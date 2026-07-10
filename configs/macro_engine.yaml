@@ -1,0 +1,30 @@
+enabled: true
+project: global-crypto
+engine_id: macro-intelligence
+priority: 100
+domains:
+  - global_liquidity
+  - interest_rates
+  - inflation
+  - stablecoin_supply
+  - bitcoin_dominance
+  - eth_btc_ratio
+  - etf_flows
+  - regulatory_environment
+  - institutional_adoption
+  - layer_1_ecosystem
+  - layer_2_ecosystem
+  - ai_sector
+  - depin_sector
+  - rwa_sector
+  - defi_sector
+  - gaming_sector
+  - infrastructure_sector
+  - privacy_sector
+  - interoperability_sector
+  - oracle_sector
+thresholds:
+  strengthening_delta: 0.05
+  weakening_delta: -0.05
+  risk_on: 0.55
+  risk_off: 0.45
