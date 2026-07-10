@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
+from hunter.intelligence.intelligence import Intelligence
+
 
 @dataclass(frozen=True)
 class PluginMetadata:
@@ -23,6 +25,7 @@ class PipelineContext:
     values: dict[str, Any] = field(default_factory=dict)
     plugin_config: dict[str, dict[str, Any]] = field(default_factory=dict)
     events: list[str] = field(default_factory=list)
+    intelligence: list[Intelligence] = field(default_factory=list)
 
     def get(self, key: str, default: Any = None) -> Any:
         return self.values.get(key, default)
@@ -35,6 +38,9 @@ class PipelineContext:
 
     def record(self, event: str) -> None:
         self.events.append(event)
+
+    def emit_intelligence(self, intelligence: Intelligence) -> None:
+        self.intelligence.append(intelligence)
 
 
 @runtime_checkable
@@ -54,4 +60,3 @@ class Plugin(Protocol):
 
     def shutdown(self, context: PipelineContext) -> None:
         raise NotImplementedError
-
