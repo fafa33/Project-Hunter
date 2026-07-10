@@ -1,0 +1,40 @@
+enabled: true
+project: global-crypto
+engine_id: onchain-intelligence
+priority: 68
+freshness_days: 30
+minimum_historical_depth_days: 90
+address_growth_threshold: 0.1
+retention_threshold: 0.5
+flow_threshold: 0.05
+exchange_flow_threshold: 0.05
+bridge_flow_threshold: 0.05
+staking_flow_threshold: 0.05
+holder_concentration_threshold: 0.45
+contract_activity_threshold: 0.1
+application_concentration_threshold: 0.55
+anomaly_threshold: 0.45
+detected_anomaly_threshold: 0.7
+sybil_risk_threshold: 0.35
+wash_activity_threshold: 0.35
+bot_risk_threshold: 0.35
+attribution_quality_threshold: 0.5
+minimum_chain_coverage: 1
+duplicate_detection: true
+overlap_detection: true
+preserve_denominations: true
+chain_priorities:
+  ethereum: 1.0
+  base: 0.9
+  arbitrum: 0.9
+  solana: 0.9
+provider_priorities:
+  fixture: 1.0
+confidence_weights:
+  completeness: 0.25
+  evidence_quality: 0.25
+  freshness: 0.2
+  chain_coverage: 0.1
+  historical_depth: 0.1
+  duplicate_quality: 0.05
+  cross_engine_alignment: 0.05
