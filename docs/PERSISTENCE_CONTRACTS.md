@@ -118,9 +118,7 @@ Backend selection and implementation are outside this milestone.
 
 ## Relationship to Pipeline
 
-This milestone does not modify pipeline execution.
-
-Future pipeline integration should persist `PipelineRunRecord` and emitted Intelligence-related records through repository interfaces. Engines must remain storage-agnostic.
+Pipeline persistence integration now persists `PipelineRunRecord` lifecycle records and emitted Intelligence-related records through repository interfaces when an explicit adapter is supplied. Engines remain storage-agnostic.
 
 ## Relationship to Fusion
 
@@ -135,5 +133,5 @@ The presence of `FusedIntelligenceRecord` defines the future persistence contrac
 - No query engine is implemented.
 - No migrations are implemented.
 - No transaction or index model is implemented.
-- No pipeline persistence wiring is implemented.
+- Pipeline persistence is opt-in and requires an explicit adapter.
 - No Fusion or Opportunity Timing behavior is implemented.

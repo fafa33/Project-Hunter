@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Protocol, runtime_checkable
 
+from hunter.execution.canonicalization import normalize
 from hunter.execution.clock import Clock, SystemClock
 from hunter.execution.identity import fingerprint
 from hunter.execution.run import PipelineRun
@@ -34,6 +35,12 @@ class PipelineContext:
     intelligence: list[Intelligence] = field(default_factory=list)
     run: PipelineRun | None = None
     clock: Clock = field(default_factory=SystemClock)
+    persistence_adapter: Any | None = None
+    persistence_policy: Any | None = None
+    persisted_artifact_ids: list[str] = field(default_factory=list)
+    persistence_errors: list[str] = field(default_factory=list)
+    persistence_events: list[Any] = field(default_factory=list)
+    run_identity_snapshot: dict[str, object] | None = None
 
     def get(self, key: str, default: Any = None) -> Any:
         return self.values.get(key, default)
@@ -72,6 +79,26 @@ class PipelineContext:
                 clock=self.clock,
             )
         return self.run
+
+    def freeze_run_identity(self, *, engine_manifest: Any | None = None) -> None:
+        run = self.ensure_run(engine_manifest=engine_manifest)
+        self.run_identity_snapshot = self._run_identity_payload(run=run, engine_manifest=engine_manifest)
+
+    def validate_run_identity(self, *, engine_manifest: Any | None = None) -> bool:
+        if self.run is None or self.run_identity_snapshot is None:
+            return True
+        current = self._run_identity_payload(run=self.run, engine_manifest=engine_manifest)
+        return current == self.run_identity_snapshot
+
+    def _run_identity_payload(self, *, run: PipelineRun, engine_manifest: Any | None = None) -> dict[str, object]:
+        return {
+            "target_id": run.target_id,
+            "target_type": run.target_type,
+            "configuration_fingerprint": fingerprint("pipeline-configuration", self.plugin_config),
+            "input_fingerprint": fingerprint("pipeline-input", self.values),
+            "engine_manifest_fingerprint": fingerprint("engine-manifest", engine_manifest or {}),
+            "effective_at": normalize(run.effective_at),
+        }
 
 
 @runtime_checkable

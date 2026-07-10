@@ -19,7 +19,7 @@ The current implementation separates responsibilities as follows:
 - `PipelineContext` is the shared runtime state passed through orchestration.
 - Concrete Intelligence Engines own domain-specific collection, normalization, analysis, confidence, and Intelligence generation.
 
-The orchestrator does not implement scoring, ranking, report rendering, persistence, scheduling, retries, external API access, or domain analysis.
+The orchestrator does not implement scoring, ranking, report rendering, scheduling, retries, external API access, or domain analysis. Persistence remains optional and is delegated to the Pipeline Persistence Integration adapter when explicitly supplied.
 
 There is no `src/hunter/orchestrator/` package in the current repository. The orchestrator implementation is the single `src/hunter/pipeline.py` module.
 
@@ -34,7 +34,8 @@ There is no `src/hunter/orchestrator/` package in the current repository. The or
 5. Initialize plugins through `PluginManager.initialize(...)`.
 6. Execute plugins through `PluginManager.execute(...)`.
 7. Shut down plugins through `PluginManager.shutdown(...)` in a `finally` block.
-8. Return the same `PipelineContext`.
+8. If an explicit persistence adapter is supplied, run lifecycle and emitted artifacts are persisted through the adapter's UnitOfWork boundary.
+9. Return the same `PipelineContext`.
 
 Intelligence Engines passed directly to `PipelineOrchestrator.run(...)` execute before plugins. Intelligence Engines can also run inside plugins when a plugin calls `EngineRunner`.
 
@@ -62,7 +63,7 @@ It exposes:
 
 Dedicated services, metadata, warning collections, and error collections are not currently modeled as first-class `PipelineContext` fields. Errors are propagated as exceptions rather than stored in the context.
 
-The context lifecycle is one orchestrator run. The current implementation does not persist context state after execution.
+The context lifecycle is one orchestrator run. Context state is not persisted directly. When persistence is explicitly enabled, the adapter persists the canonical run lifecycle and emitted analytical artifacts.
 
 `PipelineRun` establishes deterministic run identity before database persistence exists. Its analytical identity is based on run type, target identity, configuration fingerprint, input fingerprint, engine manifest fingerprint, effective analytical time, parent run identity, replay source, and schema version. Runtime-only timestamps remain separate from analytical identity.
 
@@ -213,7 +214,7 @@ Current limitations include:
 
 - No `configs/pipeline.yaml`.
 - No dedicated `src/hunter/orchestrator/` package.
-- No persisted pipeline-run records.
+- Pipeline persistence is optional and explicit.
 - No first-class stage model.
 - No pipeline dependency graph beyond plugin dependency ordering.
 - No retry policy.

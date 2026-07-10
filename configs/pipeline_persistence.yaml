@@ -1,0 +1,20 @@
+enabled: false
+backend: sqlite
+persistence_policy: atomic
+
+artifacts:
+  persist_evidence: true
+  persist_signals: true
+  persist_observations: true
+  persist_insights: true
+  persist_intelligence: true
+
+snapshots:
+  create_snapshot_on_success: true
+  create_snapshot_on_partial: true
+
+history:
+  enabled: true
+
+strict_identity_validation: true
+engine_manifest_enforcement: true

@@ -8,6 +8,8 @@ It lives under `src/hunter/persistence/sql/` and provides a SQLite-backed SQLAlc
 
 This layer does not implement Fusion, Opportunity Timing, Automation, Scheduler, dashboards, distributed execution, caching, async execution, search, or vector storage.
 
+Pipeline persistence integration lives above this layer in `src/hunter/persistence/integration/` and uses repository and UnitOfWork contracts.
+
 ## Repository Implementation
 
 Concrete repositories live under `src/hunter/persistence/sql/repositories/`.
@@ -104,7 +106,7 @@ It reuses deterministic serialization from `src/hunter/persistence/serialization
 
 ## Known Limitations
 
-- No automatic pipeline persistence is implemented.
+- No automatic pipeline persistence is implemented; persistence remains explicit through the integration adapter.
 - No migrations are implemented.
 - No PostgreSQL backend is implemented.
 - No indexing strategy beyond basic ORM columns is implemented.
