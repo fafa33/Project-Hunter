@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
+from hunter.execution.identity import IntelligenceIdentityFactory
 from hunter.intelligence.engines.contracts import IntelligenceEngine
 from hunter.intelligence.engines.exceptions import IntelligenceEngineExecutionError
 from hunter.intelligence.intelligence import Intelligence
@@ -10,8 +11,13 @@ from hunter.plugins.contracts import PipelineContext
 
 
 class EngineRunner:
-    def __init__(self, validator: IntelligenceValidator | None = None) -> None:
+    def __init__(
+        self,
+        validator: IntelligenceValidator | None = None,
+        identity_factory: IntelligenceIdentityFactory | None = None,
+    ) -> None:
         self._validator = validator or IntelligenceValidator()
+        self._identity_factory = identity_factory or IntelligenceIdentityFactory()
 
     def run(self, engines: Iterable[IntelligenceEngine], context: PipelineContext) -> list[Intelligence]:
         emitted: list[Intelligence] = []
@@ -27,6 +33,8 @@ class EngineRunner:
             collected = engine.collect(context)
             analysis = engine.analyze(context, collected)
             intelligence = engine.generate_intelligence(context, analysis)
+            run = context.ensure_run(engine_manifest=_engine_manifest(engine))
+            intelligence = self._identity_factory.stabilize(intelligence, run, engine_version=engine.version)
             self._validator.validate(intelligence)
             context.emit_intelligence(intelligence)
         except IntelligenceEngineExecutionError:
@@ -36,3 +44,15 @@ class EngineRunner:
             raise IntelligenceEngineExecutionError(msg) from exc
         return intelligence
 
+
+def _engine_manifest(engine: IntelligenceEngine) -> dict[str, object]:
+    return {
+        "id": engine.id,
+        "name": engine.name,
+        "category": engine.category,
+        "version": engine.version,
+        "priority": engine.priority,
+        "required_inputs": engine.required_inputs,
+        "produced_outputs": engine.produced_outputs,
+        "capabilities": engine.capabilities,
+    }

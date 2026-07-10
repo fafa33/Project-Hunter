@@ -66,6 +66,9 @@ class PluginManager:
     def plugins(self) -> list[Plugin]:
         return list(self._plugins)
 
+    def config(self) -> PluginConfig:
+        return self._config
+
     def _is_enabled(self, plugin: Plugin) -> bool:
         configured = self._config.enabled.get(plugin.metadata.id)
         return plugin.metadata.enabled if configured is None else configured

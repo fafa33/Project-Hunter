@@ -48,6 +48,8 @@ It currently contains:
 - `plugin_config`: plugin-specific configuration loaded by `PluginManager`.
 - `events`: ordered lifecycle or test-observable event strings.
 - `intelligence`: emitted standardized Intelligence objects.
+- `run`: optional canonical `PipelineRun` identity for the current execution.
+- `clock`: explicit execution clock used when a run must be created.
 
 It exposes:
 
@@ -56,10 +58,13 @@ It exposes:
 - `config_for(plugin_id)` for plugin configuration lookup.
 - `record(event)` for lifecycle/event recording.
 - `emit_intelligence(intelligence)` for Intelligence Layer emission.
+- `ensure_run(...)` for creating or returning the canonical `PipelineRun`.
 
 Dedicated services, metadata, warning collections, and error collections are not currently modeled as first-class `PipelineContext` fields. Errors are propagated as exceptions rather than stored in the context.
 
 The context lifecycle is one orchestrator run. The current implementation does not persist context state after execution.
+
+`PipelineRun` establishes deterministic run identity before database persistence exists. Its analytical identity is based on run type, target identity, configuration fingerprint, input fingerprint, engine manifest fingerprint, effective analytical time, parent run identity, replay source, and schema version. Runtime-only timestamps remain separate from analytical identity.
 
 ## Plugin Execution
 
@@ -104,10 +109,11 @@ For each engine, the current lifecycle is:
 3. `collect(context)`
 4. `analyze(context, collected)`
 5. `generate_intelligence(context, analysis)`
-6. Validate generated Intelligence with `IntelligenceValidator`.
-7. Emit the Intelligence object through `PipelineContext.emit_intelligence(...)`.
+6. Stabilize generated Intelligence IDs and generated timestamps through the deterministic identity factory using the shared `PipelineRun`.
+7. Validate generated Intelligence with `IntelligenceValidator`.
+8. Emit the Intelligence object through `PipelineContext.emit_intelligence(...)`.
 
-Current concrete engines include Macro, Whale, and Developer Intelligence Engines. They are also exposed as plugins through the `hunter.plugins` entry point group in `pyproject.toml`.
+Current concrete engines include Macro, Whale, Developer, Protocol, News, Narrative, Social, and On-chain Intelligence Engines. They are also exposed as plugins through the `hunter.plugins` entry point group in `pyproject.toml`.
 
 ## Failure Handling
 
