@@ -16,6 +16,7 @@ class PersistenceAdapter(Protocol):
     def run(self, context: PipelineContext, execute: Any, *, engine_manifest: Any | None = None) -> Any:
         raise NotImplementedError
 
+
 DEFAULT_EFFECTIVE_AT = datetime(1970, 1, 1, tzinfo=UTC)
 
 
@@ -44,7 +45,7 @@ class PipelineContext:
     persistence_adapter: PersistenceAdapter | None = None
     persistence_policy: Any | None = None
     persisted_artifact_ids: list[str] = field(default_factory=list)
-    persistence_errors: list[str] = field(default_factory=list)
+    persistence_errors: list[object] = field(default_factory=list)
     persistence_events: list[Any] = field(default_factory=list)
     run_identity_snapshot: dict[str, object] | None = None
 

@@ -12,7 +12,7 @@ from hunter.execution.identity import fingerprint
 from hunter.execution.run import PipelineRun
 from hunter.intelligence import Confidence, Evidence, Insight, Intelligence, Observation, Signal
 from hunter.intelligence.engines import BaseIntelligenceEngine, EngineMetadata
-from hunter.persistence.integration.adapter import PersistenceEventType, PipelinePersistenceAdapter
+from hunter.persistence.integration.adapter import PersistenceEventType, PersistenceIssue, PipelinePersistenceAdapter
 from hunter.persistence.integration.exceptions import (
     ArtifactPersistenceError,
     EngineManifestError,
@@ -77,6 +77,7 @@ def test_pipeline_persists_pending_running_success_artifacts_and_snapshot(sessio
     assert intelligence_record is not None
     assert intelligence_record.pipeline_run_id == context.run.run_id
     assert intelligence_record.evidence_ids == tuple(item.id for item in context.intelligence[0].evidence)
+    assert intelligence_record.metadata["engine_version"] == "1.0.0"
     assert snapshot.metadata["pipeline_run_id"] == context.run.run_id
     assert {event.event_type for event in context.persistence_events} >= {
         PersistenceEventType.RUN_PERSISTENCE_STARTED,
@@ -227,6 +228,37 @@ def test_engine_and_plugin_versions_are_preserved_in_artifact_metadata(session_f
     assert record.metadata["plugin_version"] == "2.0.0"
 
 
+def test_strict_manifest_rejects_engine_and_plugin_version_mismatch(session_factory: SessionFactory) -> None:
+    adapter = enabled_adapter(session_factory)
+    context = run_context()
+    context.emit_intelligence(
+        sample_intelligence(
+            metadata={
+                "engine_version": "9.9.9",
+                "plugin_id": "macro-plugin",
+                "plugin_version": "2.0.0",
+            }
+        )
+    )
+
+    with pytest.raises(EngineManifestError, match="engine version mismatch"):
+        adapter.run(context, lambda: None, engine_manifest=manifest_with_plugin())
+
+    context = run_context()
+    context.emit_intelligence(
+        sample_intelligence(
+            metadata={
+                "engine_version": "1.0.0",
+                "plugin_id": "macro-plugin",
+                "plugin_version": "9.9.9",
+            }
+        )
+    )
+
+    with pytest.raises(EngineManifestError, match="plugin version mismatch"):
+        adapter.run(context, lambda: None, engine_manifest=manifest_with_plugin())
+
+
 def test_partial_transition_and_snapshot_determinism(session_factory: SessionFactory) -> None:
     context = run_context()
     context.persistence_errors.append("optional engine failed")
@@ -297,6 +329,21 @@ def test_partial_attempt_followed_by_successful_attempt(session_factory: Session
         attempts = PipelineHistory(RepositoryFactory(session)).attempt_history(context.run.run_id)
 
     assert [attempt.status for attempt in attempts] == ["pending", "running", "partial", "pending", "running", "succeeded"]
+
+
+def test_typed_persistence_issue_marks_partial_attempt(session_factory: SessionFactory) -> None:
+    context = run_context()
+    context.persistence_errors.append(PersistenceIssue(code="optional", summary="optional engine failed"))
+    context.emit_intelligence(sample_intelligence())
+
+    enabled_adapter(session_factory).run(context, lambda: None, engine_manifest=manifest())
+
+    assert context.run is not None
+    with session_factory.create() as session:
+        final_attempt = PipelineHistory(RepositoryFactory(session)).attempt_history(context.run.run_id)[-1]
+
+    assert final_attempt.status == "partial"
+    assert final_attempt.warning_summary == "optional engine failed"
 
 
 def test_operational_timestamps_do_not_alter_pipeline_run_identity() -> None:
@@ -395,6 +442,12 @@ def manifest() -> dict[str, object]:
         ],
         "plugins": [],
     }
+
+
+def manifest_with_plugin() -> dict[str, object]:
+    data = manifest()
+    data["plugins"] = [{"id": "macro-plugin", "version": "2.0.0", "category": "intelligence"}]
+    return data
 
 
 def record_query(kind: str):

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from dataclasses import replace
 
 from hunter.execution.identity import IntelligenceIdentityFactory
 from hunter.intelligence.engines.contracts import IntelligenceEngine
@@ -35,6 +36,14 @@ class EngineRunner:
             intelligence = engine.generate_intelligence(context, analysis)
             run = context.ensure_run(engine_manifest=_engine_manifest(engine))
             intelligence = self._identity_factory.stabilize(intelligence, run, engine_version=engine.version)
+            intelligence = replace(
+                intelligence,
+                metadata={
+                    **intelligence.metadata.as_dict(),
+                    "engine_id": engine.id,
+                    "engine_version": engine.version,
+                },
+            )
             self._validator.validate(intelligence)
             context.emit_intelligence(intelligence)
         except IntelligenceEngineExecutionError:

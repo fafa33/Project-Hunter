@@ -12,6 +12,8 @@ Analytical identity identifies reproducible analytical facts and outputs. It is 
 
 Operational correlation identifies one runtime attempt or operational event. It may use wall-clock time when explicitly requested, but it must remain separate from reproducible analytical identity.
 
+Operational uniqueness is represented by `OperationalAttemptRecord`, not by changing `PipelineRun.run_id`.
+
 ## PipelineRun Model
 
 `PipelineRun` is the immutable execution-run model in `src/hunter/execution/run.py`.
@@ -34,7 +36,9 @@ It contains:
 - `replay_of_run_id`
 - `metadata`
 
-`run_id` is deterministic by default and excludes runtime-only execution timestamps such as `requested_at`, `started_at`, and `finished_at`.
+`run_id` is deterministic and excludes runtime-only execution timestamps such as `requested_at`, `started_at`, and `finished_at`.
+
+`run_id` also excludes arbitrary `metadata`. Metadata is descriptive context and must not change analytical identity.
 
 ## Run Types
 

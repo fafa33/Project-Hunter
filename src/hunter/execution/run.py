@@ -63,10 +63,7 @@ class PipelineRun:
             "effective_at": effective_at,
             "parent_run_id": parent_run_id,
             "replay_of_run_id": replay_of_run_id,
-            "metadata": metadata or {},
         }
-        if unique_operational_run:
-            identity_payload["requested_at"] = requested
         return cls(
             run_id=stable_identifier(
                 "pipeline-run",
@@ -98,5 +95,4 @@ class PipelineRun:
             "effective_at": normalize(self.effective_at),
             "parent_run_id": self.parent_run_id,
             "replay_of_run_id": self.replay_of_run_id,
-            "metadata": self.metadata,
         }

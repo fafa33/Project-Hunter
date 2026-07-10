@@ -91,6 +91,19 @@ def test_pipeline_run_identity_is_deterministic_and_fingerprint_sensitive() -> N
     assert base.run_id != different_config.run_id
 
 
+def test_pipeline_run_identity_ignores_metadata_and_operational_uniqueness_flag() -> None:
+    base = _run(metadata={"attempt": "one"})
+    changed_metadata = _run(metadata={"attempt": "two"})
+    unique_operational = _run(
+        metadata={"attempt": "three"},
+        requested_at=datetime(2026, 1, 2, 4, 4, 5, tzinfo=UTC),
+        unique_operational_run=True,
+    )
+
+    assert base.run_id == changed_metadata.run_id
+    assert base.run_id == unique_operational.run_id
+
+
 def test_replay_identity_semantics_include_replay_source() -> None:
     original = _run(run_type="live")
     replay = _run(run_type="replay", replay_of_run_id=original.run_id)

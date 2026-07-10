@@ -144,11 +144,12 @@ class PipelinePersistenceAdapter:
                         )
                     self._validate_emitted_engines(context, engine_manifest=engine_manifest)
                     artifact_ids = self._persist_artifacts(context, repositories, run, engine_manifest=engine_manifest)
-                    final_state = RunLifecycleState.PARTIAL if context.persistence_errors else RunLifecycleState.SUCCEEDED
+                    issues = _issues(context)
+                    final_state = RunLifecycleState.PARTIAL if issues else RunLifecycleState.SUCCEEDED
                     final = attempt.transition(
                         final_state,
                         at=context.clock.now(),
-                        warning_summary="; ".join(context.persistence_errors) or None,
+                        warning_summary="; ".join(issue.summary for issue in issues) or None,
                     )
                     self._save_attempt_record(
                         context,
@@ -176,7 +177,7 @@ class PipelinePersistenceAdapter:
         try:
             return self._run_atomic(context, execute, run=run, engine_manifest=engine_manifest)
         except ArtifactPersistenceError as exc:
-            context.persistence_errors.append(_summary(exc))
+            _add_issue(context, "artifact_persistence_failed", _summary(exc))
             with self.unit_of_work_factory() as uow:
                 repositories = _repositories(uow)
                 repositories.pipeline_runs().save(RunLifecycle(run).to_record(created_at=context.clock.now()))
@@ -337,22 +338,20 @@ class PipelinePersistenceAdapter:
         if not self.settings.enforce_engine_manifest or engine_manifest is not None:
             return
         msg = "Persistence-enabled pipeline execution requires a declared engine manifest"
-        context.persistence_errors.append(msg)
+        _add_issue(context, "missing_engine_manifest", msg)
         raise EngineManifestError(msg)
 
     def _validate_emitted_engines(self, context: PipelineContext, *, engine_manifest: Any | None) -> None:
         if not self.settings.enforce_engine_manifest or not isinstance(engine_manifest, dict):
             return
-        declared = {str(item.get("id")) for item in engine_manifest.get("engines", ()) if isinstance(item, dict)}
-        plugins = {str(item.get("id")) for item in engine_manifest.get("plugins", ()) if isinstance(item, dict)}
-        undeclared = {
-            item.engine
+        violations = [
+            _manifest_violation(item.engine, item.metadata.as_dict(), engine_manifest)
             for item in context.intelligence
-            if item.engine not in declared and str(item.metadata.get("plugin_id", "")) not in plugins
-        }
-        if undeclared:
-            msg = f"Emitted intelligence from undeclared engines: {', '.join(sorted(undeclared))}"
-            context.persistence_errors.append(msg)
+        ]
+        violations = [item for item in violations if item is not None]
+        if violations:
+            msg = "; ".join(violations)
+            _add_issue(context, "manifest_violation", msg)
             raise EngineManifestError(msg)
 
     def _record(
@@ -406,6 +405,20 @@ def _summary(exc: BaseException) -> str:
     return f"{exc.__class__.__name__}: {exc}"
 
 
+def _add_issue(context: PipelineContext, code: str, summary: str, record_id: str | None = None) -> None:
+    context.persistence_errors.append(PersistenceIssue(code=code, summary=summary, record_id=record_id))
+
+
+def _issues(context: PipelineContext) -> tuple[PersistenceIssue, ...]:
+    normalized: list[PersistenceIssue] = []
+    for item in context.persistence_errors:
+        if isinstance(item, PersistenceIssue):
+            normalized.append(item)
+        else:
+            normalized.append(PersistenceIssue(code="legacy", summary=str(item)))
+    return tuple(normalized)
+
+
 def _next_attempt_number(repositories: Any, run_id: str) -> int:
     attempts = repositories.operational_attempts().query(
         QuerySpec(record_kind="operational-attempt", filters=(QueryFilter("run_id", run_id),))
@@ -433,3 +446,33 @@ def _declaration_metadata(
                 metadata["plugin_version"] = str(item.get("version", ""))
                 break
     return metadata
+
+
+def _manifest_violation(
+    engine_id: str,
+    intelligence_metadata: dict[str, str | int | float | bool | None],
+    engine_manifest: Any,
+) -> str | None:
+    declared_engines = {
+        str(item.get("id")): str(item.get("version", ""))
+        for item in engine_manifest.get("engines", ())
+        if isinstance(item, dict)
+    }
+    declared_plugins = {
+        str(item.get("id")): str(item.get("version", ""))
+        for item in engine_manifest.get("plugins", ())
+        if isinstance(item, dict)
+    }
+    engine_version = intelligence_metadata.get("engine_version")
+    plugin_id = intelligence_metadata.get("plugin_id")
+    plugin_version = intelligence_metadata.get("plugin_version")
+    if engine_id not in declared_engines:
+        return f"undeclared engine: {engine_id}"
+    if engine_version is not None and str(engine_version) != declared_engines[engine_id]:
+        return f"engine version mismatch: {engine_id}"
+    if plugin_id is not None:
+        if str(plugin_id) not in declared_plugins:
+            return f"undeclared plugin: {plugin_id}"
+        if plugin_version is not None and str(plugin_version) != declared_plugins[str(plugin_id)]:
+            return f"plugin version mismatch: {plugin_id}"
+    return None

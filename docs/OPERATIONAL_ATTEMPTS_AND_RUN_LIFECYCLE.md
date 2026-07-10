@@ -22,6 +22,8 @@ It is based on:
 
 Runtime timestamps do not alter analytical run identity.
 
+Arbitrary metadata does not alter analytical run identity. Distinct operational attempts are represented by `OperationalAttemptRecord`, not by changing `PipelineRun`.
+
 ## Operational Attempt Model
 
 `OperationalAttemptRecord` is immutable and includes:
@@ -98,7 +100,7 @@ Stale runs fail before persistence begins.
 
 ## Engine Manifest Enforcement
 
-Strict persistence mode rejects emitted Intelligence from undeclared engines unless a declared plugin identity is present.
+Strict persistence mode rejects emitted Intelligence from undeclared engines. If engine or plugin version metadata is emitted, it must match the declared manifest.
 
 Persisted artifacts preserve declaration metadata where available:
 
