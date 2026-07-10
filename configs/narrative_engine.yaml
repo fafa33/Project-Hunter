@@ -1,0 +1,18 @@
+enabled: true
+project: global-crypto
+engine_id: narrative-intelligence
+priority: 60
+freshness_days: 30
+minimum_evidence_quality: 0.40
+duplicate_similarity_threshold: 0.90
+emerging_threshold: 0.25
+expansion_threshold: 0.45
+acceleration_threshold: 0.65
+saturation_threshold: 0.75
+confidence_weights:
+  evidence_quality: 0.25
+  freshness: 0.20
+  evidence_diversity: 0.15
+  cross_engine_agreement: 0.15
+  historical_persistence: 0.15
+  completeness: 0.10
