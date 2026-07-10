@@ -1,0 +1,19 @@
+enabled: true
+project: global-crypto
+engine_id: whale-intelligence
+priority: 90
+signal_types:
+  - accumulation
+  - distribution
+  - exchange_flow
+  - smart_money
+  - treasury_movement
+  - vc_activity
+  - foundation_activity
+  - liquidity_rotation
+  - cross_chain_flow
+  - long_term_holder_activity
+thresholds:
+  elevated_activity: 0.65
+  muted_activity: 0.35
+  high_confidence: 0.75
