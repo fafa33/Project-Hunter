@@ -1,0 +1,36 @@
+enabled: true
+project: global-crypto
+engine_id: social-intelligence
+priority: 70
+freshness_days: 30
+minimum_historical_depth_days: 90
+author_quality_threshold: 0.6
+influence_threshold: 0.55
+engagement_quality_threshold: 0.55
+community_growth_threshold: 0.1
+sentiment_momentum_threshold: 0.1
+saturation_threshold: 0.85
+bot_risk_threshold: 0.35
+spam_risk_threshold: 0.25
+coordination_risk_threshold: 0.3
+promotion_risk_threshold: 0.35
+include_reposts: false
+duplicate_detection: true
+languages:
+  - en
+required_platforms:
+  - x
+  - reddit
+  - discord
+platform_priorities:
+  x: 1.0
+  reddit: 0.9
+  discord: 0.8
+  telegram: 0.7
+confidence_weights:
+  completeness: 0.3
+  evidence_quality: 0.25
+  freshness: 0.2
+  platform_coverage: 0.1
+  historical_depth: 0.1
+  manipulation_certainty: 0.05

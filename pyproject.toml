@@ -26,6 +26,7 @@ macro-intelligence = "hunter.intelligence.engines.macro:create_plugin"
 narrative-intelligence = "hunter.intelligence.engines.narrative:create_plugin"
 news-intelligence = "hunter.intelligence.engines.news:create_plugin"
 protocol-intelligence = "hunter.intelligence.engines.protocol:create_plugin"
+social-intelligence = "hunter.intelligence.engines.social:create_plugin"
 whale-intelligence = "hunter.intelligence.engines.whale:create_plugin"
 
 [tool.pytest.ini_options]
