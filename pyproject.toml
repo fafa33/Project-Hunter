@@ -23,6 +23,7 @@ packages = ["src/hunter"]
 [project.entry-points."hunter.plugins"]
 developer-intelligence = "hunter.intelligence.engines.developer:create_plugin"
 macro-intelligence = "hunter.intelligence.engines.macro:create_plugin"
+protocol-intelligence = "hunter.intelligence.engines.protocol:create_plugin"
 whale-intelligence = "hunter.intelligence.engines.whale:create_plugin"
 
 [tool.pytest.ini_options]

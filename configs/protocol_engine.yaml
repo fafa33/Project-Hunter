@@ -1,0 +1,31 @@
+enabled: true
+project: global-crypto
+protocol: unknown
+engine_id: protocol-intelligence
+priority: 40
+core_chains: []
+core_deployments: []
+freshness_days: 45
+recent_window_days: 30
+minimum_historical_depth_days: 90
+activity_quality_threshold: 0.65
+user_retention_threshold: 0.45
+organic_tvl_threshold: 0.60
+liquidity_depth_threshold: 0.50
+concentration_risk_threshold: 0.60
+incident_severity_threshold: 0.50
+incentive_dependence_threshold: 0.50
+emissions_dependence_threshold: 0.50
+treasury_runway_months_threshold: 12.0
+confidence_weights:
+  completeness: 0.25
+  source_reliability: 0.20
+  freshness: 0.20
+  coverage_breadth: 0.15
+  historical_depth: 0.10
+  provider_agreement: 0.10
+provider_priorities:
+  defillama: 100
+  protocol_api: 90
+  explorer: 80
+  governance_portal: 70
