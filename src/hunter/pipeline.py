@@ -4,6 +4,8 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from hunter.intelligence.engines.contracts import IntelligenceEngine
+from hunter.intelligence.engines.runner import EngineRunner
 from hunter.plugins.contracts import PipelineContext, Plugin
 from hunter.plugins.manager import PluginManager
 
@@ -13,6 +15,7 @@ class PipelineOrchestrator:
     """Pipeline entry point that executes configured plugins through PluginManager."""
 
     plugin_manager: PluginManager = field(default_factory=PluginManager)
+    engine_runner: EngineRunner = field(default_factory=EngineRunner)
 
     def run(
         self,
@@ -20,8 +23,11 @@ class PipelineOrchestrator:
         *,
         config_path: Path | None = None,
         built_in_plugins: Iterable[Plugin] | None = None,
+        intelligence_engines: Iterable[IntelligenceEngine] | None = None,
     ) -> PipelineContext:
         pipeline_context = context or PipelineContext()
+        if intelligence_engines is not None:
+            self.engine_runner.run(intelligence_engines, pipeline_context)
         self.plugin_manager.load(config_path=config_path, built_in_plugins=built_in_plugins)
         self.plugin_manager.validate(pipeline_context)
         self.plugin_manager.initialize(pipeline_context)
@@ -30,4 +36,3 @@ class PipelineOrchestrator:
         finally:
             self.plugin_manager.shutdown(pipeline_context)
         return pipeline_context
-
