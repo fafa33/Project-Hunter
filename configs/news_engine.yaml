@@ -1,0 +1,23 @@
+enabled: true
+project: global-crypto
+engine_id: news-intelligence
+priority: 50
+freshness_days: 14
+minimum_source_quality: 0.45
+duplicate_title_similarity: 0.92
+structural_severity_threshold: 0.65
+rumor_confidence_penalty: 0.30
+secondary_source_confidence_penalty: 0.15
+confidence_weights:
+  completeness: 0.25
+  source_quality: 0.25
+  freshness: 0.20
+  originality: 0.10
+  primary_source_coverage: 0.10
+  consistency: 0.10
+source_priorities:
+  official_blog: 100
+  governance_forum: 95
+  foundation: 90
+  major_newsroom: 75
+  aggregator: 40
