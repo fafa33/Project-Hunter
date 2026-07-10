@@ -1,0 +1,28 @@
+enabled: true
+project: global-crypto
+engine_id: developer-intelligence
+priority: 30
+core_repositories: []
+include_archived_repositories: false
+filter_bots: true
+bot_patterns:
+  - bot
+  - "[bot]"
+  - dependabot
+  - renovate
+freshness_days: 45
+recent_window_days: 30
+minimum_historical_depth_days: 90
+contributor_concentration_risk: 0.65
+indicator_thresholds:
+  strong_health: 0.70
+  stable_health: 0.45
+  acceleration: 0.55
+  deterioration: 0.55
+confidence_weights:
+  completeness: 0.30
+  source_reliability: 0.20
+  freshness: 0.20
+  repository_coverage: 0.10
+  attribution_quality: 0.10
+  historical_depth: 0.10
