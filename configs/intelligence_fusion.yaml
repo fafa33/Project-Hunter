@@ -1,0 +1,16 @@
+strategy: weighted-corroboration-v1
+required_categories:
+  - macro
+  - developer
+  - protocol
+  - news
+  - social
+  - onchain
+  - whale
+weighting:
+  default_engine_weight: 1.0
+  engine_weights: {}
+  dependency_penalty: 0.2
+  contradiction_penalty: 0.25
+  missing_evidence_penalty: 0.15
+  corroboration_bonus: 0.1

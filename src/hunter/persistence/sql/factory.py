@@ -6,6 +6,7 @@ from hunter.persistence.sql.repositories import (
     SQLConfigurationRepository,
     SQLEngineManifestRepository,
     SQLEvidenceRepository,
+    SQLFusedIntelligenceRepository,
     SQLInsightRepository,
     SQLIntelligenceRepository,
     SQLObservationRepository,
@@ -40,6 +41,9 @@ class RepositoryFactory:
 
     def intelligence(self) -> SQLIntelligenceRepository:
         return SQLIntelligenceRepository(self._session)
+
+    def fused_intelligence(self) -> SQLFusedIntelligenceRepository:
+        return SQLFusedIntelligenceRepository(self._session)
 
     def snapshots(self) -> SQLSnapshotRepository:
         return SQLSnapshotRepository(self._session)

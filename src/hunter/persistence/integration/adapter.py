@@ -20,6 +20,7 @@ from hunter.persistence.integration.snapshots import snapshot_for_run
 from hunter.persistence.models import QueryFilter, QuerySpec
 from hunter.persistence.records import (
     EvidenceRecord,
+    FusedIntelligenceRecord,
     InsightRecord,
     IntelligenceRecord,
     ObservationRecord,
@@ -277,6 +278,14 @@ class PipelinePersistenceAdapter:
                         continue
                     self._save_artifact(context, repositories, record)
                     artifact_ids.append(record.id)
+            for fused in context.fused_intelligence:
+                record = _record_for_fused_intelligence(
+                    fused,
+                    pipeline_run_id=run.run_id,
+                    created_at=context.clock.now(),
+                )
+                self._save_artifact(context, repositories, record)
+                artifact_ids.append(record.id)
             context.persisted_artifact_ids.extend(artifact_ids)
         except BaseException as exc:
             self._record(context, run, PersistenceEventType.IDENTITY_CONFLICT, _summary(exc))
@@ -393,12 +402,23 @@ def _repository_for_record(repositories: Any, record: PersistenceRecord) -> Any:
         return repositories.insights()
     if isinstance(record, IntelligenceRecord):
         return repositories.intelligence()
+    if isinstance(record, FusedIntelligenceRecord):
+        return repositories.fused_intelligence()
     if isinstance(record, SnapshotRecord):
         return repositories.snapshots()
     if isinstance(record, OperationalAttemptRecord):
         return repositories.operational_attempts()
     msg = f"Unsupported artifact record type: {record.record_type}"
     raise TypeError(msg)
+
+
+def _record_for_fused_intelligence(fused: Any, *, pipeline_run_id: str, created_at: datetime) -> FusedIntelligenceRecord:
+    from hunter.intelligence.fusion import FusedIntelligence, fused_intelligence_to_record
+
+    if not isinstance(fused, FusedIntelligence):
+        msg = f"Unsupported fused intelligence type: {fused.__class__.__name__}"
+        raise TypeError(msg)
+    return fused_intelligence_to_record(fused, pipeline_run_id=pipeline_run_id, created_at=created_at)
 
 
 def _summary(exc: BaseException) -> str:

@@ -1,0 +1,40 @@
+from hunter.intelligence.fusion.configuration import FusionConfig, FusionWeightingConfig, load_fusion_config
+from hunter.intelligence.fusion.engine import CrossEngineFusionEngine, fused_intelligence_to_record
+from hunter.intelligence.fusion.models import (
+    ContradictionAssessment,
+    CorroborationAssessment,
+    DependencyAssessment,
+    EngineContribution,
+    FusedIntelligence,
+    FusionInput,
+    FusionTarget,
+    IntelligenceGraphEdge,
+    IntelligenceGraphNode,
+    MissingEvidenceAssessment,
+    UnifiedInsight,
+    UnifiedNarrative,
+    UnifiedObservation,
+    UnifiedSignal,
+)
+
+__all__ = [
+    "ContradictionAssessment",
+    "CorroborationAssessment",
+    "CrossEngineFusionEngine",
+    "DependencyAssessment",
+    "EngineContribution",
+    "FusedIntelligence",
+    "FusionConfig",
+    "FusionInput",
+    "FusionTarget",
+    "FusionWeightingConfig",
+    "IntelligenceGraphEdge",
+    "IntelligenceGraphNode",
+    "MissingEvidenceAssessment",
+    "UnifiedInsight",
+    "UnifiedNarrative",
+    "UnifiedObservation",
+    "UnifiedSignal",
+    "fused_intelligence_to_record",
+    "load_fusion_config",
+]

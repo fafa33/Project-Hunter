@@ -6,6 +6,7 @@ from hunter.persistence.records import (
     ConfigurationRecord,
     EngineManifestRecord,
     EvidenceRecord,
+    FusedIntelligenceRecord,
     InsightRecord,
     IntelligenceRecord,
     ObservationRecord,
@@ -61,6 +62,11 @@ class SQLInsightRepository(SQLRecordRepository[InsightRecord]):
 class SQLIntelligenceRepository(SQLRecordRepository[IntelligenceRecord]):
     record_type = "intelligence"
     record_class = IntelligenceRecord
+
+
+class SQLFusedIntelligenceRepository(SQLRecordRepository[FusedIntelligenceRecord]):
+    record_type = "fused-intelligence"
+    record_class = FusedIntelligenceRecord
 
 
 class SQLConfigurationRepository(SQLRecordRepository[ConfigurationRecord]):

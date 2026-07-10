@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from hunter.intelligence.engines.contracts import IntelligenceEngine
 from hunter.intelligence.engines.runner import EngineRunner
@@ -25,6 +26,8 @@ class PipelineOrchestrator:
         built_in_plugins: Iterable[Plugin] | None = None,
         intelligence_engines: Iterable[IntelligenceEngine] | None = None,
         persistence_adapter: PersistenceAdapter | None = None,
+        fusion_engine: Any | None = None,
+        fusion_target: Any | None = None,
     ) -> PipelineContext:
         pipeline_context = context or PipelineContext()
         engine_list = list(intelligence_engines or [])
@@ -34,7 +37,13 @@ class PipelineOrchestrator:
         adapter = persistence_adapter or pipeline_context.persistence_adapter
         if adapter is None:
             pipeline_context.ensure_run(engine_manifest=engine_manifest)
-            self._execute(pipeline_context, engine_list=engine_list, intelligence_engines=intelligence_engines)
+            self._execute(
+                pipeline_context,
+                engine_list=engine_list,
+                intelligence_engines=intelligence_engines,
+                fusion_engine=fusion_engine,
+                fusion_target=fusion_target,
+            )
         else:
             pipeline_context.persistence_adapter = adapter
             adapter.run(
@@ -43,6 +52,8 @@ class PipelineOrchestrator:
                     pipeline_context,
                     engine_list=engine_list,
                     intelligence_engines=intelligence_engines,
+                    fusion_engine=fusion_engine,
+                    fusion_target=fusion_target,
                 ),
                 engine_manifest=engine_manifest,
             )
@@ -54,6 +65,8 @@ class PipelineOrchestrator:
         *,
         engine_list: list[IntelligenceEngine],
         intelligence_engines: Iterable[IntelligenceEngine] | None,
+        fusion_engine: Any | None = None,
+        fusion_target: Any | None = None,
     ) -> None:
         if intelligence_engines is not None:
             self.engine_runner.run(engine_list, pipeline_context)
@@ -63,6 +76,10 @@ class PipelineOrchestrator:
             self.plugin_manager.execute(pipeline_context)
         finally:
             self.plugin_manager.shutdown(pipeline_context)
+        if fusion_engine is not None and fusion_target is not None:
+            pipeline_context.fused_intelligence.append(
+                fusion_engine.fuse(pipeline_context.intelligence, fusion_target)
+            )
 
 
 def _manifest(engines: list[IntelligenceEngine], plugins: list[Plugin]) -> dict[str, object]:

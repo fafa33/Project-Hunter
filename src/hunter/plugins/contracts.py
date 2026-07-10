@@ -48,6 +48,7 @@ class PipelineContext:
     persistence_errors: list[object] = field(default_factory=list)
     persistence_events: list[Any] = field(default_factory=list)
     run_identity_snapshot: dict[str, object] | None = None
+    fused_intelligence: list[Any] = field(default_factory=list)
 
     def get(self, key: str, default: Any = None) -> Any:
         return self.values.get(key, default)
