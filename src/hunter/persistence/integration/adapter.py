@@ -14,14 +14,16 @@ from hunter.persistence.integration.exceptions import (
     EngineManifestError,
     StalePipelineRunIdentityError,
 )
-from hunter.persistence.integration.lifecycle import RunLifecycle, RunLifecycleState
+from hunter.persistence.integration.lifecycle import OperationalAttempt, RunLifecycle, RunLifecycleState
 from hunter.persistence.integration.policies import PersistencePolicy, PipelinePersistenceSettings
 from hunter.persistence.integration.snapshots import snapshot_for_run
+from hunter.persistence.models import QueryFilter, QuerySpec
 from hunter.persistence.records import (
     EvidenceRecord,
     InsightRecord,
     IntelligenceRecord,
     ObservationRecord,
+    OperationalAttemptRecord,
     PersistenceRecord,
     PipelineRunRecord,
     SignalRecord,
@@ -39,6 +41,13 @@ class PersistenceEventType(StrEnum):
     TRANSACTION_COMMITTED = "transaction_committed"
     TRANSACTION_ROLLED_BACK = "transaction_rolled_back"
     PERSISTENCE_FAILED = "persistence_failed"
+
+
+@dataclass(frozen=True)
+class PersistenceIssue:
+    code: str
+    summary: str
+    record_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -83,6 +92,8 @@ class PipelinePersistenceAdapter:
         if not self.settings.enabled:
             return execute()
         run = context.ensure_run(engine_manifest=engine_manifest)
+        if not context.validate_run_identity(engine_manifest=engine_manifest):
+            raise StalePipelineRunIdentityError("Pre-existing PipelineRun does not match current context identity")
         context.freeze_run_identity(engine_manifest=engine_manifest)
         self._validate_engine_manifest(context, engine_manifest=engine_manifest)
         if self.settings.policy is PersistencePolicy.RUN_DURABLE:
@@ -91,11 +102,12 @@ class PipelinePersistenceAdapter:
 
     def persist_partial(self, context: PipelineContext, *, engine_manifest: Any | None = None) -> None:
         run = context.ensure_run(engine_manifest=engine_manifest)
-        lifecycle = RunLifecycle(run).transition(RunLifecycleState.RUNNING, at=context.clock.now())
-        lifecycle = lifecycle.transition(RunLifecycleState.PARTIAL, at=context.clock.now())
         with self.unit_of_work_factory() as uow:
             repositories = _repositories(uow)
-            repositories.pipeline_runs().save(lifecycle.to_record(created_at=context.clock.now()))
+            attempt = self._new_attempt(context, repositories, run)
+            attempt = attempt.transition(RunLifecycleState.RUNNING, at=context.clock.now())
+            attempt = attempt.transition(RunLifecycleState.PARTIAL, at=context.clock.now())
+            self._save_attempt_record(context, repositories, attempt.to_record(created_at=context.clock.now(), effective_at=run.effective_at))
 
     def _run_atomic(
         self,
@@ -110,31 +122,39 @@ class PipelinePersistenceAdapter:
         try:
             with self.unit_of_work_factory() as uow:
                 repositories = _repositories(uow)
-                lifecycle = self._start_lifecycle(context, repositories, run)
+                attempt = self._start_attempt(context, repositories, run)
                 try:
                     result = execute()
                 except BaseException as exc:
                     deferred_error = exc
-                    failed = lifecycle.transition(
+                    failed = attempt.transition(
                         RunLifecycleState.FAILED,
                         at=context.clock.now(),
                         error_summary=_summary(exc),
                     )
-                    self._save_run_record(context, repositories, failed.to_record(created_at=context.clock.now()))
+                    self._save_attempt_record(
+                        context,
+                        repositories,
+                        failed.to_record(created_at=context.clock.now(), effective_at=run.effective_at),
+                    )
                 if deferred_error is None:
                     if not context.validate_run_identity(engine_manifest=engine_manifest):
                         raise StalePipelineRunIdentityError(
                             "PipelineRun identity-bearing inputs changed after persistence started"
                         )
                     self._validate_emitted_engines(context, engine_manifest=engine_manifest)
-                    artifact_ids = self._persist_artifacts(context, repositories, run)
+                    artifact_ids = self._persist_artifacts(context, repositories, run, engine_manifest=engine_manifest)
                     final_state = RunLifecycleState.PARTIAL if context.persistence_errors else RunLifecycleState.SUCCEEDED
-                    final = lifecycle.transition(
+                    final = attempt.transition(
                         final_state,
                         at=context.clock.now(),
                         warning_summary="; ".join(context.persistence_errors) or None,
                     )
-                    self._save_run_record(context, repositories, final.to_record(created_at=context.clock.now()))
+                    self._save_attempt_record(
+                        context,
+                        repositories,
+                        final.to_record(created_at=context.clock.now(), effective_at=run.effective_at),
+                    )
                     self._maybe_snapshot(context, repositories, run, artifact_ids, final_state)
             self._record(context, run, PersistenceEventType.TRANSACTION_COMMITTED, "pipeline persistence committed")
         except BaseException as exc:
@@ -159,26 +179,48 @@ class PipelinePersistenceAdapter:
             context.persistence_errors.append(_summary(exc))
             with self.unit_of_work_factory() as uow:
                 repositories = _repositories(uow)
-                lifecycle = RunLifecycle(run)
-                self._save_run_record(context, repositories, lifecycle.to_record(created_at=context.clock.now()))
-                lifecycle = lifecycle.transition(RunLifecycleState.RUNNING, at=context.clock.now())
-                self._save_run_record(context, repositories, lifecycle.to_record(created_at=context.clock.now()))
-                failed = lifecycle.transition(
+                repositories.pipeline_runs().save(RunLifecycle(run).to_record(created_at=context.clock.now()))
+                attempt = self._new_attempt(context, repositories, run)
+                self._save_attempt_record(
+                    context,
+                    repositories,
+                    attempt.to_record(created_at=context.clock.now(), effective_at=run.effective_at),
+                )
+                attempt = attempt.transition(RunLifecycleState.RUNNING, at=context.clock.now())
+                self._save_attempt_record(
+                    context,
+                    repositories,
+                    attempt.to_record(created_at=context.clock.now(), effective_at=run.effective_at),
+                )
+                failed = attempt.transition(
                     RunLifecycleState.FAILED,
                     at=context.clock.now(),
                     error_summary=_summary(exc),
                 )
-                self._save_run_record(context, repositories, failed.to_record(created_at=context.clock.now()))
+                self._save_attempt_record(
+                    context,
+                    repositories,
+                    failed.to_record(created_at=context.clock.now(), effective_at=run.effective_at),
+                )
             self._record(context, run, PersistenceEventType.TRANSACTION_COMMITTED, "durable failure state committed")
             raise
 
-    def _start_lifecycle(self, context: PipelineContext, repositories: Any, run: PipelineRun) -> RunLifecycle:
-        lifecycle = RunLifecycle(run)
+    def _start_attempt(self, context: PipelineContext, repositories: Any, run: PipelineRun) -> OperationalAttempt:
+        repositories.pipeline_runs().save(RunLifecycle(run).to_record(created_at=context.clock.now()))
+        attempt = self._new_attempt(context, repositories, run)
         self._record(context, run, PersistenceEventType.RUN_PERSISTENCE_STARTED, "pipeline persistence started")
-        self._save_run_record(context, repositories, lifecycle.to_record(created_at=context.clock.now()))
-        lifecycle = lifecycle.transition(RunLifecycleState.RUNNING, at=context.clock.now())
-        self._save_run_record(context, repositories, lifecycle.to_record(created_at=context.clock.now()))
-        return lifecycle
+        self._save_attempt_record(
+            context,
+            repositories,
+            attempt.to_record(created_at=context.clock.now(), effective_at=run.effective_at),
+        )
+        attempt = attempt.transition(RunLifecycleState.RUNNING, at=context.clock.now())
+        self._save_attempt_record(
+            context,
+            repositories,
+            attempt.to_record(created_at=context.clock.now(), effective_at=run.effective_at),
+        )
+        return attempt
 
     def _save_run_record(self, context: PipelineContext, repositories: Any, record: PipelineRunRecord) -> None:
         repositories.pipeline_runs().save(record)
@@ -192,7 +234,34 @@ class PipelinePersistenceAdapter:
             pipeline_run_id=run_id,
         )
 
-    def _persist_artifacts(self, context: PipelineContext, repositories: Any, run: PipelineRun) -> tuple[str, ...]:
+    def _save_attempt_record(self, context: PipelineContext, repositories: Any, record: OperationalAttemptRecord) -> None:
+        repositories.operational_attempts().save(record)
+        self._record(
+            context,
+            context.run,
+            PersistenceEventType.RUN_STATE_CHANGED,
+            f"attempt state persisted: {record.status}",
+            record_id=record.id,
+            pipeline_run_id=record.run_id,
+        )
+
+    def _new_attempt(self, context: PipelineContext, repositories: Any, run: PipelineRun) -> OperationalAttempt:
+        attempt_number = _next_attempt_number(repositories, run.run_id)
+        return OperationalAttempt.create(
+            run_id=run.run_id,
+            attempt_number=attempt_number,
+            requested_at=context.clock.now(),
+            metadata={"pipeline_run_id": run.run_id},
+        )
+
+    def _persist_artifacts(
+        self,
+        context: PipelineContext,
+        repositories: Any,
+        run: PipelineRun,
+        *,
+        engine_manifest: Any | None,
+    ) -> tuple[str, ...]:
         artifact_ids: list[str] = []
         try:
             for intelligence in context.intelligence:
@@ -201,6 +270,7 @@ class PipelinePersistenceAdapter:
                     pipeline_run_id=run.run_id,
                     created_at=context.clock.now(),
                     effective_at=run.effective_at,
+                    declaration_metadata=_declaration_metadata(intelligence.engine, intelligence.metadata.as_dict(), engine_manifest),
                 ):
                     if not self._should_persist(record):
                         continue
@@ -275,10 +345,11 @@ class PipelinePersistenceAdapter:
             return
         declared = {str(item.get("id")) for item in engine_manifest.get("engines", ()) if isinstance(item, dict)}
         plugins = {str(item.get("id")) for item in engine_manifest.get("plugins", ()) if isinstance(item, dict)}
-        if not declared and plugins:
-            return
-        emitted = {item.engine for item in context.intelligence}
-        undeclared = emitted - declared
+        undeclared = {
+            item.engine
+            for item in context.intelligence
+            if item.engine not in declared and str(item.metadata.get("plugin_id", "")) not in plugins
+        }
         if undeclared:
             msg = f"Emitted intelligence from undeclared engines: {', '.join(sorted(undeclared))}"
             context.persistence_errors.append(msg)
@@ -325,9 +396,40 @@ def _repository_for_record(repositories: Any, record: PersistenceRecord) -> Any:
         return repositories.intelligence()
     if isinstance(record, SnapshotRecord):
         return repositories.snapshots()
+    if isinstance(record, OperationalAttemptRecord):
+        return repositories.operational_attempts()
     msg = f"Unsupported artifact record type: {record.record_type}"
     raise TypeError(msg)
 
 
 def _summary(exc: BaseException) -> str:
     return f"{exc.__class__.__name__}: {exc}"
+
+
+def _next_attempt_number(repositories: Any, run_id: str) -> int:
+    attempts = repositories.operational_attempts().query(
+        QuerySpec(record_kind="operational-attempt", filters=(QueryFilter("run_id", run_id),))
+    )
+    if not attempts:
+        return 1
+    return max(attempt.attempt_number for attempt in attempts) + 1
+
+
+def _declaration_metadata(
+    engine_id: str,
+    intelligence_metadata: dict[str, str | int | float | bool | None],
+    engine_manifest: Any | None,
+) -> dict[str, str | int | float | bool | None]:
+    metadata: dict[str, str | int | float | bool | None] = {"engine_id": engine_id}
+    if isinstance(engine_manifest, dict):
+        for item in engine_manifest.get("engines", ()):
+            if isinstance(item, dict) and item.get("id") == engine_id:
+                metadata["engine_version"] = str(item.get("version", ""))
+                break
+        plugin_id = intelligence_metadata.get("plugin_id")
+        for item in engine_manifest.get("plugins", ()):
+            if isinstance(item, dict) and item.get("id") == plugin_id:
+                metadata["plugin_id"] = str(item.get("id", ""))
+                metadata["plugin_version"] = str(item.get("version", ""))
+                break
+    return metadata

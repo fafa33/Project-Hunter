@@ -75,6 +75,35 @@ class PipelineRunRecord(BasePersistenceRecord):
 
 
 @dataclass(frozen=True, kw_only=True)
+class OperationalAttemptRecord(BasePersistenceRecord):
+    record_type: ClassVar[str] = "operational-attempt"
+
+    attempt_id: str
+    run_id: str
+    attempt_number: int
+    requested_at: datetime
+    status: str
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    error_summary: str | None = None
+    warning_summary: str | None = None
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        for name in ("attempt_id", "run_id", "status"):
+            _require_text(name, getattr(self, name))
+        if self.attempt_number < 1:
+            raise PersistenceValidationError("attempt_number must be positive")
+        _require_aware_datetime("requested_at", self.requested_at)
+        object.__setattr__(self, "requested_at", self.requested_at.astimezone(UTC))
+        for name in ("started_at", "finished_at"):
+            value = getattr(self, name)
+            if value is not None:
+                _require_aware_datetime(name, value)
+                object.__setattr__(self, name, value.astimezone(UTC))
+
+
+@dataclass(frozen=True, kw_only=True)
 class EvidenceRecord(BasePersistenceRecord):
     record_type: ClassVar[str] = "evidence"
 
@@ -258,6 +287,7 @@ class EngineManifestRecord(BasePersistenceRecord):
 
 PersistenceRecord = (
     PipelineRunRecord
+    | OperationalAttemptRecord
     | EvidenceRecord
     | SignalRecord
     | ObservationRecord
@@ -273,6 +303,7 @@ RECORD_TYPES: dict[str, type[PersistenceRecord]] = {
     record.record_type: record
     for record in (
         PipelineRunRecord,
+        OperationalAttemptRecord,
         EvidenceRecord,
         SignalRecord,
         ObservationRecord,

@@ -6,6 +6,7 @@ from hunter.persistence.sql.repositories.records import (
     SQLInsightRepository,
     SQLIntelligenceRepository,
     SQLObservationRepository,
+    SQLOperationalAttemptRepository,
     SQLPipelineRunRepository,
     SQLSignalRepository,
     SQLSnapshotRepository,
@@ -18,9 +19,9 @@ __all__ = [
     "SQLInsightRepository",
     "SQLIntelligenceRepository",
     "SQLObservationRepository",
+    "SQLOperationalAttemptRepository",
     "SQLPipelineRunRepository",
     "SQLRecordRepository",
     "SQLSignalRepository",
     "SQLSnapshotRepository",
 ]
-

@@ -11,6 +11,7 @@ from hunter.persistence.records import (
     InsightRecord,
     IntelligenceRecord,
     ObservationRecord,
+    OperationalAttemptRecord,
     PersistenceRecord,
     PipelineRunRecord,
     SignalRecord,
@@ -57,6 +58,10 @@ class PipelineRunRepository(Repository[PipelineRunRecord], Protocol):
     pass
 
 
+class OperationalAttemptRepository(Repository[OperationalAttemptRecord], Protocol):
+    pass
+
+
 class EvidenceRepository(Repository[EvidenceRecord], Protocol):
     pass
 
@@ -91,4 +96,3 @@ class ConfigurationRepository(Repository[ConfigurationRecord], Protocol):
 
 class EngineManifestRepository(Repository[EngineManifestRecord], Protocol):
     pass
-

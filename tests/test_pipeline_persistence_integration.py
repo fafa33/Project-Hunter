@@ -8,6 +8,8 @@ from typing import Any
 import pytest
 
 from hunter.execution import FixedClock
+from hunter.execution.identity import fingerprint
+from hunter.execution.run import PipelineRun
 from hunter.intelligence import Confidence, Evidence, Insight, Intelligence, Observation, Signal
 from hunter.intelligence.engines import BaseIntelligenceEngine, EngineMetadata
 from hunter.persistence.integration.adapter import PersistenceEventType, PipelinePersistenceAdapter
@@ -23,6 +25,7 @@ from hunter.persistence.integration.policies import PersistencePolicy, PipelineP
 from hunter.persistence.integration.snapshots import snapshot_for_run
 from hunter.persistence.records import EvidenceRecord
 from hunter.persistence.sql import RepositoryFactory, SessionFactory, UnitOfWork, create_schema, create_sqlite_engine
+from hunter.persistence.sql.exceptions import PersistenceIdentityConflictError
 from hunter.pipeline import PipelineOrchestrator
 from hunter.plugins.contracts import PipelineContext
 
@@ -63,14 +66,14 @@ def test_pipeline_persists_pending_running_success_artifacts_and_snapshot(sessio
 
     with session_factory.create() as session:
         repositories = RepositoryFactory(session)
-        history = PipelineHistory(repositories).run_history(context.run.run_id)
+        history = PipelineHistory(repositories).attempt_history(context.run.run_id)
         run_record = repositories.pipeline_runs().load(context.run.run_id)
         intelligence_record = repositories.intelligence().load(context.intelligence[0].id)
         snapshot = repositories.snapshots().snapshot(snapshot_spec(context.run.target_id, context.run.effective_at))
 
     assert [record.status for record in history] == ["pending", "running", "succeeded"]
     assert run_record is not None
-    assert run_record.status == "succeeded"
+    assert run_record.status == "analytical"
     assert intelligence_record is not None
     assert intelligence_record.pipeline_run_id == context.run.run_id
     assert intelligence_record.evidence_ids == tuple(item.id for item in context.intelligence[0].evidence)
@@ -92,7 +95,7 @@ def test_repeated_execution_is_idempotent(session_factory: SessionFactory) -> No
     assert first.run.run_id == second.run.run_id
     with session_factory.create() as session:
         repositories = RepositoryFactory(session)
-        assert len(PipelineHistory(repositories).run_history(first.run.run_id)) == 3
+        assert len(PipelineHistory(repositories).attempt_history(first.run.run_id)) == 6
         assert repositories.intelligence().load(first.intelligence[0].id) is not None
 
 
@@ -127,9 +130,11 @@ def test_run_durable_artifact_failure_persists_failed_run(session_factory: Sessi
 
     assert context.run is not None
     with session_factory.create() as session:
-        failed = RepositoryFactory(session).pipeline_runs().load(context.run.run_id)
+        repositories = RepositoryFactory(session)
+        failed = PipelineHistory(repositories).attempt_history(context.run.run_id)[-1]
+        run_record = repositories.pipeline_runs().load(context.run.run_id)
 
-    assert failed is not None
+    assert run_record is not None
     assert failed.status == "failed"
 
 
@@ -142,11 +147,15 @@ def test_pipeline_failure_persists_failed_status(session_factory: SessionFactory
 
     assert context.run is not None
     with session_factory.create() as session:
-        failed = RepositoryFactory(session).pipeline_runs().load(context.run.run_id)
+        repositories = RepositoryFactory(session)
+        run_record = repositories.pipeline_runs().load(context.run.run_id)
+        failed = PipelineHistory(repositories).attempt_history(context.run.run_id)[-1]
 
-    assert failed is not None
+    assert run_record is not None
+    assert run_record.status == "analytical"
     assert failed.status == "failed"
-    assert "RuntimeError" in str(failed.metadata["error_summary"])
+    assert failed.error_summary is not None
+    assert "RuntimeError" in failed.error_summary
 
 
 def test_stale_pipeline_run_identity_detection(session_factory: SessionFactory) -> None:
@@ -157,6 +166,28 @@ def test_stale_pipeline_run_identity_detection(session_factory: SessionFactory) 
         adapter.run(context, lambda: context.set("new-input", "changed"), engine_manifest=manifest())
 
 
+def test_stale_pre_existing_pipeline_run_rejected_before_persistence(session_factory: SessionFactory) -> None:
+    context = run_context()
+    context.run = PipelineRun.create(
+        run_type="manual",
+        target_id="global-crypto",
+        target_type="project",
+        configuration_fingerprint=fingerprint("pipeline-configuration", {}),
+        input_fingerprint=fingerprint("pipeline-input", {"market-data": "stale"}),
+        engine_manifest_fingerprint=fingerprint("engine-manifest", manifest()),
+        requested_at=NOW,
+        effective_at=NOW,
+        clock=FixedClock(NOW),
+    )
+    adapter = enabled_adapter(session_factory)
+
+    with pytest.raises(StalePipelineRunIdentityError):
+        adapter.run(context, lambda: None, engine_manifest=manifest())
+
+    with session_factory.create() as session:
+        assert RepositoryFactory(session).operational_attempts().query(record_query("operational-attempt")) == ()
+
+
 def test_engine_manifest_completeness_and_undeclared_engine_handling(session_factory: SessionFactory) -> None:
     context = run_context()
     context.emit_intelligence(sample_intelligence(engine_id="undeclared-engine"))
@@ -164,6 +195,36 @@ def test_engine_manifest_completeness_and_undeclared_engine_handling(session_fac
 
     with pytest.raises(EngineManifestError):
         adapter.run(context, lambda: None, engine_manifest=manifest())
+
+
+def test_engine_and_plugin_versions_are_preserved_in_artifact_metadata(session_factory: SessionFactory) -> None:
+    context = run_context()
+    context.emit_intelligence(sample_intelligence(metadata={"plugin_id": "macro-plugin"}))
+    adapter = enabled_adapter(session_factory)
+    declared_manifest = {
+        "engines": [
+            {
+                "id": "macro-engine",
+                "version": "1.0.0",
+                "category": "macro",
+                "priority": 10,
+                "required_inputs": ("market-data",),
+                "produced_outputs": ("macro-intelligence",),
+                "capabilities": ("collect", "analyze", "generate-intelligence"),
+            }
+        ],
+        "plugins": [{"id": "macro-plugin", "version": "2.0.0", "category": "intelligence"}],
+    }
+
+    adapter.run(context, lambda: None, engine_manifest=declared_manifest)
+
+    with session_factory.create() as session:
+        record = RepositoryFactory(session).intelligence().load(context.intelligence[0].id)
+
+    assert record is not None
+    assert record.metadata["engine_version"] == "1.0.0"
+    assert record.metadata["plugin_id"] == "macro-plugin"
+    assert record.metadata["plugin_version"] == "2.0.0"
 
 
 def test_partial_transition_and_snapshot_determinism(session_factory: SessionFactory) -> None:
@@ -178,11 +239,14 @@ def test_partial_transition_and_snapshot_determinism(session_factory: SessionFac
     first = snapshot_for_run(context.run, artifact_ids=tuple(context.persisted_artifact_ids), created_at=NOW)
     second = snapshot_for_run(context.run, artifact_ids=tuple(reversed(context.persisted_artifact_ids)), created_at=NOW)
     with session_factory.create() as session:
+        history = PipelineHistory(RepositoryFactory(session))
         record = RepositoryFactory(session).pipeline_runs().load(context.run.run_id)
+        final_attempt = history.attempt_history(context.run.run_id)[-1]
         snapshots = PipelineHistory(RepositoryFactory(session)).snapshot_history(context.run.target_id)
 
     assert record is not None
-    assert record.status == "partial"
+    assert record.status == "analytical"
+    assert final_attempt.status == "partial"
     assert first.id == second.id
     assert len(snapshots) == 1
 
@@ -198,6 +262,85 @@ def test_history_helpers_return_target_engine_effective_and_artifact_history(ses
         assert history.engine_history("macro-engine")
         assert history.effective_time_history(target_id=context.run.target_id, as_of=NOW)
         assert history.artifact_history(context.run.run_id)
+
+
+def test_failed_attempt_followed_by_successful_attempt(session_factory: SessionFactory) -> None:
+    context = run_context()
+    adapter = enabled_adapter(session_factory)
+
+    with pytest.raises(RuntimeError):
+        adapter.run(context, failing_execution, engine_manifest=manifest())
+    context.intelligence.clear()
+    PipelineOrchestrator().run(context=context, intelligence_engines=[ExampleEngine()], persistence_adapter=adapter)
+
+    assert context.run is not None
+    with session_factory.create() as session:
+        attempts = PipelineHistory(RepositoryFactory(session)).attempt_history(context.run.run_id)
+
+    assert [attempt.attempt_number for attempt in attempts] == [1, 1, 1, 2, 2, 2]
+    assert [attempt.status for attempt in attempts] == ["pending", "running", "failed", "pending", "running", "succeeded"]
+
+
+def test_partial_attempt_followed_by_successful_attempt(session_factory: SessionFactory) -> None:
+    context = run_context()
+    context.persistence_errors.append("optional failure")
+    context.emit_intelligence(sample_intelligence())
+    adapter = enabled_adapter(session_factory)
+
+    adapter.run(context, lambda: None, engine_manifest=manifest())
+    context.persistence_errors.clear()
+    context.intelligence.clear()
+    PipelineOrchestrator().run(context=context, intelligence_engines=[ExampleEngine()], persistence_adapter=adapter)
+
+    assert context.run is not None
+    with session_factory.create() as session:
+        attempts = PipelineHistory(RepositoryFactory(session)).attempt_history(context.run.run_id)
+
+    assert [attempt.status for attempt in attempts] == ["pending", "running", "partial", "pending", "running", "succeeded"]
+
+
+def test_operational_timestamps_do_not_alter_pipeline_run_identity() -> None:
+    first = PipelineRun.create(
+        run_type="manual",
+        target_id="bitcoin",
+        target_type="project",
+        configuration_fingerprint="configuration:fingerprint-v1:abc",
+        input_fingerprint="input:fingerprint-v1:abc",
+        engine_manifest_fingerprint="engine-manifest:fingerprint-v1:abc",
+        effective_at=NOW,
+        requested_at=NOW,
+        clock=FixedClock(NOW),
+    )
+    second = PipelineRun.create(
+        run_type="manual",
+        target_id="bitcoin",
+        target_type="project",
+        configuration_fingerprint="configuration:fingerprint-v1:abc",
+        input_fingerprint="input:fingerprint-v1:abc",
+        engine_manifest_fingerprint="engine-manifest:fingerprint-v1:abc",
+        effective_at=NOW,
+        requested_at=datetime(2026, 1, 2, 4, 4, 5, tzinfo=UTC),
+        clock=FixedClock(NOW),
+    )
+
+    assert first.run_id == second.run_id
+
+
+def test_attempt_idempotence_and_identity_conflict_handling(session_factory: SessionFactory) -> None:
+    context = run_persisted_pipeline(session_factory)
+    assert context.run is not None
+    with session_factory.create() as session:
+        repo = RepositoryFactory(session).operational_attempts()
+        first = PipelineHistory(RepositoryFactory(session)).attempt_history(context.run.run_id)[0]
+        repo.save(first)
+        conflicting = type(first)(
+            **{
+                **first.serializable_fields(),
+                "metadata": {"changed": "true"},
+            }
+        )
+        with pytest.raises(PersistenceIdentityConflictError):
+            repo.save(conflicting)
 
 
 def test_no_sqlalchemy_leakage_outside_persistence_source() -> None:
@@ -324,7 +467,12 @@ class ExampleEngine(BaseIntelligenceEngine):
         return True
 
 
-def sample_intelligence(*, engine_id: str = "macro-engine", raw_data: dict[str, int] | None = None) -> Intelligence:
+def sample_intelligence(
+    *,
+    engine_id: str = "macro-engine",
+    raw_data: dict[str, int] | None = None,
+    metadata: dict[str, str] | None = None,
+) -> Intelligence:
     evidence = Evidence(
         id=f"{engine_id}-evidence",
         source="fixture",
@@ -375,4 +523,5 @@ def sample_intelligence(*, engine_id: str = "macro-engine", raw_data: dict[str, 
             uncertainty=0.2,
         ),
         generated_at=NOW,
+        metadata=metadata or {},
     )

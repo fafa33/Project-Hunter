@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 from hunter.persistence.records import (
     ConfigurationRecord,
     EngineManifestRecord,
@@ -7,9 +9,11 @@ from hunter.persistence.records import (
     InsightRecord,
     IntelligenceRecord,
     ObservationRecord,
+    OperationalAttemptRecord,
     PipelineRunRecord,
     SignalRecord,
 )
+from hunter.persistence.serialization import record_to_json
 from hunter.persistence.sql.repositories.base import SQLRecordRepository
 from hunter.persistence.sql.repositories.base import SQLSnapshotRepository as BaseSQLSnapshotRepository
 
@@ -17,6 +21,21 @@ from hunter.persistence.sql.repositories.base import SQLSnapshotRepository as Ba
 class SQLPipelineRunRepository(SQLRecordRepository[PipelineRunRecord]):
     record_type = "pipeline-run"
     record_class = PipelineRunRecord
+
+    def _canonical_hash_payload(self, record: PipelineRunRecord) -> str:
+        analytical = replace(
+            record,
+            status="analytical",
+            requested_at=None,
+            started_at=None,
+            finished_at=None,
+        )
+        return record_to_json(analytical)
+
+
+class SQLOperationalAttemptRepository(SQLRecordRepository[OperationalAttemptRecord]):
+    record_type = "operational-attempt"
+    record_class = OperationalAttemptRecord
 
 
 class SQLEvidenceRepository(SQLRecordRepository[EvidenceRecord]):

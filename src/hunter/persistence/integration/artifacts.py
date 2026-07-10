@@ -20,11 +20,13 @@ def records_for_intelligence(
     pipeline_run_id: str,
     created_at: datetime,
     effective_at: datetime,
+    declaration_metadata: dict[str, str | int | float | bool | None] | None = None,
 ) -> tuple[EvidenceRecord | SignalRecord | ObservationRecord | InsightRecord | IntelligenceRecord, ...]:
     IntelligenceValidator().validate(intelligence)
+    artifact_metadata = dict(declaration_metadata or {})
     records: list[EvidenceRecord | SignalRecord | ObservationRecord | InsightRecord | IntelligenceRecord] = []
     for evidence in intelligence.evidence:
-        metadata = evidence.metadata.as_dict()
+        metadata = {**artifact_metadata, **evidence.metadata.as_dict()}
         metadata["intelligence_id"] = intelligence.id
         records.append(
             EvidenceRecord(
@@ -56,7 +58,7 @@ def records_for_intelligence(
                 strength=signal.strength,
                 confidence=signal.confidence,
                 severity=signal.severity,
-                metadata=signal.metadata.as_dict(),
+                metadata={**artifact_metadata, **signal.metadata.as_dict()},
             )
         )
     for observation in intelligence.observations:
@@ -72,7 +74,7 @@ def records_for_intelligence(
                 description=observation.description,
                 evidence_ids=tuple(evidence.id for evidence in observation.evidence),
                 importance=observation.importance,
-                metadata=observation.metadata.as_dict(),
+                metadata={**artifact_metadata, **observation.metadata.as_dict()},
             )
         )
     for insight in intelligence.insights:
@@ -88,6 +90,7 @@ def records_for_intelligence(
                 observation_ids=tuple(observation.id for observation in insight.supporting_observations),
                 confidence=insight.confidence,
                 priority=insight.priority,
+                metadata=artifact_metadata,
             )
         )
     records.append(
@@ -104,7 +107,7 @@ def records_for_intelligence(
             observation_ids=tuple(observation.id for observation in intelligence.observations),
             insight_ids=tuple(insight.id for insight in intelligence.insights),
             confidence=asdict(intelligence.confidence),
-            metadata=intelligence.metadata.as_dict(),
+            metadata={**artifact_metadata, **intelligence.metadata.as_dict()},
         )
     )
     return tuple(records)

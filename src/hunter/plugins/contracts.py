@@ -10,6 +10,12 @@ from hunter.execution.identity import fingerprint
 from hunter.execution.run import PipelineRun
 from hunter.intelligence.intelligence import Intelligence
 
+
+@runtime_checkable
+class PersistenceAdapter(Protocol):
+    def run(self, context: PipelineContext, execute: Any, *, engine_manifest: Any | None = None) -> Any:
+        raise NotImplementedError
+
 DEFAULT_EFFECTIVE_AT = datetime(1970, 1, 1, tzinfo=UTC)
 
 
@@ -35,7 +41,7 @@ class PipelineContext:
     intelligence: list[Intelligence] = field(default_factory=list)
     run: PipelineRun | None = None
     clock: Clock = field(default_factory=SystemClock)
-    persistence_adapter: Any | None = None
+    persistence_adapter: PersistenceAdapter | None = None
     persistence_policy: Any | None = None
     persisted_artifact_ids: list[str] = field(default_factory=list)
     persistence_errors: list[str] = field(default_factory=list)
@@ -85,9 +91,18 @@ class PipelineContext:
         self.run_identity_snapshot = self._run_identity_payload(run=run, engine_manifest=engine_manifest)
 
     def validate_run_identity(self, *, engine_manifest: Any | None = None) -> bool:
-        if self.run is None or self.run_identity_snapshot is None:
+        if self.run is None:
             return True
         current = self._run_identity_payload(run=self.run, engine_manifest=engine_manifest)
+        if self.run_identity_snapshot is None:
+            return current == {
+                "target_id": self.run.target_id,
+                "target_type": self.run.target_type,
+                "configuration_fingerprint": self.run.configuration_fingerprint,
+                "input_fingerprint": self.run.input_fingerprint,
+                "engine_manifest_fingerprint": self.run.engine_manifest_fingerprint,
+                "effective_at": normalize(self.run.effective_at),
+            }
         return current == self.run_identity_snapshot
 
     def _run_identity_payload(self, *, run: PipelineRun, engine_manifest: Any | None = None) -> dict[str, object]:

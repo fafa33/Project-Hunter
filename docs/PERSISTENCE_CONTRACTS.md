@@ -15,6 +15,7 @@ Repository interfaces live in `src/hunter/persistence/repositories.py`.
 They define storage-agnostic contracts for:
 
 - `PipelineRunRepository`
+- `OperationalAttemptRepository`
 - `EvidenceRepository`
 - `SignalRepository`
 - `ObservationRepository`
@@ -47,6 +48,7 @@ Canonical immutable records live in `src/hunter/persistence/records.py`.
 Implemented records:
 
 - `PipelineRunRecord`
+- `OperationalAttemptRecord`
 - `EvidenceRecord`
 - `SignalRecord`
 - `ObservationRecord`
@@ -118,7 +120,7 @@ Backend selection and implementation are outside this milestone.
 
 ## Relationship to Pipeline
 
-Pipeline persistence integration now persists `PipelineRunRecord` lifecycle records and emitted Intelligence-related records through repository interfaces when an explicit adapter is supplied. Engines remain storage-agnostic.
+Pipeline persistence integration now persists analytical `PipelineRunRecord` objects, operational attempt lifecycle records, and emitted Intelligence-related records through repository interfaces when an explicit adapter is supplied. Engines remain storage-agnostic.
 
 ## Relationship to Fusion
 

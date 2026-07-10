@@ -4,7 +4,7 @@
 
 Pipeline Persistence Integration connects deterministic pipeline execution to persistence contracts and repository implementations.
 
-It persists pipeline run lifecycle records, emitted analytical artifacts, and deterministic snapshots without adding analytical logic to the pipeline, engines, or repositories.
+It persists analytical pipeline runs, operational attempt lifecycle records, emitted analytical artifacts, and deterministic snapshots without adding analytical logic to the pipeline, engines, or repositories.
 
 ## Architecture
 
@@ -13,6 +13,7 @@ The integration package lives in `src/hunter/persistence/integration/`.
 It contains:
 
 - `PipelinePersistenceAdapter`
+- operational attempt records
 - lifecycle state validation
 - persistence policy settings
 - Intelligence-to-record conversion
@@ -56,14 +57,15 @@ When persistence is enabled, the adapter opens a UnitOfWork before lifecycle per
 
 The normal boundary is:
 
-1. Persist pending lifecycle state.
-2. Persist running lifecycle state.
-3. Execute the pipeline.
-4. Validate run identity consistency.
-5. Persist emitted artifacts.
-6. Persist final lifecycle state.
-7. Persist a deterministic snapshot when configured.
-8. Commit.
+1. Persist the analytical run record.
+2. Persist pending operational attempt state.
+3. Persist running operational attempt state.
+4. Execute the pipeline.
+5. Validate run identity consistency.
+6. Persist emitted artifacts.
+7. Persist final operational attempt state.
+8. Persist a deterministic snapshot when configured.
+9. Commit.
 
 Transaction failures roll back through the UnitOfWork.
 
@@ -79,9 +81,9 @@ Retry logic is not implemented.
 
 ## Run State Model
 
-Pipeline lifecycle records are immutable persistence records. Pending and running records use deterministic lifecycle record identities linked to the canonical run identity through metadata.
+Pipeline lifecycle records are immutable operational attempt records. Pending, running, and terminal records use deterministic attempt-state identities linked to an `attempt_id` and canonical `run_id`.
 
-The terminal run record uses the canonical `PipelineRun.run_id`.
+The analytical run record uses the canonical `PipelineRun.run_id` and remains separate from operational lifecycle state.
 
 Runtime timestamps such as `started_at` and `finished_at` are operational metadata and do not alter analytical run identity.
 

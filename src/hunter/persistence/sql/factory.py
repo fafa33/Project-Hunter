@@ -9,6 +9,7 @@ from hunter.persistence.sql.repositories import (
     SQLInsightRepository,
     SQLIntelligenceRepository,
     SQLObservationRepository,
+    SQLOperationalAttemptRepository,
     SQLPipelineRunRepository,
     SQLSignalRepository,
     SQLSnapshotRepository,
@@ -21,6 +22,9 @@ class RepositoryFactory:
 
     def pipeline_runs(self) -> SQLPipelineRunRepository:
         return SQLPipelineRunRepository(self._session)
+
+    def operational_attempts(self) -> SQLOperationalAttemptRepository:
+        return SQLOperationalAttemptRepository(self._session)
 
     def evidence(self) -> SQLEvidenceRepository:
         return SQLEvidenceRepository(self._session)
@@ -45,4 +49,3 @@ class RepositoryFactory:
 
     def engine_manifests(self) -> SQLEngineManifestRepository:
         return SQLEngineManifestRepository(self._session)
-

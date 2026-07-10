@@ -17,6 +17,7 @@ Concrete repositories live under `src/hunter/persistence/sql/repositories/`.
 Implemented repositories:
 
 - `SQLPipelineRunRepository`
+- `SQLOperationalAttemptRepository`
 - `SQLEvidenceRepository`
 - `SQLSignalRepository`
 - `SQLObservationRepository`

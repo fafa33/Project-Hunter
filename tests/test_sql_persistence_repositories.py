@@ -13,6 +13,7 @@ from hunter.persistence.records import (
     InsightRecord,
     IntelligenceRecord,
     ObservationRecord,
+    OperationalAttemptRecord,
     PipelineRunRecord,
     SignalRecord,
     SnapshotRecord,
@@ -77,6 +78,7 @@ def test_repository_factory_creates_all_repositories(session_factory: SessionFac
         factory = RepositoryFactory(session)
 
         assert factory.pipeline_runs().record_type == "pipeline-run"
+        assert factory.operational_attempts().record_type == "operational-attempt"
         assert factory.evidence().record_type == "evidence"
         assert factory.signals().record_type == "signal"
         assert factory.observations().record_type == "observation"
@@ -131,6 +133,24 @@ def test_idempotent_save_identity_preservation_and_conflict_rejection(session_fa
             repo.save(evidence_record(raw_data={"value": 2}))
 
 
+def test_pipeline_run_conflict_check_ignores_operational_timestamps(session_factory: SessionFactory) -> None:
+    with session_factory.create() as session:
+        repo = RepositoryFactory(session).pipeline_runs()
+        first = pipeline_run_record()
+        second = PipelineRunRecord(
+            **{
+                **first.serializable_fields(),
+                "requested_at": NOW + timedelta(hours=1),
+                "started_at": NOW + timedelta(hours=1),
+                "finished_at": NOW + timedelta(hours=2),
+                "status": "failed",
+            }
+        )
+
+        repo.save(first)
+        assert repo.save(second) == first
+
+
 def test_no_physical_delete(session_factory: SessionFactory) -> None:
     with session_factory.create() as session:
         repo = RepositoryFactory(session).pipeline_runs()
@@ -182,6 +202,7 @@ def test_all_requested_concrete_repositories_persist_records(session_factory: Se
         factory = RepositoryFactory(session)
 
         assert factory.pipeline_runs().save(pipeline_run_record()).id
+        assert factory.operational_attempts().save(operational_attempt_record()).id
         assert factory.evidence().save(evidence_record()).id
         assert factory.signals().save(signal_record()).id
         assert factory.observations().save(observation_record()).id
@@ -209,6 +230,21 @@ def pipeline_run_record(
         engine_manifest_fingerprint="engine-manifest:fingerprint-v1:abc",
         status="succeeded",
         requested_at=NOW,
+    )
+
+
+def operational_attempt_record() -> OperationalAttemptRecord:
+    return OperationalAttemptRecord(
+        id="operational-attempt-state:identity-v1:abc",
+        created_at=NOW,
+        effective_at=NOW,
+        attempt_id="operational-attempt:identity-v1:abc",
+        run_id="pipeline-run:identity-v1:abc",
+        attempt_number=1,
+        requested_at=NOW,
+        started_at=NOW,
+        finished_at=NOW,
+        status="succeeded",
     )
 
 

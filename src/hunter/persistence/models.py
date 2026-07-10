@@ -6,6 +6,7 @@ from typing import Any, Literal
 
 RecordKind = Literal[
     "pipeline-run",
+    "operational-attempt",
     "evidence",
     "signal",
     "observation",
@@ -73,4 +74,3 @@ class RecordBatch:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "records", tuple(self.records))
-

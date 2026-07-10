@@ -51,11 +51,11 @@ Run type is part of canonical run identity. Replay runs may also carry `replay_o
 
 ## Effective Time Semantics
 
-`requested_at` records when a run was requested.
+`requested_at` records when a run was requested on the in-memory `PipelineRun` model for compatibility, but persisted operational timing belongs to `OperationalAttemptRecord`.
 
 `effective_at` records the analytical time used for reproducible outputs.
 
-`started_at` and `finished_at` are runtime execution timestamps and are not part of deterministic analytical identity.
+`started_at` and `finished_at` are runtime execution timestamps and are not part of deterministic analytical identity. Persisted run lifecycle state is represented by operational attempt records, not by changing analytical run identity.
 
 Analytical object generation uses the run's `effective_at` through the shared identity path. Observation timestamps from source evidence remain separate from generated analytical timestamps.
 
@@ -179,7 +179,7 @@ Direct calls to engine `generate_intelligence(...)` without `EngineRunner` can s
 
 This milestone prepares identity and run metadata for future persistence. It does not write records to storage.
 
-Future persistence should store `PipelineRun`, Evidence, Intelligence, and snapshots using these deterministic identities.
+Persistence stores analytical `PipelineRunRecord` separately from operational attempts. Evidence, Intelligence, and snapshots continue to use deterministic analytical identities.
 
 ## Relationship to Fusion
 

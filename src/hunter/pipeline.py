@@ -3,11 +3,10 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
 from hunter.intelligence.engines.contracts import IntelligenceEngine
 from hunter.intelligence.engines.runner import EngineRunner
-from hunter.plugins.contracts import PipelineContext, Plugin
+from hunter.plugins.contracts import PersistenceAdapter, PipelineContext, Plugin
 from hunter.plugins.manager import PluginManager
 
 
@@ -25,7 +24,7 @@ class PipelineOrchestrator:
         config_path: Path | None = None,
         built_in_plugins: Iterable[Plugin] | None = None,
         intelligence_engines: Iterable[IntelligenceEngine] | None = None,
-        persistence_adapter: Any | None = None,
+        persistence_adapter: PersistenceAdapter | None = None,
     ) -> PipelineContext:
         pipeline_context = context or PipelineContext()
         engine_list = list(intelligence_engines or [])

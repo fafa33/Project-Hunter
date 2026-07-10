@@ -15,6 +15,7 @@ from hunter.persistence import (
     InsightRecord,
     IntelligenceRecord,
     ObservationRecord,
+    OperationalAttemptRecord,
     PipelineRunRecord,
     QueryFilter,
     QuerySpec,
@@ -37,6 +38,7 @@ from hunter.persistence.repositories import (
     InsightRepository,
     IntelligenceRepository,
     ObservationRepository,
+    OperationalAttemptRepository,
     PipelineRunRepository,
     SignalRepository,
     SnapshotRepository,
@@ -68,6 +70,7 @@ def test_record_validation_rejects_missing_identity_naive_datetime_and_bad_range
 def test_all_canonical_records_can_be_constructed_and_validate() -> None:
     records = (
         pipeline_run_record(),
+        operational_attempt_record(),
         evidence_record(),
         signal_record(),
         observation_record(),
@@ -81,6 +84,7 @@ def test_all_canonical_records_can_be_constructed_and_validate() -> None:
 
     assert [record.record_type for record in records] == [
         "pipeline-run",
+        "operational-attempt",
         "evidence",
         "signal",
         "observation",
@@ -126,6 +130,7 @@ def test_repository_contracts_expose_required_operations() -> None:
     required = {"save", "save_many", "load", "load_many", "exists", "delete", "query", "latest", "history", "snapshot"}
     repositories = (
         PipelineRunRepository,
+        OperationalAttemptRepository,
         EvidenceRepository,
         SignalRepository,
         ObservationRepository,
@@ -195,6 +200,21 @@ def pipeline_run_record(
         engine_manifest_fingerprint="engine-manifest:fingerprint-v1:abc",
         status="succeeded",
         requested_at=NOW,
+    )
+
+
+def operational_attempt_record() -> OperationalAttemptRecord:
+    return OperationalAttemptRecord(
+        id="operational-attempt-state:identity-v1:abc",
+        created_at=NOW,
+        effective_at=NOW,
+        attempt_id="operational-attempt:identity-v1:abc",
+        run_id="pipeline-run:identity-v1:abc",
+        attempt_number=1,
+        requested_at=NOW,
+        started_at=NOW,
+        finished_at=NOW,
+        status="succeeded",
     )
 
 

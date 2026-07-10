@@ -5,11 +5,13 @@ from datetime import datetime
 from typing import Protocol
 
 from hunter.persistence.models import QueryFilter, QuerySpec
-from hunter.persistence.records import IntelligenceRecord, PipelineRunRecord, SnapshotRecord
+from hunter.persistence.records import IntelligenceRecord, OperationalAttemptRecord, PipelineRunRecord, SnapshotRecord
 
 
 class HistoryRepositories(Protocol):
     def pipeline_runs(self): ...
+
+    def operational_attempts(self): ...
 
     def intelligence(self): ...
 
@@ -21,17 +23,15 @@ class PipelineHistory:
     repositories: HistoryRepositories
 
     def run_history(self, pipeline_run_id: str) -> tuple[PipelineRunRecord, ...]:
-        records = self.repositories.pipeline_runs().query(QuerySpec(record_kind="pipeline-run"))
-        return tuple(
-            sorted(
-                (
-                    record
-                    for record in records
-                    if record.id == pipeline_run_id or record.metadata.get("pipeline_run_id") == pipeline_run_id
-                ),
-                key=lambda item: (item.effective_at, str(item.metadata.get("lifecycle_state", ""))),
-            )
+        return self.repositories.pipeline_runs().query(
+            QuerySpec(record_kind="pipeline-run", filters=(QueryFilter("id", pipeline_run_id),))
         )
+
+    def attempt_history(self, pipeline_run_id: str) -> tuple[OperationalAttemptRecord, ...]:
+        records = self.repositories.operational_attempts().query(
+            QuerySpec(record_kind="operational-attempt", filters=(QueryFilter("run_id", pipeline_run_id),))
+        )
+        return tuple(sorted(records, key=lambda item: (item.attempt_number, _state_order(item.status))))
 
     def target_history(self, target_id: str) -> tuple[PipelineRunRecord, ...]:
         return self.repositories.pipeline_runs().query(
@@ -55,3 +55,14 @@ class PipelineHistory:
         return self.repositories.snapshots().query(
             QuerySpec(record_kind="snapshot", filters=(QueryFilter("target_id", target_id),))
         )
+
+
+def _state_order(status: str) -> int:
+    return {
+        "pending": 0,
+        "running": 1,
+        "failed": 2,
+        "partial": 2,
+        "cancelled": 2,
+        "succeeded": 2,
+    }.get(status, 99)
