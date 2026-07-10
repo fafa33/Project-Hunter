@@ -96,6 +96,7 @@ The adapter persists canonical records for:
 - Observation
 - Insight
 - Intelligence
+- FusedIntelligence, when the optional Fusion stage is supplied
 
 It validates standardized Intelligence objects before conversion and preserves existing deterministic IDs. It does not generate replacement analytical IDs.
 
@@ -224,9 +225,9 @@ Future PostgreSQL support should implement the same repository and UnitOfWork co
 
 ## Relationship to Fusion
 
-This integration is a prerequisite for Fusion because it provides durable run identity, artifact relationships, and snapshot history.
+Fusion integrates as an optional post-intelligence pipeline stage.
 
-Fusion is not implemented here.
+When supplied, Fusion executes after Intelligence engines and plugins have emitted Intelligence and before artifact persistence. The adapter persists `FusedIntelligenceRecord` through the same UnitOfWork and repository boundaries as other analytical artifacts.
 
 ## Relationship to Opportunity Timing
 

@@ -1,10 +1,61 @@
 from __future__ import annotations
 
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Literal
 
 FusionTargetType = Literal["project", "asset", "protocol", "chain", "sector", "narrative", "ecosystem"]
+ScalarValue = str | int | float | bool | None
+
+
+@dataclass(frozen=True)
+class FrozenScalarMap(Mapping[str, ScalarValue]):
+    values: tuple[tuple[str, ScalarValue], ...] = ()
+
+    def __init__(self, values: Mapping[str, Any] | tuple[tuple[str, ScalarValue], ...] | None = None) -> None:
+        raw = values.items() if isinstance(values, Mapping) else values or ()
+        normalized = _metadata(dict(raw))
+        object.__setattr__(self, "values", tuple(sorted(normalized.items())))
+
+    def __getitem__(self, key: str) -> ScalarValue:
+        for item_key, value in self.values:
+            if item_key == key:
+                return value
+        raise KeyError(key)
+
+    def __iter__(self) -> Iterator[str]:
+        return (key for key, _ in self.values)
+
+    def __len__(self) -> int:
+        return len(self.values)
+
+    def as_dict(self) -> dict[str, ScalarValue]:
+        return dict(self.values)
+
+
+@dataclass(frozen=True)
+class FrozenFloatMap(Mapping[str, float]):
+    values: tuple[tuple[str, float], ...] = ()
+
+    def __init__(self, values: Mapping[str, float] | tuple[tuple[str, float], ...] | None = None) -> None:
+        raw = values.items() if isinstance(values, Mapping) else values or ()
+        object.__setattr__(self, "values", tuple(sorted((str(key), _clamp(float(value))) for key, value in raw)))
+
+    def __getitem__(self, key: str) -> float:
+        for item_key, value in self.values:
+            if item_key == key:
+                return value
+        raise KeyError(key)
+
+    def __iter__(self) -> Iterator[str]:
+        return (key for key, _ in self.values)
+
+    def __len__(self) -> int:
+        return len(self.values)
+
+    def as_dict(self) -> dict[str, float]:
+        return dict(self.values)
 
 
 @dataclass(frozen=True)
@@ -12,12 +63,12 @@ class FusionTarget:
     target_type: FusionTargetType
     target_id: str
     label: str | None = None
-    metadata: dict[str, str | int | float | bool | None] = field(default_factory=dict)
+    metadata: FrozenScalarMap | Mapping[str, Any] = field(default_factory=FrozenScalarMap)
 
     def __post_init__(self) -> None:
         _require_text("target_type", self.target_type)
         _require_text("target_id", self.target_id)
-        object.__setattr__(self, "metadata", _metadata(self.metadata))
+        object.__setattr__(self, "metadata", FrozenScalarMap(self.metadata))
 
 
 @dataclass(frozen=True)
@@ -34,6 +85,9 @@ class FusionInput:
     confidence_score: float
     evidence_ids: tuple[str, ...]
     evidence_references: tuple[str, ...]
+    evidence_lineage_keys: tuple[str, ...]
+    evidence_reliabilities: tuple[float, ...]
+    evidence_freshness: tuple[float, ...]
     signal_ids: tuple[str, ...]
     signal_categories: tuple[str, ...]
     signal_strengths: tuple[float, ...]
@@ -44,7 +98,8 @@ class FusionInput:
     insight_ids: tuple[str, ...]
     insight_titles: tuple[str, ...]
     insight_explanations: tuple[str, ...]
-    metadata: dict[str, str | int | float | bool | None] = field(default_factory=dict)
+    target_refs: tuple[tuple[FusionTargetType, str], ...] = ()
+    metadata: FrozenScalarMap | Mapping[str, Any] = field(default_factory=FrozenScalarMap)
 
     def __post_init__(self) -> None:
         for name in ("intelligence_id", "engine_id", "project"):
@@ -55,6 +110,9 @@ class FusionInput:
         for name in (
             "evidence_ids",
             "evidence_references",
+            "evidence_lineage_keys",
+            "evidence_reliabilities",
+            "evidence_freshness",
             "signal_ids",
             "signal_categories",
             "signal_strengths",
@@ -65,9 +123,10 @@ class FusionInput:
             "insight_ids",
             "insight_titles",
             "insight_explanations",
+            "target_refs",
         ):
             object.__setattr__(self, name, tuple(getattr(self, name)))
-        object.__setattr__(self, "metadata", _metadata(self.metadata))
+        object.__setattr__(self, "metadata", FrozenScalarMap(self.metadata))
 
 
 @dataclass(frozen=True)
@@ -136,6 +195,21 @@ class MissingEvidenceAssessment:
     def __post_init__(self) -> None:
         object.__setattr__(self, "missing_categories", tuple(sorted(set(self.missing_categories))))
         object.__setattr__(self, "severity", _clamp(self.severity))
+
+
+@dataclass(frozen=True)
+class CanonicalEvidence:
+    canonical_key: str
+    evidence_ids: tuple[str, ...]
+    references: tuple[str, ...]
+    lineage_keys: tuple[str, ...]
+    source_intelligence_ids: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "evidence_ids", tuple(sorted(set(self.evidence_ids))))
+        object.__setattr__(self, "references", tuple(sorted(set(self.references))))
+        object.__setattr__(self, "lineage_keys", tuple(sorted(set(self.lineage_keys))))
+        object.__setattr__(self, "source_intelligence_ids", tuple(sorted(set(self.source_intelligence_ids))))
 
 
 @dataclass(frozen=True)
@@ -210,10 +284,10 @@ class IntelligenceGraphNode:
     id: str
     node_type: str
     label: str
-    metadata: dict[str, str | int | float | bool | None] = field(default_factory=dict)
+    metadata: FrozenScalarMap | Mapping[str, Any] = field(default_factory=FrozenScalarMap)
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "metadata", _metadata(self.metadata))
+        object.__setattr__(self, "metadata", FrozenScalarMap(self.metadata))
 
 
 @dataclass(frozen=True)
@@ -223,11 +297,11 @@ class IntelligenceGraphEdge:
     target_id: str
     edge_type: str
     weight: float
-    metadata: dict[str, str | int | float | bool | None] = field(default_factory=dict)
+    metadata: FrozenScalarMap | Mapping[str, Any] = field(default_factory=FrozenScalarMap)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "weight", _clamp(self.weight))
-        object.__setattr__(self, "metadata", _metadata(self.metadata))
+        object.__setattr__(self, "metadata", FrozenScalarMap(self.metadata))
 
 
 @dataclass(frozen=True)
@@ -246,19 +320,19 @@ class FusedIntelligence:
     narrative: UnifiedNarrative
     graph_nodes: tuple[IntelligenceGraphNode, ...]
     graph_edges: tuple[IntelligenceGraphEdge, ...]
-    confidence: dict[str, float]
+    confidence: FrozenFloatMap | Mapping[str, float]
     effective_at: datetime
     created_at: datetime
-    metadata: dict[str, str | int | float | bool | None] = field(default_factory=dict)
+    metadata: FrozenScalarMap | Mapping[str, Any] = field(default_factory=FrozenScalarMap)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "source_intelligence_ids", tuple(sorted(set(self.source_intelligence_ids))))
         for name in ("contributions", "signals", "observations", "insights", "graph_nodes", "graph_edges"):
             object.__setattr__(self, name, tuple(getattr(self, name)))
-        object.__setattr__(self, "confidence", {str(key): _clamp(float(value)) for key, value in sorted(self.confidence.items())})
+        object.__setattr__(self, "confidence", FrozenFloatMap(self.confidence))
         object.__setattr__(self, "effective_at", _aware(self.effective_at))
         object.__setattr__(self, "created_at", _aware(self.created_at))
-        object.__setattr__(self, "metadata", _metadata(self.metadata))
+        object.__setattr__(self, "metadata", FrozenScalarMap(self.metadata))
 
 
 def _require_text(name: str, value: str) -> None:

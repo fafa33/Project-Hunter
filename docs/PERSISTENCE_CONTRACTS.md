@@ -124,9 +124,11 @@ Pipeline persistence integration now persists analytical `PipelineRunRecord` obj
 
 ## Relationship to Fusion
 
-Fusion is not implemented here.
+`FusedIntelligenceRecord` stores durable Fusion outputs for persisted-only downstream consumers.
 
-The presence of `FusedIntelligenceRecord` defines the future persistence contract for Fusion outputs so that Fusion can be added without redesigning persistence records.
+The record preserves source Intelligence IDs, source run IDs, effective analytical window, confidence breakdown, configuration fingerprint, contribution-model fingerprint, contributions, provenance, corroboration, contradictions, dependencies, missing evidence, unified artifacts, narrative, and graph payloads.
+
+Fused record conflict semantics exclude operational `created_at` variance in the SQL repository so repeated identical analytical Fusion outputs remain idempotent across operational attempts.
 
 ## Known Limitations
 

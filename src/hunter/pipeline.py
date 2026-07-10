@@ -3,10 +3,11 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
 from hunter.intelligence.engines.contracts import IntelligenceEngine
 from hunter.intelligence.engines.runner import EngineRunner
+from hunter.intelligence.fusion.contracts import FusionEngine
+from hunter.intelligence.fusion.models import FusionTarget
 from hunter.plugins.contracts import PersistenceAdapter, PipelineContext, Plugin
 from hunter.plugins.manager import PluginManager
 
@@ -26,8 +27,8 @@ class PipelineOrchestrator:
         built_in_plugins: Iterable[Plugin] | None = None,
         intelligence_engines: Iterable[IntelligenceEngine] | None = None,
         persistence_adapter: PersistenceAdapter | None = None,
-        fusion_engine: Any | None = None,
-        fusion_target: Any | None = None,
+        fusion_engine: FusionEngine | None = None,
+        fusion_target: FusionTarget | None = None,
     ) -> PipelineContext:
         pipeline_context = context or PipelineContext()
         engine_list = list(intelligence_engines or [])
@@ -65,8 +66,8 @@ class PipelineOrchestrator:
         *,
         engine_list: list[IntelligenceEngine],
         intelligence_engines: Iterable[IntelligenceEngine] | None,
-        fusion_engine: Any | None = None,
-        fusion_target: Any | None = None,
+        fusion_engine: FusionEngine | None = None,
+        fusion_target: FusionTarget | None = None,
     ) -> None:
         if intelligence_engines is not None:
             self.engine_runner.run(engine_list, pipeline_context)

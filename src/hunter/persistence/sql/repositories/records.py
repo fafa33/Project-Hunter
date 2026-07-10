@@ -68,6 +68,10 @@ class SQLFusedIntelligenceRepository(SQLRecordRepository[FusedIntelligenceRecord
     record_type = "fused-intelligence"
     record_class = FusedIntelligenceRecord
 
+    def _canonical_hash_payload(self, record: FusedIntelligenceRecord) -> str:
+        analytical = replace(record, created_at=record.effective_at)
+        return record_to_json(analytical)
+
 
 class SQLConfigurationRepository(SQLRecordRepository[ConfigurationRecord]):
     record_type = "configuration"

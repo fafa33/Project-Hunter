@@ -108,6 +108,47 @@ def records_for_intelligence(
             insight_ids=tuple(insight.id for insight in intelligence.insights),
             confidence=asdict(intelligence.confidence),
             metadata={**artifact_metadata, **intelligence.metadata.as_dict()},
+            engine_version=_text_or_none(artifact_metadata.get("engine_version") or intelligence.metadata.as_dict().get("engine_version")),
+            plugin_id=_text_or_none(artifact_metadata.get("plugin_id") or intelligence.metadata.as_dict().get("plugin_id")),
+            plugin_version=_text_or_none(artifact_metadata.get("plugin_version") or intelligence.metadata.as_dict().get("plugin_version")),
+            target_refs=_target_refs(intelligence),
+            evidence_references=tuple(evidence.reference for evidence in intelligence.evidence),
+            evidence_lineage_keys=tuple(_lineage_key(evidence.metadata.as_dict()) for evidence in intelligence.evidence),
+            evidence_reliabilities=tuple(evidence.reliability for evidence in intelligence.evidence),
+            evidence_freshness=tuple(evidence.freshness for evidence in intelligence.evidence),
+            signal_categories=tuple(signal.category for signal in intelligence.signals),
+            signal_strengths=tuple(signal.strength for signal in intelligence.signals),
+            signal_confidences=tuple(signal.confidence for signal in intelligence.signals),
+            signal_severities=tuple(signal.severity for signal in intelligence.signals),
+            observation_descriptions=tuple(observation.description for observation in intelligence.observations),
+            insight_titles=tuple(insight.title for insight in intelligence.insights),
+            insight_explanations=tuple(insight.explanation for insight in intelligence.insights),
         )
     )
     return tuple(records)
+
+
+def _text_or_none(value: object) -> str | None:
+    if value is None:
+        return None
+    text = str(value)
+    return text if text else None
+
+
+def _lineage_key(metadata: dict[str, str | int | float | bool | None]) -> str:
+    value = metadata.get("lineage_key") or metadata.get("evidence_lineage_key")
+    return str(value) if value is not None else ""
+
+
+def _target_refs(intelligence: Intelligence) -> tuple[tuple[str, str], ...]:
+    metadata = intelligence.metadata.as_dict()
+    refs: set[tuple[str, str]] = {("project", intelligence.project)}
+    for target_type in ("asset", "protocol", "chain", "sector", "narrative", "ecosystem"):
+        value = metadata.get(f"{target_type}_id")
+        if value is not None and str(value):
+            refs.add((target_type, str(value)))
+    target_type = metadata.get("target_type")
+    target_id = metadata.get("target_id")
+    if target_type is not None and target_id is not None:
+        refs.add((str(target_type), str(target_id)))
+    return tuple(sorted(refs))

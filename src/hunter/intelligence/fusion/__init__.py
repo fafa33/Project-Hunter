@@ -1,10 +1,13 @@
 from hunter.intelligence.fusion.configuration import FusionConfig, FusionWeightingConfig, load_fusion_config
 from hunter.intelligence.fusion.engine import CrossEngineFusionEngine, fused_intelligence_to_record
 from hunter.intelligence.fusion.models import (
+    CanonicalEvidence,
     ContradictionAssessment,
     CorroborationAssessment,
     DependencyAssessment,
     EngineContribution,
+    FrozenFloatMap,
+    FrozenScalarMap,
     FusedIntelligence,
     FusionInput,
     FusionTarget,
@@ -20,10 +23,13 @@ from hunter.intelligence.fusion.models import (
 __all__ = [
     "ContradictionAssessment",
     "CorroborationAssessment",
+    "CanonicalEvidence",
     "CrossEngineFusionEngine",
     "DependencyAssessment",
     "EngineContribution",
     "FusedIntelligence",
+    "FrozenFloatMap",
+    "FrozenScalarMap",
     "FusionConfig",
     "FusionInput",
     "FusionTarget",

@@ -2,15 +2,16 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Iterable
+from dataclasses import asdict
 from datetime import UTC, datetime
 
-from hunter.execution.identity import identity
+from hunter.execution.identity import fingerprint, identity
 from hunter.intelligence.fusion.alignment import align_to_target, effective_window
 from hunter.intelligence.fusion.confidence import calculate_fused_confidence
 from hunter.intelligence.fusion.configuration import FusionConfig
 from hunter.intelligence.fusion.contradiction import assess_contradictions
 from hunter.intelligence.fusion.corroboration import assess_corroboration
-from hunter.intelligence.fusion.deduplication import deduplicate_evidence, deduplicate_sources
+from hunter.intelligence.fusion.deduplication import canonicalize_evidence, deduplicate_evidence, deduplicate_sources
 from hunter.intelligence.fusion.dependencies import assess_dependencies
 from hunter.intelligence.fusion.graph import build_intelligence_graph
 from hunter.intelligence.fusion.models import (
@@ -41,6 +42,8 @@ class CrossEngineFusionEngine:
         config: FusionConfig | None = None,
     ) -> FusedIntelligence:
         active_config = config or self.config
+        configuration_fingerprint = fingerprint("fusion-configuration", asdict(active_config))
+        contribution_model_fingerprint = fingerprint("fusion-contribution-model", asdict(active_config.weighting))
         inputs = deduplicate_sources(normalize_fusion_inputs(intelligence))
         aligned_inputs = align_to_target(inputs, target)
         dependencies = assess_dependencies(aligned_inputs, active_config)
@@ -60,15 +63,18 @@ class CrossEngineFusionEngine:
             active_config,
         )
         effective_at = max((item.effective_at for item in aligned_inputs), default=datetime(1970, 1, 1, tzinfo=UTC))
+        window = effective_window(aligned_inputs)
         source_ids = tuple(item.intelligence_id for item in aligned_inputs)
         fused_id = identity(
             "fused-intelligence",
             {
                 "target": target,
                 "source_intelligence_ids": source_ids,
+                "configuration_fingerprint": configuration_fingerprint,
+                "contribution_model_fingerprint": contribution_model_fingerprint,
                 "strategy": active_config.strategy,
-                "effective_at": effective_at,
-                "confidence": confidence,
+                "effective_window": window,
+                "identity_schema_version": "fusion-identity-v1",
             },
         )
         graph_nodes, graph_edges = build_intelligence_graph(
@@ -79,7 +85,16 @@ class CrossEngineFusionEngine:
             observations,
             insights,
         )
-        narrative = build_unified_narrative(target, aligned_inputs, insights, confidence)
+        narrative = build_unified_narrative(
+            target,
+            aligned_inputs,
+            insights,
+            confidence,
+            corroboration=corroboration,
+            contradictions=contradictions,
+            dependencies=dependencies,
+            missing_evidence=missing,
+        )
         source_run_ids = tuple(sorted({item.run_id for item in aligned_inputs if item.run_id}))
         return FusedIntelligence(
             id=fused_id,
@@ -101,10 +116,13 @@ class CrossEngineFusionEngine:
             created_at=effective_at,
             metadata={
                 "fusion_strategy": active_config.strategy,
+                "configuration_fingerprint": configuration_fingerprint,
+                "contribution_model_fingerprint": contribution_model_fingerprint,
+                "identity_schema_version": "fusion-identity-v1",
                 "input_count": len(aligned_inputs),
                 "engine_count": len({item.engine_id for item in aligned_inputs}),
                 "source_run_id": source_run_ids[0] if source_run_ids else None,
-                "effective_window": "|".join(effective_window(aligned_inputs)),
+                "effective_window": "|".join(window),
                 "deduplicated_evidence_count": len(deduplicate_evidence(aligned_inputs)),
             },
         )
@@ -124,7 +142,46 @@ def fused_intelligence_to_record(
         target_id=fused.target.target_id,
         fusion_strategy=str(fused.metadata.get("fusion_strategy") or "weighted-corroboration-v1"),
         source_intelligence_ids=fused.source_intelligence_ids,
-        confidence=fused.confidence,
+        confidence=fused.confidence.as_dict(),
+        target_type=fused.target.target_type,
+        configuration_fingerprint=str(fused.metadata.get("configuration_fingerprint") or ""),
+        contribution_model_fingerprint=str(fused.metadata.get("contribution_model_fingerprint") or ""),
+        source_run_ids=tuple(str(item) for item in _source_run_ids(fused)),
+        effective_window=tuple(str(fused.metadata.get("effective_window") or "").split("|")) if fused.metadata.get("effective_window") else (),
+        contributions=tuple(_contribution_payload(item) for item in fused.contributions),
+        corroboration={
+            "corroborated_categories": fused.corroboration.corroborated_categories,
+            "corroborating_engine_ids": fused.corroboration.corroborating_engine_ids,
+            "score": fused.corroboration.score,
+            "explanation": fused.corroboration.explanation,
+        },
+        contradictions={
+            "contradicted_categories": fused.contradictions.contradicted_categories,
+            "severity": fused.contradictions.severity,
+            "explanation": fused.contradictions.explanation,
+        },
+        dependencies={
+            "dependent_engine_ids": fused.dependencies.dependent_engine_ids,
+            "dependency_edges": fused.dependencies.dependency_edges,
+            "penalty": fused.dependencies.penalty,
+            "explanation": fused.dependencies.explanation,
+        },
+        missing_evidence={
+            "missing_categories": fused.missing_evidence.missing_categories,
+            "severity": fused.missing_evidence.severity,
+            "explanation": fused.missing_evidence.explanation,
+        },
+        unified_signals=tuple(_signal_payload(item) for item in fused.signals),
+        unified_observations=tuple(_observation_payload(item) for item in fused.observations),
+        unified_insights=tuple(_insight_payload(item) for item in fused.insights),
+        unified_narrative={
+            "summary": fused.narrative.summary,
+            "key_points": fused.narrative.key_points,
+            "uncertainty": fused.narrative.uncertainty,
+            "source_insight_ids": fused.narrative.source_insight_ids,
+        },
+        graph_nodes=tuple(_node_payload(item) for item in fused.graph_nodes),
+        graph_edges=tuple(_edge_payload(item) for item in fused.graph_edges),
         metadata={
             "target_type": fused.target.target_type,
             "engine_count": fused.metadata.get("engine_count"),
@@ -160,7 +217,7 @@ def build_unified_signals(inputs: tuple[FusionInput, ...]) -> tuple[UnifiedSigna
         severities = [item.signal_severities[index] for item, index in members if index < len(item.signal_severities)]
         source_signal_ids = tuple(item.signal_ids[index] for item, index in members if index < len(item.signal_ids))
         engine_ids = tuple(item.engine_id for item, _ in members)
-        evidence_ids = tuple(evidence_id for item, _ in members for evidence_id in item.evidence_ids)
+        evidence_ids = tuple(evidence.canonical_key for evidence in canonicalize_evidence(tuple(item for item, _ in members)))
         payload = {"category": category, "source_signal_ids": source_signal_ids, "engine_ids": engine_ids}
         signals.append(
             UnifiedSignal(
@@ -220,3 +277,81 @@ def _average(values: list[float]) -> float:
     if not values:
         return 0.0
     return round(sum(values) / len(values), 4)
+
+
+def _source_run_ids(fused: FusedIntelligence) -> tuple[str, ...]:
+    source_run_id = fused.metadata.get("source_run_id")
+    return (str(source_run_id),) if source_run_id else ()
+
+
+def _contribution_payload(item: object) -> dict[str, object]:
+    return {
+        "engine_id": item.engine_id,
+        "engine_version": item.engine_version,
+        "plugin_id": item.plugin_id,
+        "plugin_version": item.plugin_version,
+        "intelligence_ids": item.intelligence_ids,
+        "evidence_count": item.evidence_count,
+        "signal_count": item.signal_count,
+        "observation_count": item.observation_count,
+        "insight_count": item.insight_count,
+        "weight": item.weight,
+        "confidence": item.confidence,
+    }
+
+
+def _signal_payload(item: UnifiedSignal) -> dict[str, object]:
+    return {
+        "id": item.id,
+        "category": item.category,
+        "strength": item.strength,
+        "confidence": item.confidence,
+        "severity": item.severity,
+        "source_signal_ids": item.source_signal_ids,
+        "engine_ids": item.engine_ids,
+        "evidence_ids": item.evidence_ids,
+    }
+
+
+def _observation_payload(item: UnifiedObservation) -> dict[str, object]:
+    return {
+        "id": item.id,
+        "description": item.description,
+        "importance": item.importance,
+        "source_observation_ids": item.source_observation_ids,
+        "evidence_ids": item.evidence_ids,
+        "engine_ids": item.engine_ids,
+    }
+
+
+def _insight_payload(item: UnifiedInsight) -> dict[str, object]:
+    return {
+        "id": item.id,
+        "title": item.title,
+        "explanation": item.explanation,
+        "confidence": item.confidence,
+        "priority": item.priority,
+        "source_insight_ids": item.source_insight_ids,
+        "observation_ids": item.observation_ids,
+        "engine_ids": item.engine_ids,
+    }
+
+
+def _node_payload(item: object) -> dict[str, object]:
+    return {
+        "id": item.id,
+        "node_type": item.node_type,
+        "label": item.label,
+        "metadata": item.metadata.as_dict(),
+    }
+
+
+def _edge_payload(item: object) -> dict[str, object]:
+    return {
+        "id": item.id,
+        "source_id": item.source_id,
+        "target_id": item.target_id,
+        "edge_type": item.edge_type,
+        "weight": item.weight,
+        "metadata": item.metadata.as_dict(),
+    }

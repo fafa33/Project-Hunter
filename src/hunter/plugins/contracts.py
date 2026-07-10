@@ -8,6 +8,7 @@ from hunter.execution.canonicalization import normalize
 from hunter.execution.clock import Clock, SystemClock
 from hunter.execution.identity import fingerprint
 from hunter.execution.run import PipelineRun
+from hunter.intelligence.fusion.models import FusedIntelligence
 from hunter.intelligence.intelligence import Intelligence
 
 
@@ -48,7 +49,7 @@ class PipelineContext:
     persistence_errors: list[object] = field(default_factory=list)
     persistence_events: list[Any] = field(default_factory=list)
     run_identity_snapshot: dict[str, object] | None = None
-    fused_intelligence: list[Any] = field(default_factory=list)
+    fused_intelligence: list[FusedIntelligence] = field(default_factory=list)
 
     def get(self, key: str, default: Any = None) -> Any:
         return self.values.get(key, default)

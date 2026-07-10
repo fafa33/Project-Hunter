@@ -26,6 +26,26 @@ TUPLE_FIELDS = {
     "signal_ids",
     "insight_ids",
     "source_intelligence_ids",
+    "source_run_ids",
+    "effective_window",
+    "target_refs",
+    "evidence_references",
+    "evidence_lineage_keys",
+    "evidence_reliabilities",
+    "evidence_freshness",
+    "signal_categories",
+    "signal_strengths",
+    "signal_confidences",
+    "signal_severities",
+    "observation_descriptions",
+    "insight_titles",
+    "insight_explanations",
+    "contributions",
+    "unified_signals",
+    "unified_observations",
+    "unified_insights",
+    "graph_nodes",
+    "graph_edges",
     "record_ids",
     "engines",
 }
@@ -101,4 +121,3 @@ def _datetime(value: str) -> datetime:
         return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(UTC)
     except ValueError as exc:
         raise PersistenceSerializationError(f"Invalid datetime value: {value}") from exc
-

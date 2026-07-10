@@ -11,11 +11,12 @@ def assess_dependencies(inputs: tuple[FusionInput, ...], config: FusionConfig) -
     for left, right in combinations(inputs, 2):
         if left.engine_id == right.engine_id:
             continue
-        shared_refs = set(left.evidence_references).intersection(right.evidence_references)
+        shared_refs = set(left.evidence_references).intersection(item for item in right.evidence_references if item)
         shared_ids = set(left.evidence_ids).intersection(right.evidence_ids)
-        if shared_refs or shared_ids:
+        shared_lineage = set(left.evidence_lineage_keys).intersection(item for item in right.evidence_lineage_keys if item)
+        if shared_refs or shared_ids or shared_lineage:
             source, target = sorted((left.engine_id, right.engine_id))
-            reason = "shared-evidence-reference" if shared_refs else "shared-evidence-id"
+            reason = "shared-evidence-lineage" if shared_lineage else "shared-evidence-reference" if shared_refs else "shared-evidence-id"
             edges.add((source, target, reason))
     dependent_engines = {engine for edge in edges for engine in edge[:2]}
     penalty = min(len(edges) * config.weighting.dependency_penalty, 1.0)

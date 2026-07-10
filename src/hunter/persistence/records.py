@@ -204,6 +204,21 @@ class IntelligenceRecord(BasePersistenceRecord):
     observation_ids: tuple[str, ...]
     insight_ids: tuple[str, ...]
     confidence: dict[str, Any]
+    engine_version: str | None = None
+    plugin_id: str | None = None
+    plugin_version: str | None = None
+    target_refs: tuple[tuple[str, str], ...] = ()
+    evidence_references: tuple[str, ...] = ()
+    evidence_lineage_keys: tuple[str, ...] = ()
+    evidence_reliabilities: tuple[float, ...] = ()
+    evidence_freshness: tuple[float, ...] = ()
+    signal_categories: tuple[str, ...] = ()
+    signal_strengths: tuple[float, ...] = ()
+    signal_confidences: tuple[float, ...] = ()
+    signal_severities: tuple[float, ...] = ()
+    observation_descriptions: tuple[str, ...] = ()
+    insight_titles: tuple[str, ...] = ()
+    insight_explanations: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -213,6 +228,21 @@ class IntelligenceRecord(BasePersistenceRecord):
         object.__setattr__(self, "generated_at", self.generated_at.astimezone(UTC))
         for name in ("signal_ids", "evidence_ids", "observation_ids", "insight_ids"):
             object.__setattr__(self, name, _identity_tuple(name, getattr(self, name)))
+        for name in (
+            "evidence_references",
+            "evidence_lineage_keys",
+            "evidence_reliabilities",
+            "evidence_freshness",
+            "signal_categories",
+            "signal_strengths",
+            "signal_confidences",
+            "signal_severities",
+            "observation_descriptions",
+            "insight_titles",
+            "insight_explanations",
+        ):
+            object.__setattr__(self, name, tuple(getattr(self, name)))
+        object.__setattr__(self, "target_refs", tuple((str(kind), str(value)) for kind, value in self.target_refs))
         normalize(self.confidence)
         object.__setattr__(self, "confidence", dict(self.confidence))
 
@@ -226,14 +256,39 @@ class FusedIntelligenceRecord(BasePersistenceRecord):
     fusion_strategy: str
     source_intelligence_ids: tuple[str, ...]
     confidence: dict[str, Any]
+    target_type: str = "project"
+    configuration_fingerprint: str = ""
+    contribution_model_fingerprint: str = ""
+    source_run_ids: tuple[str, ...] = ()
+    effective_window: tuple[str, ...] = ()
+    contributions: tuple[dict[str, Any], ...] = ()
+    corroboration: dict[str, Any] = field(default_factory=dict)
+    contradictions: dict[str, Any] = field(default_factory=dict)
+    dependencies: dict[str, Any] = field(default_factory=dict)
+    missing_evidence: dict[str, Any] = field(default_factory=dict)
+    unified_signals: tuple[dict[str, Any], ...] = ()
+    unified_observations: tuple[dict[str, Any], ...] = ()
+    unified_insights: tuple[dict[str, Any], ...] = ()
+    unified_narrative: dict[str, Any] = field(default_factory=dict)
+    graph_nodes: tuple[dict[str, Any], ...] = ()
+    graph_edges: tuple[dict[str, Any], ...] = ()
 
     def __post_init__(self) -> None:
         super().__post_init__()
         for name in ("pipeline_run_id", "target_id", "fusion_strategy"):
             _require_text(name, getattr(self, name))
         object.__setattr__(self, "source_intelligence_ids", _identity_tuple("source_intelligence_ids", self.source_intelligence_ids))
+        for name in ("source_run_ids", "effective_window"):
+            object.__setattr__(self, name, tuple(str(item) for item in getattr(self, name)))
+        for name in ("contributions", "unified_signals", "unified_observations", "unified_insights", "graph_nodes", "graph_edges"):
+            object.__setattr__(self, name, tuple(_freeze_payload(item) for item in getattr(self, name)))
+        for name in ("corroboration", "contradictions", "dependencies", "missing_evidence", "unified_narrative"):
+            object.__setattr__(self, name, _freeze_payload(getattr(self, name)))
         normalize(self.confidence)
         object.__setattr__(self, "confidence", dict(self.confidence))
+        for name in ("configuration_fingerprint", "contribution_model_fingerprint"):
+            if getattr(self, name):
+                _require_text(name, getattr(self, name))
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -346,3 +401,12 @@ def _identity_tuple(name: str, values: tuple[str, ...]) -> tuple[str, ...]:
     if not identities:
         raise PersistenceValidationError(f"{name} must include at least one identity")
     return identities
+
+
+def _freeze_payload(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(key): _freeze_payload(item) for key, item in sorted(value.items(), key=lambda row: str(row[0]))}
+    if isinstance(value, list | tuple):
+        return tuple(_freeze_payload(item) for item in value)
+    normalize(value)
+    return value
