@@ -54,7 +54,7 @@ Fusion preserves:
 - plugin IDs and versions where available
 - evidence IDs and references
 - lineage-aware canonical evidence groups
-- run IDs
+- all contributing source run IDs
 - effective timestamps
 - uncertainty and confidence breakdown
 - corroboration, contradiction, dependency, and missing-evidence assessments
@@ -82,6 +82,7 @@ Persisted fused records include the full explainability payload required by pers
 - contribution-model fingerprint
 - source Intelligence IDs
 - source run IDs
+- canonical evidence groups
 - effective analytical window
 
 Pipeline integration is optional. If no fusion engine and target are supplied, pipeline behavior is unchanged.
@@ -109,6 +110,8 @@ Canonical evidence grouping collapses equivalent evidence when:
 - lineage keys indicate the same underlying evidence
 
 The canonical group preserves all contributing evidence IDs, references, lineage keys, and source Intelligence IDs.
+
+Each canonical group also preserves contributing engine IDs, plugin IDs, source run IDs, dependency classification, and provenance metadata. Canonical evidence groups are part of the in-memory Fusion output, persisted fused record payload, deterministic explainability graph, and analytical identity when they change the underlying evidence provenance.
 
 ## Corroboration and Contradiction
 

@@ -226,8 +226,114 @@ def test_rich_fused_record_round_trip_preserves_explainability() -> None:
     assert record.unified_narrative["key_points"]
     assert record.graph_nodes
     assert record.graph_edges
+    assert record.canonical_evidence_groups
     assert record.configuration_fingerprint
     assert record.contribution_model_fingerprint
+
+
+def test_multiple_source_run_ids_are_preserved_and_ordered() -> None:
+    first = _intelligence(
+        "macro-engine",
+        "1.0.0",
+        "plugin-macro",
+        "1.0.0",
+        category="macro",
+        strength=0.8,
+        reference="ref-a",
+        run_id="run-b",
+    )
+    second = _intelligence(
+        "news-engine",
+        "1.0.0",
+        "plugin-news",
+        "1.0.0",
+        category="macro",
+        strength=0.7,
+        reference="ref-b",
+        run_id="run-a",
+    )
+
+    fused = CrossEngineFusionEngine().fuse((first, second), FusionTarget(target_type="project", target_id="project-a"))
+    record = fused_intelligence_to_record(fused, pipeline_run_id="run-fusion", created_at=NOW)
+
+    assert fused.source_run_ids == ("run-a", "run-b")
+    assert record.source_run_ids == ("run-a", "run-b")
+
+
+def test_canonical_evidence_groups_persist_full_provenance_and_graph_links() -> None:
+    first = _intelligence(
+        "macro-engine",
+        "1.0.0",
+        "plugin-macro",
+        "1.0.0",
+        category="macro",
+        strength=0.8,
+        reference="ref-a",
+        lineage_key="lineage-shared",
+        run_id="run-a",
+    )
+    second = _intelligence(
+        "news-engine",
+        "1.0.0",
+        "plugin-news",
+        "1.0.0",
+        category="macro",
+        strength=0.7,
+        reference="ref-b",
+        lineage_key="lineage-shared",
+        run_id="run-b",
+    )
+
+    fused = CrossEngineFusionEngine().fuse((first, second), FusionTarget(target_type="project", target_id="project-a"))
+    record = fused_intelligence_to_record(fused, pipeline_run_id="run-fusion", created_at=NOW)
+    group = fused.canonical_evidence_groups[0]
+    record_group = record.canonical_evidence_groups[0]
+    node_types = {node.node_type for node in fused.graph_nodes}
+    edge_types = {edge.edge_type for edge in fused.graph_edges}
+
+    assert group.evidence_ids == ("evidence-macro-engine", "evidence-news-engine")
+    assert group.references == ("ref-a", "ref-b")
+    assert group.lineage_keys == ("lineage-shared",)
+    assert group.source_intelligence_ids == ("intelligence-macro-engine", "intelligence-news-engine")
+    assert group.engine_ids == ("macro-engine", "news-engine")
+    assert group.plugin_ids == ("plugin-macro", "plugin-news")
+    assert group.source_run_ids == ("run-a", "run-b")
+    assert group.dependency_classification == "shared-evidence-lineage"
+    assert record_group["canonical_key"] == group.canonical_key
+    assert record_group["source_run_ids"] == ("run-a", "run-b")
+    assert "canonical_evidence" in node_types
+    assert {"canonicalizes_evidence", "member_of_canonical_evidence", "contributes_evidence"}.issubset(edge_types)
+
+
+def test_canonical_evidence_groups_affect_identity_when_analytically_relevant() -> None:
+    target = FusionTarget(target_type="project", target_id="project-a")
+    first = _intelligence("macro-engine", "1.0.0", "plugin-macro", "1.0.0", category="macro", strength=0.8, lineage_key="lineage-a")
+    second = _intelligence("macro-engine", "1.0.0", "plugin-macro", "1.0.0", category="macro", strength=0.8, lineage_key="lineage-b")
+
+    assert CrossEngineFusionEngine().fuse((first,), target).id != CrossEngineFusionEngine().fuse((second,), target).id
+
+
+def test_legacy_fused_record_deserialization_defaults_new_provenance_fields() -> None:
+    from hunter.persistence import FusedIntelligenceRecord, record_from_dict, record_to_dict
+
+    legacy = FusedIntelligenceRecord(
+        id="fused-intelligence:identity-v1:legacy",
+        created_at=NOW,
+        effective_at=NOW,
+        pipeline_run_id="run-legacy",
+        target_id="project-a",
+        fusion_strategy="legacy",
+        source_intelligence_ids=("intelligence-legacy",),
+        confidence={"score": 0.5},
+    )
+    payload = record_to_dict(legacy)
+    payload["fields"].pop("source_run_ids")
+    payload["fields"].pop("canonical_evidence_groups")
+
+    restored = record_from_dict(payload)
+
+    assert restored.source_run_ids == ()
+    assert restored.canonical_evidence_groups == ()
 
 
 def test_live_object_and_persisted_record_fusion_parity() -> None:
@@ -330,6 +436,8 @@ def test_fusion_models_are_deeply_immutable() -> None:
         fused.metadata["x"] = "y"  # type: ignore[index]
     with pytest.raises(TypeError):
         fused.confidence["score"] = 0.1  # type: ignore[index]
+    with pytest.raises(TypeError):
+        fused.canonical_evidence_groups[0].metadata["x"] = "y"  # type: ignore[index]
 
 
 def test_improved_corroboration_and_contradiction_semantics() -> None:
@@ -359,6 +467,7 @@ def _intelligence(
     reference: str = "shared-ref",
     lineage_key: str | None = None,
     target_refs: dict[str, str] | None = None,
+    run_id: str = "run-1",
 ) -> Intelligence:
     evidence = Evidence(
         id=f"evidence-{engine_id}",
@@ -406,7 +515,7 @@ def _intelligence(
         confidence=Confidence(score=0.8, completeness=0.8, evidence_quality=0.8, freshness=0.8, uncertainty=0.2),
         generated_at=NOW,
         metadata={
-            "pipeline_run_id": "run-1",
+            "pipeline_run_id": run_id,
             "engine_version": engine_version,
             "plugin_id": plugin_id,
             "plugin_version": plugin_version,

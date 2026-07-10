@@ -261,6 +261,7 @@ class FusedIntelligenceRecord(BasePersistenceRecord):
     contribution_model_fingerprint: str = ""
     source_run_ids: tuple[str, ...] = ()
     effective_window: tuple[str, ...] = ()
+    canonical_evidence_groups: tuple[dict[str, Any], ...] = ()
     contributions: tuple[dict[str, Any], ...] = ()
     corroboration: dict[str, Any] = field(default_factory=dict)
     contradictions: dict[str, Any] = field(default_factory=dict)
@@ -280,7 +281,15 @@ class FusedIntelligenceRecord(BasePersistenceRecord):
         object.__setattr__(self, "source_intelligence_ids", _identity_tuple("source_intelligence_ids", self.source_intelligence_ids))
         for name in ("source_run_ids", "effective_window"):
             object.__setattr__(self, name, tuple(str(item) for item in getattr(self, name)))
-        for name in ("contributions", "unified_signals", "unified_observations", "unified_insights", "graph_nodes", "graph_edges"):
+        for name in (
+            "canonical_evidence_groups",
+            "contributions",
+            "unified_signals",
+            "unified_observations",
+            "unified_insights",
+            "graph_nodes",
+            "graph_edges",
+        ):
             object.__setattr__(self, name, tuple(_freeze_payload(item) for item in getattr(self, name)))
         for name in ("corroboration", "contradictions", "dependencies", "missing_evidence", "unified_narrative"):
             object.__setattr__(self, name, _freeze_payload(getattr(self, name)))

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from hunter.execution.identity import identity
 from hunter.intelligence.fusion.models import (
+    CanonicalEvidence,
     FusionInput,
     FusionTarget,
     IntelligenceGraphEdge,
@@ -16,6 +17,7 @@ def build_intelligence_graph(
     fused_id: str,
     target: FusionTarget,
     inputs: tuple[FusionInput, ...],
+    canonical_evidence_groups: tuple[CanonicalEvidence, ...],
     signals: tuple[UnifiedSignal, ...],
     observations: tuple[UnifiedObservation, ...],
     insights: tuple[UnifiedInsight, ...],
@@ -46,6 +48,22 @@ def build_intelligence_graph(
         for evidence_id in item.evidence_ids:
             nodes[evidence_id] = IntelligenceGraphNode(id=evidence_id, node_type="evidence", label=evidence_id)
             _add_edge(edges, evidence_id, item.intelligence_id, "supports", 1.0)
+    for group in canonical_evidence_groups:
+        nodes[group.canonical_key] = IntelligenceGraphNode(
+            id=group.canonical_key,
+            node_type="canonical_evidence",
+            label=group.dependency_classification,
+            metadata={
+                "dependency_classification": group.dependency_classification,
+                "evidence_count": len(group.evidence_ids),
+                "source_intelligence_count": len(group.source_intelligence_ids),
+            },
+        )
+        _add_edge(edges, group.canonical_key, fused_id, "canonicalizes_evidence", 1.0)
+        for evidence_id in group.evidence_ids:
+            _add_edge(edges, evidence_id, group.canonical_key, "member_of_canonical_evidence", 1.0)
+        for intelligence_id in group.source_intelligence_ids:
+            _add_edge(edges, intelligence_id, group.canonical_key, "contributes_evidence", 1.0)
     for signal in signals:
         nodes[signal.id] = IntelligenceGraphNode(id=signal.id, node_type="unified_signal", label=signal.category)
         _add_edge(edges, signal.id, fused_id, "summarizes_signal", signal.confidence)

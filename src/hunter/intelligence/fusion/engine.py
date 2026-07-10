@@ -11,10 +11,11 @@ from hunter.intelligence.fusion.confidence import calculate_fused_confidence
 from hunter.intelligence.fusion.configuration import FusionConfig
 from hunter.intelligence.fusion.contradiction import assess_contradictions
 from hunter.intelligence.fusion.corroboration import assess_corroboration
-from hunter.intelligence.fusion.deduplication import canonicalize_evidence, deduplicate_evidence, deduplicate_sources
+from hunter.intelligence.fusion.deduplication import canonicalize_evidence, deduplicate_sources
 from hunter.intelligence.fusion.dependencies import assess_dependencies
 from hunter.intelligence.fusion.graph import build_intelligence_graph
 from hunter.intelligence.fusion.models import (
+    CanonicalEvidence,
     FusedIntelligence,
     FusionInput,
     FusionTarget,
@@ -46,6 +47,7 @@ class CrossEngineFusionEngine:
         contribution_model_fingerprint = fingerprint("fusion-contribution-model", asdict(active_config.weighting))
         inputs = deduplicate_sources(normalize_fusion_inputs(intelligence))
         aligned_inputs = align_to_target(inputs, target)
+        canonical_evidence_groups = canonicalize_evidence(aligned_inputs)
         dependencies = assess_dependencies(aligned_inputs, active_config)
         corroboration = assess_corroboration(aligned_inputs, dependencies)
         contradictions = assess_contradictions(aligned_inputs)
@@ -74,6 +76,7 @@ class CrossEngineFusionEngine:
                 "contribution_model_fingerprint": contribution_model_fingerprint,
                 "strategy": active_config.strategy,
                 "effective_window": window,
+                "canonical_evidence_groups": tuple(_canonical_evidence_payload(item) for item in canonical_evidence_groups),
                 "identity_schema_version": "fusion-identity-v1",
             },
         )
@@ -81,6 +84,7 @@ class CrossEngineFusionEngine:
             fused_id,
             target,
             aligned_inputs,
+            canonical_evidence_groups,
             signals,
             observations,
             insights,
@@ -100,6 +104,8 @@ class CrossEngineFusionEngine:
             id=fused_id,
             target=target,
             source_intelligence_ids=source_ids,
+            source_run_ids=source_run_ids,
+            canonical_evidence_groups=canonical_evidence_groups,
             contributions=contributions,
             corroboration=corroboration,
             contradictions=contradictions,
@@ -121,9 +127,9 @@ class CrossEngineFusionEngine:
                 "identity_schema_version": "fusion-identity-v1",
                 "input_count": len(aligned_inputs),
                 "engine_count": len({item.engine_id for item in aligned_inputs}),
-                "source_run_id": source_run_ids[0] if source_run_ids else None,
+                "source_run_count": len(source_run_ids),
                 "effective_window": "|".join(window),
-                "deduplicated_evidence_count": len(deduplicate_evidence(aligned_inputs)),
+                "deduplicated_evidence_count": len(canonical_evidence_groups),
             },
         )
 
@@ -146,8 +152,9 @@ def fused_intelligence_to_record(
         target_type=fused.target.target_type,
         configuration_fingerprint=str(fused.metadata.get("configuration_fingerprint") or ""),
         contribution_model_fingerprint=str(fused.metadata.get("contribution_model_fingerprint") or ""),
-        source_run_ids=tuple(str(item) for item in _source_run_ids(fused)),
+        source_run_ids=fused.source_run_ids,
         effective_window=tuple(str(fused.metadata.get("effective_window") or "").split("|")) if fused.metadata.get("effective_window") else (),
+        canonical_evidence_groups=tuple(_canonical_evidence_payload(item) for item in fused.canonical_evidence_groups),
         contributions=tuple(_contribution_payload(item) for item in fused.contributions),
         corroboration={
             "corroborated_categories": fused.corroboration.corroborated_categories,
@@ -280,8 +287,22 @@ def _average(values: list[float]) -> float:
 
 
 def _source_run_ids(fused: FusedIntelligence) -> tuple[str, ...]:
-    source_run_id = fused.metadata.get("source_run_id")
-    return (str(source_run_id),) if source_run_id else ()
+    return fused.source_run_ids
+
+
+def _canonical_evidence_payload(item: CanonicalEvidence) -> dict[str, object]:
+    return {
+        "canonical_key": item.canonical_key,
+        "evidence_ids": item.evidence_ids,
+        "references": item.references,
+        "lineage_keys": item.lineage_keys,
+        "source_intelligence_ids": item.source_intelligence_ids,
+        "engine_ids": item.engine_ids,
+        "plugin_ids": item.plugin_ids,
+        "source_run_ids": item.source_run_ids,
+        "dependency_classification": item.dependency_classification,
+        "metadata": item.metadata.as_dict(),
+    }
 
 
 def _contribution_payload(item: object) -> dict[str, object]:

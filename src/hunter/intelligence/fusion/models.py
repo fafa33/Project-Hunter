@@ -204,12 +204,21 @@ class CanonicalEvidence:
     references: tuple[str, ...]
     lineage_keys: tuple[str, ...]
     source_intelligence_ids: tuple[str, ...]
+    engine_ids: tuple[str, ...]
+    plugin_ids: tuple[str, ...]
+    source_run_ids: tuple[str, ...]
+    dependency_classification: str
+    metadata: FrozenScalarMap | Mapping[str, Any] = field(default_factory=FrozenScalarMap)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "evidence_ids", tuple(sorted(set(self.evidence_ids))))
         object.__setattr__(self, "references", tuple(sorted(set(self.references))))
         object.__setattr__(self, "lineage_keys", tuple(sorted(set(self.lineage_keys))))
         object.__setattr__(self, "source_intelligence_ids", tuple(sorted(set(self.source_intelligence_ids))))
+        object.__setattr__(self, "engine_ids", tuple(sorted(set(self.engine_ids))))
+        object.__setattr__(self, "plugin_ids", tuple(sorted(set(self.plugin_ids))))
+        object.__setattr__(self, "source_run_ids", tuple(sorted(set(self.source_run_ids))))
+        object.__setattr__(self, "metadata", FrozenScalarMap(self.metadata))
 
 
 @dataclass(frozen=True)
@@ -309,6 +318,8 @@ class FusedIntelligence:
     id: str
     target: FusionTarget
     source_intelligence_ids: tuple[str, ...]
+    source_run_ids: tuple[str, ...]
+    canonical_evidence_groups: tuple[CanonicalEvidence, ...]
     contributions: tuple[EngineContribution, ...]
     corroboration: CorroborationAssessment
     contradictions: ContradictionAssessment
@@ -327,7 +338,8 @@ class FusedIntelligence:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "source_intelligence_ids", tuple(sorted(set(self.source_intelligence_ids))))
-        for name in ("contributions", "signals", "observations", "insights", "graph_nodes", "graph_edges"):
+        object.__setattr__(self, "source_run_ids", tuple(sorted(set(self.source_run_ids))))
+        for name in ("canonical_evidence_groups", "contributions", "signals", "observations", "insights", "graph_nodes", "graph_edges"):
             object.__setattr__(self, name, tuple(getattr(self, name)))
         object.__setattr__(self, "confidence", FrozenFloatMap(self.confidence))
         object.__setattr__(self, "effective_at", _aware(self.effective_at))

@@ -16,10 +16,11 @@ def build_engine_contributions(
         grouped[(item.engine_id, item.engine_version, item.plugin_id, item.plugin_version)].append(item)
     contributions: list[EngineContribution] = []
     dependent_engines = set(dependencies.dependent_engine_ids)
+    engine_weights = dict(config.weighting.engine_weights)
     for key in sorted(grouped):
         engine_id, engine_version, plugin_id, plugin_version = key
         items = grouped[key]
-        base_weight = config.weighting.engine_weights.get(engine_id, config.weighting.default_engine_weight)
+        base_weight = engine_weights.get(engine_id, config.weighting.default_engine_weight)
         dependency_multiplier = 1.0 - config.weighting.dependency_penalty if engine_id in dependent_engines else 1.0
         confidence = sum(item.confidence_score for item in items) / len(items)
         contributions.append(

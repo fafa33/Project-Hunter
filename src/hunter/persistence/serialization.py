@@ -41,6 +41,7 @@ TUPLE_FIELDS = {
     "insight_titles",
     "insight_explanations",
     "contributions",
+    "canonical_evidence_groups",
     "unified_signals",
     "unified_observations",
     "unified_insights",

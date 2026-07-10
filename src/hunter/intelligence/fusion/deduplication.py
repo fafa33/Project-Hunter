@@ -24,6 +24,11 @@ def canonicalize_evidence(inputs: tuple[FusionInput, ...]) -> tuple[CanonicalEvi
             if lineage_key:
                 group["lineage"].add(lineage_key)
             group["intelligence"].add(item.intelligence_id)
+            group["engines"].add(item.engine_id)
+            if item.plugin_id:
+                group["plugins"].add(item.plugin_id)
+            if item.run_id:
+                group["runs"].add(item.run_id)
     canonical: list[CanonicalEvidence] = []
     for group in groups:
         key = _canonical_key(group)
@@ -34,6 +39,16 @@ def canonicalize_evidence(inputs: tuple[FusionInput, ...]) -> tuple[CanonicalEvi
                 references=tuple(group["references"]),
                 lineage_keys=tuple(group["lineage"]),
                 source_intelligence_ids=tuple(group["intelligence"]),
+                engine_ids=tuple(group["engines"]),
+                plugin_ids=tuple(group["plugins"]),
+                source_run_ids=tuple(group["runs"]),
+                dependency_classification=_dependency_classification(group),
+                metadata={
+                    "evidence_count": len(group["ids"]),
+                    "reference_count": len(group["references"]),
+                    "lineage_count": len(group["lineage"]),
+                    "source_intelligence_count": len(group["intelligence"]),
+                },
             )
         )
     return tuple(sorted(canonical, key=lambda item: item.canonical_key))
@@ -57,7 +72,16 @@ def _at(values: tuple[str, ...], index: int) -> str:
 def _matching_group(groups: list[dict[str, set[str]]], keys: set[str]) -> dict[str, set[str]]:
     matches = [group for group in groups if group["keys"].intersection(keys)]
     if not matches:
-        group = {"keys": set(), "ids": set(), "references": set(), "lineage": set(), "intelligence": set()}
+        group = {
+            "keys": set(),
+            "ids": set(),
+            "references": set(),
+            "lineage": set(),
+            "intelligence": set(),
+            "engines": set(),
+            "plugins": set(),
+            "runs": set(),
+        }
         groups.append(group)
         return group
     primary = matches[0]
@@ -67,6 +91,9 @@ def _matching_group(groups: list[dict[str, set[str]]], keys: set[str]) -> dict[s
         primary["references"].update(extra["references"])
         primary["lineage"].update(extra["lineage"])
         primary["intelligence"].update(extra["intelligence"])
+        primary["engines"].update(extra["engines"])
+        primary["plugins"].update(extra["plugins"])
+        primary["runs"].update(extra["runs"])
         groups.remove(extra)
     return primary
 
@@ -82,3 +109,13 @@ def _canonical_key(group: dict[str, set[str]]) -> str:
         prefix = "id"
         values = sorted(group["ids"])
     return identity("fusion-evidence", {"type": prefix, "values": values})
+
+
+def _dependency_classification(group: dict[str, set[str]]) -> str:
+    if len(group["engines"]) <= 1:
+        return "single-source"
+    if group["lineage"]:
+        return "shared-evidence-lineage"
+    if group["references"]:
+        return "shared-evidence-reference"
+    return "shared-evidence-id"
