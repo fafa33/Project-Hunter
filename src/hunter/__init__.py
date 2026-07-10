@@ -1,0 +1,2 @@
+"""Project Hunter package."""
+
