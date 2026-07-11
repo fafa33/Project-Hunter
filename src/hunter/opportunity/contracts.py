@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from datetime import datetime
 from typing import Protocol, runtime_checkable
 
 from hunter.intelligence.fusion.models import FusionTarget
@@ -20,6 +21,8 @@ class OpportunityTimingEngine(Protocol):
         fused_records: Iterable[FusedIntelligenceRecord],
         target: FusionTarget,
         *,
+        as_of: datetime | None = None,
+        replay: bool = False,
         historical_snapshots: Iterable[OpportunityTimingSnapshotRecord | OpportunityTimingAssessmentRecord] = (),
         config: OpportunityTimingConfig | None = None,
     ) -> OpportunityTimingAssessment:

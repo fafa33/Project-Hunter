@@ -13,10 +13,11 @@ from hunter.opportunity import (
     OpportunityTimingEngine,
     opportunity_assessment_to_record,
     opportunity_snapshot_from_assessment,
+    opportunity_timing_config_from_mapping,
 )
 from hunter.opportunity.acceleration import assess_acceleration
 from hunter.opportunity.divergence import assess_divergence
-from hunter.opportunity.exceptions import InsufficientFusionInputError
+from hunter.opportunity.exceptions import InsufficientFusionInputError, ReplaySafetyError
 from hunter.opportunity.phases import classify_phase
 from hunter.opportunity.temporal import analyze_temporal
 from hunter.opportunity.windows import classify_window
@@ -46,10 +47,114 @@ def test_opportunity_models_are_canonical_and_immutable() -> None:
 def test_phase_and_window_classification() -> None:
     assessment = OpportunityTimingEngine().assess((_fused(0.55, 0), _fused(0.75, 1), _fused(0.85, 2)), TARGET)
 
-    assert assessment.opportunity_phase in {"early_entry", "confirmed_entry", "expansion", "mature"}
-    assert assessment.opportunity_window in {"opening", "open", "strengthening"}
+    assert assessment.opportunity_phase == "forming"
+    assert assessment.opportunity_window == "watch"
     assert classify_phase(10, assessment.confirmation_state, assessment.acceleration_state, assessment.risk_state, analyze_temporal((_fused(0.1, 0),), required_depth=3)) == "too_early"
     assert classify_window(10, "too_early", assessment.risk_state, analyze_temporal((_fused(0.1, 0),), required_depth=3)) == "closed"
+
+
+def test_as_of_replay_excludes_future_fusion_and_requires_explicit_replay_time() -> None:
+    records = (_fused(0.4, 0), _fused(0.5, 1), _fused(0.95, 5))
+    as_of = NOW + timedelta(days=1)
+
+    replayed = OpportunityTimingEngine().assess(records, TARGET, as_of=as_of, replay=True)
+    without_future = OpportunityTimingEngine().assess(records[:2], TARGET, as_of=as_of, replay=True)
+
+    assert replayed.source_fused_intelligence_ids == ("fused-0", "fused-1")
+    assert replayed.assessment_id == without_future.assessment_id
+    with pytest.raises(ReplaySafetyError):
+        OpportunityTimingEngine().assess(records, TARGET, replay=True)
+
+
+def test_current_state_default_as_of_uses_latest_fusion_effective_time() -> None:
+    assessment = OpportunityTimingEngine().assess((_fused(0.4, 0), _fused(0.95, 5)), TARGET)
+
+    assert assessment.effective_at == NOW + timedelta(days=5)
+    assert assessment.source_fused_intelligence_ids == ("fused-0", "fused-5")
+
+
+def test_future_snapshots_are_excluded_from_historical_replay() -> None:
+    past = opportunity_assessment_to_record(
+        OpportunityTimingEngine().assess((_fused(0.35, 0),), TARGET),
+        pipeline_run_id="run-past",
+        created_at=NOW,
+    )
+    future = opportunity_assessment_to_record(
+        OpportunityTimingEngine().assess((_fused(0.9, 5, dependency_classification="single-source"),), TARGET),
+        pipeline_run_id="run-future",
+        created_at=NOW,
+    )
+
+    current = OpportunityTimingEngine().assess(
+        (_fused(0.35, 0), _fused(0.45, 1)),
+        TARGET,
+        as_of=NOW + timedelta(days=1),
+        replay=True,
+        historical_snapshots=(past, future),
+    )
+
+    assert current.historical_comparisons[0].prior_phases == (past.opportunity_phase,)
+
+
+def test_configured_phase_window_thresholds_and_invalid_thresholds() -> None:
+    records = (_fused(0.8, 0, dependency_classification="single-source"), _fused(0.85, 1, dependency_classification="single-source"))
+    base = OpportunityTimingEngine().assess(records, TARGET)
+    config = OpportunityTimingConfig(
+        required_categories=("macro", "developer"),
+        phase_thresholds=(("too_early", 10), ("forming", 20), ("early_entry", 30), ("confirmed_entry", 40), ("expansion", 50)),
+        window_thresholds=(("closed", 10), ("watch", 20), ("opening", 30), ("open", 40), ("strengthening", 50)),
+    )
+    changed = OpportunityTimingEngine(config).assess(records, TARGET)
+
+    assert base.opportunity_phase == "early_entry"
+    assert base.opportunity_window == "opening"
+    assert changed.opportunity_phase == "mature"
+    assert changed.opportunity_window == "strengthening"
+    assert base.assessment_id != changed.assessment_id
+    with pytest.raises(ValueError):
+        OpportunityTimingConfig(phase_thresholds=(("forming", 40), ("too_early", 20)))
+    with pytest.raises(ValueError):
+        opportunity_timing_config_from_mapping({"window_thresholds": {"closed": 120}})
+
+
+def test_complete_model_fingerprint_is_sensitive_to_material_rules() -> None:
+    records = (_fused(0.6, 0), _fused(0.7, 1), _fused(0.8, 2))
+    base = OpportunityTimingEngine().assess(records, TARGET)
+    changed_freshness = OpportunityTimingEngine(OpportunityTimingConfig(freshness_window_days=60)).assess(records, TARGET)
+    changed_divergence = OpportunityTimingEngine(OpportunityTimingConfig(divergence_rules=(("social_high", 0.6),))).assess(records, TARGET)
+
+    assert base.assessment_id != changed_freshness.assessment_id
+    assert base.assessment_id != changed_divergence.assessment_id
+
+
+def test_required_category_coverage_and_dependent_evidence_do_not_confirm() -> None:
+    dependent = OpportunityTimingEngine(OpportunityTimingConfig(required_categories=("macro", "developer"), min_category_coverage=1.0)).assess(
+        (_fused(0.85, 0, dependency_classification="shared-evidence-lineage"),),
+        TARGET,
+    )
+    partial = OpportunityTimingEngine(OpportunityTimingConfig(required_categories=("macro", "developer"), min_category_coverage=1.0)).assess(
+        (_fused(0.85, 0, categories=("macro",), dependency_classification="single-source"),),
+        TARGET,
+    )
+    confirmed = OpportunityTimingEngine(OpportunityTimingConfig(required_categories=("macro", "developer"), min_category_coverage=1.0)).assess(
+        (_fused(0.85, 0, dependency_classification="single-source"),),
+        TARGET,
+    )
+
+    assert dependent.confirmation_state.confirmed is False
+    assert dependent.confirmation_state.independent_group_count == 0
+    assert "dependent groups excluded" in dependent.confirmation_state.summary
+    assert partial.confirmation_state.confirmed is False
+    assert "category coverage" in partial.confirmation_state.summary
+    assert confirmed.confirmation_state.confirmed is True
+
+
+def test_freshness_decays_from_as_of() -> None:
+    fresh = OpportunityTimingEngine().assess((_fused(0.7, 0),), TARGET, as_of=NOW, replay=True)
+    stale = OpportunityTimingEngine().assess((_fused(0.7, 0),), TARGET, as_of=NOW + timedelta(days=45), replay=True)
+
+    assert fresh.confidence["data_freshness"] == 1.0
+    assert stale.confidence["data_freshness"] < fresh.confidence["data_freshness"]
 
 
 def test_temporal_comparison_acceleration_deterioration_and_reversal() -> None:
@@ -189,6 +294,7 @@ def _fused(
     categories: tuple[str, ...] = ("macro", "developer"),
     strengths: tuple[float, ...] = (0.7, 0.75),
     contradiction: float = 0.0,
+    dependency_classification: str = "shared-evidence-lineage",
 ):
     from hunter.persistence.records import FusedIntelligenceRecord
 
@@ -215,7 +321,7 @@ def _fused(
             "engine_ids": (f"engine-{category}", f"peer-{category}"),
             "plugin_ids": (f"plugin-{category}",),
             "source_run_ids": (f"run-{index}",),
-            "dependency_classification": "shared-evidence-lineage",
+            "dependency_classification": dependency_classification,
             "metadata": {"evidence_count": 1},
         }
         for category in categories

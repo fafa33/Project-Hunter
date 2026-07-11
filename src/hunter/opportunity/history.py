@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 from hunter.opportunity.models import HistoricalComparison
 from hunter.persistence.records import OpportunityTimingAssessmentRecord, OpportunityTimingSnapshotRecord
 
 
-def compare_history(history: tuple[OpportunityTimingAssessmentRecord | OpportunityTimingSnapshotRecord, ...]) -> tuple[HistoricalComparison, ...]:
-    if not history:
+def compare_history(
+    history: tuple[OpportunityTimingAssessmentRecord | OpportunityTimingSnapshotRecord, ...],
+    *,
+    as_of: datetime,
+) -> tuple[HistoricalComparison, ...]:
+    scoped = tuple(item for item in history if item.effective_at <= as_of)
+    if not scoped:
         return (
             HistoricalComparison(
                 prior_phases=(),
@@ -17,7 +24,7 @@ def compare_history(history: tuple[OpportunityTimingAssessmentRecord | Opportuni
                 similarity_summary="No prior timing history for target.",
             ),
         )
-    ordered = tuple(sorted(history, key=lambda item: item.effective_at))
+    ordered = tuple(sorted(scoped, key=lambda item: item.effective_at))
     phases = tuple(getattr(item, "opportunity_phase", "") for item in ordered if getattr(item, "opportunity_phase", ""))
     transitions = tuple(f"{left}->{right}" for left, right in zip(phases, phases[1:], strict=False) if left != right)
     false_starts = sum(1 for item in transitions if item in {"forming->too_early", "early_entry->too_early", "confirmed_entry->deteriorating"})

@@ -7,3 +7,7 @@ class OpportunityTimingError(Exception):
 
 class InsufficientFusionInputError(OpportunityTimingError):
     pass
+
+
+class ReplaySafetyError(OpportunityTimingError):
+    pass

@@ -12,21 +12,37 @@ The engine consumes persisted `FusedIntelligenceRecord` objects and historical O
 
 Inputs must be aligned to the requested Fusion target and include persisted Fusion explainability payloads: source Fusion IDs, source run IDs, canonical evidence groups, confidence, corroboration, contradiction, dependency, missing-evidence, unified signal, narrative, and graph payloads.
 
+## As-Of Replay Semantics
+
+Every assessment has an `as_of` boundary.
+
+For current-state execution, callers may omit `as_of`; the engine uses the latest aligned Fusion effective time as the current analytical boundary.
+
+For replay and backtest execution, callers must pass an explicit timezone-aware `as_of`. The engine excludes any Fusion records and historical timing records with `effective_at` later than `as_of`. Future data must never influence an earlier assessment.
+
 ## Phases
 
 Supported phases are `too_early`, `forming`, `early_entry`, `confirmed_entry`, `expansion`, `mature`, `crowded`, `deteriorating`, `exit_risk`, `invalidated`, and `insufficient_evidence`.
+
+Phase classification uses configured upper-bound thresholds from `configs/opportunity_timing.yaml`. Configuration is validated at startup for ordered 0-100 threshold ranges.
 
 ## Opportunity Windows
 
 Supported windows are `closed`, `watch`, `opening`, `open`, `strengthening`, `weakening`, `closing`, and `invalid`.
 
+Opportunity-window classification uses configured upper-bound thresholds from `configs/opportunity_timing.yaml`.
+
 ## Temporal Analysis
 
 Temporal analysis compares current and historical fused records for the same target. It detects structural change, persistence, deterioration, reversal, and one-off events from deterministic confidence deltas.
 
+Historical comparison excludes timing records later than the assessment `as_of` boundary.
+
 ## Confirmation
 
 Confirmation uses categories and canonical evidence groups rather than hardcoded engine names. Categories may include macro, whale, developer, protocol, news, narrative, social, and on-chain, but configuration may change the required coverage.
+
+Confirmation requires both configured category coverage and a configured count of independent canonical evidence groups. Dependent canonical evidence groups, including shared-lineage, shared-reference, and shared-id groups, are excluded from independent confirmation. Failed or partial confirmation records explain missing category coverage, insufficient independent groups, and excluded dependent groups.
 
 ## Acceleration
 
@@ -40,9 +56,13 @@ Divergence detects deterministic evidence mismatches such as social excitement w
 
 The timing score is a deterministic 0-100 score derived from Fusion confidence, confirmation, acceleration, persistence, contradiction severity, missing evidence, divergence, risk, and historical depth. Score labels and thresholds are configurable.
 
+The model fingerprint includes every analytically material timing rule: phase thresholds, window thresholds, confirmation rules, acceleration rules, divergence rules, contradiction penalties, missing-evidence penalties, risk weights, confidence weights, horizon rules, historical-depth rules, invalidation rules, freshness windows, schema identity version, and model version.
+
 ## Confidence
 
 Confidence accounts for historical depth, source diversity, category coverage, canonical evidence independence, persistence of change, contradiction severity, missing evidence, freshness, target alignment, Fusion confidence, and snapshot completeness.
+
+Freshness is derived from Fusion effective time, effective windows where available, configured freshness windows, and the assessment `as_of` boundary. Freshness decays deterministically after the configured grace period.
 
 ## Risk
 

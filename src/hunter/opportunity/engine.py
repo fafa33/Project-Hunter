@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import asdict
-from datetime import datetime
+from datetime import UTC, datetime
 
 from hunter.execution.identity import fingerprint, identity
 from hunter.intelligence.fusion.models import FusionTarget
@@ -11,7 +11,7 @@ from hunter.opportunity.confidence import calculate_confidence
 from hunter.opportunity.configuration import OpportunityTimingConfig
 from hunter.opportunity.confirmation import assess_confirmation
 from hunter.opportunity.divergence import assess_divergence
-from hunter.opportunity.exceptions import InsufficientFusionInputError
+from hunter.opportunity.exceptions import InsufficientFusionInputError, ReplaySafetyError
 from hunter.opportunity.history import compare_history
 from hunter.opportunity.models import OpportunityTimingAssessment
 from hunter.opportunity.phases import classify_phase
@@ -37,27 +37,35 @@ class OpportunityTimingEngine:
         fused_records: Iterable[FusedIntelligenceRecord],
         target: FusionTarget,
         *,
+        as_of: datetime | None = None,
+        replay: bool = False,
         historical_snapshots: Iterable[OpportunityTimingSnapshotRecord | OpportunityTimingAssessmentRecord] = (),
         config: OpportunityTimingConfig | None = None,
     ) -> OpportunityTimingAssessment:
         active_config = config or self.config
-        records = tuple(sorted((record for record in fused_records if _aligned(record, target)), key=lambda item: (item.effective_at, item.id)))
-        if not records:
+        aligned_records = tuple(sorted((record for record in fused_records if _aligned(record, target)), key=lambda item: (item.effective_at, item.id)))
+        if not aligned_records:
             raise InsufficientFusionInputError("Opportunity Timing requires persisted FusedIntelligence for the target")
+        if replay and as_of is None:
+            raise ReplaySafetyError("Replay and backtest Opportunity Timing calls require explicit as_of")
+        effective_as_of = _as_of(as_of, aligned_records)
+        records = tuple(record for record in aligned_records if record.effective_at <= effective_as_of)
+        if not records:
+            raise InsufficientFusionInputError("Opportunity Timing requires FusedIntelligence at or before as_of")
         current = records[-1]
         configuration_fingerprint = fingerprint("opportunity-timing-configuration", asdict(active_config))
-        model_fingerprint = fingerprint("opportunity-timing-model", {"version": active_config.model_version, "weights": active_config.confidence_weights})
+        model_fingerprint = _model_fingerprint(active_config)
         historical_window = _historical_window(records)
         temporal = analyze_temporal(records, required_depth=active_config.required_historical_depth)
         confirmation = assess_confirmation(records, active_config)
-        acceleration = assess_acceleration(records)
-        divergence = assess_divergence(records)
+        acceleration = assess_acceleration(records, active_config)
+        divergence = assess_divergence(records, active_config)
         risk = assess_risk(records, confirmation, divergence, temporal)
         score = timing_score(records, temporal, confirmation, acceleration, divergence, risk, active_config)
-        confidence = calculate_confidence(records, temporal, confirmation, risk, active_config)
-        phase = classify_phase(score, confirmation, acceleration, risk, temporal)
-        window = classify_window(score, phase, risk, temporal)
-        history = compare_history(tuple(historical_snapshots))
+        confidence = calculate_confidence(records, temporal, confirmation, risk, active_config, as_of=effective_as_of)
+        phase = classify_phase(score, confirmation, acceleration, risk, temporal, active_config)
+        window = classify_window(score, phase, risk, temporal, active_config)
+        history = compare_history(tuple(historical_snapshots), as_of=effective_as_of)
         source_ids = tuple(record.id for record in records)
         source_run_ids = tuple(sorted({run_id for record in records for run_id in record.source_run_ids}))
         assessment_id = identity(
@@ -65,6 +73,7 @@ class OpportunityTimingEngine:
             {
                 "target": target,
                 "effective_at": current.effective_at,
+                "as_of": effective_as_of,
                 "source_fused_intelligence_ids": source_ids,
                 "configuration_fingerprint": configuration_fingerprint,
                 "model_fingerprint": model_fingerprint,
@@ -91,18 +100,19 @@ class OpportunityTimingEngine:
             acceleration_state=acceleration,
             divergence_state=divergence,
             risk_state=risk,
-            expected_horizon=_expected_horizon(score, temporal.historical_depth, acceleration.state),
+            expected_horizon=_expected_horizon(score, temporal.historical_depth, acceleration.state, active_config),
             supporting_factors=supporting,
             opposing_factors=opposing,
             contradictions=contradictions,
             missing_evidence=missing,
-            invalidation_conditions=_invalidation_conditions(phase, confirmation, risk, divergence, missing),
+            invalidation_conditions=_invalidation_conditions(phase, confirmation, risk, divergence, missing, active_config),
             canonical_evidence_refs=_canonical_refs(records),
             historical_comparisons=history,
             metadata={
                 "configuration_fingerprint": configuration_fingerprint,
                 "model_fingerprint": model_fingerprint,
                 "historical_window": "|".join(historical_window),
+                "as_of": effective_as_of.isoformat(),
                 "identity_schema_version": IDENTITY_SCHEMA_VERSION,
                 "source_fused_count": len(records),
             },
@@ -184,6 +194,33 @@ def _aligned(record: FusedIntelligenceRecord, target: FusionTarget) -> bool:
     return record.target_id == target.target_id and record.target_type == target.target_type
 
 
+def _as_of(as_of: datetime | None, records: tuple[FusedIntelligenceRecord, ...]) -> datetime:
+    if as_of is None:
+        return records[-1].effective_at
+    if as_of.tzinfo is None:
+        msg = "as_of must be timezone-aware"
+        raise ReplaySafetyError(msg)
+    return as_of.astimezone(UTC)
+
+
+def _model_fingerprint(config: OpportunityTimingConfig) -> str:
+    return fingerprint(
+        "opportunity-timing-model",
+        {
+            "identity_schema_version": IDENTITY_SCHEMA_VERSION,
+            "configuration": asdict(config),
+            "phase_classifier": "config-threshold-upper-bound-v1",
+            "window_classifier": "config-threshold-upper-bound-v1",
+            "confirmation": "category-coverage-independent-canonical-evidence-v1",
+            "acceleration": "three-point-delta-v1",
+            "divergence": "category-pattern-v1",
+            "risk": "deterministic-risk-v1",
+            "freshness": "as-of-effective-window-decay-v1",
+            "invalidation": "configured-rule-set-v1",
+        },
+    )
+
+
 def _historical_window(records: tuple[FusedIntelligenceRecord, ...]) -> tuple[str, str]:
     return (records[0].effective_at.isoformat(), records[-1].effective_at.isoformat())
 
@@ -212,7 +249,15 @@ def _opposing_factors(risk: object, divergence: object, temporal: object) -> tup
     return tuple(sorted(set(factors))) or ("no_material_opposing_factor",)
 
 
-def _invalidation_conditions(phase: str, confirmation: object, risk: object, divergence: object, missing: tuple[str, ...]) -> tuple[str, ...]:
+def _invalidation_conditions(
+    phase: str,
+    confirmation: object,
+    risk: object,
+    divergence: object,
+    missing: tuple[str, ...],
+    config: OpportunityTimingConfig,
+) -> tuple[str, ...]:
+    allowed = set(config.invalidation_rules)
     conditions = [
         "loss_of_independent_confirmation",
         "material_increase_in_contradiction_severity",
@@ -226,21 +271,22 @@ def _invalidation_conditions(phase: str, confirmation: object, risk: object, div
         conditions.append("divergence_remains_unresolved")
     if phase in {"confirmed_entry", "expansion"} and not getattr(confirmation, "confirmed", False):
         conditions.append("confirmation_threshold_not_maintained")
-    return tuple(sorted(set(conditions)))
+    return tuple(sorted(set(conditions).intersection(allowed)))
 
 
-def _expected_horizon(score: float, depth: int, acceleration: str) -> str:
+def _expected_horizon(score: float, depth: int, acceleration: str, config: OpportunityTimingConfig) -> str:
     if depth < 2:
         return "indeterminate"
-    if acceleration == "positive_acceleration" and score >= 75:
+    rules = dict(config.horizon_rules)
+    if acceleration == "positive_acceleration" and score >= rules.get("weeks", 75.0):
         return "weeks"
-    if score >= 75:
+    if score >= rules.get("1-3 months", 75.0):
         return "1-3 months"
-    if score >= 60:
+    if score >= rules.get("3-6 months", 60.0):
         return "3-6 months"
-    if score >= 40:
+    if score >= rules.get("6-12 months", 40.0):
         return "6-12 months"
-    if score >= 20:
+    if score >= rules.get("12-24 months", 20.0):
         return "12-24 months"
     return "indeterminate"
 
