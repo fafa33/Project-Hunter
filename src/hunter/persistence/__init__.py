@@ -1,5 +1,7 @@
 from hunter.persistence.models import HistorySpec, QueryFilter, QuerySpec, RecordBatch, SnapshotSpec
 from hunter.persistence.records import (
+    AutomationJobRecord,
+    AutomationRunRecord,
     ConfigurationRecord,
     EngineManifestRecord,
     EvidenceRecord,
@@ -26,6 +28,8 @@ from hunter.persistence.versioning import PERSISTENCE_SCHEMA_VERSION, MigrationD
 
 __all__ = [
     "PERSISTENCE_SCHEMA_VERSION",
+    "AutomationJobRecord",
+    "AutomationRunRecord",
     "ConfigurationRecord",
     "EngineManifestRecord",
     "EvidenceRecord",

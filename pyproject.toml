@@ -31,6 +31,9 @@ protocol-intelligence = "hunter.intelligence.engines.protocol:create_plugin"
 social-intelligence = "hunter.intelligence.engines.social:create_plugin"
 whale-intelligence = "hunter.intelligence.engines.whale:create_plugin"
 
+[project.scripts]
+hunter = "hunter.cli:main"
+
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]

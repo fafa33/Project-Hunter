@@ -1,0 +1,54 @@
+enabled: false
+timezone: UTC
+polling_interval_seconds: 60
+jobs:
+  - job_id: current-state-project-a
+    name: Current-state project pipeline
+    enabled: true
+    job_kind: current_state_pipeline
+    schedule:
+      type: daily
+    timezone: UTC
+    target:
+      type: project
+      id: project-a
+    run_type: scheduled
+    pipeline_options:
+      run_intelligence: true
+      run_fusion: true
+      run_opportunity_timing: true
+      selected_engines: []
+      generate_reports: false
+      evaluate_alerts: false
+    persistence_policy: atomic
+    as_of_policy:
+      mode: current
+    timeout_seconds: 3600
+    concurrency_policy:
+      prevent_overlapping: true
+      scope: job_target
+    metadata:
+      purpose: default-current-state
+  - job_id: replay-project-a
+    name: Historical replay project pipeline
+    enabled: false
+    job_kind: historical_replay
+    schedule:
+      type: once
+      run_at: "2026-01-01T00:00:00+00:00"
+    timezone: UTC
+    target:
+      type: project
+      id: project-a
+    run_type: replay
+    pipeline_options:
+      run_intelligence: false
+      run_fusion: true
+      run_opportunity_timing: true
+    persistence_policy: atomic
+    as_of_policy:
+      mode: replay
+      as_of: "2026-01-01T00:00:00+00:00"
+    concurrency_policy:
+      prevent_overlapping: true
+      scope: job_target

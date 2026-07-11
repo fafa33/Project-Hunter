@@ -4,6 +4,8 @@ from typing import Generic, Protocol, TypeVar, runtime_checkable
 
 from hunter.persistence.models import HistorySpec, QuerySpec, SnapshotSpec
 from hunter.persistence.records import (
+    AutomationJobRecord,
+    AutomationRunRecord,
     ConfigurationRecord,
     EngineManifestRecord,
     EvidenceRecord,
@@ -61,6 +63,14 @@ class PipelineRunRepository(Repository[PipelineRunRecord], Protocol):
 
 
 class OperationalAttemptRepository(Repository[OperationalAttemptRecord], Protocol):
+    pass
+
+
+class AutomationJobRepository(Repository[AutomationJobRecord], Protocol):
+    pass
+
+
+class AutomationRunRepository(Repository[AutomationRunRecord], Protocol):
     pass
 
 

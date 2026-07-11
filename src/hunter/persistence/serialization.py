@@ -18,6 +18,7 @@ DATETIME_FIELDS = {
     "collected_at",
     "timestamp",
     "generated_at",
+    "scheduled_for",
 }
 
 TUPLE_FIELDS = {
@@ -58,6 +59,7 @@ TUPLE_FIELDS = {
     "canonical_evidence_refs",
     "record_ids",
     "engines",
+    "selected_engines",
 }
 
 

@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import replace
 
 from hunter.persistence.records import (
+    AutomationJobRecord,
+    AutomationRunRecord,
     ConfigurationRecord,
     EngineManifestRecord,
     EvidenceRecord,
@@ -39,6 +41,16 @@ class SQLPipelineRunRepository(SQLRecordRepository[PipelineRunRecord]):
 class SQLOperationalAttemptRepository(SQLRecordRepository[OperationalAttemptRecord]):
     record_type = "operational-attempt"
     record_class = OperationalAttemptRecord
+
+
+class SQLAutomationJobRepository(SQLRecordRepository[AutomationJobRecord]):
+    record_type = "automation-job"
+    record_class = AutomationJobRecord
+
+
+class SQLAutomationRunRepository(SQLRecordRepository[AutomationRunRecord]):
+    record_type = "automation-run"
+    record_class = AutomationRunRecord
 
 
 class SQLEvidenceRepository(SQLRecordRepository[EvidenceRecord]):

@@ -104,6 +104,61 @@ class OperationalAttemptRecord(BasePersistenceRecord):
 
 
 @dataclass(frozen=True, kw_only=True)
+class AutomationJobRecord(BasePersistenceRecord):
+    record_type: ClassVar[str] = "automation-job"
+
+    job_id: str
+    name: str
+    enabled: bool
+    schedule: dict[str, Any]
+    timezone: str
+    target: dict[str, Any]
+    run_type: str
+    pipeline_options: dict[str, Any]
+    persistence_policy: str
+    as_of_policy: dict[str, Any]
+    timeout_seconds: int | None
+    concurrency_policy: dict[str, Any]
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        for name in ("job_id", "name", "timezone", "run_type", "persistence_policy"):
+            _require_text(name, getattr(self, name))
+        for name in ("schedule", "target", "pipeline_options", "as_of_policy", "concurrency_policy"):
+            object.__setattr__(self, name, _freeze_payload(getattr(self, name)))
+        if self.timeout_seconds is not None and self.timeout_seconds <= 0:
+            raise PersistenceValidationError("timeout_seconds must be positive")
+
+
+@dataclass(frozen=True, kw_only=True)
+class AutomationRunRecord(BasePersistenceRecord):
+    record_type: ClassVar[str] = "automation-run"
+
+    automation_run_id: str
+    job_id: str
+    scheduled_for: datetime
+    status: str
+    pipeline_run_id: str | None = None
+    operational_attempt_id: str | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    error_summary: str | None = None
+    warning_summary: str | None = None
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        for name in ("automation_run_id", "job_id", "status"):
+            _require_text(name, getattr(self, name))
+        _require_aware_datetime("scheduled_for", self.scheduled_for)
+        object.__setattr__(self, "scheduled_for", self.scheduled_for.astimezone(UTC))
+        for name in ("started_at", "finished_at"):
+            value = getattr(self, name)
+            if value is not None:
+                _require_aware_datetime(name, value)
+                object.__setattr__(self, name, value.astimezone(UTC))
+
+
+@dataclass(frozen=True, kw_only=True)
 class EvidenceRecord(BasePersistenceRecord):
     record_type: ClassVar[str] = "evidence"
 
@@ -443,6 +498,8 @@ class EngineManifestRecord(BasePersistenceRecord):
 PersistenceRecord = (
     PipelineRunRecord
     | OperationalAttemptRecord
+    | AutomationJobRecord
+    | AutomationRunRecord
     | EvidenceRecord
     | SignalRecord
     | ObservationRecord
@@ -461,6 +518,8 @@ RECORD_TYPES: dict[str, type[PersistenceRecord]] = {
     for record in (
         PipelineRunRecord,
         OperationalAttemptRecord,
+        AutomationJobRecord,
+        AutomationRunRecord,
         EvidenceRecord,
         SignalRecord,
         ObservationRecord,
