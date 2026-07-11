@@ -6,6 +6,7 @@ from pathlib import Path
 from hunter.automation import AutomationJobRunner, AutomationScheduler, load_automation_config
 from hunter.dashboard import DashboardDataProvider, HtmlDashboardRenderer, load_dashboard_config
 from hunter.dashboard.exceptions import DashboardPersistenceError
+from hunter.opportunity.ranking import rank_opportunities
 from hunter.persistence.sql import SessionFactory, UnitOfWork, create_schema, create_sqlite_engine
 
 
@@ -31,7 +32,12 @@ def main(argv: list[str] | None = None) -> int:
     build_dashboard = dashboard_sub.add_parser("build")
     build_dashboard.add_argument("--output")
     build_dashboard.add_argument("--sqlite-path")
+    rank = sub.add_parser("rank")
+    rank.add_argument("--sort", choices=("opportunity", "conviction"), default="opportunity")
     args = parser.parse_args(argv)
+    if args.command == "rank":
+        rank_opportunities((), sort=args.sort)
+        return 0
     if args.command == "dashboard":
         return _dashboard(args)
     if args.command != "automation":

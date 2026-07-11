@@ -8,12 +8,13 @@ from hunter.execution.identity import fingerprint, identity
 from hunter.intelligence.fusion.models import FusionTarget
 from hunter.opportunity.acceleration import assess_acceleration
 from hunter.opportunity.confidence import calculate_confidence
-from hunter.opportunity.configuration import OpportunityTimingConfig
+from hunter.opportunity.configuration import OpportunityConfig, OpportunityTimingConfig
 from hunter.opportunity.confirmation import assess_confirmation
 from hunter.opportunity.divergence import assess_divergence
 from hunter.opportunity.exceptions import InsufficientFusionInputError, ReplaySafetyError
 from hunter.opportunity.history import compare_history
-from hunter.opportunity.models import OpportunityTimingAssessment
+from hunter.opportunity.metrics import NEGATIVE_FACTORS, OpportunityMetricSnapshot
+from hunter.opportunity.models import OpportunityAssessment, OpportunityFactor, OpportunityTimingAssessment
 from hunter.opportunity.phases import classify_phase
 from hunter.opportunity.risk import assess_risk
 from hunter.opportunity.scoring import timing_score
@@ -117,6 +118,143 @@ class OpportunityTimingEngine:
                 "source_fused_count": len(records),
             },
         )
+
+
+class OpportunityEngine:
+    def __init__(self, config: OpportunityConfig | None = None) -> None:
+        self.config = config or OpportunityConfig()
+
+    def evaluate(
+        self,
+        snapshot: OpportunityMetricSnapshot,
+        *,
+        config: OpportunityConfig | None = None,
+    ) -> OpportunityAssessment:
+        active_config = config or self.config
+        values = snapshot.values.as_dict()
+        weighted_factors = _weighted_factors(values, active_config)
+        positive_total = sum(item.contribution for item in weighted_factors if item.name not in NEGATIVE_FACTORS)
+        risk_penalty = values.get("risk", 0.0) * active_config.risk_weight
+        missing_value = max(values.get("missing_evidence", 0.0), len(snapshot.missing_evidence) / max(1, len(dict(active_config.factor_weights))))
+        missing_penalty = missing_value * active_config.missing_evidence_weight
+        validation_health = values.get("validation_health", 1.0)
+        validation_penalty = (1.0 - validation_health) * active_config.validation_gate_weight
+        opportunity_score = _clamp01(positive_total - risk_penalty - missing_penalty - validation_penalty)
+        conviction_score = _conviction(values, opportunity_score, missing_value)
+        contributors = tuple(sorted((item for item in weighted_factors if item.contribution > 0), key=lambda item: (-item.contribution, item.name))[:5])
+        risks = _risk_factors(values, active_config, missing_value, validation_health)
+        assessment_id = identity(
+            "opportunity-assessment",
+            {
+                "project_id": snapshot.project_id,
+                "effective_at": snapshot.effective_at,
+                "values": values,
+                "evidence_ids": snapshot.evidence_ids,
+                "missing_evidence": snapshot.missing_evidence,
+                "configuration_fingerprint": fingerprint("opportunity-configuration", asdict(active_config)),
+                "identity_schema_version": "opportunity-entry-v1",
+            },
+        )
+        return OpportunityAssessment(
+            assessment_id=assessment_id,
+            project_id=snapshot.project_id,
+            effective_at=snapshot.effective_at,
+            opportunity_score=opportunity_score,
+            opportunity_label=_threshold_label(opportunity_score, active_config.label_thresholds),
+            conviction_score=conviction_score,
+            conviction_explanation=_conviction_explanation(conviction_score, values, missing_value),
+            risk_reward_balance=_risk_reward(values.get("risk", 0.0), opportunity_score),
+            opportunity_window=_threshold_label(opportunity_score, active_config.window_thresholds_entry),
+            positive_factors=tuple(item.name for item in contributors),
+            negative_factors=tuple(item.name for item in risks),
+            largest_contributors=contributors,
+            largest_risks=risks,
+            supporting_evidence=snapshot.evidence_ids,
+            missing_evidence=snapshot.missing_evidence,
+            confidence={
+                "score": conviction_score,
+                "evidence_completeness": _clamp01(1.0 - missing_value),
+                "evidence_freshness": values.get("evidence_freshness", 0.0),
+                "input_confidence": values.get("confidence", 0.0),
+                "backtesting_quality": values.get("backtesting_quality", 0.0),
+            },
+            metadata={
+                "configuration_fingerprint": fingerprint("opportunity-configuration", asdict(active_config)),
+                "identity_schema_version": "opportunity-entry-v1",
+            },
+        )
+def _weighted_factors(values: dict[str, float], config: OpportunityConfig) -> tuple[OpportunityFactor, ...]:
+    factors: list[OpportunityFactor] = []
+    for name, weight in config.factor_weights:
+        value = _clamp01(values.get(name, 0.0))
+        factors.append(
+            OpportunityFactor(
+                name=name,
+                value=value,
+                weight=weight,
+                contribution=round(value * weight, 4),
+                evidence_id=None,
+                explanation=f"{name} contributes {round(value * weight, 4)}",
+            )
+        )
+    return tuple(factors)
+
+
+def _risk_factors(
+    values: dict[str, float],
+    config: OpportunityConfig,
+    missing_value: float,
+    validation_health: float,
+) -> tuple[OpportunityFactor, ...]:
+    risks = (
+        OpportunityFactor("risk", _clamp01(values.get("risk", 0.0)), config.risk_weight, -values.get("risk", 0.0) * config.risk_weight),
+        OpportunityFactor("missing_evidence", _clamp01(missing_value), config.missing_evidence_weight, -missing_value * config.missing_evidence_weight),
+        OpportunityFactor("validation_health", _clamp01(validation_health), config.validation_gate_weight, -(1.0 - validation_health) * config.validation_gate_weight),
+    )
+    return tuple(sorted(risks, key=lambda item: (item.contribution, item.name)))
+
+
+def _conviction(values: dict[str, float], opportunity_score: float, missing_value: float) -> float:
+    return _clamp01(
+        opportunity_score * 0.45
+        + values.get("confidence", 0.0) * 0.2
+        + values.get("evidence_freshness", 0.0) * 0.12
+        + values.get("backtesting_quality", 0.0) * 0.13
+        + (1.0 - missing_value) * 0.1
+    )
+
+
+def _conviction_explanation(conviction_score: float, values: dict[str, float], missing_value: float) -> str:
+    if missing_value > 0.4:
+        return "Conviction is constrained by missing evidence."
+    if values.get("confidence", 0.0) < 0.5:
+        return "Conviction is constrained by low source confidence."
+    if conviction_score >= 0.75:
+        return "Conviction is high because opportunity score, confidence, freshness, and backtesting support are aligned."
+    if conviction_score >= 0.5:
+        return "Conviction is moderate because support is present but not fully confirmed."
+    return "Conviction is low because evidence support is limited."
+
+
+def _risk_reward(risk: float, opportunity_score: float) -> str:
+    if risk >= 0.75:
+        return "Extreme"
+    if risk >= 0.55:
+        return "High"
+    if risk >= 0.3 or opportunity_score < 0.45:
+        return "Moderate"
+    return "Low"
+
+
+def _threshold_label(score: float, thresholds: tuple[tuple[str, float], ...]) -> str:
+    for label, threshold in thresholds:
+        if score <= threshold:
+            return label
+    return thresholds[-1][0]
+
+
+def _clamp01(value: float) -> float:
+    return round(max(0.0, min(1.0, float(value))), 4)
 
 
 def opportunity_assessment_to_record(

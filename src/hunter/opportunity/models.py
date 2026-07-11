@@ -22,6 +22,19 @@ OpportunityPhase = Literal[
 ]
 OpportunityWindow = Literal["closed", "watch", "opening", "open", "strengthening", "weakening", "closing", "invalid"]
 ExpectedHorizon = Literal["days", "weeks", "1-3 months", "3-6 months", "6-12 months", "12-24 months", "24-36 months", "indeterminate"]
+OpportunityLabel = Literal[
+    "Exceptional Opportunity",
+    "High Conviction",
+    "Strong Opportunity",
+    "Accumulation",
+    "Watch Closely",
+    "Neutral",
+    "Wait",
+    "Weak Opportunity",
+    "Avoid",
+]
+RiskRewardBalance = Literal["Low", "Moderate", "High", "Extreme"]
+OpportunityEntryWindow = Literal["Very Early", "Early", "Developing", "Established", "Late", "Very Late", "Unknown"]
 
 
 @dataclass(frozen=True)
@@ -168,11 +181,73 @@ class OpportunityTimingAssessment:
         object.__setattr__(self, "metadata", FrozenScalarMap(self.metadata))
 
 
+@dataclass(frozen=True)
+class OpportunityFactor:
+    name: str
+    value: float | None
+    weight: float
+    contribution: float
+    evidence_id: str | None = None
+    explanation: str = ""
+
+    def __post_init__(self) -> None:
+        _require_text("name", self.name)
+        if self.value is not None:
+            object.__setattr__(self, "value", _clamp(self.value))
+        object.__setattr__(self, "weight", _clamp(self.weight))
+        object.__setattr__(self, "contribution", round(float(self.contribution), 4))
+
+
+@dataclass(frozen=True)
+class OpportunityAssessment:
+    assessment_id: str
+    project_id: str
+    effective_at: datetime
+    opportunity_score: float
+    opportunity_label: OpportunityLabel
+    conviction_score: float
+    conviction_explanation: str
+    risk_reward_balance: RiskRewardBalance
+    opportunity_window: OpportunityEntryWindow
+    positive_factors: tuple[str, ...]
+    negative_factors: tuple[str, ...]
+    largest_contributors: tuple[OpportunityFactor, ...]
+    largest_risks: tuple[OpportunityFactor, ...]
+    supporting_evidence: tuple[str, ...]
+    missing_evidence: tuple[str, ...]
+    confidence: FrozenFloatMap | Mapping[str, float]
+    metadata: FrozenScalarMap | Mapping[str, Any] = field(default_factory=FrozenScalarMap)
+
+    def __post_init__(self) -> None:
+        _require_text("assessment_id", self.assessment_id)
+        _require_text("project_id", self.project_id)
+        object.__setattr__(self, "effective_at", _aware(self.effective_at))
+        object.__setattr__(self, "opportunity_score", _clamp(self.opportunity_score))
+        object.__setattr__(self, "conviction_score", _clamp(self.conviction_score))
+        for name in (
+            "positive_factors",
+            "negative_factors",
+            "supporting_evidence",
+            "missing_evidence",
+        ):
+            object.__setattr__(self, name, tuple(str(item) for item in getattr(self, name)))
+        object.__setattr__(self, "largest_contributors", tuple(self.largest_contributors))
+        object.__setattr__(self, "largest_risks", tuple(self.largest_risks))
+        object.__setattr__(self, "confidence", FrozenFloatMap(self.confidence))
+        object.__setattr__(self, "metadata", FrozenScalarMap(self.metadata))
+
+
 def _aware(value: datetime) -> datetime:
     if value.tzinfo is None:
         msg = "opportunity timing timestamps must be timezone-aware"
         raise ValueError(msg)
     return value.astimezone(UTC)
+
+
+def _require_text(name: str, value: str) -> None:
+    if not value.strip():
+        msg = f"{name} is required"
+        raise ValueError(msg)
 
 
 def _clamp(value: float) -> float:

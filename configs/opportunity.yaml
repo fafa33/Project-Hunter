@@ -1,0 +1,38 @@
+enabled: false
+factor_weights:
+  valuation_discount: 0.11
+  relative_valuation: 0.08
+  historical_discount: 0.07
+  whale_accumulation: 0.10
+  smart_money_positioning: 0.07
+  developer_momentum: 0.07
+  macro_tailwinds: 0.10
+  future_demand: 0.10
+  sector_strength: 0.06
+  capital_formation: 0.05
+  validation_health: 0.08
+  evidence_freshness: 0.04
+  confidence: 0.04
+  backtesting_quality: 0.02
+  historical_opportunity_similarity: 0.01
+risk_weight: 0.18
+missing_evidence_weight: 0.12
+validation_gate_weight: 0.20
+label_thresholds:
+  Avoid: 0.10
+  Weak Opportunity: 0.22
+  Wait: 0.34
+  Neutral: 0.46
+  Watch Closely: 0.58
+  Accumulation: 0.68
+  Strong Opportunity: 0.78
+  High Conviction: 0.88
+  Exceptional Opportunity: 1.00
+window_thresholds:
+  Unknown: 0.00
+  Very Early: 0.18
+  Early: 0.34
+  Developing: 0.52
+  Established: 0.70
+  Late: 0.84
+  Very Late: 1.00
