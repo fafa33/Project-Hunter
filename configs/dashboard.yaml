@@ -1,0 +1,9 @@
+enabled: false
+title: Project Hunter Dashboard
+output_path: dashboard.html
+sqlite_path:
+max_rows: 20
+include_automation: true
+include_pipeline: true
+include_fusion: true
+include_opportunity_timing: true

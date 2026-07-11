@@ -4,6 +4,9 @@ import argparse
 from pathlib import Path
 
 from hunter.automation import AutomationJobRunner, AutomationScheduler, load_automation_config
+from hunter.dashboard import DashboardDataProvider, HtmlDashboardRenderer, load_dashboard_config
+from hunter.dashboard.exceptions import DashboardPersistenceError
+from hunter.persistence.sql import SessionFactory, UnitOfWork, create_schema, create_sqlite_engine
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -22,7 +25,15 @@ def main(argv: list[str] | None = None) -> int:
     run_once.add_argument("job")
     cancel = automation_sub.add_parser("cancel")
     cancel.add_argument("run_id")
+    dashboard = sub.add_parser("dashboard")
+    dashboard.add_argument("--dashboard-config", default="configs/dashboard.yaml")
+    dashboard_sub = dashboard.add_subparsers(dest="dashboard_command")
+    build_dashboard = dashboard_sub.add_parser("build")
+    build_dashboard.add_argument("--output")
+    build_dashboard.add_argument("--sqlite-path")
     args = parser.parse_args(argv)
+    if args.command == "dashboard":
+        return _dashboard(args)
     if args.command != "automation":
         parser.print_help()
         return 1
@@ -59,6 +70,24 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     automation.print_help()
     return 1
+
+
+def _dashboard(args: object) -> int:
+    config = load_dashboard_config(Path(args.dashboard_config))
+    sqlite_path = args.sqlite_path or config.sqlite_path
+    if sqlite_path is None:
+        print("Dashboard build requires --sqlite-path or dashboard sqlite_path")
+        return 2
+    output = Path(args.output or config.output_path)
+    engine = create_sqlite_engine(sqlite_path)
+    create_schema(engine)
+    with UnitOfWork(SessionFactory(engine)) as uow:
+        if uow.repositories is None:
+            raise DashboardPersistenceError("UnitOfWork did not expose repositories")
+        view = DashboardDataProvider(uow.repositories, config).build()
+    output.write_text(HtmlDashboardRenderer().render(view))
+    print(str(output))
+    return 0
 
 
 def _job(jobs: tuple[object, ...], job_id: str):
