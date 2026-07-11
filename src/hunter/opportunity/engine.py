@@ -1,0 +1,249 @@
+from __future__ import annotations
+
+from collections.abc import Iterable
+from dataclasses import asdict
+from datetime import datetime
+
+from hunter.execution.identity import fingerprint, identity
+from hunter.intelligence.fusion.models import FusionTarget
+from hunter.opportunity.acceleration import assess_acceleration
+from hunter.opportunity.confidence import calculate_confidence
+from hunter.opportunity.configuration import OpportunityTimingConfig
+from hunter.opportunity.confirmation import assess_confirmation
+from hunter.opportunity.divergence import assess_divergence
+from hunter.opportunity.exceptions import InsufficientFusionInputError
+from hunter.opportunity.history import compare_history
+from hunter.opportunity.models import OpportunityTimingAssessment
+from hunter.opportunity.phases import classify_phase
+from hunter.opportunity.risk import assess_risk
+from hunter.opportunity.scoring import timing_score
+from hunter.opportunity.temporal import analyze_temporal
+from hunter.opportunity.windows import classify_window
+from hunter.persistence.records import (
+    FusedIntelligenceRecord,
+    OpportunityTimingAssessmentRecord,
+    OpportunityTimingSnapshotRecord,
+)
+
+IDENTITY_SCHEMA_VERSION = "opportunity-timing-identity-v1"
+
+
+class OpportunityTimingEngine:
+    def __init__(self, config: OpportunityTimingConfig | None = None) -> None:
+        self.config = config or OpportunityTimingConfig()
+
+    def assess(
+        self,
+        fused_records: Iterable[FusedIntelligenceRecord],
+        target: FusionTarget,
+        *,
+        historical_snapshots: Iterable[OpportunityTimingSnapshotRecord | OpportunityTimingAssessmentRecord] = (),
+        config: OpportunityTimingConfig | None = None,
+    ) -> OpportunityTimingAssessment:
+        active_config = config or self.config
+        records = tuple(sorted((record for record in fused_records if _aligned(record, target)), key=lambda item: (item.effective_at, item.id)))
+        if not records:
+            raise InsufficientFusionInputError("Opportunity Timing requires persisted FusedIntelligence for the target")
+        current = records[-1]
+        configuration_fingerprint = fingerprint("opportunity-timing-configuration", asdict(active_config))
+        model_fingerprint = fingerprint("opportunity-timing-model", {"version": active_config.model_version, "weights": active_config.confidence_weights})
+        historical_window = _historical_window(records)
+        temporal = analyze_temporal(records, required_depth=active_config.required_historical_depth)
+        confirmation = assess_confirmation(records, active_config)
+        acceleration = assess_acceleration(records)
+        divergence = assess_divergence(records)
+        risk = assess_risk(records, confirmation, divergence, temporal)
+        score = timing_score(records, temporal, confirmation, acceleration, divergence, risk, active_config)
+        confidence = calculate_confidence(records, temporal, confirmation, risk, active_config)
+        phase = classify_phase(score, confirmation, acceleration, risk, temporal)
+        window = classify_window(score, phase, risk, temporal)
+        history = compare_history(tuple(historical_snapshots))
+        source_ids = tuple(record.id for record in records)
+        source_run_ids = tuple(sorted({run_id for record in records for run_id in record.source_run_ids}))
+        assessment_id = identity(
+            "opportunity-timing-assessment",
+            {
+                "target": target,
+                "effective_at": current.effective_at,
+                "source_fused_intelligence_ids": source_ids,
+                "configuration_fingerprint": configuration_fingerprint,
+                "model_fingerprint": model_fingerprint,
+                "historical_window": historical_window,
+                "identity_schema_version": IDENTITY_SCHEMA_VERSION,
+            },
+        )
+        missing = tuple(sorted({str(item) for record in records for item in record.missing_evidence.get("missing_categories", ()) or ()}))
+        contradictions = tuple(sorted({str(item) for record in records for item in record.contradictions.get("contradicted_categories", ()) or ()}))
+        supporting = _supporting_factors(confirmation, acceleration, temporal)
+        opposing = _opposing_factors(risk, divergence, temporal)
+        return OpportunityTimingAssessment(
+            assessment_id=assessment_id,
+            target=target,
+            effective_at=current.effective_at,
+            source_fused_intelligence_ids=source_ids,
+            source_run_ids=source_run_ids,
+            opportunity_phase=phase,
+            opportunity_window=window,
+            timing_score=score,
+            confidence=confidence,
+            evidence_quality=_evidence_quality(records),
+            confirmation_state=confirmation,
+            acceleration_state=acceleration,
+            divergence_state=divergence,
+            risk_state=risk,
+            expected_horizon=_expected_horizon(score, temporal.historical_depth, acceleration.state),
+            supporting_factors=supporting,
+            opposing_factors=opposing,
+            contradictions=contradictions,
+            missing_evidence=missing,
+            invalidation_conditions=_invalidation_conditions(phase, confirmation, risk, divergence, missing),
+            canonical_evidence_refs=_canonical_refs(records),
+            historical_comparisons=history,
+            metadata={
+                "configuration_fingerprint": configuration_fingerprint,
+                "model_fingerprint": model_fingerprint,
+                "historical_window": "|".join(historical_window),
+                "identity_schema_version": IDENTITY_SCHEMA_VERSION,
+                "source_fused_count": len(records),
+            },
+        )
+
+
+def opportunity_assessment_to_record(
+    assessment: OpportunityTimingAssessment,
+    *,
+    pipeline_run_id: str,
+    created_at: datetime,
+) -> OpportunityTimingAssessmentRecord:
+    return OpportunityTimingAssessmentRecord(
+        id=assessment.assessment_id,
+        created_at=created_at,
+        effective_at=assessment.effective_at,
+        pipeline_run_id=pipeline_run_id,
+        target_id=assessment.target.target_id,
+        target_type=assessment.target.target_type,
+        source_fused_intelligence_ids=assessment.source_fused_intelligence_ids,
+        source_run_ids=assessment.source_run_ids,
+        configuration_fingerprint=str(assessment.metadata.get("configuration_fingerprint") or ""),
+        model_fingerprint=str(assessment.metadata.get("model_fingerprint") or ""),
+        historical_window=tuple(str(assessment.metadata.get("historical_window") or "").split("|")) if assessment.metadata.get("historical_window") else (),
+        opportunity_phase=assessment.opportunity_phase,
+        opportunity_window=assessment.opportunity_window,
+        timing_score=assessment.timing_score,
+        confidence=assessment.confidence.as_dict(),
+        evidence_quality=assessment.evidence_quality,
+        confirmation_state=asdict(assessment.confirmation_state),
+        acceleration_state=asdict(assessment.acceleration_state),
+        divergence_state=asdict(assessment.divergence_state),
+        risk_state=asdict(assessment.risk_state),
+        expected_horizon=assessment.expected_horizon,
+        supporting_factors=assessment.supporting_factors,
+        opposing_factors=assessment.opposing_factors,
+        contradictions=assessment.contradictions,
+        missing_evidence=assessment.missing_evidence,
+        invalidation_conditions=assessment.invalidation_conditions,
+        historical_comparisons=tuple(asdict(item) for item in assessment.historical_comparisons),
+        canonical_evidence_refs=assessment.canonical_evidence_refs,
+        metadata=assessment.metadata.as_dict(),
+    )
+
+
+def opportunity_snapshot_from_assessment(
+    assessment: OpportunityTimingAssessment,
+    *,
+    created_at: datetime,
+) -> OpportunityTimingSnapshotRecord:
+    snapshot_id = identity(
+        "opportunity-timing-snapshot",
+        {
+            "assessment_id": assessment.assessment_id,
+            "target": assessment.target,
+            "effective_at": assessment.effective_at,
+            "phase": assessment.opportunity_phase,
+            "window": assessment.opportunity_window,
+        },
+    )
+    return OpportunityTimingSnapshotRecord(
+        id=snapshot_id,
+        created_at=created_at,
+        effective_at=assessment.effective_at,
+        target_id=assessment.target.target_id,
+        target_type=assessment.target.target_type,
+        assessment_id=assessment.assessment_id,
+        opportunity_phase=assessment.opportunity_phase,
+        opportunity_window=assessment.opportunity_window,
+        timing_score=assessment.timing_score,
+        confidence=assessment.confidence.as_dict(),
+        source_fused_intelligence_ids=assessment.source_fused_intelligence_ids,
+        source_run_ids=assessment.source_run_ids,
+        metadata=assessment.metadata.as_dict(),
+    )
+
+
+def _aligned(record: FusedIntelligenceRecord, target: FusionTarget) -> bool:
+    return record.target_id == target.target_id and record.target_type == target.target_type
+
+
+def _historical_window(records: tuple[FusedIntelligenceRecord, ...]) -> tuple[str, str]:
+    return (records[0].effective_at.isoformat(), records[-1].effective_at.isoformat())
+
+
+def _evidence_quality(records: tuple[FusedIntelligenceRecord, ...]) -> float:
+    counts = [len(record.canonical_evidence_groups) for record in records]
+    return round(min(1.0, sum(counts) / max(1, len(counts) * 4)), 4)
+
+
+def _supporting_factors(confirmation: object, acceleration: object, temporal: object) -> tuple[str, ...]:
+    factors: list[str] = []
+    if getattr(confirmation, "confirmed", False):
+        factors.append("independent_confirmation")
+    if getattr(acceleration, "state", "") == "positive_acceleration":
+        factors.append("positive_acceleration")
+    if getattr(temporal, "persistence", 0.0) >= 0.6:
+        factors.append("persistent_change")
+    return tuple(factors or ("limited_supporting_evidence",))
+
+
+def _opposing_factors(risk: object, divergence: object, temporal: object) -> tuple[str, ...]:
+    factors = list(getattr(risk, "risks", ()))
+    factors.extend(getattr(divergence, "divergences", ()))
+    if getattr(temporal, "deterioration", False):
+        factors.append("deterioration")
+    return tuple(sorted(set(factors))) or ("no_material_opposing_factor",)
+
+
+def _invalidation_conditions(phase: str, confirmation: object, risk: object, divergence: object, missing: tuple[str, ...]) -> tuple[str, ...]:
+    conditions = [
+        "loss_of_independent_confirmation",
+        "material_increase_in_contradiction_severity",
+        "sustained_negative_acceleration",
+    ]
+    if missing:
+        conditions.append("continued_absence_of_required_evidence")
+    if getattr(risk, "score", 0.0) > 0.4:
+        conditions.append("risk_state_worsens")
+    if getattr(divergence, "severity", 0.0) > 0:
+        conditions.append("divergence_remains_unresolved")
+    if phase in {"confirmed_entry", "expansion"} and not getattr(confirmation, "confirmed", False):
+        conditions.append("confirmation_threshold_not_maintained")
+    return tuple(sorted(set(conditions)))
+
+
+def _expected_horizon(score: float, depth: int, acceleration: str) -> str:
+    if depth < 2:
+        return "indeterminate"
+    if acceleration == "positive_acceleration" and score >= 75:
+        return "weeks"
+    if score >= 75:
+        return "1-3 months"
+    if score >= 60:
+        return "3-6 months"
+    if score >= 40:
+        return "6-12 months"
+    if score >= 20:
+        return "12-24 months"
+    return "indeterminate"
+
+
+def _canonical_refs(records: tuple[FusedIntelligenceRecord, ...]) -> tuple[str, ...]:
+    return tuple(sorted({str(group.get("canonical_key", "")) for record in records for group in record.canonical_evidence_groups if group.get("canonical_key")}))

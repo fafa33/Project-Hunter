@@ -11,6 +11,8 @@ from hunter.persistence.records import (
     IntelligenceRecord,
     ObservationRecord,
     OperationalAttemptRecord,
+    OpportunityTimingAssessmentRecord,
+    OpportunityTimingSnapshotRecord,
     PipelineRunRecord,
     SignalRecord,
 )
@@ -69,6 +71,24 @@ class SQLFusedIntelligenceRepository(SQLRecordRepository[FusedIntelligenceRecord
     record_class = FusedIntelligenceRecord
 
     def _canonical_hash_payload(self, record: FusedIntelligenceRecord) -> str:
+        analytical = replace(record, created_at=record.effective_at)
+        return record_to_json(analytical)
+
+
+class SQLOpportunityTimingAssessmentRepository(SQLRecordRepository[OpportunityTimingAssessmentRecord]):
+    record_type = "opportunity-timing-assessment"
+    record_class = OpportunityTimingAssessmentRecord
+
+    def _canonical_hash_payload(self, record: OpportunityTimingAssessmentRecord) -> str:
+        analytical = replace(record, created_at=record.effective_at)
+        return record_to_json(analytical)
+
+
+class SQLOpportunityTimingSnapshotRepository(SQLRecordRepository[OpportunityTimingSnapshotRecord]):
+    record_type = "opportunity-timing-snapshot"
+    record_class = OpportunityTimingSnapshotRecord
+
+    def _canonical_hash_payload(self, record: OpportunityTimingSnapshotRecord) -> str:
         analytical = replace(record, created_at=record.effective_at)
         return record_to_json(analytical)
 

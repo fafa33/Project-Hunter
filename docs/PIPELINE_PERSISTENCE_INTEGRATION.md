@@ -97,6 +97,7 @@ The adapter persists canonical records for:
 - Insight
 - Intelligence
 - FusedIntelligence, when the optional Fusion stage is supplied
+- OpportunityTimingAssessment and OpportunityTimingSnapshot, when the optional Opportunity Timing stage is supplied
 
 It validates standardized Intelligence objects before conversion and preserves existing deterministic IDs. It does not generate replacement analytical IDs.
 
@@ -231,4 +232,6 @@ When supplied, Fusion executes after Intelligence engines and plugins have emitt
 
 ## Relationship to Opportunity Timing
 
-Opportunity Timing will need persisted effective-time histories and snapshots. This milestone provides those foundations but does not implement timing logic.
+Opportunity Timing integrates as an optional post-Fusion stage.
+
+When supplied, the persistence adapter first persists `FusedIntelligenceRecord` outputs, then passes those persisted records to the timing engine. The adapter persists `OpportunityTimingAssessmentRecord` and `OpportunityTimingSnapshotRecord` through the same UnitOfWork and repository boundaries.

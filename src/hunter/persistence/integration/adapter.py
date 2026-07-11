@@ -25,6 +25,8 @@ from hunter.persistence.records import (
     IntelligenceRecord,
     ObservationRecord,
     OperationalAttemptRecord,
+    OpportunityTimingAssessmentRecord,
+    OpportunityTimingSnapshotRecord,
     PersistenceRecord,
     PipelineRunRecord,
     SignalRecord,
@@ -278,6 +280,7 @@ class PipelinePersistenceAdapter:
                         continue
                     self._save_artifact(context, repositories, record)
                     artifact_ids.append(record.id)
+            fused_records: list[FusedIntelligenceRecord] = []
             for fused in context.fused_intelligence:
                 record = _record_for_fused_intelligence(
                     fused,
@@ -286,6 +289,24 @@ class PipelinePersistenceAdapter:
                 )
                 self._save_artifact(context, repositories, record)
                 artifact_ids.append(record.id)
+                fused_records.append(record)
+            if fused_records:
+                context.set("persisted_fused_intelligence", tuple(fused_records))
+            timing_engine = context.opportunity_timing_engine
+            timing_target = context.opportunity_timing_target
+            if timing_engine is not None and timing_target is not None and fused_records:
+                assessment = timing_engine.assess(tuple(fused_records), timing_target)
+                context.opportunity_timing.append(assessment)
+            for assessment in context.opportunity_timing:
+                record = _record_for_opportunity_timing(
+                    assessment,
+                    pipeline_run_id=run.run_id,
+                    created_at=context.clock.now(),
+                )
+                snapshot = _snapshot_for_opportunity_timing(assessment, created_at=context.clock.now())
+                self._save_artifact(context, repositories, record)
+                self._save_artifact(context, repositories, snapshot)
+                artifact_ids.extend((record.id, snapshot.id))
             context.persisted_artifact_ids.extend(artifact_ids)
         except BaseException as exc:
             self._record(context, run, PersistenceEventType.IDENTITY_CONFLICT, _summary(exc))
@@ -404,6 +425,10 @@ def _repository_for_record(repositories: Any, record: PersistenceRecord) -> Any:
         return repositories.intelligence()
     if isinstance(record, FusedIntelligenceRecord):
         return repositories.fused_intelligence()
+    if isinstance(record, OpportunityTimingAssessmentRecord):
+        return repositories.opportunity_timing_assessments()
+    if isinstance(record, OpportunityTimingSnapshotRecord):
+        return repositories.opportunity_timing_snapshots()
     if isinstance(record, SnapshotRecord):
         return repositories.snapshots()
     if isinstance(record, OperationalAttemptRecord):
@@ -419,6 +444,24 @@ def _record_for_fused_intelligence(fused: Any, *, pipeline_run_id: str, created_
         msg = f"Unsupported fused intelligence type: {fused.__class__.__name__}"
         raise TypeError(msg)
     return fused_intelligence_to_record(fused, pipeline_run_id=pipeline_run_id, created_at=created_at)
+
+
+def _record_for_opportunity_timing(assessment: Any, *, pipeline_run_id: str, created_at: datetime) -> OpportunityTimingAssessmentRecord:
+    from hunter.opportunity import OpportunityTimingAssessment, opportunity_assessment_to_record
+
+    if not isinstance(assessment, OpportunityTimingAssessment):
+        msg = f"Unsupported opportunity timing type: {assessment.__class__.__name__}"
+        raise TypeError(msg)
+    return opportunity_assessment_to_record(assessment, pipeline_run_id=pipeline_run_id, created_at=created_at)
+
+
+def _snapshot_for_opportunity_timing(assessment: Any, *, created_at: datetime) -> OpportunityTimingSnapshotRecord:
+    from hunter.opportunity import OpportunityTimingAssessment, opportunity_snapshot_from_assessment
+
+    if not isinstance(assessment, OpportunityTimingAssessment):
+        msg = f"Unsupported opportunity timing type: {assessment.__class__.__name__}"
+        raise TypeError(msg)
+    return opportunity_snapshot_from_assessment(assessment, created_at=created_at)
 
 
 def _summary(exc: BaseException) -> str:

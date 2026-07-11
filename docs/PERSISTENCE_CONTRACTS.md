@@ -55,6 +55,8 @@ Implemented records:
 - `InsightRecord`
 - `IntelligenceRecord`
 - `FusedIntelligenceRecord`
+- `OpportunityTimingAssessmentRecord`
+- `OpportunityTimingSnapshotRecord`
 - `SnapshotRecord`
 - `ConfigurationRecord`
 - `EngineManifestRecord`
@@ -130,6 +132,14 @@ The record preserves source Intelligence IDs, all source run IDs, canonical evid
 
 Fused record conflict semantics exclude operational `created_at` variance in the SQL repository so repeated identical analytical Fusion outputs remain idempotent across operational attempts.
 
+## Relationship to Opportunity Timing
+
+`OpportunityTimingAssessmentRecord` and `OpportunityTimingSnapshotRecord` store deterministic timing assessments derived only from persisted Fusion records and historical timing records or snapshots.
+
+Timing records preserve source Fusion IDs, all source run IDs, canonical evidence references, configuration fingerprint, model fingerprint, historical window, phase, window, score, confidence, risk, invalidation conditions, and explainability payloads.
+
+Assessment and snapshot conflict semantics exclude operational `created_at` variance in the SQL repository so repeated identical analytical timing outputs remain idempotent across operational attempts.
+
 ## Known Limitations
 
 - No database backend is implemented.
@@ -138,4 +148,4 @@ Fused record conflict semantics exclude operational `created_at` variance in the
 - No migrations are implemented.
 - No transaction or index model is implemented.
 - Pipeline persistence is opt-in and requires an explicit adapter.
-- No Fusion or Opportunity Timing behavior is implemented.
+- Opportunity Timing is deterministic and persistence-backed, but it does not implement automation, live providers, recommendations, expected returns, price targets, or machine-learning prediction.

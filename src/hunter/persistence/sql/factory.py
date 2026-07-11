@@ -11,6 +11,8 @@ from hunter.persistence.sql.repositories import (
     SQLIntelligenceRepository,
     SQLObservationRepository,
     SQLOperationalAttemptRepository,
+    SQLOpportunityTimingAssessmentRepository,
+    SQLOpportunityTimingSnapshotRepository,
     SQLPipelineRunRepository,
     SQLSignalRepository,
     SQLSnapshotRepository,
@@ -44,6 +46,12 @@ class RepositoryFactory:
 
     def fused_intelligence(self) -> SQLFusedIntelligenceRepository:
         return SQLFusedIntelligenceRepository(self._session)
+
+    def opportunity_timing_assessments(self) -> SQLOpportunityTimingAssessmentRepository:
+        return SQLOpportunityTimingAssessmentRepository(self._session)
+
+    def opportunity_timing_snapshots(self) -> SQLOpportunityTimingSnapshotRepository:
+        return SQLOpportunityTimingSnapshotRepository(self._session)
 
     def snapshots(self) -> SQLSnapshotRepository:
         return SQLSnapshotRepository(self._session)

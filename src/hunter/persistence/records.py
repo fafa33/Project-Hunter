@@ -301,6 +301,97 @@ class FusedIntelligenceRecord(BasePersistenceRecord):
 
 
 @dataclass(frozen=True, kw_only=True)
+class OpportunityTimingAssessmentRecord(BasePersistenceRecord):
+    record_type: ClassVar[str] = "opportunity-timing-assessment"
+
+    pipeline_run_id: str
+    target_id: str
+    target_type: str
+    source_fused_intelligence_ids: tuple[str, ...]
+    source_run_ids: tuple[str, ...]
+    configuration_fingerprint: str
+    model_fingerprint: str
+    historical_window: tuple[str, ...]
+    opportunity_phase: str
+    opportunity_window: str
+    timing_score: float
+    confidence: dict[str, Any]
+    evidence_quality: float
+    confirmation_state: dict[str, Any]
+    acceleration_state: dict[str, Any]
+    divergence_state: dict[str, Any]
+    risk_state: dict[str, Any]
+    expected_horizon: str
+    supporting_factors: tuple[str, ...]
+    opposing_factors: tuple[str, ...]
+    contradictions: tuple[str, ...]
+    missing_evidence: tuple[str, ...]
+    invalidation_conditions: tuple[str, ...]
+    historical_comparisons: tuple[dict[str, Any], ...]
+    canonical_evidence_refs: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        for name in (
+            "pipeline_run_id",
+            "target_id",
+            "target_type",
+            "configuration_fingerprint",
+            "model_fingerprint",
+            "opportunity_phase",
+            "opportunity_window",
+            "expected_horizon",
+        ):
+            _require_text(name, getattr(self, name))
+        object.__setattr__(self, "source_fused_intelligence_ids", _identity_tuple("source_fused_intelligence_ids", self.source_fused_intelligence_ids))
+        for name in (
+            "source_run_ids",
+            "historical_window",
+            "supporting_factors",
+            "opposing_factors",
+            "contradictions",
+            "missing_evidence",
+            "invalidation_conditions",
+            "canonical_evidence_refs",
+        ):
+            object.__setattr__(self, name, tuple(str(item) for item in getattr(self, name)))
+        for name in ("confirmation_state", "acceleration_state", "divergence_state", "risk_state"):
+            object.__setattr__(self, name, _freeze_payload(getattr(self, name)))
+        object.__setattr__(self, "historical_comparisons", tuple(_freeze_payload(item) for item in self.historical_comparisons))
+        normalize(self.confidence)
+        object.__setattr__(self, "confidence", dict(self.confidence))
+        _range("evidence_quality", self.evidence_quality)
+        if self.timing_score < 0 or self.timing_score > 100:
+            raise PersistenceValidationError("timing_score must be between 0 and 100")
+
+
+@dataclass(frozen=True, kw_only=True)
+class OpportunityTimingSnapshotRecord(BasePersistenceRecord):
+    record_type: ClassVar[str] = "opportunity-timing-snapshot"
+
+    target_id: str
+    target_type: str
+    assessment_id: str
+    opportunity_phase: str
+    opportunity_window: str
+    timing_score: float
+    confidence: dict[str, Any]
+    source_fused_intelligence_ids: tuple[str, ...]
+    source_run_ids: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        for name in ("target_id", "target_type", "assessment_id", "opportunity_phase", "opportunity_window"):
+            _require_text(name, getattr(self, name))
+        object.__setattr__(self, "source_fused_intelligence_ids", _identity_tuple("source_fused_intelligence_ids", self.source_fused_intelligence_ids))
+        object.__setattr__(self, "source_run_ids", tuple(str(item) for item in self.source_run_ids))
+        normalize(self.confidence)
+        object.__setattr__(self, "confidence", dict(self.confidence))
+        if self.timing_score < 0 or self.timing_score > 100:
+            raise PersistenceValidationError("timing_score must be between 0 and 100")
+
+
+@dataclass(frozen=True, kw_only=True)
 class SnapshotRecord(BasePersistenceRecord):
     record_type: ClassVar[str] = "snapshot"
 
@@ -358,6 +449,8 @@ PersistenceRecord = (
     | InsightRecord
     | IntelligenceRecord
     | FusedIntelligenceRecord
+    | OpportunityTimingAssessmentRecord
+    | OpportunityTimingSnapshotRecord
     | SnapshotRecord
     | ConfigurationRecord
     | EngineManifestRecord
@@ -374,6 +467,8 @@ RECORD_TYPES: dict[str, type[PersistenceRecord]] = {
         InsightRecord,
         IntelligenceRecord,
         FusedIntelligenceRecord,
+        OpportunityTimingAssessmentRecord,
+        OpportunityTimingSnapshotRecord,
         SnapshotRecord,
         ConfigurationRecord,
         EngineManifestRecord,

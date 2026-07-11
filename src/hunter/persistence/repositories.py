@@ -12,6 +12,8 @@ from hunter.persistence.records import (
     IntelligenceRecord,
     ObservationRecord,
     OperationalAttemptRecord,
+    OpportunityTimingAssessmentRecord,
+    OpportunityTimingSnapshotRecord,
     PersistenceRecord,
     PipelineRunRecord,
     SignalRecord,
@@ -83,6 +85,14 @@ class IntelligenceRepository(Repository[IntelligenceRecord], Protocol):
 
 
 class FusedIntelligenceRepository(Repository[FusedIntelligenceRecord], Protocol):
+    pass
+
+
+class OpportunityTimingAssessmentRepository(Repository[OpportunityTimingAssessmentRecord], Protocol):
+    pass
+
+
+class OpportunityTimingSnapshotRepository(Repository[OpportunityTimingSnapshotRecord], Protocol):
     pass
 
 

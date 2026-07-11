@@ -10,6 +10,7 @@ from hunter.execution.identity import fingerprint
 from hunter.execution.run import PipelineRun
 from hunter.intelligence.fusion.models import FusedIntelligence
 from hunter.intelligence.intelligence import Intelligence
+from hunter.opportunity.models import OpportunityTimingAssessment
 
 
 @runtime_checkable
@@ -50,6 +51,9 @@ class PipelineContext:
     persistence_events: list[Any] = field(default_factory=list)
     run_identity_snapshot: dict[str, object] | None = None
     fused_intelligence: list[FusedIntelligence] = field(default_factory=list)
+    opportunity_timing: list[OpportunityTimingAssessment] = field(default_factory=list)
+    opportunity_timing_engine: Any | None = None
+    opportunity_timing_target: Any | None = None
 
     def get(self, key: str, default: Any = None) -> Any:
         return self.values.get(key, default)

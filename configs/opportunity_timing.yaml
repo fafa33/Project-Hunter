@@ -1,0 +1,44 @@
+enabled: false
+required_historical_depth: 3
+min_confirmation_groups: 2
+required_categories:
+  - macro
+  - whale
+  - developer
+  - protocol
+  - news
+  - narrative
+  - social
+  - on-chain
+phase_thresholds:
+  too_early: 20
+  forming: 40
+  early_entry: 60
+  confirmed_entry: 75
+  expansion: 90
+window_thresholds:
+  closed: 20
+  watch: 40
+  opening: 60
+  open: 75
+  strengthening: 90
+risk_weights:
+  contradiction: 0.25
+  missing_evidence: 0.2
+  dependency: 0.2
+  divergence: 0.2
+  insufficient_history: 0.15
+confidence_weights:
+  history: 0.2
+  diversity: 0.2
+  coverage: 0.2
+  independence: 0.15
+  freshness: 0.1
+  fusion: 0.15
+contradiction_penalty: 18
+missing_evidence_penalty: 3
+divergence_penalty: 15
+acceleration_bonus: 12
+confirmation_bonus: 18
+persistence_bonus: 10
+model_version: opportunity-timing-model-v1
