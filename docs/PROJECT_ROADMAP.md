@@ -22,14 +22,15 @@
 - Operational Attempts and Run Lifecycle: complete.
 - Intelligence Fusion Layer: complete.
 - Opportunity Timing Engine: complete.
+- Probability Engine: complete.
 - Automation and Scheduler Layer: complete.
 - Dashboard Foundation (Phase 1): complete.
 
 ## Next Milestone
 
-Probability Engine is the next implementation milestone.
+Next implementation milestone is pending specification.
 
-Implementation should wait for the dedicated Probability Engine specification.
+Implementation should wait for the next dedicated milestone specification.
 
 ## Deferred Milestones
 

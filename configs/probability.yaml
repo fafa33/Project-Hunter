@@ -1,0 +1,47 @@
+enabled: true
+minimum_evidence_records: 1
+missing_evidence_penalty: 0.2
+conflict_penalty: 0.2
+weak_backtesting_threshold: 0.5
+
+component_weights:
+  fundamental_strength: 0.08
+  valuation_quality: 0.08
+  relative_valuation: 0.06
+  mispricing_quality: 0.08
+  macro_alignment: 0.08
+  future_demand_alignment: 0.08
+  opportunity_timing: 0.12
+  whale_alignment: 0.06
+  developer_strength: 0.08
+  validation_health: 0.08
+  backtesting_reliability: 0.08
+  historical_consistency: 0.06
+  evidence_quality: 0.06
+  evidence_freshness: 0.04
+  confidence: 0.04
+  risk_balance: 0.04
+
+label_thresholds:
+  Insufficient Evidence: 0.0
+  Very Low Probability: 0.15
+  Low Probability: 0.25
+  Speculative: 0.35
+  Neutral: 0.45
+  Moderately Positive: 0.55
+  High Probability: 0.68
+  Very High Probability: 0.8
+  Exceptional Probability: 0.9
+
+engine_component_map:
+  macro: macro_alignment
+  future: future_demand_alignment
+  demand: future_demand_alignment
+  whale: whale_alignment
+  developer: developer_strength
+  validation: validation_health
+  discovery: fundamental_strength
+  valuation: valuation_quality
+  comparative: relative_valuation
+  mispricing: mispricing_quality
+  asymmetry: risk_balance
