@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC
 from typing import Any
 
 from hunter.intelligence import Evidence, Insight, Intelligence, Observation, Signal
@@ -65,7 +65,7 @@ class WhaleIntelligenceEngine(BaseIntelligenceEngine):
         if not isinstance(analysis, WhaleAnalysis):
             raise WhaleCollectionError("Whale engine expected WhaleAnalysis")
         confidence = self._confidence_model.calculate(self._latest_dataset)
-        generated_at = datetime.now(UTC)
+        generated_at = context.clock.now().astimezone(UTC)
         evidence = tuple(
             Evidence(
                 id=f"whale-evidence-{event.id}",

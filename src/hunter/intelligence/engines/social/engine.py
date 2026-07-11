@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC
 from typing import Any
 
 from hunter.intelligence import Evidence, Insight, Intelligence, Observation, Signal
@@ -64,7 +64,7 @@ class SocialIntelligenceEngine(BaseIntelligenceEngine):
     def generate_intelligence(self, context: PipelineContext, analysis: Any) -> Intelligence:
         if not isinstance(analysis, SocialAnalysis):
             raise SocialCollectionError("Social engine expected SocialAnalysis")
-        generated_at = datetime.now(UTC)
+        generated_at = context.clock.now().astimezone(UTC)
         evidence = self._evidence()
         observations = tuple(
             Observation(

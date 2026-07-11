@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC
 from typing import Any
 
 from hunter.intelligence import Evidence, Insight, Intelligence, Observation, Signal
@@ -67,7 +67,7 @@ class ProtocolIntelligenceEngine(BaseIntelligenceEngine):
     def generate_intelligence(self, context: PipelineContext, analysis: Any) -> Intelligence:
         if not isinstance(analysis, ProtocolAnalysis):
             raise ProtocolCollectionError("Protocol engine expected ProtocolAnalysis")
-        generated_at = datetime.now(UTC)
+        generated_at = context.clock.now().astimezone(UTC)
         confidence = self._confidence_model.calculate(self._latest_dataset)
         evidence = self._evidence()
         observations = tuple(

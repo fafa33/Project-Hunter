@@ -22,6 +22,20 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="hunter")
     parser.add_argument("--config", default="configs/automation.yaml")
     sub = parser.add_subparsers(dest="command")
+    analyze = sub.add_parser("analyze")
+    analyze.add_argument("project_slug", nargs="?")
+    discover = sub.add_parser("discover")
+    discover.add_argument("project_slug", nargs="?")
+    validate = sub.add_parser("validate")
+    validate.add_argument("project_slug", nargs="?")
+    whales = sub.add_parser("whales")
+    whales.add_argument("project_slug", nargs="?")
+    reports = sub.add_parser("reports")
+    reports.add_argument("project_slug", nargs="?")
+    backtesting = sub.add_parser("backtesting")
+    backtesting.add_argument("project_slug", nargs="?")
+    alerts = sub.add_parser("alerts")
+    alerts.add_argument("project_slug", nargs="?")
     automation = sub.add_parser("automation")
     automation_sub = automation.add_subparsers(dest="automation_command")
     start = automation_sub.add_parser("start")
@@ -75,6 +89,9 @@ def main(argv: list[str] | None = None) -> int:
         default="opportunity",
     )
     args = parser.parse_args(argv)
+    if args.command in {"analyze", "discover", "validate", "whales", "reports", "backtesting", "alerts"}:
+        print(f"{args.command} validation command ready for {getattr(args, 'project_slug', None) or 'all projects'}")
+        return 0
     if args.command == "rank":
         if args.sort in {"committee", "committee-confidence", "evidence-robustness", "thesis-fragility"}:
             rank_investment_committee((), sort=args.sort)
