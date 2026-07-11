@@ -60,14 +60,20 @@ def test_deduplication_dependency_corroboration_and_contradiction_are_determinis
 
 
 def test_independent_corroboration_weighting_missing_evidence_and_confidence() -> None:
-    left = _intelligence("macro-engine", "1.0.0", "plugin-macro", "1.0.0", category="macro", strength=0.75, reference="ref-a")
-    right = _intelligence("news-engine", "2.0.0", "plugin-news", "2.0.0", category="macro", strength=0.7, reference="ref-b")
+    left = _intelligence(
+        "macro-engine", "1.0.0", "plugin-macro", "1.0.0", category="macro", strength=0.75, reference="ref-a"
+    )
+    right = _intelligence(
+        "news-engine", "2.0.0", "plugin-news", "2.0.0", category="macro", strength=0.7, reference="ref-b"
+    )
     config = FusionConfig(
         required_categories=("macro", "developer"),
         weighting=FusionWeightingConfig(engine_weights={"news-engine": 0.5}),
     )
 
-    fused = CrossEngineFusionEngine(config).fuse((left, right), FusionTarget(target_type="project", target_id="project-a"))
+    fused = CrossEngineFusionEngine(config).fuse(
+        (left, right), FusionTarget(target_type="project", target_id="project-a")
+    )
 
     assert fused.corroboration.corroborated_categories == ("macro",)
     assert fused.missing_evidence.missing_categories == ("developer",)
@@ -78,7 +84,9 @@ def test_independent_corroboration_weighting_missing_evidence_and_confidence() -
 
 
 def test_unified_narrative_and_graph_preserve_links() -> None:
-    intelligence = _intelligence("protocol-engine", "1.0.0", "plugin-protocol", "1.0.0", category="protocol", strength=0.8)
+    intelligence = _intelligence(
+        "protocol-engine", "1.0.0", "plugin-protocol", "1.0.0", category="protocol", strength=0.8
+    )
 
     fused = CrossEngineFusionEngine().fuse((intelligence,), FusionTarget(target_type="project", target_id="project-a"))
 
@@ -201,12 +209,12 @@ def test_operational_timestamps_do_not_change_fusion_identity() -> None:
 
 
 def test_rich_fused_record_round_trip_preserves_explainability() -> None:
-    fused = CrossEngineFusionEngine(
-        FusionConfig(required_categories=("macro", "developer"))
-    ).fuse(
+    fused = CrossEngineFusionEngine(FusionConfig(required_categories=("macro", "developer"))).fuse(
         (
             _intelligence("macro-engine", "1.0.0", "plugin-macro", "1.0.0", category="macro", strength=0.8),
-            _intelligence("news-engine", "1.0.0", "plugin-news", "1.0.0", category="macro", strength=0.7, reference="other-ref"),
+            _intelligence(
+                "news-engine", "1.0.0", "plugin-news", "1.0.0", category="macro", strength=0.7, reference="other-ref"
+            ),
         ),
         FusionTarget(target_type="project", target_id="project-a"),
     )
@@ -307,8 +315,12 @@ def test_canonical_evidence_groups_persist_full_provenance_and_graph_links() -> 
 
 def test_canonical_evidence_groups_affect_identity_when_analytically_relevant() -> None:
     target = FusionTarget(target_type="project", target_id="project-a")
-    first = _intelligence("macro-engine", "1.0.0", "plugin-macro", "1.0.0", category="macro", strength=0.8, lineage_key="lineage-a")
-    second = _intelligence("macro-engine", "1.0.0", "plugin-macro", "1.0.0", category="macro", strength=0.8, lineage_key="lineage-b")
+    first = _intelligence(
+        "macro-engine", "1.0.0", "plugin-macro", "1.0.0", category="macro", strength=0.8, lineage_key="lineage-a"
+    )
+    second = _intelligence(
+        "macro-engine", "1.0.0", "plugin-macro", "1.0.0", category="macro", strength=0.8, lineage_key="lineage-b"
+    )
 
     assert CrossEngineFusionEngine().fuse((first,), target).id != CrossEngineFusionEngine().fuse((second,), target).id
 
@@ -337,7 +349,9 @@ def test_legacy_fused_record_deserialization_defaults_new_provenance_fields() ->
 
 
 def test_live_object_and_persisted_record_fusion_parity() -> None:
-    live = _intelligence("macro-engine", "1.0.0", "plugin-macro", "1.0.0", category="macro", strength=0.8, reference="ref-a")
+    live = _intelligence(
+        "macro-engine", "1.0.0", "plugin-macro", "1.0.0", category="macro", strength=0.8, reference="ref-a"
+    )
     record = IntelligenceRecord(
         id=live.id,
         created_at=NOW,
@@ -404,16 +418,31 @@ def test_target_alignment_for_all_supported_target_types() -> None:
             target_refs={target_type: target_id},
         )
 
-        fused = CrossEngineFusionEngine().fuse((intelligence,), FusionTarget(target_type=target_type, target_id=target_id))
-        filtered = CrossEngineFusionEngine().fuse((intelligence,), FusionTarget(target_type=target_type, target_id="other"))
+        fused = CrossEngineFusionEngine().fuse(
+            (intelligence,), FusionTarget(target_type=target_type, target_id=target_id)
+        )
+        filtered = CrossEngineFusionEngine().fuse(
+            (intelligence,), FusionTarget(target_type=target_type, target_id="other")
+        )
 
         assert fused.source_intelligence_ids == (intelligence.id,)
         assert filtered.source_intelligence_ids == ()
 
 
 def test_canonical_evidence_deduplication_preserves_lineage_provenance() -> None:
-    left = _intelligence("macro-engine", "1.0.0", "plugin-macro", "1.0.0", category="macro", strength=0.8, reference="ref-a")
-    right = _intelligence("news-engine", "1.0.0", "plugin-news", "1.0.0", category="macro", strength=0.7, reference="ref-b", lineage_key="shared-lineage")
+    left = _intelligence(
+        "macro-engine", "1.0.0", "plugin-macro", "1.0.0", category="macro", strength=0.8, reference="ref-a"
+    )
+    right = _intelligence(
+        "news-engine",
+        "1.0.0",
+        "plugin-news",
+        "1.0.0",
+        category="macro",
+        strength=0.7,
+        reference="ref-b",
+        lineage_key="shared-lineage",
+    )
     left = _with_lineage(left, "shared-lineage")
 
     canonical = canonicalize_evidence(normalize_fusion_inputs((left, right)))
@@ -441,9 +470,15 @@ def test_fusion_models_are_deeply_immutable() -> None:
 
 
 def test_improved_corroboration_and_contradiction_semantics() -> None:
-    positive = _intelligence("macro-engine", "1.0.0", "plugin-macro", "1.0.0", category="macro", strength=0.85, reference="ref-a")
-    positive_peer = _intelligence("news-engine", "1.0.0", "plugin-news", "1.0.0", category="macro", strength=0.8, reference="ref-b")
-    negative = _intelligence("social-engine", "1.0.0", "plugin-social", "1.0.0", category="macro", strength=0.1, reference="ref-c")
+    positive = _intelligence(
+        "macro-engine", "1.0.0", "plugin-macro", "1.0.0", category="macro", strength=0.85, reference="ref-a"
+    )
+    positive_peer = _intelligence(
+        "news-engine", "1.0.0", "plugin-news", "1.0.0", category="macro", strength=0.8, reference="ref-b"
+    )
+    negative = _intelligence(
+        "social-engine", "1.0.0", "plugin-social", "1.0.0", category="macro", strength=0.1, reference="ref-c"
+    )
 
     fused = CrossEngineFusionEngine().fuse(
         (positive, positive_peer, negative),
@@ -520,7 +555,11 @@ def _intelligence(
             "plugin_id": plugin_id,
             "plugin_version": plugin_version,
             **{f"{key}_id": value for key, value in (target_refs or {}).items() if key != "project"},
-            **({"target_type": "project", "target_id": target_refs["project"]} if target_refs and "project" in target_refs else {}),
+            **(
+                {"target_type": "project", "target_id": target_refs["project"]}
+                if target_refs and "project" in target_refs
+                else {}
+            ),
         },
     )
 

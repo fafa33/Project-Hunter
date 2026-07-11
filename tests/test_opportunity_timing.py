@@ -49,8 +49,20 @@ def test_phase_and_window_classification() -> None:
 
     assert assessment.opportunity_phase == "forming"
     assert assessment.opportunity_window == "watch"
-    assert classify_phase(10, assessment.confirmation_state, assessment.acceleration_state, assessment.risk_state, analyze_temporal((_fused(0.1, 0),), required_depth=3)) == "too_early"
-    assert classify_window(10, "too_early", assessment.risk_state, analyze_temporal((_fused(0.1, 0),), required_depth=3)) == "closed"
+    assert (
+        classify_phase(
+            10,
+            assessment.confirmation_state,
+            assessment.acceleration_state,
+            assessment.risk_state,
+            analyze_temporal((_fused(0.1, 0),), required_depth=3),
+        )
+        == "too_early"
+    )
+    assert (
+        classify_window(10, "too_early", assessment.risk_state, analyze_temporal((_fused(0.1, 0),), required_depth=3))
+        == "closed"
+    )
 
 
 def test_as_of_replay_excludes_future_fusion_and_requires_explicit_replay_time() -> None:
@@ -97,11 +109,20 @@ def test_future_snapshots_are_excluded_from_historical_replay() -> None:
 
 
 def test_configured_phase_window_thresholds_and_invalid_thresholds() -> None:
-    records = (_fused(0.8, 0, dependency_classification="single-source"), _fused(0.85, 1, dependency_classification="single-source"))
+    records = (
+        _fused(0.8, 0, dependency_classification="single-source"),
+        _fused(0.85, 1, dependency_classification="single-source"),
+    )
     base = OpportunityTimingEngine().assess(records, TARGET)
     config = OpportunityTimingConfig(
         required_categories=("macro", "developer"),
-        phase_thresholds=(("too_early", 10), ("forming", 20), ("early_entry", 30), ("confirmed_entry", 40), ("expansion", 50)),
+        phase_thresholds=(
+            ("too_early", 10),
+            ("forming", 20),
+            ("early_entry", 30),
+            ("confirmed_entry", 40),
+            ("expansion", 50),
+        ),
         window_thresholds=(("closed", 10), ("watch", 20), ("opening", 30), ("open", 40), ("strengthening", 50)),
     )
     changed = OpportunityTimingEngine(config).assess(records, TARGET)
@@ -120,23 +141,33 @@ def test_configured_phase_window_thresholds_and_invalid_thresholds() -> None:
 def test_complete_model_fingerprint_is_sensitive_to_material_rules() -> None:
     records = (_fused(0.6, 0), _fused(0.7, 1), _fused(0.8, 2))
     base = OpportunityTimingEngine().assess(records, TARGET)
-    changed_freshness = OpportunityTimingEngine(OpportunityTimingConfig(freshness_window_days=60)).assess(records, TARGET)
-    changed_divergence = OpportunityTimingEngine(OpportunityTimingConfig(divergence_rules=(("social_high", 0.6),))).assess(records, TARGET)
+    changed_freshness = OpportunityTimingEngine(OpportunityTimingConfig(freshness_window_days=60)).assess(
+        records, TARGET
+    )
+    changed_divergence = OpportunityTimingEngine(
+        OpportunityTimingConfig(divergence_rules=(("social_high", 0.6),))
+    ).assess(records, TARGET)
 
     assert base.assessment_id != changed_freshness.assessment_id
     assert base.assessment_id != changed_divergence.assessment_id
 
 
 def test_required_category_coverage_and_dependent_evidence_do_not_confirm() -> None:
-    dependent = OpportunityTimingEngine(OpportunityTimingConfig(required_categories=("macro", "developer"), min_category_coverage=1.0)).assess(
+    dependent = OpportunityTimingEngine(
+        OpportunityTimingConfig(required_categories=("macro", "developer"), min_category_coverage=1.0)
+    ).assess(
         (_fused(0.85, 0, dependency_classification="shared-evidence-lineage"),),
         TARGET,
     )
-    partial = OpportunityTimingEngine(OpportunityTimingConfig(required_categories=("macro", "developer"), min_category_coverage=1.0)).assess(
+    partial = OpportunityTimingEngine(
+        OpportunityTimingConfig(required_categories=("macro", "developer"), min_category_coverage=1.0)
+    ).assess(
         (_fused(0.85, 0, categories=("macro",), dependency_classification="single-source"),),
         TARGET,
     )
-    confirmed = OpportunityTimingEngine(OpportunityTimingConfig(required_categories=("macro", "developer"), min_category_coverage=1.0)).assess(
+    confirmed = OpportunityTimingEngine(
+        OpportunityTimingConfig(required_categories=("macro", "developer"), min_category_coverage=1.0)
+    ).assess(
         (_fused(0.85, 0, dependency_classification="single-source"),),
         TARGET,
     )
@@ -182,7 +213,14 @@ def test_confirmation_divergence_risk_confidence_score_horizon_and_invalidation(
     assert "score" in assessment.confidence
     assert assessment.risk_state.risks
     assert assessment.canonical_evidence_refs
-    assert assessment.expected_horizon in {"weeks", "1-3 months", "3-6 months", "6-12 months", "12-24 months", "indeterminate"}
+    assert assessment.expected_horizon in {
+        "weeks",
+        "1-3 months",
+        "3-6 months",
+        "6-12 months",
+        "12-24 months",
+        "indeterminate",
+    }
     assert assessment.invalidation_conditions
 
 
@@ -192,7 +230,9 @@ def test_false_start_and_historical_phase_transitions() -> None:
         pipeline_run_id="run-pipeline",
         created_at=NOW,
     )
-    current = OpportunityTimingEngine().assess((_fused(0.45, 0), _fused(0.65, 1), _fused(0.3, 2)), TARGET, historical_snapshots=(previous,))
+    current = OpportunityTimingEngine().assess(
+        (_fused(0.45, 0), _fused(0.65, 1), _fused(0.3, 2)), TARGET, historical_snapshots=(previous,)
+    )
 
     assert current.historical_comparisons[0].prior_phases
     assert current.historical_comparisons[0].similarity_summary
@@ -230,11 +270,15 @@ def test_persistence_round_trip_and_repeated_run_idempotence() -> None:
 
 def test_pipeline_ordering_missing_fusion_inputs_and_optional_stage_behavior() -> None:
     context = PipelineContext()
-    PipelineOrchestrator().run(context=context, opportunity_timing_engine=OpportunityTimingEngine(), fusion_target=TARGET)
+    PipelineOrchestrator().run(
+        context=context, opportunity_timing_engine=OpportunityTimingEngine(), fusion_target=TARGET
+    )
     assert context.opportunity_timing == []
 
     context.set("persisted_fused_intelligence", (_fused(0.6, 0), _fused(0.7, 1), _fused(0.8, 2)))
-    PipelineOrchestrator().run(context=context, opportunity_timing_engine=OpportunityTimingEngine(), fusion_target=TARGET)
+    PipelineOrchestrator().run(
+        context=context, opportunity_timing_engine=OpportunityTimingEngine(), fusion_target=TARGET
+    )
     assert len(context.opportunity_timing) == 1
 
     with pytest.raises(InsufficientFusionInputError):
@@ -266,7 +310,9 @@ def test_persistence_enabled_pipeline_runs_timing_after_fusion_records_are_avail
     with UnitOfWork(session_factory) as uow:
         repositories = uow.repositories
         assert repositories is not None
-        assert repositories.opportunity_timing_assessments().load(result.opportunity_timing[0].assessment_id) is not None
+        assert (
+            repositories.opportunity_timing_assessments().load(result.opportunity_timing[0].assessment_id) is not None
+        )
 
 
 def test_end_to_end_historical_states_without_recommendation_language() -> None:
@@ -342,8 +388,16 @@ def _fused(
         effective_window=(effective_at.isoformat(), effective_at.isoformat()),
         canonical_evidence_groups=groups,
         contributions=tuple({"engine_id": f"engine-{category}", "weight": 1.0} for category in categories),
-        corroboration={"corroborated_categories": categories, "score": score, "explanation": "deterministic corroboration"},
-        contradictions={"contradicted_categories": ("macro",) if contradiction else (), "severity": contradiction, "explanation": "deterministic contradiction"},
+        corroboration={
+            "corroborated_categories": categories,
+            "score": score,
+            "explanation": "deterministic corroboration",
+        },
+        contradictions={
+            "contradicted_categories": ("macro",) if contradiction else (),
+            "severity": contradiction,
+            "explanation": "deterministic contradiction",
+        },
         dependencies={"dependent_engine_ids": (), "dependency_edges": (), "penalty": 0.0, "explanation": "independent"},
         missing_evidence={"missing_categories": (), "severity": 0.0, "explanation": "complete"},
         unified_signals=signals,

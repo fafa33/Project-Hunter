@@ -68,6 +68,7 @@ class SnapshotSpec:
             raise ValueError("Snapshot type is required")
         object.__setattr__(self, "metadata", dict(self.metadata))
 
+
 @dataclass(frozen=True)
 class RecordBatch:
     records: tuple[Any, ...]

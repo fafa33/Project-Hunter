@@ -24,4 +24,3 @@ class ContextWhaleCollector:
         if isinstance(value, list):
             return tuple(item for item in value if isinstance(item, WhaleEvent))
         return ()
-

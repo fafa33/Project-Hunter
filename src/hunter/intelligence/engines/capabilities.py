@@ -32,4 +32,3 @@ class CapabilityRegistry:
 
 def _normalize(value: str) -> str:
     return value.strip().lower()
-

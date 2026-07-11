@@ -31,4 +31,3 @@ class MacroEngineConfigurationLoader:
             domains=tuple(str(domain) for domain in data.get("domains", [])),
             thresholds={str(key): float(value) for key, value in data.get("thresholds", {}).items()},
         )
-

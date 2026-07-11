@@ -12,4 +12,3 @@ class IntelligenceRegistryError(IntelligenceError):
 
 class IntelligenceAggregationError(IntelligenceError):
     """Raised when intelligence aggregation fails."""
-

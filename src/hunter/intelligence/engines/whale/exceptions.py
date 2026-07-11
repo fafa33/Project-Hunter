@@ -12,4 +12,3 @@ class WhaleCollectionError(WhaleIntelligenceError):
 
 class WhaleAnalysisError(WhaleIntelligenceError):
     """Raised when whale analysis fails."""
-

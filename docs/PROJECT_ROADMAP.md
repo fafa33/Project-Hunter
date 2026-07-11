@@ -21,14 +21,15 @@
 - Pipeline Persistence Integration: complete.
 - Operational Attempts and Run Lifecycle: complete.
 - Intelligence Fusion Layer: complete.
+- Opportunity Timing Engine: complete.
 - Automation and Scheduler Layer: complete.
 - Dashboard Foundation (Phase 1): complete.
 
 ## Next Milestone
 
-Opportunity Timing Engine is the next implementation milestone.
+Probability Engine is the next implementation milestone.
 
-Implementation should wait for the dedicated Opportunity Timing Engine specification.
+Implementation should wait for the dedicated Probability Engine specification.
 
 ## Deferred Milestones
 

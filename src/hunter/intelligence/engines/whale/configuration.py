@@ -31,4 +31,3 @@ class WhaleEngineConfigurationLoader:
             signal_types=tuple(str(signal_type) for signal_type in data.get("signal_types", [])),
             thresholds={str(key): float(value) for key, value in data.get("thresholds", {}).items()},
         )
-

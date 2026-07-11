@@ -41,7 +41,14 @@ class SocialConfidenceModel:
     def _quality(self, dataset: SocialDataset) -> float:
         if not dataset.posts:
             return 0.0
-        author_quality = mean((author.credibility + author.attribution_quality + (1.0 - author.bot_probability)) / 3 for author in dataset.authors) if dataset.authors else 0.0
+        author_quality = (
+            mean(
+                (author.credibility + author.attribution_quality + (1.0 - author.bot_probability)) / 3
+                for author in dataset.authors
+            )
+            if dataset.authors
+            else 0.0
+        )
         engagement_quality = mean(item.quality for item in dataset.engagements) if dataset.engagements else 0.0
         duplicate_penalty = len(dataset.duplicates) / max(len(dataset.posts), 1)
         filtered_penalty = len(dataset.filtered) / max(len(dataset.posts), 1)

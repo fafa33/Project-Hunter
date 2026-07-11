@@ -60,23 +60,45 @@ def base(
 def protocol_records():
     return (
         UsageSnapshot(**base("usage-old", 60), active_users=100, new_users=20, returning_users=70, retained_users=50),
-        UsageSnapshot(**base("usage-new", 5, source="defillama"), active_users=150, new_users=30, returning_users=110, retained_users=90),
-        TransactionSnapshot(**base("tx-old", 60), transaction_count=1000, economically_meaningful_count=700, duplicate_ratio=0.05),
-        TransactionSnapshot(**base("tx-new", 5), transaction_count=1500, economically_meaningful_count=1200, duplicate_ratio=0.05, bridge_pass_through_ratio=0.05),
+        UsageSnapshot(
+            **base("usage-new", 5, source="defillama"),
+            active_users=150,
+            new_users=30,
+            returning_users=110,
+            retained_users=90,
+        ),
+        TransactionSnapshot(
+            **base("tx-old", 60), transaction_count=1000, economically_meaningful_count=700, duplicate_ratio=0.05
+        ),
+        TransactionSnapshot(
+            **base("tx-new", 5),
+            transaction_count=1500,
+            economically_meaningful_count=1200,
+            duplicate_ratio=0.05,
+            bridge_pass_through_ratio=0.05,
+        ),
         FeeSnapshot(**base("fee-old", 60), fees_usd=1000),
         FeeSnapshot(**base("fee-new", 5), fees_usd=1600),
         RevenueSnapshot(**base("rev-old", 60), revenue_usd=300, protocol_income_usd=150),
         RevenueSnapshot(**base("rev-new", 5), revenue_usd=700, protocol_income_usd=300),
         TVLSnapshot(**base("tvl-old", 60), tvl_usd=100_000, organic_tvl_usd=65_000, incentive_tvl_usd=35_000),
         TVLSnapshot(**base("tvl-new", 5), tvl_usd=140_000, organic_tvl_usd=100_000, incentive_tvl_usd=40_000),
-        LiquiditySnapshot(**base("liq-new", 5), liquidity_usd=50_000, depth_usd=30_000, stable_liquidity_ratio=0.8, utilization_ratio=0.7),
+        LiquiditySnapshot(
+            **base("liq-new", 5),
+            liquidity_usd=50_000,
+            depth_usd=30_000,
+            stable_liquidity_ratio=0.8,
+            utilization_ratio=0.7,
+        ),
         ApplicationSnapshot(**base("app-1", 5), application_id="lend", volume_share=0.45),
         ApplicationSnapshot(**base("app-2", 5, chain="polygon"), application_id="borrow", volume_share=0.30),
         ApplicationSnapshot(**base("app-3", 5, chain="arbitrum"), application_id="stable", volume_share=0.25),
         ValidatorSnapshot(**base("val-new", 5), active_validators=120, online_ratio=0.95, concentration_ratio=0.25),
         IncidentSnapshot(**base("incident-old", 70), severity=0.2, resolved=True, duration_minutes=10),
         GovernanceSnapshot(**base("gov-new", 5), proposals=4, voter_count=1200, participation_ratio=0.55),
-        TreasurySnapshot(**base("treasury-new", 5), treasury_usd=1_000_000, monthly_expense_usd=50_000, runway_months=20),
+        TreasurySnapshot(
+            **base("treasury-new", 5), treasury_usd=1_000_000, monthly_expense_usd=50_000, runway_months=20
+        ),
         IncentiveSnapshot(**base("incentive-new", 5), incentives_usd=250, emissions_usd=200, revenue_usd=700),
     )
 

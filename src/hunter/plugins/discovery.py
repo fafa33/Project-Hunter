@@ -16,10 +16,13 @@ class PluginDiscovery:
         built_in_plugins: Iterable[Plugin] | None = None,
         module_paths: Iterable[str] | None = None,
         entry_point_group: str = "hunter.plugins",
+        include_entry_points: bool = False,
     ) -> list[Plugin]:
         plugins = list(built_in_plugins or [])
-        plugins.extend(self._from_modules(module_paths or []))
-        plugins.extend(self._from_entry_points(entry_point_group))
+        configured_module_paths = tuple(module_paths or ())
+        plugins.extend(self._from_modules(configured_module_paths))
+        if include_entry_points:
+            plugins.extend(self._from_entry_points(entry_point_group))
         return plugins
 
     def _from_modules(self, module_paths: Iterable[str]) -> list[Plugin]:
@@ -53,4 +56,3 @@ def _ensure_plugin(value: Any, source: str) -> Plugin:
         msg = f"Discovered object is not a plugin: {source}"
         raise PluginDiscoveryError(msg)
     return value
-

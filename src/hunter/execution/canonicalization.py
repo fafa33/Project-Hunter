@@ -90,4 +90,3 @@ def _decimal_text(value: Decimal) -> str:
     if normalized == normalized.to_integral():
         return format(normalized, "f")
     return format(normalized, "f").rstrip("0").rstrip(".")
-

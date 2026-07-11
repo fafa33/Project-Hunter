@@ -16,15 +16,24 @@ class OnchainFlowAnalyzer:
         return _net_ratio(tuple((item.inflow or 0.0, item.outflow or 0.0) for item in dataset.bridge_flows))
 
     def staking_netflow(self, dataset: OnchainDataset) -> float:
-        return _net_ratio(tuple((item.staked_inflow or 0.0, (item.staked_outflow or 0.0) + (item.unstaked or 0.0)) for item in dataset.staking_flows))
+        return _net_ratio(
+            tuple(
+                (item.staked_inflow or 0.0, (item.staked_outflow or 0.0) + (item.unstaked or 0.0))
+                for item in dataset.staking_flows
+            )
+        )
 
     def capital_retention(self, dataset: OnchainDataset) -> float:
-        values = [_ratio(item.retained_capital or 0.0, item.inflow or 0.0) for item in dataset.capital_flows if item.inflow]
+        values = [
+            _ratio(item.retained_capital or 0.0, item.inflow or 0.0) for item in dataset.capital_flows if item.inflow
+        ]
         return round(mean(values), 4) if values else 0.0
 
     def circular_flow_risk(self, dataset: OnchainDataset) -> float:
         values = [item.circular_flow_ratio for item in dataset.capital_flows if item.circular_flow_ratio is not None]
-        values.extend(item.circular_transfer_ratio for item in dataset.transfers if item.circular_transfer_ratio is not None)
+        values.extend(
+            item.circular_transfer_ratio for item in dataset.transfers if item.circular_transfer_ratio is not None
+        )
         return round(mean(values), 4) if values else 0.0
 
     def bridge_pass_through_risk(self, dataset: OnchainDataset) -> float:

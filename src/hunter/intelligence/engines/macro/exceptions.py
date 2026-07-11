@@ -12,4 +12,3 @@ class MacroCollectionError(MacroIntelligenceError):
 
 class MacroAnalysisError(MacroIntelligenceError):
     """Raised when macro analysis fails."""
-

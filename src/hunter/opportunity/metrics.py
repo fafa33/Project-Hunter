@@ -52,6 +52,4 @@ NEGATIVE_FACTORS: tuple[str, ...] = (
     "missing_evidence",
 )
 
-GATING_FACTORS: tuple[str, ...] = (
-    "validation_health",
-)
+GATING_FACTORS: tuple[str, ...] = ("validation_health",)

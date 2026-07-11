@@ -65,4 +65,3 @@ class WhaleAnalysis:
     smart_money_activity: str = "unknown"
     notable_events: tuple[str, ...] = ()
     metadata: dict[str, str] = field(default_factory=dict)
-

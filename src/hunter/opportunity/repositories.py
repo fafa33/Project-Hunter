@@ -10,5 +10,7 @@ class OpportunityMetricRepository(Protocol):
     def latest_for_project(self, project_id: str) -> OpportunityMetricSnapshot | None:
         raise NotImplementedError
 
-    def history_for_project(self, project_id: str, *, limit: int | None = None) -> tuple[OpportunityMetricSnapshot, ...]:
+    def history_for_project(
+        self, project_id: str, *, limit: int | None = None
+    ) -> tuple[OpportunityMetricSnapshot, ...]:
         raise NotImplementedError

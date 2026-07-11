@@ -37,4 +37,3 @@ class PluginLifecycle:
             except Exception as exc:  # noqa: BLE001
                 msg = f"Plugin {phase} failed for {plugin.metadata.id}"
                 raise PluginLifecycleError(msg) from exc
-

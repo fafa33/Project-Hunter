@@ -27,4 +27,3 @@ class EngineFactory:
 
     def available(self) -> tuple[str, ...]:
         return tuple(sorted(self._builders))
-

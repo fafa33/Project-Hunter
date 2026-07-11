@@ -14,8 +14,11 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+  "black>=24,<25",
+  "mypy>=1.10,<2",
   "pytest>=8,<9",
   "ruff>=0.6,<1",
+  "types-PyYAML>=6,<7",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -45,3 +48,21 @@ target-version = "py311"
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
 ignore = ["E501"]
+
+[tool.black]
+line-length = 120
+target-version = ["py311"]
+
+[tool.mypy]
+python_version = "3.11"
+files = ["src", "tests"]
+warn_unused_configs = true
+disable_error_code = [
+  "arg-type",
+  "assignment",
+  "attr-defined",
+  "operator",
+  "type-var",
+  "union-attr",
+  "var-annotated",
+]

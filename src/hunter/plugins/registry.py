@@ -40,4 +40,3 @@ class PluginRegistry:
     def extend(self, plugins: Iterable[Plugin]) -> None:
         for plugin in plugins:
             self.register(plugin)
-

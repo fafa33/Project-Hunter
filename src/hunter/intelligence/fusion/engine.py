@@ -76,7 +76,9 @@ class CrossEngineFusionEngine:
                 "contribution_model_fingerprint": contribution_model_fingerprint,
                 "strategy": active_config.strategy,
                 "effective_window": window,
-                "canonical_evidence_groups": tuple(_canonical_evidence_payload(item) for item in canonical_evidence_groups),
+                "canonical_evidence_groups": tuple(
+                    _canonical_evidence_payload(item) for item in canonical_evidence_groups
+                ),
                 "identity_schema_version": "fusion-identity-v1",
             },
         )
@@ -153,7 +155,11 @@ def fused_intelligence_to_record(
         configuration_fingerprint=str(fused.metadata.get("configuration_fingerprint") or ""),
         contribution_model_fingerprint=str(fused.metadata.get("contribution_model_fingerprint") or ""),
         source_run_ids=fused.source_run_ids,
-        effective_window=tuple(str(fused.metadata.get("effective_window") or "").split("|")) if fused.metadata.get("effective_window") else (),
+        effective_window=(
+            tuple(str(fused.metadata.get("effective_window") or "").split("|"))
+            if fused.metadata.get("effective_window")
+            else ()
+        ),
         canonical_evidence_groups=tuple(_canonical_evidence_payload(item) for item in fused.canonical_evidence_groups),
         contributions=tuple(_contribution_payload(item) for item in fused.contributions),
         corroboration={
@@ -203,7 +209,9 @@ def assess_missing_evidence(inputs: tuple[FusionInput, ...], config: FusionConfi
     required = set(config.required_categories)
     missing = required.difference(observed)
     severity = len(missing) / len(required) if required else 0.0
-    explanation = "No required evidence categories configured" if not required else f"{len(missing)} required category gap(s)"
+    explanation = (
+        "No required evidence categories configured" if not required else f"{len(missing)} required category gap(s)"
+    )
     return MissingEvidenceAssessment(
         missing_categories=tuple(missing),
         severity=severity,
@@ -220,11 +228,15 @@ def build_unified_signals(inputs: tuple[FusionInput, ...]) -> tuple[UnifiedSigna
     for category in sorted(grouped):
         members = grouped[category]
         strengths = [item.signal_strengths[index] for item, index in members if index < len(item.signal_strengths)]
-        confidences = [item.signal_confidences[index] for item, index in members if index < len(item.signal_confidences)]
+        confidences = [
+            item.signal_confidences[index] for item, index in members if index < len(item.signal_confidences)
+        ]
         severities = [item.signal_severities[index] for item, index in members if index < len(item.signal_severities)]
         source_signal_ids = tuple(item.signal_ids[index] for item, index in members if index < len(item.signal_ids))
         engine_ids = tuple(item.engine_id for item, _ in members)
-        evidence_ids = tuple(evidence.canonical_key for evidence in canonicalize_evidence(tuple(item for item, _ in members)))
+        evidence_ids = tuple(
+            evidence.canonical_key for evidence in canonicalize_evidence(tuple(item for item, _ in members))
+        )
         payload = {"category": category, "source_signal_ids": source_signal_ids, "engine_ids": engine_ids}
         signals.append(
             UnifiedSignal(
@@ -245,7 +257,9 @@ def build_unified_observations(inputs: tuple[FusionInput, ...]) -> tuple[Unified
     observations: list[UnifiedObservation] = []
     for item in inputs:
         for index, observation_id in enumerate(item.observation_ids):
-            description = item.observation_descriptions[index] if index < len(item.observation_descriptions) else observation_id
+            description = (
+                item.observation_descriptions[index] if index < len(item.observation_descriptions) else observation_id
+            )
             observations.append(
                 UnifiedObservation(
                     id=identity("fusion-unified-observation", {"source": observation_id, "engine": item.engine_id}),

@@ -11,8 +11,12 @@ class MacroAnalyzer:
     def analyze(self, dataset: MacroDataset) -> MacroAnalysis:
         points = dataset.by_domain()
         indicators = self._indicator_calculator.calculate(points)
-        strengthening = tuple(indicator.domain for indicator in indicators if indicator.direction in {"strengthening", "risk_on"})
-        weakening = tuple(indicator.domain for indicator in indicators if indicator.direction in {"weakening", "risk_off"})
+        strengthening = tuple(
+            indicator.domain for indicator in indicators if indicator.direction in {"strengthening", "risk_on"}
+        )
+        weakening = tuple(
+            indicator.domain for indicator in indicators if indicator.direction in {"weakening", "risk_off"}
+        )
         risk_indicator = next((indicator for indicator in indicators if indicator.name == "market_cycle"), None)
         liquidity = next((indicator for indicator in indicators if indicator.name == "liquidity_expansion"), None)
         notable_events = tuple(
@@ -29,4 +33,3 @@ class MacroAnalyzer:
             notable_events=notable_events,
             metadata={"engine": "macro"},
         )
-

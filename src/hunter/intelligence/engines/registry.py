@@ -62,4 +62,3 @@ class EngineRegistry:
             raise IntelligenceEngineValidationError(f"Invalid intelligence engine version: {metadata.version}")
         if metadata.priority < 0:
             raise IntelligenceEngineValidationError("Intelligence engine priority must be non-negative")
-

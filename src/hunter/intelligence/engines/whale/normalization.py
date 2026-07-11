@@ -42,4 +42,3 @@ def _clamp_optional(value: float | None) -> float | None:
 
 def _clamp(value: float) -> float:
     return min(max(value, 0.0), 1.0)
-

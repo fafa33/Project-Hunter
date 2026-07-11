@@ -92,4 +92,3 @@ def _version_at_least(actual: str, minimum: str) -> bool:
 def _version_tuple(version: str) -> tuple[int, int, int]:
     major, minor, patch = version.split(".")
     return int(major), int(minor), int(patch)
-

@@ -42,7 +42,11 @@ class AutomationJobRunner:
             job_id=job.job_id,
             scheduled_for=scheduled,
             status="scheduled",
-            metadata={"target_id": job.target.target_id, "target_type": job.target.target_type, "run_type": job.run_type},
+            metadata={
+                "target_id": job.target.target_id,
+                "target_type": job.target.target_type,
+                "run_type": job.run_type,
+            },
         )
         self._record("job_scheduled", job, run, "job scheduled")
         self._save_job(job, scheduled)
@@ -147,10 +151,20 @@ class AutomationJobRunner:
             candidates.extend(run_from_record(record) for record in records)
         if not candidates:
             return None
-        return sorted(candidates, key=lambda item: (item.finished_at or item.started_at or item.scheduled_for, item.status))[-1]
+        return sorted(
+            candidates, key=lambda item: (item.finished_at or item.started_at or item.scheduled_for, item.status)
+        )[-1]
 
     def _record(self, event_type: str, job: AutomationJob, run: AutomationRun, detail: str) -> None:
-        self.events.append(AutomationEvent(event_type=event_type, job_id=job.job_id, automation_run_id=run.automation_run_id, at=self.clock(), detail=detail))
+        self.events.append(
+            AutomationEvent(
+                event_type=event_type,
+                job_id=job.job_id,
+                automation_run_id=run.automation_run_id,
+                at=self.clock(),
+                detail=detail,
+            )
+        )
 
     def _save_job(self, job: AutomationJob, created_at: datetime) -> None:
         if self.repositories is None:
@@ -166,7 +180,10 @@ class AutomationJobRunner:
 
 
 def _run_id(job: AutomationJob, scheduled_for: datetime) -> str:
-    return identity("automation-run", {"job_id": job.job_id, "target": job.target, "scheduled_for": scheduled_for, "run_type": job.run_type})
+    return identity(
+        "automation-run",
+        {"job_id": job.job_id, "target": job.target, "scheduled_for": scheduled_for, "run_type": job.run_type},
+    )
 
 
 def _attempt_id(context: PipelineContext) -> str | None:

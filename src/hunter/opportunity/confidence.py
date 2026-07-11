@@ -17,8 +17,15 @@ def calculate_confidence(
     as_of: datetime,
 ) -> dict[str, float]:
     history = min(1.0, temporal.historical_depth / max(1, config.required_historical_depth))
-    categories = {str(signal.get("category", "")) for record in records for signal in record.unified_signals if signal.get("category")}
-    engines = {str(item.get("engine_id", "")) for record in records for item in record.contributions if item.get("engine_id")}
+    categories = {
+        str(signal.get("category", ""))
+        for record in records
+        for signal in record.unified_signals
+        if signal.get("category")
+    }
+    engines = {
+        str(item.get("engine_id", "")) for record in records for item in record.contributions if item.get("engine_id")
+    }
     canonical_groups = {
         str(item.get("canonical_key", ""))
         for record in records
@@ -52,7 +59,9 @@ def calculate_confidence(
     }
 
 
-def _freshness(records: tuple[FusedIntelligenceRecord, ...], *, as_of: datetime, config: OpportunityTimingConfig) -> float:
+def _freshness(
+    records: tuple[FusedIntelligenceRecord, ...], *, as_of: datetime, config: OpportunityTimingConfig
+) -> float:
     if not records:
         return 0.0
     values: list[float] = []

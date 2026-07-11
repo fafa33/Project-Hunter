@@ -116,7 +116,11 @@ class NewsEventClassifier:
             self.configuration.rumor_confidence_penalty if article.rumor else 0.0,
             0.20 if article.anonymous_sources else 0.0,
             0.15 if article.clickbait else 0.0,
-            self.configuration.secondary_source_confidence_penalty if not article.source_quality.primary_source else 0.0,
+            (
+                self.configuration.secondary_source_confidence_penalty
+                if not article.source_quality.primary_source
+                else 0.0
+            ),
             0.10 if event_type not in NEWS_DOMAINS else 0.0,
         ]
         return _clamp(article.source_quality.score() - sum(penalties))

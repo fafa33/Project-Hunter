@@ -64,7 +64,9 @@ class AutomationPipelineExecutor:
         )
 
 
-def _engines(plan: AutomationPipelinePlan, builders: Mapping[str, EngineBuilder]) -> tuple[IntelligenceEngine, ...] | None:
+def _engines(
+    plan: AutomationPipelinePlan, builders: Mapping[str, EngineBuilder]
+) -> tuple[IntelligenceEngine, ...] | None:
     if not plan.run_intelligence:
         return None
     selected = plan.selected_engines or tuple(sorted(builders))

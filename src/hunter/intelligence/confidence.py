@@ -41,4 +41,3 @@ class Confidence:
 
 def clamp(value: float) -> float:
     return min(max(value, 0.0), 1.0)
-

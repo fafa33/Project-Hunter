@@ -11,4 +11,3 @@ def create_schema(engine: Engine) -> None:
 
 def drop_schema(engine: Engine) -> None:
     SQLBase.metadata.drop_all(engine)
-

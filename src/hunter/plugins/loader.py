@@ -29,4 +29,3 @@ class PluginConfigLoader:
             priorities={str(key): int(value) for key, value in data.get("priorities", {}).items()},
             module_paths=tuple(str(item) for item in data.get("module_paths", [])),
         )
-

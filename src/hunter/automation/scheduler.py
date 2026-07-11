@@ -43,9 +43,7 @@ class AutomationScheduler:
         return tuple(
             job
             for job in self.jobs
-            if job.enabled
-            and is_due(job.schedule, at=now, timezone=job.timezone)
-            and not self._completed_one_time(job)
+            if job.enabled and is_due(job.schedule, at=now, timezone=job.timezone) and not self._completed_one_time(job)
         )
 
     def run_due(self, *, at: datetime | None = None) -> tuple[AutomationRun, ...]:
@@ -85,8 +83,12 @@ class AutomationScheduler:
                 continue
             job = self._job(run.job_id)
             if job is None:
-                recovered = transition(run, "blocked", at=self.clock(), warning="job definition unavailable during recovery")
-                self._event("job_blocked", run.job_id, run.automation_run_id, "job definition unavailable during recovery")
+                recovered = transition(
+                    run, "blocked", at=self.clock(), warning="job definition unavailable during recovery"
+                )
+                self._event(
+                    "job_blocked", run.job_id, run.automation_run_id, "job definition unavailable during recovery"
+                )
             elif run.status == "scheduled":
                 recovered = transition(run, "blocked", at=self.clock(), warning="scheduled run blocked during recovery")
                 self._event("job_blocked", job.job_id, run.automation_run_id, "scheduled run blocked during recovery")
@@ -94,16 +96,26 @@ class AutomationScheduler:
                 if self.runner.lock.locked(job.lock_key()):
                     self.runner.lock.release(job.lock_key())
                     self._event("lock_released", job.job_id, run.automation_run_id, "stale lock released")
-                recovered = transition(run, "failed", at=self.clock(), error="RestartRecoveryError: active run abandoned during restart")
-                self._event("job_failed", job.job_id, run.automation_run_id, "active run failed during restart recovery")
+                recovered = transition(
+                    run, "failed", at=self.clock(), error="RestartRecoveryError: active run abandoned during restart"
+                )
+                self._event(
+                    "job_failed", job.job_id, run.automation_run_id, "active run failed during restart recovery"
+                )
             self.runner._save_run(recovered, recovered.scheduled_for)
             self.runner.runs.append(recovered)
 
     def status(self) -> AutomationStatus:
-        return AutomationStatus(jobs=self.jobs, runs=tuple(self.runner.runs), events=tuple([*self.events, *self.runner.events]))
+        return AutomationStatus(
+            jobs=self.jobs, runs=tuple(self.runner.runs), events=tuple([*self.events, *self.runner.events])
+        )
 
     def _event(self, event_type: str, job_id: str, run_id: str | None, detail: str) -> None:
-        self.events.append(AutomationEvent(event_type=event_type, job_id=job_id, automation_run_id=run_id, at=self.clock(), detail=detail))
+        self.events.append(
+            AutomationEvent(
+                event_type=event_type, job_id=job_id, automation_run_id=run_id, at=self.clock(), detail=detail
+            )
+        )
 
     def _job(self, job_id: str) -> AutomationJob | None:
         for job in self.jobs:
@@ -115,6 +127,11 @@ class AutomationScheduler:
         if job.schedule.schedule_type != "once" or self.runner.repositories is None:
             return False
         records = self.runner.repositories.automation_runs().query(
-            QuerySpec(record_kind="automation-run", filters=(QueryFilter("job_id", job.job_id),), sort_by="created_at", direction="desc")
+            QuerySpec(
+                record_kind="automation-run",
+                filters=(QueryFilter("job_id", job.job_id),),
+                sort_by="created_at",
+                direction="desc",
+            )
         )
         return any(record.status in {"succeeded", "partial", "failed", "cancelled"} for record in records)

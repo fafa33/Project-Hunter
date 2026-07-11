@@ -11,7 +11,9 @@ from hunter.execution.canonicalization import normalize
 from hunter.intelligence.fusion.models import FusionTarget
 
 AutomationScheduleType = Literal["hourly", "every_6_hours", "daily", "weekly", "cron", "once"]
-AutomationRunStatus = Literal["scheduled", "claimed", "running", "succeeded", "partial", "failed", "cancelled", "skipped", "blocked"]
+AutomationRunStatus = Literal[
+    "scheduled", "claimed", "running", "succeeded", "partial", "failed", "cancelled", "skipped", "blocked"
+]
 AutomationJobKind = Literal[
     "ingest_project_data",
     "current_state_pipeline",
@@ -109,7 +111,9 @@ class AutomationJob:
             msg = "timeout_seconds must be positive"
             raise ValueError(msg)
         normalize(dict(self.metadata))
-        object.__setattr__(self, "metadata", MappingProxyType({str(key): value for key, value in self.metadata.items()}))
+        object.__setattr__(
+            self, "metadata", MappingProxyType({str(key): value for key, value in self.metadata.items()})
+        )
 
     def lock_key(self) -> str:
         return f"{self.job_id}:{self.target.target_type}:{self.target.target_id}"
@@ -152,7 +156,9 @@ class AutomationRun:
             if value is not None:
                 object.__setattr__(self, name, _aware(name, value))
         normalize(dict(self.metadata))
-        object.__setattr__(self, "metadata", MappingProxyType({str(key): value for key, value in self.metadata.items()}))
+        object.__setattr__(
+            self, "metadata", MappingProxyType({str(key): value for key, value in self.metadata.items()})
+        )
 
 
 @dataclass(frozen=True)

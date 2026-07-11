@@ -52,7 +52,12 @@ class ProtocolIndicatorCalculator:
         latest = _latest(dataset.usage)
         if latest is None or latest.returning_users is None or latest.active_users in {None, 0}:
             return _missing("returning_user_ratio", "usage")
-        return _indicator("returning_user_ratio", latest.returning_users / latest.active_users, "positive", "Returning users as share of active users.")
+        return _indicator(
+            "returning_user_ratio",
+            latest.returning_users / latest.active_users,
+            "positive",
+            "Returning users as share of active users.",
+        )
 
     def retention_trend(self, dataset: ProtocolDataset) -> ProtocolIndicator:
         values = [
@@ -77,10 +82,19 @@ class ProtocolIndicatorCalculator:
                 latest.bridge_pass_through_ratio or 0.0,
             )
         )
-        return _indicator("transaction_quality", meaningful * (1.0 - penalties), "positive", "Economically meaningful transaction share adjusted for duplicate and pass-through activity.")
+        return _indicator(
+            "transaction_quality",
+            meaningful * (1.0 - penalties),
+            "positive",
+            "Economically meaningful transaction share adjusted for duplicate and pass-through activity.",
+        )
 
     def fee_growth(self, dataset: ProtocolDataset) -> ProtocolIndicator:
-        return _growth_indicator("fee_growth", [item.fees_usd for item in dataset.fees if item.fees_usd is not None], "Fee growth across snapshots.")
+        return _growth_indicator(
+            "fee_growth",
+            [item.fees_usd for item in dataset.fees if item.fees_usd is not None],
+            "Fee growth across snapshots.",
+        )
 
     def revenue_growth(self, dataset: ProtocolDataset) -> ProtocolIndicator:
         values = [item.revenue_usd for item in dataset.revenues if item.revenue_usd is not None]
@@ -91,10 +105,19 @@ class ProtocolIndicatorCalculator:
         revenue = _latest(dataset.revenues)
         if fee is None or revenue is None or fee.fees_usd in {None, 0} or revenue.revenue_usd is None:
             return _missing("fee_to_revenue_conversion", "fees_or_revenue")
-        return _indicator("fee_to_revenue_conversion", _ratio(revenue.revenue_usd, fee.fees_usd), "positive", "Revenue captured as share of fees.")
+        return _indicator(
+            "fee_to_revenue_conversion",
+            _ratio(revenue.revenue_usd, fee.fees_usd),
+            "positive",
+            "Revenue captured as share of fees.",
+        )
 
     def tvl_growth(self, dataset: ProtocolDataset) -> ProtocolIndicator:
-        return _growth_indicator("tvl_growth", [item.tvl_usd for item in dataset.tvl if item.tvl_usd is not None], "TVL growth across snapshots.")
+        return _growth_indicator(
+            "tvl_growth",
+            [item.tvl_usd for item in dataset.tvl if item.tvl_usd is not None],
+            "TVL growth across snapshots.",
+        )
 
     def organic_tvl_ratio(self, dataset: ProtocolDataset) -> ProtocolIndicator:
         latest = _latest(dataset.tvl)
@@ -108,7 +131,12 @@ class ProtocolIndicatorCalculator:
         latest = _latest(dataset.liquidity)
         if latest is None or latest.depth_usd is None or latest.liquidity_usd in {None, 0}:
             return _missing("liquidity_depth", "liquidity")
-        return _indicator("liquidity_depth", _ratio(latest.depth_usd, latest.liquidity_usd), "positive", "Depth relative to total liquidity.")
+        return _indicator(
+            "liquidity_depth",
+            _ratio(latest.depth_usd, latest.liquidity_usd),
+            "positive",
+            "Depth relative to total liquidity.",
+        )
 
     def liquidity_stability(self, dataset: ProtocolDataset) -> ProtocolIndicator:
         latest = _latest(dataset.liquidity)
@@ -119,9 +147,19 @@ class ProtocolIndicatorCalculator:
     def capital_efficiency(self, dataset: ProtocolDataset) -> ProtocolIndicator:
         latest_tx = _latest(dataset.transactions)
         latest_tvl = _latest(dataset.tvl)
-        if latest_tx is None or latest_tvl is None or latest_tx.economically_meaningful_count is None or latest_tvl.tvl_usd in {None, 0}:
+        if (
+            latest_tx is None
+            or latest_tvl is None
+            or latest_tx.economically_meaningful_count is None
+            or latest_tvl.tvl_usd in {None, 0}
+        ):
             return _missing("capital_efficiency", "transactions_or_tvl")
-        return _indicator("capital_efficiency", min(latest_tx.economically_meaningful_count / latest_tvl.tvl_usd * 1000, 1.0), "positive", "Meaningful activity relative to TVL.")
+        return _indicator(
+            "capital_efficiency",
+            min(latest_tx.economically_meaningful_count / latest_tvl.tvl_usd * 1000, 1.0),
+            "positive",
+            "Meaningful activity relative to TVL.",
+        )
 
     def utilization(self, dataset: ProtocolDataset) -> ProtocolIndicator:
         latest = _latest(dataset.liquidity)
@@ -131,7 +169,9 @@ class ProtocolIndicatorCalculator:
 
     def application_breadth(self, dataset: ProtocolDataset) -> ProtocolIndicator:
         active = [item for item in dataset.applications if item.active]
-        return _indicator("application_breadth", min(len(active) / 5, 1.0), "positive", "Breadth of active applications.")
+        return _indicator(
+            "application_breadth", min(len(active) / 5, 1.0), "positive", "Breadth of active applications."
+        )
 
     def application_concentration(self, dataset: ProtocolDataset) -> ProtocolIndicator:
         shares = [item.volume_share for item in dataset.applications if item.volume_share is not None]
@@ -139,24 +179,41 @@ class ProtocolIndicatorCalculator:
             return _missing("application_concentration", "applications")
         concentration = max(shares)
         direction = "negative" if concentration >= self.configuration.concentration_risk_threshold else "positive"
-        return _indicator("application_concentration", 1.0 - concentration, direction, "Lower application concentration indicates broader usage.")
+        return _indicator(
+            "application_concentration",
+            1.0 - concentration,
+            direction,
+            "Lower application concentration indicates broader usage.",
+        )
 
     def network_reliability(self, dataset: ProtocolDataset) -> ProtocolIndicator:
         recent_incidents = self._recent_incidents(dataset)
         value = 1.0 - min(sum(item.severity for item in recent_incidents) / 3, 1.0)
-        return _indicator("network_reliability", value, "positive" if value >= 0.6 else "negative", "Recent incident-adjusted reliability.")
+        return _indicator(
+            "network_reliability",
+            value,
+            "positive" if value >= 0.6 else "negative",
+            "Recent incident-adjusted reliability.",
+        )
 
     def incident_frequency(self, dataset: ProtocolDataset) -> ProtocolIndicator:
         recent = self._recent_incidents(dataset)
         value = 1.0 - min(len(recent) / 3, 1.0)
-        return _indicator("incident_frequency", value, "positive" if value >= 0.6 else "negative", "Low recent incident frequency.")
+        return _indicator(
+            "incident_frequency", value, "positive" if value >= 0.6 else "negative", "Low recent incident frequency."
+        )
 
     def incident_severity_trend(self, dataset: ProtocolDataset) -> ProtocolIndicator:
         values = [item.severity for item in dataset.incidents]
         if not values:
             return _indicator("incident_severity_trend", 1.0, "positive", "No incidents observed.")
         trend = _growth_score(values)
-        return _indicator("incident_severity_trend", 1.0 - trend, "negative" if trend >= 0.55 else "positive", "Incident severity trend, inverted.")
+        return _indicator(
+            "incident_severity_trend",
+            1.0 - trend,
+            "negative" if trend >= 0.55 else "positive",
+            "Incident severity trend, inverted.",
+        )
 
     def validator_health(self, dataset: ProtocolDataset) -> ProtocolIndicator:
         latest = _latest(dataset.validators)
@@ -165,13 +222,20 @@ class ProtocolIndicatorCalculator:
         online = latest.online_ratio if latest.online_ratio is not None else 0.0
         concentration = latest.concentration_ratio if latest.concentration_ratio is not None else 1.0
         count_score = min((latest.active_validators or 0) / 100, 1.0)
-        return _indicator("validator_health", mean((online, 1.0 - concentration, count_score)), "positive", "Validator online status, decentralization, and count.")
+        return _indicator(
+            "validator_health",
+            mean((online, 1.0 - concentration, count_score)),
+            "positive",
+            "Validator online status, decentralization, and count.",
+        )
 
     def governance_participation(self, dataset: ProtocolDataset) -> ProtocolIndicator:
         latest = _latest(dataset.governance)
         if latest is None or latest.participation_ratio is None:
             return _missing("governance_participation", "governance")
-        return _indicator("governance_participation", latest.participation_ratio, "positive", "Governance participation ratio.")
+        return _indicator(
+            "governance_participation", latest.participation_ratio, "positive", "Governance participation ratio."
+        )
 
     def treasury_runway(self, dataset: ProtocolDataset) -> ProtocolIndicator:
         latest = _latest(dataset.treasury)
@@ -182,7 +246,12 @@ class ProtocolIndicatorCalculator:
             runway = latest.treasury_usd / latest.monthly_expense_usd
         if runway is None:
             return _missing("treasury_runway", "treasury_runway")
-        return _indicator("treasury_runway", min(runway / self.configuration.treasury_runway_months_threshold, 1.0), "positive", "Treasury runway relative to configured threshold.")
+        return _indicator(
+            "treasury_runway",
+            min(runway / self.configuration.treasury_runway_months_threshold, 1.0),
+            "positive",
+            "Treasury runway relative to configured threshold.",
+        )
 
     def incentive_dependence(self, dataset: ProtocolDataset) -> ProtocolIndicator:
         latest = _latest(dataset.incentives)
@@ -191,7 +260,12 @@ class ProtocolIndicatorCalculator:
         denominator = max(latest.revenue_usd or 0.0, latest.incentives_usd)
         dependence = _ratio(latest.incentives_usd, denominator)
         direction = "negative" if dependence >= self.configuration.incentive_dependence_threshold else "positive"
-        return _indicator("incentive_dependence", 1.0 - dependence, direction, "Lower incentive dependence indicates healthier activity.")
+        return _indicator(
+            "incentive_dependence",
+            1.0 - dependence,
+            direction,
+            "Lower incentive dependence indicates healthier activity.",
+        )
 
     def emissions_dependence(self, dataset: ProtocolDataset) -> ProtocolIndicator:
         latest = _latest(dataset.incentives)
@@ -200,19 +274,31 @@ class ProtocolIndicatorCalculator:
         denominator = max(latest.revenue_usd or 0.0, latest.emissions_usd)
         dependence = _ratio(latest.emissions_usd, denominator)
         direction = "negative" if dependence >= self.configuration.emissions_dependence_threshold else "positive"
-        return _indicator("emissions_dependence", 1.0 - dependence, direction, "Lower emissions dependence indicates healthier activity.")
+        return _indicator(
+            "emissions_dependence",
+            1.0 - dependence,
+            direction,
+            "Lower emissions dependence indicates healthier activity.",
+        )
 
     def value_capture_efficiency(self, dataset: ProtocolDataset) -> ProtocolIndicator:
         revenue = _latest(dataset.revenues)
         tvl = _latest(dataset.tvl)
         if revenue is None or tvl is None or revenue.protocol_income_usd is None or tvl.tvl_usd in {None, 0}:
             return _missing("value_capture_efficiency", "revenue_or_tvl")
-        return _indicator("value_capture_efficiency", min(revenue.protocol_income_usd / tvl.tvl_usd * 20, 1.0), "positive", "Protocol income relative to TVL.")
+        return _indicator(
+            "value_capture_efficiency",
+            min(revenue.protocol_income_usd / tvl.tvl_usd * 20, 1.0),
+            "positive",
+            "Protocol income relative to TVL.",
+        )
 
     def ecosystem_expansion(self, dataset: ProtocolDataset) -> ProtocolIndicator:
         chain_score = min(len(dataset.chains()) / 3, 1.0)
         application_score = self.application_breadth(dataset).value
-        return _indicator("ecosystem_expansion", mean((chain_score, application_score)), "positive", "Chain and application breadth.")
+        return _indicator(
+            "ecosystem_expansion", mean((chain_score, application_score)), "positive", "Chain and application breadth."
+        )
 
     def protocol_resilience(self, dataset: ProtocolDataset) -> ProtocolIndicator:
         reliability = self.network_reliability(dataset)
@@ -221,7 +307,9 @@ class ProtocolIndicatorCalculator:
         values = [item.value for item in (reliability, validator, liquidity) if not item.missing_evidence]
         if not values:
             return _missing("protocol_resilience", "reliability")
-        return _indicator("protocol_resilience", mean(values), "positive", "Reliability, validator health, and liquidity stability.")
+        return _indicator(
+            "protocol_resilience", mean(values), "positive", "Reliability, validator health, and liquidity stability."
+        )
 
     def protocol_acceleration(self, dataset: ProtocolDataset) -> ProtocolIndicator:
         user = self.user_growth(dataset)
@@ -230,19 +318,30 @@ class ProtocolIndicatorCalculator:
         values = [item.value for item in (user, tx, revenue) if not item.missing_evidence]
         if not values:
             return _missing("protocol_acceleration", "growth")
-        return _indicator("protocol_acceleration", mean(values), "positive", "Combined user, transaction, and revenue growth.")
+        return _indicator(
+            "protocol_acceleration", mean(values), "positive", "Combined user, transaction, and revenue growth."
+        )
 
     def protocol_deterioration(self, dataset: ProtocolDataset) -> ProtocolIndicator:
         acceleration = self.protocol_acceleration(dataset)
         resilience = self.protocol_resilience(dataset)
         value = 1.0 - mean((acceleration.value, resilience.value))
-        return _indicator("protocol_deterioration", value, "negative" if value >= 0.55 else "neutral", "Risk of weakening growth and resilience.")
+        return _indicator(
+            "protocol_deterioration",
+            value,
+            "negative" if value >= 0.55 else "neutral",
+            "Risk of weakening growth and resilience.",
+        )
 
     def _recent_incidents(self, dataset: ProtocolDataset):
         if not dataset.incidents:
             return ()
         latest = max(item.timestamp for item in dataset.incidents)
-        return tuple(item for item in dataset.incidents if item.timestamp >= latest - timedelta(days=self.configuration.recent_window_days))
+        return tuple(
+            item
+            for item in dataset.incidents
+            if item.timestamp >= latest - timedelta(days=self.configuration.recent_window_days)
+        )
 
 
 def _growth_indicator(name: str, values: list[int | float | None], description: str) -> ProtocolIndicator:

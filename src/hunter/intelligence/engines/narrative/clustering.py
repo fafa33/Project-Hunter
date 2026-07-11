@@ -15,7 +15,11 @@ class NarrativeClusterer:
             if institutional and retail and len(items) >= 4:
                 clusters.append(_cluster(f"{category}-institutional", category, institutional, parent=category))
                 clusters.append(_cluster(f"{category}-retail", category, retail, parent=category))
-                clusters.append(_cluster(category, category, tuple(items), children=(f"{category}-institutional", f"{category}-retail")))
+                clusters.append(
+                    _cluster(
+                        category, category, tuple(items), children=(f"{category}-institutional", f"{category}-retail")
+                    )
+                )
             else:
                 clusters.append(_cluster(category, category, tuple(items)))
         return tuple(clusters)

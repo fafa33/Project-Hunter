@@ -120,7 +120,9 @@ class NewsArticle:
         _require_datetime(self.published_at, "published_at")
         _require_datetime(self.collected_at, "collected_at")
         object.__setattr__(self, "domains", tuple(_normalize_domain(item) for item in self.domains))
-        object.__setattr__(self, "affected_projects", tuple(str(item).strip().lower() for item in self.affected_projects))
+        object.__setattr__(
+            self, "affected_projects", tuple(str(item).strip().lower() for item in self.affected_projects)
+        )
         object.__setattr__(self, "affected_sectors", tuple(str(item).strip().lower() for item in self.affected_sectors))
         object.__setattr__(self, "metadata", _string_metadata(self.metadata))
 
@@ -155,7 +157,9 @@ class NewsEvent:
         object.__setattr__(self, "severity", _clamp(self.severity))
         object.__setattr__(self, "permanence", _clamp(self.permanence))
         object.__setattr__(self, "confidence", _clamp(self.confidence))
-        object.__setattr__(self, "affected_projects", tuple(str(item).strip().lower() for item in self.affected_projects))
+        object.__setattr__(
+            self, "affected_projects", tuple(str(item).strip().lower() for item in self.affected_projects)
+        )
         object.__setattr__(self, "affected_sectors", tuple(str(item).strip().lower() for item in self.affected_sectors))
         object.__setattr__(self, "article_ids", tuple(self.article_ids))
         object.__setattr__(self, "metadata", _string_metadata(self.metadata))

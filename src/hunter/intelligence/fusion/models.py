@@ -11,51 +11,51 @@ ScalarValue = str | int | float | bool | None
 
 @dataclass(frozen=True)
 class FrozenScalarMap(Mapping[str, ScalarValue]):
-    values: tuple[tuple[str, ScalarValue], ...] = ()
+    entries: tuple[tuple[str, ScalarValue], ...] = ()
 
     def __init__(self, values: Mapping[str, Any] | tuple[tuple[str, ScalarValue], ...] | None = None) -> None:
         raw = values.items() if isinstance(values, Mapping) else values or ()
         normalized = _metadata(dict(raw))
-        object.__setattr__(self, "values", tuple(sorted(normalized.items())))
+        object.__setattr__(self, "entries", tuple(sorted(normalized.items())))
 
     def __getitem__(self, key: str) -> ScalarValue:
-        for item_key, value in self.values:
+        for item_key, value in self.entries:
             if item_key == key:
                 return value
         raise KeyError(key)
 
     def __iter__(self) -> Iterator[str]:
-        return (key for key, _ in self.values)
+        return (key for key, _ in self.entries)
 
     def __len__(self) -> int:
-        return len(self.values)
+        return len(self.entries)
 
     def as_dict(self) -> dict[str, ScalarValue]:
-        return dict(self.values)
+        return dict(self.entries)
 
 
 @dataclass(frozen=True)
 class FrozenFloatMap(Mapping[str, float]):
-    values: tuple[tuple[str, float], ...] = ()
+    entries: tuple[tuple[str, float], ...] = ()
 
     def __init__(self, values: Mapping[str, float] | tuple[tuple[str, float], ...] | None = None) -> None:
         raw = values.items() if isinstance(values, Mapping) else values or ()
-        object.__setattr__(self, "values", tuple(sorted((str(key), _clamp(float(value))) for key, value in raw)))
+        object.__setattr__(self, "entries", tuple(sorted((str(key), _clamp(float(value))) for key, value in raw)))
 
     def __getitem__(self, key: str) -> float:
-        for item_key, value in self.values:
+        for item_key, value in self.entries:
             if item_key == key:
                 return value
         raise KeyError(key)
 
     def __iter__(self) -> Iterator[str]:
-        return (key for key, _ in self.values)
+        return (key for key, _ in self.entries)
 
     def __len__(self) -> int:
-        return len(self.values)
+        return len(self.entries)
 
     def as_dict(self) -> dict[str, float]:
-        return dict(self.values)
+        return dict(self.entries)
 
 
 @dataclass(frozen=True)
@@ -339,7 +339,15 @@ class FusedIntelligence:
     def __post_init__(self) -> None:
         object.__setattr__(self, "source_intelligence_ids", tuple(sorted(set(self.source_intelligence_ids))))
         object.__setattr__(self, "source_run_ids", tuple(sorted(set(self.source_run_ids))))
-        for name in ("canonical_evidence_groups", "contributions", "signals", "observations", "insights", "graph_nodes", "graph_edges"):
+        for name in (
+            "canonical_evidence_groups",
+            "contributions",
+            "signals",
+            "observations",
+            "insights",
+            "graph_nodes",
+            "graph_edges",
+        ):
             object.__setattr__(self, name, tuple(getattr(self, name)))
         object.__setattr__(self, "confidence", FrozenFloatMap(self.confidence))
         object.__setattr__(self, "effective_at", _aware(self.effective_at))

@@ -215,7 +215,9 @@ class DeveloperDataset:
         return tuple(repository for repository in self.repositories if not repository.is_archived)
 
     def core_repositories(self) -> tuple[RepositorySnapshot, ...]:
-        return tuple(repository for repository in self.repositories if repository.is_core and not repository.is_archived)
+        return tuple(
+            repository for repository in self.repositories if repository.is_core and not repository.is_archived
+        )
 
 
 @dataclass(frozen=True)

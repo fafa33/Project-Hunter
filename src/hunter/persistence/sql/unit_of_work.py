@@ -46,4 +46,3 @@ class UnitOfWork:
             msg = "UnitOfWork has no active session"
             raise RuntimeError(msg)
         self.session.rollback()
-

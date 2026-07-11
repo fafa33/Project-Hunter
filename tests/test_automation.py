@@ -134,8 +134,18 @@ def test_current_state_and_replay_as_of_policies() -> None:
     current = _job("current", as_of_policy=AsOfPolicy("current"))
     replay = _job("replay", run_type="replay", as_of_policy=AsOfPolicy("replay", NOW), job_kind="historical_replay")
 
-    assert AutomationJobRunner(pipeline_executor=_successful_executor, clock=lambda: NOW).run_once(current, scheduled_for=NOW).status == "succeeded"
-    assert AutomationJobRunner(pipeline_executor=_successful_executor, clock=lambda: NOW).run_once(replay, scheduled_for=NOW).status == "succeeded"
+    assert (
+        AutomationJobRunner(pipeline_executor=_successful_executor, clock=lambda: NOW)
+        .run_once(current, scheduled_for=NOW)
+        .status
+        == "succeeded"
+    )
+    assert (
+        AutomationJobRunner(pipeline_executor=_successful_executor, clock=lambda: NOW)
+        .run_once(replay, scheduled_for=NOW)
+        .status
+        == "succeeded"
+    )
     with pytest.raises(ValueError):
         AsOfPolicy("replay")
     bad = replace(current, run_type="replay", job_kind="historical_replay")
@@ -221,8 +231,12 @@ def test_real_cancellation_persists_and_releases_lock() -> None:
     with UnitOfWork(SessionFactory(engine)) as uow:
         repositories = uow.repositories
         assert repositories is not None
-        runner = AutomationJobRunner(pipeline_executor=_successful_executor, lock=lock, repositories=repositories, clock=lambda: NOW)
-        running = transition(transition(_run("run-cancel", "scheduled", job_id=job.job_id), "claimed", at=NOW), "running", at=NOW)
+        runner = AutomationJobRunner(
+            pipeline_executor=_successful_executor, lock=lock, repositories=repositories, clock=lambda: NOW
+        )
+        running = transition(
+            transition(_run("run-cancel", "scheduled", job_id=job.job_id), "claimed", at=NOW), "running", at=NOW
+        )
         runner._save_run(running, running.scheduled_for)
 
         cancelled = runner.cancel_by_id("run-cancel", jobs=(job,))
@@ -240,8 +254,12 @@ def test_restart_recovery_fails_active_runs_and_releases_stale_locks() -> None:
     with UnitOfWork(SessionFactory(engine)) as uow:
         repositories = uow.repositories
         assert repositories is not None
-        runner = AutomationJobRunner(pipeline_executor=_successful_executor, lock=lock, repositories=repositories, clock=lambda: NOW)
-        running = transition(transition(_run("run-restart", "scheduled", job_id=job.job_id), "claimed", at=NOW), "running", at=NOW)
+        runner = AutomationJobRunner(
+            pipeline_executor=_successful_executor, lock=lock, repositories=repositories, clock=lambda: NOW
+        )
+        running = transition(
+            transition(_run("run-restart", "scheduled", job_id=job.job_id), "claimed", at=NOW), "running", at=NOW
+        )
         runner._save_run(running, running.scheduled_for)
         scheduler = AutomationScheduler((job,), runner, clock=lambda: NOW)
 
@@ -258,7 +276,9 @@ def test_completed_one_time_job_is_suppressed_and_scheduler_polls() -> None:
     with UnitOfWork(SessionFactory(engine)) as uow:
         repositories = uow.repositories
         assert repositories is not None
-        runner = AutomationJobRunner(pipeline_executor=_successful_executor, repositories=repositories, clock=lambda: NOW)
+        runner = AutomationJobRunner(
+            pipeline_executor=_successful_executor, repositories=repositories, clock=lambda: NOW
+        )
         first = runner.run_once(job, scheduled_for=NOW)
         scheduler = AutomationScheduler((job,), runner, polling_interval_seconds=0, clock=lambda: NOW)
 

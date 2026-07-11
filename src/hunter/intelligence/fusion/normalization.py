@@ -76,7 +76,8 @@ def normalize_intelligence_record(record: IntelligenceRecord) -> FusionInput:
         evidence_reliabilities=record.evidence_reliabilities,
         evidence_freshness=record.evidence_freshness,
         signal_ids=record.signal_ids,
-        signal_categories=record.signal_categories or tuple(str(item) for item in metadata.get("signal_categories", "").split(",") if item),
+        signal_categories=record.signal_categories
+        or tuple(str(item) for item in metadata.get("signal_categories", "").split(",") if item),
         signal_strengths=record.signal_strengths,
         signal_confidences=record.signal_confidences,
         signal_severities=record.signal_severities,
@@ -109,7 +110,9 @@ def _lineage_key(metadata: dict[str, str | int | float | bool | None]) -> str:
     return str(value) if value is not None else ""
 
 
-def _target_refs(project: str, metadata: dict[str, str | int | float | bool | None]) -> tuple[tuple[FusionTargetType, str], ...]:
+def _target_refs(
+    project: str, metadata: dict[str, str | int | float | bool | None]
+) -> tuple[tuple[FusionTargetType, str], ...]:
     refs: set[tuple[FusionTargetType, str]] = {("project", project)}
     for target_type in ("asset", "protocol", "chain", "sector", "narrative", "ecosystem"):
         value = metadata.get(f"{target_type}_id")

@@ -19,12 +19,21 @@ TRANSITIONS: dict[AutomationRunStatus, set[AutomationRunStatus]] = {
 }
 
 
-def transition(run: AutomationRun, status: AutomationRunStatus, *, at: datetime, error: str | None = None, warning: str | None = None) -> AutomationRun:
+def transition(
+    run: AutomationRun,
+    status: AutomationRunStatus,
+    *,
+    at: datetime,
+    error: str | None = None,
+    warning: str | None = None,
+) -> AutomationRun:
     if status not in TRANSITIONS[run.status]:
         msg = f"Invalid automation transition: {run.status} -> {status}"
         raise AutomationLifecycleError(msg)
     started_at = at if status == "running" and run.started_at is None else run.started_at
-    finished_at = at if status in {"succeeded", "partial", "failed", "cancelled", "skipped", "blocked"} else run.finished_at
+    finished_at = (
+        at if status in {"succeeded", "partial", "failed", "cancelled", "skipped", "blocked"} else run.finished_at
+    )
     return replace(
         run,
         status=status,

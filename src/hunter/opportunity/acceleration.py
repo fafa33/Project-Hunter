@@ -5,7 +5,9 @@ from hunter.opportunity.models import AccelerationState
 from hunter.persistence.records import FusedIntelligenceRecord
 
 
-def assess_acceleration(records: tuple[FusedIntelligenceRecord, ...], config: OpportunityTimingConfig | None = None) -> AccelerationState:
+def assess_acceleration(
+    records: tuple[FusedIntelligenceRecord, ...], config: OpportunityTimingConfig | None = None
+) -> AccelerationState:
     rules = dict((config or OpportunityTimingConfig()).acceleration_rules)
     ordered = tuple(sorted(records, key=lambda item: (item.effective_at, item.id)))
     if len(ordered) < 3:

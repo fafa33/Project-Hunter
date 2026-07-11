@@ -27,10 +27,19 @@ def compare_history(
     ordered = tuple(sorted(scoped, key=lambda item: item.effective_at))
     phases = tuple(getattr(item, "opportunity_phase", "") for item in ordered if getattr(item, "opportunity_phase", ""))
     transitions = tuple(f"{left}->{right}" for left, right in zip(phases, phases[1:], strict=False) if left != right)
-    false_starts = sum(1 for item in transitions if item in {"forming->too_early", "early_entry->too_early", "confirmed_entry->deteriorating"})
+    false_starts = sum(
+        1
+        for item in transitions
+        if item in {"forming->too_early", "early_entry->too_early", "confirmed_entry->deteriorating"}
+    )
     prior_confirmations = sum(1 for phase in phases if phase in {"confirmed_entry", "expansion"})
-    deteriorated = any(item in {"confirmed_entry->deteriorating", "expansion->exit_risk", "confirmed_entry->exit_risk"} for item in transitions)
-    open_duration = sum(1 for item in ordered if getattr(item, "opportunity_window", "") in {"opening", "open", "strengthening"})
+    deteriorated = any(
+        item in {"confirmed_entry->deteriorating", "expansion->exit_risk", "confirmed_entry->exit_risk"}
+        for item in transitions
+    )
+    open_duration = sum(
+        1 for item in ordered if getattr(item, "opportunity_window", "") in {"opening", "open", "strengthening"}
+    )
     return (
         HistoricalComparison(
             prior_phases=phases,

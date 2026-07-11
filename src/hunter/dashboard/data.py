@@ -31,7 +31,11 @@ class DashboardDataProvider:
         if self.config.include_fusion:
             panels.append(_fusion_panel(self.repositories.fused_intelligence().query(_latest(self.config.max_rows))))
         if self.config.include_opportunity_timing:
-            panels.append(_opportunity_panel(self.repositories.opportunity_timing_assessments().query(_latest(self.config.max_rows))))
+            panels.append(
+                _opportunity_panel(
+                    self.repositories.opportunity_timing_assessments().query(_latest(self.config.max_rows))
+                )
+            )
         return DashboardView(
             view_id="project-hunter-dashboard",
             title=self.config.title,
@@ -118,7 +122,11 @@ def _fusion_panel(records: tuple[FusedIntelligenceRecord, ...]) -> DashboardPane
         kind="table",
         metrics=(
             DashboardMetric("total", "Total", len(records)),
-            DashboardMetric("latest_target", "Latest Target", f"{records[0].target_type}:{records[0].target_id}" if records else "none"),
+            DashboardMetric(
+                "latest_target",
+                "Latest Target",
+                f"{records[0].target_type}:{records[0].target_id}" if records else "none",
+            ),
         ),
         rows=tuple(
             DashboardRow(

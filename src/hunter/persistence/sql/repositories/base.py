@@ -27,7 +27,9 @@ class SQLRecordRepository(Repository[RecordT], Generic[RecordT]):
     def save(self, record: RecordT) -> RecordT:
         self._require_record_type(record)
         payload = record_to_json(record)
-        canonical_hash = stable_digest("persistence-record", self._canonical_hash_payload(record), schema_version=record.schema_version)
+        canonical_hash = stable_digest(
+            "persistence-record", self._canonical_hash_payload(record), schema_version=record.schema_version
+        )
         existing = self._session.get(PersistenceRecordModel, record.id)
         if existing is not None:
             if existing.deleted_at is not None:

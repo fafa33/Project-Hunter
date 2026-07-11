@@ -38,8 +38,18 @@ class NarrativeAnalyzer:
         signals = tuple(_signal(trend, lifecycle) for trend, lifecycle in zip(trends, lifecycles, strict=True))
         events = tuple(_event(signal, cluster) for signal, cluster in zip(signals, clusters, strict=True))
         relationships = _relationships(clusters, lifecycles)
-        strengths = tuple(sorted({lifecycle.category for lifecycle in lifecycles if lifecycle.phase in {"acceleration", "expansion"}}))
-        risks = tuple(sorted({lifecycle.category for lifecycle in lifecycles if lifecycle.phase in {"crowded", "saturation", "decline"}}))
+        strengths = tuple(
+            sorted({lifecycle.category for lifecycle in lifecycles if lifecycle.phase in {"acceleration", "expansion"}})
+        )
+        risks = tuple(
+            sorted(
+                {
+                    lifecycle.category
+                    for lifecycle in lifecycles
+                    if lifecycle.phase in {"crowded", "saturation", "decline"}
+                }
+            )
+        )
         return NarrativeAnalysis(
             narratives=narratives,
             clusters=clusters,
@@ -72,7 +82,13 @@ def _narrative(cluster: NarrativeCluster) -> Narrative:
 
 
 def _signal(trend: NarrativeTrend, lifecycle: NarrativeLifecycle) -> NarrativeSignal:
-    strength = mean((trend.growth, trend.acceleration, 1.0 - trend.saturation if lifecycle.phase in {"crowded", "saturation"} else trend.persistence))
+    strength = mean(
+        (
+            trend.growth,
+            trend.acceleration,
+            1.0 - trend.saturation if lifecycle.phase in {"crowded", "saturation"} else trend.persistence,
+        )
+    )
     return NarrativeSignal(
         narrative_id=trend.narrative_id,
         category=trend.category,
@@ -117,12 +133,18 @@ def _relationships(
             relationships.append(NarrativeRelationship(narrative_id, child, "child", 0.8))
         for target in complements.get(cluster.category, ()):
             if target in by_category:
-                relationships.append(NarrativeRelationship(f"narrative-{cluster.category}", f"narrative-{target}", "complementary", 0.7))
+                relationships.append(
+                    NarrativeRelationship(f"narrative-{cluster.category}", f"narrative-{target}", "complementary", 0.7)
+                )
     if "layer_1" in by_category and "layer_2" in by_category:
         relationships.append(NarrativeRelationship("narrative-layer_1", "narrative-layer_2", "competing", 0.6))
     if "rollups" in by_category and "modular_chains" in by_category:
         relationships.append(NarrativeRelationship("narrative-rollups", "narrative-modular_chains", "successor", 0.55))
-    return tuple(sorted(relationships, key=lambda item: (item.source_narrative_id, item.target_narrative_id, item.relationship_type)))
+    return tuple(
+        sorted(
+            relationships, key=lambda item: (item.source_narrative_id, item.target_narrative_id, item.relationship_type)
+        )
+    )
 
 
 def _now_from_trend(trend: NarrativeTrend):

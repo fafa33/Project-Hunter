@@ -40,4 +40,3 @@ class IntelligenceAggregator:
             uncertainty=sum(item.confidence.uncertainty for item in items) / len(items),
         )
         return IntelligenceCollection(intelligence=items, confidence=confidence)
-

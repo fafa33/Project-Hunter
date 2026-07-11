@@ -91,7 +91,9 @@ def post(
     )
 
 
-def engagement(post_id: str, days_ago: int, likes: int, replies: int, reposts: int, *, quality: float = 0.75) -> SocialEngagement:
+def engagement(
+    post_id: str, days_ago: int, likes: int, replies: int, reposts: int, *, quality: float = 0.75
+) -> SocialEngagement:
     return SocialEngagement(
         id=f"engagement-{post_id}",
         post_id=post_id,
@@ -105,7 +107,9 @@ def engagement(post_id: str, days_ago: int, likes: int, replies: int, reposts: i
     )
 
 
-def community(snapshot_id: str, days_ago: int, members: int, active: int, retained: int, *, platform: str = "discord") -> CommunitySnapshot:
+def community(
+    snapshot_id: str, days_ago: int, members: int, active: int, retained: int, *, platform: str = "discord"
+) -> CommunitySnapshot:
     return CommunitySnapshot(
         id=snapshot_id,
         project="api3",
@@ -148,7 +152,14 @@ def social_records():
         engagement("old-1", 120, 20, 3, 2, quality=0.55),
         engagement("recent-1", 5, 120, 30, 20),
         engagement("recent-2", 4, 100, 25, 18),
-        SocialConversation(id="conversation-1", project="api3", topic="ai", post_ids=("recent-1", "recent-2"), started_at=NOW, quality=0.85),
+        SocialConversation(
+            id="conversation-1",
+            project="api3",
+            topic="ai",
+            post_ids=("recent-1", "recent-2"),
+            started_at=NOW,
+            quality=0.85,
+        ),
         SocialTopic(id="topic-ai", project="api3", topic="ai", narrative="ai", weight=0.9),
         sentiment("sentiment-old", 90, 0.35, 0.25),
         sentiment("sentiment-new", 1, 0.68, 0.12),

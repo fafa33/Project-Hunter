@@ -34,8 +34,7 @@ class IntelligenceRegistry:
         return [
             item
             for item in self._outputs.values()
-            if any(signal.category == category for signal in item.signals)
-            or item.metadata.get("category") == category
+            if any(signal.category == category for signal in item.signals) or item.metadata.get("category") == category
         ]
 
     def all(self) -> list[Intelligence]:
@@ -43,4 +42,3 @@ class IntelligenceRegistry:
 
     def registered_types(self) -> dict[str, type[Intelligence]]:
         return dict(self._types)
-

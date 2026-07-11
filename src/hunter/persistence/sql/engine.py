@@ -11,4 +11,3 @@ def create_sqlite_engine(path: str | Path = ":memory:", *, echo: bool = False) -
     else:
         url = f"sqlite+pysqlite:///{Path(path)}"
     return create_engine(url, echo=echo, future=True)
-

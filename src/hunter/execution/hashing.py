@@ -26,4 +26,3 @@ def stable_fingerprint(namespace: str, payload: Any, *, schema_version: str = "f
 
 def stable_identifier(namespace: str, payload: Any, *, schema_version: str = "identity-v1") -> str:
     return f"{namespace}:{schema_version}:{stable_digest(namespace, payload, schema_version=schema_version)}"
-

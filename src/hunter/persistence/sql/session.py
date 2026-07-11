@@ -34,4 +34,3 @@ class SessionManager:
             raise
         finally:
             session.close()
-

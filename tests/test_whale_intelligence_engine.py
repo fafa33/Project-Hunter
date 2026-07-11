@@ -166,4 +166,3 @@ module_paths:
     assert len(result.intelligence) == 1
     assert result.intelligence[0].engine == "whale-intelligence"
     assert "whale:intelligence:execute" in result.events
-

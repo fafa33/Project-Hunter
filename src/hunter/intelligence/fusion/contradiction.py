@@ -12,7 +12,9 @@ def assess_contradictions(inputs: tuple[FusionInput, ...]) -> ContradictionAsses
         time_weight = _time_weight(item, inputs)
         for index, category in enumerate(item.signal_categories):
             if index < len(item.signal_strengths):
-                confidence = item.signal_confidences[index] if index < len(item.signal_confidences) else item.confidence_score
+                confidence = (
+                    item.signal_confidences[index] if index < len(item.signal_confidences) else item.confidence_score
+                )
                 category_items[category].append((item.signal_strengths[index], confidence, quality * time_weight))
     contradicted: set[str] = set()
     severities: list[float] = []
@@ -27,7 +29,9 @@ def assess_contradictions(inputs: tuple[FusionInput, ...]) -> ContradictionAsses
             confidence_quality = sum(item[1] * item[2] for item in items) / len(items)
             severities.append(spread * confidence_quality)
     severity = sum(severities) / len(severities) if severities else 0.0
-    explanation = "No material contradictions detected" if not contradicted else f"{len(contradicted)} contradicted category(s)"
+    explanation = (
+        "No material contradictions detected" if not contradicted else f"{len(contradicted)} contradicted category(s)"
+    )
     return ContradictionAssessment(
         contradicted_categories=tuple(contradicted),
         severity=severity,

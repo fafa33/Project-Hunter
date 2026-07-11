@@ -35,7 +35,9 @@ def load_automation_config(path: Path) -> AutomationConfig:
 
 def automation_config_from_mapping(payload: dict[str, Any]) -> AutomationConfig:
     timezone = str(payload.get("timezone", "UTC"))
-    jobs = tuple(_job_from_mapping(item, default_timezone=timezone) for item in payload.get("jobs", ()) if isinstance(item, dict))
+    jobs = tuple(
+        _job_from_mapping(item, default_timezone=timezone) for item in payload.get("jobs", ()) if isinstance(item, dict)
+    )
     return AutomationConfig(
         enabled=bool(payload.get("enabled", False)),
         timezone=timezone,

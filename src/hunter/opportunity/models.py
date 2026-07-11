@@ -21,7 +21,9 @@ OpportunityPhase = Literal[
     "insufficient_evidence",
 ]
 OpportunityWindow = Literal["closed", "watch", "opening", "open", "strengthening", "weakening", "closing", "invalid"]
-ExpectedHorizon = Literal["days", "weeks", "1-3 months", "3-6 months", "6-12 months", "12-24 months", "24-36 months", "indeterminate"]
+ExpectedHorizon = Literal[
+    "days", "weeks", "1-3 months", "3-6 months", "6-12 months", "12-24 months", "24-36 months", "indeterminate"
+]
 OpportunityLabel = Literal[
     "Exceptional Opportunity",
     "High Conviction",
@@ -39,26 +41,30 @@ OpportunityEntryWindow = Literal["Very Early", "Early", "Developing", "Establish
 
 @dataclass(frozen=True)
 class FrozenStringTupleMap(Mapping[str, tuple[str, ...]]):
-    values: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    entries: tuple[tuple[str, tuple[str, ...]], ...] = ()
 
-    def __init__(self, values: Mapping[str, tuple[str, ...] | list[str]] | tuple[tuple[str, tuple[str, ...]], ...] | None = None) -> None:
+    def __init__(
+        self, values: Mapping[str, tuple[str, ...] | list[str]] | tuple[tuple[str, tuple[str, ...]], ...] | None = None
+    ) -> None:
         raw = values.items() if isinstance(values, Mapping) else values or ()
-        object.__setattr__(self, "values", tuple(sorted((str(key), tuple(str(item) for item in value)) for key, value in raw)))
+        object.__setattr__(
+            self, "entries", tuple(sorted((str(key), tuple(str(item) for item in value)) for key, value in raw))
+        )
 
     def __getitem__(self, key: str) -> tuple[str, ...]:
-        for item_key, value in self.values:
+        for item_key, value in self.entries:
             if item_key == key:
                 return value
         raise KeyError(key)
 
     def __iter__(self) -> Iterator[str]:
-        return (key for key, _ in self.values)
+        return (key for key, _ in self.entries)
 
     def __len__(self) -> int:
-        return len(self.values)
+        return len(self.entries)
 
     def as_dict(self) -> dict[str, tuple[str, ...]]:
-        return dict(self.values)
+        return dict(self.entries)
 
 
 @dataclass(frozen=True)
@@ -163,7 +169,9 @@ class OpportunityTimingAssessment:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "effective_at", _aware(self.effective_at))
-        object.__setattr__(self, "source_fused_intelligence_ids", tuple(sorted(set(self.source_fused_intelligence_ids))))
+        object.__setattr__(
+            self, "source_fused_intelligence_ids", tuple(sorted(set(self.source_fused_intelligence_ids)))
+        )
         object.__setattr__(self, "source_run_ids", tuple(sorted(set(self.source_run_ids))))
         object.__setattr__(self, "timing_score", round(max(0.0, min(100.0, float(self.timing_score))), 4))
         object.__setattr__(self, "confidence", FrozenFloatMap(self.confidence))

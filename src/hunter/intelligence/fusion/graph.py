@@ -23,7 +23,9 @@ def build_intelligence_graph(
     insights: tuple[UnifiedInsight, ...],
 ) -> tuple[tuple[IntelligenceGraphNode, ...], tuple[IntelligenceGraphEdge, ...]]:
     nodes: dict[str, IntelligenceGraphNode] = {
-        target.target_id: IntelligenceGraphNode(id=target.target_id, node_type="target", label=target.label or target.target_id),
+        target.target_id: IntelligenceGraphNode(
+            id=target.target_id, node_type="target", label=target.label or target.target_id
+        ),
         fused_id: IntelligenceGraphNode(id=fused_id, node_type="fused_intelligence", label="Fused Intelligence"),
     }
     edges: dict[str, IntelligenceGraphEdge] = {
@@ -68,7 +70,9 @@ def build_intelligence_graph(
         nodes[signal.id] = IntelligenceGraphNode(id=signal.id, node_type="unified_signal", label=signal.category)
         _add_edge(edges, signal.id, fused_id, "summarizes_signal", signal.confidence)
     for observation in observations:
-        nodes[observation.id] = IntelligenceGraphNode(id=observation.id, node_type="unified_observation", label=observation.description)
+        nodes[observation.id] = IntelligenceGraphNode(
+            id=observation.id, node_type="unified_observation", label=observation.description
+        )
         _add_edge(edges, observation.id, fused_id, "summarizes_observation", observation.importance)
     for insight in insights:
         nodes[insight.id] = IntelligenceGraphNode(id=insight.id, node_type="unified_insight", label=insight.title)
@@ -76,7 +80,9 @@ def build_intelligence_graph(
     return tuple(nodes[key] for key in sorted(nodes)), tuple(edges[key] for key in sorted(edges))
 
 
-def _add_edge(edges: dict[str, IntelligenceGraphEdge], source_id: str, target_id: str, edge_type: str, weight: float) -> None:
+def _add_edge(
+    edges: dict[str, IntelligenceGraphEdge], source_id: str, target_id: str, edge_type: str, weight: float
+) -> None:
     edge_id = _edge_id(source_id, target_id, edge_type)
     edges[edge_id] = IntelligenceGraphEdge(
         id=edge_id,

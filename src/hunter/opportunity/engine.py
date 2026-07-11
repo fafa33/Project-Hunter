@@ -44,7 +44,12 @@ class OpportunityTimingEngine:
         config: OpportunityTimingConfig | None = None,
     ) -> OpportunityTimingAssessment:
         active_config = config or self.config
-        aligned_records = tuple(sorted((record for record in fused_records if _aligned(record, target)), key=lambda item: (item.effective_at, item.id)))
+        aligned_records = tuple(
+            sorted(
+                (record for record in fused_records if _aligned(record, target)),
+                key=lambda item: (item.effective_at, item.id),
+            )
+        )
         if not aligned_records:
             raise InsufficientFusionInputError("Opportunity Timing requires persisted FusedIntelligence for the target")
         if replay and as_of is None:
@@ -82,8 +87,24 @@ class OpportunityTimingEngine:
                 "identity_schema_version": IDENTITY_SCHEMA_VERSION,
             },
         )
-        missing = tuple(sorted({str(item) for record in records for item in record.missing_evidence.get("missing_categories", ()) or ()}))
-        contradictions = tuple(sorted({str(item) for record in records for item in record.contradictions.get("contradicted_categories", ()) or ()}))
+        missing = tuple(
+            sorted(
+                {
+                    str(item)
+                    for record in records
+                    for item in record.missing_evidence.get("missing_categories", ()) or ()
+                }
+            )
+        )
+        contradictions = tuple(
+            sorted(
+                {
+                    str(item)
+                    for record in records
+                    for item in record.contradictions.get("contradicted_categories", ()) or ()
+                }
+            )
+        )
         supporting = _supporting_factors(confirmation, acceleration, temporal)
         opposing = _opposing_factors(risk, divergence, temporal)
         return OpportunityTimingAssessment(
@@ -106,7 +127,9 @@ class OpportunityTimingEngine:
             opposing_factors=opposing,
             contradictions=contradictions,
             missing_evidence=missing,
-            invalidation_conditions=_invalidation_conditions(phase, confirmation, risk, divergence, missing, active_config),
+            invalidation_conditions=_invalidation_conditions(
+                phase, confirmation, risk, divergence, missing, active_config
+            ),
             canonical_evidence_refs=_canonical_refs(records),
             historical_comparisons=history,
             metadata={
@@ -135,13 +158,21 @@ class OpportunityEngine:
         weighted_factors = _weighted_factors(values, active_config)
         positive_total = sum(item.contribution for item in weighted_factors if item.name not in NEGATIVE_FACTORS)
         risk_penalty = values.get("risk", 0.0) * active_config.risk_weight
-        missing_value = max(values.get("missing_evidence", 0.0), len(snapshot.missing_evidence) / max(1, len(dict(active_config.factor_weights))))
+        missing_value = max(
+            values.get("missing_evidence", 0.0),
+            len(snapshot.missing_evidence) / max(1, len(dict(active_config.factor_weights))),
+        )
         missing_penalty = missing_value * active_config.missing_evidence_weight
         validation_health = values.get("validation_health", 1.0)
         validation_penalty = (1.0 - validation_health) * active_config.validation_gate_weight
         opportunity_score = _clamp01(positive_total - risk_penalty - missing_penalty - validation_penalty)
         conviction_score = _conviction(values, opportunity_score, missing_value)
-        contributors = tuple(sorted((item for item in weighted_factors if item.contribution > 0), key=lambda item: (-item.contribution, item.name))[:5])
+        contributors = tuple(
+            sorted(
+                (item for item in weighted_factors if item.contribution > 0),
+                key=lambda item: (-item.contribution, item.name),
+            )[:5]
+        )
         risks = _risk_factors(values, active_config, missing_value, validation_health)
         assessment_id = identity(
             "opportunity-assessment",
@@ -183,6 +214,8 @@ class OpportunityEngine:
                 "identity_schema_version": "opportunity-entry-v1",
             },
         )
+
+
 def _weighted_factors(values: dict[str, float], config: OpportunityConfig) -> tuple[OpportunityFactor, ...]:
     factors: list[OpportunityFactor] = []
     for name, weight in config.factor_weights:
@@ -207,9 +240,21 @@ def _risk_factors(
     validation_health: float,
 ) -> tuple[OpportunityFactor, ...]:
     risks = (
-        OpportunityFactor("risk", _clamp01(values.get("risk", 0.0)), config.risk_weight, -values.get("risk", 0.0) * config.risk_weight),
-        OpportunityFactor("missing_evidence", _clamp01(missing_value), config.missing_evidence_weight, -missing_value * config.missing_evidence_weight),
-        OpportunityFactor("validation_health", _clamp01(validation_health), config.validation_gate_weight, -(1.0 - validation_health) * config.validation_gate_weight),
+        OpportunityFactor(
+            "risk", _clamp01(values.get("risk", 0.0)), config.risk_weight, -values.get("risk", 0.0) * config.risk_weight
+        ),
+        OpportunityFactor(
+            "missing_evidence",
+            _clamp01(missing_value),
+            config.missing_evidence_weight,
+            -missing_value * config.missing_evidence_weight,
+        ),
+        OpportunityFactor(
+            "validation_health",
+            _clamp01(validation_health),
+            config.validation_gate_weight,
+            -(1.0 - validation_health) * config.validation_gate_weight,
+        ),
     )
     return tuple(sorted(risks, key=lambda item: (item.contribution, item.name)))
 
@@ -230,7 +275,9 @@ def _conviction_explanation(conviction_score: float, values: dict[str, float], m
     if values.get("confidence", 0.0) < 0.5:
         return "Conviction is constrained by low source confidence."
     if conviction_score >= 0.75:
-        return "Conviction is high because opportunity score, confidence, freshness, and backtesting support are aligned."
+        return (
+            "Conviction is high because opportunity score, confidence, freshness, and backtesting support are aligned."
+        )
     if conviction_score >= 0.5:
         return "Conviction is moderate because support is present but not fully confirmed."
     return "Conviction is low because evidence support is limited."
@@ -274,7 +321,11 @@ def opportunity_assessment_to_record(
         source_run_ids=assessment.source_run_ids,
         configuration_fingerprint=str(assessment.metadata.get("configuration_fingerprint") or ""),
         model_fingerprint=str(assessment.metadata.get("model_fingerprint") or ""),
-        historical_window=tuple(str(assessment.metadata.get("historical_window") or "").split("|")) if assessment.metadata.get("historical_window") else (),
+        historical_window=(
+            tuple(str(assessment.metadata.get("historical_window") or "").split("|"))
+            if assessment.metadata.get("historical_window")
+            else ()
+        ),
         opportunity_phase=assessment.opportunity_phase,
         opportunity_window=assessment.opportunity_window,
         timing_score=assessment.timing_score,
@@ -430,4 +481,13 @@ def _expected_horizon(score: float, depth: int, acceleration: str, config: Oppor
 
 
 def _canonical_refs(records: tuple[FusedIntelligenceRecord, ...]) -> tuple[str, ...]:
-    return tuple(sorted({str(group.get("canonical_key", "")) for record in records for group in record.canonical_evidence_groups if group.get("canonical_key")}))
+    return tuple(
+        sorted(
+            {
+                str(group.get("canonical_key", ""))
+                for record in records
+                for group in record.canonical_evidence_groups
+                if group.get("canonical_key")
+            }
+        )
+    )

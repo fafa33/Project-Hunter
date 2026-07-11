@@ -58,5 +58,7 @@ class NarrativeConfidenceModel:
     def _historical_persistence(self, dataset: NarrativeDataset) -> float:
         if len(dataset.evidence) < 2:
             return 0.0
-        depth = (max(item.timestamp for item in dataset.evidence) - min(item.timestamp for item in dataset.evidence)).days
+        depth = (
+            max(item.timestamp for item in dataset.evidence) - min(item.timestamp for item in dataset.evidence)
+        ).days
         return min(depth / 180, 1.0)

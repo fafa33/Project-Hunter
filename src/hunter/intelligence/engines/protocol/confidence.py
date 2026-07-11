@@ -63,13 +63,17 @@ class ProtocolConfidenceModel:
 
     def _coverage_breadth(self, dataset: ProtocolDataset) -> float:
         chain_score = min(len(dataset.chains()) / 3, 1.0) if dataset.chains() else 0.3 if dataset.records else 0.0
-        deployment_score = min(len(dataset.deployments()) / 3, 1.0) if dataset.deployments() else 0.3 if dataset.records else 0.0
+        deployment_score = (
+            min(len(dataset.deployments()) / 3, 1.0) if dataset.deployments() else 0.3 if dataset.records else 0.0
+        )
         return mean((chain_score, deployment_score))
 
     def _historical_depth(self, dataset: ProtocolDataset) -> float:
         if len(dataset.records) < 2:
             return 0.0
-        depth = (max(record.timestamp for record in dataset.records) - min(record.timestamp for record in dataset.records)).days
+        depth = (
+            max(record.timestamp for record in dataset.records) - min(record.timestamp for record in dataset.records)
+        ).days
         return min(depth / max(self.configuration.minimum_historical_depth_days, 1), 1.0)
 
     def _provider_agreement(self, dataset: ProtocolDataset) -> float:

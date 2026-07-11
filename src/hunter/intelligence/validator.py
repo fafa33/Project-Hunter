@@ -98,4 +98,3 @@ class IntelligenceValidator:
             if item_id in seen:
                 raise IntelligenceValidationError(f"Duplicate intelligence object id: {item_id}")
             seen.add(item_id)
-

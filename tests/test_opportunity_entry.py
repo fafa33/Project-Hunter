@@ -14,8 +14,12 @@ NOW = datetime(2026, 1, 5, tzinfo=UTC)
 
 
 def test_higher_mispricing_improves_opportunity_score() -> None:
-    low = OpportunityEngine().evaluate(_snapshot(valuation_discount=0.2, relative_valuation=0.2, historical_discount=0.2))
-    high = OpportunityEngine().evaluate(_snapshot(valuation_discount=0.9, relative_valuation=0.8, historical_discount=0.8))
+    low = OpportunityEngine().evaluate(
+        _snapshot(valuation_discount=0.2, relative_valuation=0.2, historical_discount=0.2)
+    )
+    high = OpportunityEngine().evaluate(
+        _snapshot(valuation_discount=0.9, relative_valuation=0.8, historical_discount=0.8)
+    )
 
     assert high.opportunity_score > low.opportunity_score
 
@@ -29,7 +33,9 @@ def test_macro_future_demand_and_whale_accumulation_improve_score() -> None:
 
 def test_missing_evidence_lowers_confidence_and_weak_validation_reduces_score() -> None:
     complete = OpportunityEngine().evaluate(_snapshot(validation_health=1.0, missing_evidence=0.0, missing=()))
-    missing = OpportunityEngine().evaluate(_snapshot(validation_health=1.0, missing_evidence=0.8, missing=("valuation", "macro")))
+    missing = OpportunityEngine().evaluate(
+        _snapshot(validation_health=1.0, missing_evidence=0.8, missing=("valuation", "macro"))
+    )
     weak_validation = OpportunityEngine().evaluate(_snapshot(validation_health=0.2, missing_evidence=0.0, missing=()))
 
     assert missing.confidence["evidence_completeness"] < complete.confidence["evidence_completeness"]

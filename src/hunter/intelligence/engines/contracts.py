@@ -71,4 +71,3 @@ class IntelligenceEngine(Protocol):
 
     def health_check(self) -> bool:
         raise NotImplementedError
-

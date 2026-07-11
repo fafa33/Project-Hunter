@@ -33,7 +33,9 @@ class DeveloperIndicatorCalculator:
     def commit_momentum(self, dataset: DeveloperDataset) -> DeveloperIndicator:
         commit_events = tuple(event for event in dataset.events if event.event_type == "commit")
         value = _recent_share(commit_events, self.configuration.recent_window_days)
-        return _indicator("commit_momentum", value, "positive", "Recent commit activity compared with older activity.", commit_events)
+        return _indicator(
+            "commit_momentum", value, "positive", "Recent commit activity compared with older activity.", commit_events
+        )
 
     def contributor_growth(self, dataset: DeveloperDataset) -> DeveloperIndicator:
         if not dataset.contributors:
@@ -42,10 +44,18 @@ class DeveloperIndicatorCalculator:
         recent = sum(
             1
             for contributor in dataset.contributors
-            if contributor.first_seen and latest and contributor.first_seen >= latest - timedelta(days=self.configuration.recent_window_days)
+            if contributor.first_seen
+            and latest
+            and contributor.first_seen >= latest - timedelta(days=self.configuration.recent_window_days)
         )
         value = _bounded_ratio(recent, len(dataset.contributors))
-        return _indicator("contributor_growth", value, "positive", "New contributor share across active repositories.", dataset.contributors)
+        return _indicator(
+            "contributor_growth",
+            value,
+            "positive",
+            "New contributor share across active repositories.",
+            dataset.contributors,
+        )
 
     def contributor_concentration(self, dataset: DeveloperDataset) -> DeveloperIndicator:
         human_contributors = tuple(contributor for contributor in dataset.contributors if contributor.commits > 0)
@@ -81,20 +91,30 @@ class DeveloperIndicatorCalculator:
         historical = sum(
             1
             for contributor in dataset.contributors
-            if contributor.first_seen and latest and contributor.first_seen < latest - timedelta(days=self.configuration.recent_window_days)
+            if contributor.first_seen
+            and latest
+            and contributor.first_seen < latest - timedelta(days=self.configuration.recent_window_days)
         )
-        return _indicator("developer_retention", _bounded_ratio(retained, historical), "positive", "Share of historical contributors still active.", dataset.contributors)
+        return _indicator(
+            "developer_retention",
+            _bounded_ratio(retained, historical),
+            "positive",
+            "Share of historical contributors still active.",
+            dataset.contributors,
+        )
 
     def release_cadence(self, dataset: DeveloperDataset) -> DeveloperIndicator:
         if not dataset.releases:
             return _missing("release_cadence", "releases")
         latest = _latest_timestamp(dataset)
-        recent = sum(
-            1
-            for release in dataset.releases
-            if latest and release.released_at >= latest - timedelta(days=90)
+        recent = sum(1 for release in dataset.releases if latest and release.released_at >= latest - timedelta(days=90))
+        return _indicator(
+            "release_cadence",
+            min(recent / 4, 1.0),
+            "positive",
+            "Release frequency over the last ninety days.",
+            dataset.releases,
         )
-        return _indicator("release_cadence", min(recent / 4, 1.0), "positive", "Release frequency over the last ninety days.", dataset.releases)
 
     def release_consistency(self, dataset: DeveloperDataset) -> DeveloperIndicator:
         if len(dataset.releases) < 3:
@@ -102,42 +122,80 @@ class DeveloperIndicatorCalculator:
         dates = sorted(release.released_at for release in dataset.releases)
         gaps = [(right - left).days for left, right in zip(dates, dates[1:], strict=False)]
         value = 1.0 - min(pstdev(gaps) / max(mean(gaps), 1.0), 1.0)
-        return _indicator("release_consistency", value, "positive", "Release gap consistency across historical releases.", dataset.releases)
+        return _indicator(
+            "release_consistency",
+            value,
+            "positive",
+            "Release gap consistency across historical releases.",
+            dataset.releases,
+        )
 
     def pull_request_throughput(self, dataset: DeveloperDataset) -> DeveloperIndicator:
         if not dataset.pull_requests:
             return _missing("pull_request_throughput", "pull_requests")
         merged = sum(1 for pull_request in dataset.pull_requests if pull_request.merged_at is not None)
-        return _indicator("pull_request_throughput", _bounded_ratio(merged, len(dataset.pull_requests)), "positive", "Pull request merge rate.", dataset.pull_requests)
+        return _indicator(
+            "pull_request_throughput",
+            _bounded_ratio(merged, len(dataset.pull_requests)),
+            "positive",
+            "Pull request merge rate.",
+            dataset.pull_requests,
+        )
 
     def issue_resolution_efficiency(self, dataset: DeveloperDataset) -> DeveloperIndicator:
         if not dataset.issues:
             return _missing("issue_resolution_efficiency", "issues")
         closed = sum(1 for issue in dataset.issues if issue.closed_at is not None)
-        return _indicator("issue_resolution_efficiency", _bounded_ratio(closed, len(dataset.issues)), "positive", "Issue closure rate.", dataset.issues)
+        return _indicator(
+            "issue_resolution_efficiency",
+            _bounded_ratio(closed, len(dataset.issues)),
+            "positive",
+            "Issue closure rate.",
+            dataset.issues,
+        )
 
     def code_review_health(self, dataset: DeveloperDataset) -> DeveloperIndicator:
         review_events = tuple(event for event in dataset.events if event.event_type == "review")
         value = _bounded_ratio(len(review_events), max(len(dataset.pull_requests), 1))
-        return _indicator("code_review_health", value, "positive", "Review events relative to pull request volume.", review_events)
+        return _indicator(
+            "code_review_health", value, "positive", "Review events relative to pull request volume.", review_events
+        )
 
     def repository_maintenance_health(self, dataset: DeveloperDataset) -> DeveloperIndicator:
         if not dataset.repositories:
             return _missing("repository_maintenance_health", "repositories")
         active = len(dataset.active_repositories())
         core = len(dataset.core_repositories())
-        value = mean((_bounded_ratio(active, len(dataset.repositories)), _bounded_ratio(core, len(dataset.repositories))))
-        return _indicator("repository_maintenance_health", value, "positive", "Active and core repository share.", dataset.repositories)
+        value = mean(
+            (_bounded_ratio(active, len(dataset.repositories)), _bounded_ratio(core, len(dataset.repositories)))
+        )
+        return _indicator(
+            "repository_maintenance_health",
+            value,
+            "positive",
+            "Active and core repository share.",
+            dataset.repositories,
+        )
 
     def ecosystem_breadth(self, dataset: DeveloperDataset) -> DeveloperIndicator:
         active_repositories = dataset.active_repositories()
         value = min(len(active_repositories) / 5, 1.0)
-        return _indicator("ecosystem_breadth", value, "positive", "Breadth of maintained repositories.", active_repositories)
+        return _indicator(
+            "ecosystem_breadth", value, "positive", "Breadth of maintained repositories.", active_repositories
+        )
 
     def roadmap_delivery_consistency(self, dataset: DeveloperDataset) -> DeveloperIndicator:
-        upgrade_events = tuple(event for event in dataset.events if event.event_type in {"protocol_upgrade", "roadmap_delivery"})
+        upgrade_events = tuple(
+            event for event in dataset.events if event.event_type in {"protocol_upgrade", "roadmap_delivery"}
+        )
         value = min(len(upgrade_events) / 3, 1.0)
-        return _indicator("roadmap_delivery_consistency", value, "positive", "Observed protocol upgrade and roadmap delivery events.", upgrade_events)
+        return _indicator(
+            "roadmap_delivery_consistency",
+            value,
+            "positive",
+            "Observed protocol upgrade and roadmap delivery events.",
+            upgrade_events,
+        )
 
     def engineering_activity_quality(self, dataset: DeveloperDataset) -> DeveloperIndicator:
         indicators = (
@@ -196,7 +254,9 @@ def _recent_share(events: tuple[DeveloperEvent, ...], window_days: int) -> float
     return _bounded_ratio(recent, recent + previous)
 
 
-def _indicator(name: str, value: float, direction: str, description: str, evidence: tuple[object, ...]) -> DeveloperIndicator:
+def _indicator(
+    name: str, value: float, direction: str, description: str, evidence: tuple[object, ...]
+) -> DeveloperIndicator:
     return DeveloperIndicator(
         name=name,
         value=round(_clamp(value), 4),

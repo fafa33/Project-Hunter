@@ -41,7 +41,11 @@ class SocialAnalyzer:
                 if indicator.direction == "negative" and indicator.value >= 0.45
             )
         )
-        missing = tuple(sorted(set(dataset.missing_fields) | {item for indicator in indicators for item in indicator.missing_evidence}))
+        missing = tuple(
+            sorted(
+                set(dataset.missing_fields) | {item for indicator in indicators for item in indicator.missing_evidence}
+            )
+        )
         return SocialAnalysis(
             indicators=indicators,
             manipulation=manipulation,

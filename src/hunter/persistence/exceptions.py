@@ -11,4 +11,3 @@ class PersistenceValidationError(PersistenceError):
 
 class PersistenceSerializationError(PersistenceError):
     """Raised when a persistence record cannot be serialized or restored."""
-

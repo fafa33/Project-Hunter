@@ -24,18 +24,25 @@ def identity(namespace: str, payload: Any) -> str:
 
 class IntelligenceIdentityFactory:
     def stabilize(self, intelligence: Intelligence, run: PipelineRun, *, engine_version: str) -> Intelligence:
-        evidence = tuple(self.evidence(item, run, intelligence.engine, engine_version) for item in intelligence.evidence)
+        evidence = tuple(
+            self.evidence(item, run, intelligence.engine, engine_version) for item in intelligence.evidence
+        )
         evidence_by_previous_id = {old.id: new for old, new in zip(intelligence.evidence, evidence, strict=True)}
         observations = tuple(
             self.observation(item, run, intelligence.engine, engine_version, evidence_by_previous_id)
             for item in intelligence.observations
         )
-        observations_by_previous_id = {old.id: new for old, new in zip(intelligence.observations, observations, strict=True)}
+        observations_by_previous_id = {
+            old.id: new for old, new in zip(intelligence.observations, observations, strict=True)
+        }
         insights = tuple(
             self.insight(item, run, intelligence.engine, engine_version, observations_by_previous_id)
             for item in intelligence.insights
         )
-        signals = tuple(self.signal(item, run, intelligence.project, intelligence.engine, engine_version) for item in intelligence.signals)
+        signals = tuple(
+            self.signal(item, run, intelligence.project, intelligence.engine, engine_version)
+            for item in intelligence.signals
+        )
         stable = replace(
             intelligence,
             id="",

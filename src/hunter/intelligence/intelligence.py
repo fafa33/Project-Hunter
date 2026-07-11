@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Any
 
 from hunter.intelligence.confidence import Confidence
 from hunter.intelligence.evidence import Evidence
@@ -22,7 +23,7 @@ class Intelligence:
     insights: tuple[Insight, ...]
     confidence: Confidence
     generated_at: datetime
-    metadata: IntelligenceMetadata = field(default_factory=IntelligenceMetadata)
+    metadata: IntelligenceMetadata | dict[str, Any] = field(default_factory=IntelligenceMetadata)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "signals", tuple(self.signals))

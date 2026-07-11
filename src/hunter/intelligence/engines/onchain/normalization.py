@@ -31,7 +31,9 @@ class OnchainNormalizer:
     def __init__(self, configuration: OnchainEngineConfiguration | None = None) -> None:
         self.configuration = configuration or OnchainEngineConfiguration()
 
-    def normalize(self, records: tuple[OnchainInput, ...], intelligence: tuple[Intelligence, ...] = ()) -> OnchainDataset:
+    def normalize(
+        self, records: tuple[OnchainInput, ...], intelligence: tuple[Intelligence, ...] = ()
+    ) -> OnchainDataset:
         unique: dict[str, OnchainInput] = {}
         duplicates: list[str] = []
         overlaps: list[str] = []
@@ -50,7 +52,9 @@ class OnchainNormalizer:
                 if len({type(item).__name__ for item in window_records}) == 1 and len(window_records) > 1:
                     overlaps.extend(item.id for item in window_records[1:])
 
-        normalized = tuple(sorted(unique.values(), key=lambda item: (item.timestamp.isoformat(), type(item).__name__, item.id)))
+        normalized = tuple(
+            sorted(unique.values(), key=lambda item: (item.timestamp.isoformat(), type(item).__name__, item.id))
+        )
         return OnchainDataset(
             project=_project(normalized, self.configuration.project),
             records=normalized,
@@ -96,7 +100,13 @@ def _record_key(record: OnchainInput) -> str:
 
 
 def _window_key(record: OnchainInput) -> tuple[str, str, str, str, str]:
-    return (type(record).__name__, record.project.lower(), record.asset, record.chain, record.timestamp.date().isoformat())
+    return (
+        type(record).__name__,
+        record.project.lower(),
+        record.asset,
+        record.chain,
+        record.timestamp.date().isoformat(),
+    )
 
 
 def _project(records: tuple[OnchainInput, ...], default: str) -> str:
@@ -116,13 +126,20 @@ def _missing(records: tuple[OnchainInput, ...]) -> tuple[str, ...]:
         "holders": HolderSnapshot,
         "contract_activity": ContractActivitySnapshot,
     }
-    return tuple(sorted(name for name, kind in required.items() if not any(isinstance(record, kind) for record in records)))
+    return tuple(
+        sorted(name for name, kind in required.items() if not any(isinstance(record, kind) for record in records))
+    )
 
 
 def _cross_engine_alignment(intelligence: tuple[Intelligence, ...]) -> float:
     if not intelligence:
         return 0.0
-    related = [item for item in intelligence if item.engine in {"whale-intelligence", "protocol-intelligence", "social-intelligence", "narrative-intelligence"}]
+    related = [
+        item
+        for item in intelligence
+        if item.engine
+        in {"whale-intelligence", "protocol-intelligence", "social-intelligence", "narrative-intelligence"}
+    ]
     if not related:
         return 0.0
     positive = sum(1 for item in related if item.confidence.score >= 0.5)

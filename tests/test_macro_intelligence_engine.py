@@ -170,4 +170,3 @@ module_paths:
     assert len(result.intelligence) == 1
     assert result.intelligence[0].engine == "macro-intelligence"
     assert "macro:intelligence:execute" in result.events
-

@@ -13,4 +13,3 @@ class PersistenceIdentityConflictError(SQLPersistenceError):
 
 class PersistenceRecordDeletedError(SQLPersistenceError):
     """Raised when a deleted record is written again."""
-

@@ -89,13 +89,13 @@ class PipelineOrchestrator:
         finally:
             self.plugin_manager.shutdown(pipeline_context)
         if fusion_engine is not None and fusion_target is not None:
-            pipeline_context.fused_intelligence.append(
-                fusion_engine.fuse(pipeline_context.intelligence, fusion_target)
-            )
+            pipeline_context.fused_intelligence.append(fusion_engine.fuse(pipeline_context.intelligence, fusion_target))
         if run_opportunity_from_context and opportunity_timing_engine is not None and fusion_target is not None:
             fused_records = pipeline_context.get("persisted_fused_intelligence", ())
             if fused_records:
-                pipeline_context.opportunity_timing.append(opportunity_timing_engine.assess(fused_records, fusion_target))
+                pipeline_context.opportunity_timing.append(
+                    opportunity_timing_engine.assess(fused_records, fusion_target)
+                )
 
 
 def _manifest(engines: list[IntelligenceEngine], plugins: list[Plugin]) -> dict[str, object]:

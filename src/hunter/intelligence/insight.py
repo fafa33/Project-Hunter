@@ -16,4 +16,3 @@ class Insight:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "supporting_observations", tuple(self.supporting_observations))
-

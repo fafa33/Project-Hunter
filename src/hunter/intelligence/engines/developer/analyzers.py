@@ -19,9 +19,18 @@ class DeveloperAnalyzer:
 
     def analyze(self, dataset: DeveloperDataset) -> DeveloperAnalysis:
         indicators = self._indicator_calculator.calculate(dataset)
-        strengths = tuple(indicator.name for indicator in indicators if indicator.direction == "positive" and indicator.value >= 0.6)
-        risks = tuple(indicator.name for indicator in indicators if indicator.direction == "negative" and indicator.value >= 0.45)
-        missing = tuple(sorted({missing for indicator in indicators for missing in indicator.missing_evidence} | set(dataset.missing_fields)))
+        strengths = tuple(
+            indicator.name for indicator in indicators if indicator.direction == "positive" and indicator.value >= 0.6
+        )
+        risks = tuple(
+            indicator.name for indicator in indicators if indicator.direction == "negative" and indicator.value >= 0.45
+        )
+        missing = tuple(
+            sorted(
+                {missing for indicator in indicators for missing in indicator.missing_evidence}
+                | set(dataset.missing_fields)
+            )
+        )
         health = self._health(indicators)
         trend = self._trend(indicators)
         return DeveloperAnalysis(

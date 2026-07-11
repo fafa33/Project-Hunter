@@ -23,4 +23,3 @@ class FixedClock:
         if self.fixed_at.tzinfo is None:
             return self.fixed_at.replace(tzinfo=UTC)
         return self.fixed_at.astimezone(UTC)
-

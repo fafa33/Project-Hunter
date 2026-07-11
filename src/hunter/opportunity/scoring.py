@@ -30,8 +30,13 @@ def timing_score(
     score += temporal.persistence * config.persistence_bonus
     score -= divergence.severity * config.divergence_penalty
     score -= risk.score * 20
-    score -= max((float(record.contradictions.get("severity", 0.0) or 0.0) for record in records), default=0.0) * config.contradiction_penalty
-    missing_count = max((len(record.missing_evidence.get("missing_categories", ()) or ()) for record in records), default=0)
+    score -= (
+        max((float(record.contradictions.get("severity", 0.0) or 0.0) for record in records), default=0.0)
+        * config.contradiction_penalty
+    )
+    missing_count = max(
+        (len(record.missing_evidence.get("missing_categories", ()) or ()) for record in records), default=0
+    )
     score -= missing_count * config.missing_evidence_penalty
     if temporal.historical_depth < config.required_historical_depth:
         score -= 8

@@ -65,7 +65,15 @@ class PipelineRunRecord(BasePersistenceRecord):
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        for name in ("run_type", "target_id", "target_type", "configuration_fingerprint", "input_fingerprint", "engine_manifest_fingerprint", "status"):
+        for name in (
+            "run_type",
+            "target_id",
+            "target_type",
+            "configuration_fingerprint",
+            "input_fingerprint",
+            "engine_manifest_fingerprint",
+            "status",
+        ):
             _require_text(name, getattr(self, name))
         for name in ("requested_at", "started_at", "finished_at"):
             value = getattr(self, name)
@@ -333,7 +341,9 @@ class FusedIntelligenceRecord(BasePersistenceRecord):
         super().__post_init__()
         for name in ("pipeline_run_id", "target_id", "fusion_strategy"):
             _require_text(name, getattr(self, name))
-        object.__setattr__(self, "source_intelligence_ids", _identity_tuple("source_intelligence_ids", self.source_intelligence_ids))
+        object.__setattr__(
+            self, "source_intelligence_ids", _identity_tuple("source_intelligence_ids", self.source_intelligence_ids)
+        )
         for name in ("source_run_ids", "effective_window"):
             object.__setattr__(self, name, tuple(str(item) for item in getattr(self, name)))
         for name in (
@@ -398,7 +408,11 @@ class OpportunityTimingAssessmentRecord(BasePersistenceRecord):
             "expected_horizon",
         ):
             _require_text(name, getattr(self, name))
-        object.__setattr__(self, "source_fused_intelligence_ids", _identity_tuple("source_fused_intelligence_ids", self.source_fused_intelligence_ids))
+        object.__setattr__(
+            self,
+            "source_fused_intelligence_ids",
+            _identity_tuple("source_fused_intelligence_ids", self.source_fused_intelligence_ids),
+        )
         for name in (
             "source_run_ids",
             "historical_window",
@@ -412,7 +426,9 @@ class OpportunityTimingAssessmentRecord(BasePersistenceRecord):
             object.__setattr__(self, name, tuple(str(item) for item in getattr(self, name)))
         for name in ("confirmation_state", "acceleration_state", "divergence_state", "risk_state"):
             object.__setattr__(self, name, _freeze_payload(getattr(self, name)))
-        object.__setattr__(self, "historical_comparisons", tuple(_freeze_payload(item) for item in self.historical_comparisons))
+        object.__setattr__(
+            self, "historical_comparisons", tuple(_freeze_payload(item) for item in self.historical_comparisons)
+        )
         normalize(self.confidence)
         object.__setattr__(self, "confidence", dict(self.confidence))
         _range("evidence_quality", self.evidence_quality)
@@ -438,7 +454,11 @@ class OpportunityTimingSnapshotRecord(BasePersistenceRecord):
         super().__post_init__()
         for name in ("target_id", "target_type", "assessment_id", "opportunity_phase", "opportunity_window"):
             _require_text(name, getattr(self, name))
-        object.__setattr__(self, "source_fused_intelligence_ids", _identity_tuple("source_fused_intelligence_ids", self.source_fused_intelligence_ids))
+        object.__setattr__(
+            self,
+            "source_fused_intelligence_ids",
+            _identity_tuple("source_fused_intelligence_ids", self.source_fused_intelligence_ids),
+        )
         object.__setattr__(self, "source_run_ids", tuple(str(item) for item in self.source_run_ids))
         normalize(self.confidence)
         object.__setattr__(self, "confidence", dict(self.confidence))

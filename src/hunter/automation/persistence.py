@@ -50,13 +50,20 @@ def job_to_record(job: AutomationJob, *, created_at: datetime) -> AutomationJobR
         job_id=job.job_id,
         name=job.name,
         enabled=job.enabled,
-        schedule={"type": job.schedule.schedule_type, "expression": job.schedule.expression, "run_at": job.schedule.run_at.isoformat() if job.schedule.run_at else None},
+        schedule={
+            "type": job.schedule.schedule_type,
+            "expression": job.schedule.expression,
+            "run_at": job.schedule.run_at.isoformat() if job.schedule.run_at else None,
+        },
         timezone=job.timezone,
         target={"type": job.target.target_type, "id": job.target.target_id},
         run_type=job.run_type,
         pipeline_options=job.pipeline_options.__dict__,
         persistence_policy=job.persistence_policy,
-        as_of_policy={"mode": job.as_of_policy.mode, "as_of": job.as_of_policy.as_of.isoformat() if job.as_of_policy.as_of else None},
+        as_of_policy={
+            "mode": job.as_of_policy.mode,
+            "as_of": job.as_of_policy.as_of.isoformat() if job.as_of_policy.as_of else None,
+        },
         timeout_seconds=job.timeout_seconds,
         concurrency_policy=job.concurrency_policy.__dict__,
         metadata={**dict(job.metadata), "job_kind": job.job_kind},
@@ -101,7 +108,9 @@ def job_from_record(record: AutomationJobRecord) -> AutomationJob:
             run_at=_datetime_or_none(record.schedule.get("run_at")),
         ),
         timezone=record.timezone,
-        target=TargetSelection(str(record.target.get("type", "project")), str(record.target.get("id", "global-crypto"))),
+        target=TargetSelection(
+            str(record.target.get("type", "project")), str(record.target.get("id", "global-crypto"))
+        ),
         run_type=record.run_type,
         pipeline_options=PipelineOptions(
             run_intelligence=bool(record.pipeline_options.get("run_intelligence", True)),

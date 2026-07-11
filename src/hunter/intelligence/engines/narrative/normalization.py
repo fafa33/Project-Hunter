@@ -20,7 +20,12 @@ class NarrativeNormalizer:
         for record in sorted(records, key=lambda item: (item.timestamp.isoformat(), item.id)):
             key = record.duplicate_key or _evidence_key(record)
             quality = record.reliability * record.strength
-            if record.category not in NARRATIVE_CATEGORIES or record.promotional or record.spam or quality < self.configuration.minimum_evidence_quality:
+            if (
+                record.category not in NARRATIVE_CATEGORIES
+                or record.promotional
+                or record.spam
+                or quality < self.configuration.minimum_evidence_quality
+            ):
                 filtered.append(record.id)
                 continue
             existing = by_key.get(key)

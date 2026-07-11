@@ -102,7 +102,9 @@ def test_normalization_filters_noise_and_suppresses_duplicates() -> None:
     spam = evidence("spam", "ai", 1, spam=True)
     unsupported = evidence("bad-category", "unsupported", 1)
 
-    normalized = NarrativeNormalizer().normalize((*narrative_records(), duplicate, duplicate_lower_quality, spam, unsupported))
+    normalized = NarrativeNormalizer().normalize(
+        (*narrative_records(), duplicate, duplicate_lower_quality, spam, unsupported)
+    )
 
     assert "ai-duplicate-low" in normalized.duplicates
     assert "spam" in normalized.filtered
@@ -129,7 +131,9 @@ def test_lifecycle_transitions_detect_acceleration_and_saturation() -> None:
 
 def test_relationship_detection_finds_parent_competing_and_complementary_links() -> None:
     analysis = NarrativeAnalyzer().analyze(dataset())
-    relationships = {(item.source_narrative_id, item.target_narrative_id, item.relationship_type) for item in analysis.relationships}
+    relationships = {
+        (item.source_narrative_id, item.target_narrative_id, item.relationship_type) for item in analysis.relationships
+    }
 
     assert ("narrative-ai", "narrative-depin", "complementary") in relationships
     assert ("narrative-layer_1", "narrative-layer_2", "competing") in relationships

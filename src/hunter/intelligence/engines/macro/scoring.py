@@ -12,4 +12,3 @@ class MacroEnvironmentScorer:
 
     def severity(self, value: float) -> float:
         return round(abs(value - 0.5) * 2, 4)
-

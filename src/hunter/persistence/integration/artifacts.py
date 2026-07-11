@@ -108,12 +108,20 @@ def records_for_intelligence(
             insight_ids=tuple(insight.id for insight in intelligence.insights),
             confidence=asdict(intelligence.confidence),
             metadata={**artifact_metadata, **intelligence.metadata.as_dict()},
-            engine_version=_text_or_none(artifact_metadata.get("engine_version") or intelligence.metadata.as_dict().get("engine_version")),
-            plugin_id=_text_or_none(artifact_metadata.get("plugin_id") or intelligence.metadata.as_dict().get("plugin_id")),
-            plugin_version=_text_or_none(artifact_metadata.get("plugin_version") or intelligence.metadata.as_dict().get("plugin_version")),
+            engine_version=_text_or_none(
+                artifact_metadata.get("engine_version") or intelligence.metadata.as_dict().get("engine_version")
+            ),
+            plugin_id=_text_or_none(
+                artifact_metadata.get("plugin_id") or intelligence.metadata.as_dict().get("plugin_id")
+            ),
+            plugin_version=_text_or_none(
+                artifact_metadata.get("plugin_version") or intelligence.metadata.as_dict().get("plugin_version")
+            ),
             target_refs=_target_refs(intelligence),
             evidence_references=tuple(evidence.reference for evidence in intelligence.evidence),
-            evidence_lineage_keys=tuple(_lineage_key(evidence.metadata.as_dict()) for evidence in intelligence.evidence),
+            evidence_lineage_keys=tuple(
+                _lineage_key(evidence.metadata.as_dict()) for evidence in intelligence.evidence
+            ),
             evidence_reliabilities=tuple(evidence.reliability for evidence in intelligence.evidence),
             evidence_freshness=tuple(evidence.freshness for evidence in intelligence.evidence),
             signal_categories=tuple(signal.category for signal in intelligence.signals),

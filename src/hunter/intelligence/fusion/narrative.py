@@ -54,7 +54,9 @@ def _signals_from_inputs(inputs: tuple[FusionInput, ...]) -> tuple[tuple[str, fl
     for item in inputs:
         for index, category in enumerate(item.signal_categories):
             strength = item.signal_strengths[index] if index < len(item.signal_strengths) else 0.5
-            confidence = item.signal_confidences[index] if index < len(item.signal_confidences) else item.confidence_score
+            confidence = (
+                item.signal_confidences[index] if index < len(item.signal_confidences) else item.confidence_score
+            )
             rows.append((category, strength, confidence))
     return tuple(rows)
 

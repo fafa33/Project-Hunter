@@ -14,4 +14,3 @@ def preserve_identity(stable_identity: str) -> str:
 def require_same_identity(expected: str, actual: str) -> None:
     if preserve_identity(expected) != preserve_identity(actual):
         raise PersistenceValidationError("Persistence serialization must preserve analytical identity exactly")
-

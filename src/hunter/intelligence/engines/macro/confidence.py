@@ -29,4 +29,3 @@ class MacroConfidenceModel:
             freshness=freshness,
             uncertainty=uncertainty,
         )
-

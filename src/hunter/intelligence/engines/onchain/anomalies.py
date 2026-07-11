@@ -40,12 +40,18 @@ class OnchainAnomalyModel:
 
     def wash_activity_risk(self, dataset: OnchainDataset) -> float:
         values = [item.low_value_ratio for item in dataset.transactions if item.low_value_ratio is not None]
-        values.extend(item.repeated_pattern_ratio for item in dataset.transactions if item.repeated_pattern_ratio is not None)
+        values.extend(
+            item.repeated_pattern_ratio for item in dataset.transactions if item.repeated_pattern_ratio is not None
+        )
         return round(mean(values), 4) if values else 0.0
 
     def sybil_risk(self, dataset: OnchainDataset) -> float:
         values = [item.sybil_ratio for item in dataset.addresses if item.sybil_ratio is not None]
-        values.extend(item.wallet_creation_cluster_ratio for item in dataset.addresses if item.wallet_creation_cluster_ratio is not None)
+        values.extend(
+            item.wallet_creation_cluster_ratio
+            for item in dataset.addresses
+            if item.wallet_creation_cluster_ratio is not None
+        )
         return round(mean(values), 4) if values else 0.0
 
     def bot_activity_risk(self, dataset: OnchainDataset) -> float:

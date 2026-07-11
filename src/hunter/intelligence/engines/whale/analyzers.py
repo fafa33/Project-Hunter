@@ -9,8 +9,12 @@ class WhaleAnalyzer:
     def analyze(self, dataset: WhaleDataset) -> WhaleAnalysis:
         grouped = dataset.by_type()
         signals = tuple(self._signal(event_type, events) for event_type, events in grouped.items())
-        accumulating_assets = tuple(sorted({event.asset for event in dataset.events if event.event_type == "accumulation"}))
-        distributing_assets = tuple(sorted({event.asset for event in dataset.events if event.event_type == "distribution"}))
+        accumulating_assets = tuple(
+            sorted({event.asset for event in dataset.events if event.event_type == "accumulation"})
+        )
+        distributing_assets = tuple(
+            sorted({event.asset for event in dataset.events if event.event_type == "distribution"})
+        )
         exchange_flow = self._exchange_flow(grouped.get("exchange_flow", ()))
         smart_money_activity = self._activity(grouped.get("smart_money", ()))
         notable_events = tuple(
@@ -71,4 +75,3 @@ class WhaleAnalyzer:
         if average <= 0.35:
             return "muted"
         return "moderate"
-

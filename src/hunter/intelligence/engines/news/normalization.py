@@ -36,14 +36,25 @@ class NewsNormalizer:
                 supplied_events.append(record)
 
         articles = tuple(sorted(article_by_key.values(), key=lambda item: (item.published_at.isoformat(), item.id)))
-        classified_events = tuple(self._classifier.classify(article) for article in articles if article.id not in low_quality)
-        events = tuple(sorted((*classified_events, *supplied_events), key=lambda item: (item.timestamp.isoformat(), item.id)))
+        classified_events = tuple(
+            self._classifier.classify(article) for article in articles if article.id not in low_quality
+        )
+        events = tuple(
+            sorted((*classified_events, *supplied_events), key=lambda item: (item.timestamp.isoformat(), item.id))
+        )
         missing = []
         if not articles:
             missing.append("articles")
         if not events:
             missing.append("events")
-        project = sorted({article.project for article in articles} | {project for event in events for project in event.affected_projects})[0] if articles or events else self.configuration.project
+        project = (
+            sorted(
+                {article.project for article in articles}
+                | {project for event in events for project in event.affected_projects}
+            )[0]
+            if articles or events
+            else self.configuration.project
+        )
         return NewsDataset(
             project=project,
             articles=articles,

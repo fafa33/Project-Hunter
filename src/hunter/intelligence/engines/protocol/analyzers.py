@@ -19,17 +19,30 @@ class ProtocolAnalyzer:
 
     def analyze(self, dataset: ProtocolDataset) -> ProtocolAnalysis:
         indicators = self._indicator_calculator.calculate(dataset)
-        strengths = tuple(indicator.name for indicator in indicators if indicator.direction == "positive" and indicator.value >= 0.6)
-        risks = tuple(indicator.name for indicator in indicators if indicator.direction == "negative" and indicator.value >= 0.4)
-        missing = tuple(sorted(set(dataset.missing_fields) | {missing for indicator in indicators for missing in indicator.missing_evidence}))
+        strengths = tuple(
+            indicator.name for indicator in indicators if indicator.direction == "positive" and indicator.value >= 0.6
+        )
+        risks = tuple(
+            indicator.name for indicator in indicators if indicator.direction == "negative" and indicator.value >= 0.4
+        )
+        missing = tuple(
+            sorted(
+                set(dataset.missing_fields)
+                | {missing for indicator in indicators for missing in indicator.missing_evidence}
+            )
+        )
         return ProtocolAnalysis(
             indicators=indicators,
             health=self._health(indicators),
-            operational_trend=self._label(indicators, ("network_reliability", "validator_health", "protocol_resilience")),
+            operational_trend=self._label(
+                indicators, ("network_reliability", "validator_health", "protocol_resilience")
+            ),
             economic_trend=self._label(indicators, ("fee_growth", "revenue_growth", "value_capture_efficiency")),
             adoption_trend=self._label(indicators, ("user_growth", "returning_user_ratio", "application_breadth")),
             resilience=self._label(indicators, ("network_reliability", "incident_frequency", "liquidity_stability")),
-            sustainability=self._label(indicators, ("organic_tvl_ratio", "treasury_runway", "incentive_dependence", "emissions_dependence")),
+            sustainability=self._label(
+                indicators, ("organic_tvl_ratio", "treasury_runway", "incentive_dependence", "emissions_dependence")
+            ),
             strengths=strengths,
             risks=risks,
             missing_evidence=missing,
@@ -41,7 +54,11 @@ class ProtocolAnalyzer:
         )
 
     def _health(self, indicators: tuple[ProtocolIndicator, ...]) -> str:
-        available = tuple(indicator.value for indicator in indicators if not indicator.missing_evidence and indicator.name != "protocol_deterioration")
+        available = tuple(
+            indicator.value
+            for indicator in indicators
+            if not indicator.missing_evidence and indicator.name != "protocol_deterioration"
+        )
         if not available:
             return "unknown"
         score = mean(available)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
 from hunter.intelligence.evidence import Evidence
 from hunter.intelligence.metadata import IntelligenceMetadata, normalize_metadata
@@ -14,7 +15,7 @@ class Observation:
     description: str
     evidence: tuple[Evidence, ...]
     importance: float
-    metadata: IntelligenceMetadata = field(default_factory=IntelligenceMetadata)
+    metadata: IntelligenceMetadata | dict[str, Any] = field(default_factory=IntelligenceMetadata)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "evidence", tuple(self.evidence))

@@ -7,4 +7,3 @@ class ExecutionIdentityError(Exception):
 
 class CanonicalizationError(ExecutionIdentityError):
     """Raised when a value cannot be safely canonicalized."""
-

@@ -9,4 +9,3 @@ from hunter.intelligence.intelligence import Intelligence
 class IntelligenceProducer(Protocol):
     def produce_intelligence(self) -> Intelligence:
         raise NotImplementedError
-

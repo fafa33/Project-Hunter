@@ -23,7 +23,9 @@ class SocialNormalizer:
     def __init__(self, configuration: SocialEngineConfiguration | None = None) -> None:
         self.configuration = configuration or SocialEngineConfiguration()
 
-    def normalize(self, records: tuple[SocialRecord, ...], intelligence: tuple[Intelligence, ...] = ()) -> SocialDataset:
+    def normalize(
+        self, records: tuple[SocialRecord, ...], intelligence: tuple[Intelligence, ...] = ()
+    ) -> SocialDataset:
         posts: dict[str, SocialPost] = {}
         authors: dict[str, SocialAuthor] = {}
         accounts: dict[str, SocialAccount] = {}

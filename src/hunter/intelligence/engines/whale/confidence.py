@@ -31,4 +31,3 @@ class WhaleConfidenceModel:
             freshness=freshness,
             uncertainty=uncertainty,
         )
-

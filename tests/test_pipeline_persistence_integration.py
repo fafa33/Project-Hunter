@@ -310,7 +310,14 @@ def test_failed_attempt_followed_by_successful_attempt(session_factory: SessionF
         attempts = PipelineHistory(RepositoryFactory(session)).attempt_history(context.run.run_id)
 
     assert [attempt.attempt_number for attempt in attempts] == [1, 1, 1, 2, 2, 2]
-    assert [attempt.status for attempt in attempts] == ["pending", "running", "failed", "pending", "running", "succeeded"]
+    assert [attempt.status for attempt in attempts] == [
+        "pending",
+        "running",
+        "failed",
+        "pending",
+        "running",
+        "succeeded",
+    ]
 
 
 def test_partial_attempt_followed_by_successful_attempt(session_factory: SessionFactory) -> None:
@@ -328,7 +335,14 @@ def test_partial_attempt_followed_by_successful_attempt(session_factory: Session
     with session_factory.create() as session:
         attempts = PipelineHistory(RepositoryFactory(session)).attempt_history(context.run.run_id)
 
-    assert [attempt.status for attempt in attempts] == ["pending", "running", "partial", "pending", "running", "succeeded"]
+    assert [attempt.status for attempt in attempts] == [
+        "pending",
+        "running",
+        "partial",
+        "pending",
+        "running",
+        "succeeded",
+    ]
 
 
 def test_typed_persistence_issue_marks_partial_attempt(session_factory: SessionFactory) -> None:

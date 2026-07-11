@@ -30,8 +30,14 @@ class OnchainContractAnalyzer:
         return round(max(shares), 4) if shares else 0.0
 
     def spam_contract_risk(self, dataset: OnchainDataset) -> float:
-        values = [item.spam_contract_ratio for item in dataset.contract_activity if item.spam_contract_ratio is not None]
-        values.extend(item.generated_contract_ratio for item in dataset.contract_activity if item.generated_contract_ratio is not None)
+        values = [
+            item.spam_contract_ratio for item in dataset.contract_activity if item.spam_contract_ratio is not None
+        ]
+        values.extend(
+            item.generated_contract_ratio
+            for item in dataset.contract_activity
+            if item.generated_contract_ratio is not None
+        )
         return round(mean(values), 4) if values else 0.0
 
 

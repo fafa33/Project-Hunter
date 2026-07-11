@@ -13,9 +13,21 @@ from hunter.intelligence.engines.news.models import (
 
 class NewsAnalyzer:
     def analyze(self, dataset: NewsDataset) -> NewsAnalysis:
-        material_events = tuple(event for event in dataset.events if event.severity >= 0.45 and event.confidence >= 0.45)
-        strengths = tuple(sorted({event.event_type for event in material_events if event.event_type in POSITIVE_DOMAINS}))
-        risks = tuple(sorted({event.event_type for event in material_events if event.event_type in NEGATIVE_DOMAINS or event.rumor or event.conflicting}))
+        material_events = tuple(
+            event for event in dataset.events if event.severity >= 0.45 and event.confidence >= 0.45
+        )
+        strengths = tuple(
+            sorted({event.event_type for event in material_events if event.event_type in POSITIVE_DOMAINS})
+        )
+        risks = tuple(
+            sorted(
+                {
+                    event.event_type
+                    for event in material_events
+                    if event.event_type in NEGATIVE_DOMAINS or event.rumor or event.conflicting
+                }
+            )
+        )
         missing = tuple(sorted(set(dataset.missing_fields)))
         return NewsAnalysis(
             events=material_events,
@@ -48,7 +60,9 @@ class NewsAnalyzer:
         if not events:
             return "low"
         average_confidence = mean(event.confidence for event in events)
-        quality_penalty = (len(dataset.duplicate_article_ids) + len(dataset.low_quality_article_ids)) / max(len(dataset.articles), 1)
+        quality_penalty = (len(dataset.duplicate_article_ids) + len(dataset.low_quality_article_ids)) / max(
+            len(dataset.articles), 1
+        )
         score = average_confidence * (1.0 - min(quality_penalty, 1.0))
         if score >= 0.70:
             return "high"

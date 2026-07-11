@@ -66,4 +66,3 @@ class MacroAnalysis:
     liquidity_flow: str = "unknown"
     notable_events: tuple[str, ...] = ()
     metadata: dict[str, str] = field(default_factory=dict)
-

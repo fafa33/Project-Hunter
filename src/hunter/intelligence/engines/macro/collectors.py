@@ -24,4 +24,3 @@ class ContextMacroCollector:
         if isinstance(value, list):
             return tuple(item for item in value if isinstance(item, MacroDataPoint))
         return ()
-

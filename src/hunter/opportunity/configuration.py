@@ -16,7 +16,16 @@ class OpportunityTimingConfig:
     min_category_coverage: float = 0.5
     freshness_grace_days: int = 7
     freshness_window_days: int = 30
-    required_categories: tuple[str, ...] = ("macro", "whale", "developer", "protocol", "news", "narrative", "social", "on-chain")
+    required_categories: tuple[str, ...] = (
+        "macro",
+        "whale",
+        "developer",
+        "protocol",
+        "news",
+        "narrative",
+        "social",
+        "on-chain",
+    )
     phase_thresholds: tuple[tuple[str, float], ...] = (
         ("too_early", 20.0),
         ("forming", 40.0),
@@ -31,8 +40,25 @@ class OpportunityTimingConfig:
         ("open", 75.0),
         ("strengthening", 90.0),
     )
-    risk_weights: tuple[tuple[str, float], ...] = field(default_factory=lambda: (("contradiction", 0.25), ("missing_evidence", 0.2), ("dependency", 0.2), ("divergence", 0.2), ("insufficient_history", 0.15)))
-    confidence_weights: tuple[tuple[str, float], ...] = field(default_factory=lambda: (("history", 0.2), ("diversity", 0.2), ("coverage", 0.2), ("independence", 0.15), ("freshness", 0.1), ("fusion", 0.15)))
+    risk_weights: tuple[tuple[str, float], ...] = field(
+        default_factory=lambda: (
+            ("contradiction", 0.25),
+            ("missing_evidence", 0.2),
+            ("dependency", 0.2),
+            ("divergence", 0.2),
+            ("insufficient_history", 0.15),
+        )
+    )
+    confidence_weights: tuple[tuple[str, float], ...] = field(
+        default_factory=lambda: (
+            ("history", 0.2),
+            ("diversity", 0.2),
+            ("coverage", 0.2),
+            ("independence", 0.15),
+            ("freshness", 0.1),
+            ("fusion", 0.15),
+        )
+    )
     contradiction_penalty: float = 18.0
     missing_evidence_penalty: float = 3.0
     divergence_penalty: float = 15.0
@@ -178,7 +204,9 @@ def opportunity_config_from_mapping(payload: dict[str, Any]) -> OpportunityConfi
         missing_evidence_weight=float(payload.get("missing_evidence_weight", 0.12)),
         validation_gate_weight=float(payload.get("validation_gate_weight", 0.2)),
         label_thresholds=_mapping_tuple(payload.get("label_thresholds"), OpportunityConfig().label_thresholds),
-        window_thresholds_entry=_mapping_tuple(payload.get("window_thresholds"), OpportunityConfig().window_thresholds_entry),
+        window_thresholds_entry=_mapping_tuple(
+            payload.get("window_thresholds"), OpportunityConfig().window_thresholds_entry
+        ),
     )
 
 
@@ -190,21 +218,29 @@ def opportunity_timing_config_from_mapping(payload: dict[str, Any]) -> Opportuni
         min_category_coverage=float(payload.get("min_category_coverage", 0.5)),
         freshness_grace_days=int(payload.get("freshness_grace_days", 7)),
         freshness_window_days=int(payload.get("freshness_window_days", 30)),
-        required_categories=tuple(str(item) for item in payload.get("required_categories", OpportunityTimingConfig().required_categories)),
+        required_categories=tuple(
+            str(item) for item in payload.get("required_categories", OpportunityTimingConfig().required_categories)
+        ),
         phase_thresholds=_mapping_tuple(payload.get("phase_thresholds"), OpportunityTimingConfig().phase_thresholds),
         window_thresholds=_mapping_tuple(payload.get("window_thresholds"), OpportunityTimingConfig().window_thresholds),
         risk_weights=_mapping_tuple(payload.get("risk_weights"), OpportunityTimingConfig().risk_weights),
-        confidence_weights=_mapping_tuple(payload.get("confidence_weights"), OpportunityTimingConfig().confidence_weights),
+        confidence_weights=_mapping_tuple(
+            payload.get("confidence_weights"), OpportunityTimingConfig().confidence_weights
+        ),
         contradiction_penalty=float(payload.get("contradiction_penalty", 18.0)),
         missing_evidence_penalty=float(payload.get("missing_evidence_penalty", 3.0)),
         divergence_penalty=float(payload.get("divergence_penalty", 15.0)),
         acceleration_bonus=float(payload.get("acceleration_bonus", 12.0)),
         confirmation_bonus=float(payload.get("confirmation_bonus", 18.0)),
         persistence_bonus=float(payload.get("persistence_bonus", 10.0)),
-        acceleration_rules=_mapping_tuple(payload.get("acceleration_rules"), OpportunityTimingConfig().acceleration_rules),
+        acceleration_rules=_mapping_tuple(
+            payload.get("acceleration_rules"), OpportunityTimingConfig().acceleration_rules
+        ),
         divergence_rules=_mapping_tuple(payload.get("divergence_rules"), OpportunityTimingConfig().divergence_rules),
         horizon_rules=_mapping_tuple(payload.get("horizon_rules"), OpportunityTimingConfig().horizon_rules),
-        invalidation_rules=tuple(str(item) for item in payload.get("invalidation_rules", OpportunityTimingConfig().invalidation_rules)),
+        invalidation_rules=tuple(
+            str(item) for item in payload.get("invalidation_rules", OpportunityTimingConfig().invalidation_rules)
+        ),
         model_version=str(payload.get("model_version", "opportunity-timing-model-v1")),
     )
 

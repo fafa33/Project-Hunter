@@ -52,7 +52,9 @@ class NewsConfidenceModel:
         if not dataset.articles:
             return 0.0
         duplicate_penalty = len(dataset.duplicate_article_ids) / max(len(dataset.articles), 1)
-        recycled_penalty = sum(1 for article in dataset.articles if article.recycled or article.syndicated) / len(dataset.articles)
+        recycled_penalty = sum(1 for article in dataset.articles if article.recycled or article.syndicated) / len(
+            dataset.articles
+        )
         return max(1.0 - mean((duplicate_penalty, recycled_penalty)), 0.0)
 
     def _primary_source_coverage(self, dataset: NewsDataset) -> float:

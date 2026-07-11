@@ -20,4 +20,3 @@ class PluginDependencyError(PluginValidationError):
 
 class PluginLifecycleError(PluginError):
     """Raised when plugin lifecycle execution fails."""
-

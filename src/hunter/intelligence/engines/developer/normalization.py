@@ -33,11 +33,35 @@ class DeveloperNormalizer:
                 projects.append(record.project)
                 for repository in record.repositories:
                     _add_repository(repositories, repository, self.configuration)
-                contributors.update({item.id: item for item in record.contributors if not _is_filtered_actor(item.contributor_id, item.is_bot, self.configuration)})
+                contributors.update(
+                    {
+                        item.id: item
+                        for item in record.contributors
+                        if not _is_filtered_actor(item.contributor_id, item.is_bot, self.configuration)
+                    }
+                )
                 releases.update({item.id: item for item in record.releases})
-                pull_requests.update({item.id: item for item in record.pull_requests if not _is_filtered_actor(item.author, item.is_bot, self.configuration)})
-                issues.update({item.id: item for item in record.issues if not _is_filtered_actor(item.author, item.is_bot, self.configuration)})
-                events.update({item.id: item for item in record.events if not _is_filtered_actor(item.actor, item.is_bot or item.automated, self.configuration)})
+                pull_requests.update(
+                    {
+                        item.id: item
+                        for item in record.pull_requests
+                        if not _is_filtered_actor(item.author, item.is_bot, self.configuration)
+                    }
+                )
+                issues.update(
+                    {
+                        item.id: item
+                        for item in record.issues
+                        if not _is_filtered_actor(item.author, item.is_bot, self.configuration)
+                    }
+                )
+                events.update(
+                    {
+                        item.id: item
+                        for item in record.events
+                        if not _is_filtered_actor(item.actor, item.is_bot or item.automated, self.configuration)
+                    }
+                )
             elif isinstance(record, RepositorySnapshot):
                 projects.append(record.project)
                 _add_repository(repositories, record, self.configuration)
@@ -52,7 +76,9 @@ class DeveloperNormalizer:
             elif isinstance(record, IssueSnapshot):
                 if not _is_filtered_actor(record.author, record.is_bot, self.configuration):
                     issues[record.id] = record
-            elif isinstance(record, DeveloperEvent) and not _is_filtered_actor(record.actor, record.is_bot or record.automated, self.configuration):
+            elif isinstance(record, DeveloperEvent) and not _is_filtered_actor(
+                record.actor, record.is_bot or record.automated, self.configuration
+            ):
                 events[record.id] = record
 
         repository_ids = set(repositories)
@@ -95,7 +121,11 @@ def _add_repository(
 ) -> None:
     if repository.is_archived and not configuration.include_archived_repositories:
         return
-    is_core = repository.is_core or repository.id in configuration.core_repositories or repository.name in configuration.core_repositories
+    is_core = (
+        repository.is_core
+        or repository.id in configuration.core_repositories
+        or repository.name in configuration.core_repositories
+    )
     repositories[repository.id] = RepositorySnapshot(
         id=repository.id,
         project=repository.project,

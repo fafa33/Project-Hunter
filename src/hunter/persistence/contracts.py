@@ -49,4 +49,3 @@ class RepositoryContract(Protocol):
 
     def snapshot(self, spec: SnapshotSpec) -> PersistenceRecord:
         raise NotImplementedError
-

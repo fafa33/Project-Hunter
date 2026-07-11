@@ -189,4 +189,3 @@ def create_plugin() -> WhaleIntelligencePlugin:
 
 def _severity(strength: float) -> float:
     return round(abs(strength - 0.5) * 2, 4)
-

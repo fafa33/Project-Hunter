@@ -110,7 +110,9 @@ class PipelinePersistenceAdapter:
             attempt = self._new_attempt(context, repositories, run)
             attempt = attempt.transition(RunLifecycleState.RUNNING, at=context.clock.now())
             attempt = attempt.transition(RunLifecycleState.PARTIAL, at=context.clock.now())
-            self._save_attempt_record(context, repositories, attempt.to_record(created_at=context.clock.now(), effective_at=run.effective_at))
+            self._save_attempt_record(
+                context, repositories, attempt.to_record(created_at=context.clock.now(), effective_at=run.effective_at)
+            )
 
     def _run_atomic(
         self,
@@ -238,7 +240,9 @@ class PipelinePersistenceAdapter:
             pipeline_run_id=run_id,
         )
 
-    def _save_attempt_record(self, context: PipelineContext, repositories: Any, record: OperationalAttemptRecord) -> None:
+    def _save_attempt_record(
+        self, context: PipelineContext, repositories: Any, record: OperationalAttemptRecord
+    ) -> None:
         repositories.operational_attempts().save(record)
         self._record(
             context,
@@ -274,7 +278,9 @@ class PipelinePersistenceAdapter:
                     pipeline_run_id=run.run_id,
                     created_at=context.clock.now(),
                     effective_at=run.effective_at,
-                    declaration_metadata=_declaration_metadata(intelligence.engine, intelligence.metadata.as_dict(), engine_manifest),
+                    declaration_metadata=_declaration_metadata(
+                        intelligence.engine, intelligence.metadata.as_dict(), engine_manifest
+                    ),
                 ):
                     if not self._should_persist(record):
                         continue
@@ -317,7 +323,9 @@ class PipelinePersistenceAdapter:
         repository = _repository_for_record(repositories, record)
         exists = repository.exists(record.id)
         repository.save(record)
-        event_type = PersistenceEventType.ARTIFACT_SKIPPED_IDEMPOTENT if exists else PersistenceEventType.ARTIFACT_PERSISTED
+        event_type = (
+            PersistenceEventType.ARTIFACT_SKIPPED_IDEMPOTENT if exists else PersistenceEventType.ARTIFACT_PERSISTED
+        )
         self._record(
             context,
             context.run,
@@ -375,8 +383,7 @@ class PipelinePersistenceAdapter:
         if not self.settings.enforce_engine_manifest or not isinstance(engine_manifest, dict):
             return
         violations = [
-            _manifest_violation(item.engine, item.metadata.as_dict(), engine_manifest)
-            for item in context.intelligence
+            _manifest_violation(item.engine, item.metadata.as_dict(), engine_manifest) for item in context.intelligence
         ]
         violations = [item for item in violations if item is not None]
         if violations:
@@ -437,7 +444,9 @@ def _repository_for_record(repositories: Any, record: PersistenceRecord) -> Any:
     raise TypeError(msg)
 
 
-def _record_for_fused_intelligence(fused: Any, *, pipeline_run_id: str, created_at: datetime) -> FusedIntelligenceRecord:
+def _record_for_fused_intelligence(
+    fused: Any, *, pipeline_run_id: str, created_at: datetime
+) -> FusedIntelligenceRecord:
     from hunter.intelligence.fusion import FusedIntelligence, fused_intelligence_to_record
 
     if not isinstance(fused, FusedIntelligence):
@@ -446,7 +455,9 @@ def _record_for_fused_intelligence(fused: Any, *, pipeline_run_id: str, created_
     return fused_intelligence_to_record(fused, pipeline_run_id=pipeline_run_id, created_at=created_at)
 
 
-def _record_for_opportunity_timing(assessment: Any, *, pipeline_run_id: str, created_at: datetime) -> OpportunityTimingAssessmentRecord:
+def _record_for_opportunity_timing(
+    assessment: Any, *, pipeline_run_id: str, created_at: datetime
+) -> OpportunityTimingAssessmentRecord:
     from hunter.opportunity import OpportunityTimingAssessment, opportunity_assessment_to_record
 
     if not isinstance(assessment, OpportunityTimingAssessment):

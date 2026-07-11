@@ -16,4 +16,3 @@ class IntelligenceEngineExecutionError(IntelligenceEngineError):
 
 class IntelligenceEngineValidationError(IntelligenceEngineError):
     """Raised when engine metadata or outputs are invalid."""
-

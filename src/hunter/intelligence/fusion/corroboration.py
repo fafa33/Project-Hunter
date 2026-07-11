@@ -16,7 +16,9 @@ def assess_corroboration(
         quality = _evidence_quality(item)
         for index, category in enumerate(item.signal_categories):
             direction = _direction(item.signal_strengths[index]) if index < len(item.signal_strengths) else "neutral"
-            confidence = item.signal_confidences[index] if index < len(item.signal_confidences) else item.confidence_score
+            confidence = (
+                item.signal_confidences[index] if index < len(item.signal_confidences) else item.confidence_score
+            )
             key = (category, direction)
             category_directions[key].add(item.engine_id)
             category_scores[key].append(confidence * quality * _time_weight(item, inputs))
@@ -33,7 +35,11 @@ def assess_corroboration(
     category_score = len(corroborated) / total if total else 0.0
     quality_score = sum(scores) / len(scores) if scores else 0.0
     score = (0.6 * category_score) + (0.4 * quality_score) if corroborated else 0.0
-    explanation = "No independently corroborated categories" if not corroborated else f"{len(corroborated)} corroborated category(s)"
+    explanation = (
+        "No independently corroborated categories"
+        if not corroborated
+        else f"{len(corroborated)} corroborated category(s)"
+    )
     return CorroborationAssessment(
         corroborated_categories=tuple(corroborated),
         corroborating_engine_ids=tuple(engines),

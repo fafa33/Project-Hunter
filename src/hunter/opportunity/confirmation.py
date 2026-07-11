@@ -5,7 +5,9 @@ from hunter.opportunity.models import ConfirmationState
 from hunter.persistence.records import FusedIntelligenceRecord
 
 
-def assess_confirmation(records: tuple[FusedIntelligenceRecord, ...], config: OpportunityTimingConfig) -> ConfirmationState:
+def assess_confirmation(
+    records: tuple[FusedIntelligenceRecord, ...], config: OpportunityTimingConfig
+) -> ConfirmationState:
     categories: set[str] = set()
     independent_groups: set[str] = set()
     dependent_groups = 0
@@ -44,7 +46,8 @@ def assess_confirmation(records: tuple[FusedIntelligenceRecord, ...], config: Op
         required_group_count=config.min_confirmation_groups,
         confirmed=confirmed,
         score=score,
-        summary=f"{len(categories)} categories and {len(independent_groups)} independent evidence groups confirmed. " + ("; ".join(reasons) if reasons else "Confirmation requirements satisfied."),
+        summary=f"{len(categories)} categories and {len(independent_groups)} independent evidence groups confirmed. "
+        + ("; ".join(reasons) if reasons else "Confirmation requirements satisfied."),
     )
 
 

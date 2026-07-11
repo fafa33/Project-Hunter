@@ -12,7 +12,15 @@ def canonicalize_evidence(inputs: tuple[FusionInput, ...]) -> tuple[CanonicalEvi
             evidence_id = _at(item.evidence_ids, index)
             reference = _at(item.evidence_references, index)
             lineage_key = _at(item.evidence_lineage_keys, index)
-            keys = {key for key in (f"id:{evidence_id}" if evidence_id else "", f"reference:{reference}" if reference else "", f"lineage:{lineage_key}" if lineage_key else "") if key}
+            keys = {
+                key
+                for key in (
+                    f"id:{evidence_id}" if evidence_id else "",
+                    f"reference:{reference}" if reference else "",
+                    f"lineage:{lineage_key}" if lineage_key else "",
+                )
+                if key
+            }
             if not keys:
                 continue
             group = _matching_group(groups, keys)

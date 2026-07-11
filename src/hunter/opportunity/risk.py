@@ -4,7 +4,12 @@ from hunter.opportunity.models import ConfirmationState, DivergenceState, RiskSt
 from hunter.persistence.records import FusedIntelligenceRecord
 
 
-def assess_risk(records: tuple[FusedIntelligenceRecord, ...], confirmation: ConfirmationState, divergence: DivergenceState, temporal: TemporalComparison) -> RiskState:
+def assess_risk(
+    records: tuple[FusedIntelligenceRecord, ...],
+    confirmation: ConfirmationState,
+    divergence: DivergenceState,
+    temporal: TemporalComparison,
+) -> RiskState:
     risks: list[str] = []
     contradiction = max((float(record.contradictions.get("severity", 0.0) or 0.0) for record in records), default=0.0)
     dependency = max((float(record.dependencies.get("penalty", 0.0) or 0.0) for record in records), default=0.0)
@@ -29,5 +34,12 @@ def assess_risk(records: tuple[FusedIntelligenceRecord, ...], confirmation: Conf
         risks.append("negative_capital_flows")
     if not records:
         risks.append("insufficient_historical_confirmation")
-    score = min(1.0, contradiction * 0.25 + dependency * 0.2 + missing * 0.2 + divergence.severity * 0.2 + (0.15 if temporal.historical_depth < 3 else 0.0))
+    score = min(
+        1.0,
+        contradiction * 0.25
+        + dependency * 0.2
+        + missing * 0.2
+        + divergence.severity * 0.2
+        + (0.15 if temporal.historical_depth < 3 else 0.0),
+    )
     return RiskState(tuple(risks), score, f"{len(risks)} timing-specific risks identified.")

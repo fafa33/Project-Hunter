@@ -105,4 +105,3 @@ def _direction(value: float, previous: float | None) -> str:
     if delta <= -0.05:
         return "weakening"
     return "stable"
-

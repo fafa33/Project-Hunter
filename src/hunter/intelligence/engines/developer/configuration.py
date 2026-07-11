@@ -39,7 +39,9 @@ class DeveloperEngineConfigurationLoader:
             core_repositories=tuple(str(item) for item in raw.get("core_repositories", ())),
             include_archived_repositories=bool(raw.get("include_archived_repositories", False)),
             filter_bots=bool(raw.get("filter_bots", True)),
-            bot_patterns=tuple(str(item).lower() for item in raw.get("bot_patterns", ("bot", "[bot]", "dependabot", "renovate"))),
+            bot_patterns=tuple(
+                str(item).lower() for item in raw.get("bot_patterns", ("bot", "[bot]", "dependabot", "renovate"))
+            ),
             freshness_days=int(raw.get("freshness_days", 45)),
             recent_window_days=int(raw.get("recent_window_days", 30)),
             minimum_historical_depth_days=int(raw.get("minimum_historical_depth_days", 90)),

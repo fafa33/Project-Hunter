@@ -16,7 +16,7 @@ class Evidence:
     freshness: float
     reference: str
     raw_data: Any
-    metadata: IntelligenceMetadata = field(default_factory=IntelligenceMetadata)
+    metadata: IntelligenceMetadata | dict[str, Any] = field(default_factory=IntelligenceMetadata)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "metadata", normalize_metadata(self.metadata))

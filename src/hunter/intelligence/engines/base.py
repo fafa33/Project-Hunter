@@ -62,4 +62,3 @@ class BaseIntelligenceEngine(ABC):
     @abstractmethod
     def health_check(self) -> bool:
         raise NotImplementedError
-

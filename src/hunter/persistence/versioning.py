@@ -33,4 +33,3 @@ class MigrationPlan(Protocol):
 
     def describe(self) -> MigrationDescriptor:
         raise NotImplementedError
-
