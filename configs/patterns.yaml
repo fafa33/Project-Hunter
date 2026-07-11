@@ -1,0 +1,54 @@
+enabled: true
+top_match_limit: 5
+minimum_source_records: 1
+missing_evidence_penalty: 0.2
+historical_weight: 0.65
+context_weight: 0.35
+
+dimension_weights:
+  fundamentals: 0.09
+  valuation: 0.08
+  revenue: 0.06
+  developer_activity: 0.09
+  tokenomics: 0.06
+  whale_behaviour: 0.07
+  macro_alignment: 0.07
+  future_demand: 0.08
+  opportunity_timing: 0.1
+  probability: 0.1
+  validation_health: 0.07
+  backtesting_reliability: 0.06
+  evidence_quality: 0.04
+  risk: 0.02
+  confidence: 0.01
+
+label_thresholds:
+  Insufficient Evidence: 0.0
+  No Reliable Match: 0.2
+  Weak Match: 0.35
+  Moderate Match: 0.5
+  Strong Match: 0.68
+  Very Strong Match: 0.82
+  Exceptional Match: 0.92
+
+context_weights:
+  current_macro_conditions: 0.22
+  current_technology_trends: 0.18
+  current_capital_rotation: 0.18
+  current_institutional_adoption: 0.14
+  current_regulatory_environment: 0.12
+  current_future_demand: 0.10
+  current_sector_strength: 0.06
+
+engine_dimension_map:
+  macro: macro_alignment
+  future: future_demand
+  demand: future_demand
+  whale: whale_behaviour
+  developer: developer_activity
+  validation: validation_health
+  valuation: valuation
+  comparative: valuation
+  mispricing: valuation
+  asymmetry: risk
+  probability: probability

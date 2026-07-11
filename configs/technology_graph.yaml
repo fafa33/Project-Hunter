@@ -1,0 +1,54 @@
+categories:
+  - Artificial Intelligence
+  - Agentic AI
+  - Oracle
+  - Identity
+  - RWA
+  - Stablecoin
+  - Storage
+  - Compute
+  - GPU Networks
+  - Data Availability
+  - Cross-chain
+  - Settlement
+  - Payments
+  - Privacy
+  - Security
+  - Cybersecurity
+  - Compliance
+  - Infrastructure
+  - DePIN
+  - Tokenization
+  - Prediction Markets
+  - Gaming
+  - Social
+  - IoT
+  - Robotics
+  - Quantum
+  - Cloud Infrastructure
+
+dependencies:
+  - from: Agentic AI
+    to: Oracle
+  - from: Oracle
+    to: Identity
+  - from: Identity
+    to: Payments
+  - from: Payments
+    to: Settlement
+  - from: RWA
+    to: Oracle
+  - from: RWA
+    to: Identity
+  - from: RWA
+    to: Stablecoin
+  - from: Stablecoin
+    to: Compliance
+  - from: Compliance
+    to: Settlement
+  - from: GPU Networks
+    to: Compute
+  - from: DePIN
+    to: IoT
+  - from: Data Availability
+    to: Settlement

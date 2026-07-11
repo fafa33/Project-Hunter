@@ -23,6 +23,8 @@
 - Intelligence Fusion Layer: complete.
 - Opportunity Timing Engine: complete.
 - Probability Engine: complete.
+- Pattern Matching Engine: complete.
+- Technology Necessity and Capital Rotation Engine: complete.
 - Automation and Scheduler Layer: complete.
 - Dashboard Foundation (Phase 1): complete.
 

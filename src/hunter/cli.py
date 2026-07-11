@@ -6,7 +6,9 @@ from pathlib import Path
 from hunter.automation import AutomationJobRunner, AutomationScheduler, load_automation_config
 from hunter.dashboard import DashboardDataProvider, HtmlDashboardRenderer, load_dashboard_config
 from hunter.dashboard.exceptions import DashboardPersistenceError
+from hunter.necessity.ranking import rank_necessity_assessments
 from hunter.opportunity.ranking import rank_opportunities
+from hunter.patterns.ranking import rank_pattern_assessments
 from hunter.persistence.sql import SessionFactory, UnitOfWork, create_schema, create_sqlite_engine
 from hunter.probability.ranking import rank_probability_assessments
 
@@ -36,13 +38,30 @@ def main(argv: list[str] | None = None) -> int:
     rank = sub.add_parser("rank")
     rank.add_argument(
         "--sort",
-        choices=("opportunity", "conviction", "probability", "robustness", "consensus"),
+        choices=(
+            "opportunity",
+            "conviction",
+            "probability",
+            "robustness",
+            "consensus",
+            "similarity",
+            "historical",
+            "pattern",
+            "necessity",
+            "gap",
+            "rotation",
+            "dependency",
+        ),
         default="opportunity",
     )
     args = parser.parse_args(argv)
     if args.command == "rank":
         if args.sort in {"probability", "robustness", "consensus"}:
             rank_probability_assessments((), sort=args.sort)
+        elif args.sort in {"similarity", "historical", "pattern"}:
+            rank_pattern_assessments((), sort=args.sort)
+        elif args.sort in {"necessity", "gap", "rotation", "dependency"}:
+            rank_necessity_assessments((), sort=args.sort)
         else:
             rank_opportunities((), sort=args.sort)
         return 0

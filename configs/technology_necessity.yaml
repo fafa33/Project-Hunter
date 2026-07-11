@@ -1,0 +1,43 @@
+enabled: true
+minimum_source_records: 1
+missing_evidence_penalty: 0.2
+
+component_weights:
+  technology_necessity: 0.12
+  infrastructure_criticality: 0.11
+  replacement_difficulty: 0.08
+  adoption_momentum: 0.08
+  developer_adoption: 0.07
+  enterprise_adoption: 0.06
+  institutional_adoption: 0.06
+  government_adoption: 0.04
+  market_awareness: 0.06
+  technology_maturity: 0.06
+  capital_attraction: 0.08
+  future_relevance: 0.10
+  dependency_strength: 0.06
+  evidence_confidence: 0.02
+
+label_thresholds:
+  Insufficient Evidence: 0.0
+  Low Necessity: 0.15
+  Legacy: 0.25
+  Declining: 0.35
+  Mature: 0.45
+  Established: 0.55
+  Growing Necessity: 0.65
+  Emerging Necessity: 0.75
+  Critical Infrastructure: 0.86
+
+engine_component_map:
+  macro: technology_necessity
+  future: future_relevance
+  demand: future_relevance
+  developer: developer_adoption
+  whale: capital_attraction
+  validation: technology_maturity
+  probability: technology_necessity
+  opportunity: adoption_momentum
+  pattern: market_awareness
+  valuation: market_awareness
+  mispricing: market_awareness

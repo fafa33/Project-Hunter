@@ -1,0 +1,215 @@
+projects:
+  - project_id: bitcoin
+    name: Bitcoin
+    outcome: successful
+    dimensions: &strong_store
+      fundamentals: 0.92
+      valuation: 0.72
+      revenue: 0.35
+      developer_activity: 0.82
+      tokenomics: 0.95
+      whale_behaviour: 0.78
+      macro_alignment: 0.82
+      future_demand: 0.88
+      opportunity_timing: 0.76
+      probability: 0.86
+      validation_health: 0.92
+      backtesting_reliability: 0.88
+      evidence_quality: 0.9
+      risk: 0.66
+      confidence: 0.9
+  - project_id: ethereum
+    name: Ethereum
+    outcome: successful
+    dimensions: &strong_platform
+      fundamentals: 0.9
+      valuation: 0.7
+      revenue: 0.78
+      developer_activity: 0.95
+      tokenomics: 0.74
+      whale_behaviour: 0.73
+      macro_alignment: 0.77
+      future_demand: 0.92
+      opportunity_timing: 0.78
+      probability: 0.88
+      validation_health: 0.9
+      backtesting_reliability: 0.86
+      evidence_quality: 0.88
+      risk: 0.64
+      confidence: 0.9
+  - project_id: chainlink
+    name: Chainlink
+    outcome: successful
+    dimensions:
+      <<: *strong_platform
+      revenue: 0.62
+      tokenomics: 0.68
+      future_demand: 0.86
+  - project_id: solana
+    name: Solana
+    outcome: successful
+    dimensions:
+      <<: *strong_platform
+      valuation: 0.66
+      whale_behaviour: 0.7
+      risk: 0.55
+  - project_id: bnb
+    name: BNB
+    outcome: successful
+    dimensions:
+      <<: *strong_platform
+      developer_activity: 0.68
+      revenue: 0.86
+  - project_id: polygon
+    name: Polygon
+    outcome: successful
+    dimensions:
+      <<: *strong_platform
+      valuation: 0.64
+      future_demand: 0.75
+  - project_id: arbitrum
+    name: Arbitrum
+    outcome: successful
+    dimensions:
+      <<: *strong_platform
+      tokenomics: 0.6
+      revenue: 0.64
+  - project_id: optimism
+    name: Optimism
+    outcome: successful
+    dimensions:
+      <<: *strong_platform
+      tokenomics: 0.62
+      revenue: 0.62
+  - project_id: aave
+    name: Aave
+    outcome: successful
+    dimensions:
+      <<: *strong_platform
+      revenue: 0.74
+      validation_health: 0.86
+  - project_id: maker
+    name: Maker
+    outcome: successful
+    dimensions:
+      <<: *strong_platform
+      revenue: 0.82
+      macro_alignment: 0.72
+  - project_id: uniswap
+    name: Uniswap
+    outcome: successful
+    dimensions:
+      <<: *strong_platform
+      revenue: 0.8
+      whale_behaviour: 0.66
+  - project_id: render
+    name: Render
+    outcome: successful
+    dimensions:
+      <<: *strong_platform
+      future_demand: 0.9
+      revenue: 0.58
+  - project_id: bittensor
+    name: Bittensor
+    outcome: successful
+    dimensions:
+      <<: *strong_platform
+      future_demand: 0.93
+      risk: 0.5
+  - project_id: filecoin
+    name: Filecoin
+    outcome: mixed
+    dimensions:
+      <<: *strong_store
+      valuation: 0.54
+      tokenomics: 0.48
+      probability: 0.56
+  - project_id: arweave
+    name: Arweave
+    outcome: successful
+    dimensions:
+      <<: *strong_store
+      revenue: 0.42
+      developer_activity: 0.7
+  - project_id: helium
+    name: Helium
+    outcome: mixed
+    dimensions:
+      <<: *strong_platform
+      validation_health: 0.48
+      evidence_quality: 0.58
+      probability: 0.5
+  - project_id: akash
+    name: Akash
+    outcome: successful
+    dimensions:
+      <<: *strong_platform
+      future_demand: 0.84
+      revenue: 0.52
+  - project_id: api3
+    name: API3
+    outcome: mixed
+    dimensions:
+      <<: *strong_platform
+      developer_activity: 0.58
+      probability: 0.52
+  - project_id: pyth
+    name: Pyth
+    outcome: successful
+    dimensions:
+      <<: *strong_platform
+      future_demand: 0.82
+      tokenomics: 0.6
+  - project_id: sui
+    name: Sui
+    outcome: successful
+    dimensions:
+      <<: *strong_platform
+      developer_activity: 0.84
+      tokenomics: 0.56
+  - project_id: aptos
+    name: Aptos
+    outcome: mixed
+    dimensions:
+      <<: *strong_platform
+      tokenomics: 0.46
+      valuation: 0.48
+      probability: 0.5
+  - project_id: ethena
+    name: Ethena
+    outcome: successful
+    dimensions:
+      <<: *strong_platform
+      revenue: 0.84
+      macro_alignment: 0.74
+      risk: 0.52
+  - project_id: hyperliquid
+    name: Hyperliquid
+    outcome: successful
+    dimensions:
+      <<: *strong_platform
+      revenue: 0.88
+      whale_behaviour: 0.82
+  - project_id: weak-tokenomics-pattern
+    name: Weak Tokenomics Pattern
+    outcome: unsuccessful
+    warning_patterns:
+      - weak_tokenomics
+      - poor_adoption
+      - declining_whale_support
+    dimensions:
+      fundamentals: 0.38
+      valuation: 0.28
+      revenue: 0.22
+      developer_activity: 0.3
+      tokenomics: 0.12
+      whale_behaviour: 0.2
+      macro_alignment: 0.42
+      future_demand: 0.26
+      opportunity_timing: 0.22
+      probability: 0.18
+      validation_health: 0.28
+      backtesting_reliability: 0.2
+      evidence_quality: 0.36
+      risk: 0.18
+      confidence: 0.34

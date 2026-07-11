@@ -1,0 +1,8 @@
+weights:
+  capital_entering: 0.24
+  capital_leaving_inverse: 0.12
+  institutional_rotation: 0.16
+  developer_rotation: 0.14
+  narrative_rotation: 0.12
+  infrastructure_rotation: 0.14
+  sector_rotation: 0.08
