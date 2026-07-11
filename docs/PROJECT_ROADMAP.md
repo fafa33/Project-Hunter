@@ -2,7 +2,8 @@
 
 ## Current Milestone State
 
-- Project Hunter V1: fully validated.
+- Project Hunter V1: OFFICIALLY RELEASED.
+- Project Hunter V1 baseline: FROZEN.
 - Project Constitution: complete.
 - Plugin Architecture: complete.
 - Pipeline Orchestrator: complete.
@@ -32,11 +33,17 @@
 
 ## Next Milestone
 
-Project Hunter V1 analytical roadmap is complete and fully validated.
+Project Hunter V1 analytical roadmap is complete, fully validated, officially released, and frozen.
 
-Next implementation milestone: Real-world validation.
+Next development track: Project Hunter V2.
 
-Implementation should wait for the Real-world validation specification.
+Do not implement V2 until a dedicated V2 milestone specification is provided.
+
+## V2 Roadmap
+
+- Technology Dependency Engine.
+- Economic Dependency Graph.
+- Scenario Simulation Engine.
 
 ## Deferred Milestones
 
