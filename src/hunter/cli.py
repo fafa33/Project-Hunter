@@ -12,7 +12,8 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command")
     automation = sub.add_parser("automation")
     automation_sub = automation.add_subparsers(dest="automation_command")
-    automation_sub.add_parser("start")
+    start = automation_sub.add_parser("start")
+    start.add_argument("--max-iterations", type=int, default=1)
     automation_sub.add_parser("status")
     automation_sub.add_parser("list-jobs")
     show_job = automation_sub.add_parser("show-job")
@@ -27,7 +28,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     config = load_automation_config(Path(args.config))
     runner = AutomationJobRunner()
-    scheduler = AutomationScheduler(config.jobs, runner)
+    scheduler = AutomationScheduler(config.jobs, runner, polling_interval_seconds=config.polling_interval_seconds)
     if args.automation_command == "list-jobs":
         for job in config.jobs:
             print(f"{job.job_id}\t{job.name}\t{'enabled' if job.enabled else 'disabled'}")
@@ -41,7 +42,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{run.automation_run_id}\t{run.status}")
         return 0 if run.status in {"succeeded", "partial"} else 2
     if args.automation_command == "start":
-        scheduler.start()
+        scheduler.run_loop(max_iterations=args.max_iterations)
         print("scheduler started")
         return 0
     if args.automation_command == "status":
@@ -49,7 +50,12 @@ def main(argv: list[str] | None = None) -> int:
         print(f"jobs={len(status.jobs)} active_runs={len(status.active_runs)} events={len(status.events)}")
         return 0
     if args.automation_command == "cancel":
-        print(f"cancel requested: {args.run_id}")
+        try:
+            run = runner.cancel_by_id(args.run_id, jobs=config.jobs)
+        except LookupError as exc:
+            print(str(exc))
+            return 2
+        print(f"{run.automation_run_id}\t{run.status}")
         return 0
     automation.print_help()
     return 1

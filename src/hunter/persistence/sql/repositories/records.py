@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import UTC, datetime
 
 from hunter.persistence.records import (
     AutomationJobRecord,
@@ -47,10 +48,25 @@ class SQLAutomationJobRepository(SQLRecordRepository[AutomationJobRecord]):
     record_type = "automation-job"
     record_class = AutomationJobRecord
 
+    def _canonical_hash_payload(self, record: AutomationJobRecord) -> str:
+        definition_time = datetime(1970, 1, 1, tzinfo=UTC)
+        definition = replace(record, created_at=definition_time, effective_at=definition_time)
+        return record_to_json(definition)
+
 
 class SQLAutomationRunRepository(SQLRecordRepository[AutomationRunRecord]):
     record_type = "automation-run"
     record_class = AutomationRunRecord
+
+    def _canonical_hash_payload(self, record: AutomationRunRecord) -> str:
+        state = replace(
+            record,
+            created_at=record.scheduled_for,
+            effective_at=record.scheduled_for,
+            started_at=None,
+            finished_at=None,
+        )
+        return record_to_json(state)
 
 
 class SQLEvidenceRepository(SQLRecordRepository[EvidenceRecord]):

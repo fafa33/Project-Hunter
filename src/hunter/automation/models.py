@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from types import MappingProxyType
 from typing import Literal
 from zoneinfo import ZoneInfo
 
 from hunter.execution.canonicalization import normalize
+from hunter.intelligence.fusion.models import FusionTarget
 
 AutomationScheduleType = Literal["hourly", "every_6_hours", "daily", "weekly", "cron", "once"]
 AutomationRunStatus = Literal["scheduled", "claimed", "running", "succeeded", "partial", "failed", "cancelled", "skipped", "blocked"]
@@ -96,7 +99,7 @@ class AutomationJob:
     timeout_seconds: int | None = None
     concurrency_policy: ConcurrencyPolicy = field(default_factory=ConcurrencyPolicy)
     job_kind: AutomationJobKind = "current_state_pipeline"
-    metadata: dict[str, str | int | float | bool | None] = field(default_factory=dict)
+    metadata: Mapping[str, str | int | float | bool | None] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         for name in ("job_id", "name", "timezone", "run_type", "persistence_policy", "job_kind"):
@@ -105,8 +108,8 @@ class AutomationJob:
         if self.timeout_seconds is not None and self.timeout_seconds <= 0:
             msg = "timeout_seconds must be positive"
             raise ValueError(msg)
-        normalize(self.metadata)
-        object.__setattr__(self, "metadata", {str(key): value for key, value in self.metadata.items()})
+        normalize(dict(self.metadata))
+        object.__setattr__(self, "metadata", MappingProxyType({str(key): value for key, value in self.metadata.items()}))
 
     def lock_key(self) -> str:
         return f"{self.job_id}:{self.target.target_type}:{self.target.target_id}"
@@ -138,7 +141,7 @@ class AutomationRun:
     finished_at: datetime | None = None
     error_summary: str | None = None
     warning_summary: str | None = None
-    metadata: dict[str, str | int | float | bool | None] = field(default_factory=dict)
+    metadata: Mapping[str, str | int | float | bool | None] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         _text("automation_run_id", self.automation_run_id)
@@ -148,8 +151,38 @@ class AutomationRun:
             value = getattr(self, name)
             if value is not None:
                 object.__setattr__(self, name, _aware(name, value))
-        normalize(self.metadata)
-        object.__setattr__(self, "metadata", {str(key): value for key, value in self.metadata.items()})
+        normalize(dict(self.metadata))
+        object.__setattr__(self, "metadata", MappingProxyType({str(key): value for key, value in self.metadata.items()}))
+
+
+@dataclass(frozen=True)
+class AutomationReplayContext:
+    mode: str
+    as_of: datetime | None
+
+    def __post_init__(self) -> None:
+        if self.as_of is not None:
+            object.__setattr__(self, "as_of", _aware("as_of", self.as_of))
+        if self.mode in {"replay", "backtest"} and self.as_of is None:
+            msg = "replay and backtest execution requires explicit as_of"
+            raise ValueError(msg)
+
+
+@dataclass(frozen=True)
+class AutomationPipelinePlan:
+    job_id: str
+    job_kind: AutomationJobKind
+    target: FusionTarget
+    run_type: str
+    selected_engines: tuple[str, ...]
+    run_intelligence: bool
+    run_fusion: bool
+    run_opportunity_timing: bool
+    persistence_policy: str
+    replay: AutomationReplayContext
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "selected_engines", tuple(sorted(str(item) for item in self.selected_engines)))
 
 
 def next_scheduled_at(schedule: AutomationSchedule, *, after: datetime, timezone: str) -> datetime:
