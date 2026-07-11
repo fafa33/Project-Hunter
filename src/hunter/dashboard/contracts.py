@@ -6,7 +6,9 @@ from hunter.dashboard.models import DashboardView
 from hunter.persistence.repositories import (
     AutomationJobRepository,
     AutomationRunRepository,
+    CycleChampionSnapshotRepository,
     FusedIntelligenceRepository,
+    InvestmentCommitteeAssessmentRepository,
     OperationalAttemptRepository,
     OpportunityTimingAssessmentRepository,
     PipelineRunRepository,
@@ -26,6 +28,12 @@ class DashboardRepositoryProvider(Protocol):
         raise NotImplementedError
 
     def automation_runs(self) -> AutomationRunRepository:
+        raise NotImplementedError
+
+    def investment_committee_assessments(self) -> InvestmentCommitteeAssessmentRepository:
+        raise NotImplementedError
+
+    def cycle_champion_snapshots(self) -> CycleChampionSnapshotRepository:
         raise NotImplementedError
 
     def fused_intelligence(self) -> FusedIntelligenceRepository:

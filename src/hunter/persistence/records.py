@@ -167,6 +167,113 @@ class AutomationRunRecord(BasePersistenceRecord):
 
 
 @dataclass(frozen=True, kw_only=True)
+class CommitteeVoteRecord(BasePersistenceRecord):
+    record_type: ClassVar[str] = "committee-vote"
+
+    assessment_id: str
+    project_id: str
+    engine_name: str
+    vote: str
+    normalized_contribution: float
+    source_score: float
+    source_confidence: float
+    source_timestamp: datetime | None
+    freshness_state: str
+    explanation: str
+    supporting_references: tuple[str, ...] = ()
+    opposing_references: tuple[str, ...] = ()
+    missing_fields: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        for name in ("assessment_id", "project_id", "engine_name", "vote", "freshness_state", "explanation"):
+            _require_text(name, getattr(self, name))
+        for name in ("normalized_contribution", "source_score", "source_confidence"):
+            _range(name, getattr(self, name))
+        if self.source_timestamp is not None:
+            _require_aware_datetime("source_timestamp", self.source_timestamp)
+            object.__setattr__(self, "source_timestamp", self.source_timestamp.astimezone(UTC))
+        for name in ("supporting_references", "opposing_references", "missing_fields"):
+            object.__setattr__(self, name, tuple(sorted(str(item) for item in getattr(self, name))))
+
+
+@dataclass(frozen=True, kw_only=True)
+class InvestmentCommitteeAssessmentRecord(BasePersistenceRecord):
+    record_type: ClassVar[str] = "investment-committee-assessment"
+
+    project_id: str
+    eligibility_state: str
+    decision: str
+    approval_score: float
+    opposition_score: float
+    consensus_score: float
+    conflict_score: float
+    evidence_robustness: float
+    committee_confidence: float
+    thesis_fragility: float
+    rank: int
+    vote_ids: tuple[str, ...]
+    positive_drivers: tuple[str, ...]
+    negative_drivers: tuple[str, ...]
+    conflicts: tuple[str, ...]
+    abstentions: tuple[str, ...]
+    risks: tuple[str, ...]
+    invalidation_conditions: tuple[str, ...]
+    runner_up_comparison: str
+    explanation: tuple[str, ...]
+    source_record_ids: tuple[str, ...]
+    previous_assessment_id: str | None = None
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        for name in ("project_id", "eligibility_state", "decision", "runner_up_comparison"):
+            _require_text(name, getattr(self, name))
+        for name in (
+            "approval_score",
+            "opposition_score",
+            "consensus_score",
+            "conflict_score",
+            "evidence_robustness",
+            "committee_confidence",
+            "thesis_fragility",
+        ):
+            _range(name, getattr(self, name))
+        for name in (
+            "vote_ids",
+            "positive_drivers",
+            "negative_drivers",
+            "conflicts",
+            "abstentions",
+            "risks",
+            "invalidation_conditions",
+            "explanation",
+            "source_record_ids",
+        ):
+            object.__setattr__(self, name, tuple(sorted(str(item) for item in getattr(self, name))))
+
+
+@dataclass(frozen=True, kw_only=True)
+class CycleChampionSnapshotRecord(BasePersistenceRecord):
+    record_type: ClassVar[str] = "cycle-champion-snapshot"
+
+    selected_project_id: str | None
+    runner_up_project_id: str | None
+    decision: str
+    committee_confidence: float
+    consensus_score: float
+    lead_margin: float
+    selection_reason: str
+    no_selection_reason: str | None = None
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        for name in ("decision", "selection_reason"):
+            _require_text(name, getattr(self, name))
+        for name in ("committee_confidence", "consensus_score", "lead_margin"):
+            _range(name, getattr(self, name))
+
+
+@dataclass(frozen=True, kw_only=True)
 class EvidenceRecord(BasePersistenceRecord):
     record_type: ClassVar[str] = "evidence"
 
@@ -520,6 +627,9 @@ PersistenceRecord = (
     | OperationalAttemptRecord
     | AutomationJobRecord
     | AutomationRunRecord
+    | CommitteeVoteRecord
+    | InvestmentCommitteeAssessmentRecord
+    | CycleChampionSnapshotRecord
     | EvidenceRecord
     | SignalRecord
     | ObservationRecord
@@ -540,6 +650,9 @@ RECORD_TYPES: dict[str, type[PersistenceRecord]] = {
         OperationalAttemptRecord,
         AutomationJobRecord,
         AutomationRunRecord,
+        CommitteeVoteRecord,
+        InvestmentCommitteeAssessmentRecord,
+        CycleChampionSnapshotRecord,
         EvidenceRecord,
         SignalRecord,
         ObservationRecord,

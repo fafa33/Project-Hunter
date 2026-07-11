@@ -4,6 +4,11 @@ import argparse
 from pathlib import Path
 
 from hunter.automation import AutomationJobRunner, AutomationScheduler, load_automation_config
+from hunter.committee import (
+    InvestmentCommitteeEngine,
+    load_investment_committee_config,
+)
+from hunter.committee.ranking import rank_investment_committee
 from hunter.dashboard import DashboardDataProvider, HtmlDashboardRenderer, load_dashboard_config
 from hunter.dashboard.exceptions import DashboardPersistenceError
 from hunter.necessity.ranking import rank_necessity_assessments
@@ -35,6 +40,17 @@ def main(argv: list[str] | None = None) -> int:
     build_dashboard = dashboard_sub.add_parser("build")
     build_dashboard.add_argument("--output")
     build_dashboard.add_argument("--sqlite-path")
+    committee = sub.add_parser("committee")
+    committee.add_argument("--committee-config", default="configs/investment_committee.yaml")
+    committee_sub = committee.add_subparsers(dest="committee_command")
+    committee_evaluate = committee_sub.add_parser("evaluate")
+    committee_evaluate.add_argument("project_slug", nargs="?")
+    committee_report = committee_sub.add_parser("report")
+    committee_report.add_argument("project_slug", nargs="?")
+    committee_sub.add_parser("ranking")
+    committee_sub.add_parser("champion")
+    committee_history = committee_sub.add_parser("history")
+    committee_history.add_argument("project_slug", nargs="?")
     rank = sub.add_parser("rank")
     rank.add_argument(
         "--sort",
@@ -51,12 +67,18 @@ def main(argv: list[str] | None = None) -> int:
             "gap",
             "rotation",
             "dependency",
+            "committee",
+            "committee-confidence",
+            "evidence-robustness",
+            "thesis-fragility",
         ),
         default="opportunity",
     )
     args = parser.parse_args(argv)
     if args.command == "rank":
-        if args.sort in {"probability", "robustness", "consensus"}:
+        if args.sort in {"committee", "committee-confidence", "evidence-robustness", "thesis-fragility"}:
+            rank_investment_committee((), sort=args.sort)
+        elif args.sort in {"probability", "robustness", "consensus"}:
             rank_probability_assessments((), sort=args.sort)
         elif args.sort in {"similarity", "historical", "pattern"}:
             rank_pattern_assessments((), sort=args.sort)
@@ -67,6 +89,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "dashboard":
         return _dashboard(args)
+    if args.command == "committee":
+        return _committee(args)
     if args.command != "automation":
         parser.print_help()
         return 1
@@ -121,6 +145,31 @@ def _dashboard(args: object) -> int:
     output.write_text(HtmlDashboardRenderer().render(view))
     print(str(output))
     return 0
+
+
+def _committee(args: object) -> int:
+    load_investment_committee_config(Path(args.committee_config))
+    command = getattr(args, "committee_command", None)
+    project = getattr(args, "project_slug", None)
+    if command == "evaluate":
+        print(f"committee evaluation requested for {project or 'all projects'}")
+        return 0
+    if command == "report":
+        print("No persisted committee assessment available")
+        return 0
+    if command == "ranking":
+        InvestmentCommitteeEngine().select_champion(())
+        print("No qualified candidate")
+        return 0
+    if command == "champion":
+        snapshot, _ = InvestmentCommitteeEngine().select_champion(())
+        print(snapshot.no_selection_reason or snapshot.selection_reason)
+        return 0
+    if command == "history":
+        print(f"committee history for {project or 'all projects'}")
+        return 0
+    print("committee command required")
+    return 1
 
 
 def _job(jobs: tuple[object, ...], job_id: str):

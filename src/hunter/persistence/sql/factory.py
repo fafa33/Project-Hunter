@@ -5,12 +5,15 @@ from sqlalchemy.orm import Session
 from hunter.persistence.sql.repositories import (
     SQLAutomationJobRepository,
     SQLAutomationRunRepository,
+    SQLCommitteeVoteRepository,
     SQLConfigurationRepository,
+    SQLCycleChampionSnapshotRepository,
     SQLEngineManifestRepository,
     SQLEvidenceRepository,
     SQLFusedIntelligenceRepository,
     SQLInsightRepository,
     SQLIntelligenceRepository,
+    SQLInvestmentCommitteeAssessmentRepository,
     SQLObservationRepository,
     SQLOperationalAttemptRepository,
     SQLOpportunityTimingAssessmentRepository,
@@ -36,6 +39,15 @@ class RepositoryFactory:
 
     def automation_runs(self) -> SQLAutomationRunRepository:
         return SQLAutomationRunRepository(self._session)
+
+    def committee_votes(self) -> SQLCommitteeVoteRepository:
+        return SQLCommitteeVoteRepository(self._session)
+
+    def investment_committee_assessments(self) -> SQLInvestmentCommitteeAssessmentRepository:
+        return SQLInvestmentCommitteeAssessmentRepository(self._session)
+
+    def cycle_champion_snapshots(self) -> SQLCycleChampionSnapshotRepository:
+        return SQLCycleChampionSnapshotRepository(self._session)
 
     def evidence(self) -> SQLEvidenceRepository:
         return SQLEvidenceRepository(self._session)

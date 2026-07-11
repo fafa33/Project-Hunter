@@ -18,6 +18,7 @@ class DashboardConfig:
     include_pipeline: bool = True
     include_fusion: bool = True
     include_opportunity_timing: bool = True
+    include_committee: bool = True
 
     def __post_init__(self) -> None:
         if self.max_rows < 1:
@@ -44,4 +45,5 @@ def dashboard_config_from_mapping(payload: dict[str, Any]) -> DashboardConfig:
         include_pipeline=bool(payload.get("include_pipeline", True)),
         include_fusion=bool(payload.get("include_fusion", True)),
         include_opportunity_timing=bool(payload.get("include_opportunity_timing", True)),
+        include_committee=bool(payload.get("include_committee", True)),
     )

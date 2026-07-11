@@ -71,6 +71,7 @@ def _job_from_mapping(payload: dict[str, Any], *, default_timezone: str) -> Auto
             run_intelligence=bool(options_payload.get("run_intelligence", True)),
             run_fusion=bool(options_payload.get("run_fusion", False)),
             run_opportunity_timing=bool(options_payload.get("run_opportunity_timing", False)),
+            run_investment_committee=bool(options_payload.get("run_investment_committee", False)),
             selected_engines=tuple(str(item) for item in options_payload.get("selected_engines", ())),
             generate_reports=bool(options_payload.get("generate_reports", False)),
             evaluate_alerts=bool(options_payload.get("evaluate_alerts", False)),

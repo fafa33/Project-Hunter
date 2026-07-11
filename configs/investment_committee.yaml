@@ -1,0 +1,56 @@
+engine_weights:
+  valuation: 0.06
+  mispricing: 0.07
+  asymmetry: 0.06
+  whale: 0.06
+  macro: 0.07
+  future_demand: 0.08
+  opportunity: 0.10
+  probability: 0.12
+  pattern: 0.08
+  technology_necessity: 0.10
+  capital_rotation: 0.07
+  validation: 0.06
+  backtesting: 0.04
+  risk: 0.02
+  evidence_quality: 0.01
+
+eligibility:
+  minimum_evidence_completeness: 0.5
+  minimum_evidence_freshness: 0.5
+  minimum_validation_health: 0.45
+  minimum_confidence: 0.45
+  maximum_missing_evidence_ratio: 0.35
+  maximum_risk: 0.7
+  minimum_available_engines: 5
+  maximum_critical_alert_count: 0
+  minimum_probability_reliability: 0.45
+  minimum_opportunity_confidence: 0.45
+  minimum_necessity_confidence: 0.45
+
+winner_minimums:
+  committee_confidence: 0.68
+  consensus: 0.62
+  evidence_robustness: 0.6
+  probability: 0.58
+  opportunity: 0.55
+  necessity: 0.55
+  maximum_conflict: 0.35
+  maximum_risk: 0.65
+  lead_margin: 0.05
+
+approve_threshold: 0.6
+strong_approve_threshold: 0.78
+oppose_threshold: 0.4
+strong_oppose_threshold: 0.22
+stale_after_days: 30
+low_confidence_threshold: 0.35
+maximum_displayed_contributors: 5
+tie_breaking_order:
+  - committee_confidence
+  - consensus_score
+  - evidence_robustness
+  - probability
+  - opportunity
+  - technology_necessity
+  - project_id

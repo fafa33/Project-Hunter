@@ -53,6 +53,7 @@ def pipeline_plan_for_job(job: AutomationJob, *, scheduled_for: datetime) -> Aut
         run_intelligence=job.pipeline_options.run_intelligence,
         run_fusion=job.pipeline_options.run_fusion,
         run_opportunity_timing=job.pipeline_options.run_opportunity_timing,
+        run_investment_committee=job.pipeline_options.run_investment_committee,
         persistence_policy=job.persistence_policy,
         replay=replay,
     )

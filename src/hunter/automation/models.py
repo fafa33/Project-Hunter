@@ -59,6 +59,7 @@ class PipelineOptions:
     run_intelligence: bool = True
     run_fusion: bool = False
     run_opportunity_timing: bool = False
+    run_investment_committee: bool = False
     selected_engines: tuple[str, ...] = ()
     generate_reports: bool = False
     evaluate_alerts: bool = False
@@ -184,6 +185,7 @@ class AutomationPipelinePlan:
     run_intelligence: bool
     run_fusion: bool
     run_opportunity_timing: bool
+    run_investment_committee: bool
     persistence_policy: str
     replay: AutomationReplayContext
 

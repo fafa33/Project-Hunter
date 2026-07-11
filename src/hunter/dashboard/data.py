@@ -9,6 +9,7 @@ from hunter.persistence.models import QuerySpec
 from hunter.persistence.records import (
     AutomationRunRecord,
     FusedIntelligenceRecord,
+    InvestmentCommitteeAssessmentRecord,
     OperationalAttemptRecord,
     OpportunityTimingAssessmentRecord,
     PipelineRunRecord,
@@ -34,6 +35,12 @@ class DashboardDataProvider:
             panels.append(
                 _opportunity_panel(
                     self.repositories.opportunity_timing_assessments().query(_latest(self.config.max_rows))
+                )
+            )
+        if self.config.include_committee and hasattr(self.repositories, "investment_committee_assessments"):
+            panels.append(
+                _committee_panel(
+                    self.repositories.investment_committee_assessments().query(_latest(self.config.max_rows))
                 )
             )
         return DashboardView(
@@ -168,6 +175,38 @@ def _opportunity_panel(records: tuple[OpportunityTimingAssessmentRecord, ...]) -
             )
             for record in records
         ),
+    )
+
+
+def _committee_panel(records: tuple[InvestmentCommitteeAssessmentRecord, ...]) -> DashboardPanel:
+    return DashboardPanel(
+        panel_id="investment-committee",
+        title="Investment Committee",
+        kind="table",
+        metrics=(
+            DashboardMetric("total", "Total", len(records)),
+            DashboardMetric("latest_decision", "Latest Decision", records[0].decision if records else "none"),
+            DashboardMetric(
+                "latest_confidence", "Latest Confidence", records[0].committee_confidence if records else 0.0
+            ),
+        ),
+        rows=tuple(
+            DashboardRow(
+                row_id=record.id,
+                values={
+                    "assessment_id": record.id,
+                    "project": record.project_id,
+                    "eligibility": record.eligibility_state,
+                    "decision": record.decision,
+                    "confidence": record.committee_confidence,
+                    "consensus": record.consensus_score,
+                    "conflict": record.conflict_score,
+                    "effective_at": record.effective_at.isoformat(),
+                },
+            )
+            for record in records
+        ),
+        metadata={"source": "persisted committee assessments"},
     )
 
 

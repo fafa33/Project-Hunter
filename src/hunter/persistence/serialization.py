@@ -19,6 +19,7 @@ DATETIME_FIELDS = {
     "timestamp",
     "generated_at",
     "scheduled_for",
+    "source_timestamp",
 }
 
 TUPLE_FIELDS = {
@@ -60,6 +61,12 @@ TUPLE_FIELDS = {
     "record_ids",
     "engines",
     "selected_engines",
+    "vote_ids",
+    "positive_drivers",
+    "negative_drivers",
+    "conflicts",
+    "abstentions",
+    "risks",
 }
 
 

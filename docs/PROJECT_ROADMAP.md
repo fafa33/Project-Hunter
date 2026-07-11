@@ -25,14 +25,17 @@
 - Probability Engine: complete.
 - Pattern Matching Engine: complete.
 - Technology Necessity and Capital Rotation Engine: complete.
+- Investment Committee Engine: complete.
 - Automation and Scheduler Layer: complete.
 - Dashboard Foundation (Phase 1): complete.
 
 ## Next Milestone
 
-Next implementation milestone is pending specification.
+Project Hunter V1 analytical roadmap is complete.
 
-Implementation should wait for the next dedicated milestone specification.
+Next implementation milestone: Real-world validation.
+
+Implementation should wait for the Real-world validation specification.
 
 ## Deferred Milestones
 

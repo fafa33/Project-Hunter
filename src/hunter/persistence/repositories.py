@@ -6,12 +6,15 @@ from hunter.persistence.models import HistorySpec, QuerySpec, SnapshotSpec
 from hunter.persistence.records import (
     AutomationJobRecord,
     AutomationRunRecord,
+    CommitteeVoteRecord,
     ConfigurationRecord,
+    CycleChampionSnapshotRecord,
     EngineManifestRecord,
     EvidenceRecord,
     FusedIntelligenceRecord,
     InsightRecord,
     IntelligenceRecord,
+    InvestmentCommitteeAssessmentRecord,
     ObservationRecord,
     OperationalAttemptRecord,
     OpportunityTimingAssessmentRecord,
@@ -71,6 +74,18 @@ class AutomationJobRepository(Repository[AutomationJobRecord], Protocol):
 
 
 class AutomationRunRepository(Repository[AutomationRunRecord], Protocol):
+    pass
+
+
+class CommitteeVoteRepository(Repository[CommitteeVoteRecord], Protocol):
+    pass
+
+
+class InvestmentCommitteeAssessmentRepository(Repository[InvestmentCommitteeAssessmentRecord], Protocol):
+    pass
+
+
+class CycleChampionSnapshotRepository(Repository[CycleChampionSnapshotRecord], Protocol):
     pass
 
 

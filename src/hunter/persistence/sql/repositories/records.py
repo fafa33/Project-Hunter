@@ -6,12 +6,15 @@ from datetime import UTC, datetime
 from hunter.persistence.records import (
     AutomationJobRecord,
     AutomationRunRecord,
+    CommitteeVoteRecord,
     ConfigurationRecord,
+    CycleChampionSnapshotRecord,
     EngineManifestRecord,
     EvidenceRecord,
     FusedIntelligenceRecord,
     InsightRecord,
     IntelligenceRecord,
+    InvestmentCommitteeAssessmentRecord,
     ObservationRecord,
     OperationalAttemptRecord,
     OpportunityTimingAssessmentRecord,
@@ -67,6 +70,33 @@ class SQLAutomationRunRepository(SQLRecordRepository[AutomationRunRecord]):
             finished_at=None,
         )
         return record_to_json(state)
+
+
+class SQLCommitteeVoteRepository(SQLRecordRepository[CommitteeVoteRecord]):
+    record_type = "committee-vote"
+    record_class = CommitteeVoteRecord
+
+    def _canonical_hash_payload(self, record: CommitteeVoteRecord) -> str:
+        analytical = replace(record, created_at=record.effective_at)
+        return record_to_json(analytical)
+
+
+class SQLInvestmentCommitteeAssessmentRepository(SQLRecordRepository[InvestmentCommitteeAssessmentRecord]):
+    record_type = "investment-committee-assessment"
+    record_class = InvestmentCommitteeAssessmentRecord
+
+    def _canonical_hash_payload(self, record: InvestmentCommitteeAssessmentRecord) -> str:
+        analytical = replace(record, created_at=record.effective_at)
+        return record_to_json(analytical)
+
+
+class SQLCycleChampionSnapshotRepository(SQLRecordRepository[CycleChampionSnapshotRecord]):
+    record_type = "cycle-champion-snapshot"
+    record_class = CycleChampionSnapshotRecord
+
+    def _canonical_hash_payload(self, record: CycleChampionSnapshotRecord) -> str:
+        analytical = replace(record, created_at=record.effective_at)
+        return record_to_json(analytical)
 
 
 class SQLEvidenceRepository(SQLRecordRepository[EvidenceRecord]):
