@@ -1,0 +1,58 @@
+run_id: v1-real-market-validation
+effective_at: "2026-07-11T00:00:00+00:00"
+output_directory: reports/market_validation
+project_universe:
+  - {project_id: bitcoin, name: Bitcoin, sector: store_of_value}
+  - {project_id: ethereum, name: Ethereum, sector: smart_contracts}
+  - {project_id: chainlink, name: Chainlink, sector: oracle}
+  - {project_id: api3, name: API3, sector: oracle}
+  - {project_id: render, name: Render, sector: decentralized_compute}
+  - {project_id: bittensor, name: Bittensor, sector: decentralized_ai}
+  - {project_id: sui, name: Sui, sector: layer_1}
+  - {project_id: arbitrum, name: Arbitrum, sector: layer_2}
+  - {project_id: filecoin, name: Filecoin, sector: decentralized_storage}
+  - {project_id: aave, name: Aave, sector: defi}
+  - {project_id: solana, name: Solana, sector: layer_1}
+  - {project_id: avalanche, name: Avalanche, sector: layer_1}
+  - {project_id: polygon, name: Polygon, sector: layer_2}
+  - {project_id: optimism, name: Optimism, sector: layer_2}
+  - {project_id: near, name: NEAR, sector: layer_1}
+  - {project_id: cosmos, name: Cosmos, sector: interoperability}
+  - {project_id: polkadot, name: Polkadot, sector: interoperability}
+  - {project_id: celestia, name: Celestia, sector: data_availability}
+  - {project_id: eigenlayer, name: EigenLayer, sector: restaking}
+  - {project_id: lido, name: Lido, sector: staking}
+  - {project_id: rocket-pool, name: Rocket Pool, sector: staking}
+  - {project_id: uniswap, name: Uniswap, sector: defi}
+  - {project_id: curve, name: Curve, sector: defi}
+  - {project_id: maker, name: Maker, sector: defi}
+  - {project_id: compound, name: Compound, sector: defi}
+  - {project_id: synthetix, name: Synthetix, sector: defi}
+  - {project_id: pendle, name: Pendle, sector: defi}
+  - {project_id: ethena, name: Ethena, sector: defi}
+  - {project_id: frax, name: Frax, sector: stablecoin}
+  - {project_id: dydx, name: dYdX, sector: derivatives}
+  - {project_id: injective, name: Injective, sector: derivatives}
+  - {project_id: thorchain, name: THORChain, sector: interoperability}
+  - {project_id: the-graph, name: The Graph, sector: indexing}
+  - {project_id: arweave, name: Arweave, sector: decentralized_storage}
+  - {project_id: akash, name: Akash, sector: decentralized_compute}
+  - {project_id: livepeer, name: Livepeer, sector: decentralized_compute}
+  - {project_id: helium, name: Helium, sector: depin}
+  - {project_id: hivemapper, name: Hivemapper, sector: depin}
+  - {project_id: iota, name: IOTA, sector: depin}
+  - {project_id: stacks, name: Stacks, sector: bitcoin_layer}
+  - {project_id: ordinals, name: Ordinals, sector: bitcoin_layer}
+  - {project_id: starknet, name: Starknet, sector: layer_2}
+  - {project_id: zksync, name: zkSync, sector: layer_2}
+  - {project_id: scroll, name: Scroll, sector: layer_2}
+  - {project_id: mantle, name: Mantle, sector: layer_2}
+  - {project_id: sei, name: Sei, sector: layer_1}
+  - {project_id: aptos, name: Aptos, sector: layer_1}
+  - {project_id: worldcoin, name: Worldcoin, sector: identity}
+  - {project_id: ens, name: ENS, sector: identity}
+  - {project_id: safe, name: Safe, sector: infrastructure}
+report_formats:
+  - csv
+  - markdown
+  - json

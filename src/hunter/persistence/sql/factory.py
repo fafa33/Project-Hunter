@@ -14,6 +14,8 @@ from hunter.persistence.sql.repositories import (
     SQLInsightRepository,
     SQLIntelligenceRepository,
     SQLInvestmentCommitteeAssessmentRepository,
+    SQLMarketValidationProjectResultRepository,
+    SQLMarketValidationRunRepository,
     SQLObservationRepository,
     SQLOperationalAttemptRepository,
     SQLOpportunityTimingAssessmentRepository,
@@ -48,6 +50,12 @@ class RepositoryFactory:
 
     def cycle_champion_snapshots(self) -> SQLCycleChampionSnapshotRepository:
         return SQLCycleChampionSnapshotRepository(self._session)
+
+    def market_validation_runs(self) -> SQLMarketValidationRunRepository:
+        return SQLMarketValidationRunRepository(self._session)
+
+    def market_validation_project_results(self) -> SQLMarketValidationProjectResultRepository:
+        return SQLMarketValidationProjectResultRepository(self._session)
 
     def evidence(self) -> SQLEvidenceRepository:
         return SQLEvidenceRepository(self._session)

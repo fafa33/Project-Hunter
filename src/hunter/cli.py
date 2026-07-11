@@ -11,6 +11,13 @@ from hunter.committee import (
 from hunter.committee.ranking import rank_investment_committee
 from hunter.dashboard import DashboardDataProvider, HtmlDashboardRenderer, load_dashboard_config
 from hunter.dashboard.exceptions import DashboardPersistenceError
+from hunter.market_validation import (
+    MarketValidationRenderer,
+    MarketValidationRunner,
+    compare_runs,
+    load_market_validation_config,
+)
+from hunter.market_validation.repositories import InMemoryMarketValidationRunRepository
 from hunter.necessity.ranking import rank_necessity_assessments
 from hunter.opportunity.ranking import rank_opportunities
 from hunter.patterns.ranking import rank_pattern_assessments
@@ -54,6 +61,15 @@ def main(argv: list[str] | None = None) -> int:
     build_dashboard = dashboard_sub.add_parser("build")
     build_dashboard.add_argument("--output")
     build_dashboard.add_argument("--sqlite-path")
+    market_validation = sub.add_parser("market-validation")
+    market_validation.add_argument("--market-validation-config", default="configs/market_validation.yaml")
+    market_validation_sub = market_validation.add_subparsers(dest="market_validation_command")
+    market_validation_sub.add_parser("run")
+    market_validation_sub.add_parser("report")
+    market_compare = market_validation_sub.add_parser("compare")
+    market_compare.add_argument("run_a")
+    market_compare.add_argument("run_b")
+    market_validation_sub.add_parser("history")
     committee = sub.add_parser("committee")
     committee.add_argument("--committee-config", default="configs/investment_committee.yaml")
     committee_sub = committee.add_subparsers(dest="committee_command")
@@ -106,6 +122,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "dashboard":
         return _dashboard(args)
+    if args.command == "market-validation":
+        return _market_validation(args)
     if args.command == "committee":
         return _committee(args)
     if args.command != "automation":
@@ -186,6 +204,32 @@ def _committee(args: object) -> int:
         print(f"committee history for {project or 'all projects'}")
         return 0
     print("committee command required")
+    return 1
+
+
+def _market_validation(args: object) -> int:
+    config = load_market_validation_config(Path(args.market_validation_config))
+    repository = InMemoryMarketValidationRunRepository()
+    renderer = MarketValidationRenderer()
+    command = getattr(args, "market_validation_command", None)
+    if command == "run":
+        run = repository.save(MarketValidationRunner(config).run())
+        print(f"{run.run_id}\tprojects={len(run.project_results)}")
+        return 0
+    if command == "report":
+        run = repository.save(MarketValidationRunner(config).run())
+        print(renderer.render_markdown(run))
+        return 0
+    if command == "compare":
+        left = repository.save(MarketValidationRunner(config).run())
+        right = repository.save(MarketValidationRunner(config).run())
+        print(renderer.render_comparison_markdown(compare_runs(left, right)))
+        return 0
+    if command == "history":
+        run = repository.save(MarketValidationRunner(config).run())
+        print(f"{run.run_id}\t{run.effective_at.isoformat()}")
+        return 0
+    print("market-validation command required")
     return 1
 
 

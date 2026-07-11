@@ -4,6 +4,7 @@
 
 - Project Hunter V1: OFFICIALLY RELEASED.
 - Project Hunter V1 baseline: FROZEN.
+- V1 Real Market Validation: NEXT REQUIRED PHASE.
 - Project Constitution: complete.
 - Plugin Architecture: complete.
 - Pipeline Orchestrator: complete.
@@ -35,9 +36,9 @@
 
 Project Hunter V1 analytical roadmap is complete, fully validated, officially released, and frozen.
 
-Next development track: Project Hunter V2.
+Next required phase: V1 Real Market Validation.
 
-Do not implement V2 until a dedicated V2 milestone specification is provided.
+V2 remains blocked until V1 Real Market Validation is completed.
 
 ## V2 Roadmap
 

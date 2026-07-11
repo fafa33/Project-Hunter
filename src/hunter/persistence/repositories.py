@@ -15,6 +15,8 @@ from hunter.persistence.records import (
     InsightRecord,
     IntelligenceRecord,
     InvestmentCommitteeAssessmentRecord,
+    MarketValidationProjectResultRecord,
+    MarketValidationRunRecord,
     ObservationRecord,
     OperationalAttemptRecord,
     OpportunityTimingAssessmentRecord,
@@ -86,6 +88,14 @@ class InvestmentCommitteeAssessmentRepository(Repository[InvestmentCommitteeAsse
 
 
 class CycleChampionSnapshotRepository(Repository[CycleChampionSnapshotRecord], Protocol):
+    pass
+
+
+class MarketValidationRunRepository(Repository[MarketValidationRunRecord], Protocol):
+    pass
+
+
+class MarketValidationProjectResultRepository(Repository[MarketValidationProjectResultRecord], Protocol):
     pass
 
 

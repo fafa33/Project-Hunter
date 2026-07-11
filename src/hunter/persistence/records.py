@@ -274,6 +274,99 @@ class CycleChampionSnapshotRecord(BasePersistenceRecord):
 
 
 @dataclass(frozen=True, kw_only=True)
+class MarketValidationRunRecord(BasePersistenceRecord):
+    record_type: ClassVar[str] = "market-validation-run"
+
+    validation_run_id: str
+    project_result_ids: tuple[str, ...]
+    champion_project_id: str | None
+    runner_up_project_id: str | None
+    no_qualified_candidate: bool
+    project_count: int
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        _require_text("validation_run_id", self.validation_run_id)
+        object.__setattr__(self, "project_result_ids", _identity_tuple("project_result_ids", self.project_result_ids))
+        if self.project_count < 0:
+            raise PersistenceValidationError("project_count must be non-negative")
+
+
+@dataclass(frozen=True, kw_only=True)
+class MarketValidationProjectResultRecord(BasePersistenceRecord):
+    record_type: ClassVar[str] = "market-validation-project-result"
+
+    validation_run_id: str
+    project_id: str
+    project_name: str
+    sector: str
+    rank: int
+    sector_rank: int
+    hunter_score: float
+    risk: float
+    confidence: float
+    valuation: float
+    comparative_valuation: float
+    mispricing: float
+    asymmetry: float
+    whale_intelligence: float
+    macro_intelligence: float
+    future_demand: float
+    opportunity_timing: float
+    probability: float
+    pattern_matching: float
+    technology_necessity: float
+    capital_rotation: float
+    necessity_gap: float
+    committee_decision: str
+    committee_confidence: float
+    missing_evidence: tuple[str, ...]
+    stale_evidence: tuple[str, ...]
+    data_freshness: float
+    validation_health: float
+    strongest_positive_drivers: tuple[str, ...]
+    strongest_negative_drivers: tuple[str, ...]
+    reasons_for_ranking: tuple[str, ...]
+    validation_warnings: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        for name in ("validation_run_id", "project_id", "project_name", "sector", "committee_decision"):
+            _require_text(name, getattr(self, name))
+        for name in (
+            "hunter_score",
+            "risk",
+            "confidence",
+            "valuation",
+            "comparative_valuation",
+            "mispricing",
+            "asymmetry",
+            "whale_intelligence",
+            "macro_intelligence",
+            "future_demand",
+            "opportunity_timing",
+            "probability",
+            "pattern_matching",
+            "technology_necessity",
+            "capital_rotation",
+            "necessity_gap",
+            "committee_confidence",
+            "data_freshness",
+            "validation_health",
+        ):
+            _range(name, getattr(self, name))
+        for name in (
+            "missing_evidence",
+            "stale_evidence",
+            "strongest_positive_drivers",
+            "strongest_negative_drivers",
+            "reasons_for_ranking",
+            "validation_warnings",
+        ):
+            object.__setattr__(self, name, tuple(sorted(str(item) for item in getattr(self, name))))
+
+
+@dataclass(frozen=True, kw_only=True)
 class EvidenceRecord(BasePersistenceRecord):
     record_type: ClassVar[str] = "evidence"
 
@@ -630,6 +723,8 @@ PersistenceRecord = (
     | CommitteeVoteRecord
     | InvestmentCommitteeAssessmentRecord
     | CycleChampionSnapshotRecord
+    | MarketValidationRunRecord
+    | MarketValidationProjectResultRecord
     | EvidenceRecord
     | SignalRecord
     | ObservationRecord
@@ -653,6 +748,8 @@ RECORD_TYPES: dict[str, type[PersistenceRecord]] = {
         CommitteeVoteRecord,
         InvestmentCommitteeAssessmentRecord,
         CycleChampionSnapshotRecord,
+        MarketValidationRunRecord,
+        MarketValidationProjectResultRecord,
         EvidenceRecord,
         SignalRecord,
         ObservationRecord,

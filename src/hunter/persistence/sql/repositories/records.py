@@ -15,6 +15,8 @@ from hunter.persistence.records import (
     InsightRecord,
     IntelligenceRecord,
     InvestmentCommitteeAssessmentRecord,
+    MarketValidationProjectResultRecord,
+    MarketValidationRunRecord,
     ObservationRecord,
     OperationalAttemptRecord,
     OpportunityTimingAssessmentRecord,
@@ -95,6 +97,24 @@ class SQLCycleChampionSnapshotRepository(SQLRecordRepository[CycleChampionSnapsh
     record_class = CycleChampionSnapshotRecord
 
     def _canonical_hash_payload(self, record: CycleChampionSnapshotRecord) -> str:
+        analytical = replace(record, created_at=record.effective_at)
+        return record_to_json(analytical)
+
+
+class SQLMarketValidationRunRepository(SQLRecordRepository[MarketValidationRunRecord]):
+    record_type = "market-validation-run"
+    record_class = MarketValidationRunRecord
+
+    def _canonical_hash_payload(self, record: MarketValidationRunRecord) -> str:
+        analytical = replace(record, created_at=record.effective_at)
+        return record_to_json(analytical)
+
+
+class SQLMarketValidationProjectResultRepository(SQLRecordRepository[MarketValidationProjectResultRecord]):
+    record_type = "market-validation-project-result"
+    record_class = MarketValidationProjectResultRecord
+
+    def _canonical_hash_payload(self, record: MarketValidationProjectResultRecord) -> str:
         analytical = replace(record, created_at=record.effective_at)
         return record_to_json(analytical)
 

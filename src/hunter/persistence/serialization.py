@@ -67,6 +67,12 @@ TUPLE_FIELDS = {
     "conflicts",
     "abstentions",
     "risks",
+    "project_result_ids",
+    "stale_evidence",
+    "strongest_positive_drivers",
+    "strongest_negative_drivers",
+    "reasons_for_ranking",
+    "validation_warnings",
 }
 
 
