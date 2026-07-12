@@ -1,0 +1,21 @@
+benchmarks:
+  - benchmark_id: bitcoin
+    name: Bitcoin
+    benchmark_type: asset
+    symbol: BTC
+  - benchmark_id: ethereum
+    name: Ethereum
+    benchmark_type: asset
+    symbol: ETH
+  - benchmark_id: total_crypto_market
+    name: Total Crypto Market
+    benchmark_type: market_index
+  - benchmark_id: sector_index
+    name: Sector Index
+    benchmark_type: sector_index
+  - benchmark_id: peer_group_median
+    name: Peer Group Median
+    benchmark_type: peer_group
+  - benchmark_id: stable_value_baseline
+    name: Stable Value Baseline
+    benchmark_type: stable_value

@@ -1,0 +1,14 @@
+# Verified real Snapshot.org (hub.snapshot.org) governance space ids.
+# Only projects confirmed via the Snapshot GraphQL API (`space(id: ...)` resolves non-null)
+# are listed here. Do not add unverified guesses.
+uniswap: uniswapgovernance.eth
+ens: ens.eth
+lido: lido-snapshot.eth
+curve: curve.eth
+compound: comp-vote.eth
+rocket-pool: rocketpool-dao.eth
+arbitrum: arbitrumfoundation.eth
+optimism: opcollective.eth
+safe: safe.eth
+the-graph: graphprotocol.eth
+starknet: starknet.eth

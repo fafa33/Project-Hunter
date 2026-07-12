@@ -213,3 +213,11 @@ projects:
       evidence_quality: 0.36
       risk: 0.18
       confidence: 0.34
+
+historical_universe_membership:
+  active_projects: [bitcoin, ethereum, chainlink, solana, polygon, aave, uniswap, render, bittensor, arweave]
+  inactive_or_failed_projects: [terra-luna, ftx-token, celsius, safemoon, bitconnect]
+  delisted_assets: [bitconnect, ftx-token]
+  renamed_projects: []
+  migrated_tokens: [terra-luna, render]
+  abandoned_projects: [bitconnect]

@@ -1,0 +1,1 @@
+{"brier_score": "INSUFFICIENT_SAMPLE_SIZE", "calibration_error": "INSUFFICIENT_SAMPLE_SIZE", "metric_id": "historical-calibration", "reliability_buckets": [["INSUFFICIENT_SAMPLE_SIZE", 2, "INSUFFICIENT_SAMPLE_SIZE"]], "sample_size_status": "INSUFFICIENT_SAMPLE_SIZE"}

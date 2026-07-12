@@ -1,6 +1,7 @@
 [build-system]
 requires = ["hatchling"]
-build-backend = "hatchling.build"
+build-backend = "project_hunter_build"
+backend-path = ["build_backend"]
 
 [project]
 name = "project-hunter"
@@ -35,7 +36,7 @@ social-intelligence = "hunter.intelligence.engines.social:create_plugin"
 whale-intelligence = "hunter.intelligence.engines.whale:create_plugin"
 
 [project.scripts]
-hunter = "hunter.cli:main"
+hunter = "hunter.__main__:main"
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

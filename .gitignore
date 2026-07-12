@@ -3,3 +3,10 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 *.pyc
+.DS_Store
+.secrets/
+.mypy_cache/
+*.pid
+*.log
+nohup.out
+reports/

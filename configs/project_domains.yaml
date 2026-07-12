@@ -1,0 +1,17 @@
+# Primary project domains for Internet Archive (Wayback Machine) historical snapshot lookups.
+# Only domains confirmed to have real Wayback CDX snapshots are listed here.
+ethereum: ethereum.org
+chainlink: chain.link
+solana: solana.com
+render: rendernetwork.com
+bittensor: bittensor.com
+terra-luna: terra.money
+ftx-token: ftx.com
+eos: eos.io
+cosmos: cosmos.network
+bitconnect: bitconnect.co
+uniswap: uniswap.org
+aave: aave.com
+polygon: polygon.technology
+arbitrum: arbitrum.io
+optimism: optimism.io

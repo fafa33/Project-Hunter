@@ -8,6 +8,7 @@ from hunter.execution.identity import identity
 from hunter.market_validation.configuration import MarketValidationConfig
 from hunter.market_validation.contracts import ProjectValidationExecutor
 from hunter.market_validation.models import (
+    EngineValidationSource,
     MarketValidationComparison,
     MarketValidationRun,
     ProjectValidationDelta,
@@ -33,7 +34,7 @@ class MarketValidationRunner:
             for project in self.config.project_universe
         )
         ranked = _rank(raw)
-        champion = ranked[0] if ranked and ranked[0].committee_decision != "NO_QUALIFIED_CANDIDATE" else None
+        champion = ranked[0] if ranked and ranked[0].committee_decision == "QUALIFIED_CANDIDATE" else None
         runner_up = ranked[1] if champion is not None and len(ranked) > 1 else None
         return MarketValidationRun(
             run_id=self.config.run_id,
@@ -52,56 +53,66 @@ class DeterministicV1ProjectExecutor:
         self.effective_at = effective_at.astimezone(UTC)
 
     def execute_project(self, target: ProjectValidationTarget, *, run_id: str) -> ProjectValidationResult:
+        return SourceBackedV1ProjectExecutor(self.effective_at, {}).execute_project(target, run_id=run_id)
+
+
+class SourceBackedV1ProjectExecutor:
+    def __init__(
+        self,
+        effective_at: datetime,
+        sources_by_project: dict[str, tuple[EngineValidationSource, ...]],
+    ) -> None:
+        self.effective_at = effective_at.astimezone(UTC)
+        self.sources_by_project = {
+            str(project_id): tuple(sorted(sources, key=lambda item: item.engine))
+            for project_id, sources in sources_by_project.items()
+        }
+
+    def execute_project(self, target: ProjectValidationTarget, *, run_id: str) -> ProjectValidationResult:
         context = PipelineContext(
             clock=FixedClock(self.effective_at),
             values={"project_id": target.project_id, "sector": target.sector},
         )
         PipelineOrchestrator().run(context=context)
-        seed = _seed(target.project_id)
-        base = 0.25 + (seed % 60) / 100.0
-        risk = _clamp(0.15 + (seed % 35) / 100.0)
-        confidence = _clamp(0.45 + (seed % 45) / 100.0)
-        valuation = _clamp(base + 0.03)
-        comparative = _clamp(base + 0.02)
-        mispricing = _clamp(base + 0.05)
-        asymmetry = _clamp(base + 0.04)
-        whale = _clamp(base + 0.01)
-        macro = _clamp(0.62)
-        future = _clamp(base + 0.06)
-        opportunity = _clamp(base + 0.07)
-        probability = _clamp(base + 0.03)
-        pattern = _clamp(base + 0.02)
-        necessity = _clamp(base + 0.05)
-        rotation = _clamp(base)
-        gap = _clamp(necessity - valuation + 0.2)
-        validation_health = _clamp(0.7 + (seed % 20) / 100.0)
-        freshness = _clamp(0.8 + (seed % 15) / 100.0)
-        hunter = _clamp(
-            (
-                valuation
-                + comparative
-                + mispricing
-                + asymmetry
-                + whale
-                + macro
-                + future
-                + opportunity
-                + probability
-                + pattern
-                + necessity
-                + rotation
-                + gap
-                + validation_health
-                + confidence
-                + (1.0 - risk)
+        sources = self.sources_by_project.get(target.project_id, ())
+        available_sources = tuple(source for source in sources if _source_available(source))
+        source_by_engine = {source.engine: source for source in available_sources}
+        missing_required = tuple(engine for engine in REQUIRED_ENGINES if engine not in source_by_engine)
+        invalid = tuple(source.engine for source in sources if not _source_available(source))
+        all_sources = tuple(
+            sorted(
+                (
+                    *sources,
+                    *(
+                        _unavailable_source(engine, self.effective_at)
+                        for engine in missing_required
+                        if engine not in {source.engine for source in sources}
+                    ),
+                ),
+                key=lambda item: item.engine,
             )
-            / 16.0
         )
-        decision = "QUALIFIED_CANDIDATE" if hunter >= 0.62 and confidence >= 0.58 else "WATCH_CLOSELY"
-        if hunter < 0.48:
+        missing = tuple(sorted((*missing_required, *(field for source in sources for field in source.missing_fields))))
+        stale = tuple(sorted(source.engine for source in sources if source.freshness < 0.5))
+        warnings = tuple(
+            sorted(
+                (
+                    *(f"missing:{item}" for item in missing),
+                    *(warning for source in sources for warning in source.warnings),
+                )
+            )
+        )
+        confidence_values = tuple(source.confidence for source in available_sources)
+        freshness_values = tuple(source.freshness for source in available_sources)
+        confidence = _clamp(sum(confidence_values) / len(confidence_values)) if confidence_values else 0.0
+        freshness = _clamp(sum(freshness_values) / len(freshness_values)) if freshness_values else 0.0
+        hunter = _clamp(sum(source.weighted_contribution for source in available_sources))
+        validation_health = _clamp(len(source_by_engine) / len(REQUIRED_ENGINES)) if REQUIRED_ENGINES else 0.0
+        decision = "INSUFFICIENT_EVIDENCE" if missing_required or invalid else "WATCH_CLOSELY"
+        if decision != "INSUFFICIENT_EVIDENCE" and hunter >= 0.62 and confidence >= 0.58:
+            decision = "QUALIFIED_CANDIDATE"
+        elif decision != "INSUFFICIENT_EVIDENCE" and hunter < 0.48:
             decision = "WAIT"
-        missing = ("comparative_valuation",) if seed % 7 == 0 else ()
-        stale = ("whale_intelligence",) if seed % 11 == 0 else ()
         return ProjectValidationResult(
             result_id=identity(
                 "market-validation-project-result",
@@ -119,31 +130,37 @@ class DeterministicV1ProjectExecutor:
             rank=0,
             sector_rank=0,
             hunter_score=hunter,
-            risk=risk,
+            risk=_score(source_by_engine, "risk"),
             confidence=confidence,
-            valuation=valuation,
-            comparative_valuation=comparative,
-            mispricing=mispricing,
-            asymmetry=asymmetry,
-            whale_intelligence=whale,
-            macro_intelligence=macro,
-            future_demand=future,
-            opportunity_timing=opportunity,
-            probability=probability,
-            pattern_matching=pattern,
-            technology_necessity=necessity,
-            capital_rotation=rotation,
-            necessity_gap=gap,
+            valuation=_score(source_by_engine, "valuation"),
+            comparative_valuation=_score(source_by_engine, "comparative_valuation"),
+            mispricing=_score(source_by_engine, "mispricing"),
+            asymmetry=_score(source_by_engine, "asymmetry"),
+            whale_intelligence=_score(source_by_engine, "whale_intelligence"),
+            macro_intelligence=_score(source_by_engine, "macro_intelligence"),
+            future_demand=_score(source_by_engine, "future_demand"),
+            opportunity_timing=_score(source_by_engine, "opportunity_timing"),
+            probability=_score(source_by_engine, "probability"),
+            pattern_matching=_score(source_by_engine, "pattern_matching"),
+            technology_necessity=_score(source_by_engine, "technology_necessity"),
+            capital_rotation=_score(source_by_engine, "capital_rotation"),
+            necessity_gap=_score(source_by_engine, "necessity_gap"),
             committee_decision=decision,
             committee_confidence=confidence,
             missing_evidence=missing,
             stale_evidence=stale,
             data_freshness=freshness,
             validation_health=validation_health,
-            strongest_positive_drivers=("opportunity_timing", "technology_necessity", "mispricing"),
-            strongest_negative_drivers=("risk", *stale, *missing),
-            reasons_for_ranking=("deterministic persisted V1 validation output",),
-            validation_warnings=tuple(f"missing:{item}" for item in missing) + tuple(f"stale:{item}" for item in stale),
+            strongest_positive_drivers=tuple(
+                source.engine
+                for source in sorted(sources, key=lambda item: (-item.weighted_contribution, item.engine))[:3]
+            ),
+            strongest_negative_drivers=tuple(sorted(("risk", *stale, *missing))),
+            reasons_for_ranking=(
+                ("persisted upstream V1 validation output",) if sources else ("insufficient upstream evidence",)
+            ),
+            validation_warnings=warnings,
+            engine_sources=all_sources,
         )
 
 
@@ -191,9 +208,57 @@ def _rank(results: tuple[ProjectValidationResult, ...]) -> tuple[ProjectValidati
     return tuple(updated)
 
 
-def _seed(value: str) -> int:
-    return sum((index + 1) * ord(char) for index, char in enumerate(value))
-
-
 def _clamp(value: float) -> float:
     return round(max(0.0, min(1.0, float(value))), 4)
+
+
+REQUIRED_ENGINES: tuple[str, ...] = (
+    "valuation",
+    "comparative_valuation",
+    "mispricing",
+    "asymmetry",
+    "whale_intelligence",
+    "macro_intelligence",
+    "future_demand",
+    "opportunity_timing",
+    "probability",
+    "pattern_matching",
+    "technology_necessity",
+    "capital_rotation",
+    "necessity_gap",
+    "risk",
+    "committee",
+)
+
+
+def _score(sources: dict[str, EngineValidationSource], engine: str) -> float:
+    source = sources.get(engine)
+    if source is None or not _source_available(source):
+        return 0.0
+    return source.score
+
+
+def _source_available(source: EngineValidationSource) -> bool:
+    return source.status == "AVAILABLE" and source.confidence > 0.0 and not source.missing_fields
+
+
+def _unavailable_source(engine: str, timestamp: datetime) -> EngineValidationSource:
+    return EngineValidationSource(
+        engine=engine,
+        score=0.0,
+        confidence=0.0,
+        timestamp=timestamp,
+        freshness=0.0,
+        source_record_ids=(),
+        evidence_ids=(),
+        source="persisted-upstream",
+        collector="repository",
+        validation_status="MISSING",
+        status="UNAVAILABLE",
+        raw_input_metrics={},
+        normalized_inputs={},
+        applied_weight=0.0,
+        weighted_contribution=0.0,
+        missing_fields=(engine,),
+        warnings=(f"missing:{engine}",),
+    )

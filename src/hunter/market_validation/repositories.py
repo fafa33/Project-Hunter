@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from hunter.market_validation.contracts import MarketValidationRunRepository
 from hunter.market_validation.models import MarketValidationRun, ProjectValidationResult
 from hunter.persistence.records import MarketValidationProjectResultRecord, MarketValidationRunRecord
@@ -75,4 +77,21 @@ def result_to_record(result: ProjectValidationResult, *, effective_at) -> Market
         strongest_negative_drivers=result.strongest_negative_drivers,
         reasons_for_ranking=result.reasons_for_ranking,
         validation_warnings=result.validation_warnings,
+        metadata={
+            "engine_sources": json.dumps(
+                [
+                    {
+                        "engine": source.engine,
+                        "source_record_ids": list(source.source_record_ids),
+                        "evidence_ids": list(source.evidence_ids),
+                        "raw_input_metrics": dict(source.raw_input_metrics),
+                        "normalized_inputs": dict(source.normalized_inputs),
+                        "applied_weight": source.applied_weight,
+                        "weighted_contribution": source.weighted_contribution,
+                    }
+                    for source in result.engine_sources
+                ],
+                sort_keys=True,
+            )
+        },
     )

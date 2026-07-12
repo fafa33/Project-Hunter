@@ -1,0 +1,60 @@
+enabled: true
+stale_after_seconds: 86400
+retry:
+  max_attempts: 1
+  backoff_seconds: 0
+cache:
+  enabled: true
+  ttl_seconds: 300
+providers:
+  - name: coingecko
+    enabled: true
+    capabilities:
+      - market
+      - developer
+      - github
+    supported_metrics:
+      - coingecko_market_profile
+    settings:
+      base_url: https://api.coingecko.com/api/v3
+      vs_currency: usd
+      per_page: 250
+      max_pages: 20
+      max_attempts: 3
+      detail_max_attempts: 1
+      detail_metadata_ttl_seconds: 604800
+      detail_rate_limit_threshold: 3
+      backoff_seconds: 1
+      jitter_seconds: 0.25
+      min_interval_seconds: 1
+  - name: defillama
+    enabled: true
+    capabilities:
+      - protocol
+      - fees
+      - revenue
+    supported_metrics:
+      - defillama_protocol_profile
+    settings:
+      base_url: https://api.llama.fi
+      max_attempts: 3
+      backoff_seconds: 1
+      jitter_seconds: 0.25
+      min_interval_seconds: 0.5
+  - name: github
+    enabled: true
+    capabilities:
+      - developer
+      - github
+      - repository
+    supported_metrics:
+      - github_repository_profile
+    settings:
+      base_url: https://api.github.com
+      per_page: 100
+      max_pages: 3
+      max_attempts: 3
+      commit_period_days: 365
+      backoff_seconds: 1
+      jitter_seconds: 0.25
+      min_interval_seconds: 0.25

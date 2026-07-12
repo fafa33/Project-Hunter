@@ -1,9 +1,56 @@
 from __future__ import annotations
 
 import argparse
+import json
+from collections import Counter
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
+from hunter.acquisition import (
+    AcquisitionConfig,
+    FileAcquisitionRepository,
+    InMemoryAcquisitionRepository,
+    ProviderConfig,
+    ProviderRegistry,
+    load_acquisition_config,
+)
+from hunter.acquisition.exceptions import ProviderUnavailableError
+from hunter.acquisition.models import AcquisitionRequest, NormalizedEvidence, RawEvidence
+from hunter.acquisition.pipeline import AcquisitionPipeline
+from hunter.acquisition.project_identifiers import (
+    GitHubRepositoryResolution,
+    ProjectIdentifierResolution,
+    coingecko_sync_ids,
+    coingecko_target_map,
+    defillama_sync_ids,
+    defillama_target_map,
+    github_sync_ids,
+    github_target_map,
+    load_project_identifiers,
+    resolve_configured_identifiers,
+    resolve_defillama_identifiers,
+    resolve_github_identifiers,
+)
+from hunter.acquisition.providers import (
+    CoinGeckoEvidenceNormalizer,
+    CoinGeckoProvider,
+    CoinGeckoProviderConfig,
+    DefiLlamaEvidenceNormalizer,
+    DefiLlamaProvider,
+    DefiLlamaProviderConfig,
+    GitHubEvidenceNormalizer,
+    GitHubProvider,
+    GitHubProviderConfig,
+)
+from hunter.acquisition.providers.coingecko import CoinGeckoHTTPError
+from hunter.acquisition.providers.defillama import DefiLlamaHTTPError
+from hunter.acquisition.providers.github import GitHubHTTPError
+from hunter.acquisition.validator import EvidenceAcquisitionValidator
+from hunter.auth import AuthRegistry, load_auth_config
+from hunter.auth.providers import provider_capabilities
 from hunter.automation import AutomationJobRunner, AutomationScheduler, load_automation_config
+from hunter.backtest import BacktestingCalibrationEngine, BacktestRepository, compare_backtests
 from hunter.committee import (
     InvestmentCommitteeEngine,
     load_investment_committee_config,
@@ -11,18 +58,69 @@ from hunter.committee import (
 from hunter.committee.ranking import rank_investment_committee
 from hunter.dashboard import DashboardDataProvider, HtmlDashboardRenderer, load_dashboard_config
 from hunter.dashboard.exceptions import DashboardPersistenceError
+from hunter.data_ops import (
+    DATA_OPS_JOB_IDS,
+    data_ops_failures,
+    data_ops_history,
+    data_ops_status,
+    install_data_ops_jobs,
+    run_data_ops_now,
+)
+from hunter.economic import EconomicDependencyGraphEngine, EconomicGraphRepository
+from hunter.economic.engine import economic_path
+from hunter.explainability import DecisionAuditRenderer, DecisionExplainabilityEngine
+from hunter.graph import TechnologyDependencyGraphEngine, TechnologyGraphRepository
+from hunter.graph.engine import dependency_path
+from hunter.historical import (
+    HistoricalPointInTimeValidationEngine,
+    HistoricalValidationRenderer,
+    HistoricalValidationRepository,
+    load_historical_validation_config,
+)
+from hunter.historical.snapshot_builder import HistoricalSnapshotBuilder
+from hunter.historical_acquisition import (
+    CoinGeckoHistoricalProvider,
+    DefiLlamaHistoricalProvider,
+    GitHubHistoricalActivityProvider,
+    GovernanceArchiveProvider,
+    HistoricalAcquisitionPipeline,
+    HistoricalEvidenceRepository,
+    HistoricalRSSAnnouncementsProvider,
+    InternetArchiveSnapshotProvider,
+    future_provider_metadata,
+)
 from hunter.market_validation import (
     MarketValidationRenderer,
     MarketValidationRunner,
     compare_runs,
     load_market_validation_config,
 )
+from hunter.market_validation.acquisition_sources import acquisition_engine_sources, engine_coverage
+from hunter.market_validation.evidence import EvidenceCoverageAnalyzer, EvidenceReportRenderer
+from hunter.market_validation.models import EngineValidationSource, MarketValidationRun
 from hunter.market_validation.repositories import InMemoryMarketValidationRunRepository
+from hunter.market_validation.runner import SourceBackedV1ProjectExecutor
+from hunter.narrative import (
+    NarrativeEvidenceNormalizer,
+    NarrativeEvidenceValidator,
+    NarrativeProvider,
+    load_narrative_config,
+    narrative_statistics,
+)
+from hunter.narrative.configuration import FUTURE_NARRATIVE_PROVIDERS, SUPPORTED_NARRATIVE_PROVIDERS
+from hunter.narrative.discovery import (
+    NarrativeSourceDiscoveryEngine,
+    NarrativeSourceDiscoveryRepository,
+    configured_project_ids,
+    source_coverage,
+)
+from hunter.narrative.provider import NarrativeProviderConfig
 from hunter.necessity.ranking import rank_necessity_assessments
 from hunter.opportunity.ranking import rank_opportunities
 from hunter.patterns.ranking import rank_pattern_assessments
 from hunter.persistence.sql import SessionFactory, UnitOfWork, create_schema, create_sqlite_engine
 from hunter.probability.ranking import rank_probability_assessments
+from hunter.scenario import ScenarioRepository, ScenarioSimulationEngine, compare_scenarios
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -55,6 +153,14 @@ def main(argv: list[str] | None = None) -> int:
     run_once.add_argument("job")
     cancel = automation_sub.add_parser("cancel")
     cancel.add_argument("run_id")
+    data_ops = sub.add_parser("data-ops")
+    data_ops.add_argument("--automation-config", default="configs/automation.yaml")
+    data_ops_sub = data_ops.add_subparsers(dest="data_ops_command")
+    data_ops_sub.add_parser("install")
+    data_ops_sub.add_parser("status")
+    data_ops_sub.add_parser("run-now")
+    data_ops_sub.add_parser("history")
+    data_ops_sub.add_parser("failures")
     dashboard = sub.add_parser("dashboard")
     dashboard.add_argument("--dashboard-config", default="configs/dashboard.yaml")
     dashboard_sub = dashboard.add_subparsers(dest="dashboard_command")
@@ -70,6 +176,177 @@ def main(argv: list[str] | None = None) -> int:
     market_compare.add_argument("run_a")
     market_compare.add_argument("run_b")
     market_validation_sub.add_parser("history")
+    evidence = sub.add_parser("evidence")
+    evidence.add_argument("--market-validation-config", default="configs/market_validation.yaml")
+    evidence_sub = evidence.add_subparsers(dest="evidence_command")
+    evidence_sub.add_parser("status")
+    evidence_sub.add_parser("coverage")
+    evidence_sub.add_parser("validate")
+    evidence_sub.add_parser("sources")
+    evidence_sub.add_parser("missing")
+    acquisition = sub.add_parser("acquisition")
+    acquisition.add_argument("--acquisition-config", default="configs/acquisition.yaml")
+    acquisition_sub = acquisition.add_subparsers(dest="acquisition_command")
+    acquisition_sub.add_parser("status")
+    acquisition_sub.add_parser("providers")
+    acquisition_sub.add_parser("validate")
+    acquisition_sub.add_parser("sync")
+    acquisition_sub.add_parser("history")
+    acquisition_sub.add_parser("health")
+    auth = sub.add_parser("auth")
+    auth.add_argument("--providers-config", default="configs/providers.yaml")
+    auth_sub = auth.add_subparsers(dest="auth_command")
+    auth_sub.add_parser("status")
+    auth_sub.add_parser("validate")
+    auth_sub.add_parser("providers")
+    auth_sub.add_parser("quota")
+    auth_sub.add_parser("doctor")
+    coingecko = sub.add_parser("coingecko")
+    coingecko.add_argument("--acquisition-config", default="configs/acquisition.yaml")
+    coingecko.add_argument("--market-validation-config", default="configs/market_validation.yaml")
+    coingecko.add_argument("--project-identifiers-config", default="configs/project_identifiers.yaml")
+    coingecko_sub = coingecko.add_subparsers(dest="coingecko_command")
+    coingecko_sub.add_parser("sync")
+    coingecko_sub.add_parser("resume")
+    coingecko_sub.add_parser("universe")
+    coingecko_sub.add_parser("unresolved")
+    coingecko_sub.add_parser("resolve")
+    coingecko_sub.add_parser("health")
+    coingecko_sub.add_parser("statistics")
+    coingecko_sub.add_parser("pending")
+    coingecko_sub.add_parser("status")
+    coingecko_sub.add_parser("validate")
+    defillama = sub.add_parser("defillama")
+    defillama.add_argument("--acquisition-config", default="configs/acquisition.yaml")
+    defillama.add_argument("--market-validation-config", default="configs/market_validation.yaml")
+    defillama.add_argument("--project-identifiers-config", default="configs/project_identifiers.yaml")
+    defillama_sub = defillama.add_subparsers(dest="defillama_command")
+    defillama_sub.add_parser("sync")
+    defillama_sub.add_parser("status")
+    defillama_sub.add_parser("validate")
+    defillama_sub.add_parser("unresolved")
+    defillama_sub.add_parser("resolve")
+    github = sub.add_parser("github")
+    github.add_argument("--acquisition-config", default="configs/acquisition.yaml")
+    github.add_argument("--market-validation-config", default="configs/market_validation.yaml")
+    github.add_argument("--project-identifiers-config", default="configs/project_identifiers.yaml")
+    github_sub = github.add_subparsers(dest="github_command")
+    github_sub.add_parser("sync")
+    github_sub.add_parser("status")
+    github_sub.add_parser("validate")
+    github_sub.add_parser("resolve")
+    github_sub.add_parser("unresolved")
+    github_sub.add_parser("statistics")
+    engines = sub.add_parser("engines")
+    engines.add_argument("--market-validation-config", default="configs/market_validation.yaml")
+    engines_sub = engines.add_subparsers(dest="engines_command")
+    engines_sub.add_parser("status")
+    engines_sub.add_parser("coverage")
+    engines_sub.add_parser("validate")
+    narrative = sub.add_parser("narrative")
+    narrative.add_argument("--acquisition-config", default="configs/acquisition.yaml")
+    narrative.add_argument("--market-validation-config", default="configs/market_validation.yaml")
+    narrative.add_argument("--narrative-config", default="configs/narrative_sources.yaml")
+    narrative_sub = narrative.add_subparsers(dest="narrative_command")
+    narrative_sub.add_parser("sync")
+    narrative_sub.add_parser("resume")
+    narrative_sub.add_parser("status")
+    narrative_sub.add_parser("validate")
+    narrative_sub.add_parser("statistics")
+    narrative_sub.add_parser("coverage")
+    narrative_sub.add_parser("providers")
+    sources = sub.add_parser("sources")
+    sources.add_argument("--market-validation-config", default="configs/market_validation.yaml")
+    sources_sub = sources.add_subparsers(dest="sources_command")
+    sources_sub.add_parser("discover")
+    sources_sub.add_parser("validate")
+    sources_sub.add_parser("status")
+    sources_sub.add_parser("report")
+    sources_sub.add_parser("coverage")
+    sources_sub.add_parser("unresolved")
+    sources_sub.add_parser("history")
+    graph = sub.add_parser("graph")
+    graph_sub = graph.add_subparsers(dest="graph_command")
+    graph_sub.add_parser("build")
+    graph_sub.add_parser("validate")
+    graph_sub.add_parser("status")
+    graph_sub.add_parser("report")
+    graph_sub.add_parser("coverage")
+    graph_explain = graph_sub.add_parser("explain")
+    graph_explain.add_argument("project")
+    graph_path = graph_sub.add_parser("path")
+    graph_path.add_argument("project_a")
+    graph_path.add_argument("project_b")
+    graph_sub.add_parser("centrality")
+    graph_sub.add_parser("critical")
+    economic = sub.add_parser("economic")
+    economic_sub = economic.add_subparsers(dest="economic_command")
+    economic_sub.add_parser("build")
+    economic_sub.add_parser("validate")
+    economic_sub.add_parser("status")
+    economic_sub.add_parser("report")
+    economic_sub.add_parser("coverage")
+    economic_explain = economic_sub.add_parser("explain")
+    economic_explain.add_argument("project")
+    economic_path_parser = economic_sub.add_parser("path")
+    economic_path_parser.add_argument("project_a")
+    economic_path_parser.add_argument("project_b")
+    economic_sub.add_parser("centrality")
+    economic_sub.add_parser("moat")
+    scenario = sub.add_parser("scenario")
+    scenario_sub = scenario.add_subparsers(dest="scenario_command")
+    scenario_sub.add_parser("run")
+    scenario_sub.add_parser("status")
+    scenario_sub.add_parser("report")
+    scenario_sub.add_parser("explain")
+    scenario_sub.add_parser("compare")
+    scenario_sub.add_parser("history")
+    scenario_sub.add_parser("coverage")
+    backtest = sub.add_parser("backtest")
+    backtest_sub = backtest.add_subparsers(dest="backtest_command")
+    backtest_sub.add_parser("run")
+    backtest_sub.add_parser("report")
+    backtest_sub.add_parser("history")
+    backtest_sub.add_parser("compare")
+    calibration = sub.add_parser("calibration")
+    calibration_sub = calibration.add_subparsers(dest="calibration_command")
+    calibration_sub.add_parser("report")
+    calibration_sub.add_parser("coverage")
+    calibration_sub.add_parser("engines")
+    historical = sub.add_parser("historical")
+    historical.add_argument("--historical-config", default="configs/historical_validation.yaml")
+    historical_sub = historical.add_subparsers(dest="historical_command")
+    historical_sub.add_parser("cases")
+    historical_build = historical_sub.add_parser("build")
+    historical_build.add_argument("project", nargs="?")
+    historical_replay = historical_sub.add_parser("replay")
+    historical_replay.add_argument("case_id", nargs="?")
+    historical_sub.add_parser("outcomes")
+    historical_sub.add_parser("evaluate")
+    historical_report = historical_sub.add_parser("report")
+    historical_report.add_argument("case_id", nargs="?")
+    historical_compare = historical_sub.add_parser("compare")
+    historical_compare.add_argument("case_a")
+    historical_compare.add_argument("case_b")
+    historical_sub.add_parser("leakage-check")
+    historical_sub.add_parser("survivorship-check")
+    historical_sub.add_parser("coverage")
+    historical_sub.add_parser("sync")
+    historical_sub.add_parser("expand")
+    historical_sub.add_parser("complete")
+    historical_sub.add_parser("progress")
+    historical_sub.add_parser("gaps")
+    historical_sub.add_parser("unresolved")
+    historical_sub.add_parser("summary")
+    historical_sub.add_parser("status")
+    historical_sub.add_parser("validate")
+    historical_sub.add_parser("providers")
+    historical_sub.add_parser("statistics")
+    historical_sub.add_parser("calibration")
+    historical_sub.add_parser("engines")
+    historical_sub.add_parser("challenges")
+    explain = sub.add_parser("explain")
+    explain.add_argument("explain_args", nargs="*")
     committee = sub.add_parser("committee")
     committee.add_argument("--committee-config", default="configs/investment_committee.yaml")
     committee_sub = committee.add_subparsers(dest="committee_command")
@@ -122,8 +399,42 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "dashboard":
         return _dashboard(args)
+    if args.command == "data-ops":
+        return _data_ops(args)
     if args.command == "market-validation":
         return _market_validation(args)
+    if args.command == "evidence":
+        return _evidence(args)
+    if args.command == "acquisition":
+        return _acquisition(args)
+    if args.command == "auth":
+        return _auth(args)
+    if args.command == "coingecko":
+        return _coingecko(args)
+    if args.command == "defillama":
+        return _defillama(args)
+    if args.command == "github":
+        return _github(args)
+    if args.command == "engines":
+        return _engines(args)
+    if args.command == "narrative":
+        return _narrative(args)
+    if args.command == "sources":
+        return _sources(args)
+    if args.command == "graph":
+        return _graph(args)
+    if args.command == "economic":
+        return _economic(args)
+    if args.command == "scenario":
+        return _scenario(args)
+    if args.command == "backtest":
+        return _backtest(args)
+    if args.command == "calibration":
+        return _calibration(args)
+    if args.command == "historical":
+        return _historical(args)
+    if args.command == "explain":
+        return _explain(args)
     if args.command == "committee":
         return _committee(args)
     if args.command != "automation":
@@ -182,6 +493,61 @@ def _dashboard(args: object) -> int:
     return 0
 
 
+def _data_ops(args: object) -> int:
+    command = getattr(args, "data_ops_command", None)
+    config_path = Path(args.automation_config)
+    if command == "install":
+        jobs = install_data_ops_jobs(config_path)
+        print(f"installed={len(jobs)} jobs={','.join(jobs)}")
+        return 0
+    if command == "run-now":
+        before = _data_ops_coverage_line()
+        runs = run_data_ops_now(config_path)
+        after = _data_ops_coverage_line()
+        counts = Counter(run.status for run in runs)
+        print(
+            f"runs={len(runs)} succeeded={counts['succeeded']} partial={counts['partial']} "
+            f"failed={counts['failed']} blocked={counts['blocked']} coverage_before={before} coverage_after={after}"
+        )
+        return 0 if counts["failed"] == 0 and counts["blocked"] == 0 else 2
+    if command == "status":
+        status = data_ops_status(config_path)
+        latest = status["latest_by_job"]
+        print(f"jobs={status['jobs']} automation_runs={status['runs']} detail_runs={len(status['details'])}")
+        for job_id in DATA_OPS_JOB_IDS:
+            run = latest.get(job_id)
+            print(f"{job_id}\t{run.status if run else 'never'}")
+        return 0
+    if command == "history":
+        for run in data_ops_history():
+            print(
+                f"{run.finished_at.isoformat()}\t{run.job_id}\t{run.status}\tduration={run.duration_seconds}"
+                f"\taccepted={run.records_accepted}\trejected={run.records_rejected}"
+            )
+        return 0
+    if command == "failures":
+        failures = data_ops_failures()
+        for run in failures:
+            print(f"{run.finished_at.isoformat()}\t{run.job_id}\t{run.status}\t{run.error}")
+        if not failures:
+            print("failures=0")
+        return 0 if not failures else 2
+    print("data-ops command required")
+    return 1
+
+
+def _data_ops_coverage_line() -> str:
+    config = load_market_validation_config(Path("configs/market_validation.yaml"))
+    repository = FileAcquisitionRepository()
+    executor = SourceBackedV1ProjectExecutor(
+        config.effective_at,
+        acquisition_engine_sources(repository, as_of=config.effective_at),
+    )
+    run = MarketValidationRunner(config, executor=executor).run()
+    report = EvidenceCoverageAnalyzer().analyze(run)
+    return f"{report.stats.coverage_percent:.2f}"
+
+
 def _committee(args: object) -> int:
     load_investment_committee_config(Path(args.committee_config))
     command = getattr(args, "committee_command", None)
@@ -212,24 +578,2054 @@ def _market_validation(args: object) -> int:
     repository = InMemoryMarketValidationRunRepository()
     renderer = MarketValidationRenderer()
     command = getattr(args, "market_validation_command", None)
+
+    def run_validation() -> MarketValidationRun:
+        sources = acquisition_engine_sources(FileAcquisitionRepository(), as_of=config.effective_at)
+        executor = SourceBackedV1ProjectExecutor(config.effective_at, sources)
+        return repository.save(MarketValidationRunner(config, executor=executor).run())
+
     if command == "run":
-        run = repository.save(MarketValidationRunner(config).run())
+        run = run_validation()
         print(f"{run.run_id}\tprojects={len(run.project_results)}")
         return 0
     if command == "report":
-        run = repository.save(MarketValidationRunner(config).run())
+        run = run_validation()
         print(renderer.render_markdown(run))
         return 0
     if command == "compare":
-        left = repository.save(MarketValidationRunner(config).run())
-        right = repository.save(MarketValidationRunner(config).run())
+        left = run_validation()
+        right = run_validation()
         print(renderer.render_comparison_markdown(compare_runs(left, right)))
         return 0
     if command == "history":
-        run = repository.save(MarketValidationRunner(config).run())
+        run = run_validation()
         print(f"{run.run_id}\t{run.effective_at.isoformat()}")
         return 0
     print("market-validation command required")
+    return 1
+
+
+def _evidence(args: object) -> int:
+    config = load_market_validation_config(Path(args.market_validation_config))
+    repository = FileAcquisitionRepository()
+    executor = SourceBackedV1ProjectExecutor(
+        config.effective_at,
+        acquisition_engine_sources(repository, as_of=config.effective_at),
+    )
+    run = MarketValidationRunner(config, executor=executor).run()
+    report = EvidenceCoverageAnalyzer().analyze(run)
+    renderer = EvidenceReportRenderer()
+    command = getattr(args, "evidence_command", None)
+    if command == "status":
+        print(renderer.render_status(report))
+        return 0
+    if command == "coverage":
+        print(renderer.render_coverage(report))
+        return 0
+    if command == "validate":
+        print(renderer.render_validate(report))
+        return 0
+    if command == "sources":
+        print(renderer.render_sources(report))
+        return 0
+    if command == "missing":
+        print(renderer.render_missing(report))
+        return 0
+    print("evidence command required")
+    return 1
+
+
+def _engines(args: object) -> int:
+    config = load_market_validation_config(Path(args.market_validation_config))
+    repository = FileAcquisitionRepository()
+    sources = acquisition_engine_sources(repository, as_of=config.effective_at)
+    executor = SourceBackedV1ProjectExecutor(config.effective_at, sources)
+    run = MarketValidationRunner(config, executor=executor).run()
+    report = EvidenceCoverageAnalyzer().analyze(run)
+    command = getattr(args, "engines_command", None)
+    if command == "status":
+        print(
+            f"engines={report.engine_count} projects={report.project_count} "
+            f"available={report.stats.available_engines} missing={report.stats.missing_engines} "
+            f"coverage={report.stats.coverage_percent:.2f}"
+        )
+        return 0
+    if command == "coverage":
+        project_ids = tuple(project.project_id for project in config.project_universe)
+        rows = engine_coverage(
+            sources,
+            project_ids=project_ids,
+            engines=tuple(sorted({source.engine for values in sources.values() for source in values})),
+        )
+        for row in rows:
+            print(
+                f"{row.engine}\tavailable={row.available_projects}\tconfigured={row.configured_projects}"
+                f"\tcoverage={row.coverage_percent:.2f}"
+            )
+        if not rows:
+            print("no analytical acquisition evidence available")
+        return 0
+    if command == "validate":
+        print(EvidenceReportRenderer().render_validate(report))
+        return 0
+    print("engines command required")
+    return 1
+
+
+def _narrative(args: object) -> int:
+    acquisition_config = load_acquisition_config(Path(args.acquisition_config))
+    narrative_config = load_narrative_config(Path(args.narrative_config))
+    repository = FileAcquisitionRepository()
+    stats = narrative_statistics(repository)
+    command = getattr(args, "narrative_command", None)
+    if command == "status":
+        state = "enabled" if narrative_config.enabled else "disabled"
+        print(
+            f"narrative={state} sources={len(narrative_config.sources)} raw={stats.raw} "
+            f"normalized={stats.normalized} valid={stats.valid}"
+        )
+        return 0
+    if command == "providers":
+        for provider in SUPPORTED_NARRATIVE_PROVIDERS:
+            configured = sum(1 for source in narrative_config.sources if source.provider == provider and source.enabled)
+            print(f"{provider}\tsupported\tconfigured={configured}")
+        for provider in FUTURE_NARRATIVE_PROVIDERS:
+            print(f"{provider}\tfuture\tconfigured=0")
+        return 0
+    if command == "validate":
+        unknown = tuple(
+            source
+            for source in narrative_config.sources
+            if source.enabled and source.provider not in SUPPORTED_NARRATIVE_PROVIDERS
+        )
+        missing = tuple(source for source in narrative_config.sources if source.enabled and not source.project_id)
+        print(
+            f"sources={len(narrative_config.sources)} unknown_providers={len(unknown)} missing_project={len(missing)}"
+        )
+        return 2 if unknown or missing else 0
+    if command == "statistics":
+        print(
+            f"raw={stats.raw} normalized={stats.normalized} valid={stats.valid} duplicate={stats.duplicate} "
+            f"stale={stats.stale} invalid={stats.invalid} projects={stats.projects} "
+            f"providers={','.join(stats.providers) or 'none'}"
+        )
+        return 0
+    if command == "coverage":
+        project_count = _configured_project_count(args)
+        coverage = round((stats.projects / project_count) * 100, 2) if project_count else 0.0
+        print(f"projects={project_count} narrative_projects={stats.projects} coverage={coverage:.2f}")
+        return 0
+    if command in {"sync", "resume"}:
+        if not narrative_config.enabled:
+            print("narrative provider not enabled")
+            return 0
+        provider = NarrativeProvider(NarrativeProviderConfig(sources=narrative_config.sources))
+        pipeline = AcquisitionPipeline(
+            normalizer=NarrativeEvidenceNormalizer(),
+            validator=NarrativeEvidenceValidator(expired_after_days=narrative_config.expired_after_days),
+            repository=repository,
+            config=acquisition_config,
+        )
+        run = pipeline.sync(
+            provider,
+            AcquisitionRequest(
+                domain="narrative",
+                metric="narrative_item",
+                target_id="configured-projects",
+                requested_at=datetime.now(tz=UTC),
+                mode="resume" if command == "resume" else "incremental",
+                parameters={
+                    "source_ids": tuple(source.source_id for source in narrative_config.sources if source.enabled)
+                },
+            ),
+        )
+        print(
+            f"{run.run_id}\tsources={len(narrative_config.sources)} raw={run.raw_count} "
+            f"normalized={run.normalized_count} valid={run.valid_count} duplicate={run.duplicate_count} "
+            f"stale={run.stale_count} invalid={run.invalid_count}"
+        )
+        return 0
+    print("narrative command required")
+    return 1
+
+
+def _sources(args: object) -> int:
+    project_ids = configured_project_ids(Path(args.market_validation_config))
+    repository = NarrativeSourceDiscoveryRepository()
+    sources = repository.sources()
+    command = getattr(args, "sources_command", None)
+    if command == "discover":
+        run = NarrativeSourceDiscoveryEngine().discover(project_ids)
+        print(
+            f"{run.run_id}\tprojects={run.configured_projects}\tdiscovered={run.discovered_sources} "
+            f"verified={run.verified_sources}\tresolved={run.projects_resolved} "
+            f"partial={run.projects_partially_resolved}\tunresolved={run.projects_unresolved} "
+            f"rejected={run.rejected_sources}\tduplicates={run.duplicate_sources}"
+        )
+        return 0
+    if command == "validate":
+        valid = sum(1 for source in sources if source.validation_status == "VALID")
+        invalid = sum(1 for source in sources if source.validation_status != "VALID")
+        print(f"sources={len(sources)} valid={valid} invalid={invalid}")
+        return 0 if invalid == 0 else 2
+    if command == "status":
+        runs = repository.runs()
+        latest = runs[-1].run_id if runs else "-"
+        print(f"projects={len(project_ids)} sources={len(sources)} runs={len(runs)} latest_run={latest}")
+        return 0
+    if command == "coverage":
+        coverage = source_coverage(sources, project_ids=project_ids)
+        runs = repository.runs()
+        latest = runs[-1] if runs else None
+        print(
+            f"projects={coverage.configured_projects} resolved={coverage.projects_resolved} "
+            f"partial={coverage.projects_partially_resolved} unresolved={coverage.projects_unresolved} "
+            f"coverage={coverage.coverage_percent:.2f} "
+            f"verified={latest.verified_sources if latest else sum(1 for source in sources if source.verified)} "
+            f"rejected={latest.rejected_sources if latest else sum(1 for source in sources if not source.verified)} "
+            f"duplicates={latest.duplicate_sources if latest else 0}"
+        )
+        return 0
+    if command == "unresolved":
+        coverage = source_coverage(sources, project_ids=project_ids)
+        for project_id, missing in coverage.missing_by_project.items():
+            if len(missing) == 16:
+                print(f"{project_id}\tUNRESOLVED\tmissing={','.join(missing)}")
+        return 0
+    if command == "report":
+        coverage = source_coverage(sources, project_ids=project_ids)
+        by_project: dict[str, set[str]] = {}
+        for source in sources:
+            by_project.setdefault(source.project_id, set()).add(source.source_type)
+        for project_id in project_ids:
+            found = by_project.get(project_id, set())
+            missing = coverage.missing_by_project[project_id]
+            status = "RESOLVED" if not missing else "PARTIAL" if found else "UNRESOLVED"
+            project_sources = tuple(source for source in sources if source.project_id == project_id)
+            trust = (
+                round(sum(source.trust_score for source in project_sources) / len(project_sources), 4)
+                if project_sources
+                else 0.0
+            )
+            validation = (
+                "VALID"
+                if project_sources and all(source.validation_status == "VALID" for source in project_sources)
+                else "MISSING"
+            )
+            print(
+                f"{project_id}\t{status}\tofficial_website={'yes' if 'official_website' in found else 'no'}"
+                f"\trss={'yes' if 'rss_feed' in found else 'no'}\tblog={'yes' if 'official_blog' in found else 'no'}"
+                f"\tdocs={'yes' if 'documentation' in found or 'developer_docs' in found else 'no'}"
+                f"\tgithub={'yes' if 'github_repository' in found else 'no'}"
+                f"\tmedium={'yes' if 'medium' in found else 'no'}"
+                f"\tmirror={'yes' if 'mirror' in found else 'no'}"
+                f"\tgovernance={'yes' if 'governance_forum' in found else 'no'}"
+                f"\trelease_notes={'yes' if 'github_releases' in found else 'no'}"
+                f"\tengineering_blog={'yes' if 'developer_blog' in found else 'no'}"
+                f"\tcoverage={round(((16 - len(missing)) / 16) * 100, 2):.2f}"
+                f"\tmissing={','.join(missing) or 'none'}"
+                f"\tvalidation={validation}\ttrust={trust:.4f}"
+            )
+        return 0
+    if command == "history":
+        for run in repository.runs():
+            print(
+                f"{run.run_id}\tstarted={run.started_at.isoformat()}\tprojects={run.configured_projects} "
+                f"discovered={run.discovered_sources}\tverified={run.verified_sources} "
+                f"rejected={run.rejected_sources}\tduplicates={run.duplicate_sources} "
+                f"resolved={run.projects_resolved}\tpartial={run.projects_partially_resolved} "
+                f"unresolved={run.projects_unresolved}"
+            )
+        return 0
+    print("sources command required")
+    return 1
+
+
+def _graph(args: object) -> int:
+    command = getattr(args, "graph_command", None)
+    repository = TechnologyGraphRepository()
+    if command == "build":
+        graph, run = TechnologyDependencyGraphEngine(graph_repository=repository).build()
+        print(
+            f"{run.run_id}\tprojects={run.projects_analyzed}\tnodes={run.nodes}\tedges={run.edges} "
+            f"validated={run.validated_dependencies}\trejected={run.rejected_dependencies} "
+            f"graph_coverage={run.graph_coverage:.2f}\ttechnology_coverage={run.technology_coverage:.2f}"
+        )
+        return 0
+    graph = repository.graph()
+    runs = repository.runs()
+    latest = runs[-1] if runs else None
+    metrics_by_project = {item.project_id: item for item in graph.metrics}
+    if command == "status":
+        print(
+            f"nodes={len(graph.nodes)} edges={len(graph.edges)} metrics={len(graph.metrics)} runs={len(runs)} "
+            f"latest_run={latest.run_id if latest else '-'}"
+        )
+        return 0
+    if command == "validate":
+        valid = sum(1 for edge in graph.edges if edge.validation_status == "VALID")
+        invalid = len(graph.edges) - valid
+        duplicate_pairs = len(graph.edges) - len({(edge.source_project, edge.target_project) for edge in graph.edges})
+        print(f"edges={len(graph.edges)} valid={valid} invalid={invalid} duplicate_pairs={duplicate_pairs}")
+        return 0 if invalid == 0 and duplicate_pairs == 0 else 2
+    if command == "coverage":
+        if latest is None:
+            print("projects=0 nodes=0 graph_coverage=0.00 technology_coverage=0.00")
+        else:
+            print(
+                f"projects={latest.projects_analyzed} nodes={latest.nodes} edges={latest.edges} "
+                f"graph_coverage={latest.graph_coverage:.2f} technology_coverage={latest.technology_coverage:.2f}"
+            )
+        return 0
+    if command == "report":
+        for node in graph.nodes:
+            metric = metrics_by_project[node.project_id]
+            outgoing = tuple(edge.target_project for edge in graph.edges if edge.source_project == node.project_id)
+            incoming = tuple(edge.source_project for edge in graph.edges if edge.target_project == node.project_id)
+            print(
+                f"{node.project_id}\tdirect_dependencies={','.join(outgoing) or '-'}"
+                f"\tdependent_projects={','.join(incoming) or '-'}\tdepth={metric.dependency_depth}"
+                f"\tcentrality={metric.dependency_centrality:.4f}"
+                f"\tinfrastructure={metric.infrastructure_centrality:.4f}"
+                f"\treplacement_availability={metric.replacement_availability:.4f}"
+                f"\tspof_risk={metric.single_point_of_failure_risk:.4f}"
+            )
+        return 0
+    if command == "explain":
+        project = str(args.project)
+        node_edges = tuple(
+            edge for edge in graph.edges if edge.source_project == project or edge.target_project == project
+        )
+        if project not in metrics_by_project or not node_edges:
+            print(f"{project}\tUNAVAILABLE\tno validated dependency graph evidence")
+            return 0
+        metric = metrics_by_project[project]
+        print(
+            f"{project}\tcentrality={metric.dependency_centrality:.4f}\tinfrastructure="
+            f"{metric.infrastructure_centrality:.4f}\tcritical_path={','.join(metric.critical_path)}"
+        )
+        for edge in node_edges:
+            print(
+                f"edge={edge.source_project}->{edge.target_project}\ttype={edge.dependency_type}"
+                f"\tevidence={','.join(edge.evidence_ids)}\trepository={','.join(edge.repository_ids)}"
+                f"\tconfidence={edge.dependency_confidence:.4f}\tfreshness={edge.freshness:.4f}"
+                f"\tvalidation={edge.validation_status}"
+            )
+        return 0
+    if command == "path":
+        path = dependency_path(graph, str(args.project_a), str(args.project_b))
+        print("->".join(path) if path else "UNAVAILABLE")
+        return 0
+    if command == "centrality":
+        for metric in sorted(graph.metrics, key=lambda item: item.dependency_centrality, reverse=True):
+            print(
+                f"{metric.project_id}\tcentrality={metric.dependency_centrality:.4f}\tfan_in={metric.fan_in}\tfan_out={metric.fan_out}"
+            )
+        return 0
+    if command == "critical":
+        for metric in sorted(graph.metrics, key=lambda item: item.single_point_of_failure_risk, reverse=True):
+            print(
+                f"{metric.project_id}\tspof_risk={metric.single_point_of_failure_risk:.4f}"
+                f"\tinfrastructure={metric.infrastructure_centrality:.4f}"
+            )
+        return 0
+    print("graph command required")
+    return 1
+
+
+def _economic(args: object) -> int:
+    command = getattr(args, "economic_command", None)
+    repository = EconomicGraphRepository()
+    if command == "build":
+        graph, run = EconomicDependencyGraphEngine(graph_repository=repository).build()
+        print(
+            f"{run.run_id}\tprojects={run.projects_analyzed}\tnodes={run.nodes}\tedges={run.edges} "
+            f"validated={run.validated_relationships}\trejected={run.rejected_relationships} "
+            f"graph_coverage={run.graph_coverage:.2f}\teconomic_coverage={run.economic_coverage:.2f}"
+        )
+        return 0
+    graph = repository.graph()
+    runs = repository.runs()
+    latest = runs[-1] if runs else None
+    metrics_by_project = {item.project_id: item for item in graph.metrics}
+    if command == "status":
+        print(
+            f"nodes={len(graph.nodes)} edges={len(graph.edges)} metrics={len(graph.metrics)} runs={len(runs)} "
+            f"latest_run={latest.run_id if latest else '-'}"
+        )
+        return 0
+    if command == "validate":
+        valid = sum(1 for edge in graph.edges if edge.validation_status == "VALID")
+        invalid = len(graph.edges) - valid
+        duplicate_pairs = len(graph.edges) - len({(edge.source_project, edge.target_project) for edge in graph.edges})
+        print(f"edges={len(graph.edges)} valid={valid} invalid={invalid} duplicate_pairs={duplicate_pairs}")
+        return 0 if invalid == 0 and duplicate_pairs == 0 else 2
+    if command == "coverage":
+        if latest is None:
+            print("projects=0 nodes=0 graph_coverage=0.00 economic_coverage=0.00")
+        else:
+            print(
+                f"projects={latest.projects_analyzed} nodes={latest.nodes} edges={latest.edges} "
+                f"graph_coverage={latest.graph_coverage:.2f} economic_coverage={latest.economic_coverage:.2f}"
+            )
+        return 0
+    if command == "report":
+        for node in graph.nodes:
+            metric = metrics_by_project[node.project_id]
+            revenue = tuple(
+                edge.target_project
+                for edge in graph.edges
+                if edge.source_project == node.project_id
+                and edge.relationship_type in {"revenue_dependency", "fee_dependency"}
+            )
+            capital = tuple(
+                edge.target_project
+                for edge in graph.edges
+                if edge.source_project == node.project_id
+                and edge.relationship_type in {"capital_dependency", "liquidity_dependency", "treasury_dependency"}
+            )
+            print(
+                f"{node.project_id}\trevenue_dependencies={','.join(revenue) or '-'}"
+                f"\tcapital_dependencies={','.join(capital) or '-'}"
+                f"\tvalue_capture={metric.value_capture:.4f}\teconomic_moat={metric.economic_moat:.4f}"
+                f"\tswitching_cost={metric.switching_cost:.4f}"
+                f"\trevenue_concentration={metric.revenue_concentration:.4f}"
+                f"\tcapital_concentration={metric.capital_concentration:.4f}"
+                f"\tcritical_counterparties={','.join(metric.critical_counterparties) or '-'}"
+                f"\tresilience={metric.economic_resilience:.4f}"
+            )
+        return 0
+    if command == "explain":
+        project = str(args.project)
+        node_edges = tuple(
+            edge for edge in graph.edges if edge.source_project == project or edge.target_project == project
+        )
+        if project not in metrics_by_project or not node_edges:
+            print(f"{project}\tUNAVAILABLE\tno validated economic graph evidence")
+            return 0
+        metric = metrics_by_project[project]
+        print(
+            f"{project}\tmoat={metric.economic_moat:.4f}\tvalue_capture={metric.value_capture:.4f}"
+            f"\tcapital_centrality={metric.capital_centrality:.4f}"
+            f"\trevenue_centrality={metric.revenue_centrality:.4f}"
+        )
+        for edge in node_edges:
+            print(
+                f"edge={edge.source_project}->{edge.target_project}\ttype={edge.relationship_type}"
+                f"\tevidence={','.join(edge.evidence_ids)}\trepository={','.join(edge.repository_ids)}"
+                f"\tconfidence={edge.dependency_confidence:.4f}\tfreshness={edge.freshness:.4f}"
+                f"\tvalidation={edge.validation_status}"
+            )
+        return 0
+    if command == "path":
+        path = economic_path(graph, str(args.project_a), str(args.project_b))
+        print("->".join(path) if path else "UNAVAILABLE")
+        return 0
+    if command == "centrality":
+        for metric in sorted(
+            graph.metrics, key=lambda item: item.capital_centrality + item.revenue_centrality, reverse=True
+        ):
+            print(
+                f"{metric.project_id}\tcapital={metric.capital_centrality:.4f}"
+                f"\trevenue={metric.revenue_centrality:.4f}\tmoat={metric.economic_moat:.4f}"
+            )
+        return 0
+    if command == "moat":
+        for metric in sorted(graph.metrics, key=lambda item: item.economic_moat, reverse=True):
+            print(
+                f"{metric.project_id}\tmoat={metric.economic_moat:.4f}"
+                f"\tvalue_capture={metric.value_capture:.4f}\tswitching_cost={metric.switching_cost:.4f}"
+            )
+        return 0
+    print("economic command required")
+    return 1
+
+
+def _scenario(args: object) -> int:
+    command = getattr(args, "scenario_command", None)
+    repository = ScenarioRepository()
+    if command == "run":
+        results, run = ScenarioSimulationEngine(scenario_repository=repository).run()
+        print(
+            f"{run.run_id}\tprojects={run.projects_analyzed}\tscenarios={run.scenarios}"
+            f"\tprojects_simulated={run.projects_simulated}\taffected_nodes={run.affected_nodes}"
+            f"\taffected_edges={run.affected_edges}\tpropagation_depth={run.propagation_depth}"
+            f"\tscenario_coverage={run.scenario_coverage:.2f}"
+        )
+        return 0 if results else 2
+    results = repository.results()
+    runs = repository.runs()
+    latest = runs[-1] if runs else None
+    if command == "status":
+        print(
+            f"scenarios={len(results)} impacts={len(repository.impacts())} runs={len(runs)} "
+            f"latest_run={latest.run_id if latest else '-'}"
+        )
+        return 0
+    if command == "coverage":
+        if latest is None:
+            print("projects=0 scenarios=0 projects_simulated=0 scenario_coverage=0.00")
+        else:
+            print(
+                f"projects={latest.projects_analyzed} scenarios={latest.scenarios}"
+                f"\tprojects_simulated={latest.projects_simulated}"
+                f"\tscenario_coverage={latest.scenario_coverage:.2f}"
+            )
+        return 0
+    if command == "history":
+        for run in runs:
+            print(
+                f"{run.run_id}\tgenerated={run.generated_at.isoformat()}\tprojects={run.projects_analyzed}"
+                f"\tscenarios={run.scenarios}\tprojects_simulated={run.projects_simulated}"
+                f"\tcoverage={run.scenario_coverage:.2f}"
+            )
+        return 0
+    if command == "report":
+        for result in results:
+            direct = sum(1 for impact in result.impacts if impact.direct_impact > 0)
+            indirect = sum(1 for impact in result.impacts if impact.indirect_impact > 0)
+            critical = sorted(
+                {node for impact in result.impacts if impact.system_fragility >= 0.5 for node in impact.affected_nodes}
+            )
+            economic = round(sum(impact.economic_propagation for impact in result.impacts), 4)
+            recovery = _mean_cli(tuple(impact.recovery_difficulty for impact in result.impacts))
+            replacement = _mean_cli(tuple(impact.replacement_availability for impact in result.impacts))
+            infrastructure = _mean_cli(tuple(impact.infrastructure_resilience for impact in result.impacts))
+            economic_resilience = _mean_cli(tuple(impact.economic_resilience for impact in result.impacts))
+            print(
+                f"{result.scenario.scenario_id}\ttype={result.scenario.scenario_type}"
+                f"\ttarget={result.scenario.target_project}\tprojects={len(result.affected_projects)}"
+                f"\tdirect={direct}\tindirect={indirect}"
+                f"\tcritical_dependencies={','.join(critical) or '-'}"
+                f"\teconomic_impact={economic:.4f}\trecovery_difficulty={recovery:.4f}"
+                f"\treplacement_options={replacement:.4f}"
+                f"\tinfrastructure_resilience={infrastructure:.4f}"
+                f"\teconomic_resilience={economic_resilience:.4f}"
+                f"\tconfidence={result.confidence:.4f}"
+            )
+        return 0
+    if command == "explain":
+        for result in results[:5]:
+            print(
+                f"{result.scenario.scenario_id}\ttype={result.scenario.scenario_type}"
+                f"\ttarget={result.scenario.target_project}\tevidence={','.join(result.scenario.evidence_ids)}"
+                f"\trepository={','.join(result.scenario.repository_ids)}"
+            )
+            for impact in result.impacts:
+                print(
+                    f"project={impact.project_id}\tdirect={impact.direct_impact:.4f}"
+                    f"\tindirect={impact.indirect_impact:.4f}"
+                    f"\tdependency_paths={';'.join('->'.join(path) for path in impact.dependency_paths) or '-'}"
+                    f"\teconomic_paths={';'.join('->'.join(path) for path in impact.economic_paths) or '-'}"
+                    f"\tconfidence={impact.confidence:.4f}\tfreshness={impact.freshness:.4f}"
+                    f"\tvalidation={impact.validation_status}"
+                )
+        return 0
+    if command == "compare":
+        if len(results) < 2:
+            print("scenario comparison requires at least two persisted scenarios")
+            return 2
+        comparison = compare_scenarios(results[0], results[1])
+        print(
+            f"left={comparison['left']}\tright={comparison['right']}"
+            f"\tshared={len(comparison['shared'])}\tleft_only={len(comparison['left_only'])}"
+            f"\tright_only={len(comparison['right_only'])}\taffected_delta={comparison['affected_delta']}"
+        )
+        return 0
+    print("scenario command required")
+    return 1
+
+
+def _backtest(args: object) -> int:
+    command = getattr(args, "backtest_command", None)
+    repository = BacktestRepository()
+    if command == "run":
+        run = BacktestingCalibrationEngine(backtest_repository=repository).run()
+        print(
+            f"{run.run_id}\thistorical_runs={run.historical_runs}\tprojects={run.projects_evaluated}"
+            f"\tengines={run.engines_evaluated}\tcoverage={run.coverage:.2f}"
+            f"\thistorical_consistency={run.historical_consistency:.4f}"
+            f"\tcalibration_completeness={run.calibration_completeness:.2f}"
+        )
+        return 0
+    runs = repository.runs()
+    latest = runs[-1] if runs else None
+    if command == "report":
+        if latest is None:
+            print("no persisted backtest run")
+            return 0
+        for metric in latest.engine_metrics:
+            print(
+                f"{metric.engine}\tcoverage={metric.historical_coverage:.2f}\thit_rate={metric.hit_rate:.2f}"
+                f"\tfalse_positives={metric.false_positives}\tfalse_negatives={metric.false_negatives}"
+                f"\tconfidence_calibration={metric.confidence_calibration:.2f}"
+                f"\treliability={metric.prediction_reliability:.2f}"
+                f"\tweaknesses={'coverage' if metric.engine in latest.calibration.coverage_gaps else '-'}"
+                f"\tstrengths={'reliable' if metric.engine in latest.calibration.strong_engines else '-'}"
+            )
+        return 0
+    if command == "history":
+        for run in runs:
+            print(
+                f"{run.run_id}\tgenerated={run.generated_at.isoformat()}\thistorical_runs={run.historical_runs}"
+                f"\tprojects={run.projects_evaluated}\tengines={run.engines_evaluated}"
+                f"\tcoverage={run.coverage:.2f}\tconsistency={run.historical_consistency:.4f}"
+            )
+        return 0
+    if command == "compare":
+        if len(runs) < 2:
+            print("backtest comparison requires at least two persisted runs")
+            return 2
+        comparison = compare_backtests(runs[-2], runs[-1])
+        print(
+            f"left={comparison['left']}\tright={comparison['right']}"
+            f"\tcoverage_delta={comparison['coverage_delta']}"
+            f"\tconsistency_delta={comparison['consistency_delta']}"
+            f"\tcalibration_delta={comparison['calibration_delta']}"
+        )
+        return 0
+    print("backtest command required")
+    return 1
+
+
+def _calibration(args: object) -> int:
+    command = getattr(args, "calibration_command", None)
+    runs = BacktestRepository().runs()
+    latest = runs[-1] if runs else None
+    if latest is None:
+        print("no persisted calibration report")
+        return 0
+    calibration = latest.calibration
+    if command == "report":
+        print(
+            f"{calibration.calibration_id}\tconfidence_calibration={calibration.confidence_calibration:.2f}"
+            f"\tevidence_quality={calibration.evidence_quality:.2f}"
+            f"\thistorical_drift={calibration.historical_drift:.4f}"
+            f"\tweak_engines={','.join(calibration.weak_engines) or '-'}"
+            f"\tstrong_engines={','.join(calibration.strong_engines) or '-'}"
+        )
+        return 0
+    if command == "coverage":
+        print(
+            f"coverage={latest.coverage:.2f}\tcalibration_completeness={latest.calibration_completeness:.2f}"
+            f"\tcoverage_gaps={','.join(calibration.coverage_gaps) or '-'}"
+        )
+        return 0
+    if command == "engines":
+        for metric in latest.engine_metrics:
+            adjustment = calibration.recommended_weight_adjustments.get(metric.engine, 0.0)
+            print(
+                f"{metric.engine}\treliability={metric.prediction_reliability:.2f}"
+                f"\tcoverage={metric.historical_coverage:.2f}"
+                f"\trecommended_adjustment={adjustment:.4f}"
+            )
+        return 0
+    print("calibration command required")
+    return 1
+
+
+def _historical(args: object) -> int:
+    command = getattr(args, "historical_command", None)
+    config = load_historical_validation_config(Path(args.historical_config))
+    repository = HistoricalValidationRepository()
+    historical_repository = HistoricalEvidenceRepository()
+    if command == "cases":
+        for case in config.challenge_cases:
+            print(
+                f"{case.case_id}\t{case.project_id}\t{case.case_type}\tcutoff="
+                f"{case.historical_cutoff_timestamp.isoformat()}\tlifecycle={case.project_lifecycle_state}"
+            )
+        return 0
+    if command == "sync":
+        coverage_before = repository.runs()[-1]["historical_coverage"] if repository.runs() else 0.0
+        identifiers = load_project_identifiers()
+        acquisition_runs = []
+        pipeline = HistoricalAcquisitionPipeline(historical_repository)
+        providers = (
+            CoinGeckoHistoricalProvider(id_map=_historical_coingecko_map(identifiers)),
+            DefiLlamaHistoricalProvider(slug_map=_historical_defillama_map(identifiers)),
+            GitHubHistoricalActivityProvider(repository_map=_historical_github_map(identifiers)),
+            HistoricalRSSAnnouncementsProvider(),
+            GovernanceArchiveProvider(space_map=_historical_governance_map()),
+            InternetArchiveSnapshotProvider(domain_map=_historical_domain_map()),
+        )
+        for provider in providers:
+            acquisition_runs.append(pipeline.sync(provider, tuple(config.challenge_cases)))
+        new_valid = sum(run.valid_count for run in acquisition_runs)
+        if new_valid:
+            replay = HistoricalPointInTimeValidationEngine(
+                config=config,
+                repository=repository,
+                snapshot_builder=HistoricalSnapshotBuilder(historical_repository=historical_repository),
+                allow_snapshot_corrections=True,
+            ).run()
+            snapshots_created = len(replay.snapshots)
+            coverage_after = replay.historical_coverage
+            completed, incomplete = _historical_challenge_counts(replay.challenge_results)
+        else:
+            latest = repository.runs()[-1] if repository.runs() else {}
+            snapshots_created = 0
+            coverage_after = float(latest.get("historical_coverage", 0.0))
+            completed, incomplete = _historical_case_progress()
+        print(
+            f"historical_records_downloaded={sum(run.raw_count for run in acquisition_runs)}"
+            f"\tnormalized={sum(run.normalized_count for run in acquisition_runs)}"
+            f"\tvalid={new_valid}"
+            f"\tinvalid={sum(run.invalid_count for run in acquisition_runs)}"
+            f"\tduplicates={sum(run.duplicate_count for run in acquisition_runs)}"
+            f"\tsnapshots_created={snapshots_created}"
+            f"\tcoverage_before={coverage_before:.2f}"
+            f"\tcoverage_after={coverage_after:.2f}"
+            f"\tcompleted={completed}\tincomplete={incomplete}"
+        )
+        return 0
+    if command == "expand":
+        coverage_before = float(repository.runs()[-1]["historical_coverage"]) if repository.runs() else 0.0
+        identifiers = load_project_identifiers()
+        expansion_cases = _historical_expansion_cases(config)
+        pipeline = HistoricalAcquisitionPipeline(historical_repository)
+        providers = (
+            CoinGeckoHistoricalProvider(
+                id_map=_historical_coingecko_map(identifiers), months_before=12, months_after=24
+            ),
+            DefiLlamaHistoricalProvider(
+                slug_map=_historical_defillama_map(identifiers), months_before=12, months_after=24
+            ),
+            GitHubHistoricalActivityProvider(
+                repository_map=_historical_github_map(identifiers), months_before=6, months_after=0
+            ),
+            HistoricalRSSAnnouncementsProvider(),
+            GovernanceArchiveProvider(space_map=_historical_governance_map()),
+            InternetArchiveSnapshotProvider(domain_map=_historical_domain_map(), months_before=12, months_after=24),
+        )
+        acquisition_runs = [pipeline.sync(provider, expansion_cases) for provider in providers]
+        new_valid = sum(run.valid_count for run in acquisition_runs)
+        if new_valid:
+            replay = HistoricalPointInTimeValidationEngine(
+                config=config,
+                repository=repository,
+                snapshot_builder=HistoricalSnapshotBuilder(historical_repository=historical_repository),
+                allow_snapshot_corrections=True,
+            ).run()
+            snapshots_created = len(replay.snapshots)
+            coverage_after = replay.historical_coverage
+            completed, incomplete = _historical_challenge_counts(replay.challenge_results)
+        else:
+            latest = repository.runs()[-1] if repository.runs() else {}
+            snapshots_created = 0
+            coverage_after = float(latest.get("historical_coverage", 0.0))
+            completed, incomplete = _historical_case_progress()
+        print(
+            f"historical_records_downloaded={sum(run.raw_count for run in acquisition_runs)}"
+            f"\tnormalized={sum(run.normalized_count for run in acquisition_runs)}"
+            f"\tvalid={new_valid}"
+            f"\tinvalid={sum(run.invalid_count for run in acquisition_runs)}"
+            f"\tduplicates={sum(run.duplicate_count for run in acquisition_runs)}"
+            f"\tsnapshots_created={snapshots_created}"
+            f"\tcoverage_before={coverage_before:.2f}"
+            f"\tcoverage_after={coverage_after:.2f}"
+            f"\tcompleted={completed}\tincomplete={incomplete}"
+        )
+        return 0
+    if command == "complete":
+        coverage_before = float(repository.runs()[-1]["historical_coverage"]) if repository.runs() else 0.0
+        identifiers = load_project_identifiers()
+        completion_cases = tuple(config.challenge_cases) + _historical_benchmark_cases(config)
+        outcome_offsets = tuple(int(days) for days in config.evaluation_windows)
+        pipeline = HistoricalAcquisitionPipeline(historical_repository)
+        providers = (
+            CoinGeckoHistoricalProvider(
+                id_map=_historical_coingecko_map(identifiers),
+                months_before=1,
+                months_after=24,
+                extra_offsets_days=outcome_offsets,
+            ),
+            DefiLlamaHistoricalProvider(
+                slug_map=_historical_defillama_map(identifiers),
+                months_before=1,
+                months_after=24,
+                extra_offsets_days=outcome_offsets,
+            ),
+            GitHubHistoricalActivityProvider(
+                repository_map=_historical_github_map(identifiers),
+                months_before=6,
+                months_after=0,
+                extra_offsets_days=outcome_offsets,
+            ),
+            HistoricalRSSAnnouncementsProvider(),
+            GovernanceArchiveProvider(space_map=_historical_governance_map()),
+            InternetArchiveSnapshotProvider(
+                domain_map=_historical_domain_map(),
+                months_before=1,
+                months_after=24,
+                extra_offsets_days=outcome_offsets,
+            ),
+        )
+        acquisition_runs = [pipeline.sync(provider, completion_cases) for provider in providers]
+        new_valid = sum(run.valid_count for run in acquisition_runs)
+        if new_valid:
+            replay = HistoricalPointInTimeValidationEngine(
+                config=config,
+                repository=repository,
+                snapshot_builder=HistoricalSnapshotBuilder(historical_repository=historical_repository),
+                allow_snapshot_corrections=True,
+            ).run()
+            snapshots_created = len(replay.snapshots)
+            coverage_after = replay.historical_coverage
+            completed, incomplete = _historical_challenge_counts(replay.challenge_results)
+        else:
+            replay = HistoricalPointInTimeValidationEngine(
+                config=config,
+                repository=repository,
+                snapshot_builder=HistoricalSnapshotBuilder(historical_repository=historical_repository),
+                append_snapshots=False,
+            ).run()
+            snapshots_created = 0
+            coverage_after = replay.historical_coverage
+            completed, incomplete = _historical_challenge_counts(replay.challenge_results)
+        completed, incomplete = _historical_completion_state_counts(config)
+        outcome_coverage, benchmark_coverage = _historical_outcome_benchmark_coverage()
+        print(
+            f"historical_records_downloaded={sum(run.raw_count for run in acquisition_runs)}"
+            f"\tnormalized={sum(run.normalized_count for run in acquisition_runs)}"
+            f"\tvalid={new_valid}"
+            f"\tinvalid={sum(run.invalid_count for run in acquisition_runs)}"
+            f"\tduplicates={sum(run.duplicate_count for run in acquisition_runs)}"
+            f"\tsnapshots_created={snapshots_created}"
+            f"\tcoverage_before={coverage_before:.2f}"
+            f"\tcoverage_after={coverage_after:.2f}"
+            f"\tcompleted={completed}\tblocked={incomplete}"
+            f"\toutcome_coverage={outcome_coverage:.2f}\tbenchmark_coverage={benchmark_coverage:.2f}"
+        )
+        return 0
+    if command == "status":
+        runs = historical_repository.runs()
+        snapshots = repository.snapshots()
+        latest = runs[-1].run_id if runs else "-"
+        print(
+            f"raw={len(historical_repository.raw())}\tnormalized={len(historical_repository.normalized())}"
+            f"\tvalidations={len(historical_repository.validations())}\truns={len(runs)}"
+            f"\tsnapshots={len(snapshots)}\tlatest_run={latest}"
+        )
+        return 0
+    if command == "validate":
+        counts = Counter(item.status for item in historical_repository.validations())
+        invalid = counts["invalid"] + counts["future"] + counts["corrupted"]
+        print(
+            f"valid={counts['valid']}\tinvalid={counts['invalid']}\tfuture={counts['future']}"
+            f"\tcorrupted={counts['corrupted']}\tduplicates={counts['duplicate']}"
+        )
+        return 0 if invalid == 0 else 2
+    if command == "providers":
+        providers = (
+            CoinGeckoHistoricalProvider(id_map={}),
+            DefiLlamaHistoricalProvider(slug_map={}),
+            GitHubHistoricalActivityProvider(repository_map={}),
+            HistoricalRSSAnnouncementsProvider(),
+            GovernanceArchiveProvider(space_map={}),
+            InternetArchiveSnapshotProvider(domain_map={}),
+        )
+        for provider in providers:
+            metadata = provider.metadata
+            print(f"{metadata.name}\timplemented\tmetrics={','.join(metadata.supported_metrics) or '-'}")
+        for metadata in future_provider_metadata():
+            print(f"{metadata.name}\tfuture\tmetrics={','.join(metadata.supported_metrics) or '-'}")
+        return 0
+    if command == "statistics":
+        validations = historical_repository.validations()
+        counts = Counter(item.status for item in validations)
+        provider_runs = Counter(run.provider for run in historical_repository.runs())
+        projects = {item.project_id for item in historical_repository.normalized()}
+        print(
+            f"raw={len(historical_repository.raw())}\tnormalized={len(historical_repository.normalized())}"
+            f"\tvalid={counts['valid']}\tinvalid={counts['invalid']}\tfuture={counts['future']}"
+            f"\tcorrupted={counts['corrupted']}\tduplicates={counts['duplicate']}"
+            f"\tprojects={len(projects)}"
+            f"\tprovider_runs={','.join(f'{key}:{value}' for key, value in sorted(provider_runs.items())) or '-'}"
+        )
+        return 0
+    if command == "progress":
+        latest = repository.runs()[-1] if repository.runs() else {}
+        completed, incomplete = _historical_case_progress()
+        outcome_coverage, benchmark_coverage = _historical_outcome_benchmark_coverage()
+        print(
+            f"records={len(historical_repository.normalized())}\tsnapshots={len(repository.snapshots())}"
+            f"\tprojects={len({item.project_id for item in historical_repository.normalized()})}"
+            f"\tcoverage={float(latest.get('historical_coverage', 0.0)):.2f}"
+            f"\tcompleted={completed}\tincomplete={incomplete}"
+            f"\toutcome_coverage={outcome_coverage:.2f}\tbenchmark_coverage={benchmark_coverage:.2f}"
+        )
+        return 0
+    if command == "gaps":
+        for row in _historical_gap_rows(config):
+            print(
+                f"{row['case_id']}\tproject={row['project_id']}\tmissing_evidence={row['missing_evidence']}"
+                f"\tmissing_providers={row['missing_providers']}\tmissing_timestamps={row['missing_timestamps']}"
+                f"\tmissing_outcome_windows={row['missing_outcome_windows']}"
+                f"\tmissing_benchmarks={row['missing_benchmarks']}\treplay_blocked_by={row['replay_blocked_by']}"
+                f"\tcoverage={row['coverage']}"
+            )
+        return 0
+    if command == "unresolved":
+        for row in _historical_gap_rows(config):
+            state = "COMPLETE" if row["replay_blocked_by"] == "none" else "BLOCKED_BY_UNAVAILABLE_DATA"
+            print(f"{row['case_id']}\t{state}\tblocked_by={row['replay_blocked_by']}")
+        return 0
+    if command == "summary":
+        latest = repository.runs()[-1] if repository.runs() else {}
+        completed, incomplete = _historical_completion_state_counts(config)
+        outcome_coverage, benchmark_coverage = _historical_outcome_benchmark_coverage()
+        calibration = repository.calibration_metrics()
+        sample_size = calibration[-1].sample_size_status if calibration else "INSUFFICIENT_SAMPLE_SIZE"
+        print(
+            f"records={len(historical_repository.normalized())}\tsnapshots={len(repository.snapshots())}"
+            f"\tprojects={len({item.project_id for item in historical_repository.normalized()})}"
+            f"\thistorical_coverage={float(latest.get('historical_coverage', 0.0)):.2f}"
+            f"\tcompleted={completed}\tblocked={incomplete}"
+            f"\toutcome_coverage={outcome_coverage:.2f}\tbenchmark_coverage={benchmark_coverage:.2f}"
+            f"\tcalibration_readiness={sample_size}"
+        )
+        return 0
+    if command in {"build", "replay", "evaluate"}:
+        selected = getattr(args, "project", None) if command == "build" else getattr(args, "case_id", None)
+        try:
+            run = HistoricalPointInTimeValidationEngine(config=config, repository=repository).run(case_id=selected)
+        except ValueError as error:
+            if "immutable historical snapshots already exist" not in str(error):
+                raise
+            run = HistoricalPointInTimeValidationEngine(
+                config=config, repository=repository, append_snapshots=False
+            ).run(case_id=selected)
+            print(f"snapshots already up to date, replayed from existing evidence: {error}")
+        HistoricalValidationRenderer().write_reports(run)
+        print(
+            f"{run.run_id}\tcases={len(run.cases)}\tsnapshots={len(run.snapshots)}"
+            f"\tengine_outputs={len(run.engine_outputs)}\toutcomes={len(run.outcomes)}"
+            f"\tcoverage={run.historical_coverage:.2f}\tleakage={'PASS' if run.leakage_passed else 'FAIL'}"
+            f"\tsurvivorship={'PASS' if run.survivorship_passed else 'FAIL'}"
+            f"\tsample_size={run.sample_size_status}"
+        )
+        return 0
+    historical_runs: tuple[dict[str, Any], ...] = repository.runs()
+    latest_run = historical_runs[-1] if historical_runs else None
+    if command == "coverage":
+        coverage = float(latest_run.get("historical_coverage", 0.0)) if latest_run else 0.0
+        case_count = int(latest_run.get("case_count", 0)) if latest_run else 0
+        print(f"runs={len(historical_runs)}\tcoverage={coverage:.2f}" f"\tcases={case_count}")
+        return 0
+    if command == "leakage-check":
+        validations = repository.bias_validations()
+        failed = tuple(item for item in validations if not item.leakage_passed)
+        print(f"cases={len(validations)} leakage_failures={len(failed)} result={'PASS' if not failed else 'FAIL'}")
+        return 0 if not failed else 2
+    if command == "survivorship-check":
+        validations = repository.bias_validations()
+        failed = tuple(item for item in validations if not item.survivorship_passed)
+        print(f"cases={len(validations)} survivorship_failures={len(failed)} result={'PASS' if not failed else 'FAIL'}")
+        return 0 if not failed else 2
+    if command == "calibration":
+        metrics = repository.calibration_metrics()
+        latest_metric = metrics[-1] if metrics else None
+        print(
+            f"metrics={len(metrics)} sample_size="
+            f"{latest_metric.sample_size_status if latest_metric else 'INSUFFICIENT_SAMPLE_SIZE'}"
+        )
+        return 0
+    if command == "engines":
+        rows = _read_jsonl_cli(Path("data/historical_validation/engine_metrics.jsonl"))
+        for row in rows:
+            print(
+                f"{row['engine']}\tavailability={row['historical_availability']}"
+                f"\tsample_count={row['sample_count']}\tevidence_quality={row['evidence_quality']}"
+            )
+        return 0
+    if command == "outcomes":
+        for row in _read_jsonl_cli(Path("data/historical_validation/outcomes.jsonl")):
+            print(f"{row['case_id']}\t{row['project_id']}\t{row['final_success_label']}")
+        return 0
+    if command == "challenges":
+        for row in _read_jsonl_cli(Path("data/historical_validation/challenge_results.jsonl")):
+            print(
+                f"{row['case_id']}\t{row['project_id']}\tdecision={row['committee_decision']}"
+                f"\toutcome={row['realized_outcome']}\tcorrect={row['was_hunter_correct']}"
+            )
+        return 0
+    if command == "report":
+        rows = _read_jsonl_cli(Path("data/historical_validation/challenge_results.jsonl"))
+        case_id = getattr(args, "case_id", None)
+        for row in rows:
+            if case_id and row["case_id"] != case_id:
+                continue
+            print(
+                f"{row['case_id']}\tproject={row['project_id']}\tcutoff={row['historical_cutoff_timestamp']}"
+                f"\tdecision={row['committee_decision']}\tprobability={row['probability']}"
+                f"\topportunity={row['opportunity']}\trisk={row['risk']}\toutcome={row['realized_outcome']}"
+                f"\tbenchmark={row['benchmark_outcome']}\texcess_return={row['excess_return']}"
+                f"\tmax_drawdown={row['maximum_drawdown']}\tcorrect={row['was_hunter_correct']}"
+                f"\tleakage={row['leakage_validation']}\tsurvivorship={row['survivorship_validation']}"
+            )
+        return 0
+    if command == "compare":
+        rows = {
+            row["case_id"]: row for row in _read_jsonl_cli(Path("data/historical_validation/challenge_results.jsonl"))
+        }
+        left = rows.get(args.case_a)
+        right = rows.get(args.case_b)
+        if left is None or right is None:
+            print("historical comparison requires two persisted cases")
+            return 2
+        print(
+            f"left={left['case_id']}\tright={right['case_id']}\tleft_outcome={left['realized_outcome']}"
+            f"\tright_outcome={right['realized_outcome']}\tleft_decision={left['committee_decision']}"
+            f"\tright_decision={right['committee_decision']}"
+        )
+        return 0
+    print("historical command required")
+    return 1
+
+
+def _historical_coingecko_map(identifiers: dict[str, Any]) -> dict[str, str]:
+    return {
+        project_id: identifier.coingecko_id
+        for project_id, identifier in identifiers.items()
+        if identifier.coingecko_id and not identifier.unsupported and not identifier.ambiguous
+    }
+
+
+def _historical_defillama_map(identifiers: dict[str, Any]) -> dict[str, str]:
+    return {
+        project_id: identifier.defillama_slug
+        for project_id, identifier in identifiers.items()
+        if identifier.defillama_slug and not identifier.defillama_unsupported and not identifier.defillama_ambiguous
+    }
+
+
+def _historical_github_map(identifiers: dict[str, Any]) -> dict[str, tuple[str, ...]]:
+    return {
+        project_id: identifier.github_repositories
+        for project_id, identifier in identifiers.items()
+        if identifier.github_repositories and not identifier.github_unsupported and not identifier.github_ambiguous
+    }
+
+
+def _historical_governance_map(path: str | Path = "configs/governance_spaces.yaml") -> dict[str, str]:
+    import yaml
+
+    location = Path(path)
+    if not location.exists():
+        return {}
+    data = yaml.safe_load(location.read_text(encoding="utf-8")) or {}
+    return {str(project_id): str(space) for project_id, space in data.items() if space}
+
+
+def _historical_domain_map(path: str | Path = "configs/project_domains.yaml") -> dict[str, str]:
+    import yaml
+
+    location = Path(path)
+    if not location.exists():
+        return {}
+    data = yaml.safe_load(location.read_text(encoding="utf-8")) or {}
+    return {str(project_id): str(domain) for project_id, domain in data.items() if domain}
+
+
+def _historical_challenge_counts(challenges: object) -> tuple[int, int]:
+    rows = tuple(challenges) if isinstance(challenges, tuple | list) else ()
+    completed = sum(1 for row in rows if getattr(row, "realized_outcome", "") != "INSUFFICIENT_OUTCOME_DATA")
+    return completed, len(rows) - completed
+
+
+def _historical_expansion_cases(config: Any) -> tuple[Any, ...]:
+    challenge_cases = tuple(config.challenge_cases)
+    existing = {case.project_id for case in challenge_cases}
+    market_config = load_market_validation_config()
+    universe_cases = []
+    for project in market_config.project_universe:
+        if project.project_id in existing:
+            continue
+        universe_cases.append(
+            _historical_universe_case(
+                project_id=project.project_id,
+                name=project.name,
+                sector=project.sector,
+                timestamp=market_config.effective_at,
+            )
+        )
+    return challenge_cases + tuple(universe_cases)
+
+
+def _historical_benchmark_cases(config: Any) -> tuple[Any, ...]:
+    benchmark_ids = tuple(item for item in config.benchmarks if item in {"bitcoin", "ethereum"})
+    cases = []
+    for case in config.challenge_cases:
+        for benchmark_id in benchmark_ids:
+            cases.append(
+                _historical_universe_case(
+                    project_id=benchmark_id,
+                    name=benchmark_id.title(),
+                    sector="benchmark",
+                    timestamp=case.evaluation_timestamp,
+                    case_id=f"benchmark-{benchmark_id}-for-{case.case_id}",
+                )
+            )
+    return tuple(cases)
+
+
+def _historical_universe_case(
+    *,
+    project_id: str,
+    name: str,
+    sector: str,
+    timestamp: datetime,
+    case_id: str | None = None,
+) -> Any:
+    from hunter.historical.models import HistoricalValidationCase
+
+    return HistoricalValidationCase(
+        case_id=case_id or f"universe-{project_id}-{timestamp.date().isoformat()}",
+        project_id=project_id,
+        project_slug=project_id,
+        project_name=name,
+        symbol=project_id[:8].upper(),
+        sector=sector,
+        case_type="NEUTRAL_CONTROL",
+        evaluation_timestamp=timestamp,
+        historical_cutoff_timestamp=timestamp,
+        project_lifecycle_state="active",
+        token_lifecycle_state="active",
+    )
+
+
+def _historical_case_progress() -> tuple[int, int]:
+    rows = _read_jsonl_cli(Path("data/historical_validation/challenge_results.jsonl"))
+    completed = sum(1 for row in rows if row.get("realized_outcome") != "INSUFFICIENT_OUTCOME_DATA")
+    return completed, len(rows) - completed
+
+
+def _historical_completion_state_counts(config: Any) -> tuple[int, int]:
+    rows = _historical_gap_rows(config)
+    completed = sum(1 for row in rows if row["replay_blocked_by"] == "none")
+    return completed, len(rows) - completed
+
+
+def _historical_outcome_benchmark_coverage() -> tuple[float, float]:
+    outcomes = _read_jsonl_cli(Path("data/historical_validation/outcomes.jsonl"))
+    benchmarks = _read_jsonl_cli(Path("data/historical_validation/benchmark_outcomes.jsonl"))
+    outcome_coverage = (
+        round(
+            (
+                sum(1 for row in outcomes if row.get("final_success_label") != "INSUFFICIENT_OUTCOME_DATA")
+                / len(outcomes)
+            )
+            * 100.0,
+            2,
+        )
+        if outcomes
+        else 0.0
+    )
+    benchmark_coverage = (
+        round((sum(1 for row in benchmarks if row.get("excess_return") is not None) / len(benchmarks)) * 100.0, 2)
+        if benchmarks
+        else 0.0
+    )
+    return outcome_coverage, benchmark_coverage
+
+
+def _historical_gap_rows(config: Any) -> tuple[dict[str, str], ...]:
+    validation_repository = HistoricalValidationRepository()
+    acquisition_repository = HistoricalEvidenceRepository()
+    latest_snapshots = _latest_snapshots_by_case(validation_repository)
+    outcomes = {row["case_id"]: row for row in _read_jsonl_cli(Path("data/historical_validation/outcomes.jsonl"))}
+    benchmark_rows = _read_jsonl_cli(Path("data/historical_validation/benchmark_outcomes.jsonl"))
+    valid_historical = {item.evidence_id for item in acquisition_repository.validations() if item.status == "valid"}
+    normalized = tuple(item for item in acquisition_repository.normalized() if item.evidence_id in valid_historical)
+    rows = []
+    for case in config.challenge_cases:
+        snapshot = latest_snapshots.get(case.case_id)
+        missing_evidence = tuple(snapshot.missing_evidence if snapshot else config.required_evidence)
+        case_records = tuple(item for item in normalized if item.case_id == case.case_id)
+        missing_providers = tuple(
+            provider
+            for provider, expected in {
+                "coingecko-historical": "historical_market",
+                "defillama-historical": "historical_protocol",
+                "github-historical": "historical_developer",
+                "historical-rss-announcements": "historical_narrative",
+            }.items()
+            if not any(item.provider == provider and item.metric == expected for item in case_records)
+        )
+        outcome = outcomes.get(case.case_id, {})
+        missing_windows = tuple(
+            str(window.get("window_days"))
+            for window in outcome.get("windows", ())
+            if isinstance(window, dict) and window.get("simple_return") is None
+        )
+        missing_benchmarks = tuple(
+            str(row.get("window_days"))
+            for row in benchmark_rows
+            if row.get("case_id") == case.case_id and row.get("excess_return") is None
+        )
+        missing_timestamps = _missing_window_timestamps(case, config.evaluation_windows, normalized)
+        coverage = _case_snapshot_coverage(snapshot)
+        blocked = _blocked_reason(missing_evidence, missing_windows, missing_benchmarks)
+        rows.append(
+            {
+                "case_id": case.case_id,
+                "project_id": case.project_id,
+                "missing_evidence": ",".join(missing_evidence) or "none",
+                "missing_providers": ",".join(missing_providers) or "none",
+                "missing_timestamps": ",".join(missing_timestamps) or "none",
+                "missing_outcome_windows": ",".join(missing_windows) or "none",
+                "missing_benchmarks": ",".join(missing_benchmarks) or "none",
+                "replay_blocked_by": blocked,
+                "coverage": f"{coverage:.2f}",
+            }
+        )
+    return tuple(rows)
+
+
+def _latest_snapshots_by_case(repository: HistoricalValidationRepository) -> dict[str, Any]:
+    snapshots: dict[str, Any] = {}
+    for snapshot in repository.snapshots():
+        current = snapshots.get(snapshot.case_id)
+        if current is None or snapshot.version > current.version:
+            snapshots[snapshot.case_id] = snapshot
+    return snapshots
+
+
+def _missing_window_timestamps(case: Any, windows: tuple[int, ...], normalized: tuple[Any, ...]) -> tuple[str, ...]:
+    project_rows = tuple(
+        item for item in normalized if item.project_id == case.project_id and item.metric == "historical_market"
+    )
+    missing = []
+    for days in windows:
+        end = case.evaluation_timestamp + timedelta(days=int(days))
+        has_start = any(item.event_timestamp <= case.evaluation_timestamp for item in project_rows)
+        has_end = any(case.evaluation_timestamp < item.event_timestamp <= end for item in project_rows)
+        if not has_start or not has_end:
+            missing.append(f"{days}d")
+    return tuple(missing)
+
+
+def _case_snapshot_coverage(snapshot: Any | None) -> float:
+    if snapshot is None:
+        return 0.0
+    available = len(snapshot.evidence)
+    total = available + len(snapshot.missing_evidence)
+    return round((available / max(total, 1)) * 100.0, 2)
+
+
+def _blocked_reason(
+    missing_evidence: tuple[str, ...],
+    missing_windows: tuple[str, ...],
+    missing_benchmarks: tuple[str, ...],
+) -> str:
+    reasons = []
+    if missing_evidence:
+        reasons.append("missing_evidence")
+    if missing_windows:
+        reasons.append("missing_outcome_windows")
+    if missing_benchmarks:
+        reasons.append("missing_benchmarks")
+    return ",".join(reasons) or "none"
+
+
+def _acquisition(args: object) -> int:
+    config = load_acquisition_config(Path(args.acquisition_config))
+    registry = ProviderRegistry()
+    repository = InMemoryAcquisitionRepository()
+    command = getattr(args, "acquisition_command", None)
+    if command == "status":
+        enabled = "enabled" if config.enabled else "disabled"
+        print(f"acquisition={enabled} providers={len(config.providers)} cache={config.cache.enabled}")
+        return 0
+    if command == "providers":
+        if not registry.providers():
+            print("no providers registered")
+            return 0
+        for provider in registry.providers():
+            metadata = provider.metadata
+            print(f"{metadata.name}\t{metadata.availability}\t{','.join(metadata.supported_metrics)}")
+        return 0
+    if command == "validate":
+        print(f"configuration valid providers={len(config.providers)}")
+        return 0
+    if command == "sync":
+        print("no enabled providers registered")
+        return 0
+    if command == "history":
+        print(f"runs={len(repository.history())}")
+        return 0
+    if command == "health":
+        print(f"checked_at={datetime.now(tz=UTC).isoformat()} providers={len(registry.providers())}")
+        return 0
+    print("acquisition command required")
+    return 1
+
+
+def _auth(args: object) -> int:
+    config = load_auth_config(Path(args.providers_config))
+    registry = AuthRegistry(config)
+    command = getattr(args, "auth_command", None)
+    if command == "status":
+        for provider in registry.providers():
+            state = registry.state(provider.name)
+            print(f"{provider.name}\t{state.mode}\t{state.credential_status}\t{state.credential_source or '-'}")
+        return 0
+    if command == "validate":
+        invalid = 0
+        for provider in registry.providers():
+            state = registry.state(provider.name)
+            if state.mode == "disabled" or state.credential_status == "invalid":
+                invalid += 1
+            print(f"{provider.name}\t{state.credential_status}\t{state.message}")
+        return 0 if invalid == 0 else 2
+    if command == "providers":
+        for provider in registry.providers():
+            print(f"{provider.name}\t{','.join(provider_capabilities(provider))}")
+        return 0
+    if command == "quota":
+        for provider in registry.providers():
+            quota = registry.quota(provider.name)
+            limit = "-" if quota.limit is None else str(quota.limit)
+            remaining = "-" if quota.remaining is None else str(quota.remaining)
+            mode = "authenticated" if quota.authenticated else "anonymous"
+            print(f"{provider.name}\t{mode}\tlimit={limit}\tremaining={remaining}\tsource={quota.source}")
+        return 0
+    if command == "doctor":
+        for provider in registry.providers():
+            state = registry.state(provider.name)
+            quota = registry.quota(provider.name)
+            print(
+                f"{provider.name}\tmode={state.mode}\tcredential={state.credential_status}"
+                f"\tquota={quota.remaining if quota.remaining is not None else '-'}"
+                f"\tmessage={state.message}"
+            )
+        return 0
+    print("auth command required")
+    return 1
+
+
+def _coingecko(args: object) -> int:
+    config = load_acquisition_config(Path(args.acquisition_config))
+    provider_config = next((item for item in config.providers if item.name == "coingecko"), None)
+    command = getattr(args, "coingecko_command", None)
+    if command == "status":
+        state = "enabled" if provider_config and provider_config.enabled else "disabled"
+        repository = FileAcquisitionRepository()
+        valid_ids = {evidence_id for evidence_id, item in repository.validations.items() if item.status == "valid"}
+        coingecko_normalized = tuple(item for item in repository.normalized.values() if item.provider == "coingecko")
+        print(
+            f"coingecko={state} raw={sum(1 for item in repository.raw.values() if item.provider == 'coingecko')} "
+            f"normalized={len(coingecko_normalized)} valid={sum(1 for item in coingecko_normalized if item.evidence_id in valid_ids)}"
+        )
+        return 0
+    if command == "health":
+        state = "enabled" if provider_config and provider_config.enabled else "disabled"
+        stats = _coingecko_persistent_statistics(
+            FileAcquisitionRepository(),
+            universe_targets=_coingecko_universe_targets(args),
+        )
+        print(
+            f"coingecko={state} success_rate={stats['success_rate']:.4f} retries={stats['retry_count']} "
+            f"rate_limits={stats['rate_limit_count']} accepted={stats['accepted']} rejected={stats['rejected']}"
+        )
+        return 0
+    if command == "statistics":
+        stats = _coingecko_persistent_statistics(
+            FileAcquisitionRepository(),
+            universe_targets=_coingecko_universe_targets(args),
+        )
+        print(
+            f"raw={stats['raw']} normalized={stats['normalized']} valid={stats['valid']} "
+            f"duplicate={stats['duplicate']} stale={stats['stale']} invalid={stats['invalid']} "
+            f"market_coverage={stats['market_coverage']:.2f} detail_coverage={stats['detail_coverage']:.2f} "
+            f"accepted={stats['accepted']} rejected={stats['rejected']} pending={stats['pending']} "
+            f"rejection_reasons={stats['rejection_reasons']}"
+        )
+        return 0
+    if command == "pending":
+        stats = _coingecko_persistent_statistics(
+            FileAcquisitionRepository(),
+            universe_targets=_coingecko_universe_targets(args),
+        )
+        print(f"pending_detail_enrichment={stats['pending']} targets={stats['pending_targets']}")
+        return 0
+    if command in {"universe", "unresolved", "resolve"}:
+        if provider_config is None:
+            print("coingecko provider not configured")
+            return 0
+        if not provider_config.enabled:
+            print("coingecko provider not enabled")
+            return 0
+        resolutions = _coingecko_identifier_resolutions(args, provider_config, config)
+        counts = Counter(row.status for row in resolutions)
+        accepted = _coingecko_persistent_statistics(
+            FileAcquisitionRepository(),
+            universe_targets=_coingecko_universe_targets(args),
+        )
+        print(
+            f"configured={len(resolutions)} resolved={counts['RESOLVED']} unresolved="
+            f"{len(resolutions) - counts['RESOLVED'] - counts['UNSUPPORTED']} unsupported={counts['UNSUPPORTED']} "
+            f"invalid_mappings={counts['INVALID_ID'] + counts['AMBIGUOUS']} "
+            f"accepted_market_records={accepted['market_records']} market_coverage={accepted['market_coverage']:.2f}"
+        )
+        rows = resolutions if command in {"unresolved", "resolve"} else ()
+        for row in rows:
+            if command == "unresolved" and row.status in {"RESOLVED", "UNSUPPORTED"}:
+                continue
+            print(f"{row.project_id}\t{row.coingecko_id or '-'}\t{row.status}\t{row.reason}")
+        return 0
+    if command == "validate":
+        if provider_config is None:
+            print("coingecko provider not configured")
+            return 0
+        print("coingecko configuration valid")
+        return 0
+    if command in {"sync", "resume"}:
+        if provider_config is None or not provider_config.enabled:
+            print("coingecko provider not enabled")
+            return 0
+        settings = provider_config.settings or {}
+        provider = CoinGeckoProvider(_coingecko_provider_config(provider_config, config))
+        resolutions = _coingecko_identifier_resolutions(args, provider_config, config)
+        project_ids = coingecko_sync_ids(resolutions)
+        target_map = coingecko_target_map(resolutions)
+        repository = FileAcquisitionRepository()
+        detail_cache = _coingecko_detail_cache(
+            repository,
+            ttl_seconds=int(settings.get("detail_metadata_ttl_seconds", 604_800)),
+            as_of=datetime.now(tz=UTC),
+        )
+        requested_at = datetime.now(tz=UTC)
+        pipeline = AcquisitionPipeline(
+            normalizer=CoinGeckoEvidenceNormalizer(),
+            validator=EvidenceAcquisitionValidator(
+                stale_after_seconds=config.stale_after_seconds,
+                minimum_confidence=1.0,
+            ),
+            repository=repository,
+            config=config,
+        )
+        run = pipeline.sync(
+            provider,
+            AcquisitionRequest(
+                domain="market",
+                metric="coingecko_market_profile",
+                target_id="configured-projects",
+                requested_at=requested_at,
+                mode="resume" if command == "resume" else "incremental",
+                parameters={"project_ids": project_ids, "target_map": target_map, "detail_cache": detail_cache},
+            ),
+        )
+        print(
+            f"{run.run_id}\trequested={len(resolutions)}\tresolved={len(project_ids)}"
+            f"\traw={run.raw_count}\tnormalized={run.normalized_count}"
+            f"\tvalid={run.valid_count}\tinvalid={run.invalid_count}"
+            f"\tmarket_accepted={provider.statistics.accepted_record_count}"
+            f"\tdetail_accepted={provider.statistics.accepted_detail_count}"
+            f"\treused_from_cache={provider.statistics.cached_detail_count}"
+            f"\tdeferred={provider.statistics.deferred_detail_count}"
+            f"\tpending_enrichment={provider.statistics.deferred_detail_count}"
+            f"\trejected={provider.statistics.rejected_record_count}"
+            f"\tretried={provider.statistics.retry_count}"
+            f"\trate_limited={provider.statistics.rate_limit_count}"
+            f"\tsucceeded={provider.statistics.success_count}"
+            f"\tsuccess_rate={provider.statistics.success_rate:.4f}"
+        )
+        return 0
+    print("coingecko command required")
+    return 1
+
+
+def _defillama(args: object) -> int:
+    config = load_acquisition_config(Path(args.acquisition_config))
+    provider_config = next((item for item in config.providers if item.name == "defillama"), None)
+    command = getattr(args, "defillama_command", None)
+    repository = FileAcquisitionRepository()
+    stats = _defillama_persistent_statistics(repository, universe_targets=_defillama_universe_targets(args))
+    if command == "status":
+        state = "enabled" if provider_config and provider_config.enabled else "disabled"
+        print(
+            f"defillama={state} raw={stats['raw']} normalized={stats['normalized']} valid={stats['valid']} "
+            f"tvl_coverage={stats['tvl_coverage']:.2f} revenue_coverage={stats['revenue_coverage']:.2f} "
+            f"fee_coverage={stats['fee_coverage']:.2f}"
+        )
+        return 0
+    if command == "validate":
+        if provider_config is None:
+            print("defillama provider not configured")
+            return 0
+        print("defillama configuration valid")
+        return 0
+    if command in {"unresolved", "resolve"}:
+        if provider_config is None:
+            print("defillama provider not configured")
+            return 0
+        if not provider_config.enabled:
+            print("defillama provider not enabled")
+            return 0
+        resolutions = _defillama_identifier_resolutions(args, provider_config, config)
+        counts = Counter(row.status for row in resolutions)
+        print(
+            f"configured={len(resolutions)} resolved={counts['RESOLVED']} "
+            f"unresolved={len(resolutions) - counts['RESOLVED'] - counts['UNSUPPORTED']} "
+            f"unsupported={counts['UNSUPPORTED']} invalid_mappings={counts['INVALID_ID'] + counts['AMBIGUOUS']} "
+            f"accepted_records={stats['protocol_records']} tvl_coverage={stats['tvl_coverage']:.2f} "
+            f"revenue_coverage={stats['revenue_coverage']:.2f} fee_coverage={stats['fee_coverage']:.2f}"
+        )
+        for row in resolutions:
+            if command == "unresolved" and row.status in {"RESOLVED", "UNSUPPORTED"}:
+                continue
+            print(f"{row.project_id}\t{row.coingecko_id or '-'}\t{row.status}\t{row.reason}")
+        return 0
+    if command == "sync":
+        if provider_config is None or not provider_config.enabled:
+            print("defillama provider not enabled")
+            return 0
+        provider = DefiLlamaProvider(_defillama_provider_config(provider_config, config))
+        resolutions = _defillama_identifier_resolutions(args, provider_config, config)
+        protocol_slugs = defillama_sync_ids(resolutions)
+        target_map = defillama_target_map(resolutions)
+        pipeline = AcquisitionPipeline(
+            normalizer=DefiLlamaEvidenceNormalizer(),
+            validator=EvidenceAcquisitionValidator(
+                stale_after_seconds=config.stale_after_seconds,
+                minimum_confidence=1.0,
+            ),
+            repository=repository,
+            config=config,
+        )
+        run = pipeline.sync(
+            provider,
+            AcquisitionRequest(
+                domain="protocol",
+                metric="defillama_protocol_profile",
+                target_id="configured-projects",
+                requested_at=datetime.now(tz=UTC),
+                mode="incremental",
+                parameters={"project_ids": protocol_slugs, "target_map": target_map},
+            ),
+        )
+        print(
+            f"{run.run_id}\tconfigured={len(resolutions)}\tresolved={len(protocol_slugs)}"
+            f"\traw={run.raw_count}\tnormalized={run.normalized_count}\tvalid={run.valid_count}"
+            f"\tinvalid={run.invalid_count}\taccepted={provider.statistics.accepted_record_count}"
+            f"\trejected={provider.statistics.rejected_record_count}\ttvl={provider.statistics.tvl_record_count}"
+            f"\trevenue={provider.statistics.revenue_record_count}\tfees={provider.statistics.fee_record_count}"
+            f"\trate_limits={provider.statistics.rate_limit_count}\tretries={provider.statistics.retry_count}"
+            f"\tsuccess_rate={provider.statistics.success_rate:.4f}"
+        )
+        return 0
+    print("defillama command required")
+    return 1
+
+
+def _github(args: object) -> int:
+    config = load_acquisition_config(Path(args.acquisition_config))
+    provider_config = next((item for item in config.providers if item.name == "github"), None)
+    command = getattr(args, "github_command", None)
+    repository = FileAcquisitionRepository()
+    stats = _github_persistent_statistics(repository, universe_targets=_github_universe_targets(args))
+    if command == "status":
+        state = "enabled" if provider_config and provider_config.enabled else "disabled"
+        print(
+            f"github={state} raw={stats['raw']} normalized={stats['normalized']} valid={stats['valid']} "
+            f"commit_coverage={stats['commit_coverage']:.2f} "
+            f"contributor_coverage={stats['contributor_coverage']:.2f} "
+            f"release_coverage={stats['release_coverage']:.2f}"
+        )
+        return 0
+    if command == "validate":
+        if provider_config is None:
+            print("github provider not configured")
+            return 0
+        print("github configuration valid")
+        return 0
+    if command == "statistics":
+        print(
+            f"raw={stats['raw']} normalized={stats['normalized']} valid={stats['valid']} "
+            f"accepted_records={stats['repository_records']} "
+            f"commit_coverage={stats['commit_coverage']:.2f} "
+            f"contributor_coverage={stats['contributor_coverage']:.2f} "
+            f"release_coverage={stats['release_coverage']:.2f}"
+        )
+        return 0
+    if command in {"resolve", "unresolved"}:
+        if provider_config is None:
+            print("github provider not configured")
+            return 0
+        if not provider_config.enabled:
+            print("github provider not enabled")
+            return 0
+        resolutions = _github_identifier_resolutions(args, provider_config, config)
+        counts = Counter(row.status for row in resolutions)
+        print(
+            f"configured={len(_github_universe_targets(args))} resolved={counts['RESOLVED']} "
+            f"unresolved={len(resolutions) - counts['RESOLVED'] - counts['UNSUPPORTED']} "
+            f"unsupported={counts['UNSUPPORTED']} invalid_mappings={counts['INVALID_ID'] + counts['AMBIGUOUS']} "
+            f"accepted_records={stats['repository_records']} commit_coverage={stats['commit_coverage']:.2f} "
+            f"contributor_coverage={stats['contributor_coverage']:.2f} "
+            f"release_coverage={stats['release_coverage']:.2f}"
+        )
+        for row in resolutions:
+            if command == "unresolved" and row.status in {"RESOLVED", "UNSUPPORTED"}:
+                continue
+            print(f"{row.project_id}\t{row.repository or '-'}\t{row.status}\t{row.reason}")
+        return 0
+    if command == "sync":
+        if provider_config is None or not provider_config.enabled:
+            print("github provider not enabled")
+            return 0
+        provider = GitHubProvider(_github_provider_config(provider_config, config))
+        resolutions = _github_configured_resolutions(args)
+        repositories = github_sync_ids(resolutions)
+        target_map = github_target_map(resolutions)
+        pipeline = AcquisitionPipeline(
+            normalizer=GitHubEvidenceNormalizer(),
+            validator=EvidenceAcquisitionValidator(
+                stale_after_seconds=config.stale_after_seconds,
+                minimum_confidence=1.0,
+            ),
+            repository=repository,
+            config=config,
+        )
+        run = pipeline.sync(
+            provider,
+            AcquisitionRequest(
+                domain="github",
+                metric="github_repository_profile",
+                target_id="configured-projects",
+                requested_at=datetime.now(tz=UTC),
+                mode="incremental",
+                parameters={
+                    "project_ids": repositories,
+                    "target_map": target_map,
+                    "response_cache": _github_response_cache(repository),
+                },
+            ),
+        )
+        print(
+            f"{run.run_id}\tconfigured={len(_github_universe_targets(args))}\tresolved={len(repositories)}"
+            f"\traw={run.raw_count}\tnormalized={run.normalized_count}\tvalid={run.valid_count}"
+            f"\tinvalid={run.invalid_count}\taccepted={provider.statistics.accepted_record_count}"
+            f"\trejected={provider.statistics.rejected_record_count}\tcommits={provider.statistics.commit_record_count}"
+            f"\tcontributors={provider.statistics.contributor_record_count}"
+            f"\treleases={provider.statistics.release_record_count}"
+            f"\tetag_reused={provider.statistics.etag_reused_count}"
+            f"\trate_limits={provider.statistics.rate_limit_count}\tretries={provider.statistics.retry_count}"
+            f"\tsuccess_rate={provider.statistics.success_rate:.4f}"
+        )
+        return 0
+    print("github command required")
+    return 1
+
+
+def _coingecko_sources(repository: FileAcquisitionRepository) -> dict[str, tuple[EngineValidationSource, ...]]:
+    sources: dict[str, list[EngineValidationSource]] = {}
+    valid_ids = {evidence_id for evidence_id, item in repository.validations.items() if item.status == "valid"}
+    latest: dict[str, NormalizedEvidence] = {}
+    for candidate in repository.normalized.values():
+        if (
+            candidate.provider != "coingecko"
+            or candidate.metric != "coingecko_market_profile"
+            or candidate.evidence_id not in valid_ids
+        ):
+            continue
+        current = latest.get(candidate.target_id)
+        if current is None or candidate.retrieved_at > current.retrieved_at:
+            latest[candidate.target_id] = candidate
+    for evidence in latest.values():
+        sources.setdefault(evidence.target_id, []).append(
+            EngineValidationSource(
+                engine="valuation",
+                score=0.0,
+                confidence=evidence.confidence,
+                timestamp=evidence.retrieved_at,
+                freshness=evidence.freshness,
+                source_record_ids=(evidence.raw_evidence_id,),
+                evidence_ids=(evidence.evidence_id,),
+                source="coingecko",
+                collector=evidence.collector,
+                repository_ids=(evidence.repository_id,),
+                validation_status="VALID",
+                status="AVAILABLE",
+                raw_input_metrics={
+                    key: value
+                    for key, value in evidence.raw_metrics.items()
+                    if isinstance(value, str | int | float | bool) or value is None
+                },
+                normalized_inputs=dict(evidence.normalized_metrics),
+                applied_weight=0.0,
+                weighted_contribution=0.0,
+            )
+        )
+    return {project: tuple(items) for project, items in sources.items()}
+
+
+def _mean_cli(values: tuple[float, ...]) -> float:
+    if not values:
+        return 0.0
+    return round(sum(values) / len(values), 4)
+
+
+def _read_jsonl_cli(path: Path) -> tuple[dict[str, Any], ...]:
+    if not path.exists():
+        return ()
+    return tuple(json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip())
+
+
+def _coingecko_persistent_statistics(
+    repository: FileAcquisitionRepository,
+    *,
+    universe_targets: tuple[str, ...] | None = None,
+) -> dict[str, Any]:
+    raw = tuple(item for item in repository.raw.values() if item.provider == "coingecko")
+    normalized = tuple(item for item in repository.normalized.values() if item.provider == "coingecko")
+    normalized_ids = {item.evidence_id for item in normalized}
+    validations = tuple(item for item in repository.validations.values() if item.evidence_id in normalized_ids)
+    status_counts = Counter(item.status for item in validations)
+    rejection_reasons: Counter[str] = Counter()
+    for validation in validations:
+        if validation.status == "valid":
+            continue
+        if validation.issues:
+            for issue in validation.issues:
+                rejection_reasons[f"{issue.code}:{issue.field}"] += 1
+        else:
+            rejection_reasons[validation.status] += 1
+    request_count = len(validations)
+    valid_count = status_counts["valid"]
+    invalid_count = status_counts["invalid"]
+    market_targets = {
+        evidence.target_id
+        for validation in repository.validations.values()
+        if validation.status == "valid"
+        for evidence in normalized
+        if evidence.evidence_id == validation.evidence_id and evidence.metric == "coingecko_market_profile"
+    }
+    detail_targets = {item.target_id for item in raw if item.metric == "coingecko_detail_metadata"}
+    pending_targets = sorted(
+        {item.target_id for item in raw if item.metric == "coingecko_pending_detail_enrichment"} - detail_targets
+    )
+    universe = max(len(tuple(universe_targets or ())) or len(market_targets | detail_targets | set(pending_targets)), 1)
+    return {
+        "raw": len(raw),
+        "normalized": len(normalized),
+        "valid": valid_count,
+        "market_records": len(market_targets),
+        "duplicate": status_counts["duplicate"],
+        "stale": status_counts["stale"],
+        "invalid": invalid_count,
+        "accepted": valid_count,
+        "rejected": invalid_count + status_counts["stale"],
+        "retry_count": 0,
+        "rate_limit_count": 0,
+        "success_rate": round(valid_count / request_count, 4) if request_count else 0.0,
+        "market_coverage": round((len(market_targets) / universe) * 100, 2),
+        "detail_coverage": round((len(detail_targets) / universe) * 100, 2),
+        "pending": len(pending_targets),
+        "pending_targets": ",".join(pending_targets) or "none",
+        "rejection_reasons": ",".join(f"{key}:{value}" for key, value in sorted(rejection_reasons.items())) or "none",
+    }
+
+
+def _coingecko_provider_config(provider_config: ProviderConfig, config: AcquisitionConfig) -> CoinGeckoProviderConfig:
+    settings = provider_config.settings or {}
+    credential = AuthRegistry(load_auth_config()).credential("coingecko", "api_key")
+    return CoinGeckoProviderConfig(
+        base_url=str(settings.get("base_url", "https://api.coingecko.com/api/v3")),
+        api_key=str(settings["api_key"]) if settings.get("api_key") else (credential.value if credential else None),
+        per_page=int(settings.get("per_page", 250)),
+        max_pages=int(settings.get("max_pages", 20)),
+        max_attempts=int(settings.get("max_attempts", config.retry.max_attempts)),
+        detail_max_attempts=int(settings.get("detail_max_attempts", 1)),
+        detail_metadata_ttl_seconds=int(settings.get("detail_metadata_ttl_seconds", 604_800)),
+        detail_rate_limit_threshold=int(settings.get("detail_rate_limit_threshold", 3)),
+        backoff_seconds=float(settings.get("backoff_seconds", config.retry.backoff_seconds)),
+        jitter_seconds=float(settings.get("jitter_seconds", 0.25)),
+        min_interval_seconds=float(settings.get("min_interval_seconds", 0.0)),
+        vs_currency=str(settings.get("vs_currency", "usd")),
+    )
+
+
+def _coingecko_identifier_resolutions(
+    args: object,
+    provider_config: ProviderConfig,
+    config: AcquisitionConfig,
+) -> tuple[ProjectIdentifierResolution, ...]:
+    project_ids = _coingecko_universe_targets(args)
+    identifiers = load_project_identifiers(Path(args.project_identifiers_config))
+    configured_ids = tuple(
+        identifier.coingecko_id
+        for identifier in identifiers.values()
+        if identifier.coingecko_id and not identifier.unsupported and not identifier.ambiguous
+    )
+    if not configured_ids:
+        return resolve_configured_identifiers(project_ids, identifiers, set())
+    try:
+        provider = CoinGeckoProvider(_coingecko_provider_config(provider_config, config))
+        rows = provider._markets(ids=tuple(dict.fromkeys(configured_ids)), page=1)  # noqa: SLF001
+    except CoinGeckoHTTPError as exc:
+        return resolve_configured_identifiers(project_ids, identifiers, set(), rate_limited=exc.status_code == 429)
+    except ProviderUnavailableError:
+        return resolve_configured_identifiers(project_ids, identifiers, set(), failed=True)
+    available = {str(row.get("id")) for row in rows if row.get("id")}
+    return resolve_configured_identifiers(project_ids, identifiers, available)
+
+
+def _coingecko_universe_targets(args: object) -> tuple[str, ...]:
+    try:
+        market_config = load_market_validation_config(Path(args.market_validation_config))
+    except Exception:  # noqa: BLE001
+        return ()
+    return tuple(project.project_id for project in market_config.project_universe)
+
+
+def _configured_project_count(args: object) -> int:
+    try:
+        market_config = load_market_validation_config(Path(args.market_validation_config))
+    except Exception:  # noqa: BLE001
+        return 0
+    return len(market_config.project_universe)
+
+
+def _coingecko_detail_cache(
+    repository: FileAcquisitionRepository,
+    *,
+    ttl_seconds: int,
+    as_of: datetime,
+) -> dict[str, dict[str, object]]:
+    latest: dict[str, RawEvidence] = {}
+    for item in repository.raw.values():
+        if item.provider != "coingecko" or item.metric != "coingecko_detail_metadata":
+            continue
+        current = latest.get(item.target_id)
+        if current is None or item.retrieved_at > current.retrieved_at:
+            latest[item.target_id] = item
+    cache: dict[str, dict[str, object]] = {}
+    for target_id, item in latest.items():
+        if as_of - item.retrieved_at <= timedelta(seconds=ttl_seconds):
+            cache[target_id] = {
+                "retrieved_at": item.retrieved_at.isoformat(),
+                "payload": dict(item.payload),
+            }
+    return cache
+
+
+def _defillama_provider_config(provider_config: ProviderConfig, config: AcquisitionConfig) -> DefiLlamaProviderConfig:
+    settings = provider_config.settings or {}
+    return DefiLlamaProviderConfig(
+        base_url=str(settings.get("base_url", "https://api.llama.fi")),
+        max_attempts=int(settings.get("max_attempts", config.retry.max_attempts)),
+        backoff_seconds=float(settings.get("backoff_seconds", config.retry.backoff_seconds)),
+        jitter_seconds=float(settings.get("jitter_seconds", 0.25)),
+        min_interval_seconds=float(settings.get("min_interval_seconds", 0.0)),
+    )
+
+
+def _defillama_identifier_resolutions(
+    args: object,
+    provider_config: ProviderConfig,
+    config: AcquisitionConfig,
+) -> tuple[ProjectIdentifierResolution, ...]:
+    project_ids = _defillama_universe_targets(args)
+    identifiers = load_project_identifiers(Path(args.project_identifiers_config))
+    configured_slugs = tuple(
+        identifier.defillama_slug
+        for identifier in identifiers.values()
+        if identifier.defillama_slug and not identifier.defillama_unsupported and not identifier.defillama_ambiguous
+    )
+    if not configured_slugs:
+        return resolve_defillama_identifiers(project_ids, identifiers, set())
+    try:
+        provider = DefiLlamaProvider(_defillama_provider_config(provider_config, config))
+        rows = provider.protocols()
+    except DefiLlamaHTTPError as exc:
+        return resolve_defillama_identifiers(project_ids, identifiers, set(), rate_limited=exc.status_code == 429)
+    except ProviderUnavailableError:
+        return resolve_defillama_identifiers(project_ids, identifiers, set(), failed=True)
+    available = {str(row.get("slug")) for row in rows if row.get("slug")}
+    return resolve_defillama_identifiers(project_ids, identifiers, available)
+
+
+def _defillama_universe_targets(args: object) -> tuple[str, ...]:
+    try:
+        market_config = load_market_validation_config(Path(args.market_validation_config))
+    except Exception:  # noqa: BLE001
+        return ()
+    return tuple(project.project_id for project in market_config.project_universe)
+
+
+def _defillama_persistent_statistics(
+    repository: FileAcquisitionRepository,
+    *,
+    universe_targets: tuple[str, ...] | None = None,
+) -> dict[str, Any]:
+    raw = tuple(item for item in repository.raw.values() if item.provider == "defillama")
+    normalized = tuple(item for item in repository.normalized.values() if item.provider == "defillama")
+    normalized_ids = {item.evidence_id for item in normalized}
+    valid_ids = {
+        evidence_id
+        for evidence_id, item in repository.validations.items()
+        if item.status == "valid" and evidence_id in normalized_ids
+    }
+    valid = tuple(item for item in normalized if item.evidence_id in valid_ids)
+    protocol_targets = {item.target_id for item in valid if item.metric == "defillama_protocol_profile"}
+    tvl_targets = {item.target_id for item in valid if item.raw_metrics.get("tvl") is not None}
+    revenue_targets = {
+        item.target_id
+        for item in valid
+        if item.raw_metrics.get("revenue") is not None or item.raw_metrics.get("daily_revenue") is not None
+    }
+    fee_targets = {
+        item.target_id
+        for item in valid
+        if item.raw_metrics.get("fees") is not None or item.raw_metrics.get("daily_fees") is not None
+    }
+    universe = max(len(tuple(universe_targets or ())) or len(protocol_targets), 1)
+    return {
+        "raw": len(raw),
+        "normalized": len(normalized),
+        "valid": len(valid),
+        "protocol_records": len(protocol_targets),
+        "tvl_coverage": round((len(tvl_targets) / universe) * 100, 2),
+        "revenue_coverage": round((len(revenue_targets) / universe) * 100, 2),
+        "fee_coverage": round((len(fee_targets) / universe) * 100, 2),
+    }
+
+
+def _github_provider_config(provider_config: ProviderConfig, config: AcquisitionConfig) -> GitHubProviderConfig:
+    settings = provider_config.settings or {}
+    credential = AuthRegistry(load_auth_config()).credential("github", "token")
+    return GitHubProviderConfig(
+        base_url=str(settings.get("base_url", "https://api.github.com")),
+        token=str(settings["token"]) if settings.get("token") else (credential.value if credential else None),
+        per_page=int(settings.get("per_page", 100)),
+        max_pages=int(settings.get("max_pages", 3)),
+        max_attempts=int(settings.get("max_attempts", config.retry.max_attempts)),
+        commit_period_days=int(settings.get("commit_period_days", 365)),
+        backoff_seconds=float(settings.get("backoff_seconds", config.retry.backoff_seconds)),
+        jitter_seconds=float(settings.get("jitter_seconds", 0.25)),
+        min_interval_seconds=float(settings.get("min_interval_seconds", 0.0)),
+    )
+
+
+def _github_identifier_resolutions(
+    args: object,
+    provider_config: ProviderConfig,
+    config: AcquisitionConfig,
+) -> tuple[GitHubRepositoryResolution, ...]:
+    project_ids = _github_universe_targets(args)
+    identifiers = load_project_identifiers(Path(args.project_identifiers_config))
+    configured_repositories = tuple(
+        repository
+        for identifier in identifiers.values()
+        if not identifier.github_unsupported and not identifier.github_ambiguous
+        for repository in identifier.github_repositories
+    )
+    if not configured_repositories:
+        return resolve_github_identifiers(project_ids, identifiers, set())
+    provider = GitHubProvider(_github_provider_config(provider_config, config))
+    available = set()
+    try:
+        for repository in tuple(dict.fromkeys(configured_repositories)):
+            if provider.repository_exists(repository):
+                available.add(repository.lower())
+    except GitHubHTTPError as exc:
+        return resolve_github_identifiers(project_ids, identifiers, set(), rate_limited=exc.status_code in {403, 429})
+    except ProviderUnavailableError:
+        return resolve_github_identifiers(project_ids, identifiers, set(), failed=True)
+    return resolve_github_identifiers(project_ids, identifiers, available)
+
+
+def _github_configured_resolutions(args: object) -> tuple[GitHubRepositoryResolution, ...]:
+    project_ids = _github_universe_targets(args)
+    identifiers = load_project_identifiers(Path(args.project_identifiers_config))
+    available = {
+        repository.lower()
+        for project_id in project_ids
+        if (identifier := identifiers.get(project_id)) is not None
+        if not identifier.github_unsupported and not identifier.github_ambiguous
+        for repository in identifier.github_repositories
+    }
+    return resolve_github_identifiers(project_ids, identifiers, available)
+
+
+def _github_universe_targets(args: object) -> tuple[str, ...]:
+    try:
+        market_config = load_market_validation_config(Path(args.market_validation_config))
+    except Exception:  # noqa: BLE001
+        return ()
+    return tuple(project.project_id for project in market_config.project_universe)
+
+
+def _github_response_cache(repository: FileAcquisitionRepository) -> dict[str, dict[str, object]]:
+    latest: dict[str, RawEvidence] = {}
+    for item in repository.raw.values():
+        if item.provider != "github" or item.metric != "github_repository_profile":
+            continue
+        current = latest.get(item.raw_source_id)
+        if current is None or item.retrieved_at > current.retrieved_at:
+            latest[item.raw_source_id] = item
+    return {
+        key: {
+            "payload": dict(item.payload),
+            "etags": {"repo": item.payload.get("etag")},
+        }
+        for key, item in latest.items()
+        if item.payload.get("etag")
+    }
+
+
+def _github_persistent_statistics(
+    repository: FileAcquisitionRepository,
+    *,
+    universe_targets: tuple[str, ...] | None = None,
+) -> dict[str, Any]:
+    raw = tuple(item for item in repository.raw.values() if item.provider == "github")
+    normalized = tuple(item for item in repository.normalized.values() if item.provider == "github")
+    normalized_ids = {item.evidence_id for item in normalized}
+    valid_ids = {
+        evidence_id
+        for evidence_id, item in repository.validations.items()
+        if item.status == "valid" and evidence_id in normalized_ids
+    }
+    valid = tuple(item for item in normalized if item.evidence_id in valid_ids)
+    repository_targets = {item.target_id for item in valid if item.metric == "github_repository_profile"}
+    commit_targets = {item.target_id for item in valid if item.raw_metrics.get("commit_count")}
+    contributor_targets = {item.target_id for item in valid if item.raw_metrics.get("contributors_count")}
+    release_targets = {item.target_id for item in valid if item.raw_metrics.get("releases")}
+    universe = max(len(tuple(universe_targets or ())) or len(repository_targets), 1)
+    return {
+        "raw": len(raw),
+        "normalized": len(normalized),
+        "valid": len(valid),
+        "repository_records": len(repository_targets),
+        "commit_coverage": round((len(commit_targets) / universe) * 100, 2),
+        "contributor_coverage": round((len(contributor_targets) / universe) * 100, 2),
+        "release_coverage": round((len(release_targets) / universe) * 100, 2),
+    }
+
+
+def _explain(args: object) -> int:
+    config = load_market_validation_config()
+    sources = acquisition_engine_sources(FileAcquisitionRepository(), as_of=config.effective_at)
+    executor = SourceBackedV1ProjectExecutor(config.effective_at, sources)
+    run = MarketValidationRunner(config, executor=executor).run()
+    engine = DecisionExplainabilityEngine()
+    renderer = DecisionAuditRenderer()
+    explain_args = tuple(str(item) for item in getattr(args, "explain_args", ()))
+    if len(explain_args) == 1 and explain_args[0] != "ranking":
+        target = explain_args[0]
+        print(renderer.render_project(engine.explain_project(run, target)))
+        return 0
+    if len(explain_args) == 3 and explain_args[0] == "compare":
+        print(renderer.render_comparison(engine.compare_projects(run, explain_args[1], explain_args[2])))
+        return 0
+    if explain_args == ("ranking",):
+        print(renderer.render_ranking(engine.explain_ranking(run)))
+        return 0
+    print("explain command required")
     return 1
 
 

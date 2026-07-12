@@ -1,54 +1,325 @@
-enabled: false
+enabled: true
 timezone: UTC
 polling_interval_seconds: 60
 jobs:
-  - job_id: current-state-project-a
-    name: Current-state project pipeline
-    enabled: true
-    job_kind: current_state_pipeline
-    schedule:
-      type: daily
-    timezone: UTC
-    target:
-      type: project
-      id: project-a
-    run_type: scheduled
-    pipeline_options:
-      run_intelligence: true
-      run_fusion: true
-      run_opportunity_timing: true
-      selected_engines: []
-      generate_reports: false
-      evaluate_alerts: false
-    persistence_policy: atomic
-    as_of_policy:
-      mode: current
-    timeout_seconds: 3600
-    concurrency_policy:
-      prevent_overlapping: true
-      scope: job_target
-    metadata:
-      purpose: default-current-state
-  - job_id: replay-project-a
-    name: Historical replay project pipeline
-    enabled: false
-    job_kind: historical_replay
-    schedule:
-      type: once
-      run_at: "2026-01-01T00:00:00+00:00"
-    timezone: UTC
-    target:
-      type: project
-      id: project-a
-    run_type: replay
-    pipeline_options:
-      run_intelligence: false
-      run_fusion: true
-      run_opportunity_timing: true
-    persistence_policy: atomic
-    as_of_policy:
-      mode: replay
-      as_of: "2026-01-01T00:00:00+00:00"
-    concurrency_policy:
-      prevent_overlapping: true
-      scope: job_target
+- job_id: current-state-project-a
+  name: Current-state project pipeline
+  enabled: true
+  job_kind: current_state_pipeline
+  schedule:
+    type: daily
+  timezone: UTC
+  target:
+    type: project
+    id: project-a
+  run_type: scheduled
+  pipeline_options:
+    run_intelligence: true
+    run_fusion: true
+    run_opportunity_timing: true
+    selected_engines: []
+    generate_reports: false
+    evaluate_alerts: false
+  persistence_policy: atomic
+  as_of_policy:
+    mode: current
+  timeout_seconds: 3600
+  concurrency_policy:
+    prevent_overlapping: true
+    scope: job_target
+  metadata:
+    purpose: default-current-state
+- job_id: replay-project-a
+  name: Historical replay project pipeline
+  enabled: false
+  job_kind: historical_replay
+  schedule:
+    type: once
+    run_at: '2026-01-01T00:00:00+00:00'
+  timezone: UTC
+  target:
+    type: project
+    id: project-a
+  run_type: replay
+  pipeline_options:
+    run_intelligence: false
+    run_fusion: true
+    run_opportunity_timing: true
+  persistence_policy: atomic
+  as_of_policy:
+    mode: replay
+    as_of: '2026-01-01T00:00:00+00:00'
+  concurrency_policy:
+    prevent_overlapping: true
+    scope: job_target
+- job_id: dataops-coingecko-market-sync
+  name: CoinGecko market sync
+  enabled: true
+  job_kind: ingest_project_data
+  schedule:
+    type: every_6_hours
+  timezone: UTC
+  target:
+    type: operation
+    id: coingecko_market_sync
+  run_type: scheduled
+  pipeline_options:
+    run_intelligence: false
+    run_fusion: false
+    run_opportunity_timing: false
+    run_investment_committee: false
+  persistence_policy: atomic
+  as_of_policy:
+    mode: current
+  timeout_seconds: 7200
+  concurrency_policy:
+    prevent_overlapping: true
+    scope: job_target
+  metadata:
+    operation: coingecko_market_sync
+    depends_on: ''
+    records_metrics: true
+- job_id: dataops-defillama-protocol-sync
+  name: DefiLlama protocol sync
+  enabled: true
+  job_kind: ingest_project_data
+  schedule:
+    type: cron
+    expression: 0 */12 * * *
+  timezone: UTC
+  target:
+    type: operation
+    id: defillama_protocol_sync
+  run_type: scheduled
+  pipeline_options:
+    run_intelligence: false
+    run_fusion: false
+    run_opportunity_timing: false
+    run_investment_committee: false
+  persistence_policy: atomic
+  as_of_policy:
+    mode: current
+  timeout_seconds: 7200
+  concurrency_policy:
+    prevent_overlapping: true
+    scope: job_target
+  metadata:
+    operation: defillama_protocol_sync
+    depends_on: ''
+    records_metrics: true
+- job_id: dataops-github-developer-sync
+  name: GitHub developer sync
+  enabled: true
+  job_kind: ingest_project_data
+  schedule:
+    type: daily
+  timezone: UTC
+  target:
+    type: operation
+    id: github_developer_sync
+  run_type: scheduled
+  pipeline_options:
+    run_intelligence: false
+    run_fusion: false
+    run_opportunity_timing: false
+    run_investment_committee: false
+  persistence_policy: atomic
+  as_of_policy:
+    mode: current
+  timeout_seconds: 7200
+  concurrency_policy:
+    prevent_overlapping: true
+    scope: job_target
+  metadata:
+    operation: github_developer_sync
+    depends_on: ''
+    records_metrics: true
+- job_id: dataops-narrative-source-validation
+  name: Narrative source validation
+  enabled: true
+  job_kind: ingest_project_data
+  schedule:
+    type: daily
+  timezone: UTC
+  target:
+    type: operation
+    id: narrative_source_validation
+  run_type: scheduled
+  pipeline_options:
+    run_intelligence: false
+    run_fusion: false
+    run_opportunity_timing: false
+    run_investment_committee: false
+  persistence_policy: atomic
+  as_of_policy:
+    mode: current
+  timeout_seconds: 7200
+  concurrency_policy:
+    prevent_overlapping: true
+    scope: job_target
+  metadata:
+    operation: narrative_source_validation
+    depends_on: ''
+    records_metrics: true
+- job_id: dataops-narrative-evidence-sync
+  name: Narrative evidence sync
+  enabled: true
+  job_kind: ingest_project_data
+  schedule:
+    type: every_6_hours
+  timezone: UTC
+  target:
+    type: operation
+    id: narrative_evidence_sync
+  run_type: scheduled
+  pipeline_options:
+    run_intelligence: false
+    run_fusion: false
+    run_opportunity_timing: false
+    run_investment_committee: false
+  persistence_policy: atomic
+  as_of_policy:
+    mode: current
+  timeout_seconds: 7200
+  concurrency_policy:
+    prevent_overlapping: true
+    scope: job_target
+  metadata:
+    operation: narrative_evidence_sync
+    depends_on: ''
+    records_metrics: true
+- job_id: dataops-technology-graph-rebuild
+  name: Technology graph rebuild
+  enabled: true
+  job_kind: ingest_project_data
+  schedule:
+    type: daily
+  timezone: UTC
+  target:
+    type: operation
+    id: technology_graph_rebuild
+  run_type: scheduled
+  pipeline_options:
+    run_intelligence: false
+    run_fusion: false
+    run_opportunity_timing: false
+    run_investment_committee: false
+  persistence_policy: atomic
+  as_of_policy:
+    mode: current
+  timeout_seconds: 7200
+  concurrency_policy:
+    prevent_overlapping: true
+    scope: job_target
+  metadata:
+    operation: technology_graph_rebuild
+    depends_on: dataops-coingecko-market-sync,dataops-defillama-protocol-sync,dataops-github-developer-sync,dataops-narrative-evidence-sync
+    records_metrics: true
+- job_id: dataops-economic-graph-rebuild
+  name: Economic graph rebuild
+  enabled: true
+  job_kind: ingest_project_data
+  schedule:
+    type: daily
+  timezone: UTC
+  target:
+    type: operation
+    id: economic_graph_rebuild
+  run_type: scheduled
+  pipeline_options:
+    run_intelligence: false
+    run_fusion: false
+    run_opportunity_timing: false
+    run_investment_committee: false
+  persistence_policy: atomic
+  as_of_policy:
+    mode: current
+  timeout_seconds: 7200
+  concurrency_policy:
+    prevent_overlapping: true
+    scope: job_target
+  metadata:
+    operation: economic_graph_rebuild
+    depends_on: dataops-coingecko-market-sync,dataops-defillama-protocol-sync
+    records_metrics: true
+- job_id: dataops-scenario-refresh
+  name: Scenario refresh
+  enabled: true
+  job_kind: ingest_project_data
+  schedule:
+    type: daily
+  timezone: UTC
+  target:
+    type: operation
+    id: scenario_refresh
+  run_type: scheduled
+  pipeline_options:
+    run_intelligence: false
+    run_fusion: false
+    run_opportunity_timing: false
+    run_investment_committee: false
+  persistence_policy: atomic
+  as_of_policy:
+    mode: current
+  timeout_seconds: 7200
+  concurrency_policy:
+    prevent_overlapping: true
+    scope: job_target
+  metadata:
+    operation: scenario_refresh
+    depends_on: dataops-technology-graph-rebuild,dataops-economic-graph-rebuild
+    records_metrics: true
+- job_id: dataops-market-validation-run
+  name: Market validation run
+  enabled: true
+  job_kind: ingest_project_data
+  schedule:
+    type: daily
+  timezone: UTC
+  target:
+    type: operation
+    id: market_validation_run
+  run_type: scheduled
+  pipeline_options:
+    run_intelligence: false
+    run_fusion: false
+    run_opportunity_timing: false
+    run_investment_committee: false
+  persistence_policy: atomic
+  as_of_policy:
+    mode: current
+  timeout_seconds: 7200
+  concurrency_policy:
+    prevent_overlapping: true
+    scope: job_target
+  metadata:
+    operation: market_validation_run
+    depends_on: dataops-scenario-refresh
+    records_metrics: true
+- job_id: dataops-committee-evaluation
+  name: Committee evaluation
+  enabled: true
+  job_kind: ingest_project_data
+  schedule:
+    type: daily
+  timezone: UTC
+  target:
+    type: operation
+    id: committee_evaluation
+  run_type: scheduled
+  pipeline_options:
+    run_intelligence: false
+    run_fusion: false
+    run_opportunity_timing: false
+    run_investment_committee: false
+  persistence_policy: atomic
+  as_of_policy:
+    mode: current
+  timeout_seconds: 7200
+  concurrency_policy:
+    prevent_overlapping: true
+    scope: job_target
+  metadata:
+    operation: committee_evaluation
+    depends_on: dataops-market-validation-run
+    records_metrics: true

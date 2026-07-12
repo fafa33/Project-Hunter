@@ -6,6 +6,7 @@ from io import StringIO
 from pathlib import Path
 from typing import Any
 
+from hunter.market_validation.evidence import EvidenceCoverageAnalyzer, EvidenceReportRenderer
 from hunter.market_validation.models import MarketValidationComparison, MarketValidationRun, ProjectValidationResult
 
 
@@ -24,6 +25,8 @@ class MarketValidationRenderer:
         return output.getvalue()
 
     def render_markdown(self, run: MarketValidationRun) -> str:
+        evidence_report = EvidenceCoverageAnalyzer().analyze(run)
+        evidence_renderer = EvidenceReportRenderer()
         leader = run.champion_project_id or "No Qualified Candidate"
         runner_up = run.runner_up_project_id or "none"
         lines = [
@@ -58,6 +61,78 @@ class MarketValidationRenderer:
             lines.append(f"- Positive drivers: {', '.join(item.strongest_positive_drivers) or 'none'}")
             lines.append(f"- Negative drivers: {', '.join(item.strongest_negative_drivers) or 'none'}")
             lines.append(f"- Validation warnings: {', '.join(item.validation_warnings) or 'none'}")
+        lines.extend(
+            [
+                "",
+                "## Decision Breakdown",
+                "",
+                "Deterministic decision audits are available through `hunter explain PROJECT`.",
+                "",
+                "## Evidence Trace",
+                "",
+                "Evidence trace details are rendered by the Decision Explainability & Audit Engine.",
+                "",
+                "## Real Evidence Coverage",
+                "",
+                evidence_renderer.render_status(evidence_report),
+                "",
+                "## Evidence Completeness",
+                "",
+                evidence_renderer.render_coverage(evidence_report),
+                "",
+                "## Engine Availability",
+                "",
+                evidence_renderer.render_validate(evidence_report),
+                "",
+                "## Collector Status",
+                "",
+                evidence_renderer.render_sources(evidence_report),
+                "",
+                "## Missing Sources",
+                "",
+                evidence_renderer.render_missing(evidence_report),
+                "",
+                "## Evidence Freshness",
+                "",
+                evidence_renderer.render_freshness(evidence_report),
+                "",
+                "## Repository Trace",
+                "",
+                evidence_renderer.render_sources(evidence_report),
+                "",
+                "## Contribution Table",
+                "",
+                "Contribution tables preserve raw score, normalized score, applied weight, and final contribution.",
+                "",
+                "## Decision Tree",
+                "",
+                "Decision trees are generated deterministically from persisted validation outputs.",
+                "",
+                "## Why This Project",
+                "",
+                "Project-specific reasons are derived from persisted score and committee fields.",
+                "",
+                "## Why Not Competitor",
+                "",
+                "Pairwise comparisons are available through `hunter explain compare PROJECT_A PROJECT_B`.",
+                "",
+                "## Top Positive Drivers",
+                "",
+                "Top positive drivers are preserved per project result.",
+                "",
+                "## Top Negative Drivers",
+                "",
+                "Top negative drivers are preserved per project result.",
+                "",
+                "## Invalidation Conditions",
+                "",
+                "Invalidation conditions are rendered by the audit engine without changing scores.",
+                "",
+                "## Sensitivity Analysis",
+                "",
+                "Sensitivity analysis reports contribution removal effects without recalculating scores.",
+            ]
+        )
         return "\n".join(lines) + "\n"
 
     def render_comparison_markdown(self, comparison: MarketValidationComparison) -> str:
@@ -138,4 +213,12 @@ def _row(result: ProjectValidationResult) -> dict[str, Any]:
         "strongest_negative_drivers": ";".join(result.strongest_negative_drivers),
         "reasons_for_ranking": ";".join(result.reasons_for_ranking),
         "validation_warnings": ";".join(result.validation_warnings),
+        "engine_availability": ";".join(f"{source.engine}:{source.status}" for source in result.engine_sources),
+        "collector_status": ";".join(f"{source.engine}:{source.collector}" for source in result.engine_sources),
+        "evidence_ids": ";".join(
+            evidence_id for source in result.engine_sources for evidence_id in source.evidence_ids
+        ),
+        "repository_ids": ";".join(
+            repository_id for source in result.engine_sources for repository_id in source.repository_ids
+        ),
     }

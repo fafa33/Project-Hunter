@@ -10,6 +10,69 @@ Scalar = str | int | float | bool | None
 
 
 @dataclass(frozen=True)
+class EngineValidationSource:
+    engine: str
+    score: float
+    confidence: float
+    timestamp: datetime
+    freshness: float
+    source_record_ids: tuple[str, ...]
+    evidence_ids: tuple[str, ...]
+    source: str = "persisted-upstream"
+    collector: str = "unknown"
+    repository_ids: tuple[str, ...] = ()
+    validation_status: str = "VALID"
+    status: str = "AVAILABLE"
+    raw_input_metrics: dict[str, Scalar] = field(default_factory=dict)
+    normalized_inputs: dict[str, float] = field(default_factory=dict)
+    applied_weight: float = 0.0
+    weighted_contribution: float = 0.0
+    missing_fields: tuple[str, ...] = ()
+    warnings: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        _text("engine", self.engine)
+        _text("source", self.source)
+        _text("collector", self.collector)
+        _text("validation_status", self.validation_status)
+        _text("status", self.status)
+        object.__setattr__(self, "score", _clamp(self.score))
+        object.__setattr__(self, "confidence", _clamp(self.confidence))
+        object.__setattr__(self, "timestamp", _aware(self.timestamp))
+        object.__setattr__(self, "freshness", _clamp(self.freshness))
+        object.__setattr__(self, "applied_weight", _clamp(self.applied_weight))
+        object.__setattr__(self, "weighted_contribution", _clamp(self.weighted_contribution))
+        object.__setattr__(self, "source_record_ids", tuple(sorted(str(item) for item in self.source_record_ids)))
+        object.__setattr__(self, "evidence_ids", tuple(sorted(str(item) for item in self.evidence_ids)))
+        object.__setattr__(self, "repository_ids", tuple(sorted(str(item) for item in self.repository_ids)))
+        object.__setattr__(self, "missing_fields", tuple(sorted(str(item) for item in self.missing_fields)))
+        object.__setattr__(self, "warnings", tuple(sorted(str(item) for item in self.warnings)))
+        object.__setattr__(self, "validation_status", self.validation_status.strip().upper())
+        object.__setattr__(self, "status", self.status.strip().upper())
+        normalize(self.raw_input_metrics)
+        object.__setattr__(
+            self, "raw_input_metrics", MappingProxyType({str(k): v for k, v in self.raw_input_metrics.items()})
+        )
+        object.__setattr__(
+            self,
+            "normalized_inputs",
+            MappingProxyType({str(k): _clamp(v) for k, v in self.normalized_inputs.items()}),
+        )
+        if self.confidence == 0.0 and not self.missing_fields and not self.warnings:
+            msg = "zero-confidence engine sources must declare missing fields or warnings"
+            raise ValueError(msg)
+        if self.confidence > 0.0 and (not self.source_record_ids or not self.evidence_ids):
+            msg = "confident engine sources must include source records and evidence IDs"
+            raise ValueError(msg)
+        if self.status == "AVAILABLE" and self.confidence == 0.0:
+            object.__setattr__(self, "status", "UNAVAILABLE")
+        if self.status == "UNAVAILABLE":
+            object.__setattr__(self, "score", 0.0)
+            object.__setattr__(self, "confidence", 0.0)
+            object.__setattr__(self, "weighted_contribution", 0.0)
+
+
+@dataclass(frozen=True)
 class ProjectValidationTarget:
     project_id: str
     name: str
@@ -59,6 +122,7 @@ class ProjectValidationResult:
     strongest_negative_drivers: tuple[str, ...] = ()
     reasons_for_ranking: tuple[str, ...] = ()
     validation_warnings: tuple[str, ...] = ()
+    engine_sources: tuple[EngineValidationSource, ...] = ()
 
     def __post_init__(self) -> None:
         for name in ("result_id", "run_id", "project_id", "project_name", "sector", "committee_decision"):
@@ -94,6 +158,7 @@ class ProjectValidationResult:
             "validation_warnings",
         ):
             object.__setattr__(self, name, tuple(sorted(str(item) for item in getattr(self, name))))
+        object.__setattr__(self, "engine_sources", tuple(sorted(self.engine_sources, key=lambda item: item.engine)))
 
     @property
     def score_breakdown(self) -> dict[str, float]:

@@ -1,0 +1,151 @@
+evaluation_windows: [7, 30, 90, 180, 365, 730]
+minimum_sample_size: 30
+success_threshold: 0.0
+failure_threshold: -0.5
+benchmarks: [bitcoin, ethereum, total_crypto_market, sector_index, peer_group_median]
+calibration_buckets: [0.0, 0.25, 0.5, 0.75, 1.0]
+acceptable_freshness: 0.5
+required_evidence:
+  - valuation
+  - comparative_valuation
+  - mispricing
+  - asymmetry
+  - developer
+  - protocol
+  - probability
+  - opportunity_timing
+  - risk
+  - committee
+maximum_missing_evidence: 21
+leakage_rules:
+  - publication_timestamp_lte_cutoff
+  - ingestion_timestamp_lte_cutoff
+  - event_timestamp_lte_cutoff
+  - no_current_status_substitution
+  - no_current_supply_substitution
+  - no_future_graph_edges
+  - no_future_outcomes_in_inputs
+snapshot_versioning: true
+outcome_labels:
+  major_winner_return: 5.0
+  moderate_winner_return: 1.0
+  severe_underperformer_return: -0.8
+challenge_cases:
+  - case_id: ethereum-early-stage-2016
+    project_id: ethereum
+    project_slug: ethereum
+    project_name: Ethereum
+    symbol: ETH
+    sector: smart_contracts
+    case_type: EARLY_WINNER
+    evaluation_timestamp: "2016-01-01T00:00:00+00:00"
+    historical_cutoff_timestamp: "2016-01-01T00:00:00+00:00"
+    project_lifecycle_state: active
+    token_lifecycle_state: active
+  - case_id: chainlink-pre-expansion-2019
+    project_id: chainlink
+    project_slug: chainlink
+    project_name: Chainlink
+    symbol: LINK
+    sector: oracle
+    case_type: EARLY_WINNER
+    evaluation_timestamp: "2019-01-01T00:00:00+00:00"
+    historical_cutoff_timestamp: "2019-01-01T00:00:00+00:00"
+    project_lifecycle_state: active
+    token_lifecycle_state: active
+  - case_id: solana-early-stage-2020
+    project_id: solana
+    project_slug: solana
+    project_name: Solana
+    symbol: SOL
+    sector: layer_1
+    case_type: EARLY_WINNER
+    evaluation_timestamp: "2020-06-01T00:00:00+00:00"
+    historical_cutoff_timestamp: "2020-06-01T00:00:00+00:00"
+    project_lifecycle_state: active
+    token_lifecycle_state: active
+  - case_id: render-early-stage-2022
+    project_id: render
+    project_slug: render
+    project_name: Render
+    symbol: RNDR
+    sector: decentralized_compute
+    case_type: EARLY_WINNER
+    evaluation_timestamp: "2022-01-01T00:00:00+00:00"
+    historical_cutoff_timestamp: "2022-01-01T00:00:00+00:00"
+    project_lifecycle_state: active
+    token_lifecycle_state: migrated
+    current_token_id: render-token
+    historical_token_id: render-token
+    migration_date: "2024-07-22T00:00:00+00:00"
+    continuity_status: continuous
+  - case_id: bittensor-early-stage-2023
+    project_id: bittensor
+    project_slug: bittensor
+    project_name: Bittensor
+    symbol: TAO
+    sector: decentralized_ai
+    case_type: EARLY_WINNER
+    evaluation_timestamp: "2023-01-01T00:00:00+00:00"
+    historical_cutoff_timestamp: "2023-01-01T00:00:00+00:00"
+    project_lifecycle_state: active
+    token_lifecycle_state: active
+  - case_id: terra-pre-collapse-2022
+    project_id: terra-luna
+    project_slug: terra-luna
+    project_name: Terra
+    symbol: LUNA
+    sector: layer_1
+    case_type: COLLAPSED_PROJECT
+    evaluation_timestamp: "2022-04-01T00:00:00+00:00"
+    historical_cutoff_timestamp: "2022-04-01T00:00:00+00:00"
+    project_lifecycle_state: collapsed
+    token_lifecycle_state: migrated
+    current_project_id: terra-luna-2
+    historical_token_id: terra-luna
+    current_token_id: terra-luna-2
+    continuity_status: discontinuous
+  - case_id: ftt-pre-collapse-2022
+    project_id: ftx-token
+    project_slug: ftx-token
+    project_name: FTX Token
+    symbol: FTT
+    sector: exchange_token
+    case_type: COLLAPSED_PROJECT
+    evaluation_timestamp: "2022-10-01T00:00:00+00:00"
+    historical_cutoff_timestamp: "2022-10-01T00:00:00+00:00"
+    project_lifecycle_state: collapsed
+    token_lifecycle_state: delisted
+  - case_id: eos-post-ico-2018
+    project_id: eos
+    project_slug: eos
+    project_name: EOS
+    symbol: EOS
+    sector: layer_1
+    case_type: UNDERPERFORMER
+    evaluation_timestamp: "2018-07-01T00:00:00+00:00"
+    historical_cutoff_timestamp: "2018-07-01T00:00:00+00:00"
+    project_lifecycle_state: active
+    token_lifecycle_state: active
+  - case_id: cosmos-neutral-control-2021
+    project_id: cosmos
+    project_slug: cosmos
+    project_name: Cosmos
+    symbol: ATOM
+    sector: interoperability
+    case_type: NEUTRAL_CONTROL
+    evaluation_timestamp: "2021-01-01T00:00:00+00:00"
+    historical_cutoff_timestamp: "2021-01-01T00:00:00+00:00"
+    project_lifecycle_state: active
+    token_lifecycle_state: active
+  - case_id: bitconnect-delisted-2017
+    project_id: bitconnect
+    project_slug: bitconnect
+    project_name: BitConnect
+    symbol: BCC
+    sector: failed_lending
+    case_type: DELISTED_PROJECT
+    evaluation_timestamp: "2017-12-01T00:00:00+00:00"
+    historical_cutoff_timestamp: "2017-12-01T00:00:00+00:00"
+    project_lifecycle_state: failed
+    token_lifecycle_state: delisted

@@ -1,0 +1,200 @@
+bitcoin:
+  coingecko_id: bitcoin
+  defillama_unsupported: true
+  github_repositories: [bitcoin/bitcoin]
+ethereum:
+  coingecko_id: ethereum
+  defillama_unsupported: true
+  github_repositories: [ethereum/go-ethereum]
+chainlink:
+  coingecko_id: chainlink
+  defillama_slug: chainlink-staking
+  github_repositories: [smartcontractkit/chainlink]
+api3:
+  coingecko_id: api3
+  defillama_slug: api3
+  github_repositories: [api3dao/airnode]
+render:
+  coingecko_id: render-token
+  defillama_unsupported: true
+  github_repositories: [rendernetwork/RNPs]
+bittensor:
+  coingecko_id: bittensor
+  defillama_unsupported: true
+  github_repositories: [RaoFoundation/bittensor]
+sui:
+  coingecko_id: sui
+  defillama_unsupported: true
+  github_repositories: [MystenLabs/sui]
+arbitrum:
+  coingecko_id: arbitrum
+  defillama_unsupported: true
+  github_repositories: [OffchainLabs/nitro]
+filecoin:
+  coingecko_id: filecoin
+  defillama_unsupported: true
+  github_repositories: [filecoin-project/lotus]
+aave:
+  coingecko_id: aave
+  defillama_slug: aave-v3
+  github_repositories: [aave/aave-v3-core]
+solana:
+  coingecko_id: solana
+  defillama_unsupported: true
+  github_repositories: [solana-labs/solana]
+avalanche:
+  coingecko_id: avalanche-2
+  defillama_unsupported: true
+  github_repositories: [ava-labs/avalanchego]
+polygon:
+  coingecko_id: polygon-ecosystem-token
+  defillama_slug: polygon-bridge
+  github_repositories: [0xPolygon/bor]
+optimism:
+  coingecko_id: optimism
+  defillama_unsupported: true
+  github_repositories: [ethereum-optimism/optimism]
+near:
+  coingecko_id: near
+  defillama_unsupported: true
+  github_repositories: [near/nearcore]
+cosmos:
+  coingecko_id: cosmos
+  defillama_unsupported: true
+  github_repositories: [cosmos/gaia]
+polkadot:
+  coingecko_id: polkadot
+  defillama_unsupported: true
+  github_repositories: [paritytech/polkadot-sdk]
+celestia:
+  coingecko_id: celestia
+  defillama_unsupported: true
+  github_repositories: [celestiaorg/celestia-node]
+eigenlayer:
+  coingecko_id: eigenlayer
+  defillama_slug: eigencloud
+  github_repositories: [Layr-Labs/eigenlayer-contracts]
+lido:
+  coingecko_id: lido-dao
+  defillama_slug: lido
+  github_repositories: [lidofinance/core]
+rocket-pool:
+  coingecko_id: rocket-pool
+  defillama_slug: rocket-pool
+  github_repositories: [rocket-pool/rocketpool]
+uniswap:
+  coingecko_id: uniswap
+  defillama_slug: uniswap-v3
+  github_repositories: [Uniswap/v3-core]
+curve:
+  coingecko_id: curve-dao-token
+  defillama_slug: curve-dex
+  github_repositories: [curvefi/curve-contract]
+maker:
+  coingecko_id: sky
+  defillama_slug: sky-lending
+  github_repositories: [sky-ecosystem/dss]
+compound:
+  coingecko_id: compound-governance-token
+  defillama_slug: compound-v3
+  github_repositories: [compound-finance/comet]
+synthetix:
+  coingecko_id: havven
+  defillama_slug: synthetix-v3
+  github_repositories: [Synthetixio/synthetix-v3]
+pendle:
+  coingecko_id: pendle
+  defillama_slug: pendle
+  github_repositories: [pendle-finance/pendle-core-v2-public]
+ethena:
+  coingecko_id: ethena
+  defillama_slug: ethena-usde
+  github_repositories: [ethena-labs/ethena-minting-client]
+frax:
+  coingecko_id: frax
+  defillama_slug: frax
+  github_repositories: [FraxFinance/frax-solidity]
+dydx:
+  coingecko_id: dydx
+  defillama_slug: dydx-v4
+  github_repositories: [dydxprotocol/v4-chain]
+injective:
+  coingecko_id: injective-protocol
+  defillama_unsupported: true
+  github_repositories: [InjectiveLabs/injective-chain-releases]
+thorchain:
+  coingecko_id: thorchain
+  defillama_slug: thorchain-dex
+  github_repositories: [thorchain/thornode]
+the-graph:
+  coingecko_id: the-graph
+  defillama_unsupported: true
+  github_repositories: [graphprotocol/graph-node]
+arweave:
+  coingecko_id: arweave
+  defillama_unsupported: true
+  github_repositories: [ArweaveTeam/arweave]
+akash:
+  coingecko_id: akash-network
+  defillama_unsupported: true
+  github_repositories: [akash-network/node]
+livepeer:
+  coingecko_id: livepeer
+  defillama_unsupported: true
+  github_repositories: [livepeer/go-livepeer]
+helium:
+  coingecko_id: helium
+  defillama_unsupported: true
+  github_repositories: [helium/helium-program-library]
+hivemapper:
+  coingecko_id: hivemapper
+  defillama_unsupported: true
+  github_repositories: [Hivemapper/odc-api]
+iota:
+  coingecko_id: iota
+  defillama_unsupported: true
+  github_repositories: [iotaledger/iota]
+stacks:
+  coingecko_id: blockstack
+  defillama_unsupported: true
+  github_repositories: [stacks-network/stacks-core]
+ordinals:
+  coingecko_id: ordinals
+  defillama_unsupported: true
+  github_repositories: [ordinals/ord]
+starknet:
+  coingecko_id: starknet
+  defillama_slug: starknet-bridge
+  github_repositories: [starkware-libs/cairo]
+zksync:
+  coingecko_id: zksync
+  defillama_unsupported: true
+  github_repositories: [matter-labs/zksync-era]
+scroll:
+  coingecko_id: scroll
+  defillama_unsupported: true
+  github_repositories: [scroll-tech/scroll]
+mantle:
+  coingecko_id: mantle
+  defillama_slug: mantle-bridge
+  github_repositories: [mantlenetworkio/mantle]
+sei:
+  coingecko_id: sei-network
+  defillama_unsupported: true
+  github_repositories: [sei-protocol/sei-chain]
+aptos:
+  coingecko_id: aptos
+  defillama_unsupported: true
+  github_repositories: [aptos-labs/aptos-core]
+worldcoin:
+  coingecko_id: worldcoin-wld
+  defillama_unsupported: true
+  github_repositories: [worldcoin/world-id-contracts]
+ens:
+  coingecko_id: ethereum-name-service
+  defillama_slug: ens
+  github_repositories: [ensdomains/ens-contracts]
+safe:
+  coingecko_id: safe
+  defillama_slug: safe
+  github_repositories: [safe-fndn/safe-smart-account]

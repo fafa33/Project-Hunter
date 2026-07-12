@@ -1,0 +1,26 @@
+providers:
+  - name: github
+    enabled: true
+    anonymous_quota: 60
+    authenticated_quota: 5000
+    credentials:
+      - name: token
+        env: GITHUB_TOKEN
+        secret_file: .secrets/github_token
+        required: false
+        allow_anonymous: true
+  - name: coingecko
+    enabled: true
+    anonymous_quota: 30
+    authenticated_quota: 500
+    credentials:
+      - name: api_key
+        env: COINGECKO_API_KEY
+        secret_file: .secrets/coingecko_api_key
+        required: false
+        allow_anonymous: true
+  - name: defillama
+    enabled: true
+    anonymous_quota: null
+    authenticated_quota: null
+    credentials: []

@@ -45,6 +45,16 @@ V2 remains blocked until V1 Real Market Validation is completed.
 - Technology Dependency Engine.
 - Economic Dependency Graph.
 - Scenario Simulation Engine.
+- Historical Outcomes & Point-in-Time Validation.
+- Data Collection Operations: complete.
+
+V2 development remains blocked from claiming investment validity until:
+
+- leakage checks pass;
+- survivorship checks pass;
+- sufficient historical cases exist;
+- minimum sample sizes are met;
+- calibration metrics are statistically meaningful.
 
 ## Deferred Milestones
 
