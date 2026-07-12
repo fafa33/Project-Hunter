@@ -4,6 +4,7 @@
 
 - Project Hunter V1: OFFICIALLY RELEASED.
 - Project Hunter V1 baseline: FROZEN.
+- Project Hunter V2: COMPLETE.
 - V1 Real Market Validation: NEXT REQUIRED PHASE.
 - Project Constitution: complete.
 - Plugin Architecture: complete.
@@ -42,10 +43,10 @@ V2 remains blocked until V1 Real Market Validation is completed.
 
 ## V2 Roadmap
 
-- Technology Dependency Engine.
-- Economic Dependency Graph.
-- Scenario Simulation Engine.
-- Historical Outcomes & Point-in-Time Validation.
+- Technology Dependency Engine: complete.
+- Economic Dependency Graph: complete.
+- Scenario Simulation Engine: complete.
+- Historical Outcomes & Point-in-Time Validation: complete.
 - Data Collection Operations: complete.
 
 V2 development remains blocked from claiming investment validity until:
