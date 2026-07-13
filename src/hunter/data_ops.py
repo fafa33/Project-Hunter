@@ -18,6 +18,9 @@ from hunter.persistence.sql import RepositoryFactory, SessionFactory, create_sch
 from hunter.plugins.contracts import PipelineContext
 
 DATA_OPS_JOB_IDS = (
+    "discovery-market-run",
+    "discovery-candidate-screening",
+    "discovery-queue-refresh",
     "dataops-coingecko-market-sync",
     "dataops-defillama-protocol-sync",
     "dataops-github-developer-sync",
@@ -31,6 +34,9 @@ DATA_OPS_JOB_IDS = (
 )
 
 OPERATION_COMMANDS: dict[str, tuple[str, ...]] = {
+    "discovery_market_run": ("discovery", "run", "--limit", "250"),
+    "discovery_screen": ("discovery", "screen"),
+    "discovery_queue_refresh": ("discovery", "queue", "refresh"),
     "coingecko_market_sync": ("coingecko", "sync"),
     "defillama_protocol_sync": ("defillama", "sync"),
     "github_developer_sync": ("github", "sync"),
@@ -204,6 +210,9 @@ def _automation_run_records() -> tuple[Any, ...]:
 
 def _data_ops_jobs() -> tuple[dict[str, Any], ...]:
     return (
+        _job("discovery-market-run", "Global discovery market run", "every_6_hours", "discovery_market_run"),
+        _job("discovery-candidate-screening", "Discovery candidate screening", "every_6_hours", "discovery_screen"),
+        _job("discovery-queue-refresh", "Discovery queue refresh", "every_6_hours", "discovery_queue_refresh"),
         _job("dataops-coingecko-market-sync", "CoinGecko market sync", "every_6_hours", "coingecko_market_sync"),
         _job(
             "dataops-defillama-protocol-sync",

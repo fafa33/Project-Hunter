@@ -66,6 +66,14 @@ from hunter.data_ops import (
     install_data_ops_jobs,
     run_data_ops_now,
 )
+from hunter.discovery import (
+    CandidateDiscoveryEngine,
+    CandidateRegistryRepository,
+    candidate_for_report,
+    discovery_automation_status,
+    install_discovery_jobs,
+    load_discovery_config,
+)
 from hunter.economic import EconomicDependencyGraphEngine, EconomicGraphRepository
 from hunter.economic.engine import economic_path
 from hunter.explainability import DecisionAuditRenderer, DecisionExplainabilityEngine
@@ -188,6 +196,35 @@ def main(argv: list[str] | None = None) -> int:
     data_ops_sub.add_parser("run-now")
     data_ops_sub.add_parser("history")
     data_ops_sub.add_parser("failures")
+    discovery = sub.add_parser("discovery")
+    discovery.add_argument("--discovery-config", default="configs/discovery.yaml")
+    discovery_sub = discovery.add_subparsers(dest="discovery_command")
+    discovery_run = discovery_sub.add_parser("run")
+    discovery_run.add_argument("--limit", type=int)
+    discovery_sync = discovery_sub.add_parser("sync")
+    discovery_sync.add_argument("--provider", choices=("seed", "coingecko", "defillama", "all"), default="seed")
+    discovery_sync.add_argument("--limit", type=int)
+    discovery_sub.add_parser("status")
+    discovery_sub.add_parser("stats")
+    discovery_sub.add_parser("coverage")
+    discovery_sub.add_parser("validate")
+    discovery_sub.add_parser("registry")
+    discovery_candidates = discovery_sub.add_parser("candidates")
+    discovery_candidates.add_argument("--limit", type=int, default=25)
+    discovery_report = discovery_sub.add_parser("report")
+    discovery_report.add_argument("--limit", type=int, default=25)
+    discovery_candidate = discovery_sub.add_parser("candidate")
+    discovery_candidate.add_argument("candidate")
+    discovery_sub.add_parser("screen")
+    discovery_queue = discovery_sub.add_parser("queue")
+    discovery_queue.add_argument("queue_command", nargs="?", choices=("refresh",))
+    discovery_queue.add_argument("--limit", type=int, default=25)
+    discovery_sub.add_parser("conflicts")
+    discovery_automation = discovery_sub.add_parser("automation")
+    discovery_automation_sub = discovery_automation.add_subparsers(dest="discovery_automation_command")
+    discovery_automation_sub.add_parser("install")
+    discovery_automation_sub.add_parser("status")
+    discovery_automation_sub.add_parser("run-now")
     dashboard = sub.add_parser("dashboard")
     dashboard.add_argument("--dashboard-config", default="configs/dashboard.yaml")
     dashboard_sub = dashboard.add_subparsers(dest="dashboard_command")
@@ -576,6 +613,8 @@ def main(argv: list[str] | None = None) -> int:
         return _dashboard(args)
     if args.command == "data-ops":
         return _data_ops(args)
+    if args.command == "discovery":
+        return _discovery(args)
     if args.command == "market-validation":
         return _market_validation(args)
     if args.command == "evidence":
@@ -734,6 +773,186 @@ def _data_ops(args: object) -> int:
             print("failures=0")
         return 0 if not failures else 2
     print("data-ops command required")
+    return 1
+
+
+def _discovery(args: object) -> int:
+    command = getattr(args, "discovery_command", None)
+    config = load_discovery_config(Path(args.discovery_config))
+    repository = CandidateRegistryRepository(config.registry_path)
+    engine = CandidateDiscoveryEngine(repository, config)
+    if command == "run":
+        result = engine.run_market_discovery(limit=getattr(args, "limit", None))
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return 0
+    if command == "sync":
+        run = engine.sync(provider=str(args.provider), limit=getattr(args, "limit", None))
+        print(
+            f"provider={run.provider} status={run.status} seen={run.candidates_seen} "
+            f"created={run.candidates_created} updated={run.candidates_updated} message={run.message}"
+        )
+        return 0 if run.status in {"succeeded", "partial"} else 2
+    if command in {"status", "stats"}:
+        stats = repository.stats()
+        last_run = stats.last_run_at.isoformat() if stats.last_run_at else "never"
+        print(
+            f"candidates={stats.total_candidates} configured={stats.configured_candidates} "
+            f"screenable={stats.screenable_candidates} identifiers={stats.identifier_count} "
+            f"sources={stats.source_count} last_run={last_run}"
+        )
+        return 0
+    if command == "coverage":
+        stats = repository.stats()
+        expected = len(load_market_validation_config(Path(config.market_validation_config)).project_universe)
+        registry_coverage = (stats.configured_candidates / expected) if expected else 0.0
+        screening_count = len(repository.latest_screening_results())
+        queue_count = len(repository.queue_entries(limit=1000))
+        print(f"registry_coverage={registry_coverage:.2%}")
+        print(f"configured_candidates={stats.configured_candidates}/{expected}")
+        print(f"source_discovery_coverage={(1.0 if stats.total_candidates else 0.0):.2%}")
+        print(
+            f"canonical_identity_coverage={stats.future_identity_ready_candidates / stats.total_candidates if stats.total_candidates else 0.0:.2%}"
+        )
+        print("contract_identity_coverage=0.00%")
+        print("official_link_verification_coverage=0.00%")
+        print(f"screening_coverage={screening_count / stats.total_candidates if stats.total_candidates else 0.0:.2%}")
+        print(
+            f"analyzable_coverage={stats.by_status.get('analyzable', 0) / stats.total_candidates if stats.total_candidates else 0.0:.2%}"
+        )
+        print(
+            f"deep_analysis_coverage={stats.configured_candidates / stats.total_candidates if stats.total_candidates else 0.0:.2%}"
+        )
+        print(f"historical_point_in_time_coverage={(1.0 if stats.total_candidates else 0.0):.2%}")
+        print(f"screenable_ratio={stats.screenable_ratio:.2%}")
+        print(f"identity_ready_candidates={stats.future_identity_ready_candidates}/{stats.total_candidates}")
+        print(f"queue_entries={queue_count}")
+        print(f"by_status={json.dumps(stats.by_status, sort_keys=True)}")
+        print(f"by_source={json.dumps(stats.by_source, sort_keys=True)}")
+        return 0
+    if command == "validate":
+        stats = repository.stats()
+        print(f"valid={stats.configured_candidates >= 50 and stats.total_candidates >= stats.configured_candidates}")
+        print(f"candidates={stats.total_candidates} configured={stats.configured_candidates}")
+        return 0 if stats.configured_candidates >= 50 else 2
+    if command in {"registry", "candidates"}:
+        candidates = repository.list_candidates(limit=int(getattr(args, "limit", 25)))
+        print(json.dumps([candidate_for_report(candidate) for candidate in candidates], indent=2, sort_keys=True))
+        return 0
+    if command == "screen":
+        results = engine.screen_candidates()
+        counts = Counter(result.status for result in results)
+        print(
+            f"screened={len(results)} advanced={counts['advanced']} deferred={counts['deferred']} rejected={counts['rejected']}"
+        )
+        return 0
+    if command == "queue":
+        entries = (
+            engine.refresh_queue()
+            if getattr(args, "queue_command", None) == "refresh"
+            else repository.queue_entries(limit=int(args.limit))
+        )
+        candidates_by_id = {candidate.candidate_id: candidate for candidate in repository.list_candidates(limit=1000)}
+        print(
+            json.dumps(
+                [
+                    {
+                        "candidate_id": entry.candidate_id,
+                        "slug": (
+                            candidates_by_id[entry.candidate_id].slug
+                            if entry.candidate_id in candidates_by_id
+                            else None
+                        ),
+                        "name": (
+                            candidates_by_id[entry.candidate_id].name
+                            if entry.candidate_id in candidates_by_id
+                            else None
+                        ),
+                        "priority_score": entry.priority_score,
+                        "priority": entry.priority,
+                        "eligible_for_deep_analysis": entry.eligible_for_deep_analysis,
+                        "priority_reasons": entry.priority_reasons,
+                        "missing_evidence": entry.missing_evidence,
+                    }
+                    for entry in entries[: int(args.limit)]
+                ],
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return 0
+    if command == "conflicts":
+        print(
+            json.dumps(
+                [conflict.__dict__ for conflict in repository.conflicts()], indent=2, sort_keys=True, default=str
+            )
+        )
+        return 0
+    if command == "automation":
+        automation_command = getattr(args, "discovery_automation_command", None)
+        if automation_command == "install":
+            jobs = install_discovery_jobs(Path(args.config))
+            print(f"installed={len(jobs)} jobs={','.join(jobs)}")
+            return 0
+        if automation_command == "status":
+            print(json.dumps(discovery_automation_status(Path(args.config)), indent=2, sort_keys=True))
+            return 0
+        if automation_command == "run-now":
+            result = engine.run_market_discovery(limit=250)
+            print(json.dumps(result, indent=2, sort_keys=True))
+            return 0
+        print("discovery automation command required")
+        return 1
+    if command == "report":
+        candidates = repository.list_candidates(limit=int(args.limit))
+        queue = repository.queue_entries(limit=int(args.limit))
+        candidates_by_id = {candidate.candidate_id: candidate for candidate in repository.list_candidates(limit=1000)}
+        payload = {
+            "candidate_counts": repository.stats().__dict__,
+            "candidates": [candidate_for_report(candidate) for candidate in candidates],
+            "top_prioritized_candidates": [
+                {
+                    "candidate_id": entry.candidate_id,
+                    "slug": (
+                        candidates_by_id[entry.candidate_id].slug if entry.candidate_id in candidates_by_id else None
+                    ),
+                    "name": (
+                        candidates_by_id[entry.candidate_id].name if entry.candidate_id in candidates_by_id else None
+                    ),
+                    "priority_score": entry.priority_score,
+                    "priority": entry.priority,
+                    "reasons": entry.priority_reasons,
+                    "missing_evidence": entry.missing_evidence,
+                    "ready_for_deep_analysis": entry.eligible_for_deep_analysis,
+                }
+                for entry in queue
+            ],
+            "conflicts": [conflict.__dict__ for conflict in repository.conflicts()],
+        }
+        print(json.dumps(payload, indent=2, sort_keys=True, default=str))
+        return 0
+    if command == "candidate":
+        candidate = repository.get_by_slug(str(args.candidate)) or repository.get(str(args.candidate))
+        if candidate is None:
+            print("candidate not found")
+            return 2
+        payload = candidate_for_report(candidate)
+        payload["identifiers"] = [
+            {"namespace": item.namespace, "value": item.value, "source": item.source, "confidence": item.confidence}
+            for item in candidate.identifiers
+        ]
+        payload["sources"] = [
+            {
+                "provider": item.provider,
+                "source_type": item.source_type,
+                "source_url": item.source_url,
+                "source_ref": item.source_ref,
+                "confidence": item.confidence,
+            }
+            for item in candidate.sources
+        ]
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return 0
+    print("discovery command required")
     return 1
 
 

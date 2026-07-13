@@ -323,3 +323,81 @@ jobs:
     operation: committee_evaluation
     depends_on: dataops-market-validation-run
     records_metrics: true
+- job_id: discovery-market-run
+  name: Global discovery market run
+  enabled: true
+  job_kind: ingest_project_data
+  schedule:
+    type: every_6_hours
+  timezone: UTC
+  target:
+    type: operation
+    id: discovery_market_run
+  run_type: scheduled
+  pipeline_options:
+    run_intelligence: false
+    run_fusion: false
+    run_opportunity_timing: false
+    run_investment_committee: false
+  persistence_policy: atomic
+  as_of_policy:
+    mode: current
+  timeout_seconds: 3600
+  concurrency_policy:
+    prevent_overlapping: true
+    scope: job_target
+  metadata:
+    operation: discovery_market_run
+    records_metrics: true
+- job_id: discovery-candidate-screening
+  name: Discovery candidate screening
+  enabled: true
+  job_kind: ingest_project_data
+  schedule:
+    type: every_6_hours
+  timezone: UTC
+  target:
+    type: operation
+    id: discovery_screen
+  run_type: scheduled
+  pipeline_options:
+    run_intelligence: false
+    run_fusion: false
+    run_opportunity_timing: false
+    run_investment_committee: false
+  persistence_policy: atomic
+  as_of_policy:
+    mode: current
+  timeout_seconds: 3600
+  concurrency_policy:
+    prevent_overlapping: true
+    scope: job_target
+  metadata:
+    operation: discovery_screen
+    records_metrics: true
+- job_id: discovery-queue-refresh
+  name: Discovery queue refresh
+  enabled: true
+  job_kind: ingest_project_data
+  schedule:
+    type: every_6_hours
+  timezone: UTC
+  target:
+    type: operation
+    id: discovery_queue_refresh
+  run_type: scheduled
+  pipeline_options:
+    run_intelligence: false
+    run_fusion: false
+    run_opportunity_timing: false
+    run_investment_committee: false
+  persistence_policy: atomic
+  as_of_policy:
+    mode: current
+  timeout_seconds: 3600
+  concurrency_policy:
+    prevent_overlapping: true
+    scope: job_target
+  metadata:
+    operation: discovery_queue_refresh
+    records_metrics: true

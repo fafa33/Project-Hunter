@@ -1,0 +1,16 @@
+registry_path: data/discovery/runtime/candidates.sqlite
+market_validation_config: configs/market_validation.yaml
+project_identifiers_config: configs/project_identifiers.yaml
+seed_market_validation_universe: true
+minimum_screening_identifiers: 1
+providers:
+  coingecko:
+    enabled: true
+    limit: 250
+    base_url: https://api.coingecko.com/api/v3
+    timeout_seconds: 30
+  defillama:
+    enabled: true
+    limit: 250
+    base_url: https://api.llama.fi
+    timeout_seconds: 30
