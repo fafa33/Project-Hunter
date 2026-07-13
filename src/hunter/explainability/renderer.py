@@ -14,13 +14,15 @@ class DecisionAuditRenderer:
             "",
             "## Decision Breakdown",
             "",
-            "| Engine | Raw Score | Normalized Score | Applied Weight | Contribution |",
-            "| --- | ---: | ---: | ---: | ---: |",
+            "| Engine | Raw Score | Normalized Score | Base Weight | Adjusted Weight | Contribution | Confidence | Freshness | Coverage | Version |",
+            "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
         ]
         for item in audit.contributions:
             lines.append(
                 f"| {item.engine} | {item.raw_score:.4f} | {item.normalized_score:.4f} | "
-                f"{item.applied_weight:.6f} | {item.final_score_contribution:.4f} |"
+                f"{item.base_weight:.6f} | {item.adjusted_weight:.6f} | "
+                f"{item.final_score_contribution:.4f} | {item.confidence:.4f} | "
+                f"{item.freshness:.4f} | {item.evidence_coverage:.4f} | {item.scoring_version or '-'} |"
             )
         lines.extend(["", "## Evidence Trace", ""])
         for trace in audit.evidence_trace:
@@ -30,6 +32,8 @@ class DecisionAuditRenderer:
             lines.append(f"- Timestamp: {trace.timestamp.isoformat()}")
             lines.append(f"- Confidence: {trace.confidence:.4f}")
             lines.append(f"- Freshness: {trace.freshness:.4f}")
+            if trace.engine == "Opportunity Timing":
+                lines.append(f"- Timing freshness: {trace.freshness:.4f}")
             lines.append(f"- Missing evidence: {', '.join(trace.missing_evidence) or 'none'}")
             lines.append(f"- Stale evidence: {', '.join(trace.stale_evidence) or 'none'}")
             lines.append(f"- Validation warnings: {', '.join(trace.validation_warnings) or 'none'}")

@@ -89,7 +89,9 @@ def test_defillama_mapping_validation_and_invalid_slug_rejection() -> None:
         ("aave", "missing", "unsupported"),
         {
             "aave": ProjectIdentifier("aave", defillama_slug="aave"),
-            "unsupported": ProjectIdentifier("unsupported", defillama_unsupported=True),
+            "unsupported": ProjectIdentifier(
+                "unsupported", defillama_slug="chain-without-tvl", defillama_unsupported=True
+            ),
         },
         {"aave"},
     )
@@ -101,6 +103,7 @@ def test_defillama_mapping_validation_and_invalid_slug_rejection() -> None:
     }
     assert defillama_sync_ids(resolutions) == ("aave",)
     assert defillama_target_map(resolutions) == {"aave": "aave"}
+    assert next(item for item in resolutions if item.project_id == "unsupported").coingecko_id == "chain-without-tvl"
 
 
 def test_defillama_persistence_resume_cache_retry_and_duplicate_detection() -> None:

@@ -89,6 +89,8 @@ from hunter.historical_acquisition import (
     InternetArchiveSnapshotProvider,
     future_provider_metadata,
 )
+from hunter.macro import MacroIntelligenceEvidenceEngine, MacroProviderRegistry, MacroRepository, load_macro_config
+from hunter.macro.engine import REQUIRED_MACRO_METRICS
 from hunter.market_validation import (
     MarketValidationRenderer,
     MarketValidationRunner,
@@ -121,6 +123,20 @@ from hunter.patterns.ranking import rank_pattern_assessments
 from hunter.persistence.sql import SessionFactory, UnitOfWork, create_schema, create_sqlite_engine
 from hunter.probability.ranking import rank_probability_assessments
 from hunter.scenario import ScenarioRepository, ScenarioSimulationEngine, compare_scenarios
+from hunter.timing import (
+    OpportunityTimingEvidenceEngine,
+    TimingAssessment,
+    TimingRepository,
+    current_timing_dependencies,
+)
+from hunter.weights import WeightEngine, WeightReportRenderer, load_weight_config, recommend_weight_adjustments
+from hunter.whale import (
+    REQUIRED_WHALE_METRICS,
+    WhaleIntelligenceEvidenceEngine,
+    WhaleProviderRegistry,
+    WhaleRepository,
+    load_whale_config,
+)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -226,6 +242,17 @@ def main(argv: list[str] | None = None) -> int:
     defillama_sub.add_parser("validate")
     defillama_sub.add_parser("unresolved")
     defillama_sub.add_parser("resolve")
+    protocol = sub.add_parser("protocol")
+    protocol.add_argument("--acquisition-config", default="configs/acquisition.yaml")
+    protocol.add_argument("--market-validation-config", default="configs/market_validation.yaml")
+    protocol.add_argument("--project-identifiers-config", default="configs/project_identifiers.yaml")
+    protocol_sub = protocol.add_subparsers(dest="protocol_command")
+    protocol_sub.add_parser("sync")
+    protocol_sub.add_parser("coverage")
+    protocol_sub.add_parser("validate")
+    protocol_sub.add_parser("report")
+    protocol_explain = protocol_sub.add_parser("explain")
+    protocol_explain.add_argument("project", nargs="?")
     github = sub.add_parser("github")
     github.add_argument("--acquisition-config", default="configs/acquisition.yaml")
     github.add_argument("--market-validation-config", default="configs/market_validation.yaml")
@@ -243,6 +270,33 @@ def main(argv: list[str] | None = None) -> int:
     engines_sub.add_parser("status")
     engines_sub.add_parser("coverage")
     engines_sub.add_parser("validate")
+    macro = sub.add_parser("macro")
+    macro.add_argument("--macro-config", default="configs/macro.yaml")
+    macro_sub = macro.add_subparsers(dest="macro_command")
+    macro_sub.add_parser("status")
+    macro_sub.add_parser("providers")
+    macro_sub.add_parser("sync")
+    macro_sub.add_parser("validate")
+    macro_sub.add_parser("coverage")
+    macro_sub.add_parser("missing")
+    macro_sub.add_parser("failures")
+    macro_sub.add_parser("report")
+    macro_explain = macro_sub.add_parser("explain")
+    macro_explain.add_argument("metric", nargs="?")
+    macro_sub.add_parser("history")
+    whale = sub.add_parser("whale")
+    whale.add_argument("--whale-config", default="configs/whale.yaml")
+    whale_sub = whale.add_subparsers(dest="whale_command")
+    whale_sub.add_parser("status")
+    whale_sub.add_parser("providers")
+    whale_sub.add_parser("sync")
+    whale_sub.add_parser("validate")
+    whale_sub.add_parser("coverage")
+    whale_sub.add_parser("report")
+    whale_explain = whale_sub.add_parser("explain")
+    whale_explain.add_argument("metric", nargs="?")
+    whale_sub.add_parser("history")
+    whale_sub.add_parser("failures")
     narrative = sub.add_parser("narrative")
     narrative.add_argument("--acquisition-config", default="configs/acquisition.yaml")
     narrative.add_argument("--market-validation-config", default="configs/market_validation.yaml")
@@ -254,6 +308,12 @@ def main(argv: list[str] | None = None) -> int:
     narrative_sub.add_parser("validate")
     narrative_sub.add_parser("statistics")
     narrative_sub.add_parser("coverage")
+    narrative_sub.add_parser("missing")
+    narrative_sub.add_parser("freshness")
+    narrative_sub.add_parser("report")
+    narrative_explain = narrative_sub.add_parser("explain")
+    narrative_explain.add_argument("project")
+    narrative_sub.add_parser("sources")
     narrative_sub.add_parser("providers")
     sources = sub.add_parser("sources")
     sources.add_argument("--market-validation-config", default="configs/market_validation.yaml")
@@ -313,6 +373,30 @@ def main(argv: list[str] | None = None) -> int:
     calibration_sub.add_parser("report")
     calibration_sub.add_parser("coverage")
     calibration_sub.add_parser("engines")
+    weights = sub.add_parser("weights")
+    weights.add_argument("--weights-config", default="configs/weights.yaml")
+    weights_sub = weights.add_subparsers(dest="weights_command")
+    weights_sub.add_parser("status")
+    weights_sub.add_parser("validate")
+    weights_sub.add_parser("report")
+    weights_sub.add_parser("recommend")
+    weights_sub.add_parser("activate")
+    timing = sub.add_parser("timing")
+    timing_sub = timing.add_subparsers(dest="timing_command")
+    timing_sub.add_parser("status")
+    timing_sub.add_parser("validate")
+    timing_sub.add_parser("report")
+    timing_explain = timing_sub.add_parser("explain")
+    timing_explain.add_argument("project")
+    timing_sub.add_parser("coverage")
+    timing_sub.add_parser("freshness")
+    timing_sub.add_parser("rebuild-status")
+    timing_sub.add_parser("dependencies")
+    timing_sub.add_parser("sync")
+    timing_sub.add_parser("history")
+    timing_compare = timing_sub.add_parser("compare")
+    timing_compare.add_argument("project_a")
+    timing_compare.add_argument("project_b")
     historical = sub.add_parser("historical")
     historical.add_argument("--historical-config", default="configs/historical_validation.yaml")
     historical_sub = historical.add_subparsers(dest="historical_command")
@@ -413,10 +497,16 @@ def main(argv: list[str] | None = None) -> int:
         return _coingecko(args)
     if args.command == "defillama":
         return _defillama(args)
+    if args.command == "protocol":
+        return _protocol(args)
     if args.command == "github":
         return _github(args)
     if args.command == "engines":
         return _engines(args)
+    if args.command == "macro":
+        return _macro(args)
+    if args.command == "whale":
+        return _whale(args)
     if args.command == "narrative":
         return _narrative(args)
     if args.command == "sources":
@@ -431,6 +521,10 @@ def main(argv: list[str] | None = None) -> int:
         return _backtest(args)
     if args.command == "calibration":
         return _calibration(args)
+    if args.command == "weights":
+        return _weights(args)
+    if args.command == "timing":
+        return _timing(args)
     if args.command == "historical":
         return _historical(args)
     if args.command == "explain":
@@ -552,6 +646,11 @@ def _committee(args: object) -> int:
     load_investment_committee_config(Path(args.committee_config))
     command = getattr(args, "committee_command", None)
     project = getattr(args, "project_slug", None)
+    if command in {"evaluate", "report", "ranking", "champion"}:
+        stale = _stale_timing_message(TimingRepository())
+        if stale is not None:
+            print(stale)
+            return 2
     if command == "evaluate":
         print(f"committee evaluation requested for {project or 'all projects'}")
         return 0
@@ -580,25 +679,44 @@ def _market_validation(args: object) -> int:
     command = getattr(args, "market_validation_command", None)
 
     def run_validation() -> MarketValidationRun:
+        stale = _stale_timing_message(TimingRepository())
+        if stale is not None:
+            raise RuntimeError(stale)
         sources = acquisition_engine_sources(FileAcquisitionRepository(), as_of=config.effective_at)
         executor = SourceBackedV1ProjectExecutor(config.effective_at, sources)
         return repository.save(MarketValidationRunner(config, executor=executor).run())
 
     if command == "run":
-        run = run_validation()
+        try:
+            run = run_validation()
+        except RuntimeError as exc:
+            print(str(exc))
+            return 2
         print(f"{run.run_id}\tprojects={len(run.project_results)}")
         return 0
     if command == "report":
-        run = run_validation()
+        try:
+            run = run_validation()
+        except RuntimeError as exc:
+            print(str(exc))
+            return 2
         print(renderer.render_markdown(run))
         return 0
     if command == "compare":
-        left = run_validation()
-        right = run_validation()
+        try:
+            left = run_validation()
+            right = run_validation()
+        except RuntimeError as exc:
+            print(str(exc))
+            return 2
         print(renderer.render_comparison_markdown(compare_runs(left, right)))
         return 0
     if command == "history":
-        run = run_validation()
+        try:
+            run = run_validation()
+        except RuntimeError as exc:
+            print(str(exc))
+            return 2
         print(f"{run.run_id}\t{run.effective_at.isoformat()}")
         return 0
     print("market-validation command required")
@@ -672,6 +790,320 @@ def _engines(args: object) -> int:
     return 1
 
 
+def _macro(args: object) -> int:
+    command = getattr(args, "macro_command", None)
+    config = load_macro_config(Path(args.macro_config))
+    repository = MacroRepository()
+    snapshot = repository.latest_snapshot()
+    if command == "status":
+        print(
+            f"enabled={config.enabled} providers={len(config.providers)} snapshots={len(repository.snapshots())} "
+            f"latest={snapshot.snapshot_id if snapshot else '-'}"
+        )
+        statuses = _macro_metric_status(repository, config)
+        for metric in REQUIRED_MACRO_METRICS:
+            print(f"{metric}\t{statuses[metric]}")
+        return 0
+    if command == "providers":
+        active = {provider.name for provider in MacroProviderRegistry(config.providers).providers()}
+        for provider in config.providers:
+            state = "enabled" if provider.name in active else "disabled"
+            print(f"{provider.name}\t{state}\tmetrics={','.join(provider.metrics)}")
+        return 0
+    if command == "sync":
+        snapshot = MacroIntelligenceEvidenceEngine(config=config, repository=repository).sync()
+        print(
+            f"{snapshot.snapshot_id}\tmetrics={len(snapshot.evidence)}\tcoverage="
+            f"{round((len(snapshot.evidence) / len(REQUIRED_MACRO_METRICS)) * 100, 2):.2f}"
+            f"\tconfidence={snapshot.macro_confidence:.4f}"
+        )
+        return 0
+    if command == "validate":
+        evidence = repository.evidence()
+        invalid = tuple(item for item in evidence if item.validation_status != "VALID")
+        print(f"evidence={len(evidence)} valid={len(evidence) - len(invalid)} invalid={len(invalid)}")
+        return 0 if not invalid else 2
+    if command == "coverage":
+        available = len({item.metric.name for item in repository.evidence() if item.validation_status == "VALID"})
+        coverage = round((available / len(REQUIRED_MACRO_METRICS)) * 100, 2)
+        print(f"required={len(REQUIRED_MACRO_METRICS)} available={available} coverage={coverage:.2f}")
+        return 0
+    if command == "missing":
+        statuses = _macro_metric_status(repository, config)
+        for metric, status in statuses.items():
+            if status != "AVAILABLE":
+                print(f"{metric}\t{status}")
+        return 0
+    if command == "failures":
+        for failure in repository.failures():
+            print(
+                f"{failure.occurred_at.isoformat()}\t{failure.provider}\t{failure.metric}\t"
+                f"{_macro_failure_reason(failure.reason)}\t{failure.message}"
+            )
+        if not repository.failures():
+            print("failures=0")
+        return 0
+    if command == "report":
+        if snapshot is None:
+            print("macro evidence unavailable")
+            return 0
+        print(_macro_snapshot_report(snapshot))
+        return 0
+    if command == "explain":
+        if snapshot is None:
+            print("macro evidence unavailable")
+            return 0
+        metric_filter = getattr(args, "metric", None)
+        for evidence in snapshot.evidence:
+            if metric_filter and evidence.metric.name != metric_filter:
+                continue
+            print(
+                f"{evidence.metric.name}\tvalue={evidence.metric.value}\tnormalized={evidence.normalized_value:.4f}"
+                f"\tprovider={evidence.metric.provider}\tconfidence={evidence.metric.confidence:.4f}"
+                f"\tfreshness={evidence.metric.freshness:.4f}\tquality={snapshot.evidence_quality:.4f}"
+                f"\tevidence_id={evidence.evidence_id}\trepository_id={evidence.repository_id}"
+                f"\tvalidation={evidence.validation_status}\tsource={evidence.metric.source_url}"
+            )
+        return 0
+    if command == "history":
+        for item in repository.snapshots():
+            print(
+                f"{item.snapshot_id}\tgenerated={item.generated_at.isoformat()}\tmetrics={len(item.evidence)}"
+                f"\tconfidence={item.macro_confidence:.4f}\tquality={item.evidence_quality:.4f}"
+            )
+        return 0
+    print("macro command required")
+    return 1
+
+
+def _macro_metric_status(repository: MacroRepository, config: Any) -> dict[str, str]:
+    evidence = repository.evidence()
+    available = {item.metric.name for item in evidence if item.validation_status == "VALID"}
+    latest_evidence: dict[str, Any] = {}
+    for item in evidence:
+        current = latest_evidence.get(item.metric.name)
+        if current is None or item.metric.timestamp > current.metric.timestamp:
+            latest_evidence[item.metric.name] = item
+    failed = {failure.metric: _macro_failure_reason(failure.reason) for failure in repository.failures()}
+    enabled = {metric for provider in config.providers if provider.enabled for metric in provider.metrics}
+    configured = {metric for provider in config.providers for metric in provider.metrics}
+    disabled = {metric for provider in config.providers if not provider.enabled for metric in provider.metrics}
+    statuses = {}
+    for metric in REQUIRED_MACRO_METRICS:
+        if metric in available:
+            statuses[metric] = "AVAILABLE"
+        elif metric in latest_evidence and latest_evidence[metric].validation_status == "STALE":
+            statuses[metric] = "STALE"
+        elif metric in failed:
+            statuses[metric] = failed[metric]
+        elif metric in latest_evidence and "future_timestamp" in latest_evidence[metric].validation_errors:
+            statuses[metric] = "SCHEMA_MISMATCH"
+        elif metric in disabled and metric in {"bitcoin_etf_net_flows", "ethereum_etf_net_flows"}:
+            statuses[metric] = "NO_PUBLIC_SOURCE"
+        elif metric in disabled and metric not in enabled:
+            statuses[metric] = "AUTH_REQUIRED"
+        elif metric not in configured:
+            statuses[metric] = "NO_PUBLIC_SOURCE"
+        else:
+            statuses[metric] = "MISCONFIGURED"
+    return statuses
+
+
+def _macro_failure_reason(reason: str) -> str:
+    allowed = {
+        "AVAILABLE",
+        "AUTH_REQUIRED",
+        "RATE_LIMITED",
+        "SCHEMA_MISMATCH",
+        "STALE",
+        "PROVIDER_BLOCKED",
+        "NO_PUBLIC_SOURCE",
+        "MISCONFIGURED",
+        "REQUEST_FAILED",
+    }
+    normalized = reason.upper()
+    if normalized == "NO_PUBLIC_SOURCE":
+        return "NO_DOCUMENTED_FREE_SOURCE"
+    if normalized in allowed:
+        return normalized
+    if "ERRNO" in normalized or "NODENAME" in normalized or "NAME" in normalized:
+        return "PROVIDER_BLOCKED"
+    return "REQUEST_FAILED"
+
+
+def _macro_snapshot_report(snapshot: Any) -> str:
+    lines = [
+        f"snapshot={snapshot.snapshot_id}",
+        f"generated_at={snapshot.generated_at.isoformat()}",
+        f"liquidity_score={snapshot.liquidity_score:.4f}",
+        f"inflation_score={snapshot.inflation_score:.4f}",
+        f"monetary_policy_score={snapshot.monetary_policy_score:.4f}",
+        f"recession_probability={snapshot.recession_probability:.4f}",
+        f"risk_on_score={snapshot.risk_on_score:.4f}",
+        f"risk_off_score={snapshot.risk_off_score:.4f}",
+        f"crypto_liquidity_score={snapshot.crypto_liquidity_score:.4f}",
+        f"macro_confidence={snapshot.macro_confidence:.4f}",
+        f"freshness={snapshot.freshness:.4f}",
+        f"evidence_quality={snapshot.evidence_quality:.4f}",
+    ]
+    for evidence in snapshot.evidence:
+        lines.append(
+            f"{evidence.metric.name}\tvalue={evidence.metric.value}\tnormalized={evidence.normalized_value:.4f}"
+            f"\tprovider={evidence.metric.provider}\tevidence_id={evidence.evidence_id}"
+        )
+    return "\n".join(lines)
+
+
+def _whale(args: object) -> int:
+    command = getattr(args, "whale_command", None)
+    config = load_whale_config(Path(args.whale_config))
+    repository = WhaleRepository()
+    snapshot = repository.latest_snapshot()
+    if command == "status":
+        print(
+            f"enabled={config.enabled} providers={len(config.providers)} snapshots={len(repository.snapshots())} "
+            f"latest={snapshot.snapshot_id if snapshot else '-'}"
+        )
+        statuses = _whale_metric_status(repository, config)
+        for metric in REQUIRED_WHALE_METRICS:
+            print(f"{metric}\t{statuses[metric]}")
+        return 0
+    if command == "providers":
+        active = {provider.name for provider in WhaleProviderRegistry(config.providers).providers()}
+        for provider in config.providers:
+            state = "enabled" if provider.name in active else "disabled"
+            print(f"{provider.name}\t{state}\tmetrics={','.join(provider.metrics)}")
+        return 0
+    if command == "sync":
+        snapshot = WhaleIntelligenceEvidenceEngine(config=config, repository=repository).sync()
+        print(
+            f"{snapshot.snapshot_id}\tmetrics={len(snapshot.evidence)}\tcoverage="
+            f"{round((len({item.metric.name for item in snapshot.evidence}) / len(REQUIRED_WHALE_METRICS)) * 100, 2):.2f}"
+            f"\tconfidence={snapshot.confidence:.4f}"
+        )
+        return 0
+    if command == "validate":
+        evidence = repository.evidence()
+        invalid = tuple(item for item in evidence if item.validation_status != "VALID")
+        print(f"evidence={len(evidence)} valid={len(evidence) - len(invalid)} invalid={len(invalid)}")
+        return 0 if not invalid else 2
+    if command == "coverage":
+        available = len({item.metric.name for item in repository.evidence() if item.validation_status == "VALID"})
+        coverage = round((available / len(REQUIRED_WHALE_METRICS)) * 100, 2)
+        print(f"required={len(REQUIRED_WHALE_METRICS)} available={available} coverage={coverage:.2f}")
+        return 0
+    if command == "failures":
+        for failure in repository.failures():
+            print(
+                f"{failure.occurred_at.isoformat()}\t{failure.provider}\t{failure.metric}\t"
+                f"{_whale_failure_reason(failure.reason)}\t{failure.message}"
+            )
+        if not repository.failures():
+            print("failures=0")
+        return 0
+    if command == "report":
+        if snapshot is None:
+            print("whale evidence unavailable")
+            return 0
+        print(_whale_snapshot_report(snapshot))
+        return 0
+    if command == "explain":
+        if snapshot is None:
+            print("whale evidence unavailable")
+            return 0
+        metric_filter = getattr(args, "metric", None)
+        for evidence in snapshot.evidence:
+            if metric_filter and evidence.metric.name != metric_filter:
+                continue
+            print(
+                f"{evidence.metric.name}\tasset={evidence.metric.asset}\tvalue={evidence.metric.value}"
+                f"\tnormalized={evidence.normalized_value:.4f}\tprovider={evidence.metric.provider}"
+                f"\tconfidence={evidence.metric.confidence:.4f}\tfreshness={evidence.metric.freshness:.4f}"
+                f"\tquality={snapshot.evidence_quality:.4f}\tevidence_id={evidence.evidence_id}"
+                f"\trepository_id={evidence.repository_id}\tvalidation={evidence.validation_status}"
+                f"\tsource={evidence.metric.source_url}"
+            )
+        return 0
+    if command == "history":
+        for item in repository.snapshots():
+            print(
+                f"{item.snapshot_id}\tgenerated={item.generated_at.isoformat()}\tmetrics={len(item.evidence)}"
+                f"\tconfidence={item.confidence:.4f}\tquality={item.evidence_quality:.4f}"
+            )
+        return 0
+    print("whale command required")
+    return 1
+
+
+def _whale_metric_status(repository: WhaleRepository, config: Any) -> dict[str, str]:
+    evidence = repository.evidence()
+    available = {item.metric.name for item in evidence if item.validation_status == "VALID"}
+    stale = {item.metric.name for item in evidence if item.validation_status == "STALE"}
+    failed = {failure.metric: _whale_failure_reason(failure.reason) for failure in repository.failures()}
+    enabled = {metric for provider in config.providers if provider.enabled for metric in provider.metrics}
+    configured = {metric for provider in config.providers for metric in provider.metrics}
+    statuses = {}
+    for metric in REQUIRED_WHALE_METRICS:
+        if metric in available:
+            statuses[metric] = "AVAILABLE"
+        elif metric in stale:
+            statuses[metric] = "STALE"
+        elif metric in failed:
+            statuses[metric] = failed[metric]
+        elif metric not in configured:
+            statuses[metric] = "NO_DOCUMENTED_FREE_SOURCE"
+        elif metric not in enabled:
+            statuses[metric] = "NO_DOCUMENTED_FREE_SOURCE"
+        else:
+            statuses[metric] = "MISCONFIGURED"
+    return statuses
+
+
+def _whale_failure_reason(reason: str) -> str:
+    allowed = {
+        "AUTH_REQUIRED",
+        "RATE_LIMITED",
+        "SCHEMA_MISMATCH",
+        "STALE",
+        "PROVIDER_BLOCKED",
+        "NO_DOCUMENTED_FREE_SOURCE",
+        "MISCONFIGURED",
+        "REQUEST_FAILED",
+        "ASSET_UNSUPPORTED",
+    }
+    normalized = reason.upper()
+    if normalized in allowed:
+        return normalized
+    if "ERRNO" in normalized or "NODENAME" in normalized or "NAME" in normalized:
+        return "PROVIDER_BLOCKED"
+    return "REQUEST_FAILED"
+
+
+def _whale_snapshot_report(snapshot: Any) -> str:
+    lines = [
+        f"snapshot={snapshot.snapshot_id}",
+        f"generated_at={snapshot.generated_at.isoformat()}",
+        f"whale_score={snapshot.whale_score:.4f}",
+        f"accumulation_score={snapshot.accumulation_score:.4f}",
+        f"distribution_score={snapshot.distribution_score:.4f}",
+        f"exchange_pressure={snapshot.exchange_pressure:.4f}",
+        f"smart_money_score={snapshot.smart_money_score:.4f}",
+        f"stablecoin_pressure={snapshot.stablecoin_pressure:.4f}",
+        f"institutional_score={snapshot.institutional_score:.4f}",
+        f"market_participation={snapshot.market_participation:.4f}",
+        f"confidence={snapshot.confidence:.4f}",
+        f"freshness={snapshot.freshness:.4f}",
+        f"evidence_quality={snapshot.evidence_quality:.4f}",
+    ]
+    for evidence in snapshot.evidence:
+        lines.append(
+            f"{evidence.metric.name}\tasset={evidence.metric.asset}\tvalue={evidence.metric.value}"
+            f"\tnormalized={evidence.normalized_value:.4f}\tprovider={evidence.metric.provider}"
+            f"\tevidence_id={evidence.evidence_id}"
+        )
+    return "\n".join(lines)
+
+
 def _narrative(args: object) -> int:
     acquisition_config = load_acquisition_config(Path(args.acquisition_config))
     narrative_config = load_narrative_config(Path(args.narrative_config))
@@ -699,10 +1131,12 @@ def _narrative(args: object) -> int:
             if source.enabled and source.provider not in SUPPORTED_NARRATIVE_PROVIDERS
         )
         missing = tuple(source for source in narrative_config.sources if source.enabled and not source.project_id)
+        malformed = tuple(source for source in narrative_config.sources if source.enabled and not source.url)
         print(
-            f"sources={len(narrative_config.sources)} unknown_providers={len(unknown)} missing_project={len(missing)}"
+            f"sources={len(narrative_config.sources)} unknown_providers={len(unknown)} "
+            f"missing_project={len(missing)} malformed_sources={len(malformed)}"
         )
-        return 2 if unknown or missing else 0
+        return 2 if unknown or missing or malformed else 0
     if command == "statistics":
         print(
             f"raw={stats.raw} normalized={stats.normalized} valid={stats.valid} duplicate={stats.duplicate} "
@@ -711,9 +1145,66 @@ def _narrative(args: object) -> int:
         )
         return 0
     if command == "coverage":
-        project_count = _configured_project_count(args)
-        coverage = round((stats.projects / project_count) * 100, 2) if project_count else 0.0
-        print(f"projects={project_count} narrative_projects={stats.projects} coverage={coverage:.2f}")
+        project_ids = _market_project_ids(args)
+        covered = _narrative_projects(repository)
+        coverage = round((len(covered) / len(project_ids)) * 100, 2) if project_ids else 0.0
+        print(f"projects={len(project_ids)} narrative_projects={len(covered)} coverage={coverage:.2f}")
+        return 0
+    if command == "missing":
+        covered = _narrative_projects(repository)
+        for project_id in _market_project_ids(args):
+            if project_id not in covered:
+                print(f"{project_id}\tMISSING_NARRATIVE")
+        return 0
+    if command == "freshness":
+        latest = _latest_narrative_evidence(repository)
+        for project_id in _market_project_ids(args):
+            item = latest.get(project_id)
+            if item is None:
+                print(f"{project_id}\tmissing")
+            else:
+                validation = repository.validations[item.evidence_id]
+                print(
+                    f"{project_id}\t{item.retrieved_at.isoformat()}\tfreshness={validation.freshness:.4f}"
+                    f"\tevidence_id={item.evidence_id}"
+                )
+        return 0
+    if command == "report":
+        latest = _latest_narrative_evidence(repository)
+        for project_id in _market_project_ids(args):
+            item = latest.get(project_id)
+            if item is None:
+                print(f"{project_id}\tMISSING_NARRATIVE")
+                continue
+            categories = ",".join(item.raw_metrics.get("evidence_categories", ())) or "-"
+            print(
+                f"{project_id}\tAVAILABLE\tprovider={item.raw_metrics.get('provider', '-')}"
+                f"\tsource={item.raw_metrics.get('source', '-')}\tcategories={categories}"
+                f"\ttimestamp={item.raw_metrics.get('timestamp', '-')}\tevidence_id={item.evidence_id}"
+            )
+        return 0
+    if command == "explain":
+        project_id = str(args.project)
+        rows = _valid_narrative_evidence(repository).get(project_id, ())
+        if not rows:
+            print(f"{project_id}\tMISSING_NARRATIVE")
+            return 2
+        for item in rows:
+            categories = ",".join(item.raw_metrics.get("evidence_categories", ())) or "-"
+            print(
+                f"{project_id}\ttitle={item.raw_metrics.get('title', '-')}\tprovider={item.raw_metrics.get('provider', '-')}"
+                f"\tcategories={categories}\tconfidence={item.confidence:.4f}\tfreshness={item.freshness:.4f}"
+                f"\tevidence_id={item.evidence_id}\trepository_id={item.repository_id}\turl={item.source_url}"
+            )
+        return 0
+    if command == "sources":
+        for source in sorted(
+            narrative_config.sources, key=lambda item: (item.project_id, item.provider, item.source_id)
+        ):
+            print(
+                f"{source.project_id}\t{source.provider}\t{source.source_id}\t{source.url}"
+                f"\tenabled={source.enabled}\tcategories={','.join(source.categories) or '-'}"
+            )
         return 0
     if command in {"sync", "resume"}:
         if not narrative_config.enabled:
@@ -1222,6 +1713,231 @@ def _calibration(args: object) -> int:
         return 0
     print("calibration command required")
     return 1
+
+
+def _weights(args: object) -> int:
+    command = getattr(args, "weights_command", None)
+    config = load_weight_config(Path(args.weights_config))
+    renderer = WeightReportRenderer()
+    if command == "status":
+        print(renderer.render_status(config))
+        return 0
+    if command == "validate":
+        print(renderer.render_validate(config))
+        return 0
+    if command == "report":
+        market_config = load_market_validation_config(Path("configs/market_validation.yaml"))
+        sources = acquisition_engine_sources(FileAcquisitionRepository(), as_of=market_config.effective_at)
+        run = MarketValidationRunner(
+            market_config,
+            executor=SourceBackedV1ProjectExecutor(market_config.effective_at, sources),
+        ).run()
+        sample = run.project_results[0].engine_sources if run.project_results else ()
+        print(renderer.render_report(config, WeightEngine(config).score(sample)))
+        return 0
+    if command == "recommend":
+        runs = BacktestRepository().runs()
+        recommendation = recommend_weight_adjustments(config, runs[-1] if runs else None)
+        print(renderer.render_recommendation(recommendation))
+        return 0
+    if command == "activate":
+        print(f"active_version={config.version} policy={config.calibration_policy} recommended_weights_activated=false")
+        return 0
+    print("weights command required")
+    return 1
+
+
+def _timing(args: object) -> int:
+    command = getattr(args, "timing_command", None)
+    repository = TimingRepository()
+    if command == "status":
+        assessments = repository.assessments()
+        latest = repository.latest_by_project()
+        available = tuple(item for item in latest.values() if item.classification != "INSUFFICIENT_EVIDENCE")
+        status = _timing_rebuild_status(repository)
+        print(
+            f"assessments={len(assessments)} projects={len(latest)} available={len(available)} "
+            f"insufficient={len(latest) - len(available)} latest={_timing_latest_timestamp(latest)} "
+            f"rebuild_status={status.status} stale_dependencies={','.join(status.stale_dependencies) or '-'}"
+        )
+        return 0 if not status.is_stale else 2
+    if command == "validate":
+        assessments = repository.assessments()
+        invalid = tuple(
+            item for item in assessments if item.classification == "INSUFFICIENT_EVIDENCE" and not item.missing_evidence
+        )
+        status = _timing_rebuild_status(repository)
+        print(
+            f"assessments={len(assessments)} structurally_valid={len(assessments) - len(invalid)} invalid={len(invalid)}"
+            f" rebuild_status={status.status} stale_dependencies={','.join(status.stale_dependencies) or '-'}"
+        )
+        return 0 if not invalid and not status.is_stale else 2
+    if command == "report":
+        OpportunityTimingEvidenceEngine(repository=repository).sync()
+        latest = repository.latest_by_project()
+        for item in sorted(latest.values(), key=lambda row: row.project_id):
+            print(_timing_report_line(item))
+        return 0
+    if command == "coverage":
+        cached = repository.latest_by_project()
+        project_count = len(load_market_validation_config().project_universe)
+        cached_available = sum(1 for item in cached.values() if item.classification != "INSUFFICIENT_EVIDENCE")
+        cached_coverage = round((cached_available / project_count) * 100.0, 2) if project_count else 0.0
+        status = _timing_rebuild_status(repository)
+        latest = _timing_latest_or_sync(repository)
+        available = sum(1 for item in latest.values() if item.classification != "INSUFFICIENT_EVIDENCE")
+        coverage = round((available / project_count) * 100.0, 2) if project_count else 0.0
+        print(
+            f"cached projects={project_count} available={cached_available} "
+            f"insufficient={project_count - cached_available} coverage={cached_coverage:.2f} status={status.status}"
+        )
+        print(
+            f"rebuilt projects={project_count} available={available} "
+            f"insufficient={project_count - available} coverage={coverage:.2f} status=CURRENT"
+        )
+        return 0
+    if command == "sync":
+        assessments = OpportunityTimingEvidenceEngine(repository=repository).sync()
+        available = sum(1 for item in assessments if item.classification != "INSUFFICIENT_EVIDENCE")
+        print(
+            f"synced assessments={len(assessments)} available={available} "
+            f"insufficient={len(assessments) - available}"
+        )
+        return 0
+    if command == "freshness":
+        print(_timing_freshness_line(repository))
+        return 0
+    if command == "rebuild-status":
+        status = _timing_rebuild_status(repository)
+        print(
+            f"status={status.status} stale_dependencies={','.join(status.stale_dependencies) or '-'} "
+            f"saved={status.saved_generation_timestamp.isoformat() if status.saved_generation_timestamp else '-'} "
+            f"current={status.current_generation_timestamp.isoformat() if status.current_generation_timestamp else '-'}"
+        )
+        return 0 if not status.is_stale else 2
+    if command == "dependencies":
+        print(_timing_dependencies_report(repository))
+        return 0
+    if command == "history":
+        for row in repository.history():
+            print(
+                f"{row.get('generated_at')}\tassessments={row.get('assessments', 0)}"
+                f"\tavailable={row.get('available', 0)}\tinsufficient={row.get('insufficient', 0)}"
+            )
+        if not repository.history():
+            print("history=0")
+        return 0
+    if command == "explain":
+        latest = _timing_latest_or_sync(repository)
+        project = args.project
+        item = latest.get(project)
+        if item is None:
+            print(f"{project}\tINSUFFICIENT_EVIDENCE\tmissing=project_not_assessed")
+            return 2
+        print(_timing_explain_line(item))
+        return 0
+    if command == "compare":
+        latest = _timing_latest_or_sync(repository)
+        first = latest.get(args.project_a)
+        second = latest.get(args.project_b)
+        if first is None or second is None:
+            print("comparison unavailable")
+            return 2
+        print(
+            f"{first.project_id}\tclassification={first.classification}\tentry={first.entry_score:.4f}"
+            f"\texit={first.exit_score:.4f}\tconfidence={first.timing_confidence:.4f}"
+        )
+        print(
+            f"{second.project_id}\tclassification={second.classification}\tentry={second.entry_score:.4f}"
+            f"\texit={second.exit_score:.4f}\tconfidence={second.timing_confidence:.4f}"
+        )
+        return 0
+    print("timing command required")
+    return 1
+
+
+def _timing_latest_or_sync(repository: TimingRepository) -> dict[str, TimingAssessment]:
+    latest = repository.latest_by_project()
+    status = _timing_rebuild_status(repository)
+    if latest and not status.is_stale:
+        return latest
+    OpportunityTimingEvidenceEngine(repository=repository).sync()
+    return repository.latest_by_project()
+
+
+def _timing_rebuild_status(repository: TimingRepository):
+    return repository.rebuild_status(current_timing_dependencies())
+
+
+def _stale_timing_message(repository: TimingRepository) -> str | None:
+    status = _timing_rebuild_status(repository)
+    if not status.is_stale:
+        return None
+    return f"STALE_TIMING_REBUILD_REQUIRED stale_dependencies={','.join(status.stale_dependencies) or '-'}"
+
+
+def _timing_freshness_line(repository: TimingRepository) -> str:
+    current = current_timing_dependencies()
+    status = repository.rebuild_status(current)
+    saved = repository.latest_dependencies()
+    return (
+        f"status={status.status} stale_dependencies={','.join(status.stale_dependencies) or '-'} "
+        f"saved_generation={saved.generation_timestamp.isoformat() if saved else '-'} "
+        f"current_generation={current.generation_timestamp.isoformat()} "
+        f"protocol={_optional_iso(current.protocol_evidence_timestamp)} "
+        f"narrative={_optional_iso(current.narrative_evidence_timestamp)} "
+        f"developer={_optional_iso(current.developer_evidence_timestamp)} "
+        f"graph={_optional_iso(current.graph_timestamp)} "
+        f"macro={_optional_iso(current.macro_timestamp)} "
+        f"whale={_optional_iso(current.whale_timestamp)}"
+    )
+
+
+def _timing_dependencies_report(repository: TimingRepository) -> str:
+    current = current_timing_dependencies()
+    saved = repository.latest_dependencies()
+    lines = [_timing_freshness_line(repository)]
+    for dependency in sorted(current.dependency_fingerprints):
+        saved_fingerprint = saved.dependency_fingerprints.get(dependency) if saved is not None else None
+        lines.append(
+            f"{dependency}\ttimestamp={_optional_iso(current.dependency_timestamps.get(dependency))}"
+            f"\tfingerprint={current.dependency_fingerprints[dependency]}"
+            f"\tsaved_fingerprint={saved_fingerprint or '-'}"
+        )
+    return "\n".join(lines)
+
+
+def _optional_iso(value: object) -> str:
+    return value.isoformat() if hasattr(value, "isoformat") else "-"
+
+
+def _timing_latest_timestamp(latest: dict[str, TimingAssessment]) -> str:
+    if not latest:
+        return "-"
+    return max(item.generated_at for item in latest.values()).isoformat()
+
+
+def _timing_report_line(item: TimingAssessment) -> str:
+    return (
+        f"{item.project_id}\tclassification={item.classification}\tentry={item.entry_score:.4f}"
+        f"\texit={item.exit_score:.4f}\taccumulation={item.accumulation_score:.4f}"
+        f"\tdistribution={item.distribution_score:.4f}\trisk_reward={item.risk_reward_score:.4f}"
+        f"\tconfidence={item.timing_confidence:.4f}\tquality={item.evidence_quality:.4f}"
+        f"\tfreshness={item.freshness:.4f}"
+    )
+
+
+def _timing_explain_line(item: TimingAssessment) -> str:
+    return (
+        _timing_report_line(item)
+        + f"\tcycle={item.cycle_position}\tregime={item.market_regime}"
+        + f"\tsources={','.join(item.source_engines) or '-'}"
+        + f"\tevidence_ids={','.join(item.evidence_ids) or '-'}"
+        + f"\trepository_ids={','.join(item.repository_ids) or '-'}"
+        + f"\tmissing={','.join(item.missing_evidence) or '-'}"
+        + f"\tstale={','.join(item.stale_evidence) or '-'}"
+        + f"\treasoning={';'.join(item.reasoning_chain) or '-'}"
+    )
 
 
 def _historical(args: object) -> int:
@@ -2120,6 +2836,120 @@ def _defillama(args: object) -> int:
     return 1
 
 
+def _protocol(args: object) -> int:
+    command = getattr(args, "protocol_command", None)
+    if command == "sync":
+        args.defillama_command = "sync"
+        return _defillama(args)
+    if command == "validate":
+        args.defillama_command = "validate"
+        result = _defillama(args)
+        repository = FileAcquisitionRepository()
+        latest = _latest_protocol_evidence(repository)
+        invalid = tuple(
+            validation
+            for validation in repository.validations.values()
+            if validation.evidence_id in {item.evidence_id for item in latest.values()}
+            and validation.status not in {"valid", "duplicate"}
+        )
+        print(f"protocol_records={len(latest)} invalid={len(invalid)}")
+        return result if result != 0 else 0 if not invalid else 2
+    if command in {"coverage", "report", "explain"}:
+        config = load_acquisition_config(Path(args.acquisition_config))
+        provider_config = next((item for item in config.providers if item.name == "defillama"), None)
+        repository = FileAcquisitionRepository()
+        latest = _latest_protocol_evidence(repository)
+        targets = _defillama_universe_targets(args)
+        coverage = round((len(latest) / max(len(targets), 1)) * 100.0, 2)
+        if command == "coverage":
+            print(
+                f"projects={len(targets)} available={len(latest)} missing={len(targets) - len(latest)} coverage={coverage:.2f}"
+            )
+            return 0
+        if provider_config is None:
+            print("defillama provider not configured")
+            return 0
+        resolutions = _defillama_identifier_resolutions(args, provider_config, config)
+        project_filter = getattr(args, "project", None)
+        for row in _protocol_audit_rows(resolutions, latest):
+            if command == "explain" and project_filter and row["project"] != project_filter:
+                continue
+            print(
+                f"{row['project']}\t{row['provider']}\t{row['slug']}\t{row['status']}\t{row['reason']}"
+                f"\ttvl={row['tvl_available']}\trevenue={row['revenue_available']}\tfees={row['fees_available']}"
+                f"\tfreshness={row['freshness']}\tvalidation={row['validation']}"
+            )
+        return 0
+    print("protocol command required")
+    return 1
+
+
+def _latest_protocol_evidence(repository: FileAcquisitionRepository) -> dict[str, NormalizedEvidence]:
+    valid_ids = {item.evidence_id for item in repository.validations.values() if item.status == "valid"}
+    latest: dict[str, NormalizedEvidence] = {}
+    for evidence in repository.normalized.values():
+        if (
+            evidence.provider != "defillama"
+            or evidence.metric != "defillama_protocol_profile"
+            or evidence.evidence_id not in valid_ids
+        ):
+            continue
+        current = latest.get(evidence.target_id)
+        if current is None or evidence.retrieved_at > current.retrieved_at:
+            latest[evidence.target_id] = evidence
+    return latest
+
+
+def _protocol_audit_rows(
+    resolutions: tuple[ProjectIdentifierResolution, ...],
+    latest: dict[str, NormalizedEvidence],
+) -> tuple[dict[str, str], ...]:
+    rows = []
+    for resolution in resolutions:
+        evidence = latest.get(resolution.project_id)
+        status = _protocol_status(resolution, evidence)
+        payload = evidence.raw_metrics if evidence is not None else {}
+        rows.append(
+            {
+                "project": resolution.project_id,
+                "provider": "defillama",
+                "slug": resolution.coingecko_id or "-",
+                "status": status,
+                "reason": _protocol_reason(resolution, evidence),
+                "tvl_available": str(payload.get("tvl") is not None).lower(),
+                "revenue_available": str(
+                    payload.get("revenue") is not None or payload.get("daily_revenue") is not None
+                ).lower(),
+                "fees_available": str(payload.get("fees") is not None or payload.get("daily_fees") is not None).lower(),
+                "freshness": f"{evidence.freshness:.4f}" if evidence is not None else "0.0000",
+                "validation": "valid" if evidence is not None else resolution.status.lower(),
+            }
+        )
+    return tuple(rows)
+
+
+def _protocol_status(resolution: ProjectIdentifierResolution, evidence: NormalizedEvidence | None) -> str:
+    if evidence is not None:
+        return "AVAILABLE"
+    if resolution.status == "INVALID_ID":
+        return "INVALID_IDENTIFIER"
+    if resolution.status == "UNSUPPORTED":
+        return "NO_PUBLIC_PROTOCOL"
+    if resolution.status in {"NOT_FOUND", "REQUEST_FAILED", "RATE_LIMITED"}:
+        return "SUPPORTED_WITH_PROVIDER_FIX" if resolution.coingecko_id else "UNSUPPORTED_BY_PROVIDER"
+    return "SUPPORTED_WITH_PROVIDER_FIX"
+
+
+def _protocol_reason(resolution: ProjectIdentifierResolution, evidence: NormalizedEvidence | None) -> str:
+    if evidence is not None:
+        return "validated persisted protocol evidence"
+    if resolution.status == "UNSUPPORTED":
+        if resolution.coingecko_id:
+            return "DefiLlama exposes a canonical identifier but no usable public TVL protocol endpoint"
+        return "no verified public protocol TVL endpoint configured"
+    return resolution.reason or "protocol evidence unavailable"
+
+
 def _github(args: object) -> int:
     config = load_acquisition_config(Path(args.acquisition_config))
     provider_config = next((item for item in config.providers if item.name == "github"), None)
@@ -2389,6 +3219,37 @@ def _configured_project_count(args: object) -> int:
     return len(market_config.project_universe)
 
 
+def _market_project_ids(args: object) -> tuple[str, ...]:
+    try:
+        market_config = load_market_validation_config(Path(args.market_validation_config))
+    except Exception:  # noqa: BLE001
+        return ()
+    return tuple(project.project_id for project in market_config.project_universe)
+
+
+def _valid_narrative_evidence(repository: FileAcquisitionRepository) -> dict[str, tuple[NormalizedEvidence, ...]]:
+    rows: dict[str, list[NormalizedEvidence]] = {}
+    for evidence in repository.normalized.values():
+        validation = repository.validations.get(evidence.evidence_id)
+        if validation is None or validation.status != "valid":
+            continue
+        if evidence.provider != "narrative" or evidence.metric != "narrative_item":
+            continue
+        rows.setdefault(evidence.target_id, []).append(evidence)
+    return {
+        project_id: tuple(sorted(items, key=lambda item: (item.retrieved_at, item.evidence_id), reverse=True))
+        for project_id, items in rows.items()
+    }
+
+
+def _latest_narrative_evidence(repository: FileAcquisitionRepository) -> dict[str, NormalizedEvidence]:
+    return {project_id: items[0] for project_id, items in _valid_narrative_evidence(repository).items() if items}
+
+
+def _narrative_projects(repository: FileAcquisitionRepository) -> set[str]:
+    return set(_valid_narrative_evidence(repository))
+
+
 def _coingecko_detail_cache(
     repository: FileAcquisitionRepository,
     *,
@@ -2608,6 +3469,10 @@ def _github_persistent_statistics(
 
 
 def _explain(args: object) -> int:
+    stale = _stale_timing_message(TimingRepository())
+    if stale is not None:
+        print(stale)
+        return 2
     config = load_market_validation_config()
     sources = acquisition_engine_sources(FileAcquisitionRepository(), as_of=config.effective_at)
     executor = SourceBackedV1ProjectExecutor(config.effective_at, sources)

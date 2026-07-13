@@ -1,0 +1,26 @@
+version: hunter-score-v3.0.0-baseline
+active: true
+minimum_historical_sample_size: 30
+calibration_policy: recommend_only
+weights:
+  valuation: 0.065
+  comparative_valuation: 0.055
+  mispricing: 0.055
+  asymmetry: 0.055
+  risk: 0.075
+  developer: 0.065
+  protocol: 0.065
+  future_demand: 0.060
+  probability: 0.060
+  pattern_matching: 0.045
+  technology_necessity: 0.060
+  capital_rotation: 0.045
+  necessity_gap: 0.040
+  validation_health: 0.045
+  committee: 0.075
+  whale_intelligence: 0.030
+  macro_intelligence: 0.030
+  opportunity_timing: 0.030
+  narrative: 0.015
+  news: 0.015
+  social: 0.015

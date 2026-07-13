@@ -1,9 +1,11 @@
 bitcoin:
   coingecko_id: bitcoin
+  defillama_slug: bitcoin
   defillama_unsupported: true
   github_repositories: [bitcoin/bitcoin]
 ethereum:
   coingecko_id: ethereum
+  defillama_slug: ethereum
   defillama_unsupported: true
   github_repositories: [ethereum/go-ethereum]
 chainlink:
@@ -16,22 +18,25 @@ api3:
   github_repositories: [api3dao/airnode]
 render:
   coingecko_id: render-token
+  defillama_slug: render-network-bme
   defillama_unsupported: true
   github_repositories: [rendernetwork/RNPs]
 bittensor:
   coingecko_id: bittensor
+  defillama_slug: bittensor
   defillama_unsupported: true
   github_repositories: [RaoFoundation/bittensor]
 sui:
   coingecko_id: sui
-  defillama_unsupported: true
+  defillama_slug: suibridge
   github_repositories: [MystenLabs/sui]
 arbitrum:
   coingecko_id: arbitrum
-  defillama_unsupported: true
+  defillama_slug: arbitrum-bridge
   github_repositories: [OffchainLabs/nitro]
 filecoin:
   coingecko_id: filecoin
+  defillama_slug: filecoin
   defillama_unsupported: true
   github_repositories: [filecoin-project/lotus]
 aave:
@@ -40,11 +45,12 @@ aave:
   github_repositories: [aave/aave-v3-core]
 solana:
   coingecko_id: solana
+  defillama_slug: solana
   defillama_unsupported: true
   github_repositories: [solana-labs/solana]
 avalanche:
   coingecko_id: avalanche-2
-  defillama_unsupported: true
+  defillama_slug: avalanche-core-bridge
   github_repositories: [ava-labs/avalanchego]
 polygon:
   coingecko_id: polygon-ecosystem-token
@@ -52,11 +58,11 @@ polygon:
   github_repositories: [0xPolygon/bor]
 optimism:
   coingecko_id: optimism
-  defillama_unsupported: true
+  defillama_slug: optimism-bridge
   github_repositories: [ethereum-optimism/optimism]
 near:
   coingecko_id: near
-  defillama_unsupported: true
+  defillama_slug: near-intents
   github_repositories: [near/nearcore]
 cosmos:
   coingecko_id: cosmos
@@ -68,6 +74,7 @@ polkadot:
   github_repositories: [paritytech/polkadot-sdk]
 celestia:
   coingecko_id: celestia
+  defillama_slug: celestia
   defillama_unsupported: true
   github_repositories: [celestiaorg/celestia-node]
 eigenlayer:
@@ -120,7 +127,7 @@ dydx:
   github_repositories: [dydxprotocol/v4-chain]
 injective:
   coingecko_id: injective-protocol
-  defillama_unsupported: true
+  defillama_slug: injective-bridge
   github_repositories: [InjectiveLabs/injective-chain-releases]
 thorchain:
   coingecko_id: thorchain
@@ -128,11 +135,11 @@ thorchain:
   github_repositories: [thorchain/thornode]
 the-graph:
   coingecko_id: the-graph
-  defillama_unsupported: true
+  defillama_slug: the-graph
   github_repositories: [graphprotocol/graph-node]
 arweave:
   coingecko_id: arweave
-  defillama_unsupported: true
+  defillama_slug: ao-bridge
   github_repositories: [ArweaveTeam/arweave]
 akash:
   coingecko_id: akash-network
@@ -140,23 +147,27 @@ akash:
   github_repositories: [akash-network/node]
 livepeer:
   coingecko_id: livepeer
+  defillama_slug: livepeer
   defillama_unsupported: true
   github_repositories: [livepeer/go-livepeer]
 helium:
   coingecko_id: helium
+  defillama_slug: helium-network
   defillama_unsupported: true
   github_repositories: [helium/helium-program-library]
 hivemapper:
   coingecko_id: hivemapper
+  defillama_slug: hivemapper
   defillama_unsupported: true
   github_repositories: [Hivemapper/odc-api]
 iota:
   coingecko_id: iota
+  defillama_slug: iota
   defillama_unsupported: true
   github_repositories: [iotaledger/iota]
 stacks:
   coingecko_id: blockstack
-  defillama_unsupported: true
+  defillama_slug: stacks-sbtc
   github_repositories: [stacks-network/stacks-core]
 ordinals:
   coingecko_id: ordinals
@@ -168,11 +179,11 @@ starknet:
   github_repositories: [starkware-libs/cairo]
 zksync:
   coingecko_id: zksync
-  defillama_unsupported: true
+  defillama_slug: zksync-era-txbridge
   github_repositories: [matter-labs/zksync-era]
 scroll:
   coingecko_id: scroll
-  defillama_unsupported: true
+  defillama_slug: scroll-bridge
   github_repositories: [scroll-tech/scroll]
 mantle:
   coingecko_id: mantle
@@ -180,14 +191,17 @@ mantle:
   github_repositories: [mantlenetworkio/mantle]
 sei:
   coingecko_id: sei-network
+  defillama_slug: sei
   defillama_unsupported: true
   github_repositories: [sei-protocol/sei-chain]
 aptos:
   coingecko_id: aptos
+  defillama_slug: aptos
   defillama_unsupported: true
   github_repositories: [aptos-labs/aptos-core]
 worldcoin:
   coingecko_id: worldcoin-wld
+  defillama_slug: worldcoin
   defillama_unsupported: true
   github_repositories: [worldcoin/world-id-contracts]
 ens:

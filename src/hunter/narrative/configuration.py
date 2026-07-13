@@ -11,6 +11,7 @@ SUPPORTED_NARRATIVE_PROVIDERS: tuple[str, ...] = (
     "official_blog",
     "official_announcement",
     "github_releases",
+    "github_commits",
     "github_discussions",
     "github_tags",
     "official_docs",

@@ -1,0 +1,1 @@
+{"message": "Invalid isoformat string: 'None'", "metric": "gold", "occurred_at": "2026-07-13T05:30:16.026254+00:00", "provider": "stooq", "reason": "SCHEMA_MISMATCH", "source_url": "https://stooq.com/q/d/l/?s=xauusd&d1=20200101&d2=20300101&i=d"}

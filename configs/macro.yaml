@@ -1,0 +1,62 @@
+enabled: true
+stale_after_hours: 2160
+providers:
+  fred:
+    enabled: true
+    base_url: https://fred.stlouisfed.org/graph/fredgraph.csv
+    metrics:
+      federal_funds_rate: FEDFUNDS
+      ecb_interest_rate: ECBMRRFR
+      us_cpi: CPIAUCSL
+      us_ppi: PPIACO
+      us_unemployment: UNRATE
+      dxy: DTWEXBGS
+      treasury_10y: DGS10
+      treasury_2y: DGS2
+      global_m2_liquidity: WM2NS
+      oil_wti: DCOILWTICO
+      dollar_liquidity_indicators: WALCL
+  ecb:
+    enabled: false
+    base_url: https://data-api.ecb.europa.eu/service/data/FM/M.U2.EUR.4F.KR.MRR_FR.LEV
+    metrics:
+      ecb_interest_rate: ecb_main_refinancing_rate
+  coingecko_global:
+    enabled: true
+    base_url: https://api.coingecko.com/api/v3/global
+    metrics:
+      bitcoin_dominance: bitcoin_dominance
+      total_crypto_market_cap: total_crypto_market_cap
+  defillama_stablecoins:
+    enabled: true
+    base_url: https://stablecoins.llama.fi/stablecoins
+    metrics:
+      stablecoin_market_cap: stablecoin_market_cap
+  alternative_me:
+    enabled: true
+    base_url: https://api.alternative.me/fng/
+    metrics:
+      fear_greed_index: fear_greed_index
+  cboe:
+    enabled: true
+    base_url: https://cdn.cboe.com/api/global/us_indices/daily_prices/VIX_History.csv
+    metrics:
+      vix: vix
+  nasdaq_data_link:
+    enabled: false
+    base_url: https://data.nasdaq.com/api/v3/datasets
+    metrics:
+      oil_wti: oil_wti
+      gold: gold
+      dxy: dxy
+  stooq:
+    enabled: true
+    base_url: https://stooq.com/q/d/l/
+    metrics:
+      gold: xauusd
+  etf_flows:
+    enabled: false
+    base_url: https://www.sosovalue.com
+    metrics:
+      bitcoin_etf_net_flows: bitcoin_etf_net_flows
+      ethereum_etf_net_flows: ethereum_etf_net_flows

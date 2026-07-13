@@ -1,0 +1,52 @@
+enabled: true
+stale_after_hours: 24
+providers:
+  binance_derivatives:
+    enabled: true
+    base_url: https://fapi.binance.com
+    assets:
+      BTC: BTCUSDT
+      ETH: ETHUSDT
+    metrics:
+      open_interest: open_interest
+      funding_rate: funding_rate
+  bybit_derivatives:
+    enabled: true
+    base_url: https://api.bybit.com
+    assets:
+      BTC: BTCUSDT
+      ETH: ETHUSDT
+    metrics:
+      open_interest: open_interest
+      funding_rate: funding_rate
+  okx_derivatives:
+    enabled: true
+    base_url: https://www.okx.com
+    assets:
+      BTC: BTC-USDT-SWAP
+      ETH: ETH-USDT-SWAP
+    metrics:
+      open_interest: open_interest
+      funding_rate: funding_rate
+  unavailable_public_sources:
+    enabled: false
+    base_url: unavailable://no-documented-free-source
+    metrics:
+      exchange_inflows: NO_DOCUMENTED_FREE_SOURCE
+      exchange_outflows: NO_DOCUMENTED_FREE_SOURCE
+      net_exchange_flows: NO_DOCUMENTED_FREE_SOURCE
+      large_transaction_activity: NO_DOCUMENTED_FREE_SOURCE
+      whale_accumulation: NO_DOCUMENTED_FREE_SOURCE
+      whale_distribution: NO_DOCUMENTED_FREE_SOURCE
+      smart_money_activity: NO_DOCUMENTED_FREE_SOURCE
+      top_holder_concentration: NO_DOCUMENTED_FREE_SOURCE
+      holder_growth: NO_DOCUMENTED_FREE_SOURCE
+      long_term_holder_supply: NO_DOCUMENTED_FREE_SOURCE
+      short_term_holder_supply: NO_DOCUMENTED_FREE_SOURCE
+      supply_on_exchanges: NO_DOCUMENTED_FREE_SOURCE
+      supply_off_exchanges: NO_DOCUMENTED_FREE_SOURCE
+      stablecoin_inflows: NO_DOCUMENTED_FREE_SOURCE
+      stablecoin_outflows: NO_DOCUMENTED_FREE_SOURCE
+      liquidation_pressure: NO_DOCUMENTED_FREE_SOURCE
+      large_wallet_balance_changes: NO_DOCUMENTED_FREE_SOURCE
+      institutional_accumulation: NO_DOCUMENTED_FREE_SOURCE

@@ -11,10 +11,14 @@ from hunter.economic.models import EconomicEdge, EconomicGraphMetrics
 from hunter.economic.repository import EconomicGraphRepository
 from hunter.graph.models import TechnologyEdge, TechnologyGraphMetrics
 from hunter.graph.repository import TechnologyGraphRepository
+from hunter.macro import MacroRepository, MacroSnapshot
 from hunter.market_validation.models import EngineValidationSource, Scalar
 from hunter.narrative.provider import NARRATIVE_ENGINES, NARRATIVE_METRIC
 from hunter.scenario import SCENARIO_ENGINES, ScenarioRepository
 from hunter.scenario.models import ScenarioImpact
+from hunter.timing.models import TimingAssessment
+from hunter.timing.repository import TimingRepository
+from hunter.whale import WHALE_ENGINE_TARGETS, WhaleRepository, WhaleSnapshot
 
 MARKET_ENGINES: tuple[str, ...] = ("valuation", "comparative_valuation", "mispricing", "asymmetry")
 GRAPH_ENGINES: tuple[str, ...] = (
@@ -32,6 +36,15 @@ ECONOMIC_GRAPH_ENGINES: tuple[str, ...] = (
     "probability",
     "opportunity_timing",
     "technology_necessity",
+    "committee",
+)
+MACRO_ENGINE_TARGETS: tuple[str, ...] = (
+    "macro_intelligence",
+    "probability",
+    "future_demand",
+    "capital_rotation",
+    "pattern_matching",
+    "risk",
     "committee",
 )
 
@@ -78,13 +91,123 @@ def acquisition_engine_sources(
         if health is not None:
             sources[project_id].append(health)
     if hasattr(repository, "root"):
+        macro_sources = _macro_engine_sources(as_of=as_of)
+        whale_sources = _whale_engine_sources(as_of=as_of)
+        for project_id in evidence_by_project:
+            sources[project_id].extend(macro_sources)
+            sources[project_id].extend(whale_sources)
         for project_id, graph_sources in _graph_engine_sources(as_of=as_of).items():
             sources[project_id].extend(graph_sources)
         for project_id, economic_sources in _economic_graph_engine_sources(as_of=as_of).items():
             sources[project_id].extend(economic_sources)
         for project_id, scenario_sources in _scenario_engine_sources(as_of=as_of).items():
             sources[project_id].extend(scenario_sources)
+        for project_id, timing_sources in _timing_engine_sources(as_of=as_of).items():
+            sources[project_id].extend(timing_sources)
     return {project_id: tuple(sorted(items, key=lambda item: item.engine)) for project_id, items in sources.items()}
+
+
+def _macro_engine_sources(*, as_of: datetime | None) -> tuple[EngineValidationSource, ...]:
+    snapshot = MacroRepository().latest_snapshot()
+    if snapshot is None or not snapshot.evidence:
+        return ()
+    timestamp = as_of.astimezone(UTC) if as_of is not None else snapshot.generated_at
+    return tuple(_macro_source(engine, snapshot, timestamp) for engine in MACRO_ENGINE_TARGETS)
+
+
+def _macro_source(engine: str, snapshot: MacroSnapshot, timestamp: datetime) -> EngineValidationSource:
+    source_record_ids = tuple(f"{item.metric.provider}:{item.metric.name}" for item in snapshot.evidence)
+    evidence_ids = tuple(item.evidence_id for item in snapshot.evidence)
+    repository_ids = tuple(item.repository_id for item in snapshot.evidence)
+    return EngineValidationSource(
+        engine=engine,
+        score=_macro_score(engine, snapshot),
+        confidence=snapshot.macro_confidence,
+        timestamp=timestamp,
+        freshness=snapshot.freshness,
+        source_record_ids=source_record_ids,
+        evidence_ids=evidence_ids,
+        source="macro-intelligence",
+        collector="macro-repository",
+        repository_ids=repository_ids,
+        validation_status="VALID",
+        status="AVAILABLE",
+        raw_input_metrics=dict(snapshot.raw_metrics),
+        normalized_inputs=dict(snapshot.normalized_metrics),
+    )
+
+
+def _macro_score(engine: str, snapshot: MacroSnapshot) -> float:
+    if engine == "risk":
+        return snapshot.risk_off_score
+    if engine == "probability":
+        return _mean((snapshot.risk_on_score, snapshot.monetary_policy_score, snapshot.crypto_liquidity_score))
+    if engine == "future_demand":
+        return _mean((snapshot.liquidity_score, snapshot.crypto_liquidity_score, 1.0 - snapshot.recession_probability))
+    if engine == "capital_rotation":
+        return _mean((snapshot.crypto_liquidity_score, snapshot.risk_on_score))
+    if engine == "pattern_matching":
+        return _mean((snapshot.risk_on_score, snapshot.risk_off_score, snapshot.evidence_quality))
+    if engine == "committee":
+        return _mean((snapshot.risk_on_score, snapshot.crypto_liquidity_score, snapshot.macro_confidence))
+    return _mean(
+        (
+            snapshot.liquidity_score,
+            snapshot.inflation_score,
+            snapshot.monetary_policy_score,
+            1.0 - snapshot.recession_probability,
+            snapshot.risk_on_score,
+            snapshot.crypto_liquidity_score,
+        )
+    )
+
+
+def _whale_engine_sources(*, as_of: datetime | None) -> tuple[EngineValidationSource, ...]:
+    snapshot = WhaleRepository().latest_snapshot()
+    if snapshot is None or not snapshot.evidence:
+        return ()
+    timestamp = as_of.astimezone(UTC) if as_of is not None else snapshot.generated_at
+    return tuple(_whale_source(engine, snapshot, timestamp) for engine in WHALE_ENGINE_TARGETS)
+
+
+def _whale_source(engine: str, snapshot: WhaleSnapshot, timestamp: datetime) -> EngineValidationSource:
+    source_record_ids = tuple(
+        f"{item.metric.provider}:{item.metric.asset}:{item.metric.name}" for item in snapshot.evidence
+    )
+    evidence_ids = tuple(item.evidence_id for item in snapshot.evidence)
+    repository_ids = tuple(item.repository_id for item in snapshot.evidence)
+    return EngineValidationSource(
+        engine=engine,
+        score=_whale_score(engine, snapshot),
+        confidence=snapshot.confidence,
+        timestamp=timestamp,
+        freshness=snapshot.freshness,
+        source_record_ids=source_record_ids,
+        evidence_ids=evidence_ids,
+        source="whale-intelligence",
+        collector="whale-repository",
+        repository_ids=repository_ids,
+        validation_status="VALID",
+        status="AVAILABLE",
+        raw_input_metrics=dict(snapshot.raw_metrics),
+        normalized_inputs=dict(snapshot.normalized_metrics),
+    )
+
+
+def _whale_score(engine: str, snapshot: WhaleSnapshot) -> float:
+    if engine == "risk":
+        return _mean((snapshot.distribution_score, snapshot.exchange_pressure))
+    if engine == "probability":
+        return _mean((snapshot.whale_score, snapshot.accumulation_score, snapshot.institutional_score))
+    if engine == "future_demand":
+        return _mean((snapshot.accumulation_score, snapshot.market_participation, snapshot.institutional_score))
+    if engine == "capital_rotation":
+        return _mean((snapshot.stablecoin_pressure, snapshot.market_participation, snapshot.whale_score))
+    if engine == "pattern_matching":
+        return _mean((snapshot.whale_score, snapshot.evidence_quality, 1.0 - snapshot.distribution_score))
+    if engine == "committee":
+        return _mean((snapshot.whale_score, snapshot.confidence, snapshot.institutional_score))
+    return snapshot.whale_score
 
 
 def engine_coverage(
@@ -481,6 +604,37 @@ def _scenario_score(engine: str, impacts: tuple[ScenarioImpact, ...]) -> float:
     if engine == "opportunity_timing":
         return _mean(tuple(max(impact.direct_impact, impact.indirect_impact) for impact in impacts))
     return _mean(tuple(impact.infrastructure_resilience + impact.economic_resilience for impact in impacts)) / 2
+
+
+def _timing_engine_sources(*, as_of: datetime | None) -> dict[str, tuple[EngineValidationSource, ...]]:
+    timestamp = as_of.astimezone(UTC) if as_of is not None else datetime.now(tz=UTC)
+    rows: dict[str, tuple[EngineValidationSource, ...]] = {}
+    for project_id, assessment in TimingRepository().latest_by_project().items():
+        if assessment.generated_at > timestamp or assessment.classification == "INSUFFICIENT_EVIDENCE":
+            continue
+        rows[project_id] = (_timing_source(assessment),)
+    return rows
+
+
+def _timing_source(assessment: TimingAssessment) -> EngineValidationSource:
+    return EngineValidationSource(
+        engine="opportunity_timing",
+        score=assessment.entry_score,
+        confidence=assessment.timing_confidence,
+        timestamp=assessment.generated_at,
+        freshness=assessment.freshness,
+        source_record_ids=(assessment.assessment_id,),
+        evidence_ids=assessment.evidence_ids,
+        source="opportunity-timing",
+        collector="timing-repository",
+        repository_ids=assessment.repository_ids,
+        validation_status="VALID",
+        status="AVAILABLE",
+        raw_input_metrics=dict(assessment.raw_inputs),
+        normalized_inputs=dict(assessment.normalized_factors),
+        applied_weight=0.0,
+        weighted_contribution=0.0,
+    )
 
 
 def _evidence_score(evidence: NormalizedEvidence) -> float:

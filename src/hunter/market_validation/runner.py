@@ -17,6 +17,7 @@ from hunter.market_validation.models import (
 )
 from hunter.pipeline import PipelineOrchestrator
 from hunter.plugins.contracts import PipelineContext
+from hunter.weights import WeightEngine
 
 
 class MarketValidationRunner:
@@ -36,6 +37,7 @@ class MarketValidationRunner:
         ranked = _rank(raw)
         champion = ranked[0] if ranked and ranked[0].committee_decision == "QUALIFIED_CANDIDATE" else None
         runner_up = ranked[1] if champion is not None and len(ranked) > 1 else None
+        scoring_versions = tuple(sorted({result.scoring_version for result in ranked if result.scoring_version}))
         return MarketValidationRun(
             run_id=self.config.run_id,
             effective_at=self.config.effective_at,
@@ -44,7 +46,11 @@ class MarketValidationRunner:
             runner_up_project_id=runner_up.project_id if runner_up else None,
             no_qualified_candidate=champion is None,
             created_at=self.config.effective_at,
-            metadata={"project_count": len(ranked), "schema": "market-validation-v1"},
+            metadata={
+                "project_count": len(ranked),
+                "schema": "market-validation-v1",
+                "scoring_version": scoring_versions[0] if len(scoring_versions) == 1 else ",".join(scoring_versions),
+            },
         )
 
 
@@ -74,12 +80,12 @@ class SourceBackedV1ProjectExecutor:
             values={"project_id": target.project_id, "sector": target.sector},
         )
         PipelineOrchestrator().run(context=context)
-        sources = self.sources_by_project.get(target.project_id, ())
-        available_sources = tuple(source for source in sources if _source_available(source))
-        source_by_engine = {source.engine: source for source in available_sources}
+        sources = _collapse_sources_by_engine(self.sources_by_project.get(target.project_id, ()))
+        present_available = tuple(source for source in sources if _source_available(source))
+        source_by_engine = {source.engine: source for source in present_available}
         missing_required = tuple(engine for engine in REQUIRED_ENGINES if engine not in source_by_engine)
         invalid = tuple(source.engine for source in sources if not _source_available(source))
-        all_sources = tuple(
+        unweighted_sources = tuple(
             sorted(
                 (
                     *sources,
@@ -92,6 +98,9 @@ class SourceBackedV1ProjectExecutor:
                 key=lambda item: item.engine,
             )
         )
+        all_sources = WeightEngine().apply(unweighted_sources)
+        available_sources = tuple(source for source in all_sources if _source_available(source))
+        source_by_engine = {source.engine: source for source in available_sources}
         missing = tuple(sorted((*missing_required, *(field for source in sources for field in source.missing_fields))))
         stale = tuple(sorted(source.engine for source in sources if source.freshness < 0.5))
         warnings = tuple(
@@ -106,7 +115,9 @@ class SourceBackedV1ProjectExecutor:
         freshness_values = tuple(source.freshness for source in available_sources)
         confidence = _clamp(sum(confidence_values) / len(confidence_values)) if confidence_values else 0.0
         freshness = _clamp(sum(freshness_values) / len(freshness_values)) if freshness_values else 0.0
-        hunter = _clamp(sum(source.weighted_contribution for source in available_sources))
+        weighted_score = WeightEngine().score(all_sources)
+        hunter = weighted_score.hunter_score
+        final_score = weighted_score.final_score
         validation_health = _clamp(len(source_by_engine) / len(REQUIRED_ENGINES)) if REQUIRED_ENGINES else 0.0
         decision = "INSUFFICIENT_EVIDENCE" if missing_required or invalid else "WATCH_CLOSELY"
         if decision != "INSUFFICIENT_EVIDENCE" and hunter >= 0.62 and confidence >= 0.58:
@@ -130,6 +141,7 @@ class SourceBackedV1ProjectExecutor:
             rank=0,
             sector_rank=0,
             hunter_score=hunter,
+            final_score=final_score,
             risk=_score(source_by_engine, "risk"),
             confidence=confidence,
             valuation=_score(source_by_engine, "valuation"),
@@ -161,6 +173,7 @@ class SourceBackedV1ProjectExecutor:
             ),
             validation_warnings=warnings,
             engine_sources=all_sources,
+            scoring_version=weighted_score.scoring_version,
         )
 
 
@@ -199,7 +212,9 @@ def compare_runs(left: MarketValidationRun, right: MarketValidationRun) -> Marke
 
 
 def _rank(results: tuple[ProjectValidationResult, ...]) -> tuple[ProjectValidationResult, ...]:
-    ranked = sorted(results, key=lambda item: (-item.hunter_score, -item.committee_confidence, item.project_id))
+    ranked = sorted(
+        results, key=lambda item: (-item.final_score, -item.hunter_score, -item.committee_confidence, item.project_id)
+    )
     sector_counts: dict[str, int] = {}
     updated = []
     for index, item in enumerate(ranked, start=1):
@@ -262,3 +277,58 @@ def _unavailable_source(engine: str, timestamp: datetime) -> EngineValidationSou
         missing_fields=(engine,),
         warnings=(f"missing:{engine}",),
     )
+
+
+def _collapse_sources_by_engine(sources: tuple[EngineValidationSource, ...]) -> tuple[EngineValidationSource, ...]:
+    grouped: dict[str, list[EngineValidationSource]] = {}
+    for source in sources:
+        grouped.setdefault(source.engine, []).append(source)
+    collapsed = []
+    for engine, items in grouped.items():
+        if len(items) == 1:
+            collapsed.append(items[0])
+            continue
+        available = tuple(item for item in items if _source_available(item))
+        candidates = available or tuple(items)
+        newest = max(item.timestamp for item in candidates)
+        collapsed.append(
+            EngineValidationSource(
+                engine=engine,
+                score=_mean(tuple(item.score for item in candidates)),
+                confidence=_mean(tuple(item.confidence for item in candidates)),
+                timestamp=newest,
+                freshness=_mean(tuple(item.freshness for item in candidates)),
+                source_record_ids=tuple(
+                    sorted({source_id for item in candidates for source_id in item.source_record_ids})
+                ),
+                evidence_ids=tuple(sorted({evidence_id for item in candidates for evidence_id in item.evidence_ids})),
+                source="+".join(sorted({item.source for item in candidates})),
+                collector="weighted-source-aggregator",
+                repository_ids=tuple(
+                    sorted({repository_id for item in candidates for repository_id in item.repository_ids})
+                ),
+                validation_status=(
+                    "VALID" if all(item.validation_status == "VALID" for item in candidates) else "PARTIAL"
+                ),
+                status="AVAILABLE" if available else "UNAVAILABLE",
+                raw_input_metrics={
+                    f"{index}.{key}": value
+                    for index, item in enumerate(candidates)
+                    for key, value in item.raw_input_metrics.items()
+                },
+                normalized_inputs={
+                    f"{index}.{key}": value
+                    for index, item in enumerate(candidates)
+                    for key, value in item.normalized_inputs.items()
+                },
+                missing_fields=tuple(sorted({field for item in items for field in item.missing_fields})),
+                warnings=tuple(sorted({warning for item in items for warning in item.warnings})),
+            )
+        )
+    return tuple(sorted(collapsed, key=lambda item: item.engine))
+
+
+def _mean(values: tuple[float, ...]) -> float:
+    if not values:
+        return 0.0
+    return _clamp(sum(values) / len(values))

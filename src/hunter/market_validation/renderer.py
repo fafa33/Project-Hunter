@@ -37,30 +37,45 @@ class MarketValidationRenderer:
             f"Top candidate: {leader}",
             f"Runner-up: {runner_up}",
             f"No-qualified-candidate state: {run.no_qualified_candidate}",
+            f"Scoring version: `{run.metadata.get('scoring_version', '-')}`",
             "",
             "## Full Ranking",
             "",
-            "| Rank | Project | Sector | Score | Confidence | Committee | Missing | Stale |",
-            "| --- | --- | --- | ---: | ---: | --- | --- | --- |",
+            "| Rank | Project | Sector | Hunter Score | Final Score | Confidence | Committee | Missing | Stale |",
+            "| --- | --- | --- | ---: | ---: | ---: | --- | --- | --- |",
         ]
         for item in run.project_results:
             lines.append(
                 f"| {item.rank} | {item.project_id} | {item.sector} | {item.hunter_score:.4f} | "
-                f"{item.confidence:.4f} | {item.committee_decision} | "
+                f"{item.final_score:.4f} | {item.confidence:.4f} | {item.committee_decision} | "
                 f"{', '.join(item.missing_evidence) or 'none'} | {', '.join(item.stale_evidence) or 'none'} |"
             )
         lines.extend(["", "## Sector Ranking", ""])
         for sector in sorted({item.sector for item in run.project_results}):
             lines.append(f"### {sector}")
             for item in [row for row in run.project_results if row.sector == sector]:
-                lines.append(f"- {item.sector_rank}. {item.project_id}: {item.hunter_score:.4f}")
+                lines.append(f"- {item.sector_rank}. {item.project_id}: {item.final_score:.4f}")
         lines.extend(["", "## Score Breakdown", ""])
         for item in run.project_results[:10]:
             lines.append(f"### {item.project_id}")
+            lines.append(f"- Hunter Score: {item.hunter_score:.4f}")
+            lines.append(f"- Final Score: {item.final_score:.4f}")
+            lines.append(f"- Scoring version: {item.scoring_version or '-'}")
             lines.append(f"- Reasons: {', '.join(item.reasons_for_ranking)}")
             lines.append(f"- Positive drivers: {', '.join(item.strongest_positive_drivers) or 'none'}")
             lines.append(f"- Negative drivers: {', '.join(item.strongest_negative_drivers) or 'none'}")
             lines.append(f"- Validation warnings: {', '.join(item.validation_warnings) or 'none'}")
+            lines.append("")
+            lines.append(
+                "| Engine | Raw | Base Weight | Adjusted Weight | Contribution | Confidence | Freshness | Coverage |"
+            )
+            lines.append("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
+            for source in item.engine_sources:
+                lines.append(
+                    f"| {source.engine} | {source.score:.4f} | {source.base_weight:.6f} | "
+                    f"{source.adjusted_weight:.4f} | {source.weighted_contribution:.4f} | "
+                    f"{source.confidence:.4f} | {source.freshness:.4f} | {source.evidence_coverage:.4f} |"
+                )
         lines.extend(
             [
                 "",
@@ -102,7 +117,7 @@ class MarketValidationRenderer:
                 "",
                 "## Contribution Table",
                 "",
-                "Contribution tables preserve raw score, normalized score, applied weight, and final contribution.",
+                "Contribution tables preserve raw score, base weight, adjusted weight, confidence, freshness, evidence coverage, scoring version, and final contribution.",
                 "",
                 "## Decision Tree",
                 "",
@@ -187,6 +202,8 @@ def _row(result: ProjectValidationResult) -> dict[str, Any]:
         "project_name": result.project_name,
         "sector": result.sector,
         "hunter_score": result.hunter_score,
+        "final_score": result.final_score,
+        "scoring_version": result.scoring_version,
         "risk": result.risk,
         "confidence": result.confidence,
         "valuation": result.valuation,
@@ -215,6 +232,12 @@ def _row(result: ProjectValidationResult) -> dict[str, Any]:
         "validation_warnings": ";".join(result.validation_warnings),
         "engine_availability": ";".join(f"{source.engine}:{source.status}" for source in result.engine_sources),
         "collector_status": ";".join(f"{source.engine}:{source.collector}" for source in result.engine_sources),
+        "score_contributions": ";".join(
+            f"{source.engine}:raw={source.score:.4f}:base={source.base_weight:.6f}:adjusted={source.adjusted_weight:.4f}:"
+            f"contribution={source.weighted_contribution:.4f}:confidence={source.confidence:.4f}:"
+            f"freshness={source.freshness:.4f}:coverage={source.evidence_coverage:.4f}:version={source.scoring_version}"
+            for source in result.engine_sources
+        ),
         "evidence_ids": ";".join(
             evidence_id for source in result.engine_sources for evidence_id in source.evidence_ids
         ),

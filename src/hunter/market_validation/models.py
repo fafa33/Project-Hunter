@@ -25,8 +25,12 @@ class EngineValidationSource:
     status: str = "AVAILABLE"
     raw_input_metrics: dict[str, Scalar] = field(default_factory=dict)
     normalized_inputs: dict[str, float] = field(default_factory=dict)
+    base_weight: float = 0.0
+    adjusted_weight: float = 0.0
     applied_weight: float = 0.0
     weighted_contribution: float = 0.0
+    evidence_coverage: float = 0.0
+    scoring_version: str = ""
     missing_fields: tuple[str, ...] = ()
     warnings: tuple[str, ...] = ()
 
@@ -40,8 +44,12 @@ class EngineValidationSource:
         object.__setattr__(self, "confidence", _clamp(self.confidence))
         object.__setattr__(self, "timestamp", _aware(self.timestamp))
         object.__setattr__(self, "freshness", _clamp(self.freshness))
+        object.__setattr__(self, "base_weight", _clamp(self.base_weight))
+        object.__setattr__(self, "adjusted_weight", _clamp(self.adjusted_weight))
         object.__setattr__(self, "applied_weight", _clamp(self.applied_weight))
         object.__setattr__(self, "weighted_contribution", _clamp(self.weighted_contribution))
+        object.__setattr__(self, "evidence_coverage", _clamp(self.evidence_coverage))
+        object.__setattr__(self, "scoring_version", str(self.scoring_version))
         object.__setattr__(self, "source_record_ids", tuple(sorted(str(item) for item in self.source_record_ids)))
         object.__setattr__(self, "evidence_ids", tuple(sorted(str(item) for item in self.evidence_ids)))
         object.__setattr__(self, "repository_ids", tuple(sorted(str(item) for item in self.repository_ids)))
@@ -97,6 +105,7 @@ class ProjectValidationResult:
     rank: int
     sector_rank: int
     hunter_score: float
+    final_score: float
     risk: float
     confidence: float
     valuation: float
@@ -123,12 +132,14 @@ class ProjectValidationResult:
     reasons_for_ranking: tuple[str, ...] = ()
     validation_warnings: tuple[str, ...] = ()
     engine_sources: tuple[EngineValidationSource, ...] = ()
+    scoring_version: str = ""
 
     def __post_init__(self) -> None:
         for name in ("result_id", "run_id", "project_id", "project_name", "sector", "committee_decision"):
             _text(name, getattr(self, name))
         for name in (
             "hunter_score",
+            "final_score",
             "risk",
             "confidence",
             "valuation",
@@ -159,6 +170,7 @@ class ProjectValidationResult:
         ):
             object.__setattr__(self, name, tuple(sorted(str(item) for item in getattr(self, name))))
         object.__setattr__(self, "engine_sources", tuple(sorted(self.engine_sources, key=lambda item: item.engine)))
+        object.__setattr__(self, "scoring_version", str(self.scoring_version))
 
     @property
     def score_breakdown(self) -> dict[str, float]:

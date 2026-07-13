@@ -55,7 +55,7 @@ class DecisionExplainabilityEngine:
         return DecisionAudit(
             project_id=result.project_id,
             project_name=result.project_name,
-            final_score=result.hunter_score,
+            final_score=result.final_score,
             rank=result.rank,
             committee_decision=result.committee_decision,
             committee_confidence=result.committee_confidence,
@@ -115,6 +115,8 @@ def _contributions(result: ProjectValidationResult) -> tuple[ContributionBreakdo
         raw = float(getattr(result, field))
         normalized = round(1.0 - raw, 4) if label == "Risk Penalty" else round(raw, 4)
         source = sources.get(engine)
+        base_weight = source.base_weight if source is not None else 0.0
+        adjusted_weight = source.adjusted_weight if source is not None else 0.0
         applied_weight = source.applied_weight if source is not None else 0.0
         contribution = source.weighted_contribution if source is not None and source.confidence > 0.0 else 0.0
         items.append(
@@ -122,8 +124,14 @@ def _contributions(result: ProjectValidationResult) -> tuple[ContributionBreakdo
                 engine=label,
                 raw_score=round(raw, 4),
                 normalized_score=normalized,
+                base_weight=round(base_weight, 6),
+                adjusted_weight=round(adjusted_weight, 6),
                 applied_weight=round(applied_weight, 6),
                 final_score_contribution=round(contribution, 4),
+                confidence=round(source.confidence if source is not None else 0.0, 4),
+                freshness=round(source.freshness if source is not None else 0.0, 4),
+                evidence_coverage=round(source.evidence_coverage if source is not None else 0.0, 4),
+                scoring_version=source.scoring_version if source is not None else "",
             )
         )
     for label, _, engine in TRACE_ONLY_FIELDS:
@@ -131,7 +139,21 @@ def _contributions(result: ProjectValidationResult) -> tuple[ContributionBreakdo
         score = source.score if source is not None else 0.0
         weight = source.applied_weight if source is not None else ZERO_WEIGHT
         contribution = source.weighted_contribution if source is not None and source.confidence > 0.0 else 0.0
-        items.append(ContributionBreakdown(label, score, score, weight, contribution))
+        items.append(
+            ContributionBreakdown(
+                label,
+                score,
+                score,
+                source.base_weight if source is not None else 0.0,
+                source.adjusted_weight if source is not None else 0.0,
+                weight,
+                contribution,
+                source.confidence if source is not None else 0.0,
+                source.freshness if source is not None else 0.0,
+                source.evidence_coverage if source is not None else 0.0,
+                source.scoring_version if source is not None else "",
+            )
+        )
     return tuple(items)
 
 
@@ -161,7 +183,7 @@ def _evidence_trace(result: ProjectValidationResult, effective_at: datetime) -> 
                     f"{key}={value}" for key, value in sorted((source.raw_input_metrics if source else {}).items())
                 ),
                 evidence_ids=source.evidence_ids if source is not None else (),
-                repository_ids=source.source_record_ids if source is not None else (),
+                repository_ids=(source.repository_ids or source.source_record_ids) if source is not None else (),
                 timestamp=source.timestamp if source is not None else effective_at,
                 confidence=round(source.confidence if source is not None and score > 0.0 else 0.0, 4),
                 freshness=round(source.freshness if source is not None else 0.0, 4),
@@ -177,8 +199,13 @@ def _engine_explanation(contribution: ContributionBreakdown, result: ProjectVali
     reasons = [
         f"raw={contribution.raw_score:.4f}",
         f"normalized={contribution.normalized_score:.4f}",
-        f"weight={contribution.applied_weight:.6f}",
+        f"base_weight={contribution.base_weight:.6f}",
+        f"adjusted_weight={contribution.adjusted_weight:.6f}",
         f"contribution={contribution.final_score_contribution:.4f}",
+        f"confidence={contribution.confidence:.4f}",
+        f"freshness={contribution.freshness:.4f}",
+        f"evidence_coverage={contribution.evidence_coverage:.4f}",
+        f"scoring_version={contribution.scoring_version or '-'}",
     ]
     if contribution.engine in result.strongest_positive_drivers:
         reasons.append("listed as a strongest positive driver")

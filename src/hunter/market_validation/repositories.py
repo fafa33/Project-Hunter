@@ -82,16 +82,26 @@ def result_to_record(result: ProjectValidationResult, *, effective_at) -> Market
                 [
                     {
                         "engine": source.engine,
+                        "raw_score": source.score,
                         "source_record_ids": list(source.source_record_ids),
                         "evidence_ids": list(source.evidence_ids),
+                        "repository_ids": list(source.repository_ids),
                         "raw_input_metrics": dict(source.raw_input_metrics),
                         "normalized_inputs": dict(source.normalized_inputs),
+                        "base_weight": source.base_weight,
+                        "adjusted_weight": source.adjusted_weight,
                         "applied_weight": source.applied_weight,
                         "weighted_contribution": source.weighted_contribution,
+                        "confidence": source.confidence,
+                        "freshness": source.freshness,
+                        "evidence_coverage": source.evidence_coverage,
+                        "scoring_version": source.scoring_version,
                     }
                     for source in result.engine_sources
                 ],
                 sort_keys=True,
-            )
+            ),
+            "final_score": result.final_score,
+            "scoring_version": result.scoring_version,
         },
     )

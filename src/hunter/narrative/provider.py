@@ -46,6 +46,19 @@ TOPIC_KEYWORDS: dict[str, tuple[str, ...]] = {
     "roadmap": ("roadmap", "milestone", "mainnet", "testnet", "upgrade"),
 }
 
+EVIDENCE_CATEGORY_KEYWORDS: dict[str, tuple[str, ...]] = {
+    "protocol_release": ("release", "version", "upgrade", "mainnet", "testnet"),
+    "governance": ("governance", "proposal", "vote", "dao"),
+    "partnership": ("partnership", "partner", "collaboration"),
+    "integration": ("integration", "integrates", "integrated", "support"),
+    "exchange_listing": ("listing", "listed", "exchange"),
+    "security_event": ("security", "audit", "vulnerability", "incident"),
+    "exploit": ("exploit", "hack", "attack"),
+    "ecosystem_expansion": ("ecosystem", "launch", "expansion", "grant"),
+    "developer_activity": ("commit", "pull request", "merge", "tag", "release"),
+    "roadmap_milestone": ("roadmap", "milestone", "phase"),
+}
+
 CHAIN_KEYWORDS: tuple[str, ...] = (
     "ethereum",
     "bitcoin",
@@ -114,7 +127,12 @@ class NarrativeProvider:
             if source.provider not in SUPPORTED_NARRATIVE_PROVIDERS:
                 rows.append(_invalid_provider_row(source, request, index))
                 continue
-            for item_index, item in enumerate(_parse_feed(_read_source(source, self.config.request_timeout_seconds))):
+            try:
+                items = _parse_feed(_read_source(source, self.config.request_timeout_seconds))
+            except (OSError, ET.ParseError, UnicodeDecodeError, ValueError) as exc:
+                rows.append(_source_error_row(source, request, index, exc))
+                continue
+            for item_index, item in enumerate(items):
                 payload = _payload(source, item, page=index, item_index=item_index)
                 rows.append(
                     RawEvidence(
@@ -166,6 +184,7 @@ class NarrativeEvidenceNormalizer:
                         "schema_completeness": confidence,
                         "topic_count": _scale(len(extracted["topics"]), 10),
                         "entity_count": _scale(len(extracted["entities"]), 10),
+                        "evidence_category_count": _scale(len(extracted["evidence_categories"]), 10),
                         "roadmap_reference": 1.0 if extracted["roadmap_references"] else 0.0,
                         "version_reference": 1.0 if extracted["version_references"] else 0.0,
                         "technology_reference": 1.0 if extracted["technology_references"] else 0.0,
@@ -236,7 +255,8 @@ def _read_source(source: NarrativeSourceConfig, timeout: int) -> str:
     path = Path(source.url)
     if parsed.scheme == "" and path.exists():
         return path.read_text(encoding="utf-8")
-    with urllib.request.urlopen(source.url, timeout=timeout) as response:
+    request = urllib.request.Request(source.url, headers={"User-Agent": "Project-Hunter/1.0"})
+    with urllib.request.urlopen(request, timeout=timeout) as response:
         return response.read().decode("utf-8")
 
 
@@ -344,9 +364,50 @@ def _invalid_provider_row(source: NarrativeSourceConfig, request: AcquisitionReq
     )
 
 
+def _source_error_row(
+    source: NarrativeSourceConfig, request: AcquisitionRequest, page: int, error: BaseException
+) -> RawEvidence:
+    payload = {
+        "title": source.source_id,
+        "description": "",
+        "url": source.url,
+        "timestamp": request.requested_at.isoformat(),
+        "project": source.project_id,
+        "source": source.source,
+        "provider": source.provider,
+        "language": source.language,
+        "author": source.author,
+        "tags": source.tags,
+        "categories": source.categories,
+        "content_hash": _hash(f"{source.source_id}:{type(error).__name__}"),
+        "duplicate_hash": _hash(source.source_id),
+        "collector_metadata": {"source_id": source.source_id, "page": page},
+        "page": page,
+        "fetch_error": type(error).__name__,
+        "fetch_error_message": str(error),
+    }
+    return RawEvidence(
+        provider="narrative",
+        collector=f"narrative-{source.provider}-collector",
+        raw_source_id=str(payload["duplicate_hash"]),
+        domain="narrative",
+        metric=NARRATIVE_METRIC,
+        target_id=source.project_id or "unknown",
+        retrieved_at=request.requested_at,
+        payload=payload,
+        source_url=source.url,
+        repository_id=f"narrative:{source.project_id or 'unknown'}:{source.provider}:{payload['content_hash']}",
+    )
+
+
 def _extract(text: str, project: str) -> dict[str, tuple[str, ...]]:
     lowered = text.lower()
     topics = tuple(sorted(topic for topic, words in TOPIC_KEYWORDS.items() if any(word in lowered for word in words)))
+    evidence_categories = tuple(
+        sorted(
+            category for category, words in EVIDENCE_CATEGORY_KEYWORDS.items() if any(word in lowered for word in words)
+        )
+    )
     chains = tuple(sorted(chain for chain in CHAIN_KEYWORDS if chain in lowered))
     technologies = tuple(sorted(word for word in TECHNOLOGY_KEYWORDS if word in lowered))
     versions = tuple(sorted(set(VERSION_RE.findall(text))))
@@ -364,6 +425,7 @@ def _extract(text: str, project: str) -> dict[str, tuple[str, ...]]:
         "chains": chains,
         "narratives": topics,
         "categories": topics,
+        "evidence_categories": evidence_categories,
         "keywords": words,
         "project_references": project_refs,
         "technology_references": technologies,
@@ -374,6 +436,8 @@ def _extract(text: str, project: str) -> dict[str, tuple[str, ...]]:
 
 
 def _validate_required(item: NormalizedEvidence, issues: list[ValidationIssue]) -> None:
+    if item.raw_metrics.get("fetch_error"):
+        issues.append(ValidationIssue("source", "url", "source could not be fetched or parsed"))
     for field in ("title", "url", "timestamp", "project", "source", "provider", "content_hash", "duplicate_hash"):
         value = item.raw_metrics.get(field)
         if value is None or (isinstance(value, str) and not value.strip()):

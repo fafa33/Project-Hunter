@@ -1,6 +1,36 @@
 enabled: true
 expired_after_days: 365
 sources:
+- source_id: aave-github_commits-2e21c30416ea
+  provider: github_commits
+  project_id: aave
+  url: https://github.com/aave/aave-v3-core/commits/master.atom
+  source: GitHub commits
+  language: en
+  enabled: true
+  discovered: true
+  source_type: github_commits
+  priority: 7
+  trust_score: 0.9
+  repository_id: narrative-source:aave:github_commits:github.com
+  evidence_id: narrative-source:analytical-identity-v1:2e21c30416eae9643f2d942854c623ff9f0939aed68516a78304bdcbd82734a0
+  categories:
+  - developer_activity
+- source_id: aave-github_commits-597f3dcbf121
+  provider: github_commits
+  project_id: aave
+  url: https://github.com/aave/aave-v3-core/commits.atom
+  source: GitHub commits
+  language: en
+  enabled: true
+  discovered: true
+  source_type: github_commits
+  priority: 7
+  trust_score: 0.85
+  repository_id: narrative-source:aave:github_commits:github.com
+  evidence_id: narrative-source:analytical-identity-v1:597f3dcbf12102921f2e0cb475dbd9f98abe201e1d14c35a4b729ef09967d689
+  categories:
+  - developer_activity
 - source_id: aave-github_releases-edd6caa3e509
   provider: github_releases
   project_id: aave
@@ -27,6 +57,36 @@ sources:
   trust_score: 0.9
   repository_id: narrative-source:aave:github_tags:github.com
   evidence_id: narrative-source:analytical-identity-v1:d5d6b9de218f320a977b6c3dc7197a53b47de349936dd96a3906badc01440199
+- source_id: aave-official_announcement-874b5f75e631
+  provider: official_announcement
+  project_id: aave
+  url: https://governance.aave.com/latest.rss
+  source: Aave Governance
+  language: en
+  enabled: true
+  discovered: true
+  source_type: official_announcement
+  priority: 2
+  trust_score: 0.9
+  repository_id: narrative-source:aave:official_announcement:governance.aave.com
+  evidence_id: narrative-source:analytical-identity-v1:874b5f75e631282b596df180585174a37c7fd619c37766d75ebf6d90afc0bbb0
+  categories:
+  - governance
+- source_id: akash-github_commits-c39fce130996
+  provider: github_commits
+  project_id: akash
+  url: https://github.com/akash-network/node/commits.atom
+  source: GitHub commits
+  language: en
+  enabled: true
+  discovered: true
+  source_type: github_commits
+  priority: 7
+  trust_score: 0.85
+  repository_id: narrative-source:akash:github_commits:github.com
+  evidence_id: narrative-source:analytical-identity-v1:c39fce130996490e79f929a4a490765db4e6e958ed5a6b8025db3a1b7443dcc3
+  categories:
+  - developer_activity
 - source_id: akash-github_releases-5bfa9a4a8347
   provider: github_releases
   project_id: akash
@@ -53,6 +113,21 @@ sources:
   trust_score: 0.9
   repository_id: narrative-source:akash:github_tags:github.com
   evidence_id: narrative-source:analytical-identity-v1:9a647b57f08ec14c4242c8ff824b1342707e3e463220a193aa30265359d75cb0
+- source_id: api3-github_commits-7ce815269df9
+  provider: github_commits
+  project_id: api3
+  url: https://github.com/api3dao/airnode/commits.atom
+  source: GitHub commits
+  language: en
+  enabled: true
+  discovered: true
+  source_type: github_commits
+  priority: 7
+  trust_score: 0.85
+  repository_id: narrative-source:api3:github_commits:github.com
+  evidence_id: narrative-source:analytical-identity-v1:7ce815269df9e7201037e4e9f9eaef79fe8ffe91d3fecad6704688be2baa966f
+  categories:
+  - developer_activity
 - source_id: api3-github_releases-dc118bb7db90
   provider: github_releases
   project_id: api3
@@ -79,6 +154,21 @@ sources:
   trust_score: 0.9
   repository_id: narrative-source:api3:github_tags:github.com
   evidence_id: narrative-source:analytical-identity-v1:bcc8d4bde6842e1f027d974d33611451579fef6825e872fe149c86b561ec8ccb
+- source_id: aptos-github_commits-13cd481661ab
+  provider: github_commits
+  project_id: aptos
+  url: https://github.com/aptos-labs/aptos-core/commits.atom
+  source: GitHub commits
+  language: en
+  enabled: true
+  discovered: true
+  source_type: github_commits
+  priority: 7
+  trust_score: 0.85
+  repository_id: narrative-source:aptos:github_commits:github.com
+  evidence_id: narrative-source:analytical-identity-v1:13cd481661ab7c8fe5ee7298a142e996de1fc61b038e621f038d20146deb455b
+  categories:
+  - developer_activity
 - source_id: aptos-github_releases-d49ca55bc55f
   provider: github_releases
   project_id: aptos
@@ -105,6 +195,21 @@ sources:
   trust_score: 0.9
   repository_id: narrative-source:aptos:github_tags:github.com
   evidence_id: narrative-source:analytical-identity-v1:cc697c2e64d60a989cf92016b53d0ec69c8c890deef18002eeeb984a3e53ee48
+- source_id: arbitrum-github_commits-ece79054c318
+  provider: github_commits
+  project_id: arbitrum
+  url: https://github.com/OffchainLabs/nitro/commits.atom
+  source: GitHub commits
+  language: en
+  enabled: true
+  discovered: true
+  source_type: github_commits
+  priority: 7
+  trust_score: 0.85
+  repository_id: narrative-source:arbitrum:github_commits:github.com
+  evidence_id: narrative-source:analytical-identity-v1:ece79054c318891807935c1da27b348338c376d422b23ee99523f4221b30641c
+  categories:
+  - developer_activity
 - source_id: arbitrum-github_releases-ef76cf040720
   provider: github_releases
   project_id: arbitrum
@@ -157,6 +262,21 @@ sources:
   trust_score: 0.9
   repository_id: narrative-source:arbitrum:github_tags:github.com
   evidence_id: narrative-source:analytical-identity-v1:b88949df805f7ab6067e8f7a27b35844ab89a971fedb687503dde754cd54dd60
+- source_id: arweave-github_commits-1edb62a89a1d
+  provider: github_commits
+  project_id: arweave
+  url: https://github.com/ArweaveTeam/arweave/commits.atom
+  source: GitHub commits
+  language: en
+  enabled: true
+  discovered: true
+  source_type: github_commits
+  priority: 7
+  trust_score: 0.85
+  repository_id: narrative-source:arweave:github_commits:github.com
+  evidence_id: narrative-source:analytical-identity-v1:1edb62a89a1d5e57b7d8b0a0e7b841b02efe84d2216ff1c772ba8f583bf47e32
+  categories:
+  - developer_activity
 - source_id: arweave-github_releases-c89a9f44a6dd
   provider: github_releases
   project_id: arweave
@@ -209,6 +329,21 @@ sources:
   trust_score: 0.9
   repository_id: narrative-source:arweave:github_tags:github.com
   evidence_id: narrative-source:analytical-identity-v1:23cc476a630e4b2c88089c11a43dcd099e9ab57115b8820dccf972bbc2d5178a
+- source_id: avalanche-github_commits-74264474005b
+  provider: github_commits
+  project_id: avalanche
+  url: https://github.com/ava-labs/avalanchego/commits.atom
+  source: GitHub commits
+  language: en
+  enabled: true
+  discovered: true
+  source_type: github_commits
+  priority: 7
+  trust_score: 0.85
+  repository_id: narrative-source:avalanche:github_commits:github.com
+  evidence_id: narrative-source:analytical-identity-v1:74264474005b183757e716e02cb2d15f105246e02297247d840ef3402707f0fc
+  categories:
+  - developer_activity
 - source_id: avalanche-github_releases-0518d2e6c28e
   provider: github_releases
   project_id: avalanche
@@ -235,6 +370,21 @@ sources:
   trust_score: 0.9
   repository_id: narrative-source:avalanche:github_tags:github.com
   evidence_id: narrative-source:analytical-identity-v1:5387ed26ac74afde71e4d910b387511e8a94a145cde22d7886b87be5087a5d92
+- source_id: bitcoin-github_commits-1b9fda4a7306
+  provider: github_commits
+  project_id: bitcoin
+  url: https://github.com/bitcoin/bitcoin/commits.atom
+  source: GitHub commits
+  language: en
+  enabled: true
+  discovered: true
+  source_type: github_commits
+  priority: 7
+  trust_score: 0.85
+  repository_id: narrative-source:bitcoin:github_commits:github.com
+  evidence_id: narrative-source:analytical-identity-v1:1b9fda4a7306ca2199ed44b791ba16174b3731bd6e5dcf9317ec899cdac82133
+  categories:
+  - developer_activity
 - source_id: bitcoin-github_releases-d518e4556df1
   provider: github_releases
   project_id: bitcoin
@@ -261,6 +411,21 @@ sources:
   trust_score: 0.9
   repository_id: narrative-source:bitcoin:github_tags:github.com
   evidence_id: narrative-source:analytical-identity-v1:606f375dc1322a7a8b503f561dffcf99cdef72b3562748971830ffb5780f7a79
+- source_id: bittensor-github_commits-4ff0319517c4
+  provider: github_commits
+  project_id: bittensor
+  url: https://github.com/RaoFoundation/bittensor/commits.atom
+  source: GitHub commits
+  language: en
+  enabled: true
+  discovered: true
+  source_type: github_commits
+  priority: 7
+  trust_score: 0.85
+  repository_id: narrative-source:bittensor:github_commits:github.com
+  evidence_id: narrative-source:analytical-identity-v1:4ff0319517c49bd1cdb2432f7f699650f5afa7627f87dd37af194ce7c5945222
+  categories:
+  - developer_activity
 - source_id: bittensor-github_releases-11a13704cd60
   provider: github_releases
   project_id: bittensor
@@ -339,6 +504,21 @@ sources:
   trust_score: 0.9
   repository_id: narrative-source:bittensor:github_tags:github.com
   evidence_id: narrative-source:analytical-identity-v1:011e32b449dd3a9037f076de3fca029f58585b09f5379bc32129d9521179463a
+- source_id: celestia-github_commits-d6c9b9c9a1fa
+  provider: github_commits
+  project_id: celestia
+  url: https://github.com/celestiaorg/celestia-node/commits.atom
+  source: GitHub commits
+  language: en
+  enabled: true
+  discovered: true
+  source_type: github_commits
+  priority: 7
+  trust_score: 0.85
+  repository_id: narrative-source:celestia:github_commits:github.com
+  evidence_id: narrative-source:analytical-identity-v1:d6c9b9c9a1fa327594e666dfca677c77128c3fb03a050fa549aa4fe93dc36a1e
+  categories:
+  - developer_activity
 - source_id: celestia-github_releases-a2b3fd4814f5
   provider: github_releases
   project_id: celestia
@@ -365,6 +545,21 @@ sources:
   trust_score: 0.9
   repository_id: narrative-source:celestia:github_tags:github.com
   evidence_id: narrative-source:analytical-identity-v1:d51698a1aee48fb9dcefd0447cd10eca993d8f276b65c4fc57fc1530f89df4c9
+- source_id: chainlink-github_commits-c6182e691432
+  provider: github_commits
+  project_id: chainlink
+  url: https://github.com/smartcontractkit/chainlink/commits.atom
+  source: GitHub commits
+  language: en
+  enabled: true
+  discovered: true
+  source_type: github_commits
+  priority: 7
+  trust_score: 0.85
+  repository_id: narrative-source:chainlink:github_commits:github.com
+  evidence_id: narrative-source:analytical-identity-v1:c6182e691432490adb91a4cce4337976c815e3fb38cf08213042ec4dcdd6d36a
+  categories:
+  - developer_activity
 - source_id: chainlink-github_releases-adb083730642
   provider: github_releases
   project_id: chainlink
@@ -391,6 +586,21 @@ sources:
   trust_score: 0.9
   repository_id: narrative-source:chainlink:github_tags:github.com
   evidence_id: narrative-source:analytical-identity-v1:f5a87004e6cbd4d7dc8b2b0ec9edd25d6becfccc06c83e601ebfff0ffa326419
+- source_id: compound-github_commits-4ccaa590168a
+  provider: github_commits
+  project_id: compound
+  url: https://github.com/compound-finance/comet/commits.atom
+  source: GitHub commits
+  language: en
+  enabled: true
+  discovered: true
+  source_type: github_commits
+  priority: 7
+  trust_score: 0.85
+  repository_id: narrative-source:compound:github_commits:github.com
+  evidence_id: narrative-source:analytical-identity-v1:4ccaa590168a4482923a6af58da006fd3ab9163f89da5c40811c544f653e4076
+  categories:
+  - developer_activity
 - source_id: compound-github_releases-6a6fc6477de8
   provider: github_releases
   project_id: compound
@@ -417,6 +627,21 @@ sources:
   trust_score: 0.9
   repository_id: narrative-source:compound:github_tags:github.com
   evidence_id: narrative-source:analytical-identity-v1:2eac1a0967cd2437b6c619c8c39a77faa70f77a32eea8b3d399e9f543e22e881
+- source_id: cosmos-github_commits-9f1bfdef5c6a
+  provider: github_commits
+  project_id: cosmos
+  url: https://github.com/cosmos/gaia/commits.atom
+  source: GitHub commits
+  language: en
+  enabled: true
+  discovered: true
+  source_type: github_commits
+  priority: 7
+  trust_score: 0.85
+  repository_id: narrative-source:cosmos:github_commits:github.com
+  evidence_id: narrative-source:analytical-identity-v1:9f1bfdef5c6adada269ee4dddca178d1e28140e3123ac43ebe3d27757b895563
+  categories:
+  - developer_activity
 - source_id: cosmos-github_releases-7c2006100729
   provider: github_releases
   project_id: cosmos
@@ -443,6 +668,66 @@ sources:
   trust_score: 0.9
   repository_id: narrative-source:cosmos:github_tags:github.com
   evidence_id: narrative-source:analytical-identity-v1:37f221ea0b48c67406a24d09db252425eb14658394b101a1e1e4521b0fb3850e
+- source_id: curve-github_commits-6ccf4ba41c76
+  provider: github_commits
+  project_id: curve
+  url: https://github.com/curvefi/curve-stablecoin/commits/master.atom
+  source: GitHub commits
+  language: en
+  enabled: true
+  discovered: true
+  source_type: github_commits
+  priority: 7
+  trust_score: 0.85
+  repository_id: narrative-source:curve:github_commits:github.com
+  evidence_id: narrative-source:analytical-identity-v1:6ccf4ba41c76f570c429e6b35073f632ac912e16a239110a5aa5ec8feaa84cdb
+  categories:
+  - developer_activity
+- source_id: curve-github_commits-b541989f719c
+  provider: github_commits
+  project_id: curve
+  url: https://github.com/curvefi/curve-contract/commits/master.atom
+  source: GitHub commits
+  language: en
+  enabled: true
+  discovered: true
+  source_type: github_commits
+  priority: 7
+  trust_score: 0.9
+  repository_id: narrative-source:curve:github_commits:github.com
+  evidence_id: narrative-source:analytical-identity-v1:b541989f719c0d42fe0cc02a59d924979dde11258920cc94b814f5a2c5e6dae4
+  categories:
+  - developer_activity
+- source_id: curve-github_commits-b69f1ecc5ac3
+  provider: github_commits
+  project_id: curve
+  url: https://github.com/curvefi/curve-contract/commits.atom
+  source: GitHub commits
+  language: en
+  enabled: true
+  discovered: true
+  source_type: github_commits
+  priority: 7
+  trust_score: 0.85
+  repository_id: narrative-source:curve:github_commits:github.com
+  evidence_id: narrative-source:analytical-identity-v1:b69f1ecc5ac3d5b2b3ca31e6523244ce772f01159187f0caede1b83898f3c71a
+  categories:
+  - developer_activity
+- source_id: curve-github_commits-c56520458deb
+  provider: github_commits
+  project_id: curve
+  url: https://github.com/curvefi/curve-dao-contracts/commits/master.atom
+  source: GitHub commits
+  language: en
+  enabled: true
+  discovered: true
+  source_type: github_commits
+  priority: 7
+  trust_score: 0.85
+  repository_id: narrative-source:curve:github_commits:github.com
+  evidence_id: narrative-source:analytical-identity-v1:c56520458deb120c4c32ec184ffb52521cbbbaf0144f8c7a3c9afc23e2d52104
+  categories:
+  - governance
 - source_id: curve-github_releases-39d152ce48b9
   provider: github_releases
   project_id: curve
@@ -469,6 +754,36 @@ sources:
   trust_score: 0.9
   repository_id: narrative-source:curve:github_tags:github.com
   evidence_id: narrative-source:analytical-identity-v1:f563ac67b32f6f763d897f7d1967d2967415e3b9dbcfb6dcb29b2d1769caeafe
+- source_id: curve-rss-0205e3fff8e1
+  provider: rss
+  project_id: curve
+  url: https://curve.substack.com/feed
+  source: Curve Substack
+  language: en
+  enabled: true
+  discovered: true
+  source_type: rss
+  priority: 2
+  trust_score: 0.85
+  repository_id: narrative-source:curve:rss:curve.substack.com
+  evidence_id: narrative-source:analytical-identity-v1:0205e3fff8e1131cf3d481ec3bd27d471238c1fd983e29a4922fcaf9e95cc088
+  categories:
+  - ecosystem_expansion
+- source_id: dydx-github_commits-5e545b5a9cc1
+  provider: github_commits
+  project_id: dydx
+  url: https://github.com/dydxprotocol/v4-chain/commits.atom
+  source: GitHub commits
+  language: en
+  enabled: true
+  discovered: true
+  source_type: github_commits
+  priority: 7
+  trust_score: 0.85
+  repository_id: narrative-source:dydx:github_commits:github.com
+  evidence_id: narrative-source:analytical-identity-v1:5e545b5a9cc1edc690ea3ca6e47645b346563ffa1346265f312833eb1b5a2755
+  categories:
+  - developer_activity
 - source_id: dydx-github_releases-8507de83758b
   provider: github_releases
   project_id: dydx
@@ -495,6 +810,21 @@ sources:
   trust_score: 0.9
   repository_id: narrative-source:dydx:github_tags:github.com
   evidence_id: narrative-source:analytical-identity-v1:e79d5c1ff903036c9b1b12577964cbd13f41f192bed114ebacbba238db902feb
+- source_id: eigenlayer-github_commits-98ca24272f4d
+  provider: github_commits
+  project_id: eigenlayer
+  url: https://github.com/Layr-Labs/eigenlayer-contracts/commits.atom
+  source: GitHub commits
+  language: en
+  enabled: true
+  discovered: true
+  source_type: github_commits
+  priority: 7
+  trust_score: 0.85
+  repository_id: narrative-source:eigenlayer:github_commits:github.com
+  evidence_id: narrative-source:analytical-identity-v1:98ca24272f4d1fe36c7733b732f46e81385f3766bb941b6066c71a84dce3ab91
+  categories:
+  - developer_activity
 - source_id: eigenlayer-github_releases-08f2b4d1d606
   provider: github_releases
   project_id: eigenlayer
@@ -547,6 +877,21 @@ sources:
   trust_score: 0.9
   repository_id: narrative-source:eigenlayer:github_tags:github.com
   evidence_id: narrative-source:analytical-identity-v1:78a83bada94d998b2006163681bc27cb6d0217622a63f752d58fb245e518f2ed
+- source_id: ens-github_commits-8c1af70c8058
+  provider: github_commits
+  project_id: ens
+  url: https://github.com/ensdomains/ens-contracts/commits.atom
+  source: GitHub commits
+  language: en
+  enabled: true
+  discovered: true
+  source_type: github_commits
+  priority: 7
+  trust_score: 0.85
+  repository_id: narrative-source:ens:github_commits:github.com
+  evidence_id: narrative-source:analytical-identity-v1:8c1af70c8058e89b6e5ab734b9b3d1d358dcdd15e7d5a77956a71d9bea5879a1
+  categories:
+  - developer_activity
 - source_id: ens-github_releases-7449ab770c6c
   provider: github_releases
   project_id: ens
@@ -573,6 +918,21 @@ sources:
   trust_score: 0.9
   repository_id: narrative-source:ens:github_tags:github.com
   evidence_id: narrative-source:analytical-identity-v1:c3a9d2f57dc8a1cd70a1a923865ac8d7d6193891d484d68f8ca1d10fbbce5375
+- source_id: ethena-github_commits-0d3d014fd27b
+  provider: github_commits
+  project_id: ethena
+  url: https://github.com/ethena-labs/ethena-minting-client/commits.atom
+  source: GitHub commits
+  language: en
+  enabled: true
+  discovered: true
+  source_type: github_commits
+  priority: 7
+  trust_score: 0.85
+  repository_id: narrative-source:ethena:github_commits:github.com
+  evidence_id: narrative-source:analytical-identity-v1:0d3d014fd27b4f027b906bcfce4faf1e57e3bcc0ec6179dad1fd5f6c5570a062
+  categories:
+  - developer_activity
 - source_id: ethena-github_releases-ddf17e70671a
   provider: github_releases
   project_id: ethena
@@ -599,6 +959,21 @@ sources:
   trust_score: 0.9
   repository_id: narrative-source:ethena:github_tags:github.com
   evidence_id: narrative-source:analytical-identity-v1:6505647c9ed78f3ffcdb34d2502ffdedb8a01c5f7744a1e95726b12a97e70626
+- source_id: ethereum-github_commits-3417b4c9008d
+  provider: github_commits
+  project_id: ethereum
+  url: https://github.com/ethereum/go-ethereum/commits.atom
+  source: GitHub commits
+  language: en
+  enabled: true
+  discovered: true
+  source_type: github_commits
+  priority: 7
+  trust_score: 0.85
+  repository_id: narrative-source:ethereum:github_commits:github.com
+  evidence_id: narrative-source:analytical-identity-v1:3417b4c9008dec8ba43b67b8cf6e035154c98eeac86098fe53188e0ee0ecf180
+  categories:
+  - developer_activity
 - source_id: ethereum-github_releases-0523cefe610a
   provider: github_releases
   project_id: ethereum
@@ -625,6 +1000,21 @@ sources:
   trust_score: 0.9
   repository_id: narrative-source:ethereum:github_tags:github.com
   evidence_id: narrative-source:analytical-identity-v1:daf276938e66f798ad05b39e2a07a4bf8a2ed8328ddcc39da1b3bc0788133ce3
+- source_id: filecoin-github_commits-e79611bc0980
+  provider: github_commits
+  project_id: filecoin
+  url: https://github.com/filecoin-project/lotus/commits.atom
+  source: GitHub commits
+  language: en
+  enabled: true
+  discovered: true
+  source_type: github_commits
+  priority: 7
+  trust_score: 0.85
+  repository_id: narrative-source:filecoin:github_commits:github.com
+  evidence_id: narrative-source:analytical-identity-v1:e79611bc0980794bcca84a3dce797f6f28bb9f17e442b442e8d469bd3bbe06ab
+  categories:
+  - developer_activity
 - source_id: filecoin-github_releases-340848faa934
   provider: github_releases
   project_id: filecoin
@@ -651,6 +1041,21 @@ sources:
   trust_score: 0.9
   repository_id: narrative-source:filecoin:github_tags:github.com
   evidence_id: narrative-source:analytical-identity-v1:f54a0b37586e78826feb1d8d2a32dee982235d3eda7a9e23f79097783be2eaf1
+- source_id: frax-github_commits-7dbdd1f7a45d
+  provider: github_commits
+  project_id: frax
+  url: https://github.com/FraxFinance/frax-solidity/commits.atom
+  source: GitHub commits
+  language: en
+  enabled: true
+  discovered: true
+  source_type: github_commits
+  priority: 7
+  trust_score: 0.85
+  repository_id: narrative-source:frax:github_commits:github.com
+  evidence_id: narrative-source:analytical-identity-v1:7dbdd1f7a45d16ed89c2b37687486f391128446eac27651ff5d84c52f71b3f43
+  categories:
+  - developer_activity
 - source_id: frax-github_releases-ce89ec99da96
   provider: github_releases
   project_id: frax
@@ -703,6 +1108,21 @@ sources:
   trust_score: 0.9
   repository_id: narrative-source:frax:github_tags:github.com
   evidence_id: narrative-source:analytical-identity-v1:30eafb3568e4ea03786e2371ccd4e7ddb3bb897d4af2f482dadca719a0d30a8f
+- source_id: helium-github_commits-b260204a26e0
+  provider: github_commits
+  project_id: helium
+  url: https://github.com/helium/helium-program-library/commits.atom
+  source: GitHub commits
+  language: en
+  enabled: true
+  discovered: true
+  source_type: github_commits
+  priority: 7
+  trust_score: 0.85
+  repository_id: narrative-source:helium:github_commits:github.com
+  evidence_id: narrative-source:analytical-identity-v1:b260204a26e041183c461415d0f58312b024c2e8cc20775a326e91099dd326fa
+  categories:
+  - developer_activity
 - source_id: helium-github_releases-d0f45fef511c
   provider: github_releases
   project_id: helium
@@ -729,6 +1149,21 @@ sources:
   trust_score: 0.9
   repository_id: narrative-source:helium:github_tags:github.com
   evidence_id: narrative-source:analytical-identity-v1:041aa63e6e3e03a87a0711866b9061710144683d86962e08253aac5bcd0be84f
+- source_id: hivemapper-github_commits-b7b676426f97
+  provider: github_commits
+  project_id: hivemapper
+  url: https://github.com/Hivemapper/odc-api/commits.atom
+  source: GitHub commits
+  language: en
+  enabled: true
+  discovered: true
+  source_type: github_commits
+  priority: 7
+  trust_score: 0.85
+  repository_id: narrative-source:hivemapper:github_commits:github.com
+  evidence_id: narrative-source:analytical-identity-v1:b7b676426f97342e13587f49b38cefd862834c945f2e865254a5ad679b7570b2
+  categories:
+  - developer_activity
 - source_id: hivemapper-github_releases-7a33b25f12a1
   provider: github_releases
   project_id: hivemapper
@@ -781,6 +1216,36 @@ sources:
   trust_score: 0.9
   repository_id: narrative-source:hivemapper:github_tags:github.com
   evidence_id: narrative-source:analytical-identity-v1:5509fc743387f8f9b17b218f524d1ac362f0fbcaf21d1512c9f35d8e19b68574
+- source_id: injective-github_commits-5b638333998e
+  provider: github_commits
+  project_id: injective
+  url: https://github.com/InjectiveLabs/injective-chain-releases/commits.atom
+  source: GitHub commits
+  language: en
+  enabled: true
+  discovered: true
+  source_type: github_commits
+  priority: 7
+  trust_score: 0.85
+  repository_id: narrative-source:injective:github_commits:github.com
+  evidence_id: narrative-source:analytical-identity-v1:5b638333998e9135a5c59a71657b414ec3e292f2886cfcecc262c8224d69b93c
+  categories:
+  - developer_activity
+- source_id: iota-github_commits-c90623a87c80
+  provider: github_commits
+  project_id: iota
+  url: https://github.com/iotaledger/iota/commits.atom
+  source: GitHub commits
+  language: en
+  enabled: true
+  discovered: true
+  source_type: github_commits
+  priority: 7
+  trust_score: 0.85
+  repository_id: narrative-source:iota:github_commits:github.com
+  evidence_id: narrative-source:analytical-identity-v1:c90623a87c8099dcf35e40b69272440dd35b4623c97e89633b8738a2e5e573ee
+  categories:
+  - developer_activity
 - source_id: iota-github_releases-0fb105c0c159
   provider: github_releases
   project_id: iota
@@ -807,6 +1272,21 @@ sources:
   trust_score: 0.9
   repository_id: narrative-source:iota:github_tags:github.com
   evidence_id: narrative-source:analytical-identity-v1:294619688afab338268da3e1dcc7ba4fbf298a0b63ece660365156c0f36e55b3
+- source_id: lido-github_commits-8edff358691e
+  provider: github_commits
+  project_id: lido
+  url: https://github.com/lidofinance/core/commits.atom
+  source: GitHub commits
+  language: en
+  enabled: true
+  discovered: true
+  source_type: github_commits
+  priority: 7
+  trust_score: 0.85
+  repository_id: narrative-source:lido:github_commits:github.com
+  evidence_id: narrative-source:analytical-identity-v1:8edff358691e83390559ab4976685e0a903e630b9894fb10debc0b8f5f296072
+  categories:
+  - developer_activity
 - source_id: lido-github_releases-7c22e09858a2
   provider: github_releases
   project_id: lido
@@ -833,6 +1313,21 @@ sources:
   trust_score: 0.9
   repository_id: narrative-source:lido:github_tags:github.com
   evidence_id: narrative-source:analytical-identity-v1:48c74196efb755e74b810f21fa357fb88d5285ee1993d35960782abf7fde60ac
+- source_id: livepeer-github_commits-e0a177462725
+  provider: github_commits
+  project_id: livepeer
+  url: https://github.com/livepeer/go-livepeer/commits.atom
+  source: GitHub commits
+  language: en
+  enabled: true
+  discovered: true
+  source_type: github_commits
+  priority: 7
+  trust_score: 0.85
+  repository_id: narrative-source:livepeer:github_commits:github.com
+  evidence_id: narrative-source:analytical-identity-v1:e0a17746272539e9423e929e7862c178ddfc51167d4d34ea690c8ad55e6b30d0
+  categories:
+  - developer_activity
 - source_id: livepeer-github_releases-f79d95f620c7
   provider: github_releases
   project_id: livepeer
@@ -859,6 +1354,36 @@ sources:
   trust_score: 0.9
   repository_id: narrative-source:livepeer:github_tags:github.com
   evidence_id: narrative-source:analytical-identity-v1:273105c016a5a1bc210d1c5dfc1859f5a20b510346f46c17f918e607b94c0718
+- source_id: maker-github_commits-3637d2469d0c
+  provider: github_commits
+  project_id: maker
+  url: https://github.com/sky-ecosystem/dss/commits.atom
+  source: GitHub commits
+  language: en
+  enabled: true
+  discovered: true
+  source_type: github_commits
+  priority: 7
+  trust_score: 0.85
+  repository_id: narrative-source:maker:github_commits:github.com
+  evidence_id: narrative-source:analytical-identity-v1:3637d2469d0ccb54c067b6cd5488d2d5ae047bb2d6f690958b763f703c22dec1
+  categories:
+  - developer_activity
+- source_id: maker-github_commits-50cdbc913c44
+  provider: github_commits
+  project_id: maker
+  url: https://github.com/sky-ecosystem/dss/commits/master.atom
+  source: GitHub commits
+  language: en
+  enabled: true
+  discovered: true
+  source_type: github_commits
+  priority: 7
+  trust_score: 0.9
+  repository_id: narrative-source:maker:github_commits:github.com
+  evidence_id: narrative-source:analytical-identity-v1:50cdbc913c44860e0716987d0007610ab6f367c61e9d580fb3d327382c3e2deb
+  categories:
+  - developer_activity
 - source_id: maker-github_releases-55e9f09387bb
   provider: github_releases
   project_id: maker
@@ -911,6 +1436,81 @@ sources:
   trust_score: 0.9
   repository_id: narrative-source:maker:github_tags:github.com
   evidence_id: narrative-source:analytical-identity-v1:1c2a96d7673d2714f0278682750e35dcbb2faf4170aedc5d31cbb9568d4997a4
+- source_id: maker-official_announcement-8e56526c38e0
+  provider: official_announcement
+  project_id: maker
+  url: https://forum.sky.money/latest.rss
+  source: Sky Governance Forum
+  language: en
+  enabled: true
+  discovered: true
+  source_type: official_announcement
+  priority: 2
+  trust_score: 0.9
+  repository_id: narrative-source:maker:official_announcement:forum.sky.money
+  evidence_id: narrative-source:analytical-identity-v1:8e56526c38e0c5b9722ae6e38b596da344a6e5b382c2080e0e841a7037a3b483
+  categories:
+  - governance
+- source_id: mantle-github_commits-913c24cd936b
+  provider: github_commits
+  project_id: mantle
+  url: https://github.com/mantlenetworkio/mantle/commits.atom
+  source: GitHub commits
+  language: en
+  enabled: true
+  discovered: true
+  source_type: github_commits
+  priority: 7
+  trust_score: 0.85
+  repository_id: narrative-source:mantle:github_commits:github.com
+  evidence_id: narrative-source:analytical-identity-v1:913c24cd936b209c6d02a68f18ec5870c0e0a95c57dd7cfa8b778efd710c6951
+  categories:
+  - developer_activity
+- source_id: mantle-github_commits-c24fb2dda9cb
+  provider: github_commits
+  project_id: mantle
+  url: https://github.com/mantlenetworkio/networks/commits/main.atom
+  source: GitHub commits
+  language: en
+  enabled: true
+  discovered: true
+  source_type: github_commits
+  priority: 7
+  trust_score: 0.85
+  repository_id: narrative-source:mantle:github_commits:github.com
+  evidence_id: narrative-source:analytical-identity-v1:c24fb2dda9cbc80d4902b7858e19184605f3dca4a2c25fcb5cf2097c1336e57d
+  categories:
+  - developer_activity
+- source_id: mantle-github_commits-e186e0bf9bd9
+  provider: github_commits
+  project_id: mantle
+  url: https://github.com/mantlenetworkio/mantle/commits/main.atom
+  source: GitHub commits
+  language: en
+  enabled: true
+  discovered: true
+  source_type: github_commits
+  priority: 7
+  trust_score: 0.9
+  repository_id: narrative-source:mantle:github_commits:github.com
+  evidence_id: narrative-source:analytical-identity-v1:e186e0bf9bd90408230c9e11886f41bbc26fd00d2917596c4ad001152f1b9623
+  categories:
+  - developer_activity
+- source_id: mantle-github_commits-f22c690b5e14
+  provider: github_commits
+  project_id: mantle
+  url: https://github.com/mantlenetworkio/mantle-v2/commits/main.atom
+  source: GitHub commits
+  language: en
+  enabled: true
+  discovered: true
+  source_type: github_commits
+  priority: 7
+  trust_score: 0.85
+  repository_id: narrative-source:mantle:github_commits:github.com
+  evidence_id: narrative-source:analytical-identity-v1:f22c690b5e14bd7476c9a84186fc6941ee3ba94d320268bcdb42b1bad0817a6d
+  categories:
+  - developer_activity
 - source_id: mantle-github_releases-c14c2e5e18e1
   provider: github_releases
   project_id: mantle
@@ -937,6 +1537,66 @@ sources:
   trust_score: 0.9
   repository_id: narrative-source:mantle:github_tags:github.com
   evidence_id: narrative-source:analytical-identity-v1:f7639595e13d10dbe81591eee575eda7e760893fa15e99ba2dd09c7d6d8ee133
+- source_id: mantle-official_announcement-e99ddf557a8c
+  provider: official_announcement
+  project_id: mantle
+  url: https://forum.mantle.xyz/latest.rss
+  source: Mantle Forum
+  language: en
+  enabled: true
+  discovered: true
+  source_type: official_announcement
+  priority: 2
+  trust_score: 0.85
+  repository_id: narrative-source:mantle:official_announcement:forum.mantle.xyz
+  evidence_id: narrative-source:analytical-identity-v1:e99ddf557a8c306fc8686c47bb29fd5dd1d719db28498cc07712396699ce3062
+  categories:
+  - governance
+- source_id: mantle-official_blog-d07bf826fa03
+  provider: official_blog
+  project_id: mantle
+  url: https://www.mantle.xyz/blog/rss.xml
+  source: Mantle Blog
+  language: en
+  enabled: true
+  discovered: true
+  source_type: official_blog
+  priority: 2
+  trust_score: 0.9
+  repository_id: narrative-source:mantle:official_blog:www.mantle.xyz
+  evidence_id: narrative-source:analytical-identity-v1:d07bf826fa03d01bbcd5fad48e47a563beca2619c713b40566e58dbba3bc0334
+  categories:
+  - ecosystem_expansion
+- source_id: mantle-rss-a948ef865a8b
+  provider: rss
+  project_id: mantle
+  url: https://mantle.substack.com/feed
+  source: Mantle Substack
+  language: en
+  enabled: true
+  discovered: true
+  source_type: rss
+  priority: 2
+  trust_score: 0.85
+  repository_id: narrative-source:mantle:rss:mantle.substack.com
+  evidence_id: narrative-source:analytical-identity-v1:a948ef865a8b7b68718b809896a0d440d9f41963f94ad3012588a7cc80aeda4f
+  categories:
+  - ecosystem_expansion
+- source_id: near-github_commits-a5c39c8f8683
+  provider: github_commits
+  project_id: near
+  url: https://github.com/near/nearcore/commits.atom
+  source: GitHub commits
+  language: en
+  enabled: true
+  discovered: true
+  source_type: github_commits
+  priority: 7
+  trust_score: 0.85
+  repository_id: narrative-source:near:github_commits:github.com
+  evidence_id: narrative-source:analytical-identity-v1:a5c39c8f868360ba01295bee157a1f2edf8c6691aecadf386eabe658a9293517
+  categories:
+  - developer_activity
 - source_id: near-github_releases-ef204da443ff
   provider: github_releases
   project_id: near
@@ -963,6 +1623,21 @@ sources:
   trust_score: 0.9
   repository_id: narrative-source:near:github_tags:github.com
   evidence_id: narrative-source:analytical-identity-v1:9f5121800bdb761e3e13390b43d7a8827242e4a65a188865d289864e2631ccf5
+- source_id: optimism-github_commits-e08ee27bfd86
+  provider: github_commits
+  project_id: optimism
+  url: https://github.com/ethereum-optimism/optimism/commits.atom
+  source: GitHub commits
+  language: en
+  enabled: true
+  discovered: true
+  source_type: github_commits
+  priority: 7
+  trust_score: 0.85
+  repository_id: narrative-source:optimism:github_commits:github.com
+  evidence_id: narrative-source:analytical-identity-v1:e08ee27bfd86b9516cda445bee729d0602bde43f1dfa040e9b3ff94b406bcb88
+  categories:
+  - developer_activity
 - source_id: optimism-github_releases-8414ebc3e4cf
   provider: github_releases
   project_id: optimism
@@ -989,6 +1664,21 @@ sources:
   trust_score: 0.9
   repository_id: narrative-source:optimism:github_tags:github.com
   evidence_id: narrative-source:analytical-identity-v1:3a8de7281fa87a727ead723b8cf020d407ac732aabaa86b3fff1feed082129ca
+- source_id: ordinals-github_commits-79de6130a316
+  provider: github_commits
+  project_id: ordinals
+  url: https://github.com/ordinals/ord/commits.atom
+  source: GitHub commits
+  language: en
+  enabled: true
+  discovered: true
+  source_type: github_commits
+  priority: 7
+  trust_score: 0.85
+  repository_id: narrative-source:ordinals:github_commits:github.com
+  evidence_id: narrative-source:analytical-identity-v1:79de6130a316d74b08e8f9d0cba3d6a423a5105a1f3ee1800a05d0c48555fc12
+  categories:
+  - developer_activity
 - source_id: ordinals-github_releases-78e1fb3e1868
   provider: github_releases
   project_id: ordinals
@@ -1015,6 +1705,21 @@ sources:
   trust_score: 0.9
   repository_id: narrative-source:ordinals:github_tags:github.com
   evidence_id: narrative-source:analytical-identity-v1:922dd4ce8f366b5abaac8d8399fa6ee6e1b47e1ab5ddb2bc7b2755a86d69b568
+- source_id: pendle-github_commits-99391334d749
+  provider: github_commits
+  project_id: pendle
+  url: https://github.com/pendle-finance/pendle-core-v2-public/commits.atom
+  source: GitHub commits
+  language: en
+  enabled: true
+  discovered: true
+  source_type: github_commits
+  priority: 7
+  trust_score: 0.85
+  repository_id: narrative-source:pendle:github_commits:github.com
+  evidence_id: narrative-source:analytical-identity-v1:99391334d749b5898e749b8cd17ca31f36561f1dd0a7980bc3b567de38b91571
+  categories:
+  - developer_activity
 - source_id: pendle-github_releases-853faace4205
   provider: github_releases
   project_id: pendle
@@ -1041,6 +1746,21 @@ sources:
   trust_score: 0.9
   repository_id: narrative-source:pendle:github_tags:github.com
   evidence_id: narrative-source:analytical-identity-v1:6ee2cdd11a18df15efa57ed7ef2c3139f87a814b4d627455e1dab51b4e07f7e8
+- source_id: polkadot-github_commits-36acfb686fd7
+  provider: github_commits
+  project_id: polkadot
+  url: https://github.com/paritytech/polkadot-sdk/commits.atom
+  source: GitHub commits
+  language: en
+  enabled: true
+  discovered: true
+  source_type: github_commits
+  priority: 7
+  trust_score: 0.85
+  repository_id: narrative-source:polkadot:github_commits:github.com
+  evidence_id: narrative-source:analytical-identity-v1:36acfb686fd7d62451b665c0cf30ad123596eddf9a0ec106eadc26ebe1f257e4
+  categories:
+  - developer_activity
 - source_id: polkadot-github_releases-62447456be36
   provider: github_releases
   project_id: polkadot
@@ -1067,6 +1787,21 @@ sources:
   trust_score: 0.9
   repository_id: narrative-source:polkadot:github_tags:github.com
   evidence_id: narrative-source:analytical-identity-v1:696d7c98cafb068d81c89243bd0fcf1c5cd4dc7e00a2cebf4f2f17e1725f26c4
+- source_id: polygon-github_commits-2da80a53b853
+  provider: github_commits
+  project_id: polygon
+  url: https://github.com/0xPolygon/bor/commits.atom
+  source: GitHub commits
+  language: en
+  enabled: true
+  discovered: true
+  source_type: github_commits
+  priority: 7
+  trust_score: 0.85
+  repository_id: narrative-source:polygon:github_commits:github.com
+  evidence_id: narrative-source:analytical-identity-v1:2da80a53b8536d1305ad91c5ed996f195027df08f12c7a1d799160e2e55ccf94
+  categories:
+  - developer_activity
 - source_id: polygon-github_releases-0d50eb592762
   provider: github_releases
   project_id: polygon
@@ -1119,6 +1854,36 @@ sources:
   trust_score: 0.9
   repository_id: narrative-source:polygon:github_tags:github.com
   evidence_id: narrative-source:analytical-identity-v1:de9e2c30ea7240b948c3a11e4ca7971eb9b4a5b62b6cc29c416ce83de3de207e
+- source_id: render-github_commits-6371a50d758d
+  provider: github_commits
+  project_id: render
+  url: https://github.com/rendernetwork/RNPs/commits.atom
+  source: GitHub commits
+  language: en
+  enabled: true
+  discovered: true
+  source_type: github_commits
+  priority: 7
+  trust_score: 0.85
+  repository_id: narrative-source:render:github_commits:github.com
+  evidence_id: narrative-source:analytical-identity-v1:6371a50d758d8370860c21b0f54943657be5b1827fb53c9cfdb2aec1955b1b80
+  categories:
+  - developer_activity
+- source_id: rocket-pool-github_commits-5a94f47d70d3
+  provider: github_commits
+  project_id: rocket-pool
+  url: https://github.com/rocket-pool/rocketpool/commits.atom
+  source: GitHub commits
+  language: en
+  enabled: true
+  discovered: true
+  source_type: github_commits
+  priority: 7
+  trust_score: 0.85
+  repository_id: narrative-source:rocket-pool:github_commits:github.com
+  evidence_id: narrative-source:analytical-identity-v1:5a94f47d70d360d3e9c7b5c5af774adffdd5302cf0f3fc78284ee71373aa0387
+  categories:
+  - developer_activity
 - source_id: rocket-pool-github_releases-5ba249a638b1
   provider: github_releases
   project_id: rocket-pool
@@ -1145,6 +1910,21 @@ sources:
   trust_score: 0.9
   repository_id: narrative-source:rocket-pool:github_tags:github.com
   evidence_id: narrative-source:analytical-identity-v1:25ccc0bb65c51511c23d02dd134010c9c13d2eddc41e5b9070feafc8e94ed985
+- source_id: safe-github_commits-903ab5f6f899
+  provider: github_commits
+  project_id: safe
+  url: https://github.com/safe-fndn/safe-smart-account/commits.atom
+  source: GitHub commits
+  language: en
+  enabled: true
+  discovered: true
+  source_type: github_commits
+  priority: 7
+  trust_score: 0.85
+  repository_id: narrative-source:safe:github_commits:github.com
+  evidence_id: narrative-source:analytical-identity-v1:903ab5f6f899d29778a58b6c1b805ce8c4ca8317a3fc638de33fcf965048322a
+  categories:
+  - developer_activity
 - source_id: safe-github_releases-854f7e4082c4
   provider: github_releases
   project_id: safe
@@ -1197,6 +1977,21 @@ sources:
   trust_score: 0.9
   repository_id: narrative-source:safe:github_tags:github.com
   evidence_id: narrative-source:analytical-identity-v1:556a4c0e2a876f1d9cc84fe97d818aa146127b5025cbeabe92ce684dce8b8447
+- source_id: scroll-github_commits-05f575a85e80
+  provider: github_commits
+  project_id: scroll
+  url: https://github.com/scroll-tech/scroll/commits.atom
+  source: GitHub commits
+  language: en
+  enabled: true
+  discovered: true
+  source_type: github_commits
+  priority: 7
+  trust_score: 0.85
+  repository_id: narrative-source:scroll:github_commits:github.com
+  evidence_id: narrative-source:analytical-identity-v1:05f575a85e80f41589a5fe67cce1838b71ace7f3a03268f6e808ccb8604db612
+  categories:
+  - developer_activity
 - source_id: scroll-github_releases-a54a90d07c8e
   provider: github_releases
   project_id: scroll
@@ -1223,6 +2018,21 @@ sources:
   trust_score: 0.9
   repository_id: narrative-source:scroll:github_tags:github.com
   evidence_id: narrative-source:analytical-identity-v1:db20b84aff284fc8ffb752ad6a0187e19542c2dd0657436dc07db1768fa232e5
+- source_id: sei-github_commits-b96c1d6e97db
+  provider: github_commits
+  project_id: sei
+  url: https://github.com/sei-protocol/sei-chain/commits.atom
+  source: GitHub commits
+  language: en
+  enabled: true
+  discovered: true
+  source_type: github_commits
+  priority: 7
+  trust_score: 0.85
+  repository_id: narrative-source:sei:github_commits:github.com
+  evidence_id: narrative-source:analytical-identity-v1:b96c1d6e97dba250391dc6eadedf212968938ab81196bb6dd09f159311bdcf01
+  categories:
+  - developer_activity
 - source_id: sei-github_releases-b54dca2e3f06
   provider: github_releases
   project_id: sei
@@ -1249,6 +2059,36 @@ sources:
   trust_score: 0.9
   repository_id: narrative-source:sei:github_tags:github.com
   evidence_id: narrative-source:analytical-identity-v1:2955cccc310d0c0c40ff38e51c6ad7f88c22763069744593070cbf9224e7ec7a
+- source_id: solana-github_commits-9c20e17f1ba6
+  provider: github_commits
+  project_id: solana
+  url: https://github.com/solana-labs/solana/commits/master.atom
+  source: GitHub commits
+  language: en
+  enabled: true
+  discovered: true
+  source_type: github_commits
+  priority: 7
+  trust_score: 0.9
+  repository_id: narrative-source:solana:github_commits:github.com
+  evidence_id: narrative-source:analytical-identity-v1:9c20e17f1ba624dc25232f334c8d293fe848f839b596059243e8c76f75f7943b
+  categories:
+  - developer_activity
+- source_id: solana-github_commits-b7e9eeb7fde0
+  provider: github_commits
+  project_id: solana
+  url: https://github.com/solana-labs/solana/commits.atom
+  source: GitHub commits
+  language: en
+  enabled: true
+  discovered: true
+  source_type: github_commits
+  priority: 7
+  trust_score: 0.85
+  repository_id: narrative-source:solana:github_commits:github.com
+  evidence_id: narrative-source:analytical-identity-v1:b7e9eeb7fde07ef6a0381fc6122481e3cc449a74b842723688a8e2b501b15235
+  categories:
+  - developer_activity
 - source_id: solana-github_releases-ca241148d0c4
   provider: github_releases
   project_id: solana
@@ -1275,6 +2115,36 @@ sources:
   trust_score: 0.9
   repository_id: narrative-source:solana:github_tags:github.com
   evidence_id: narrative-source:analytical-identity-v1:9de064615a8769f326200d6bcd0390f24d12db27304e737833d817c6ef9a37cc
+- source_id: solana-official_announcement-6a3e37671f57
+  provider: official_announcement
+  project_id: solana
+  url: https://solana.com/news/rss.xml
+  source: Solana News
+  language: en
+  enabled: true
+  discovered: true
+  source_type: official_announcement
+  priority: 2
+  trust_score: 0.9
+  repository_id: narrative-source:solana:official_announcement:solana.com
+  evidence_id: narrative-source:analytical-identity-v1:6a3e37671f574baff02d874e1336e6f345d8fc73710bd31898933752593a368f
+  categories:
+  - ecosystem_expansion
+- source_id: stacks-github_commits-634b96c9c6b1
+  provider: github_commits
+  project_id: stacks
+  url: https://github.com/stacks-network/stacks-core/commits.atom
+  source: GitHub commits
+  language: en
+  enabled: true
+  discovered: true
+  source_type: github_commits
+  priority: 7
+  trust_score: 0.85
+  repository_id: narrative-source:stacks:github_commits:github.com
+  evidence_id: narrative-source:analytical-identity-v1:634b96c9c6b15549bb3dcab1c26ead562c418c73d7e6a85a43ff908f90980a8a
+  categories:
+  - developer_activity
 - source_id: stacks-github_releases-2d8d00e7121d
   provider: github_releases
   project_id: stacks
@@ -1301,6 +2171,21 @@ sources:
   trust_score: 0.9
   repository_id: narrative-source:stacks:github_tags:github.com
   evidence_id: narrative-source:analytical-identity-v1:3728a947885e3af8e127c616a9502627abb94743e94c66d2b85e37b52302ebeb
+- source_id: starknet-github_commits-095ebdfca7f8
+  provider: github_commits
+  project_id: starknet
+  url: https://github.com/starkware-libs/cairo/commits.atom
+  source: GitHub commits
+  language: en
+  enabled: true
+  discovered: true
+  source_type: github_commits
+  priority: 7
+  trust_score: 0.85
+  repository_id: narrative-source:starknet:github_commits:github.com
+  evidence_id: narrative-source:analytical-identity-v1:095ebdfca7f8339e4a21ebcde43cb61af40be4669101f585a56f947b3d79edbf
+  categories:
+  - developer_activity
 - source_id: starknet-github_releases-49466d96a036
   provider: github_releases
   project_id: starknet
@@ -1327,6 +2212,21 @@ sources:
   trust_score: 0.9
   repository_id: narrative-source:starknet:github_tags:github.com
   evidence_id: narrative-source:analytical-identity-v1:dc119fcb74c54d7f92c9b2d0fa906eac8fb2af7d67c9e762d4d9f6f5b0116d6d
+- source_id: sui-github_commits-6e3808308e5d
+  provider: github_commits
+  project_id: sui
+  url: https://github.com/MystenLabs/sui/commits.atom
+  source: GitHub commits
+  language: en
+  enabled: true
+  discovered: true
+  source_type: github_commits
+  priority: 7
+  trust_score: 0.85
+  repository_id: narrative-source:sui:github_commits:github.com
+  evidence_id: narrative-source:analytical-identity-v1:6e3808308e5d04fdff3cb9579f18e3647b99a24f8146d863c30dd83f53510c8c
+  categories:
+  - developer_activity
 - source_id: sui-github_releases-344d063ecd18
   provider: github_releases
   project_id: sui
@@ -1379,6 +2279,36 @@ sources:
   trust_score: 0.9
   repository_id: narrative-source:sui:github_tags:github.com
   evidence_id: narrative-source:analytical-identity-v1:863c95bdd2bffe1debdfc3341eb2d8a88af04bcbda9386125286738240429e3d
+- source_id: synthetix-github_commits-09426ad944d5
+  provider: github_commits
+  project_id: synthetix
+  url: https://github.com/Synthetixio/synthetix-v3/commits/main.atom
+  source: GitHub commits
+  language: en
+  enabled: true
+  discovered: true
+  source_type: github_commits
+  priority: 7
+  trust_score: 0.9
+  repository_id: narrative-source:synthetix:github_commits:github.com
+  evidence_id: narrative-source:analytical-identity-v1:09426ad944d58776407a33a03366a2dc8afe901c1b79c3370834993ce32280d3
+  categories:
+  - developer_activity
+- source_id: synthetix-github_commits-5983b6c9ef45
+  provider: github_commits
+  project_id: synthetix
+  url: https://github.com/Synthetixio/synthetix-v3/commits.atom
+  source: GitHub commits
+  language: en
+  enabled: true
+  discovered: true
+  source_type: github_commits
+  priority: 7
+  trust_score: 0.85
+  repository_id: narrative-source:synthetix:github_commits:github.com
+  evidence_id: narrative-source:analytical-identity-v1:5983b6c9ef45bc2376423bcd1fffe91c6e18baba3da09f47fdc52e0d96fd7033
+  categories:
+  - developer_activity
 - source_id: synthetix-github_releases-6bfacf8cfa3e
   provider: github_releases
   project_id: synthetix
@@ -1431,6 +2361,36 @@ sources:
   trust_score: 0.9
   repository_id: narrative-source:synthetix:github_tags:github.com
   evidence_id: narrative-source:analytical-identity-v1:be938836773d4bb8421be95c40f244f3f59230cf6941d6695b37a5e891dbd516
+- source_id: synthetix-official_blog-0fb5eb76484d
+  provider: official_blog
+  project_id: synthetix
+  url: https://blog.synthetix.io/rss/
+  source: Synthetix Blog
+  language: en
+  enabled: true
+  discovered: true
+  source_type: official_blog
+  priority: 2
+  trust_score: 0.85
+  repository_id: narrative-source:synthetix:official_blog:blog.synthetix.io
+  evidence_id: narrative-source:analytical-identity-v1:0fb5eb76484d094814ee5e5eb47e441ca93d63607341a542128825c5a66a9ce4
+  categories:
+  - protocol_release
+- source_id: the-graph-github_commits-b7f3580345e3
+  provider: github_commits
+  project_id: the-graph
+  url: https://github.com/graphprotocol/graph-node/commits.atom
+  source: GitHub commits
+  language: en
+  enabled: true
+  discovered: true
+  source_type: github_commits
+  priority: 7
+  trust_score: 0.85
+  repository_id: narrative-source:the-graph:github_commits:github.com
+  evidence_id: narrative-source:analytical-identity-v1:b7f3580345e33cb2f3f042ebb40ad1363bcf531cc8afb024dd1f5c68627ae81a
+  categories:
+  - developer_activity
 - source_id: the-graph-github_releases-ec3d18850a95
   provider: github_releases
   project_id: the-graph
@@ -1457,6 +2417,66 @@ sources:
   trust_score: 0.9
   repository_id: narrative-source:the-graph:github_tags:github.com
   evidence_id: narrative-source:analytical-identity-v1:21834a10a996876964d528ae4d2b8ce1eb9d86b4888ac257d58536253f0bbfc1
+- source_id: thorchain-github_commits-0e05522c5d99
+  provider: github_commits
+  project_id: thorchain
+  url: https://github.com/thorchain/thornode/commits.atom
+  source: GitHub commits
+  language: en
+  enabled: true
+  discovered: true
+  source_type: github_commits
+  priority: 7
+  trust_score: 0.85
+  repository_id: narrative-source:thorchain:github_commits:github.com
+  evidence_id: narrative-source:analytical-identity-v1:0e05522c5d99bb06ab9652d855a3b53556e08b3f53ce02ac44a9bf35b645497e
+  categories:
+  - developer_activity
+- source_id: thorchain-github_commits-47e75f9039d6
+  provider: github_commits
+  project_id: thorchain
+  url: https://github.com/thorchain/thornode/commits/master.atom
+  source: GitHub commits
+  language: en
+  enabled: true
+  discovered: true
+  source_type: github_commits
+  priority: 7
+  trust_score: 0.9
+  repository_id: narrative-source:thorchain:github_commits:github.com
+  evidence_id: narrative-source:analytical-identity-v1:47e75f9039d6a7c05218d7e2d37cfa052b190e782375d4e9be849005167e052b
+  categories:
+  - developer_activity
+- source_id: thorchain-rss-76bfb66409e8
+  provider: rss
+  project_id: thorchain
+  url: https://medium.com/feed/thorchain
+  source: THORChain Medium
+  language: en
+  enabled: true
+  discovered: true
+  source_type: rss
+  priority: 2
+  trust_score: 0.8
+  repository_id: narrative-source:thorchain:rss:medium.com
+  evidence_id: narrative-source:analytical-identity-v1:76bfb66409e8d6e533158f357f6754a8e1bbdbc070ef03bfa98ca382518fd889
+  categories:
+  - ecosystem_expansion
+- source_id: uniswap-github_commits-88ab426a254e
+  provider: github_commits
+  project_id: uniswap
+  url: https://github.com/Uniswap/v3-core/commits.atom
+  source: GitHub commits
+  language: en
+  enabled: true
+  discovered: true
+  source_type: github_commits
+  priority: 7
+  trust_score: 0.85
+  repository_id: narrative-source:uniswap:github_commits:github.com
+  evidence_id: narrative-source:analytical-identity-v1:88ab426a254e58a30d9aa9b571df6ffee6e18e68e323a7b47942a8bfdffed2e4
+  categories:
+  - developer_activity
 - source_id: uniswap-github_releases-4db79fecbc91
   provider: github_releases
   project_id: uniswap
@@ -1509,6 +2529,36 @@ sources:
   trust_score: 0.9
   repository_id: narrative-source:uniswap:github_tags:github.com
   evidence_id: narrative-source:analytical-identity-v1:3ab3d1dd5f7d23d2cd2c49501f2a425175a981280c06f7e6c0b7d1c73eff66c1
+- source_id: worldcoin-github_commits-1f83afc710ce
+  provider: github_commits
+  project_id: worldcoin
+  url: https://github.com/worldcoin/world-id-contracts/commits.atom
+  source: GitHub commits
+  language: en
+  enabled: true
+  discovered: true
+  source_type: github_commits
+  priority: 7
+  trust_score: 0.85
+  repository_id: narrative-source:worldcoin:github_commits:github.com
+  evidence_id: narrative-source:analytical-identity-v1:1f83afc710ce43ab82879755d93f39993b8cacf05f2d785c1de7b52f13101c0a
+  categories:
+  - developer_activity
+- source_id: zksync-github_commits-fddf41aa744c
+  provider: github_commits
+  project_id: zksync
+  url: https://github.com/matter-labs/zksync-era/commits.atom
+  source: GitHub commits
+  language: en
+  enabled: true
+  discovered: true
+  source_type: github_commits
+  priority: 7
+  trust_score: 0.85
+  repository_id: narrative-source:zksync:github_commits:github.com
+  evidence_id: narrative-source:analytical-identity-v1:fddf41aa744cdc2c32853f304d0fc297ceffe11f26ca6a055f4b4fe86a42d2a7
+  categories:
+  - developer_activity
 - source_id: zksync-github_releases-91894581e6a4
   provider: github_releases
   project_id: zksync

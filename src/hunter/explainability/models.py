@@ -9,8 +9,14 @@ class ContributionBreakdown:
     engine: str
     raw_score: float
     normalized_score: float
-    applied_weight: float
-    final_score_contribution: float
+    base_weight: float = 0.0
+    adjusted_weight: float = 0.0
+    applied_weight: float = 0.0
+    final_score_contribution: float = 0.0
+    confidence: float = 0.0
+    freshness: float = 0.0
+    evidence_coverage: float = 0.0
+    scoring_version: str = ""
 
 
 @dataclass(frozen=True)
