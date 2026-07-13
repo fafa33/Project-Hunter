@@ -16,3 +16,8 @@ __all__ = [
     "EngineRunner",
     "IntelligenceEngine",
 ]
+"""Experimental plugin Intelligence Engine implementations for v2.1.x.
+
+Production Market Validation uses persisted evidence sources through
+EngineValidationSource rather than this plugin engine package.
+"""

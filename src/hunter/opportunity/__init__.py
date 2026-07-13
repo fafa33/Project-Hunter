@@ -1,3 +1,9 @@
+"""Experimental Fusion-backed opportunity timing package for v2.1.x.
+
+Production timing is implemented by hunter.timing and persisted in
+TimingRepository for the current Market Validation runtime.
+"""
+
 from hunter.opportunity.configuration import (
     OpportunityConfig,
     OpportunityTimingConfig,

@@ -17,7 +17,7 @@ from hunter.market_validation.evidence import (
     ensure_complete_engine_sources,
 )
 from hunter.market_validation.models import EngineValidationSource, MarketValidationRun
-from hunter.market_validation.runner import SourceBackedV1ProjectExecutor
+from hunter.market_validation.runner import EvidenceBackedProjectExecutor
 from hunter.scenario import ScenarioRepository
 
 
@@ -43,7 +43,7 @@ class BacktestingCalibrationEngine:
         sources = acquisition_engine_sources(self.acquisition_repository, as_of=config.effective_at)
         validation_run = MarketValidationRunner(
             config,
-            executor=SourceBackedV1ProjectExecutor(config.effective_at, sources),
+            executor=EvidenceBackedProjectExecutor(config.effective_at, sources),
         ).run()
         historical_runs = _historical_run_count(
             self.acquisition_repository,

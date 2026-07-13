@@ -1,3 +1,9 @@
+"""Experimental pipeline orchestration path for v2.1.x.
+
+The canonical production runtime is the evidence-backed Market Validation path
+documented in docs/CANONICAL_RUNTIME_ARCHITECTURE.md.
+"""
+
 from __future__ import annotations
 
 from collections.abc import Iterable

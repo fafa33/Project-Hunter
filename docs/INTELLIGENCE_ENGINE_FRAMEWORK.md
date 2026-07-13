@@ -1,5 +1,9 @@
 # Intelligence Engine Framework
 
+Status: Experimental for v2.1.x production architecture.
+
+The plugin-style Intelligence Engine Framework is retained for tests, automation experiments, persistence integration, and future migration work. The canonical v2.1.x production runtime is the evidence-backed Market Validation path documented in `docs/CANONICAL_RUNTIME_ARCHITECTURE.md`.
+
 ## Architecture
 
 The Intelligence Engine Framework defines the permanent base architecture for all Project Hunter intelligence engines.
@@ -128,4 +132,3 @@ The framework supports future engines including:
 - Opportunity Timing.
 
 These engines must be added as independent implementations of the framework contract.
-

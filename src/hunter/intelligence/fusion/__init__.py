@@ -1,3 +1,9 @@
+"""Experimental Fusion package for v2.1.x.
+
+The canonical production runtime consumes persisted evidence through Market
+Validation and does not execute Fusion in the current production path.
+"""
+
 from hunter.intelligence.fusion.configuration import FusionConfig, FusionWeightingConfig, load_fusion_config
 from hunter.intelligence.fusion.engine import CrossEngineFusionEngine, fused_intelligence_to_record
 from hunter.intelligence.fusion.models import (

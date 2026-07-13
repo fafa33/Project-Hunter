@@ -14,7 +14,7 @@ from hunter.macro import MacroRepository
 from hunter.market_validation import MarketValidationRunner, load_market_validation_config
 from hunter.market_validation.acquisition_sources import acquisition_engine_sources
 from hunter.market_validation.models import EngineValidationSource, ProjectValidationResult
-from hunter.market_validation.runner import SourceBackedV1ProjectExecutor
+from hunter.market_validation.runner import EvidenceBackedProjectExecutor
 from hunter.scenario import ScenarioRepository
 from hunter.timing.models import TimingAssessment, TimingDependencySnapshot
 from hunter.timing.repository import TimingRepository
@@ -53,7 +53,7 @@ class OpportunityTimingEvidenceEngine:
         dependencies = current_timing_dependencies(generation_timestamp=timestamp)
         runner = MarketValidationRunner(
             market_config,
-            executor=SourceBackedV1ProjectExecutor(timestamp, sources),
+            executor=EvidenceBackedProjectExecutor(timestamp, sources),
         )
         assessments = tuple(self.assess_project(result, as_of=timestamp) for result in runner.run().project_results)
         self.repository.save(assessments, dependencies=dependencies)

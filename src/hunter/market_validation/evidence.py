@@ -29,6 +29,33 @@ REQUIRED_EVIDENCE_ENGINES: tuple[str, ...] = (
     "committee",
 )
 
+INDEPENDENT_PRODUCTION_ENGINES: tuple[str, ...] = (
+    "valuation",
+    "comparative_valuation",
+    "mispricing",
+    "asymmetry",
+    "developer",
+    "protocol",
+    "news",
+    "social",
+    "narrative",
+    "whale_intelligence",
+    "macro_intelligence",
+    "validation_health",
+)
+
+DERIVED_ANALYTICAL_VIEWS: tuple[str, ...] = (
+    "future_demand",
+    "opportunity_timing",
+    "probability",
+    "pattern_matching",
+    "technology_necessity",
+    "capital_rotation",
+    "necessity_gap",
+    "risk",
+    "committee",
+)
+
 
 @dataclass(frozen=True)
 class EvidenceCoverageStats:
@@ -66,6 +93,14 @@ class EvidenceCoverageReport:
     engine_count: int
     sources: tuple[EngineValidationSource, ...]
     stats: EvidenceCoverageStats
+
+    @property
+    def independent_sources(self) -> tuple[EngineValidationSource, ...]:
+        return tuple(source for source in self.sources if source.engine in INDEPENDENT_PRODUCTION_ENGINES)
+
+    @property
+    def derived_sources(self) -> tuple[EngineValidationSource, ...]:
+        return tuple(source for source in self.sources if source.engine in DERIVED_ANALYTICAL_VIEWS)
 
     @property
     def missing_sources(self) -> tuple[EngineValidationSource, ...]:
@@ -131,23 +166,31 @@ class EvidenceReportRenderer:
             "Evidence Completeness",
             f"Projects: {report.project_count}",
             f"Engines per project: {report.engine_count}",
+            f"Independent production engines: {len(INDEPENDENT_PRODUCTION_ENGINES)}",
+            f"Derived analytical views: {len(DERIVED_ANALYTICAL_VIEWS)}",
             f"Coverage %: {stats.coverage_percent:.2f}",
             f"Available %: {stats.available_percent:.2f}",
             f"Missing %: {stats.missing_percent:.2f}",
             f"Stale %: {stats.stale_percent:.2f}",
             f"Contradictory %: {stats.contradictory_percent:.2f}",
+            "",
+            "Independent production engines:",
+            ", ".join(INDEPENDENT_PRODUCTION_ENGINES),
+            "",
+            "Derived analytical views:",
+            ", ".join(DERIVED_ANALYTICAL_VIEWS),
         ]
         return "\n".join(lines)
 
     def render_validate(self, report: EvidenceCoverageReport) -> str:
         lines = [
             "Engine Availability",
-            "| Engine | Status | Validation | Confidence | Freshness | Source | Collector |",
-            "| --- | --- | --- | ---: | ---: | --- | --- |",
+            "| Engine | Classification | Status | Validation | Confidence | Freshness | Source | Collector |",
+            "| --- | --- | --- | --- | ---: | ---: | --- | --- |",
         ]
         for source in sorted(report.sources, key=lambda item: (item.engine, item.source)):
             lines.append(
-                f"| {source.engine} | {source.status} | {source.validation_status} | "
+                f"| {source.engine} | {engine_classification(source.engine)} | {source.status} | {source.validation_status} | "
                 f"{source.confidence:.4f} | {source.freshness:.4f} | {source.source} | {source.collector} |"
             )
         return "\n".join(lines)
@@ -206,6 +249,14 @@ def unavailable_source(engine: str, *, timestamp: datetime, missing_field: str |
         missing_fields=(field,),
         warnings=(f"missing:{field}",),
     )
+
+
+def engine_classification(engine: str) -> str:
+    if engine in INDEPENDENT_PRODUCTION_ENGINES:
+        return "INDEPENDENT_PRODUCTION_ENGINE"
+    if engine in DERIVED_ANALYTICAL_VIEWS:
+        return "DERIVED_ANALYTICAL_VIEW"
+    return "UNCLASSIFIED"
 
 
 def ensure_complete_engine_sources(

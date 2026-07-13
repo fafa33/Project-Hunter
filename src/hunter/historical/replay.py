@@ -25,7 +25,7 @@ from hunter.historical.validation import calibration_metric, engine_metrics
 from hunter.historical_acquisition.repository import HistoricalEvidenceRepository
 from hunter.market_validation.configuration import load_market_validation_config
 from hunter.market_validation.models import EngineValidationSource, ProjectValidationTarget
-from hunter.market_validation.runner import SourceBackedV1ProjectExecutor
+from hunter.market_validation.runner import EvidenceBackedProjectExecutor
 
 
 class HistoricalPointInTimeValidationEngine:
@@ -148,7 +148,7 @@ def replay_case(
     run_id: str,
 ) -> tuple[tuple[HistoricalEngineOutput, ...], HistoricalCommitteeAssessment, HistoricalRankingSnapshot]:
     sources = tuple(_source(record) for record in snapshot.evidence)
-    result = SourceBackedV1ProjectExecutor(
+    result = EvidenceBackedProjectExecutor(
         case.evaluation_timestamp,
         {case.project_id: sources},
     ).execute_project(

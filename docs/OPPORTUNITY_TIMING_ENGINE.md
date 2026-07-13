@@ -1,5 +1,9 @@
 # Opportunity Timing Engine
 
+Status: Experimental for v2.1.x production architecture.
+
+The Fusion-backed Opportunity Timing Engine in `src/hunter/opportunity/` is not the production timing implementation for v2.1.x. Production timing is `src/hunter/timing/` and is fed by persisted evidence through the canonical Market Validation runtime documented in `docs/CANONICAL_RUNTIME_ARCHITECTURE.md`.
+
 ## Purpose
 
 The Opportunity Timing Engine deterministically evaluates whether a project, asset, protocol, chain, sector, narrative, or ecosystem is approaching, entering, remaining inside, or leaving an opportunity window.

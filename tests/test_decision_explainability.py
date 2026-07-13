@@ -7,7 +7,7 @@ from hunter.explainability import DecisionAuditRenderer, DecisionExplainabilityE
 from hunter.market_validation import MarketValidationRunner
 from hunter.market_validation.configuration import load_market_validation_config
 from hunter.market_validation.models import EngineValidationSource
-from hunter.market_validation.runner import REQUIRED_ENGINES, SourceBackedV1ProjectExecutor
+from hunter.market_validation.runner import REQUIRED_ENGINES, EvidenceBackedProjectExecutor
 
 
 def test_decision_audit_explains_project_without_changing_scores() -> None:
@@ -78,7 +78,7 @@ def test_explain_cli_commands_execute() -> None:
 
 def test_evidence_trace_resolves_to_original_source_records_when_available() -> None:
     config = load_market_validation_config()
-    executor = SourceBackedV1ProjectExecutor(
+    executor = EvidenceBackedProjectExecutor(
         config.effective_at,
         {"safe": _sources(prefix="safe-real", score=0.9, confidence=0.8, freshness=0.7)},
     )

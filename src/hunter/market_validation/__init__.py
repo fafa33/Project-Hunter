@@ -6,9 +6,10 @@ from hunter.market_validation.models import (
     ProjectValidationTarget,
 )
 from hunter.market_validation.renderer import MarketValidationRenderer
-from hunter.market_validation.runner import MarketValidationRunner, compare_runs
+from hunter.market_validation.runner import EvidenceBackedProjectExecutor, MarketValidationRunner, compare_runs
 
 __all__ = [
+    "EvidenceBackedProjectExecutor",
     "MarketValidationComparison",
     "MarketValidationConfig",
     "MarketValidationRenderer",

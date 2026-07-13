@@ -7,7 +7,7 @@ from hunter.cli import main
 from hunter.market_validation import MarketValidationRunner
 from hunter.market_validation.acquisition_sources import _whale_engine_sources
 from hunter.market_validation.configuration import load_market_validation_config
-from hunter.market_validation.runner import SourceBackedV1ProjectExecutor
+from hunter.market_validation.runner import EvidenceBackedProjectExecutor
 from hunter.whale import (
     REQUIRED_WHALE_METRICS,
     WhaleIntelligenceEvidenceEngine,
@@ -260,7 +260,7 @@ def test_whale_evidence_reaches_explainability_and_committee_path(tmp_path, monk
     result = next(
         item
         for item in MarketValidationRunner(
-            market_config, executor=SourceBackedV1ProjectExecutor(market_config.effective_at, sources)
+            market_config, executor=EvidenceBackedProjectExecutor(market_config.effective_at, sources)
         )
         .run()
         .project_results

@@ -1,5 +1,9 @@
 # Investment Committee Engine
 
+Status: Experimental for v2.1.x production architecture.
+
+The production committee output in v2.1.x is the deterministic committee decision and committee confidence on `ProjectValidationResult`, produced by the evidence-backed Market Validation runtime. This package is retained for persisted committee experiments, historical tests, dashboard contracts, and future consolidation.
+
 ## Purpose
 
 The Investment Committee Engine is the final persisted analytical decision layer for Project Hunter V1. It consolidates persisted upstream outputs into explainable committee assessments and cycle champion snapshots.

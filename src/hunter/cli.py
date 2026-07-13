@@ -98,10 +98,10 @@ from hunter.market_validation import (
     load_market_validation_config,
 )
 from hunter.market_validation.acquisition_sources import acquisition_engine_sources, engine_coverage
-from hunter.market_validation.evidence import EvidenceCoverageAnalyzer, EvidenceReportRenderer
+from hunter.market_validation.evidence import EvidenceCoverageAnalyzer, EvidenceReportRenderer, engine_classification
 from hunter.market_validation.models import EngineValidationSource, MarketValidationRun
 from hunter.market_validation.repositories import InMemoryMarketValidationRunRepository
-from hunter.market_validation.runner import SourceBackedV1ProjectExecutor
+from hunter.market_validation.runner import EvidenceBackedProjectExecutor
 from hunter.narrative import (
     NarrativeEvidenceNormalizer,
     NarrativeEvidenceValidator,
@@ -633,7 +633,7 @@ def _data_ops(args: object) -> int:
 def _data_ops_coverage_line() -> str:
     config = load_market_validation_config(Path("configs/market_validation.yaml"))
     repository = FileAcquisitionRepository()
-    executor = SourceBackedV1ProjectExecutor(
+    executor = EvidenceBackedProjectExecutor(
         config.effective_at,
         acquisition_engine_sources(repository, as_of=config.effective_at),
     )
@@ -683,7 +683,7 @@ def _market_validation(args: object) -> int:
         if stale is not None:
             raise RuntimeError(stale)
         sources = acquisition_engine_sources(FileAcquisitionRepository(), as_of=config.effective_at)
-        executor = SourceBackedV1ProjectExecutor(config.effective_at, sources)
+        executor = EvidenceBackedProjectExecutor(config.effective_at, sources)
         return repository.save(MarketValidationRunner(config, executor=executor).run())
 
     if command == "run":
@@ -726,7 +726,7 @@ def _market_validation(args: object) -> int:
 def _evidence(args: object) -> int:
     config = load_market_validation_config(Path(args.market_validation_config))
     repository = FileAcquisitionRepository()
-    executor = SourceBackedV1ProjectExecutor(
+    executor = EvidenceBackedProjectExecutor(
         config.effective_at,
         acquisition_engine_sources(repository, as_of=config.effective_at),
     )
@@ -757,7 +757,7 @@ def _engines(args: object) -> int:
     config = load_market_validation_config(Path(args.market_validation_config))
     repository = FileAcquisitionRepository()
     sources = acquisition_engine_sources(repository, as_of=config.effective_at)
-    executor = SourceBackedV1ProjectExecutor(config.effective_at, sources)
+    executor = EvidenceBackedProjectExecutor(config.effective_at, sources)
     run = MarketValidationRunner(config, executor=executor).run()
     report = EvidenceCoverageAnalyzer().analyze(run)
     command = getattr(args, "engines_command", None)
@@ -778,7 +778,7 @@ def _engines(args: object) -> int:
         for row in rows:
             print(
                 f"{row.engine}\tavailable={row.available_projects}\tconfigured={row.configured_projects}"
-                f"\tcoverage={row.coverage_percent:.2f}"
+                f"\tcoverage={row.coverage_percent:.2f}\tclassification={engine_classification(row.engine)}"
             )
         if not rows:
             print("no analytical acquisition evidence available")
@@ -1730,7 +1730,7 @@ def _weights(args: object) -> int:
         sources = acquisition_engine_sources(FileAcquisitionRepository(), as_of=market_config.effective_at)
         run = MarketValidationRunner(
             market_config,
-            executor=SourceBackedV1ProjectExecutor(market_config.effective_at, sources),
+            executor=EvidenceBackedProjectExecutor(market_config.effective_at, sources),
         ).run()
         sample = run.project_results[0].engine_sources if run.project_results else ()
         print(renderer.render_report(config, WeightEngine(config).score(sample)))
@@ -3475,7 +3475,7 @@ def _explain(args: object) -> int:
         return 2
     config = load_market_validation_config()
     sources = acquisition_engine_sources(FileAcquisitionRepository(), as_of=config.effective_at)
-    executor = SourceBackedV1ProjectExecutor(config.effective_at, sources)
+    executor = EvidenceBackedProjectExecutor(config.effective_at, sources)
     run = MarketValidationRunner(config, executor=executor).run()
     engine = DecisionExplainabilityEngine()
     renderer = DecisionAuditRenderer()

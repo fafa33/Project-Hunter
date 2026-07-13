@@ -1,5 +1,9 @@
 # Intelligence Fusion Layer
 
+Status: Experimental for v2.1.x production architecture.
+
+The Fusion Layer is retained for future architecture work and tests. It is not part of the canonical v2.1.x production Market Validation runtime. The production path consumes persisted evidence through `EngineValidationSource` and `EvidenceBackedProjectExecutor`, as documented in `docs/CANONICAL_RUNTIME_ARCHITECTURE.md`.
+
 The Intelligence Fusion Layer deterministically combines standardized Intelligence outputs into immutable FusedIntelligence artifacts.
 
 ## Scope

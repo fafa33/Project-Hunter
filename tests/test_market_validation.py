@@ -12,7 +12,7 @@ from hunter.market_validation.configuration import load_market_validation_config
 from hunter.market_validation.evidence import EvidenceCoverageAnalyzer, EvidenceReportRenderer
 from hunter.market_validation.models import EngineValidationSource
 from hunter.market_validation.repositories import result_to_record, run_to_record
-from hunter.market_validation.runner import REQUIRED_ENGINES, SourceBackedV1ProjectExecutor
+from hunter.market_validation.runner import REQUIRED_ENGINES, EvidenceBackedProjectExecutor
 from hunter.persistence.models import QuerySpec
 from hunter.persistence.serialization import record_from_json, record_to_json
 from hunter.persistence.sql import RepositoryFactory, SessionFactory, create_schema, create_sqlite_engine
@@ -165,6 +165,8 @@ def test_real_evidence_coverage_reports_missing_unavailable_and_trace_fields() -
     assert report.stats.missing_percent == 100.0
     assert all(source.status == "UNAVAILABLE" for source in report.sources)
     assert "Evidence Completeness" in rendered
+    assert "Independent production engines" in rendered
+    assert "Derived analytical views" in rendered
 
 
 def test_zero_confidence_engine_cannot_report_complete_evidence() -> None:
@@ -172,11 +174,11 @@ def test_zero_confidence_engine_cannot_report_complete_evidence() -> None:
         _source("valuation", 0.0, confidence=0.0, missing_fields=())
 
 
-def test_source_backed_validation_uses_distinct_confidence_freshness_and_evidence() -> None:
+def test_evidence_backed_validation_uses_distinct_confidence_freshness_and_evidence() -> None:
     config = load_market_validation_config()
     alpha_sources = _sources(score=0.8, confidence=0.9, freshness=0.85, prefix="alpha")
     beta_sources = _sources(score=0.5, confidence=0.6, freshness=0.7, prefix="beta")
-    executor = SourceBackedV1ProjectExecutor(
+    executor = EvidenceBackedProjectExecutor(
         config.effective_at,
         {
             "bitcoin": alpha_sources,
@@ -203,7 +205,7 @@ def test_placeholder_scores_cannot_qualify_project_when_required_engine_is_missi
         for source in _sources(score=0.95, confidence=0.95, freshness=0.95, prefix="partial")
         if source.engine != "committee"
     )
-    executor = SourceBackedV1ProjectExecutor(config.effective_at, {"safe": incomplete})
+    executor = EvidenceBackedProjectExecutor(config.effective_at, {"safe": incomplete})
 
     safe = next(
         result

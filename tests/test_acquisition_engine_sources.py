@@ -6,7 +6,7 @@ from hunter.acquisition.models import EvidenceValidation, NormalizedEvidence
 from hunter.acquisition.repositories import InMemoryAcquisitionRepository
 from hunter.market_validation.acquisition_sources import acquisition_engine_sources
 from hunter.market_validation.models import ProjectValidationTarget
-from hunter.market_validation.runner import SourceBackedV1ProjectExecutor
+from hunter.market_validation.runner import EvidenceBackedProjectExecutor
 
 NOW = datetime(2026, 7, 11, tzinfo=UTC)
 
@@ -116,7 +116,7 @@ def _run_with_market_score(score: float):
 
 
 def _execute(sources):
-    return SourceBackedV1ProjectExecutor(NOW, sources).execute_project(
+    return EvidenceBackedProjectExecutor(NOW, sources).execute_project(
         ProjectValidationTarget("bitcoin", "Bitcoin", "store-of-value"),
         run_id="run",
     )

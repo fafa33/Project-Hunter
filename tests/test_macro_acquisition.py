@@ -13,7 +13,7 @@ from hunter.macro.validation import validate_metric
 from hunter.market_validation import MarketValidationRunner
 from hunter.market_validation.acquisition_sources import _macro_engine_sources
 from hunter.market_validation.configuration import load_market_validation_config
-from hunter.market_validation.runner import SourceBackedV1ProjectExecutor
+from hunter.market_validation.runner import EvidenceBackedProjectExecutor
 
 NOW = datetime(2026, 7, 12, tzinfo=UTC)
 
@@ -294,7 +294,7 @@ def test_macro_evidence_reaches_explainability_and_committee_path(tmp_path, monk
     result = next(
         item
         for item in MarketValidationRunner(
-            market_config, executor=SourceBackedV1ProjectExecutor(market_config.effective_at, sources)
+            market_config, executor=EvidenceBackedProjectExecutor(market_config.effective_at, sources)
         )
         .run()
         .project_results

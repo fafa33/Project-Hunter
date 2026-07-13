@@ -8,7 +8,7 @@ from hunter.cli import main
 from hunter.market_validation import MarketValidationRunner
 from hunter.market_validation.configuration import load_market_validation_config
 from hunter.market_validation.models import EngineValidationSource
-from hunter.market_validation.runner import REQUIRED_ENGINES, SourceBackedV1ProjectExecutor
+from hunter.market_validation.runner import REQUIRED_ENGINES, EvidenceBackedProjectExecutor
 from hunter.weights import WeightEngine, load_weight_config, recommend_weight_adjustments
 from hunter.weights.configuration import weight_config_from_mapping
 
@@ -61,7 +61,7 @@ def test_missing_evidence_keeps_zero_contribution_with_explainable_weight() -> N
 
 def test_market_validation_activates_hunter_and_final_scores() -> None:
     config = load_market_validation_config()
-    executor = SourceBackedV1ProjectExecutor(
+    executor = EvidenceBackedProjectExecutor(
         config.effective_at,
         {"bitcoin": tuple(_source(engine, score=0.8, confidence=0.9, freshness=0.85) for engine in REQUIRED_ENGINES)},
     )

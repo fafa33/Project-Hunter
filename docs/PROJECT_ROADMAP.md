@@ -5,7 +5,10 @@
 - Project Hunter V1: OFFICIALLY RELEASED.
 - Project Hunter V1 baseline: FROZEN.
 - Project Hunter V2: COMPLETE.
-- V1 Real Market Validation: NEXT REQUIRED PHASE.
+- Project Hunter V2.1 Stable: RELEASED.
+- Architecture Consolidation Phase 1: in progress.
+- Canonical production architecture: evidence-backed Market Validation runtime.
+- V1 Real Market Validation: complete.
 - Project Constitution: complete.
 - Plugin Architecture: complete.
 - Pipeline Orchestrator: complete.
@@ -35,11 +38,9 @@
 
 ## Next Milestone
 
-Project Hunter V1 analytical roadmap is complete, fully validated, officially released, and frozen.
+Project Hunter v2.1.x consolidation continues under ADOPT_OPTION_A.
 
-Next required phase: V1 Real Market Validation.
-
-V2 remains blocked until V1 Real Market Validation is completed.
+Next required phase: complete architecture consolidation without changing production runtime behavior.
 
 ## V2 Roadmap
 

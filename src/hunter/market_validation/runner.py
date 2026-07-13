@@ -27,7 +27,7 @@ class MarketValidationRunner:
         executor: ProjectValidationExecutor | None = None,
     ) -> None:
         self.config = config
-        self.executor = executor or DeterministicV1ProjectExecutor(config.effective_at)
+        self.executor = executor or DeterministicProjectExecutor(config.effective_at)
 
     def run(self) -> MarketValidationRun:
         raw = tuple(
@@ -54,15 +54,15 @@ class MarketValidationRunner:
         )
 
 
-class DeterministicV1ProjectExecutor:
+class DeterministicProjectExecutor:
     def __init__(self, effective_at: datetime) -> None:
         self.effective_at = effective_at.astimezone(UTC)
 
     def execute_project(self, target: ProjectValidationTarget, *, run_id: str) -> ProjectValidationResult:
-        return SourceBackedV1ProjectExecutor(self.effective_at, {}).execute_project(target, run_id=run_id)
+        return EvidenceBackedProjectExecutor(self.effective_at, {}).execute_project(target, run_id=run_id)
 
 
-class SourceBackedV1ProjectExecutor:
+class EvidenceBackedProjectExecutor:
     def __init__(
         self,
         effective_at: datetime,
@@ -332,3 +332,8 @@ def _mean(values: tuple[float, ...]) -> float:
     if not values:
         return 0.0
     return _clamp(sum(values) / len(values))
+
+
+# Backward-compatible aliases for pre-consolidation imports.
+DeterministicV1ProjectExecutor = DeterministicProjectExecutor
+SourceBackedV1ProjectExecutor = EvidenceBackedProjectExecutor

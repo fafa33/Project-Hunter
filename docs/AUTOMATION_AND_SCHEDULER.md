@@ -1,5 +1,7 @@
 # Automation and Scheduler
 
+Status: Operational layer. The canonical v2.1.x production analytical runtime is the evidence-backed Market Validation path documented in `docs/CANONICAL_RUNTIME_ARCHITECTURE.md`. Automation may still invoke `PipelineOrchestrator` for experimental plugin jobs, but scheduler logic is not the production analytical architecture.
+
 ## Architecture
 
 The Automation and Scheduler layer lives in `src/hunter/automation/`.

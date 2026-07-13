@@ -8,7 +8,7 @@ from hunter.explainability import DecisionExplainabilityEngine
 from hunter.market_validation import MarketValidationRunner, load_market_validation_config
 from hunter.market_validation.acquisition_sources import _timing_source
 from hunter.market_validation.models import EngineValidationSource
-from hunter.market_validation.runner import REQUIRED_ENGINES, SourceBackedV1ProjectExecutor
+from hunter.market_validation.runner import REQUIRED_ENGINES, EvidenceBackedProjectExecutor
 from hunter.timing import OpportunityTimingEvidenceEngine, TimingRepository
 from hunter.timing.engine import REQUIRED_TIMING_ENGINES
 from hunter.timing.models import TimingDependencySnapshot
@@ -186,7 +186,7 @@ def _result(sources: tuple[EngineValidationSource, ...]):
         item
         for item in MarketValidationRunner(
             config,
-            executor=SourceBackedV1ProjectExecutor(NOW, {"bitcoin": sources}),
+            executor=EvidenceBackedProjectExecutor(NOW, {"bitcoin": sources}),
         )
         .run()
         .project_results
@@ -236,7 +236,7 @@ class _SingleResultExecutor:
     def execute_project(self, target, *, run_id: str):
         if target.project_id == self.result.project_id:
             return self.result
-        return SourceBackedV1ProjectExecutor(NOW, {}).execute_project(target, run_id=run_id)
+        return EvidenceBackedProjectExecutor(NOW, {}).execute_project(target, run_id=run_id)
 
 
 def _dependencies(*, protocol_timestamp: datetime) -> TimingDependencySnapshot:
