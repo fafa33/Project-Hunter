@@ -7,9 +7,118 @@ chains:
     family: evm
     enabled: true
     rpc_endpoint: https://ethereum.publicnode.com
+    rpc_endpoints:
+      - https://ethereum.publicnode.com
+      - https://rpc.flashbots.net
+      - https://eth.llamarpc.com
+      - https://rpc.ankr.com/eth
     rpc_env: HUNTER_ETHEREUM_RPC_URL
     explorer_url: https://etherscan.io
+    native_asset: ETH
+    wrapped_native_asset: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"
     finality_depth: 64
+    max_block_range: 5000
+    polling_interval_seconds: 300
+    retry_limit: 2
+    timeout_seconds: 20
+  - chain_id: 42161
+    network: arbitrum
+    family: evm
+    enabled: true
+    rpc_endpoint: https://arbitrum-one.publicnode.com
+    rpc_endpoints:
+      - https://arbitrum-one.publicnode.com
+      - https://arb1.arbitrum.io/rpc
+    rpc_env: HUNTER_ARBITRUM_RPC_URL
+    explorer_url: https://arbiscan.io
+    native_asset: ETH
+    wrapped_native_asset: "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1"
+    finality_depth: 100
+    max_block_range: 5000
+    polling_interval_seconds: 300
+    retry_limit: 2
+    timeout_seconds: 20
+  - chain_id: 10
+    network: optimism
+    family: evm
+    enabled: true
+    rpc_endpoint: https://optimism.publicnode.com
+    rpc_endpoints:
+      - https://optimism.publicnode.com
+      - https://mainnet.optimism.io
+    rpc_env: HUNTER_OPTIMISM_RPC_URL
+    explorer_url: https://optimistic.etherscan.io
+    native_asset: ETH
+    wrapped_native_asset: "0x4200000000000000000000000000000000000006"
+    finality_depth: 100
+    max_block_range: 5000
+    polling_interval_seconds: 300
+    retry_limit: 2
+    timeout_seconds: 20
+  - chain_id: 8453
+    network: base
+    family: evm
+    enabled: true
+    rpc_endpoint: https://base.publicnode.com
+    rpc_endpoints:
+      - https://base.publicnode.com
+      - https://mainnet.base.org
+    rpc_env: HUNTER_BASE_RPC_URL
+    explorer_url: https://basescan.org
+    native_asset: ETH
+    wrapped_native_asset: "0x4200000000000000000000000000000000000006"
+    finality_depth: 100
+    max_block_range: 5000
+    polling_interval_seconds: 300
+    retry_limit: 2
+    timeout_seconds: 20
+  - chain_id: 137
+    network: polygon
+    family: evm
+    enabled: true
+    rpc_endpoint: https://polygon-bor.publicnode.com
+    rpc_endpoints:
+      - https://polygon-bor.publicnode.com
+      - https://polygon-rpc.com
+    rpc_env: HUNTER_POLYGON_RPC_URL
+    explorer_url: https://polygonscan.com
+    native_asset: MATIC
+    wrapped_native_asset: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270"
+    finality_depth: 128
+    max_block_range: 5000
+    polling_interval_seconds: 300
+    retry_limit: 2
+    timeout_seconds: 20
+  - chain_id: 56
+    network: bnb
+    family: evm
+    enabled: true
+    rpc_endpoint: https://bsc-dataseed.binance.org
+    rpc_endpoints:
+      - https://bsc-dataseed.binance.org
+      - https://bsc.publicnode.com
+    rpc_env: HUNTER_BNB_RPC_URL
+    explorer_url: https://bscscan.com
+    native_asset: BNB
+    wrapped_native_asset: "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c"
+    finality_depth: 64
+    max_block_range: 5000
+    polling_interval_seconds: 300
+    retry_limit: 2
+    timeout_seconds: 20
+  - chain_id: 43114
+    network: avalanche
+    family: evm
+    enabled: true
+    rpc_endpoint: https://api.avax.network/ext/bc/C/rpc
+    rpc_endpoints:
+      - https://api.avax.network/ext/bc/C/rpc
+      - https://avalanche-c-chain-rpc.publicnode.com
+    rpc_env: HUNTER_AVALANCHE_RPC_URL
+    explorer_url: https://snowtrace.io
+    native_asset: AVAX
+    wrapped_native_asset: "0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7"
+    finality_depth: 32
     max_block_range: 5000
     polling_interval_seconds: 300
     retry_limit: 2
@@ -56,6 +165,76 @@ surface_registry:
     confidence: 0.95
     active: true
     valid_from: "2023-01-27T00:00:00+00:00"
+    valid_to:
+  - project: uniswap
+    chain_id: 1
+    network: ethereum
+    address: "0x1F98431c8aD98523631AE4a59f267346ea31F984"
+    address_type: protocol_contract
+    protocol_role: uniswap_v3_factory
+    asset_scope: pool_deployments
+    source_url: https://docs.uniswap.org/contracts/v3/reference/deployments/ethereum-deployments
+    source_type: official_documentation
+    verification_timestamp: "2026-07-13T00:00:00+00:00"
+    confidence: 0.95
+    active: true
+    valid_from: "2021-05-05T00:00:00+00:00"
+    valid_to:
+  - project: lido
+    chain_id: 1
+    network: ethereum
+    address: "0xae7ab96520DE3A18E5e111B5EaAb095312D7fE84"
+    address_type: staking
+    protocol_role: lido_steth_staking
+    asset_scope: eth_staking_deposits_withdrawals
+    source_url: https://docs.lido.fi/deployed-contracts/
+    source_type: official_documentation
+    verification_timestamp: "2026-07-13T00:00:00+00:00"
+    confidence: 0.95
+    active: true
+    valid_from: "2020-12-19T00:00:00+00:00"
+    valid_to:
+  - project: compound
+    chain_id: 1
+    network: ethereum
+    address: "0xc3d688B66703497DAA19211EEdff47f25384cdc3"
+    address_type: lending_market
+    protocol_role: compound_v3_usdc_comet
+    asset_scope: usdc_lending_market
+    source_url: https://docs.compound.finance/#networks
+    source_type: official_documentation
+    verification_timestamp: "2026-07-13T00:00:00+00:00"
+    confidence: 0.9
+    active: true
+    valid_from: "2022-08-26T00:00:00+00:00"
+    valid_to:
+  - project: maker
+    chain_id: 1
+    network: ethereum
+    address: "0x35D1b3F3D7966A1DFe207aa4514C12a259A0492B"
+    address_type: protocol_contract
+    protocol_role: maker_vat_core_accounting
+    asset_scope: dai_collateral_accounting
+    source_url: https://chainlog.makerdao.com/
+    source_type: official_deployment_manifest
+    verification_timestamp: "2026-07-13T00:00:00+00:00"
+    confidence: 0.9
+    active: true
+    valid_from: "2019-11-18T00:00:00+00:00"
+    valid_to:
+  - project: curve
+    chain_id: 1
+    network: ethereum
+    address: "0x0000000022D53366457F9d5E68Ec105046FC4383"
+    address_type: protocol_contract
+    protocol_role: curve_address_provider
+    asset_scope: registry_discovery
+    source_url: https://docs.curve.fi/references/deployed-contracts/
+    source_type: official_documentation
+    verification_timestamp: "2026-07-13T00:00:00+00:00"
+    confidence: 0.9
+    active: true
+    valid_from: "2020-01-01T00:00:00+00:00"
     valid_to:
 
 snapshot_windows:

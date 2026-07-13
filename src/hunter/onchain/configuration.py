@@ -49,12 +49,16 @@ def _chain(raw: dict[str, Any]) -> ChainConfig:
     env_name = str(raw.get("rpc_env", "")) or None
     if env_name and os.environ.get(env_name):
         endpoint = str(os.environ[env_name])
+    endpoints = tuple(str(item) for item in raw.get("rpc_endpoints", ()) if str(item))
+    if endpoint:
+        endpoints = (endpoint, *(item for item in endpoints if item != endpoint))
     return ChainConfig(
         chain_id=int(raw["chain_id"]),
         network=str(raw["network"]),
         family=str(raw.get("family", "evm")),
         enabled=bool(raw.get("enabled", True)),
         rpc_endpoint=endpoint,
+        rpc_endpoints=endpoints,
         rpc_env=env_name,
         explorer_url=str(raw.get("explorer_url", "")),
         finality_depth=int(raw.get("finality_depth", 64)),
@@ -62,6 +66,9 @@ def _chain(raw: dict[str, Any]) -> ChainConfig:
         polling_interval_seconds=int(raw.get("polling_interval_seconds", 300)),
         retry_limit=int(raw.get("retry_limit", 2)),
         timeout_seconds=int(raw.get("timeout_seconds", 20)),
+        native_asset=str(raw.get("native_asset", "")),
+        wrapped_native_asset=str(raw["wrapped_native_asset"]) if raw.get("wrapped_native_asset") else None,
+        deployment_start_block=int(raw["deployment_start_block"]) if raw.get("deployment_start_block") else None,
     )
 
 
@@ -102,4 +109,6 @@ def _surface(raw: dict[str, Any], *, version: str) -> OnChainSurface:
         valid_from=datetime.fromisoformat(str(raw["valid_from"])),
         valid_to=datetime.fromisoformat(str(valid_to)) if valid_to else None,
         evidence_id=identity("onchain-surface", payload),
+        deployment_start_block=int(raw["deployment_start_block"]) if raw.get("deployment_start_block") else None,
+        project_state=str(raw.get("project_state", "verified_surface")),
     )

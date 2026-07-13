@@ -56,6 +56,13 @@ class CapitalFlowEngine:
                 snapshots.append(snapshot)
                 continue
             try:
+                states = adapter.check_providers()
+                self.repository.save_provider_states(states)
+                if not any(state.status in {"healthy", "degraded"} for state in states):
+                    snapshot = _unavailable_snapshot(surface, "provider_unavailable", ("live_provider",))
+                    self.repository.save_snapshots((snapshot,))
+                    snapshots.append(snapshot)
+                    continue
                 end_block = adapter.latest_finalized_block()
                 block = adapter.block(end_block)
                 block_hash = str(block.get("hash", ""))
@@ -72,8 +79,26 @@ class CapitalFlowEngine:
             self.repository.save_raw(observations)
             self.repository.save_flows(flows)
             self.repository.save_snapshots((snapshot,))
+            self.repository.save_checkpoint(surface.chain_id, surface.project, end_block, block_hash)
             snapshots.append(snapshot)
         return tuple(snapshots)
+
+    def check_providers(self, chain: str | None = None) -> tuple[object, ...]:
+        states = []
+        for chain_config in self.config.chains:
+            if chain and chain not in {chain_config.network, str(chain_config.chain_id)}:
+                continue
+            adapter = self.adapters.get(chain_config.chain_id)
+            if adapter is None:
+                continue
+            states.extend(adapter.check_providers())
+        self.repository.save_provider_states(tuple(states))  # type: ignore[arg-type]
+        return tuple(states)
+
+    def reset_provider_cooldown(self, chain: str) -> None:
+        for chain_config in self.config.chains:
+            if chain in {chain_config.network, str(chain_config.chain_id)} and chain_config.chain_id in self.adapters:
+                self.adapters[chain_config.chain_id].reset_cooldown()
 
     def coverage(self) -> dict[str, object]:
         projects = tuple(project.project_id for project in load_market_validation_config().project_universe)
@@ -81,11 +106,22 @@ class CapitalFlowEngine:
         snapshots = self.repository.snapshots()
         live = {str(row["project"]) for row in snapshots if row.get("status") == "live"}
         unavailable = sorted(set(projects) - with_surface)
+        raw_projects = {str(row["project"]) for row in self.repository.raw() if row.get("project")}
+        provider_reachable = {
+            str(row["network"])
+            for row in self.repository.provider_states()
+            if row.get("status") in {"healthy", "degraded"}
+        }
         return {
             "projects": len(projects),
             "verified_surfaces": len(self.config.surfaces),
             "projects_with_surface": len(with_surface),
+            "adapter_supported_chains": len(
+                [chain for chain in self.config.chains if chain.family == "evm" and chain.enabled]
+            ),
+            "provider_reachable_chains": len(provider_reachable),
             "live_projects": len(live),
+            "raw_observation_projects": len(raw_projects),
             "coverage": round((len(live) / max(len(projects), 1)) * 100, 2),
             "unavailable": tuple(unavailable),
         }
@@ -100,6 +136,12 @@ class CapitalFlowEngine:
         end_timestamp: datetime,
     ) -> tuple[RawOnChainObservation, ...]:
         raw_balance = adapter.native_balance(surface.address, end_block)
+        try:
+            adapter.logs(address=surface.address, from_block=start_block, to_block=end_block, topics=(TRANSFER_TOPIC,))
+        except EVMProviderUnavailable:
+            # Public RPCs often restrict eth_getLogs. Preserve the finalized balance observation
+            # and leave transfer-derived capital classification unavailable.
+            pass
         rows = [
             RawOnChainObservation(
                 project=surface.project,

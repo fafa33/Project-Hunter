@@ -48,6 +48,7 @@ class ChainConfig:
     family: str
     enabled: bool
     rpc_endpoint: str
+    rpc_endpoints: tuple[str, ...]
     rpc_env: str | None
     explorer_url: str
     finality_depth: int
@@ -55,6 +56,9 @@ class ChainConfig:
     polling_interval_seconds: int
     retry_limit: int
     timeout_seconds: int
+    native_asset: str = ""
+    wrapped_native_asset: str | None = None
+    deployment_start_block: int | None = None
 
 
 @dataclass(frozen=True)
@@ -83,6 +87,8 @@ class OnChainSurface:
     valid_from: datetime
     evidence_id: str
     valid_to: datetime | None = None
+    deployment_start_block: int | None = None
+    project_state: str = "verified_surface"
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "address", self.address.lower())
@@ -199,3 +205,19 @@ class ProviderState:
     endpoint_identity: str
     status: str
     message: str
+    checked_at: datetime = field(default_factory=lambda: datetime.now(tz=UTC))
+    latency_ms: int | None = None
+    latest_block: int | None = None
+    chain_id_response: int | None = None
+    capabilities: tuple[str, ...] = ()
+    failure_type: str | None = None
+    cooldown_until: datetime | None = None
+    last_successful_request: datetime | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "checked_at", self.checked_at.astimezone(UTC))
+        if self.cooldown_until is not None:
+            object.__setattr__(self, "cooldown_until", self.cooldown_until.astimezone(UTC))
+        if self.last_successful_request is not None:
+            object.__setattr__(self, "last_successful_request", self.last_successful_request.astimezone(UTC))
+        object.__setattr__(self, "capabilities", tuple(sorted(self.capabilities)))

@@ -120,7 +120,14 @@ from hunter.narrative.discovery import (
 from hunter.narrative.provider import NarrativeProviderConfig
 from hunter.necessity import TechnologyNecessityEngine, TechnologyNecessityInputSet, load_technology_graph_config
 from hunter.necessity.ranking import rank_necessity_assessments
-from hunter.onchain import CapitalFlowEngine, OnChainRepository, SurfaceRegistry, load_onchain_config
+from hunter.onchain import (
+    CapitalFlowEngine,
+    OnChainAutomationManager,
+    OnChainRepository,
+    SurfaceRegistry,
+    load_onchain_config,
+)
+from hunter.onchain.automation import worker_startup_command
 from hunter.opportunity.ranking import rank_opportunities
 from hunter.patterns.ranking import rank_pattern_assessments
 from hunter.persistence.records import EvidenceRecord, SnapshotRecord
@@ -328,7 +335,21 @@ def main(argv: list[str] | None = None) -> int:
     onchain_explain.add_argument("project")
     onchain_snapshots = onchain_sub.add_parser("snapshots")
     onchain_snapshots.add_argument("project")
-    onchain_sub.add_parser("providers")
+    onchain_providers = onchain_sub.add_parser("providers")
+    onchain_providers_sub = onchain_providers.add_subparsers(dest="onchain_providers_command")
+    providers_check = onchain_providers_sub.add_parser("check")
+    providers_check.add_argument("chain", nargs="?")
+    onchain_providers_sub.add_parser("status")
+    providers_reset = onchain_providers_sub.add_parser("reset-cooldown")
+    providers_reset.add_argument("chain")
+    onchain_automation = onchain_sub.add_parser("automation")
+    onchain_automation_sub = onchain_automation.add_subparsers(dest="onchain_automation_command")
+    onchain_automation_sub.add_parser("install")
+    onchain_automation_sub.add_parser("status")
+    onchain_automation_sub.add_parser("run-now")
+    onchain_automation_sub.add_parser("pause")
+    onchain_automation_sub.add_parser("resume")
+    onchain_automation_sub.add_parser("failures")
     capital_flow = sub.add_parser("capital-flow")
     capital_flow.add_argument("--onchain-config", default="configs/onchain.yaml")
     capital_flow.add_argument("--market-validation-config", default="configs/market_validation.yaml")
@@ -3467,11 +3488,9 @@ def _onchain(args: object) -> int:
     if command == "snapshots":
         return _capital_flow_snapshots(config, str(args.project))
     if command == "providers":
-        for chain in config.chains:
-            state = "enabled" if chain.enabled else "disabled"
-            endpoint = chain.rpc_env or chain.rpc_endpoint
-            print(f"{chain.network}\tchain_id={chain.chain_id}\tfamily={chain.family}\t{state}\tendpoint={endpoint}")
-        return 0
+        return _onchain_providers(args, config)
+    if command == "automation":
+        return _onchain_automation(args, config)
     print("onchain command required")
     return 1
 
@@ -3489,6 +3508,82 @@ def _capital_flow(args: object) -> int:
     return 1
 
 
+def _onchain_providers(args: object, config: object) -> int:
+    repository = OnChainRepository(str(config.retention.get("runtime_root", "data/onchain/runtime")))  # type: ignore[attr-defined]
+    engine = CapitalFlowEngine(config, repository=repository)  # type: ignore[arg-type]
+    command = getattr(args, "onchain_providers_command", None)
+    if command == "check":
+        states = engine.check_providers(getattr(args, "chain", None))
+        for state in states:
+            print(
+                f"{state.network}\tchain_id={state.chain_id}\tendpoint={state.endpoint_identity}"
+                f"\tstatus={state.status}\tlatest={state.latest_block}\tfailure={state.failure_type or '-'}"
+            )
+        return 0
+    if command == "status" or command is None:
+        rows = repository.provider_states()
+        if not rows:
+            print("provider_status=unavailable")
+            return 0
+        for row in rows:
+            print(
+                f"{row.get('network')}\tchain_id={row.get('chain_id')}\tendpoint={row.get('endpoint_identity')}"
+                f"\tstatus={row.get('status')}\tlatest={row.get('latest_block')}"
+                f"\tcooldown_until={row.get('cooldown_until')}"
+            )
+        return 0
+    if command == "reset-cooldown":
+        engine.reset_provider_cooldown(str(args.chain))
+        print(f"cooldown_reset={args.chain}")
+        return 0
+    print("onchain providers command required")
+    return 1
+
+
+def _onchain_automation(args: object, config: object) -> int:
+    manager = OnChainAutomationManager(config)  # type: ignore[arg-type]
+    command = getattr(args, "onchain_automation_command", None)
+    if command == "install":
+        result = manager.install()
+        print(f"installed={result.installed} created={result.created} jobs={','.join(result.jobs)}")
+        return 0
+    if command == "status":
+        rows = manager.status()
+        print(f"jobs={len(rows)} worker_startup='{worker_startup_command()}'")
+        for row in rows:
+            print(
+                f"{row.get('job_id')}\tenabled={row.get('enabled')}\tlast_attempted={row.get('last_attempted_run')}"
+                f"\tlast_success={row.get('last_successful_run')}\tlast_failure={row.get('last_failure')}"
+                f"\tnext={row.get('next_scheduled_run')}\tactive_provider={row.get('active_provider')}"
+                f"\tcheckpoint={row.get('checkpoint')}\tfreshness={row.get('project_freshness')}"
+                f"\tmissed_windows={row.get('missed_windows')}"
+            )
+        return 0
+    if command == "run-now":
+        runs = manager.run_now()
+        for run in runs:
+            print(f"{run['job_id']}\t{run['status']}")
+        return 0
+    if command == "pause":
+        manager.set_enabled(False)
+        print("onchain_automation=paused")
+        return 0
+    if command == "resume":
+        manager.set_enabled(True)
+        print("onchain_automation=resumed")
+        return 0
+    if command == "failures":
+        failures = manager.failures()
+        if not failures:
+            print("failures=0")
+            return 0
+        for failure in failures:
+            print(f"{failure.get('job_id')}\t{failure.get('last_failure')}")
+        return 2
+    print("onchain automation command required")
+    return 1
+
+
 def _capital_flow_coverage(config: object) -> int:
     engine = CapitalFlowEngine(config)  # type: ignore[arg-type]
     coverage = engine.coverage()
@@ -3496,7 +3591,9 @@ def _capital_flow_coverage(config: object) -> int:
     print(
         f"projects={coverage['projects']} verified_surfaces={coverage['verified_surfaces']} "
         f"projects_with_surface={coverage['projects_with_surface']} live_projects={coverage['live_projects']} "
-        f"coverage={coverage_value:.2f}"
+        f"adapter_supported_chains={coverage['adapter_supported_chains']} "
+        f"provider_reachable_chains={coverage['provider_reachable_chains']} "
+        f"raw_observation_projects={coverage['raw_observation_projects']} coverage={coverage_value:.2f}"
     )
     return 0
 

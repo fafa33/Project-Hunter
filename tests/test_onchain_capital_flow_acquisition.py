@@ -6,6 +6,7 @@ from decimal import Decimal
 import pytest
 
 from hunter.onchain.adapters import EVMJsonRpcAdapter, EVMProviderUnavailable
+from hunter.onchain.automation import ONCHAIN_AUTOMATION_JOBS, OnChainAutomationManager
 from hunter.onchain.configuration import OnChainConfig
 from hunter.onchain.engine import CapitalFlowEngine, evm_log_evidence_id, normalize_flows, snapshot_from_flows
 from hunter.onchain.models import AssetConfig, ChainConfig, OnChainSurface, RawOnChainObservation
@@ -28,7 +29,9 @@ class StaticTransport:
         self.calls.append(method)
         if self.failures:
             self.failures -= 1
-            raise EVMProviderUnavailable("rate limited")
+            raise EVMProviderUnavailable("rate limited", failure_type="rate_limited")
+        if method == "eth_chainId":
+            return hex(1)
         if method == "eth_blockNumber":
             return hex(1_000)
         if method == "eth_getBlockByNumber":
@@ -47,6 +50,7 @@ def chain(chain_id: int = 1, *, enabled: bool = True, finality_depth: int = 64, 
         family="evm",
         enabled=enabled,
         rpc_endpoint="https://ethereum.publicnode.com",
+        rpc_endpoints=("https://ethereum.publicnode.com",),
         rpc_env=None,
         explorer_url="https://etherscan.io",
         finality_depth=finality_depth,
@@ -226,3 +230,58 @@ def test_successful_sync_is_idempotent_uses_finalized_block_and_links_evidence(t
     assert len(repo.flows()) == 1
     assert len(repo.snapshots()) == 1
     assert second[0].evidence_ids == first[0].evidence_ids
+
+
+def test_provider_pool_failover_cooldown_wrong_chain_and_status_persistence(tmp_path) -> None:
+    class PoolTransport:
+        def __init__(self, endpoint: str) -> None:
+            self.endpoint = endpoint
+
+        def rpc(self, method: str, params: tuple[object, ...]) -> object:
+            if "forbidden" in self.endpoint:
+                raise EVMProviderUnavailable("HTTP Error 403: Forbidden", failure_type="forbidden")
+            if method == "eth_chainId":
+                return hex(999) if "wrong" in self.endpoint else hex(1)
+            if method == "eth_blockNumber":
+                return hex(1000)
+            if method == "eth_getBlockByNumber":
+                return {"hash": "0xblock", "timestamp": hex(int(NOW.timestamp()))}
+            if method == "eth_getBalance":
+                return hex(1)
+            if method == "eth_getLogs":
+                return []
+            raise AssertionError(method)
+
+    pooled = chain()
+    object.__setattr__(
+        pooled,
+        "rpc_endpoints",
+        ("https://forbidden.example", "https://wrong.example", "https://healthy.example"),
+    )
+    adapter = EVMJsonRpcAdapter(pooled, transport_factory=PoolTransport)
+    repo = OnChainRepository(tmp_path)
+    engine = CapitalFlowEngine(config(surface(), chains=(pooled,)), repository=repo, adapters={1: adapter})
+
+    states = engine.check_providers()
+    snapshot = engine.sync()[0]
+
+    assert [state.status for state in states] == ["forbidden", "wrong_chain", "healthy"]
+    assert snapshot.status == "live"
+    assert repo.provider_states()[0]["status"] == "forbidden"
+    assert repo.checkpoints()[0]["block_number"] == 936
+
+
+def test_onchain_automation_install_is_idempotent_and_runtime_only(tmp_path) -> None:
+    repo = OnChainRepository(tmp_path)
+    manager = OnChainAutomationManager(config(surface()), repository=repo)
+
+    first = manager.install()
+    second = manager.install()
+    manager.set_enabled(False)
+    status = manager.status()
+
+    assert first.created == len(ONCHAIN_AUTOMATION_JOBS)
+    assert second.created == 0
+    assert len(status) == len(ONCHAIN_AUTOMATION_JOBS)
+    assert all(row["enabled"] is False for row in status)
+    assert (tmp_path / "automation.yaml").exists()

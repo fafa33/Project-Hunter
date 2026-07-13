@@ -7,7 +7,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-from hunter.onchain.models import CapitalFlowRecord, CapitalFlowSnapshot, RawOnChainObservation
+from hunter.onchain.models import CapitalFlowRecord, CapitalFlowSnapshot, ProviderState, RawOnChainObservation
 
 
 class OnChainRepository:
@@ -24,6 +24,30 @@ class OnChainRepository:
     def save_snapshots(self, rows: tuple[CapitalFlowSnapshot, ...]) -> None:
         self._upsert("snapshots.jsonl", "snapshot_id", (_payload(row) for row in rows))
 
+    def save_provider_states(self, rows: tuple[ProviderState, ...]) -> None:
+        payloads = []
+        for row in rows:
+            payload = _payload(row)
+            payload["state_id"] = f"{row.chain_id}:{row.endpoint_identity}"
+            payloads.append(payload)
+        self._upsert("provider_status.jsonl", "state_id", payloads)
+
+    def save_checkpoint(self, chain_id: int, project: str, block_number: int, block_hash: str) -> None:
+        self._upsert(
+            "checkpoints.jsonl",
+            "checkpoint_id",
+            (
+                {
+                    "checkpoint_id": f"{chain_id}:{project}",
+                    "chain_id": chain_id,
+                    "project": project,
+                    "block_number": block_number,
+                    "block_hash": block_hash,
+                    "updated_at": datetime.now().astimezone().isoformat(),
+                },
+            ),
+        )
+
     def raw(self) -> tuple[dict[str, Any], ...]:
         return _read_jsonl(self.root / "raw_observations.jsonl")
 
@@ -32,6 +56,12 @@ class OnChainRepository:
 
     def snapshots(self) -> tuple[dict[str, Any], ...]:
         return _read_jsonl(self.root / "snapshots.jsonl")
+
+    def provider_states(self) -> tuple[dict[str, Any], ...]:
+        return _read_jsonl(self.root / "provider_status.jsonl")
+
+    def checkpoints(self) -> tuple[dict[str, Any], ...]:
+        return _read_jsonl(self.root / "checkpoints.jsonl")
 
     def _upsert(self, name: str, key: str, rows: object) -> None:
         path = self.root / name
@@ -44,7 +74,7 @@ class OnChainRepository:
                 handle.write("\n")
 
 
-def _payload(row: RawOnChainObservation | CapitalFlowRecord | CapitalFlowSnapshot) -> dict[str, Any]:
+def _payload(row: RawOnChainObservation | CapitalFlowRecord | CapitalFlowSnapshot | ProviderState) -> dict[str, Any]:
     return asdict(row)
 
 
