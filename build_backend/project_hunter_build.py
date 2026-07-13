@@ -8,6 +8,7 @@ from hatchling import build as _hatchling_build
 
 build_sdist = _hatchling_build.build_sdist
 build_wheel = _hatchling_build.build_wheel
+build_editable = _hatchling_build.build_editable
 
 
 def get_requires_for_build_sdist(config_settings: dict[str, Any] | None = None) -> list[str]:
@@ -19,12 +20,4 @@ def get_requires_for_build_wheel(config_settings: dict[str, Any] | None = None) 
 
 
 def get_requires_for_build_editable(config_settings: dict[str, Any] | None = None) -> list[str]:
-    return ["editables"]
-
-
-def build_editable(
-    wheel_directory: str,
-    config_settings: dict[str, Any] | None = None,
-    metadata_directory: str | None = None,
-) -> str:
-    return _hatchling_build.build_editable(wheel_directory, config_settings, metadata_directory)
+    return _hatchling_build.get_requires_for_build_editable(config_settings)
