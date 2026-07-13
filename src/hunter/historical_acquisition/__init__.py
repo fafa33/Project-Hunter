@@ -1,3 +1,4 @@
+from hunter.historical_acquisition.models import HistoricalEngineSnapshot
 from hunter.historical_acquisition.pipeline import HistoricalAcquisitionPipeline
 from hunter.historical_acquisition.providers import (
     CoinGeckoHistoricalProvider,
@@ -17,6 +18,7 @@ __all__ = [
     "GitHubHistoricalActivityProvider",
     "GovernanceArchiveProvider",
     "HistoricalAcquisitionPipeline",
+    "HistoricalEngineSnapshot",
     "HistoricalEvidenceRepository",
     "HistoricalRSSAnnouncementsProvider",
     "InternetArchiveSnapshotProvider",

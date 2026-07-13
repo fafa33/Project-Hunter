@@ -45,9 +45,11 @@ class HistoricalSnapshotBuilder:
         self,
         acquisition_repository: FileAcquisitionRepository | None = None,
         historical_repository: HistoricalEvidenceRepository | None = None,
+        include_live_acquisition: bool = True,
     ) -> None:
         self.acquisition_repository = acquisition_repository or FileAcquisitionRepository()
         self.historical_repository = historical_repository or HistoricalEvidenceRepository()
+        self.include_live_acquisition = include_live_acquisition
 
     def build(
         self,
@@ -89,6 +91,8 @@ class HistoricalSnapshotBuilder:
 
     def _records(self, case: HistoricalValidationCase) -> tuple[HistoricalEvidenceRecord, ...]:
         rows: list[HistoricalEvidenceRecord] = []
+        if not self.include_live_acquisition:
+            return self._historical_records(case)
         for evidence in self.acquisition_repository.normalized.values():
             if evidence.target_id != case.project_id:
                 continue
@@ -123,15 +127,26 @@ class HistoricalSnapshotBuilder:
     def _historical_records(self, case: HistoricalValidationCase) -> tuple[HistoricalEvidenceRecord, ...]:
         rows = []
         valid_ids = {item.evidence_id for item in self.historical_repository.validations() if item.status == "valid"}
+        snapshots_by_engine = {
+            item.engine: item
+            for item in self.historical_repository.snapshots(case_id=case.case_id)
+            if item.status == "AVAILABLE"
+        }
         for evidence in self.historical_repository.normalized():
             if evidence.case_id != case.case_id or evidence.evidence_id not in valid_ids:
                 continue
+            snapshot = snapshots_by_engine.get(evidence.engine)
+            source_record_ids = (evidence.raw_source_id,)
+            repository_ids = (evidence.repository_id,)
+            if snapshot is not None:
+                source_record_ids = (evidence.raw_source_id, snapshot.snapshot_id, snapshot.acquisition_id)
+                repository_ids = (evidence.repository_id, snapshot.snapshot_id)
             rows.append(
                 HistoricalEvidenceRecord(
                     source_provider=evidence.provider,
-                    source_record_ids=(evidence.raw_source_id,),
+                    source_record_ids=source_record_ids,
                     evidence_ids=(evidence.evidence_id,),
-                    repository_ids=(evidence.repository_id,),
+                    repository_ids=repository_ids,
                     event_timestamp=evidence.event_timestamp,
                     publication_timestamp=evidence.publication_timestamp,
                     ingestion_timestamp=evidence.retrieval_timestamp,

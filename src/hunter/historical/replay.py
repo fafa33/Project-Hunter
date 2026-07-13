@@ -44,7 +44,7 @@ class HistoricalPointInTimeValidationEngine:
         append_snapshots: bool = True,
     ) -> None:
         self.config = config or load_historical_validation_config()
-        self.snapshot_builder = snapshot_builder or HistoricalSnapshotBuilder()
+        self.snapshot_builder = snapshot_builder or HistoricalSnapshotBuilder(include_live_acquisition=False)
         self.repository = repository or HistoricalValidationRepository()
         self.allow_snapshot_corrections = allow_snapshot_corrections
         self.append_snapshots = append_snapshots

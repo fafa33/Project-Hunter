@@ -40,10 +40,10 @@ def test_historical_acquisition_normalizes_validates_and_persists(tmp_path) -> N
     run = HistoricalAcquisitionPipeline(repository).sync(StaticHistoricalProvider((_raw("ethereum-case"),)), (_case(),))
 
     assert run.raw_count == 1
-    assert run.normalized_count == 4
-    assert run.valid_count == 4
+    assert run.normalized_count == 5
+    assert run.valid_count == 5
     assert len(repository.raw()) == 1
-    assert len(repository.normalized()) == 4
+    assert len(repository.normalized()) == 5
     assert {item.status for item in repository.validations()} == {"valid"}
 
 
@@ -58,7 +58,7 @@ def test_future_timestamps_and_invalid_chronology_are_rejected(tmp_path) -> None
     )
 
     assert run.valid_count == 0
-    assert run.invalid_count == 8
+    assert run.invalid_count == 10
     assert {item.status for item in repository.validations()} == {"future", "invalid"}
 
 
@@ -70,10 +70,10 @@ def test_duplicate_detection_is_deterministic(tmp_path) -> None:
     first = pipeline.sync(provider, (_case(),))
     second = pipeline.sync(provider, (_case(),))
 
-    assert first.duplicate_count == 4
+    assert first.duplicate_count == 5
     assert second.normalized_count == 0
-    assert second.duplicate_count == 8
-    assert len(repository.normalized()) == 4
+    assert second.duplicate_count == 10
+    assert len(repository.normalized()) == 5
 
 
 def test_snapshot_builder_consumes_historical_repository_with_cutoff_correctness(tmp_path) -> None:
@@ -87,6 +87,7 @@ def test_snapshot_builder_consumes_historical_repository_with_cutoff_correctness
     ).build(_case())
 
     assert {record.engine for record in snapshot.evidence} == {
+        "market",
         "valuation",
         "comparative_valuation",
         "mispricing",

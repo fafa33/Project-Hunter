@@ -8,6 +8,7 @@ from typing import Any
 
 from hunter.historical_acquisition.models import (
     HistoricalAcquisitionRun,
+    HistoricalEngineSnapshot,
     HistoricalEvidenceValidation,
     NormalizedHistoricalEvidence,
     RawHistoricalEvidence,
@@ -43,6 +44,17 @@ class HistoricalEvidenceRepository:
         _write_jsonl(self.root / "runs.jsonl", (_payload(run),), append=True)
         return run
 
+    def save_snapshots(self, rows: tuple[HistoricalEngineSnapshot, ...]) -> tuple[HistoricalEngineSnapshot, ...]:
+        existing = {item.snapshot_id: item for item in self.snapshots()}
+        new_rows = []
+        for row in rows:
+            current = existing.get(row.snapshot_id)
+            if current is not None:
+                continue
+            new_rows.append(row)
+        _write_jsonl(self.root / "snapshots.jsonl", (_payload(item) for item in new_rows), append=True)
+        return tuple(new_rows)
+
     def raw(self) -> tuple[RawHistoricalEvidence, ...]:
         return tuple(_raw(item) for item in _read_jsonl(self.root / "raw.jsonl"))
 
@@ -54,6 +66,28 @@ class HistoricalEvidenceRepository:
 
     def runs(self) -> tuple[HistoricalAcquisitionRun, ...]:
         return tuple(_run(item) for item in _read_jsonl(self.root / "runs.jsonl"))
+
+    def snapshots(
+        self,
+        *,
+        project_id: str | None = None,
+        engine: str | None = None,
+        start: datetime | None = None,
+        end: datetime | None = None,
+        case_id: str | None = None,
+    ) -> tuple[HistoricalEngineSnapshot, ...]:
+        rows = tuple(_snapshot(item) for item in _read_jsonl(self.root / "snapshots.jsonl"))
+        if project_id is not None:
+            rows = tuple(item for item in rows if item.project_id == project_id)
+        if engine is not None:
+            rows = tuple(item for item in rows if item.engine == engine)
+        if case_id is not None:
+            rows = tuple(item for item in rows if item.case_id == case_id)
+        if start is not None:
+            rows = tuple(item for item in rows if item.effective_timestamp >= start)
+        if end is not None:
+            rows = tuple(item for item in rows if item.effective_timestamp <= end)
+        return tuple(sorted(rows, key=lambda item: (item.case_id, item.engine, item.effective_timestamp)))
 
 
 def _unique_normalized(
@@ -163,6 +197,30 @@ def _run(payload: dict[str, Any]) -> HistoricalAcquisitionRun:
         valid_count=int(payload["valid_count"]),
         invalid_count=int(payload["invalid_count"]),
         duplicate_count=int(payload["duplicate_count"]),
+    )
+
+
+def _snapshot(payload: dict[str, Any]) -> HistoricalEngineSnapshot:
+    return HistoricalEngineSnapshot(
+        snapshot_id=str(payload["snapshot_id"]),
+        acquisition_id=str(payload["acquisition_id"]),
+        project_id=str(payload["project_id"]),
+        case_id=str(payload["case_id"]),
+        engine=str(payload["engine"]),
+        acquisition_timestamp=_dt(payload["acquisition_timestamp"]),
+        observation_timestamp=_dt(payload["observation_timestamp"]),
+        effective_timestamp=_dt(payload["effective_timestamp"]),
+        source_id=str(payload["source_id"]),
+        provider=str(payload["provider"]),
+        provider_version=str(payload["provider_version"]),
+        historical_snapshot=dict(payload.get("historical_snapshot", {})),
+        confidence=float(payload["confidence"]),
+        freshness=float(payload["freshness"]),
+        quality=float(payload["quality"]),
+        reconstruction_confidence=float(payload["reconstruction_confidence"]),
+        missing_fields=tuple(payload.get("missing_fields", ())),
+        status=str(payload["status"]),  # type: ignore[arg-type]
+        validation_errors=tuple(payload.get("validation_errors", ())),
     )
 
 

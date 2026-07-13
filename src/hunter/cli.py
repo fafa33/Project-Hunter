@@ -441,6 +441,15 @@ def main(argv: list[str] | None = None) -> int:
     historical_sub.add_parser("calibration")
     historical_sub.add_parser("engines")
     historical_sub.add_parser("challenges")
+    historical_acquisition = sub.add_parser("historical-acquisition")
+    historical_acquisition.add_argument("--historical-config", default="configs/historical_validation.yaml")
+    historical_acquisition_sub = historical_acquisition.add_subparsers(dest="historical_acquisition_command")
+    historical_acquisition_sub.add_parser("sync")
+    historical_acquisition_sub.add_parser("coverage")
+    historical_acquisition_sub.add_parser("report")
+    historical_acquisition_sub.add_parser("validate")
+    historical_acquisition_explain = historical_acquisition_sub.add_parser("explain")
+    historical_acquisition_explain.add_argument("project", nargs="?")
     explain = sub.add_parser("explain")
     explain.add_argument("explain_args", nargs="*")
     committee = sub.add_parser("committee")
@@ -543,6 +552,8 @@ def main(argv: list[str] | None = None) -> int:
         return _timing(args)
     if args.command == "historical":
         return _historical(args)
+    if args.command == "historical-acquisition":
+        return _historical_acquisition(args)
     if args.command == "explain":
         return _explain(args)
     if args.command == "committee":
@@ -1799,14 +1810,13 @@ def _run_historical_replay(
 ):
     config = load_historical_validation_config(config_path)
     historical_repository = HistoricalEvidenceRepository()
-    HistoricalAcquisitionPipeline(historical_repository).sync(
-        ReconstructedHistoricalEvidenceProvider(),
-        tuple(config.challenge_cases),
-    )
     return HistoricalPointInTimeValidationEngine(
         config=config,
         repository=HistoricalValidationRepository(),
-        snapshot_builder=HistoricalSnapshotBuilder(historical_repository=historical_repository),
+        snapshot_builder=HistoricalSnapshotBuilder(
+            historical_repository=historical_repository,
+            include_live_acquisition=False,
+        ),
         append_snapshots=append_snapshots,
     ).run()
 
@@ -2394,6 +2404,167 @@ def _historical(args: object) -> int:
         return 0
     print("historical command required")
     return 1
+
+
+def _historical_acquisition(args: object) -> int:
+    command = getattr(args, "historical_acquisition_command", None)
+    config = load_historical_validation_config(Path(args.historical_config))
+    repository = HistoricalEvidenceRepository()
+    if command == "sync":
+        before = _historical_acquisition_coverage(repository, config)
+        runs = _historical_acquisition_sync(config, repository)
+        after = _historical_acquisition_coverage(repository, config)
+        print(
+            f"runs={len(runs)} raw={sum(run.raw_count for run in runs)}"
+            f"\tnormalized={sum(run.normalized_count for run in runs)}"
+            f"\tvalid={sum(run.valid_count for run in runs)}"
+            f"\tsnapshots={len(repository.snapshots())}"
+            f"\tcoverage_before={before:.2f}\tcoverage_after={after:.2f}"
+        )
+        return 0
+    if command == "coverage":
+        print(_historical_acquisition_coverage_report(repository, config))
+        return 0
+    if command == "report":
+        print(_historical_acquisition_report(repository, config))
+        return 0
+    if command == "explain":
+        print(_historical_acquisition_explain(repository, config, getattr(args, "project", None)))
+        return 0
+    if command == "validate":
+        violations = _historical_acquisition_violations(repository)
+        print(
+            f"snapshots={len(repository.snapshots())}\tviolations={len(violations)}"
+            f"\tresult={'PASS' if not violations else 'FAIL'}"
+        )
+        for violation in violations:
+            print(violation)
+        return 0 if not violations else 2
+    print("historical-acquisition command required")
+    return 1
+
+
+def _historical_acquisition_sync(config: Any, repository: HistoricalEvidenceRepository):
+    identifiers = load_project_identifiers()
+    pipeline = HistoricalAcquisitionPipeline(repository)
+    providers = (
+        CoinGeckoHistoricalProvider(id_map=_historical_coingecko_map(identifiers)),
+        DefiLlamaHistoricalProvider(slug_map=_historical_defillama_map(identifiers)),
+        GitHubHistoricalActivityProvider(repository_map=_historical_github_map(identifiers)),
+        HistoricalRSSAnnouncementsProvider(),
+        GovernanceArchiveProvider(space_map=_historical_governance_map()),
+        InternetArchiveSnapshotProvider(domain_map=_historical_domain_map()),
+        ReconstructedHistoricalEvidenceProvider(),
+    )
+    return tuple(pipeline.sync(provider, tuple(config.challenge_cases)) for provider in providers)
+
+
+def _historical_acquisition_coverage(repository: HistoricalEvidenceRepository, config: Any) -> float:
+    total = len(config.challenge_cases) * max(len(HISTORICAL_ACQUISITION_ENGINES), 1)
+    available = {
+        (snapshot.case_id, snapshot.engine) for snapshot in repository.snapshots() if snapshot.status == "AVAILABLE"
+    }
+    return round((len(available) / max(total, 1)) * 100.0, 2)
+
+
+HISTORICAL_ACQUISITION_ENGINES: tuple[str, ...] = (
+    "protocol",
+    "developer",
+    "news",
+    "narrative",
+    "future_demand",
+    "macro_intelligence",
+    "whale_intelligence",
+    "technology_graph",
+    "economic_graph",
+    "scenario",
+    "market",
+    "valuation",
+    "comparative_valuation",
+    "mispricing",
+    "asymmetry",
+)
+
+
+def _historical_acquisition_coverage_report(repository: HistoricalEvidenceRepository, config: Any) -> str:
+    snapshots = repository.snapshots()
+    available = tuple(item for item in snapshots if item.status == "AVAILABLE")
+    missing = len(config.challenge_cases) * len(HISTORICAL_ACQUISITION_ENGINES) - len(
+        {(item.case_id, item.engine) for item in available}
+    )
+    confidence_distribution = Counter(_confidence_bucket(item.confidence) for item in available)
+    return (
+        f"projects={len(config.challenge_cases)}\tengines={len(HISTORICAL_ACQUISITION_ENGINES)}"
+        f"\tdates={len({case.historical_cutoff_timestamp.date().isoformat() for case in config.challenge_cases})}"
+        f"\tavailable_snapshots={len(available)}\tmissing_snapshots={max(missing, 0)}"
+        f"\tcoverage={_historical_acquisition_coverage(repository, config):.2f}"
+        f"\tconfidence_distribution={','.join(f'{key}:{value}' for key, value in sorted(confidence_distribution.items())) or '-'}"
+    )
+
+
+def _historical_acquisition_report(repository: HistoricalEvidenceRepository, config: Any) -> str:
+    lines = [_historical_acquisition_coverage_report(repository, config)]
+    latest_by_case_engine = {(item.case_id, item.engine): item for item in repository.snapshots()}
+    for case in config.challenge_cases:
+        for engine in HISTORICAL_ACQUISITION_ENGINES:
+            snapshot = latest_by_case_engine.get((case.case_id, engine))
+            if snapshot is None:
+                lines.append(f"{case.case_id}\t{case.project_id}\t{engine}\tMISSING\tprovider=-\tconfidence=0.0000")
+            else:
+                lines.append(
+                    f"{case.case_id}\t{case.project_id}\t{engine}\t{snapshot.status}"
+                    f"\tprovider={snapshot.provider}\tconfidence={snapshot.confidence:.4f}"
+                    f"\tfreshness={snapshot.freshness:.4f}\tmissing={','.join(snapshot.missing_fields) or '-'}"
+                )
+    return "\n".join(lines)
+
+
+def _historical_acquisition_explain(
+    repository: HistoricalEvidenceRepository,
+    config: Any,
+    project: str | None,
+) -> str:
+    target = project or "-"
+    cases = tuple(case for case in config.challenge_cases if project in {None, case.project_id, case.project_slug})
+    lines = ["case_id\tproject\tengine\tstatus\tsnapshot_id\tacquisition_id\tprovider\teffective\tmissing"]
+    for case in cases:
+        for snapshot in repository.snapshots(case_id=case.case_id):
+            lines.append(
+                f"{case.case_id}\t{case.project_id}\t{snapshot.engine}\t{snapshot.status}"
+                f"\t{snapshot.snapshot_id}\t{snapshot.acquisition_id}\t{snapshot.provider}"
+                f"\t{snapshot.effective_timestamp.isoformat()}\t{','.join(snapshot.missing_fields) or '-'}"
+            )
+    if len(lines) == 1:
+        lines.append(f"-\t{target}\t-\tMISSING\t-\t-\t-\t-\tno historical acquisition snapshots")
+    return "\n".join(lines)
+
+
+def _historical_acquisition_violations(repository: HistoricalEvidenceRepository) -> tuple[str, ...]:
+    violations = []
+    seen: set[str] = set()
+    for snapshot in repository.snapshots():
+        if snapshot.snapshot_id in seen:
+            violations.append(f"{snapshot.snapshot_id}:duplicate_snapshot")
+        seen.add(snapshot.snapshot_id)
+        if snapshot.observation_timestamp > snapshot.effective_timestamp:
+            violations.append(f"{snapshot.snapshot_id}:observation_after_effective")
+        if snapshot.effective_timestamp > snapshot.acquisition_timestamp:
+            violations.append(f"{snapshot.snapshot_id}:effective_after_acquisition")
+        if snapshot.status == "AVAILABLE" and not snapshot.historical_snapshot:
+            violations.append(f"{snapshot.snapshot_id}:missing_payload")
+        if snapshot.status == "UNAVAILABLE" and not snapshot.missing_fields:
+            violations.append(f"{snapshot.snapshot_id}:missing_unavailable_reason")
+    return tuple(sorted(violations))
+
+
+def _confidence_bucket(value: float) -> str:
+    if value < 0.25:
+        return "0.00-0.25"
+    if value < 0.5:
+        return "0.25-0.50"
+    if value < 0.75:
+        return "0.50-0.75"
+    return "0.75-1.00"
 
 
 def _historical_coingecko_map(identifiers: dict[str, Any]) -> dict[str, str]:

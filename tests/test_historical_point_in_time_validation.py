@@ -185,6 +185,10 @@ def test_reconstructed_historical_macro_evidence_expands_point_in_time_coverage(
 
     assert run.valid_count == 1
     assert any(record.engine == "macro_intelligence" for record in snapshot.evidence)
+    assert historical_repository.snapshots(project_id="ethereum", engine="macro_intelligence")[0].status == "AVAILABLE"
+    assert (
+        historical_repository.snapshots(project_id="ethereum", engine="whale_intelligence")[0].status == "UNAVAILABLE"
+    )
     assert all(record.publication_timestamp <= record.evaluation_cutoff_timestamp for record in snapshot.evidence)
 
 

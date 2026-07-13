@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from typing import Literal
 
 HistoricalValidationStatus = Literal["valid", "invalid", "duplicate", "future", "corrupted"]
+HistoricalSnapshotStatus = Literal["AVAILABLE", "UNAVAILABLE"]
 
 
 @dataclass(frozen=True)
@@ -88,3 +89,32 @@ class HistoricalAcquisitionRun:
     def __post_init__(self) -> None:
         object.__setattr__(self, "started_at", self.started_at.astimezone(UTC))
         object.__setattr__(self, "finished_at", self.finished_at.astimezone(UTC))
+
+
+@dataclass(frozen=True)
+class HistoricalEngineSnapshot:
+    snapshot_id: str
+    acquisition_id: str
+    project_id: str
+    case_id: str
+    engine: str
+    acquisition_timestamp: datetime
+    observation_timestamp: datetime
+    effective_timestamp: datetime
+    source_id: str
+    provider: str
+    provider_version: str
+    historical_snapshot: dict[str, object]
+    confidence: float
+    freshness: float
+    quality: float
+    reconstruction_confidence: float
+    missing_fields: tuple[str, ...]
+    status: HistoricalSnapshotStatus
+    validation_errors: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        for field in ("acquisition_timestamp", "observation_timestamp", "effective_timestamp"):
+            object.__setattr__(self, field, getattr(self, field).astimezone(UTC))
+        object.__setattr__(self, "missing_fields", tuple(sorted(self.missing_fields)))
+        object.__setattr__(self, "validation_errors", tuple(sorted(self.validation_errors)))
