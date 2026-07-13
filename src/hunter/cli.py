@@ -118,9 +118,11 @@ from hunter.narrative.discovery import (
     source_coverage,
 )
 from hunter.narrative.provider import NarrativeProviderConfig
+from hunter.necessity import TechnologyNecessityEngine, TechnologyNecessityInputSet, load_technology_graph_config
 from hunter.necessity.ranking import rank_necessity_assessments
 from hunter.opportunity.ranking import rank_opportunities
 from hunter.patterns.ranking import rank_pattern_assessments
+from hunter.persistence.records import EvidenceRecord, SnapshotRecord
 from hunter.persistence.sql import SessionFactory, UnitOfWork, create_schema, create_sqlite_engine
 from hunter.probability.ranking import rank_probability_assessments
 from hunter.scenario import ScenarioRepository, ScenarioSimulationEngine, compare_scenarios
@@ -265,6 +267,16 @@ def main(argv: list[str] | None = None) -> int:
     github_sub.add_parser("resolve")
     github_sub.add_parser("unresolved")
     github_sub.add_parser("statistics")
+    developer = sub.add_parser("developer")
+    developer.add_argument("--acquisition-config", default="configs/acquisition.yaml")
+    developer.add_argument("--market-validation-config", default="configs/market_validation.yaml")
+    developer.add_argument("--project-identifiers-config", default="configs/project_identifiers.yaml")
+    developer_sub = developer.add_subparsers(dest="developer_command")
+    developer_sub.add_parser("sync")
+    developer_sub.add_parser("coverage")
+    developer_sub.add_parser("report")
+    developer_explain = developer_sub.add_parser("explain")
+    developer_explain.add_argument("project", nargs="?")
     engines = sub.add_parser("engines")
     engines.add_argument("--market-validation-config", default="configs/market_validation.yaml")
     engines_sub = engines.add_subparsers(dest="engines_command")
@@ -340,6 +352,16 @@ def main(argv: list[str] | None = None) -> int:
     graph_path.add_argument("project_b")
     graph_sub.add_parser("centrality")
     graph_sub.add_parser("critical")
+    technology = sub.add_parser("technology")
+    technology_sub = technology.add_subparsers(dest="technology_command")
+    technology_sub.add_parser("coverage")
+    technology_sub.add_parser("report")
+    technology_sub.add_parser("build")
+    technology_explain = technology_sub.add_parser("explain")
+    technology_explain.add_argument("project")
+    necessity = sub.add_parser("necessity")
+    necessity_sub = necessity.add_subparsers(dest="necessity_command")
+    necessity_sub.add_parser("coverage")
     economic = sub.add_parser("economic")
     economic_sub = economic.add_subparsers(dest="economic_command")
     economic_sub.add_parser("build")
@@ -522,6 +544,8 @@ def main(argv: list[str] | None = None) -> int:
         return _protocol(args)
     if args.command == "github":
         return _github(args)
+    if args.command == "developer":
+        return _developer(args)
     if args.command == "engines":
         return _engines(args)
     if args.command == "macro":
@@ -534,6 +558,10 @@ def main(argv: list[str] | None = None) -> int:
         return _sources(args)
     if args.command == "graph":
         return _graph(args)
+    if args.command == "technology":
+        return _technology(args)
+    if args.command == "necessity":
+        return _necessity(args)
     if args.command == "economic":
         return _economic(args)
     if args.command == "scenario":
@@ -3315,6 +3343,211 @@ def _github(args: object) -> int:
         return 0
     print("github command required")
     return 1
+
+
+def _developer(args: object) -> int:
+    command = getattr(args, "developer_command", None)
+    if command == "sync":
+        args.github_command = "sync"
+        return _github(args)
+    repository = FileAcquisitionRepository()
+    targets = _github_universe_targets(args)
+    latest = _latest_github_evidence(repository)
+    identifiers = load_project_identifiers(Path(args.project_identifiers_config))
+    stats = _developer_coverage_stats(targets, latest, identifiers)
+    if command == "coverage":
+        print(
+            f"projects={len(targets)} covered={stats['covered']} live_repositories={stats['live_repositories']} "
+            f"missing={stats['missing']} coverage={stats['coverage']:.2f} "
+            f"live_repository_coverage={stats['live_repository_coverage']:.2f} "
+            f"commit_coverage={stats['commit_coverage']:.2f} "
+            f"contributor_coverage={stats['contributor_coverage']:.2f} release_coverage={stats['release_coverage']:.2f}"
+        )
+        return 0
+    if command in {"report", "explain"}:
+        project_filter = getattr(args, "project", None)
+        for project_id in targets:
+            if command == "explain" and project_filter and project_id != project_filter:
+                continue
+            evidence = latest.get(project_id)
+            identifier = identifiers.get(project_id)
+            configured = tuple(identifier.github_repositories) if identifier is not None else ()
+            status = (
+                "AVAILABLE"
+                if evidence is not None
+                else "NO_PUBLIC_REPOSITORY" if not configured else "NO_LIVE_EVIDENCE"
+            )
+            payload = evidence.raw_metrics if evidence is not None else {}
+            repositories = (
+                (str(payload.get("full_name") or payload.get("repository_name")),) if evidence else configured
+            )
+            print(
+                f"{project_id}\t{status}\trepository={','.join(repo for repo in repositories if repo) or 'NO_PUBLIC_REPOSITORY'}"
+                f"\torganization={payload.get('owner') or _repository_owner(configured)}"
+                f"\tcontributors={payload.get('contributors_count', 'unavailable')}"
+                f"\tcommits={payload.get('commit_count', 'unavailable')}"
+                f"\tcommits_30d={payload.get('commits_30d', 'unavailable')}"
+                f"\tcommits_90d={payload.get('commits_90d', 'unavailable')}"
+                f"\treleases={payload.get('releases', 'unavailable')}"
+                f"\tissues_open={payload.get('open_issues', 'unavailable')}"
+                f"\tissues_closed={payload.get('closed_issues', 'unavailable')}"
+                f"\tconfidence={evidence.confidence if evidence is not None else 0.0:.4f}"
+                f"\tfreshness={evidence.freshness if evidence is not None else 0.0:.4f}"
+                f"\tevidence={evidence.evidence_id if evidence is not None else '-'}"
+            )
+        return 0
+    print("developer command required")
+    return 1
+
+
+def _technology(args: object) -> int:
+    command = getattr(args, "technology_command", None)
+    if command == "build":
+        args.graph_command = "build"
+        return _graph(args)
+    if command in {"coverage", "report", "explain"}:
+        args.graph_command = command
+        return _graph(args)
+    print("technology command required")
+    return 1
+
+
+def _necessity(args: object) -> int:
+    command = getattr(args, "necessity_command", None)
+    if command != "coverage":
+        print("necessity command required")
+        return 1
+    assessments = _persisted_necessity_assessments()
+    project_count = len(load_market_validation_config().project_universe)
+    available = sum(1 for item in assessments if item.source_record_ids)
+    coverage = round((available / max(project_count, 1)) * 100.0, 2)
+    missing = tuple(item.technology_id for item in assessments if not item.source_record_ids)
+    print(
+        f"projects={project_count} available={available} insufficient={project_count - available} "
+        f"coverage={coverage:.2f} missing={','.join(missing) or '-'}"
+    )
+    return 0
+
+
+def _latest_github_evidence(repository: FileAcquisitionRepository) -> dict[str, NormalizedEvidence]:
+    valid_ids = {evidence_id for evidence_id, item in repository.validations.items() if item.status == "valid"}
+    latest: dict[str, NormalizedEvidence] = {}
+    for evidence in repository.normalized.values():
+        if (
+            evidence.provider != "github"
+            or evidence.metric != "github_repository_profile"
+            or evidence.evidence_id not in valid_ids
+        ):
+            continue
+        current = latest.get(evidence.target_id)
+        if current is None or evidence.retrieved_at > current.retrieved_at:
+            latest[evidence.target_id] = evidence
+    return latest
+
+
+def _developer_coverage_stats(
+    targets: tuple[str, ...],
+    latest: dict[str, NormalizedEvidence],
+    identifiers: dict[str, Any],
+) -> dict[str, float | int]:
+    universe = max(len(targets), 1)
+    covered = {
+        project
+        for project in targets
+        if project in latest
+        or (
+            (identifier := identifiers.get(project)) is not None
+            and (identifier.github_repositories or identifier.github_unsupported)
+        )
+    }
+    commit_targets = {project for project, item in latest.items() if item.raw_metrics.get("commit_count")}
+    contributor_targets = {project for project, item in latest.items() if item.raw_metrics.get("contributors_count")}
+    release_targets = {project for project, item in latest.items() if item.raw_metrics.get("releases")}
+    return {
+        "covered": len(covered),
+        "live_repositories": len(set(targets) & set(latest)),
+        "missing": len(set(targets) - covered),
+        "coverage": round((len(covered) / universe) * 100, 2),
+        "live_repository_coverage": round((len(set(targets) & set(latest)) / universe) * 100, 2),
+        "commit_coverage": round((len(commit_targets & set(targets)) / universe) * 100, 2),
+        "contributor_coverage": round((len(contributor_targets & set(targets)) / universe) * 100, 2),
+        "release_coverage": round((len(release_targets & set(targets)) / universe) * 100, 2),
+    }
+
+
+def _repository_owner(repositories: tuple[str, ...]) -> str:
+    if not repositories:
+        return "unavailable"
+    return repositories[0].split("/", 1)[0]
+
+
+def _persisted_necessity_assessments():
+    graph = TechnologyGraphRepository().graph()
+    graph_metrics = {item.project_id: item for item in graph.metrics}
+    acquisition_repository = FileAcquisitionRepository()
+    latest: dict[str, NormalizedEvidence] = {}
+    valid_ids = {
+        evidence_id for evidence_id, item in acquisition_repository.validations.items() if item.status == "valid"
+    }
+    for evidence in acquisition_repository.normalized.values():
+        if evidence.evidence_id not in valid_ids:
+            continue
+        current = latest.get(evidence.target_id)
+        if current is None or evidence.retrieved_at > current.retrieved_at:
+            latest[evidence.target_id] = evidence
+    config = load_market_validation_config()
+    graph_config = load_technology_graph_config("configs/technology_graph.yaml")
+    engine = TechnologyNecessityEngine(graph_config=graph_config)
+    assessments = []
+    for target in config.project_universe:
+        evidence = latest.get(target.project_id)
+        metric = graph_metrics.get(target.project_id)
+        if evidence is None:
+            inputs = TechnologyNecessityInputSet(technology_id=target.project_id, effective_at=config.effective_at)
+        else:
+            records = (_evidence_record(evidence),)
+            snapshots = (_necessity_snapshot(target.project_id, evidence, metric),) if metric is not None else ()
+            inputs = TechnologyNecessityInputSet(
+                technology_id=target.project_id,
+                effective_at=config.effective_at,
+                evidence=records,
+                snapshots=snapshots,
+            )
+        assessments.append(engine.assess(inputs))
+    return tuple(assessments)
+
+
+def _evidence_record(evidence: NormalizedEvidence) -> EvidenceRecord:
+    return EvidenceRecord(
+        id=evidence.evidence_id,
+        created_at=evidence.normalized_at,
+        effective_at=evidence.retrieved_at,
+        pipeline_run_id="acquisition",
+        source=evidence.provider,
+        reference=evidence.source_url,
+        collected_at=evidence.retrieved_at,
+        reliability=evidence.confidence,
+        freshness=evidence.freshness,
+        raw_data=dict(evidence.raw_metrics),
+    )
+
+
+def _necessity_snapshot(project_id: str, evidence: NormalizedEvidence, metric: Any) -> SnapshotRecord:
+    return SnapshotRecord(
+        id=f"technology-necessity-snapshot-{project_id}-{evidence.evidence_id}",
+        created_at=evidence.normalized_at,
+        effective_at=evidence.retrieved_at,
+        snapshot_type="technology-necessity-input",
+        target_id=project_id,
+        record_ids=(evidence.evidence_id,),
+        payload={
+            "infrastructure_criticality": metric.infrastructure_centrality,
+            "dependency_strength": metric.dependency_centrality,
+            "replacement_difficulty": metric.replacement_availability,
+            "technology_maturity": evidence.confidence,
+            "market_awareness": evidence.freshness,
+        },
+    )
 
 
 def _coingecko_sources(repository: FileAcquisitionRepository) -> dict[str, tuple[EngineValidationSource, ...]]:

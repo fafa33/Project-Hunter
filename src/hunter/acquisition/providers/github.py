@@ -263,7 +263,14 @@ class GitHubProvider:
         page: int,
     ) -> dict[str, Any]:
         repo_cache = response_cache.get(repository.lower(), {})
-        repo_response = self._request(f"/repos/{repository}", etag=_etag(repo_cache, "repo"))
+        try:
+            repo_response = self._request(f"/repos/{repository}", etag=_etag(repo_cache, "repo"))
+        except ProviderUnavailableError:
+            cached_payload = repo_cache.get("payload")
+            if isinstance(cached_payload, dict):
+                self.statistics.etag_reused_count += 1
+                return dict(cached_payload)
+            raise
         if repo_response.not_modified:
             cached_payload = repo_cache.get("payload")
             if isinstance(cached_payload, dict):

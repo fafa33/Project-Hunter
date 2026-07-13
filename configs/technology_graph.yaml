@@ -52,3 +52,62 @@ dependencies:
     to: IoT
   - from: Data Availability
     to: Settlement
+
+project_dependencies:
+  - from: arbitrum
+    to: ethereum
+    type: runtime
+  - from: optimism
+    to: ethereum
+    type: runtime
+  - from: polygon
+    to: ethereum
+    type: interoperability
+  - from: starknet
+    to: ethereum
+    type: settlement
+  - from: zksync
+    to: ethereum
+    type: settlement
+  - from: scroll
+    to: ethereum
+    type: settlement
+  - from: mantle
+    to: ethereum
+    type: settlement
+  - from: worldcoin
+    to: ethereum
+    type: settlement
+  - from: ens
+    to: ethereum
+    type: runtime
+  - from: safe
+    to: ethereum
+    type: runtime
+  - from: the-graph
+    to: ethereum
+    type: indexing
+  - from: livepeer
+    to: ethereum
+    type: settlement
+  - from: render
+    to: solana
+    type: runtime
+  - from: hivemapper
+    to: solana
+    type: runtime
+  - from: stacks
+    to: bitcoin
+    type: settlement
+  - from: ordinals
+    to: bitcoin
+    type: runtime
+  - from: injective
+    to: cosmos
+    type: runtime
+  - from: akash
+    to: cosmos
+    type: runtime
+  - from: celestia
+    to: cosmos
+    type: infrastructure

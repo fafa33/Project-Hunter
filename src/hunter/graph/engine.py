@@ -4,6 +4,9 @@ import json
 import re
 from collections import defaultdict, deque
 from datetime import UTC, datetime
+from pathlib import Path
+
+import yaml
 
 from hunter.acquisition.models import NormalizedEvidence
 from hunter.acquisition.repositories import FileAcquisitionRepository, InMemoryAcquisitionRepository
@@ -48,6 +51,7 @@ class TechnologyDependencyGraphEngine:
         raw_edges = tuple(
             _edge for target in targets for _edge in _edges_for_project(target, targets, latest, timestamp)
         )
+        raw_edges += tuple(edge for edge in _configured_project_edges(targets, latest, timestamp))
         edges, rejected = _validate_edges(raw_edges)
         metrics = _metrics(nodes, edges)
         graph = TechnologyGraph(
@@ -149,6 +153,74 @@ def _edges_for_project(
                 )
             )
     return tuple(edges)
+
+
+def _configured_project_edges(
+    targets: tuple[ProjectValidationTarget, ...],
+    latest: dict[str, tuple[NormalizedEvidence, ...]],
+    timestamp: datetime,
+) -> tuple[TechnologyEdge, ...]:
+    target_by_id = {target.project_id: target for target in targets}
+    rows = []
+    for dependency in _configured_project_dependencies():
+        source_id = dependency.get("from", "")
+        target_id = dependency.get("to", "")
+        if source_id not in target_by_id or target_id not in target_by_id:
+            continue
+        source_evidence = latest.get(source_id, ())
+        target_evidence = latest.get(target_id, ())
+        if not source_evidence or not target_evidence:
+            continue
+        evidence = (*source_evidence, *target_evidence)
+        target = target_by_id[target_id]
+        rows.append(
+            TechnologyEdge(
+                source_project=source_id,
+                target_project=target_id,
+                dependency_type=_configured_dependency_type(dependency.get("type", "infrastructure")),
+                strength=_mean(tuple(item.confidence for item in evidence)),
+                criticality=_criticality(target.sector),
+                replacement_difficulty=_replacement_difficulty(target.sector),
+                switching_cost=_switching_cost(target.sector),
+                dependency_confidence=_mean(tuple(item.confidence for item in evidence)),
+                evidence_ids=tuple(sorted({item.evidence_id for item in evidence})),
+                repository_ids=tuple(sorted({item.repository_id for item in evidence})),
+                discovery_timestamp=timestamp,
+                validation_timestamp=timestamp,
+                freshness=_mean(tuple(item.freshness for item in evidence)),
+                validation_status="VALID",
+                reason="configured public technology dependency backed by persisted source and target evidence",
+            )
+        )
+    return tuple(rows)
+
+
+def _configured_project_dependencies() -> tuple[dict[str, str], ...]:
+    config_path = Path("configs/technology_graph.yaml")
+    if not config_path.exists():
+        return ()
+    raw = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    dependencies = raw.get("project_dependencies", ())
+    if not isinstance(dependencies, list):
+        return ()
+    rows = []
+    for item in dependencies:
+        if not isinstance(item, dict):
+            continue
+        source = str(item.get("from", "")).strip()
+        target = str(item.get("to", "")).strip()
+        if not source or not target:
+            continue
+        rows.append({"from": source, "to": target, "type": str(item.get("type", "infrastructure"))})
+    return tuple(rows)
+
+
+def _configured_dependency_type(value: str) -> DependencyType:
+    if value in {"runtime", "security", "governance", "development", "infrastructure"}:
+        return value  # type: ignore[return-value]
+    if value in {"settlement", "indexing", "interoperability"}:
+        return "infrastructure"
+    return "infrastructure"
 
 
 def _validate_edges(edges: tuple[TechnologyEdge, ...]) -> tuple[tuple[TechnologyEdge, ...], int]:
