@@ -87,6 +87,7 @@ from hunter.historical_acquisition import (
     HistoricalEvidenceRepository,
     HistoricalRSSAnnouncementsProvider,
     InternetArchiveSnapshotProvider,
+    ReconstructedHistoricalEvidenceProvider,
     future_provider_metadata,
 )
 from hunter.macro import MacroIntelligenceEvidenceEngine, MacroProviderRegistry, MacroRepository, load_macro_config
@@ -373,6 +374,17 @@ def main(argv: list[str] | None = None) -> int:
     calibration_sub.add_parser("report")
     calibration_sub.add_parser("coverage")
     calibration_sub.add_parser("engines")
+    replay = sub.add_parser("replay")
+    replay.add_argument("--historical-config", default="configs/historical_validation.yaml")
+    replay_sub = replay.add_subparsers(dest="replay_command")
+    replay_sub.add_parser("report")
+    replay_compare = replay_sub.add_parser("compare")
+    replay_compare.add_argument("run_a", nargs="?")
+    replay_compare.add_argument("run_b", nargs="?")
+    replay_explain = replay_sub.add_parser("explain")
+    replay_explain.add_argument("case_id", nargs="?")
+    benchmark = sub.add_parser("benchmark")
+    benchmark.add_argument("--historical-config", default="configs/historical_validation.yaml")
     weights = sub.add_parser("weights")
     weights.add_argument("--weights-config", default="configs/weights.yaml")
     weights_sub = weights.add_subparsers(dest="weights_command")
@@ -521,6 +533,10 @@ def main(argv: list[str] | None = None) -> int:
         return _backtest(args)
     if args.command == "calibration":
         return _calibration(args)
+    if args.command == "replay":
+        return _replay(args)
+    if args.command == "benchmark":
+        return _benchmark(args)
     if args.command == "weights":
         return _weights(args)
     if args.command == "timing":
@@ -1681,6 +1697,13 @@ def _backtest(args: object) -> int:
 
 def _calibration(args: object) -> int:
     command = getattr(args, "calibration_command", None)
+    if command is None:
+        try:
+            run = _run_historical_replay(append_snapshots=False)
+        except ValueError:
+            run = _run_historical_replay(append_snapshots=False)
+        print(HistoricalValidationRenderer().render_calibration(run))
+        return 0
     runs = BacktestRepository().runs()
     latest = runs[-1] if runs else None
     if latest is None:
@@ -1713,6 +1736,79 @@ def _calibration(args: object) -> int:
         return 0
     print("calibration command required")
     return 1
+
+
+def _replay(args: object) -> int:
+    command = getattr(args, "replay_command", None)
+    renderer = HistoricalValidationRenderer()
+    if command in {None, "report", "explain"}:
+        try:
+            run = _run_historical_replay(
+                config_path=Path(getattr(args, "historical_config", "configs/historical_validation.yaml")),
+                append_snapshots=command is None,
+            )
+        except ValueError as error:
+            if "immutable historical snapshots already exist" not in str(error):
+                raise
+            run = _run_historical_replay(
+                config_path=Path(getattr(args, "historical_config", "configs/historical_validation.yaml")),
+                append_snapshots=False,
+            )
+        if command is None:
+            HistoricalValidationRenderer().write_reports(run)
+            print(
+                f"{run.run_id}\tcases={len(run.cases)}\tcoverage={run.historical_coverage:.2f}"
+                f"\tleakage={'PASS' if run.leakage_passed else 'FAIL'}"
+                f"\tsurvivorship={'PASS' if run.survivorship_passed else 'FAIL'}"
+                f"\tsample_size={run.sample_size_status}"
+            )
+            return 0
+        if command == "report":
+            print(renderer.render_markdown(run))
+            return 0
+        print(renderer.render_explanation(run, getattr(args, "case_id", None)))
+        return 0
+    if command == "compare":
+        left = _run_historical_replay(
+            config_path=Path(getattr(args, "historical_config", "configs/historical_validation.yaml")),
+            append_snapshots=False,
+        )
+        right = _run_historical_replay(
+            config_path=Path(getattr(args, "historical_config", "configs/historical_validation.yaml")),
+            append_snapshots=False,
+        )
+        print(renderer.render_comparison(left, right))
+        return 0
+    print("replay command required")
+    return 1
+
+
+def _benchmark(args: object) -> int:
+    run = _run_historical_replay(
+        config_path=Path(getattr(args, "historical_config", "configs/historical_validation.yaml")),
+        append_snapshots=False,
+    )
+    print(HistoricalValidationRenderer().render_benchmarks(run))
+    return 0
+
+
+def _run_historical_replay(
+    *,
+    config_path: Path = Path("configs/historical_validation.yaml"),
+    append_snapshots: bool,
+):
+    config = load_historical_validation_config(config_path)
+    historical_repository = HistoricalEvidenceRepository()
+    HistoricalAcquisitionPipeline(historical_repository).sync(
+        ReconstructedHistoricalEvidenceProvider(),
+        tuple(config.challenge_cases),
+    )
+    return HistoricalPointInTimeValidationEngine(
+        config=config,
+        repository=HistoricalValidationRepository(),
+        snapshot_builder=HistoricalSnapshotBuilder(historical_repository=historical_repository),
+        append_snapshots=append_snapshots,
+    ).run()
 
 
 def _weights(args: object) -> int:
@@ -2499,7 +2595,7 @@ def _historical_gap_rows(config: Any) -> tuple[dict[str, str], ...]:
     return tuple(rows)
 
 
-def _latest_snapshots_by_case(repository: HistoricalValidationRepository) -> dict[str, Any]:
+def _latest_snapshots_by_case(repository: Any) -> dict[str, Any]:
     snapshots: dict[str, Any] = {}
     for snapshot in repository.snapshots():
         current = snapshots.get(snapshot.case_id)

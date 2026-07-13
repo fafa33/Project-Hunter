@@ -12,10 +12,16 @@ from hunter.historical.configuration import HistoricalValidationConfig
 from hunter.historical.cutoff import evidence_is_cutoff_eligible, reject_future_evidence
 from hunter.historical.models import HistoricalValidationCase
 from hunter.historical.outcomes import build_outcome, maximum_drawdown
+from hunter.historical.performance import performance_metrics
 from hunter.historical.replay import HistoricalPointInTimeValidationEngine
 from hunter.historical.repository import HistoricalValidationRepository
 from hunter.historical.snapshot_builder import HistoricalSnapshotBuilder
 from hunter.historical.validation import calibration_metric
+from hunter.historical_acquisition.pipeline import HistoricalAcquisitionPipeline
+from hunter.historical_acquisition.providers import ReconstructedHistoricalEvidenceProvider
+from hunter.historical_acquisition.repository import HistoricalEvidenceRepository
+from hunter.macro.models import MacroEvidence, MacroMetric
+from hunter.macro.repository import MacroRepository
 
 NOW = datetime(2020, 1, 1, tzinfo=UTC)
 
@@ -113,6 +119,73 @@ def test_historical_replay_committee_no_candidate_metrics_and_repository_boundar
     assert calibration.sample_size_status == "INSUFFICIENT_SAMPLE_SIZE"
     assert run.leakage_passed
     assert run.historical_coverage > 0
+    assert run.decision_outcomes[0].decision_date == NOW
+    assert run.explanations[0].historical_evidence_ids == ("past", "past", "past", "past", "past")
+    assert run.performance_metrics is not None
+
+
+def test_historical_replay_rejects_future_snapshot_evidence(tmp_path) -> None:
+    repository = FileAcquisitionRepository(tmp_path / "acquisition")
+    repository.save_normalized(
+        (_evidence("future", "ethereum", "2020-02-01T00:00:00+00:00", "2019-12-02T00:00:00+00:00"),)
+    )
+    repository.save_validations((_validation("future"),))
+    config = _config((_case("ethereum-case", "ethereum", "EARLY_WINNER"),))
+
+    run = HistoricalPointInTimeValidationEngine(
+        config=config,
+        snapshot_builder=HistoricalSnapshotBuilder(repository),
+        repository=HistoricalValidationRepository(tmp_path / "historical"),
+    ).run(as_of=NOW)
+
+    assert run.snapshots[0].evidence == ()
+
+
+def test_performance_metrics_are_deterministic_and_complete() -> None:
+    case = _case("winner", "ethereum", "EARLY_WINNER")
+    challenge = _challenge_result(case)
+    metrics = performance_metrics((challenge,))
+
+    assert metrics.accuracy == 1.0
+    assert metrics.precision == 1.0
+    assert metrics.recall == 1.0
+    assert metrics.f1 == 1.0
+    assert metrics.win_rate == 1.0
+    assert metrics.sample_count == 1
+
+
+def test_reconstructed_historical_macro_evidence_expands_point_in_time_coverage(tmp_path) -> None:
+    macro_repository = MacroRepository(tmp_path / "macro")
+    macro_repository.save_evidence(
+        (
+            MacroEvidence(
+                evidence_id="macro-2019",
+                repository_id="macro-repo-2019",
+                metric=MacroMetric(
+                    name="liquidity",
+                    provider="public-macro-fixture",
+                    source_url="https://example.test/macro",
+                    timestamp=datetime(2019, 12, 1, tzinfo=UTC),
+                    value=0.8,
+                    raw_payload={"liquidity": 0.8},
+                ),
+                normalized_value=0.8,
+                validation_status="VALID",
+            ),
+        )
+    )
+    historical_repository = HistoricalEvidenceRepository(tmp_path / "historical-evidence")
+    run = HistoricalAcquisitionPipeline(historical_repository).sync(
+        ReconstructedHistoricalEvidenceProvider(macro_repository=macro_repository),
+        (_case("ethereum-case", "ethereum", "EARLY_WINNER"),),
+    )
+    snapshot = HistoricalSnapshotBuilder(historical_repository=historical_repository).build(
+        _case("ethereum-case", "ethereum", "EARLY_WINNER")
+    )
+
+    assert run.valid_count == 1
+    assert any(record.engine == "macro_intelligence" for record in snapshot.evidence)
+    assert all(record.publication_timestamp <= record.evaluation_cutoff_timestamp for record in snapshot.evidence)
 
 
 def _case(
@@ -179,3 +252,31 @@ def _evidence(evidence_id: str, project_id: str, publication: str, retrieved: st
 
 def _validation(evidence_id: str) -> EvidenceValidation:
     return EvidenceValidation(evidence_id=evidence_id, status="valid", validated_at=NOW, confidence=1.0, freshness=1.0)
+
+
+def _challenge_result(case: HistoricalValidationCase):
+    from hunter.historical.models import HistoricalChallengeResult
+
+    return HistoricalChallengeResult(
+        case_id=case.case_id,
+        project_id=case.project_id,
+        evaluation_timestamp=case.evaluation_timestamp,
+        historical_cutoff_timestamp=case.historical_cutoff_timestamp,
+        hunter_decision="QUALIFIED_CANDIDATE",
+        historical_rank=1,
+        committee_decision="QUALIFIED_CANDIDATE",
+        probability=0.9,
+        opportunity=0.8,
+        risk=0.2,
+        positive_drivers=("valuation",),
+        negative_drivers=(),
+        warning_signals=(),
+        realized_outcome="MAJOR_WINNER",
+        benchmark_outcome="bitcoin",
+        excess_return=1.2,
+        maximum_drawdown=-0.1,
+        was_hunter_correct="YES",
+        correctness_reason="matched outcome",
+        leakage_validation="PASS",
+        survivorship_validation="PASS",
+    )

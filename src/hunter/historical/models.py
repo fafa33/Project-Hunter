@@ -191,6 +191,11 @@ class HistoricalBenchmarkOutcome:
     percentile_outcome: float | None
     rank_improvement: int | None
     rank_deterioration: int | None
+    coverage_percentage: float = 0.0
+    missing_evidence_categories: tuple[str, ...] = ()
+    reconstruction_confidence: float = 0.0
+    historical_completeness: float = 0.0
+    evidence_freshness: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -225,6 +230,81 @@ class HistoricalCalibrationMetric:
     calibration_error: float | str
     reliability_buckets: tuple[tuple[str, int, float | str], ...]
     sample_size_status: str
+    expected_probability: float | str = "INSUFFICIENT_SAMPLE_SIZE"
+    observed_probability: float | str = "INSUFFICIENT_SAMPLE_SIZE"
+    reliability_curve: tuple[tuple[str, float | str, float | str, int], ...] = ()
+    confidence_distribution: tuple[tuple[str, int], ...] = ()
+
+
+@dataclass(frozen=True)
+class HistoricalDecisionOutcomeRecord:
+    case_id: str
+    project_id: str
+    decision_date: datetime
+    hunter_score: float
+    timing: float
+    committee_decision: str
+    confidence: float
+    freshness: float
+    price: float | None
+    market_cap: float | None
+    fdv: float | None
+    tvl: float | None
+    developer_activity: float | None
+    narrative_state: str
+    macro_state: str
+    whale_state: str
+    technology_graph: str
+    economic_graph: str
+    scenario_state: str
+    final_outcome: SuccessLabel
+    source_evidence_ids: tuple[str, ...]
+    source_repository_ids: tuple[str, ...]
+    leakage_status: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "decision_date", self.decision_date.astimezone(UTC))
+
+
+@dataclass(frozen=True)
+class HistoricalPerformanceMetrics:
+    metric_id: str
+    accuracy: float | str
+    precision: float | str
+    recall: float | str
+    f1: float | str
+    roc_auc: float | str
+    maximum_drawdown: float | str
+    annualized_return: float | str
+    sharpe_ratio: float | str
+    sortino_ratio: float | str
+    win_rate: float | str
+    average_return: float | str
+    median_return: float | str
+    best_trade: float | str
+    worst_trade: float | str
+    hit_rate: float | str
+    time_to_target: float | str
+    false_positive_rate: float | str
+    false_negative_rate: float | str
+    sample_count: int
+
+
+@dataclass(frozen=True)
+class HistoricalReplayExplanation:
+    case_id: str
+    project_id: str
+    decision: str
+    decision_reason: str
+    positive_drivers: tuple[str, ...]
+    negative_drivers: tuple[str, ...]
+    existing_evidence_ids: tuple[str, ...]
+    reconstructed_evidence_ids: tuple[str, ...]
+    historical_evidence_ids: tuple[str, ...]
+    historical_repository_ids: tuple[str, ...]
+    unavailable_evidence: tuple[str, ...]
+    unavailable_reason: str
+    leakage_status: str
 
 
 @dataclass(frozen=True)
@@ -275,6 +355,9 @@ class HistoricalBacktestRun:
     leakage_passed: bool
     survivorship_passed: bool
     sample_size_status: str
+    decision_outcomes: tuple[HistoricalDecisionOutcomeRecord, ...] = ()
+    performance_metrics: HistoricalPerformanceMetrics | None = None
+    explanations: tuple[HistoricalReplayExplanation, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "generated_at", self.generated_at.astimezone(UTC))

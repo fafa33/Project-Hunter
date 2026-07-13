@@ -1,6 +1,14 @@
+{"case_id": "bitcoin-cycle-base-2015", "leakage_passed": true, "survivorship_passed": true, "violations": []}
 {"case_id": "ethereum-early-stage-2016", "leakage_passed": true, "survivorship_passed": true, "violations": []}
+{"case_id": "maker-defi-base-2020", "leakage_passed": true, "survivorship_passed": true, "violations": []}
+{"case_id": "aave-defi-expansion-2020", "leakage_passed": true, "survivorship_passed": true, "violations": []}
+{"case_id": "uniswap-defi-expansion-2020", "leakage_passed": true, "survivorship_passed": true, "violations": []}
 {"case_id": "chainlink-pre-expansion-2019", "leakage_passed": true, "survivorship_passed": true, "violations": []}
+{"case_id": "lido-liquid-staking-2021", "leakage_passed": true, "survivorship_passed": true, "violations": []}
+{"case_id": "api3-oracle-expansion-2021", "leakage_passed": true, "survivorship_passed": true, "violations": []}
 {"case_id": "solana-early-stage-2020", "leakage_passed": true, "survivorship_passed": true, "violations": []}
+{"case_id": "sui-mainnet-2023", "leakage_passed": true, "survivorship_passed": true, "violations": []}
+{"case_id": "arbitrum-airdrop-2023", "leakage_passed": true, "survivorship_passed": true, "violations": []}
 {"case_id": "render-early-stage-2022", "leakage_passed": true, "survivorship_passed": true, "violations": []}
 {"case_id": "bittensor-early-stage-2023", "leakage_passed": true, "survivorship_passed": true, "violations": []}
 {"case_id": "terra-pre-collapse-2022", "leakage_passed": true, "survivorship_passed": true, "violations": []}

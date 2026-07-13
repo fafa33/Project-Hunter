@@ -21,6 +21,7 @@ def calibration_metric(
         and output.status == "AVAILABLE"
         and output.evidence_ids
     )
+    distribution = _confidence_distribution(tuple(output for output, _ in samples))
     if len(samples) < minimum_sample_size:
         return HistoricalCalibrationMetric(
             metric_id="historical-calibration",
@@ -28,22 +29,24 @@ def calibration_metric(
             calibration_error="INSUFFICIENT_SAMPLE_SIZE",
             reliability_buckets=(("INSUFFICIENT_SAMPLE_SIZE", len(samples), "INSUFFICIENT_SAMPLE_SIZE"),),
             sample_size_status="INSUFFICIENT_SAMPLE_SIZE",
+            confidence_distribution=distribution,
         )
     brier = sum((sample[0].confidence - float(sample[1])) ** 2 for sample in samples) / len(samples)
+    expected = sum(sample[0].confidence for sample in samples) / len(samples)
+    observed = sum(float(sample[1]) for sample in samples) / len(samples)
+    buckets = _reliability_curve(samples)
     return HistoricalCalibrationMetric(
         metric_id="historical-calibration",
         brier_score=round(brier, 6),
-        calibration_error=round(
-            abs(
-                sum(sample[0].confidence for sample in samples) / len(samples)
-                - sum(float(sample[1]) for sample in samples) / len(samples)
-            ),
-            6,
-        ),
-        reliability_buckets=(
-            ("all", len(samples), round(sum(float(sample[1]) for sample in samples) / len(samples), 6)),
+        calibration_error=round(abs(expected - observed), 6),
+        reliability_buckets=tuple(
+            (label, count, observed_probability) for label, _, observed_probability, count in buckets
         ),
         sample_size_status="OK",
+        expected_probability=round(expected, 6),
+        observed_probability=round(observed, 6),
+        reliability_curve=buckets,
+        confidence_distribution=distribution,
     )
 
 
@@ -92,3 +95,39 @@ def _rate(numerator: tuple[object, ...], denominator: tuple[object, ...]) -> flo
     if not denominator:
         return "INSUFFICIENT_SAMPLE_SIZE"
     return round((len(numerator) / len(denominator)) * 100.0, 2)
+
+
+def _confidence_distribution(outputs: tuple[HistoricalEngineOutput, ...]) -> tuple[tuple[str, int], ...]:
+    buckets = {"0.00-0.25": 0, "0.25-0.50": 0, "0.50-0.75": 0, "0.75-1.00": 0}
+    for output in outputs:
+        confidence = max(0.0, min(1.0, output.confidence))
+        if confidence < 0.25:
+            buckets["0.00-0.25"] += 1
+        elif confidence < 0.5:
+            buckets["0.25-0.50"] += 1
+        elif confidence < 0.75:
+            buckets["0.50-0.75"] += 1
+        else:
+            buckets["0.75-1.00"] += 1
+    return tuple(buckets.items())
+
+
+def _reliability_curve(
+    samples: tuple[tuple[HistoricalEngineOutput, bool], ...],
+) -> tuple[tuple[str, float | str, float | str, int], ...]:
+    rows = []
+    ranges = (
+        ("0.00-0.25", 0.0, 0.25),
+        ("0.25-0.50", 0.25, 0.5),
+        ("0.50-0.75", 0.5, 0.75),
+        ("0.75-1.00", 0.75, 1.000001),
+    )
+    for label, lower, upper in ranges:
+        bucket = tuple(sample for sample in samples if lower <= sample[0].confidence < upper)
+        if not bucket:
+            rows.append((label, "INSUFFICIENT_SAMPLE_SIZE", "INSUFFICIENT_SAMPLE_SIZE", 0))
+            continue
+        expected = sum(sample[0].confidence for sample in bucket) / len(bucket)
+        observed = sum(float(sample[1]) for sample in bucket) / len(bucket)
+        rows.append((label, round(expected, 6), round(observed, 6), len(bucket)))
+    return tuple(rows)

@@ -19,6 +19,11 @@ ENGINE_BY_METRIC = {
     "historical_narrative": ("news", "narrative", "future_demand"),
     "historical_governance": ("governance", "tokenomics"),
     "historical_archive_presence": ("narrative", "evidence_provenance"),
+    "historical_macro": ("macro_intelligence",),
+    "historical_whale": ("whale_intelligence",),
+    "historical_technology_graph": ("technology_graph",),
+    "historical_economic_graph": ("economic_graph",),
+    "historical_scenario": ("scenario",),
 }
 
 

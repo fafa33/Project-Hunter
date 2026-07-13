@@ -1,6 +1,14 @@
+{"case_id": "bitcoin-cycle-base-2015", "champion_project_id": null, "committee_confidence": 0.0, "committee_decision": "INSUFFICIENT_EVIDENCE", "no_qualified_candidate": true}
 {"case_id": "ethereum-early-stage-2016", "champion_project_id": null, "committee_confidence": 1.0, "committee_decision": "INSUFFICIENT_EVIDENCE", "no_qualified_candidate": true}
+{"case_id": "maker-defi-base-2020", "champion_project_id": null, "committee_confidence": 0.0, "committee_decision": "INSUFFICIENT_EVIDENCE", "no_qualified_candidate": true}
+{"case_id": "aave-defi-expansion-2020", "champion_project_id": null, "committee_confidence": 0.0, "committee_decision": "INSUFFICIENT_EVIDENCE", "no_qualified_candidate": true}
+{"case_id": "uniswap-defi-expansion-2020", "champion_project_id": null, "committee_confidence": 0.0, "committee_decision": "INSUFFICIENT_EVIDENCE", "no_qualified_candidate": true}
 {"case_id": "chainlink-pre-expansion-2019", "champion_project_id": null, "committee_confidence": 1.0, "committee_decision": "INSUFFICIENT_EVIDENCE", "no_qualified_candidate": true}
+{"case_id": "lido-liquid-staking-2021", "champion_project_id": null, "committee_confidence": 0.0, "committee_decision": "INSUFFICIENT_EVIDENCE", "no_qualified_candidate": true}
+{"case_id": "api3-oracle-expansion-2021", "champion_project_id": null, "committee_confidence": 0.0, "committee_decision": "INSUFFICIENT_EVIDENCE", "no_qualified_candidate": true}
 {"case_id": "solana-early-stage-2020", "champion_project_id": null, "committee_confidence": 1.0, "committee_decision": "INSUFFICIENT_EVIDENCE", "no_qualified_candidate": true}
+{"case_id": "sui-mainnet-2023", "champion_project_id": null, "committee_confidence": 0.0, "committee_decision": "INSUFFICIENT_EVIDENCE", "no_qualified_candidate": true}
+{"case_id": "arbitrum-airdrop-2023", "champion_project_id": null, "committee_confidence": 0.0, "committee_decision": "INSUFFICIENT_EVIDENCE", "no_qualified_candidate": true}
 {"case_id": "render-early-stage-2022", "champion_project_id": null, "committee_confidence": 1.0, "committee_decision": "INSUFFICIENT_EVIDENCE", "no_qualified_candidate": true}
 {"case_id": "bittensor-early-stage-2023", "champion_project_id": null, "committee_confidence": 1.0, "committee_decision": "INSUFFICIENT_EVIDENCE", "no_qualified_candidate": true}
 {"case_id": "terra-pre-collapse-2022", "champion_project_id": null, "committee_confidence": 1.0, "committee_decision": "INSUFFICIENT_EVIDENCE", "no_qualified_candidate": true}

@@ -10,9 +10,14 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 
 from hunter.acquisition.repositories import FileAcquisitionRepository
+from hunter.economic.repository import EconomicGraphRepository
 from hunter.execution.identity import identity
+from hunter.graph.repository import TechnologyGraphRepository
 from hunter.historical.models import HistoricalValidationCase
 from hunter.historical_acquisition.models import HistoricalProviderMetadata, RawHistoricalEvidence
+from hunter.macro.repository import MacroRepository
+from hunter.scenario.repository import ScenarioRepository
+from hunter.whale.repository import WhaleRepository
 
 
 class HistoricalProvider(Protocol):
@@ -483,6 +488,192 @@ class GovernanceArchiveProvider:
                     )
                 )
             time.sleep(1.0)
+        return tuple(rows)
+
+
+class ReconstructedHistoricalEvidenceProvider:
+    metadata = HistoricalProviderMetadata(
+        name="reconstructed-historical-evidence",
+        collector="persisted-reconstruction",
+        supported_metrics=(
+            "historical_macro",
+            "historical_whale",
+            "historical_technology_graph",
+            "historical_economic_graph",
+            "historical_scenario",
+        ),
+    )
+
+    def __init__(
+        self,
+        *,
+        macro_repository: MacroRepository | None = None,
+        whale_repository: WhaleRepository | None = None,
+        technology_repository: TechnologyGraphRepository | None = None,
+        economic_repository: EconomicGraphRepository | None = None,
+        scenario_repository: ScenarioRepository | None = None,
+    ) -> None:
+        self.macro_repository = macro_repository or MacroRepository()
+        self.whale_repository = whale_repository or WhaleRepository()
+        self.technology_repository = technology_repository or TechnologyGraphRepository()
+        self.economic_repository = economic_repository or EconomicGraphRepository()
+        self.scenario_repository = scenario_repository or ScenarioRepository()
+
+    def collect(self, cases: tuple[HistoricalValidationCase, ...]) -> tuple[RawHistoricalEvidence, ...]:
+        rows: list[RawHistoricalEvidence] = []
+        for case in cases:
+            rows.extend(self._macro_rows(case))
+            rows.extend(self._whale_rows(case))
+            rows.extend(self._technology_rows(case))
+            rows.extend(self._economic_rows(case))
+            rows.extend(self._scenario_rows(case))
+        return tuple(rows)
+
+    def _macro_rows(self, case: HistoricalValidationCase) -> tuple[RawHistoricalEvidence, ...]:
+        rows = []
+        for evidence in self.macro_repository.evidence():
+            if evidence.validation_status != "VALID" or evidence.metric.timestamp > case.historical_cutoff_timestamp:
+                continue
+            rows.append(
+                _raw(
+                    self.metadata,
+                    case,
+                    "historical_macro",
+                    {
+                        "metric": evidence.metric.name,
+                        "value": evidence.metric.value,
+                        "normalized_value": evidence.normalized_value,
+                        "provider": evidence.metric.provider,
+                        "source_evidence_id": evidence.evidence_id,
+                        "source_repository_id": evidence.repository_id,
+                    },
+                    evidence.metric.source_url,
+                    observed_at=evidence.metric.timestamp,
+                )
+            )
+        return tuple(rows)
+
+    def _whale_rows(self, case: HistoricalValidationCase) -> tuple[RawHistoricalEvidence, ...]:
+        rows = []
+        for evidence in self.whale_repository.evidence():
+            asset = evidence.metric.asset.lower()
+            if asset not in {case.symbol.lower(), case.project_id.lower(), case.project_slug.lower()}:
+                continue
+            if evidence.validation_status != "VALID" or evidence.metric.timestamp > case.historical_cutoff_timestamp:
+                continue
+            rows.append(
+                _raw(
+                    self.metadata,
+                    case,
+                    "historical_whale",
+                    {
+                        "metric": evidence.metric.name,
+                        "value": evidence.metric.value,
+                        "normalized_value": evidence.normalized_value,
+                        "asset": evidence.metric.asset,
+                        "provider": evidence.metric.provider,
+                        "source_evidence_id": evidence.evidence_id,
+                        "source_repository_id": evidence.repository_id,
+                    },
+                    evidence.metric.source_url,
+                    observed_at=evidence.metric.timestamp,
+                )
+            )
+        return tuple(rows)
+
+    def _technology_rows(self, case: HistoricalValidationCase) -> tuple[RawHistoricalEvidence, ...]:
+        graph = self.technology_repository.graph()
+        rows = []
+        for metric in graph.metrics:
+            if metric.project_id != case.project_id:
+                continue
+            relevant_edges = tuple(
+                edge
+                for edge in graph.edges
+                if case.project_id in {edge.source_project, edge.target_project}
+                and edge.validation_timestamp <= case.historical_cutoff_timestamp
+            )
+            if not relevant_edges:
+                continue
+            timestamp = max(edge.validation_timestamp for edge in relevant_edges)
+            rows.append(
+                _raw(
+                    self.metadata,
+                    case,
+                    "historical_technology_graph",
+                    {
+                        "dependency_depth": metric.dependency_depth,
+                        "dependency_centrality": metric.dependency_centrality,
+                        "infrastructure_centrality": metric.infrastructure_centrality,
+                        "fan_in": metric.fan_in,
+                        "fan_out": metric.fan_out,
+                        "edge_count": len(relevant_edges),
+                    },
+                    "persisted://technology_graph",
+                    observed_at=timestamp,
+                )
+            )
+        return tuple(rows)
+
+    def _economic_rows(self, case: HistoricalValidationCase) -> tuple[RawHistoricalEvidence, ...]:
+        graph = self.economic_repository.graph()
+        rows = []
+        for metric in graph.metrics:
+            if metric.project_id != case.project_id:
+                continue
+            relevant_edges = tuple(
+                edge
+                for edge in graph.edges
+                if case.project_id in {edge.source_project, edge.target_project}
+                and edge.validation_timestamp <= case.historical_cutoff_timestamp
+            )
+            if not relevant_edges:
+                continue
+            timestamp = max(edge.validation_timestamp for edge in relevant_edges)
+            rows.append(
+                _raw(
+                    self.metadata,
+                    case,
+                    "historical_economic_graph",
+                    {
+                        "capital_centrality": metric.capital_centrality,
+                        "revenue_centrality": metric.revenue_centrality,
+                        "value_capture": metric.value_capture,
+                        "economic_moat": metric.economic_moat,
+                        "economic_resilience": metric.economic_resilience,
+                        "edge_count": len(relevant_edges),
+                    },
+                    "persisted://economic_graph",
+                    observed_at=timestamp,
+                )
+            )
+        return tuple(rows)
+
+    def _scenario_rows(self, case: HistoricalValidationCase) -> tuple[RawHistoricalEvidence, ...]:
+        rows = []
+        for result in self.scenario_repository.results():
+            if result.scenario.created_at > case.historical_cutoff_timestamp:
+                continue
+            impact = next((item for item in result.impacts if item.project_id == case.project_id), None)
+            if impact is None:
+                continue
+            rows.append(
+                _raw(
+                    self.metadata,
+                    case,
+                    "historical_scenario",
+                    {
+                        "scenario_id": result.scenario.scenario_id,
+                        "scenario_type": result.scenario.scenario_type,
+                        "direct_impact": impact.direct_impact,
+                        "indirect_impact": impact.indirect_impact,
+                        "system_fragility": impact.system_fragility,
+                        "confidence": impact.confidence,
+                    },
+                    "persisted://scenarios",
+                    observed_at=result.scenario.created_at,
+                )
+            )
         return tuple(rows)
 
 

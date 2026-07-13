@@ -1,6 +1,20 @@
-from hunter.backtest.engine import BacktestingCalibrationEngine, compare_backtests
 from hunter.backtest.models import BacktestRun, CalibrationReport, EngineBacktestMetric, ProjectBacktestMetric
-from hunter.backtest.repository import BacktestRepository
+
+
+def __getattr__(name: str) -> object:
+    if name == "BacktestRepository":
+        from hunter.backtest.repository import BacktestRepository
+
+        return BacktestRepository
+    if name in {"BacktestingCalibrationEngine", "compare_backtests"}:
+        from hunter.backtest.engine import BacktestingCalibrationEngine, compare_backtests
+
+        return {
+            "BacktestingCalibrationEngine": BacktestingCalibrationEngine,
+            "compare_backtests": compare_backtests,
+        }[name]
+    raise AttributeError(name)
+
 
 __all__ = [
     "BacktestRepository",

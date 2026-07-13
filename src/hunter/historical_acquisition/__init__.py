@@ -6,6 +6,7 @@ from hunter.historical_acquisition.providers import (
     GovernanceArchiveProvider,
     HistoricalRSSAnnouncementsProvider,
     InternetArchiveSnapshotProvider,
+    ReconstructedHistoricalEvidenceProvider,
     future_provider_metadata,
 )
 from hunter.historical_acquisition.repository import HistoricalEvidenceRepository
@@ -19,5 +20,6 @@ __all__ = [
     "HistoricalEvidenceRepository",
     "HistoricalRSSAnnouncementsProvider",
     "InternetArchiveSnapshotProvider",
+    "ReconstructedHistoricalEvidenceProvider",
     "future_provider_metadata",
 ]

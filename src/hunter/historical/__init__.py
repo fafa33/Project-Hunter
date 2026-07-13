@@ -3,19 +3,39 @@ from hunter.historical.models import (
     HistoricalBacktestRun,
     HistoricalBiasValidation,
     HistoricalChallengeResult,
+    HistoricalDecisionOutcomeRecord,
     HistoricalEvidenceSnapshot,
+    HistoricalPerformanceMetrics,
+    HistoricalReplayExplanation,
     HistoricalValidationCase,
 )
-from hunter.historical.renderer import HistoricalValidationRenderer
-from hunter.historical.replay import HistoricalPointInTimeValidationEngine
-from hunter.historical.repository import HistoricalValidationRepository
+
+
+def __getattr__(name: str) -> object:
+    if name == "HistoricalPointInTimeValidationEngine":
+        from hunter.historical.replay import HistoricalPointInTimeValidationEngine
+
+        return HistoricalPointInTimeValidationEngine
+    if name == "HistoricalValidationRenderer":
+        from hunter.historical.renderer import HistoricalValidationRenderer
+
+        return HistoricalValidationRenderer
+    if name == "HistoricalValidationRepository":
+        from hunter.historical.repository import HistoricalValidationRepository
+
+        return HistoricalValidationRepository
+    raise AttributeError(name)
+
 
 __all__ = [
     "HistoricalBacktestRun",
     "HistoricalBiasValidation",
     "HistoricalChallengeResult",
+    "HistoricalDecisionOutcomeRecord",
     "HistoricalEvidenceSnapshot",
+    "HistoricalPerformanceMetrics",
     "HistoricalPointInTimeValidationEngine",
+    "HistoricalReplayExplanation",
     "HistoricalValidationCase",
     "HistoricalValidationConfig",
     "HistoricalValidationRenderer",

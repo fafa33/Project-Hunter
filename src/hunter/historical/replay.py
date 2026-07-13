@@ -1,24 +1,29 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 from hunter.execution.identity import identity
 from hunter.historical.benchmarks import benchmark_outcomes
 from hunter.historical.bias_controls import validate_bias_controls
 from hunter.historical.configuration import HistoricalValidationConfig, load_historical_validation_config
+from hunter.historical.cutoff import reject_future_evidence
 from hunter.historical.models import (
     HistoricalBacktestRun,
     HistoricalBenchmarkOutcome,
     HistoricalBiasValidation,
     HistoricalChallengeResult,
     HistoricalCommitteeAssessment,
+    HistoricalDecisionOutcomeRecord,
     HistoricalEngineOutput,
     HistoricalEvidenceSnapshot,
     HistoricalOutcome,
     HistoricalRankingSnapshot,
+    HistoricalReplayExplanation,
     HistoricalValidationCase,
 )
 from hunter.historical.outcomes import build_outcome
+from hunter.historical.performance import performance_metrics
 from hunter.historical.repository import HistoricalValidationRepository
 from hunter.historical.snapshot_builder import HistoricalSnapshotBuilder
 from hunter.historical.validation import calibration_metric, engine_metrics
@@ -56,10 +61,13 @@ class HistoricalPointInTimeValidationEngine:
         benchmarks: list[HistoricalBenchmarkOutcome] = []
         bias: list[HistoricalBiasValidation] = []
         challenges: list[HistoricalChallengeResult] = []
+        decision_outcomes: list[HistoricalDecisionOutcomeRecord] = []
+        explanations: list[HistoricalReplayExplanation] = []
         run_id = identity(
             "historical-validation-run", {"cases": tuple(case.case_id for case in cases), "timestamp": timestamp}
         )
         for case, snapshot in zip(cases, snapshots, strict=True):
+            _assert_point_in_time_snapshot(case, snapshot)
             outputs, committee, ranking = replay_case(case, snapshot, run_id=run_id)
             outcome = build_outcome(case, self._outcome_observations(case))
             benchmark = benchmark_outcomes(
@@ -67,6 +75,7 @@ class HistoricalPointInTimeValidationEngine:
                 self._benchmark_returns(self.config.benchmarks[0], case) if self.config.benchmarks else {},
                 benchmark_id=self.config.benchmarks[0] if self.config.benchmarks else "none",
             )
+            benchmark = _with_coverage_metrics(benchmark, snapshot)
             validation = validate_bias_controls(case, snapshot, current_universe=current_universe)
             engine_outputs.extend(outputs)
             committee_assessments.append(committee)
@@ -74,7 +83,12 @@ class HistoricalPointInTimeValidationEngine:
             outcomes.append(outcome)
             benchmarks.extend(benchmark)
             bias.append(validation)
-            challenges.append(_challenge(case, outputs, committee, ranking, outcome, benchmark, validation))
+            challenge = _challenge(case, outputs, committee, ranking, outcome, benchmark, validation)
+            challenges.append(challenge)
+            decision_outcomes.append(
+                _decision_outcome(case, snapshot, outputs, committee, ranking, outcome, validation)
+            )
+            explanations.append(_explanation(case, snapshot, challenge))
         calibration = calibration_metric(
             tuple(engine_outputs), tuple(outcomes), minimum_sample_size=self.config.minimum_sample_size
         )
@@ -98,6 +112,9 @@ class HistoricalPointInTimeValidationEngine:
             leakage_passed=all(item.leakage_passed for item in bias),
             survivorship_passed=all(item.survivorship_passed for item in bias),
             sample_size_status=calibration.sample_size_status,
+            decision_outcomes=tuple(decision_outcomes),
+            performance_metrics=performance_metrics(tuple(challenges)),
+            explanations=tuple(explanations),
         )
         return self.repository.save(run, append_snapshots=self.append_snapshots)
 
@@ -208,6 +225,14 @@ def _source(record) -> EngineValidationSource:
     )
 
 
+def _assert_point_in_time_snapshot(case: HistoricalValidationCase, snapshot: HistoricalEvidenceSnapshot) -> None:
+    violations = reject_future_evidence(snapshot.evidence)
+    if violations:
+        joined = ",".join(violations)
+        msg = f"future leakage detected for {case.case_id}: {joined}"
+        raise ValueError(msg)
+
+
 def _score(metrics: dict[str, float], fallback: float) -> float:
     if not metrics:
         return fallback
@@ -261,6 +286,153 @@ def _challenge(
         leakage_validation="PASS" if bias.leakage_passed else "FAIL",
         survivorship_validation="PASS" if bias.survivorship_passed else "FAIL",
     )
+
+
+def _decision_outcome(
+    case: HistoricalValidationCase,
+    snapshot: HistoricalEvidenceSnapshot,
+    outputs: tuple[HistoricalEngineOutput, ...],
+    committee: HistoricalCommitteeAssessment,
+    ranking: HistoricalRankingSnapshot,
+    outcome: HistoricalOutcome,
+    bias: HistoricalBiasValidation,
+) -> HistoricalDecisionOutcomeRecord:
+    output_by_engine = {output.engine: output for output in outputs}
+    evidence_ids = tuple(evidence_id for record in snapshot.evidence for evidence_id in record.evidence_ids)
+    repository_ids = tuple(repository_id for record in snapshot.evidence for repository_id in record.repository_ids)
+    market = _first_metrics(snapshot, "valuation")
+    return HistoricalDecisionOutcomeRecord(
+        case_id=case.case_id,
+        project_id=case.project_id,
+        decision_date=case.evaluation_timestamp,
+        hunter_score=ranking.hunter_score,
+        timing=output_by_engine.get(
+            "opportunity_timing",
+            HistoricalEngineOutput(case.case_id, "opportunity_timing", 0, 0, (), (), "UNAVAILABLE"),
+        ).score,
+        committee_decision=committee.committee_decision,
+        confidence=committee.committee_confidence,
+        freshness=_average_freshness(snapshot),
+        price=_float_metric(market, "price"),
+        market_cap=_float_metric(market, "market_cap"),
+        fdv=_float_metric(market, "fdv"),
+        tvl=_float_metric(_first_metrics(snapshot, "protocol"), "tvl"),
+        developer_activity=_float_metric(_first_metrics(snapshot, "developer"), "commits"),
+        narrative_state=_state(snapshot, "narrative"),
+        macro_state=_state(snapshot, "macro_intelligence"),
+        whale_state=_state(snapshot, "whale"),
+        technology_graph=_state(snapshot, "technology_graph"),
+        economic_graph=_state(snapshot, "economic_graph"),
+        scenario_state=_state(snapshot, "scenario"),
+        final_outcome=outcome.final_success_label,
+        source_evidence_ids=evidence_ids,
+        source_repository_ids=repository_ids,
+        leakage_status="PASS" if bias.leakage_passed else "FAIL",
+    )
+
+
+def _explanation(
+    case: HistoricalValidationCase,
+    snapshot: HistoricalEvidenceSnapshot,
+    challenge: HistoricalChallengeResult,
+) -> HistoricalReplayExplanation:
+    if challenge.committee_decision == "QUALIFIED_CANDIDATE":
+        reason = "historical committee qualified the candidate using point-in-time evidence"
+    elif challenge.committee_decision in {"WAIT", "WATCH"}:
+        reason = "historical committee waited because confirmation was not sufficient"
+    else:
+        reason = "historical committee rejected or abstained because evidence was insufficient or unfavorable"
+    reconstructed = tuple(
+        evidence_id
+        for record in snapshot.evidence
+        if record.source_provider.startswith("historical-") or record.source_provider.startswith("reconstructed-")
+        for evidence_id in record.evidence_ids
+    )
+    existing = tuple(
+        evidence_id
+        for record in snapshot.evidence
+        if not (record.source_provider.startswith("historical-") or record.source_provider.startswith("reconstructed-"))
+        for evidence_id in record.evidence_ids
+    )
+    return HistoricalReplayExplanation(
+        case_id=case.case_id,
+        project_id=case.project_id,
+        decision=challenge.committee_decision,
+        decision_reason=reason,
+        positive_drivers=challenge.positive_drivers,
+        negative_drivers=challenge.negative_drivers,
+        existing_evidence_ids=existing,
+        reconstructed_evidence_ids=reconstructed,
+        historical_evidence_ids=tuple(
+            evidence_id for record in snapshot.evidence for evidence_id in record.evidence_ids
+        ),
+        historical_repository_ids=tuple(
+            repository_id for record in snapshot.evidence for repository_id in record.repository_ids
+        ),
+        unavailable_evidence=snapshot.unavailable_engines,
+        unavailable_reason=(
+            "all required historical evidence was available"
+            if not snapshot.unavailable_engines
+            else "decision limited by unavailable point-in-time evidence: " + ",".join(snapshot.unavailable_engines)
+        ),
+        leakage_status=challenge.leakage_validation,
+    )
+
+
+def _with_coverage_metrics(
+    rows: tuple[HistoricalBenchmarkOutcome, ...],
+    snapshot: HistoricalEvidenceSnapshot,
+) -> tuple[HistoricalBenchmarkOutcome, ...]:
+    total = len(snapshot.evidence) + len(snapshot.missing_evidence)
+    coverage = round((len(snapshot.evidence) / max(total, 1)) * 100.0, 2)
+    reconstructed = tuple(
+        record
+        for record in snapshot.evidence
+        if record.source_provider.startswith("historical-") or record.source_provider.startswith("reconstructed-")
+    )
+    confidence = (
+        round(sum(record.confidence for record in reconstructed) / len(reconstructed), 4) if reconstructed else 0.0
+    )
+    completeness = round(1.0 - (len(snapshot.missing_evidence) / max(total, 1)), 4)
+    freshness = _average_freshness(snapshot)
+    return tuple(
+        replace(
+            row,
+            coverage_percentage=coverage,
+            missing_evidence_categories=snapshot.missing_evidence,
+            reconstruction_confidence=confidence,
+            historical_completeness=completeness,
+            evidence_freshness=freshness,
+        )
+        for row in rows
+    )
+
+
+def _first_metrics(snapshot: HistoricalEvidenceSnapshot, engine: str) -> dict[str, object]:
+    record = next((item for item in snapshot.evidence if item.engine == engine), None)
+    if record is None:
+        return {}
+    return {**record.raw_metrics, **record.normalized_metrics}
+
+
+def _float_metric(metrics: dict[str, object], key: str) -> float | None:
+    value = metrics.get(key)
+    if isinstance(value, int | float):
+        return float(value)
+    return None
+
+
+def _state(snapshot: HistoricalEvidenceSnapshot, engine: str) -> str:
+    record = next((item for item in snapshot.evidence if item.engine == engine), None)
+    if record is None:
+        return "UNAVAILABLE"
+    return record.validation_status
+
+
+def _average_freshness(snapshot: HistoricalEvidenceSnapshot) -> float:
+    if not snapshot.evidence:
+        return 0.0
+    return round(sum(record.freshness for record in snapshot.evidence) / len(snapshot.evidence), 4)
 
 
 def _coverage(snapshots: tuple[HistoricalEvidenceSnapshot, ...]) -> float:

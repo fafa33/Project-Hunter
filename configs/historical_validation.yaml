@@ -31,6 +31,17 @@ outcome_labels:
   moderate_winner_return: 1.0
   severe_underperformer_return: -0.8
 challenge_cases:
+  - case_id: bitcoin-cycle-base-2015
+    project_id: bitcoin
+    project_slug: bitcoin
+    project_name: Bitcoin
+    symbol: BTC
+    sector: store_of_value
+    case_type: ESTABLISHED_WINNER
+    evaluation_timestamp: "2015-01-01T00:00:00+00:00"
+    historical_cutoff_timestamp: "2015-01-01T00:00:00+00:00"
+    project_lifecycle_state: active
+    token_lifecycle_state: active
   - case_id: ethereum-early-stage-2016
     project_id: ethereum
     project_slug: ethereum
@@ -40,6 +51,39 @@ challenge_cases:
     case_type: EARLY_WINNER
     evaluation_timestamp: "2016-01-01T00:00:00+00:00"
     historical_cutoff_timestamp: "2016-01-01T00:00:00+00:00"
+    project_lifecycle_state: active
+    token_lifecycle_state: active
+  - case_id: maker-defi-base-2020
+    project_id: maker
+    project_slug: maker
+    project_name: Maker
+    symbol: MKR
+    sector: defi
+    case_type: ESTABLISHED_WINNER
+    evaluation_timestamp: "2020-01-01T00:00:00+00:00"
+    historical_cutoff_timestamp: "2020-01-01T00:00:00+00:00"
+    project_lifecycle_state: active
+    token_lifecycle_state: active
+  - case_id: aave-defi-expansion-2020
+    project_id: aave
+    project_slug: aave
+    project_name: Aave
+    symbol: AAVE
+    sector: defi
+    case_type: EARLY_WINNER
+    evaluation_timestamp: "2020-10-01T00:00:00+00:00"
+    historical_cutoff_timestamp: "2020-10-01T00:00:00+00:00"
+    project_lifecycle_state: active
+    token_lifecycle_state: active
+  - case_id: uniswap-defi-expansion-2020
+    project_id: uniswap
+    project_slug: uniswap
+    project_name: Uniswap
+    symbol: UNI
+    sector: defi
+    case_type: EARLY_WINNER
+    evaluation_timestamp: "2020-09-18T00:00:00+00:00"
+    historical_cutoff_timestamp: "2020-09-18T00:00:00+00:00"
     project_lifecycle_state: active
     token_lifecycle_state: active
   - case_id: chainlink-pre-expansion-2019
@@ -53,6 +97,28 @@ challenge_cases:
     historical_cutoff_timestamp: "2019-01-01T00:00:00+00:00"
     project_lifecycle_state: active
     token_lifecycle_state: active
+  - case_id: lido-liquid-staking-2021
+    project_id: lido
+    project_slug: lido
+    project_name: Lido
+    symbol: LDO
+    sector: liquid_staking
+    case_type: EARLY_WINNER
+    evaluation_timestamp: "2021-12-01T00:00:00+00:00"
+    historical_cutoff_timestamp: "2021-12-01T00:00:00+00:00"
+    project_lifecycle_state: active
+    token_lifecycle_state: active
+  - case_id: api3-oracle-expansion-2021
+    project_id: api3
+    project_slug: api3
+    project_name: API3
+    symbol: API3
+    sector: oracle
+    case_type: NEUTRAL_CONTROL
+    evaluation_timestamp: "2021-01-01T00:00:00+00:00"
+    historical_cutoff_timestamp: "2021-01-01T00:00:00+00:00"
+    project_lifecycle_state: active
+    token_lifecycle_state: active
   - case_id: solana-early-stage-2020
     project_id: solana
     project_slug: solana
@@ -62,6 +128,28 @@ challenge_cases:
     case_type: EARLY_WINNER
     evaluation_timestamp: "2020-06-01T00:00:00+00:00"
     historical_cutoff_timestamp: "2020-06-01T00:00:00+00:00"
+    project_lifecycle_state: active
+    token_lifecycle_state: active
+  - case_id: sui-mainnet-2023
+    project_id: sui
+    project_slug: sui
+    project_name: Sui
+    symbol: SUI
+    sector: layer_1
+    case_type: NEUTRAL_CONTROL
+    evaluation_timestamp: "2023-05-03T00:00:00+00:00"
+    historical_cutoff_timestamp: "2023-05-03T00:00:00+00:00"
+    project_lifecycle_state: active
+    token_lifecycle_state: active
+  - case_id: arbitrum-airdrop-2023
+    project_id: arbitrum
+    project_slug: arbitrum
+    project_name: Arbitrum
+    symbol: ARB
+    sector: layer_2
+    case_type: NEUTRAL_CONTROL
+    evaluation_timestamp: "2023-03-23T00:00:00+00:00"
+    historical_cutoff_timestamp: "2023-03-23T00:00:00+00:00"
     project_lifecycle_state: active
     token_lifecycle_state: active
   - case_id: render-early-stage-2022

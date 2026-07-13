@@ -4,14 +4,18 @@ import json
 from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from hunter.historical.models import (
     HistoricalBacktestRun,
     HistoricalBiasValidation,
     HistoricalCalibrationMetric,
+    HistoricalDecisionOutcomeRecord,
     HistoricalEvidenceSnapshot,
+    HistoricalPerformanceMetrics,
+    HistoricalReplayExplanation,
     HistoricalValidationCase,
+    SuccessLabel,
 )
 
 
@@ -42,6 +46,10 @@ class HistoricalValidationRepository:
         _write_jsonl(self.root / "engine_metrics.jsonl", (_payload(item) for item in run.engine_metrics))
         _write_jsonl(self.root / "challenge_results.jsonl", (_payload(item) for item in run.challenge_results))
         _write_jsonl(self.root / "bias_validations.jsonl", (_payload(item) for item in run.bias_validations))
+        _write_jsonl(self.root / "decision_outcomes.jsonl", (_payload(item) for item in run.decision_outcomes))
+        if run.performance_metrics is not None:
+            _write_jsonl(self.root / "performance_metrics.jsonl", (_payload(run.performance_metrics),))
+        _write_jsonl(self.root / "replay_explanations.jsonl", (_payload(item) for item in run.explanations))
         _write_jsonl(self.root / "runs.jsonl", (_run_payload(run),), append=True)
         return run
 
@@ -59,6 +67,15 @@ class HistoricalValidationRepository:
 
     def calibration_metrics(self) -> tuple[HistoricalCalibrationMetric, ...]:
         return tuple(_calibration(item) for item in _read_jsonl(self.root / "calibration_metrics.jsonl"))
+
+    def performance_metrics(self) -> tuple[HistoricalPerformanceMetrics, ...]:
+        return tuple(_performance(item) for item in _read_jsonl(self.root / "performance_metrics.jsonl"))
+
+    def decision_outcomes(self) -> tuple[HistoricalDecisionOutcomeRecord, ...]:
+        return tuple(_decision_outcome(item) for item in _read_jsonl(self.root / "decision_outcomes.jsonl"))
+
+    def replay_explanations(self) -> tuple[HistoricalReplayExplanation, ...]:
+        return tuple(_explanation(item) for item in _read_jsonl(self.root / "replay_explanations.jsonl"))
 
 
 def _payload(item: Any) -> dict[str, Any]:
@@ -81,6 +98,8 @@ def _run_payload(run: HistoricalBacktestRun) -> dict[str, Any]:
         "leakage_passed": run.leakage_passed,
         "survivorship_passed": run.survivorship_passed,
         "sample_size_status": run.sample_size_status,
+        "decision_outcome_count": len(run.decision_outcomes),
+        "explanation_count": len(run.explanations),
     }
 
 
@@ -159,7 +178,90 @@ def _calibration(payload: dict[str, Any]) -> HistoricalCalibrationMetric:
         calibration_error=payload["calibration_error"],
         reliability_buckets=tuple((str(row[0]), int(row[1]), row[2]) for row in payload.get("reliability_buckets", ())),
         sample_size_status=str(payload["sample_size_status"]),
+        expected_probability=payload.get("expected_probability", "INSUFFICIENT_SAMPLE_SIZE"),
+        observed_probability=payload.get("observed_probability", "INSUFFICIENT_SAMPLE_SIZE"),
+        reliability_curve=tuple(
+            (str(row[0]), row[1], row[2], int(row[3])) for row in payload.get("reliability_curve", ())
+        ),
+        confidence_distribution=tuple((str(row[0]), int(row[1])) for row in payload.get("confidence_distribution", ())),
     )
+
+
+def _performance(payload: dict[str, Any]) -> HistoricalPerformanceMetrics:
+    return HistoricalPerformanceMetrics(
+        metric_id=str(payload["metric_id"]),
+        accuracy=payload["accuracy"],
+        precision=payload["precision"],
+        recall=payload["recall"],
+        f1=payload["f1"],
+        roc_auc=payload["roc_auc"],
+        maximum_drawdown=payload["maximum_drawdown"],
+        annualized_return=payload["annualized_return"],
+        sharpe_ratio=payload["sharpe_ratio"],
+        sortino_ratio=payload["sortino_ratio"],
+        win_rate=payload["win_rate"],
+        average_return=payload["average_return"],
+        median_return=payload["median_return"],
+        best_trade=payload["best_trade"],
+        worst_trade=payload["worst_trade"],
+        hit_rate=payload["hit_rate"],
+        time_to_target=payload["time_to_target"],
+        false_positive_rate=payload["false_positive_rate"],
+        false_negative_rate=payload["false_negative_rate"],
+        sample_count=int(payload["sample_count"]),
+    )
+
+
+def _decision_outcome(payload: dict[str, Any]) -> HistoricalDecisionOutcomeRecord:
+    return HistoricalDecisionOutcomeRecord(
+        case_id=str(payload["case_id"]),
+        project_id=str(payload["project_id"]),
+        decision_date=_dt(payload["decision_date"]),
+        hunter_score=float(payload["hunter_score"]),
+        timing=float(payload["timing"]),
+        committee_decision=str(payload["committee_decision"]),
+        confidence=float(payload["confidence"]),
+        freshness=float(payload["freshness"]),
+        price=_optional_float(payload.get("price")),
+        market_cap=_optional_float(payload.get("market_cap")),
+        fdv=_optional_float(payload.get("fdv")),
+        tvl=_optional_float(payload.get("tvl")),
+        developer_activity=_optional_float(payload.get("developer_activity")),
+        narrative_state=str(payload["narrative_state"]),
+        macro_state=str(payload["macro_state"]),
+        whale_state=str(payload["whale_state"]),
+        technology_graph=str(payload["technology_graph"]),
+        economic_graph=str(payload["economic_graph"]),
+        scenario_state=str(payload["scenario_state"]),
+        final_outcome=cast(SuccessLabel, payload["final_outcome"]),
+        source_evidence_ids=tuple(payload.get("source_evidence_ids", ())),
+        source_repository_ids=tuple(payload.get("source_repository_ids", ())),
+        leakage_status=str(payload["leakage_status"]),
+    )
+
+
+def _explanation(payload: dict[str, Any]) -> HistoricalReplayExplanation:
+    return HistoricalReplayExplanation(
+        case_id=str(payload["case_id"]),
+        project_id=str(payload["project_id"]),
+        decision=str(payload["decision"]),
+        decision_reason=str(payload["decision_reason"]),
+        positive_drivers=tuple(payload.get("positive_drivers", ())),
+        negative_drivers=tuple(payload.get("negative_drivers", ())),
+        existing_evidence_ids=tuple(payload.get("existing_evidence_ids", ())),
+        reconstructed_evidence_ids=tuple(payload.get("reconstructed_evidence_ids", ())),
+        historical_evidence_ids=tuple(payload.get("historical_evidence_ids", ())),
+        historical_repository_ids=tuple(payload.get("historical_repository_ids", ())),
+        unavailable_evidence=tuple(payload.get("unavailable_evidence", ())),
+        unavailable_reason=str(payload.get("unavailable_reason", "")),
+        leakage_status=str(payload["leakage_status"]),
+    )
+
+
+def _optional_float(value: object) -> float | None:
+    if value is None:
+        return None
+    return float(value)
 
 
 def _dt(value: object) -> datetime:

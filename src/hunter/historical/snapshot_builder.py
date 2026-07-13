@@ -7,7 +7,30 @@ from hunter.execution.identity import identity
 from hunter.historical.cutoff import evidence_is_cutoff_eligible
 from hunter.historical.models import HistoricalEvidenceRecord, HistoricalEvidenceSnapshot, HistoricalValidationCase
 from hunter.historical_acquisition.repository import HistoricalEvidenceRepository
-from hunter.market_validation.evidence import REQUIRED_EVIDENCE_ENGINES
+
+REQUIRED_EVIDENCE_ENGINES: tuple[str, ...] = (
+    "valuation",
+    "comparative_valuation",
+    "mispricing",
+    "asymmetry",
+    "developer",
+    "protocol",
+    "news",
+    "social",
+    "narrative",
+    "whale_intelligence",
+    "macro_intelligence",
+    "future_demand",
+    "opportunity_timing",
+    "probability",
+    "pattern_matching",
+    "technology_necessity",
+    "capital_rotation",
+    "necessity_gap",
+    "risk",
+    "validation_health",
+    "committee",
+)
 
 PROVIDER_ENGINE_MAP = {
     "coingecko": ("valuation", "comparative_valuation", "mispricing", "asymmetry", "risk"),
