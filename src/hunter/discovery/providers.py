@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -37,8 +39,11 @@ class DiscoveryProvider(Protocol):
 class CoinGeckoDiscoveryProvider:
     base_url: str = "https://api.coingecko.com/api/v3"
     timeout_seconds: int = 30
+    max_attempts: int = 3
+    backoff_seconds: float = 0.5
     per_page: int = 250
     name: str = "coingecko"
+    sleeper: Callable[[float], None] = time.sleep
 
     def discover(self, *, limit: int) -> tuple[DiscoveredCandidate, ...]:
         rows: list[DiscoveredCandidate] = []
@@ -88,19 +93,24 @@ class CoinGeckoDiscoveryProvider:
         url = f"{self.base_url.rstrip('/')}/{path.lstrip('/')}"
         if query:
             url = f"{url}?{query}"
-        request = urllib.request.Request(url, headers={"accept": "application/json"})
-        try:
-            with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
-                return json.loads(response.read().decode("utf-8"))
-        except urllib.error.URLError as exc:
-            raise ProviderUnavailableError(f"CoinGecko discovery unavailable: {exc}") from exc
+        return _request_json(
+            url,
+            provider="CoinGecko",
+            timeout_seconds=self.timeout_seconds,
+            max_attempts=self.max_attempts,
+            backoff_seconds=self.backoff_seconds,
+            sleeper=self.sleeper,
+        )
 
 
 @dataclass(frozen=True)
 class DefiLlamaDiscoveryProvider:
     base_url: str = "https://api.llama.fi"
     timeout_seconds: int = 30
+    max_attempts: int = 3
+    backoff_seconds: float = 0.5
     name: str = "defillama"
+    sleeper: Callable[[float], None] = time.sleep
 
     def discover(self, *, limit: int) -> tuple[DiscoveredCandidate, ...]:
         payload = self._get("/protocols")
@@ -139,9 +149,52 @@ class DefiLlamaDiscoveryProvider:
 
     def _get(self, path: str) -> object:
         url = f"{self.base_url.rstrip('/')}/{path.lstrip('/')}"
-        request = urllib.request.Request(url, headers={"accept": "application/json"})
+        return _request_json(
+            url,
+            provider="DefiLlama",
+            timeout_seconds=self.timeout_seconds,
+            max_attempts=self.max_attempts,
+            backoff_seconds=self.backoff_seconds,
+            sleeper=self.sleeper,
+        )
+
+
+def _request_json(
+    url: str,
+    *,
+    provider: str,
+    timeout_seconds: int,
+    max_attempts: int,
+    backoff_seconds: float,
+    sleeper: Callable[[float], None],
+) -> object:
+    request = urllib.request.Request(url, headers={"accept": "application/json"})
+    last_error: Exception | None = None
+    for attempt in range(1, max(1, max_attempts) + 1):
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
+            with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
                 return json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            if exc.code in {408, 425, 429, 500, 502, 503, 504} and attempt < max_attempts:
+                _sleep(attempt, backoff_seconds, sleeper)
+                last_error = exc
+                continue
+            raise ProviderUnavailableError(f"{provider} discovery unavailable: HTTP {exc.code}") from exc
+        except TimeoutError as exc:
+            last_error = exc
+            if attempt < max_attempts:
+                _sleep(attempt, backoff_seconds, sleeper)
+                continue
+            raise ProviderUnavailableError(f"{provider} discovery timed out") from exc
         except urllib.error.URLError as exc:
-            raise ProviderUnavailableError(f"DefiLlama discovery unavailable: {exc}") from exc
+            last_error = exc
+            if attempt < max_attempts:
+                _sleep(attempt, backoff_seconds, sleeper)
+                continue
+            raise ProviderUnavailableError(f"{provider} discovery unavailable: {exc}") from exc
+    raise ProviderUnavailableError(f"{provider} discovery unavailable: {last_error}")
+
+
+def _sleep(attempt: int, backoff_seconds: float, sleeper: Callable[[float], None]) -> None:
+    if backoff_seconds > 0:
+        sleeper(backoff_seconds * (2 ** (attempt - 1)))

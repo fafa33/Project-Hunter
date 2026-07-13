@@ -20,6 +20,11 @@ default. This location is ignored by Git. The schema uses indexed lookups for ca
 slug, lifecycle status, discovery source, and external identifiers so discovery can scale
 incrementally without full registry scans.
 
+Registry writes are idempotent. Candidate ids are immutable once assigned; repeated
+discovery refreshes update aliases, identifiers, source references, and freshness without
+creating duplicate candidates. Batch imports use one transaction per batch instead of one
+connection per candidate, which keeps large source imports practical as the registry grows.
+
 ## Lifecycle
 
 Supported candidate lifecycle states are:
@@ -56,14 +61,34 @@ ambiguous identities unresolved until stronger evidence exists.
 Discovery includes an inexpensive screening pass and persistent candidate queue. Screening
 uses only available registry evidence: deterministic identifiers, source provenance,
 sector/category evidence, live adapter observation, and compatibility with the current
-deep-analysis path. The queue ranks what Hunter should investigate next without treating
-popularity as investment quality or excluding already known assets.
+deep-analysis path.
+
+Screening now applies deterministic minimum-quality gates:
+
+- `advanced`: sufficient identifiers and source provenance, plus analyzable seed status
+  or market/protocol measurement evidence.
+- `deferred`: candidate exists but lacks enough evidence for prioritization.
+- `rejected`: candidate fails deterministic quality checks such as blocked, spam, scam, or
+  impersonation markers.
+
+The queue ranks what Hunter should investigate next without treating popularity as
+investment quality or excluding already known assets. Queue entries are keyed by candidate
+id, so refreshes update priorities without duplicating entries.
 
 ## Public Sources
 
 Committed defaults support public CoinGecko and DefiLlama discovery endpoints. Provider
 failures are reported as unavailable discovery runs and are not treated as absence of
-market candidates.
+market candidates. Adapters use bounded deterministic retry/backoff for timeout,
+rate-limit, and temporary server failures; provider failure records the run as unavailable
+and does not write partial registry state.
+
+## Coverage
+
+`hunter discovery coverage` reports registry coverage, source-provider coverage,
+screening coverage, candidate lifecycle distribution, automation job coverage, and missing
+evidence counts separately. These values are intentionally not collapsed into a single
+completion score.
 
 ## CLI
 

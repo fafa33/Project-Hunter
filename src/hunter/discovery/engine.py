@@ -165,9 +165,7 @@ class CandidateDiscoveryEngine:
 
     def refresh_queue(self, *, limit: int = 1000) -> tuple[CandidateQueueEntry, ...]:
         now = datetime.now(tz=UTC)
-        results = self.repository.latest_screening_results()
-        if not results:
-            results = self.screen_candidates(limit=limit)
+        results = self.screen_candidates(limit=limit)
         candidates = {candidate.candidate_id: candidate for candidate in self.repository.list_candidates(limit=limit)}
         entries = tuple(
             self._queue_entry(result, candidates[result.candidate_id], updated_at=now)
@@ -280,10 +278,7 @@ class CandidateDiscoveryEngine:
         )
 
     def _provider_candidate(self, candidate: DiscoveredCandidate, *, observed_at: datetime) -> CandidateRecord:
-        existing = self.repository.get_by_slug(candidate.slug)
-        candidate_id = (
-            existing.candidate_id if existing else self._candidate_id(candidate.provider, candidate.provider_id)
-        )
+        candidate_id = self._candidate_id(candidate.provider, candidate.provider_id)
         identifiers = [
             CandidateIdentifier(
                 candidate_id,
@@ -314,8 +309,6 @@ class CandidateDiscoveryEngine:
             confidence=0.95,
         )
         lifecycle = "screenable" if len(identifiers) >= self.config.minimum_screening_identifiers else "identified"
-        if existing and existing.lifecycle_status == "analyzable":
-            lifecycle = "analyzable"
         return CandidateRecord(
             candidate_id=candidate_id,
             slug=candidate.slug,
@@ -325,8 +318,8 @@ class CandidateDiscoveryEngine:
             primary_chain=candidate.primary_chain,
             candidate_type=candidate.candidate_type,  # type: ignore[arg-type]
             lifecycle_status=lifecycle,  # type: ignore[arg-type]
-            discovery_source=existing.discovery_source if existing else candidate.provider,
-            first_seen_at=existing.first_seen_at if existing else observed_at,
+            discovery_source=candidate.provider,
+            first_seen_at=observed_at,
             last_seen_at=observed_at,
             confidence=0.95,
             identifiers=tuple(identifiers),
@@ -343,12 +336,16 @@ class CandidateDiscoveryEngine:
             providers["coingecko"] = CoinGeckoDiscoveryProvider(
                 base_url=coingecko.base_url or "https://api.coingecko.com/api/v3",
                 timeout_seconds=coingecko.timeout_seconds,
+                max_attempts=coingecko.max_attempts,
+                backoff_seconds=coingecko.backoff_seconds,
             )
         defillama = config.provider("defillama")
         if defillama.enabled:
             providers["defillama"] = DefiLlamaDiscoveryProvider(
                 base_url=defillama.base_url or "https://api.llama.fi",
                 timeout_seconds=defillama.timeout_seconds,
+                max_attempts=defillama.max_attempts,
+                backoff_seconds=defillama.backoff_seconds,
             )
         return providers
 
@@ -362,6 +359,7 @@ class CandidateDiscoveryEngine:
         reasons: list[str] = []
         missing: list[str] = []
         score = 0.0
+        rejected = _has_rejection_marker(candidate)
         if candidate.identifiers:
             score += 0.3
             reasons.append("has deterministic external identifier")
@@ -386,13 +384,35 @@ class CandidateDiscoveryEngine:
         if candidate.lifecycle_status == "analyzable":
             score += 0.1
             reasons.append("compatible with current deep analysis path")
+        if _has_market_or_protocol_measure(candidate):
+            score += 0.15
+            reasons.append("has market or protocol measurement")
+        else:
+            missing.append("market_or_protocol_measurement")
         coverage = round((5 - min(len(missing), 5)) / 5, 4)
         score = round(min(score, 1.0), 4)
-        advanced = score >= 0.45 or candidate.lifecycle_status == "analyzable"
-        status = "advanced" if advanced else "deferred"
+        minimum_quality = bool(candidate.identifiers and candidate.sources)
+        advanced = minimum_quality and (
+            candidate.lifecycle_status == "analyzable" or (score >= 0.65 and _has_market_or_protocol_measure(candidate))
+        )
+        if rejected or not minimum_quality:
+            status = "rejected"
+            advanced = False
+            reasons.append("failed deterministic minimum quality gate")
+        else:
+            status = "advanced" if advanced else "deferred"
         return CandidateScreeningResult(
             screening_id=identity(
-                "candidate-screening", {"candidate": candidate.candidate_id, "screened_at": screened_at}
+                "candidate-screening",
+                {
+                    "candidate": candidate.candidate_id,
+                    "last_seen_at": candidate.last_seen_at,
+                    "identifier_count": len(candidate.identifiers),
+                    "source_count": len(candidate.sources),
+                    "status": status,
+                    "score": score,
+                    "missing": tuple(sorted(missing)),
+                },
             ),
             candidate_id=candidate.candidate_id,
             screened_at=screened_at,
@@ -412,7 +432,9 @@ class CandidateDiscoveryEngine:
         *,
         updated_at: datetime,
     ) -> CandidateQueueEntry:
-        score = round(result.score + (0.1 if result.advanced else 0.0), 4)
+        score = (
+            0.0 if result.status == "rejected" else round(min(result.score + (0.1 if result.advanced else 0.0), 1.0), 4)
+        )
         if score >= 0.8:
             priority = "critical"
         elif score >= 0.65:
@@ -464,3 +486,13 @@ def candidate_for_report(candidate: CandidateRecord) -> dict[str, object]:
 
 def merge_candidate_status(candidate: CandidateRecord, status: str) -> CandidateRecord:
     return replace(candidate, lifecycle_status=status)  # type: ignore[arg-type]
+
+
+def _has_market_or_protocol_measure(candidate: CandidateRecord) -> bool:
+    keys = {"market_cap", "market_cap_rank", "tvl", "liquidity", "volume"}
+    return any(candidate.metadata.get(key) not in {None, ""} for key in keys)
+
+
+def _has_rejection_marker(candidate: CandidateRecord) -> bool:
+    markers = ("spam", "scam", "impersonation", "blocked")
+    return any(bool(candidate.metadata.get(marker)) for marker in markers)

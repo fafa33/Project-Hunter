@@ -32,93 +32,20 @@ class CandidateRegistryRepository:
 
     def upsert_candidate(self, candidate: CandidateRecord) -> str:
         with self._connect() as conn:
-            existing = self.get_by_slug(candidate.slug, connection=conn)
-            candidate_id = (
-                existing.candidate_id
-                if existing and existing.candidate_id != candidate.candidate_id
-                else candidate.candidate_id
-            )
-            candidate = _with_candidate_id(candidate, candidate_id)
-            previous = self.get(candidate_id, connection=conn)
-            first_seen = previous.first_seen_at if previous else candidate.first_seen_at
-            evidence_ids = tuple(sorted({*(previous.evidence_ids if previous else ()), *candidate.evidence_ids}))
-            source_ids = tuple(sorted({*(previous.source_ids if previous else ()), *candidate.source_ids}))
-            conn.execute(
-                """
-                INSERT INTO candidates (
-                    candidate_id, slug, name, symbol, sector, primary_chain, candidate_type,
-                    lifecycle_status, discovery_source, first_seen_at, last_seen_at, confidence,
-                    evidence_ids, source_ids, alias_count, identifier_count,
-                    identity_resolution_status, queue_status, screening_status,
-                    intrinsic_value_status, competition_status, network_effect_status, metadata
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(candidate_id) DO UPDATE SET
-                    slug=excluded.slug,
-                    name=excluded.name,
-                    symbol=COALESCE(excluded.symbol, candidates.symbol),
-                    sector=COALESCE(excluded.sector, candidates.sector),
-                    primary_chain=COALESCE(excluded.primary_chain, candidates.primary_chain),
-                    candidate_type=excluded.candidate_type,
-                    lifecycle_status=excluded.lifecycle_status,
-                    discovery_source=excluded.discovery_source,
-                    first_seen_at=MIN(candidates.first_seen_at, excluded.first_seen_at),
-                    last_seen_at=MAX(candidates.last_seen_at, excluded.last_seen_at),
-                    confidence=MAX(candidates.confidence, excluded.confidence),
-                    evidence_ids=excluded.evidence_ids,
-                    source_ids=excluded.source_ids,
-                    alias_count=excluded.alias_count,
-                    identifier_count=excluded.identifier_count,
-                    identity_resolution_status=excluded.identity_resolution_status,
-                    queue_status=excluded.queue_status,
-                    screening_status=excluded.screening_status,
-                    intrinsic_value_status=excluded.intrinsic_value_status,
-                    competition_status=excluded.competition_status,
-                    network_effect_status=excluded.network_effect_status,
-                    metadata=excluded.metadata
-                """,
-                (
-                    candidate_id,
-                    candidate.slug,
-                    candidate.name,
-                    candidate.symbol,
-                    candidate.sector,
-                    candidate.primary_chain,
-                    candidate.candidate_type,
-                    candidate.lifecycle_status,
-                    candidate.discovery_source,
-                    _dt(first_seen),
-                    _dt(candidate.last_seen_at),
-                    candidate.confidence,
-                    _json(evidence_ids),
-                    _json(source_ids),
-                    len(candidate.aliases),
-                    len(candidate.identifiers),
-                    candidate.identity_resolution_status,
-                    candidate.queue_status,
-                    candidate.screening_status,
-                    candidate.intrinsic_value_status,
-                    candidate.competition_status,
-                    candidate.network_effect_status,
-                    _json(candidate.metadata),
-                ),
-            )
-            self._upsert_identifiers(conn, candidate.identifiers)
-            self._upsert_aliases(conn, candidate.aliases)
-            self._upsert_sources(conn, candidate.sources)
-            self._refresh_counts(conn, candidate_id)
-            return candidate_id
+            return self._upsert_candidate(conn, candidate)
 
     def upsert_many(self, candidates: Iterable[CandidateRecord]) -> tuple[int, int]:
         created = 0
         updated = 0
-        for candidate in candidates:
-            exists = self.get(candidate.candidate_id) is not None or self.get_by_slug(candidate.slug) is not None
-            self.upsert_candidate(candidate)
-            if exists:
-                updated += 1
-            else:
-                created += 1
+        with self._connect() as conn:
+            conn.execute("BEGIN")
+            for candidate in candidates:
+                exists = self._candidate_exists(conn, candidate.candidate_id, candidate.slug)
+                self._upsert_candidate(conn, candidate)
+                if exists:
+                    updated += 1
+                else:
+                    created += 1
         return created, updated
 
     def get(self, candidate_id: str, *, connection: sqlite3.Connection | None = None) -> CandidateRecord | None:
@@ -156,7 +83,7 @@ class CandidateRegistryRepository:
         limit: int = 100,
         offset: int = 0,
     ) -> tuple[CandidateRecord, ...]:
-        limit = max(1, min(limit, 1000))
+        limit = max(1, min(limit, 100_000))
         offset = max(0, offset)
         with self._connect() as conn:
             if status:
@@ -169,6 +96,16 @@ class CandidateRegistryRepository:
                     "SELECT * FROM candidates ORDER BY slug LIMIT ? OFFSET ?", (limit, offset)
                 ).fetchall()
             return tuple(self._record_from_row(conn, row) for row in rows)
+
+    def iter_candidates(self, *, batch_size: int = 1000) -> Iterable[tuple[CandidateRecord, ...]]:
+        offset = 0
+        size = max(1, min(batch_size, 10_000))
+        while True:
+            batch = self.list_candidates(limit=size, offset=offset)
+            if not batch:
+                break
+            yield batch
+            offset += len(batch)
 
     def stats(self) -> CandidateRegistryStats:
         with self._connect() as conn:
@@ -581,6 +518,113 @@ class CandidateRegistryRepository:
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
         return conn
+
+    def _candidate_exists(self, conn: sqlite3.Connection, candidate_id: str, slug: str) -> bool:
+        return (
+            conn.execute(
+                "SELECT 1 FROM candidates WHERE candidate_id = ? OR slug = ? LIMIT 1",
+                (candidate_id, slug),
+            ).fetchone()
+            is not None
+        )
+
+    def _upsert_candidate(self, conn: sqlite3.Connection, candidate: CandidateRecord) -> str:
+        existing = conn.execute(
+            "SELECT candidate_id FROM candidates WHERE slug = ? LIMIT 1",
+            (candidate.slug,),
+        ).fetchone()
+        candidate_id = (
+            str(existing["candidate_id"])
+            if existing is not None and str(existing["candidate_id"]) != candidate.candidate_id
+            else candidate.candidate_id
+        )
+        candidate = _with_candidate_id(candidate, candidate_id)
+        previous = conn.execute(
+            "SELECT slug, name, first_seen_at, evidence_ids, source_ids FROM candidates WHERE candidate_id = ? LIMIT 1",
+            (candidate_id,),
+        ).fetchone()
+        write_slug = str(previous["slug"]) if previous else candidate.slug
+        write_name = str(previous["name"]) if previous else candidate.name
+        first_seen = _parse_dt(str(previous["first_seen_at"])) if previous else candidate.first_seen_at
+        previous_evidence = tuple(_loads(previous["evidence_ids"])) if previous else ()
+        previous_sources = tuple(_loads(previous["source_ids"])) if previous else ()
+        evidence_ids = tuple(sorted({*previous_evidence, *candidate.evidence_ids}))
+        source_ids = tuple(sorted({*previous_sources, *candidate.source_ids}))
+        conn.execute(
+            """
+            INSERT INTO candidates (
+                candidate_id, slug, name, symbol, sector, primary_chain, candidate_type,
+                lifecycle_status, discovery_source, first_seen_at, last_seen_at, confidence,
+                evidence_ids, source_ids, alias_count, identifier_count,
+                identity_resolution_status, queue_status, screening_status,
+                intrinsic_value_status, competition_status, network_effect_status, metadata
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(candidate_id) DO UPDATE SET
+                slug=excluded.slug,
+                name=excluded.name,
+                symbol=COALESCE(candidates.symbol, excluded.symbol),
+                sector=COALESCE(candidates.sector, excluded.sector),
+                primary_chain=COALESCE(candidates.primary_chain, excluded.primary_chain),
+                candidate_type=CASE
+                    WHEN candidates.candidate_type != 'unknown' THEN candidates.candidate_type
+                    ELSE excluded.candidate_type
+                END,
+                lifecycle_status=CASE
+                    WHEN candidates.lifecycle_status IN ('analyzable', 'ranked', 'deep_research')
+                    THEN candidates.lifecycle_status
+                    ELSE excluded.lifecycle_status
+                END,
+                discovery_source=CASE
+                    WHEN candidates.discovery_source = 'seed' THEN candidates.discovery_source
+                    ELSE excluded.discovery_source
+                END,
+                first_seen_at=MIN(candidates.first_seen_at, excluded.first_seen_at),
+                last_seen_at=MAX(candidates.last_seen_at, excluded.last_seen_at),
+                confidence=MAX(candidates.confidence, excluded.confidence),
+                evidence_ids=excluded.evidence_ids,
+                source_ids=excluded.source_ids,
+                alias_count=excluded.alias_count,
+                identifier_count=excluded.identifier_count,
+                identity_resolution_status=excluded.identity_resolution_status,
+                queue_status=excluded.queue_status,
+                screening_status=excluded.screening_status,
+                intrinsic_value_status=excluded.intrinsic_value_status,
+                competition_status=excluded.competition_status,
+                network_effect_status=excluded.network_effect_status,
+                metadata=excluded.metadata
+            """,
+            (
+                candidate_id,
+                write_slug,
+                write_name,
+                candidate.symbol,
+                candidate.sector,
+                candidate.primary_chain,
+                candidate.candidate_type,
+                candidate.lifecycle_status,
+                candidate.discovery_source,
+                _dt(first_seen),
+                _dt(candidate.last_seen_at),
+                candidate.confidence,
+                _json(evidence_ids),
+                _json(source_ids),
+                len(candidate.aliases),
+                len(candidate.identifiers),
+                candidate.identity_resolution_status,
+                candidate.queue_status,
+                candidate.screening_status,
+                candidate.intrinsic_value_status,
+                candidate.competition_status,
+                candidate.network_effect_status,
+                _json(candidate.metadata),
+            ),
+        )
+        self._upsert_identifiers(conn, candidate.identifiers)
+        self._upsert_aliases(conn, candidate.aliases)
+        self._upsert_sources(conn, candidate.sources)
+        self._refresh_counts(conn, candidate_id)
+        return candidate_id
 
     def _upsert_identifiers(self, conn: sqlite3.Connection, identifiers: tuple[CandidateIdentifier, ...]) -> None:
         for identifier in identifiers:

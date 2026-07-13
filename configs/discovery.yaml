@@ -9,8 +9,12 @@ providers:
     limit: 250
     base_url: https://api.coingecko.com/api/v3
     timeout_seconds: 30
+    max_attempts: 3
+    backoff_seconds: 0.5
   defillama:
     enabled: true
     limit: 250
     base_url: https://api.llama.fi
     timeout_seconds: 30
+    max_attempts: 3
+    backoff_seconds: 0.5

@@ -13,6 +13,8 @@ class DiscoveryProviderConfig:
     limit: int = 250
     base_url: str | None = None
     timeout_seconds: int = 30
+    max_attempts: int = 3
+    backoff_seconds: float = 0.5
 
 
 @dataclass(frozen=True)
@@ -42,6 +44,8 @@ def load_discovery_config(path: str | Path = "configs/discovery.yaml") -> Discov
             limit=int(raw.get("limit", 250)),
             base_url=str(raw["base_url"]) if raw.get("base_url") else None,
             timeout_seconds=int(raw.get("timeout_seconds", 30)),
+            max_attempts=int(raw.get("max_attempts", 3)),
+            backoff_seconds=float(raw.get("backoff_seconds", 0.5)),
         )
         for name, raw in (payload.get("providers") or {}).items()
         if isinstance(raw, dict)

@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 
 import pytest
 
+from hunter.acquisition.exceptions import ProviderUnavailableError
 from hunter.discovery import CandidateDiscoveryEngine, CandidateLifecycleTransition, CandidateRegistryRepository
 from hunter.discovery.automation import discovery_automation_status, install_discovery_jobs
 from hunter.discovery.configuration import DiscoveryConfig
@@ -18,6 +19,14 @@ class StaticDiscoveryProvider:
 
     def discover(self, *, limit: int) -> tuple[DiscoveredCandidate, ...]:
         return self.rows[:limit]
+
+
+@dataclass(frozen=True)
+class FailingDiscoveryProvider:
+    name: str = "coingecko"
+
+    def discover(self, *, limit: int) -> tuple[DiscoveredCandidate, ...]:
+        raise ProviderUnavailableError("provider unavailable")
 
 
 def test_configured_universe_seeds_candidate_registry(tmp_path) -> None:
@@ -71,6 +80,18 @@ def test_provider_discovery_is_incremental_and_idempotent(tmp_path) -> None:
     assert repository.find_by_identifier("coingecko_symbol", "NEW") is None
 
 
+def test_provider_failure_does_not_corrupt_registry(tmp_path) -> None:
+    repository = CandidateRegistryRepository(tmp_path / "candidates.sqlite")
+    config = DiscoveryConfig(registry_path=str(tmp_path / "candidates.sqlite"), providers={})
+    engine = CandidateDiscoveryEngine(repository, config, providers={"coingecko": FailingDiscoveryProvider()})
+
+    run = engine.sync(provider="coingecko", limit=10)
+
+    assert run.status == "unavailable"
+    assert repository.stats().total_candidates == 0
+    assert repository.runs()[0].status == "unavailable"
+
+
 def test_provider_candidate_merges_with_seed_by_slug(tmp_path) -> None:
     repository = CandidateRegistryRepository(tmp_path / "candidates.sqlite")
     config = DiscoveryConfig(
@@ -105,6 +126,77 @@ def test_provider_candidate_merges_with_seed_by_slug(tmp_path) -> None:
     assert repository.stats().total_candidates == 50
 
 
+def test_provider_identifier_merge_preserves_seed_canonical_slug(tmp_path) -> None:
+    repository = CandidateRegistryRepository(tmp_path / "candidates.sqlite")
+    config = DiscoveryConfig(
+        registry_path=str(tmp_path / "candidates.sqlite"),
+        market_validation_config="configs/market_validation.yaml",
+        project_identifiers_config="configs/project_identifiers.yaml",
+        providers={},
+    )
+    provider = StaticDiscoveryProvider(
+        "defillama",
+        (
+            DiscoveredCandidate(
+                provider="defillama",
+                provider_id="aave-v3",
+                slug="aave-v3",
+                name="Aave V3",
+                symbol="AAVE",
+                sector="Lending",
+                candidate_type="protocol",
+                metadata={"tvl": 1000},
+            ),
+        ),
+    )
+    engine = CandidateDiscoveryEngine(repository, config, providers={"defillama": _provider(provider)})
+
+    engine.sync(provider="seed")
+    engine.sync(provider="defillama", limit=1)
+
+    aave = repository.get_by_slug("aave")
+    assert aave is not None
+    assert aave.candidate_type == "project"
+    assert aave.sector == "defi"
+    assert repository.get_by_slug("aave-v3") is None
+    assert repository.find_by_identifier("defillama", "aave-v3").slug == "aave"
+
+
+def test_ticker_collision_does_not_merge_candidates(tmp_path) -> None:
+    repository = CandidateRegistryRepository(tmp_path / "candidates.sqlite")
+    config = DiscoveryConfig(registry_path=str(tmp_path / "candidates.sqlite"), providers={})
+    provider = StaticDiscoveryProvider(
+        "coingecko",
+        (
+            DiscoveredCandidate(
+                provider="coingecko",
+                provider_id="alpha-token",
+                slug="alpha-token",
+                name="Alpha Token",
+                symbol="SAME",
+                candidate_type="token",
+                metadata={"market_cap": 100},
+            ),
+            DiscoveredCandidate(
+                provider="coingecko",
+                provider_id="beta-token",
+                slug="beta-token",
+                name="Beta Token",
+                symbol="SAME",
+                candidate_type="token",
+                metadata={"market_cap": 200},
+            ),
+        ),
+    )
+
+    CandidateDiscoveryEngine(repository, config, providers={"coingecko": _provider(provider)}).sync(
+        provider="coingecko", limit=10
+    )
+
+    assert repository.stats().total_candidates == 2
+    assert repository.get_by_slug("alpha-token").candidate_id != repository.get_by_slug("beta-token").candidate_id
+
+
 def test_registry_has_indexed_lookup_surfaces(tmp_path) -> None:
     repository = CandidateRegistryRepository(tmp_path / "candidates.sqlite")
     indexes = set(repository.index_names())
@@ -132,6 +224,67 @@ def test_screening_and_queue_are_deterministic_and_idempotent(tmp_path) -> None:
     assert len(first_queue) == 50
     assert [entry.queue_entry_id for entry in first_queue] == [entry.queue_entry_id for entry in second_queue]
     assert first_queue[0].eligible_for_deep_analysis is True
+
+
+def test_screening_defers_and_rejects_low_quality_candidates(tmp_path) -> None:
+    repository = CandidateRegistryRepository(tmp_path / "candidates.sqlite")
+    config = DiscoveryConfig(registry_path=str(tmp_path / "candidates.sqlite"), providers={})
+    provider = StaticDiscoveryProvider(
+        "coingecko",
+        (
+            DiscoveredCandidate(
+                provider="coingecko",
+                provider_id="thin-evidence",
+                slug="thin-evidence",
+                name="Thin Evidence",
+                symbol="THIN",
+                candidate_type="token",
+            ),
+            DiscoveredCandidate(
+                provider="coingecko",
+                provider_id="blocked-evidence",
+                slug="blocked-evidence",
+                name="Blocked Evidence",
+                symbol="BAD",
+                candidate_type="token",
+                metadata={"market_cap": 1000, "blocked": True},
+            ),
+        ),
+    )
+    engine = CandidateDiscoveryEngine(repository, config, providers={"coingecko": _provider(provider)})
+
+    engine.sync(provider="coingecko", limit=10)
+    results = {repository.get(result.candidate_id).slug: result for result in engine.screen_candidates()}
+
+    assert results["thin-evidence"].status == "deferred"
+    assert results["blocked-evidence"].status == "rejected"
+
+
+def test_large_candidate_import_uses_idempotent_registry_writes(tmp_path) -> None:
+    repository = CandidateRegistryRepository(tmp_path / "candidates.sqlite")
+    observed_at = datetime.now(tz=UTC)
+    candidates = tuple(
+        CandidateDiscoveryEngine(repository, DiscoveryConfig(), providers={})._provider_candidate(
+            DiscoveredCandidate(
+                provider="coingecko",
+                provider_id=f"asset-{index}",
+                slug=f"asset-{index}",
+                name=f"Asset {index}",
+                symbol=f"A{index}",
+                candidate_type="token",
+                metadata={"market_cap": index + 1},
+            ),
+            observed_at=observed_at,
+        )
+        for index in range(1500)
+    )
+
+    first = repository.upsert_many(candidates)
+    second = repository.upsert_many(candidates)
+
+    assert first == (1500, 0)
+    assert second == (0, 1500)
+    assert repository.stats().total_candidates == 1500
 
 
 def test_lifecycle_transition_validation_and_persistence(tmp_path) -> None:

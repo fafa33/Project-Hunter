@@ -805,11 +805,26 @@ def _discovery(args: object) -> int:
         stats = repository.stats()
         expected = len(load_market_validation_config(Path(config.market_validation_config)).project_universe)
         registry_coverage = (stats.configured_candidates / expected) if expected else 0.0
-        screening_count = len(repository.latest_screening_results())
+        screening_results = repository.latest_screening_results()
+        screening_count = len(screening_results)
+        screening_states = Counter(result.status for result in screening_results)
+        missing_evidence = Counter(item for result in screening_results for item in result.missing_evidence)
         queue_count = len(repository.queue_entries(limit=1000))
+        enabled_providers = tuple(
+            name for name, provider_config in (config.providers or {}).items() if provider_config.enabled
+        )
+        successful_providers = {
+            run.provider
+            for run in repository.runs(limit=100)
+            if run.provider in enabled_providers and run.status == "succeeded"
+        }
+        automation_status = discovery_automation_status(Path(args.config))
         print(f"registry_coverage={registry_coverage:.2%}")
         print(f"configured_candidates={stats.configured_candidates}/{expected}")
-        print(f"source_discovery_coverage={(1.0 if stats.total_candidates else 0.0):.2%}")
+        print(
+            f"source_discovery_coverage={len(successful_providers) / len(enabled_providers) if enabled_providers else 0.0:.2%}"
+        )
+        print(f"source_provider_coverage={len(successful_providers)}/{len(enabled_providers)}")
         print(
             f"canonical_identity_coverage={stats.future_identity_ready_candidates / stats.total_candidates if stats.total_candidates else 0.0:.2%}"
         )
@@ -826,8 +841,11 @@ def _discovery(args: object) -> int:
         print(f"screenable_ratio={stats.screenable_ratio:.2%}")
         print(f"identity_ready_candidates={stats.future_identity_ready_candidates}/{stats.total_candidates}")
         print(f"queue_entries={queue_count}")
+        print(f"automation_coverage={automation_status['installed_jobs']}/3")
         print(f"by_status={json.dumps(stats.by_status, sort_keys=True)}")
         print(f"by_source={json.dumps(stats.by_source, sort_keys=True)}")
+        print(f"screening_states={json.dumps(dict(screening_states), sort_keys=True)}")
+        print(f"missing_evidence={json.dumps(dict(missing_evidence), sort_keys=True)}")
         return 0
     if command == "validate":
         stats = repository.stats()
