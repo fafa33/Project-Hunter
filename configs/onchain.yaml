@@ -1,0 +1,73 @@
+enabled: true
+version: onchain-surface-registry-v1
+
+chains:
+  - chain_id: 1
+    network: ethereum
+    family: evm
+    enabled: true
+    rpc_endpoint: https://ethereum.publicnode.com
+    rpc_env: HUNTER_ETHEREUM_RPC_URL
+    explorer_url: https://etherscan.io
+    finality_depth: 64
+    max_block_range: 5000
+    polling_interval_seconds: 300
+    retry_limit: 2
+    timeout_seconds: 20
+
+tracked_assets:
+  - chain_id: 1
+    symbol: ETH
+    asset_type: native
+    decimals: 18
+    contract_address:
+  - chain_id: 1
+    symbol: WETH
+    asset_type: wrapped_native
+    decimals: 18
+    contract_address: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"
+  - chain_id: 1
+    symbol: USDC
+    asset_type: stablecoin
+    decimals: 6
+    contract_address: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
+  - chain_id: 1
+    symbol: USDT
+    asset_type: stablecoin
+    decimals: 6
+    contract_address: "0xdAC17F958D2ee523a2206206994597C13D831ec7"
+  - chain_id: 1
+    symbol: DAI
+    asset_type: stablecoin
+    decimals: 18
+    contract_address: "0x6B175474E89094C44Da98b954EedeAC495271d0F"
+
+surface_registry:
+  - project: aave
+    chain_id: 1
+    network: ethereum
+    address: "0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2"
+    address_type: lending_market
+    protocol_role: aave_v3_pool
+    asset_scope: supported_reserve_assets
+    source_url: https://etherscan.io/address/0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2
+    source_type: verified_block_explorer
+    verification_timestamp: "2026-07-13T00:00:00+00:00"
+    confidence: 0.95
+    active: true
+    valid_from: "2023-01-27T00:00:00+00:00"
+    valid_to:
+
+snapshot_windows:
+  - latest_finalized_block
+  - 1h
+  - 24h
+  - 7d
+  - 30d
+
+retention:
+  runtime_root: data/onchain/runtime
+  commit_runtime_data: false
+  compaction: idempotent_latest_by_evidence_id
+  max_raw_observations_per_sync: 5000
+  preserve_last_valid_snapshot: true

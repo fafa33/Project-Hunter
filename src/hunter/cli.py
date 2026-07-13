@@ -120,6 +120,7 @@ from hunter.narrative.discovery import (
 from hunter.narrative.provider import NarrativeProviderConfig
 from hunter.necessity import TechnologyNecessityEngine, TechnologyNecessityInputSet, load_technology_graph_config
 from hunter.necessity.ranking import rank_necessity_assessments
+from hunter.onchain import CapitalFlowEngine, OnChainRepository, SurfaceRegistry, load_onchain_config
 from hunter.opportunity.ranking import rank_opportunities
 from hunter.patterns.ranking import rank_pattern_assessments
 from hunter.persistence.records import EvidenceRecord, SnapshotRecord
@@ -310,6 +311,32 @@ def main(argv: list[str] | None = None) -> int:
     whale_explain.add_argument("metric", nargs="?")
     whale_sub.add_parser("history")
     whale_sub.add_parser("failures")
+    onchain = sub.add_parser("onchain")
+    onchain.add_argument("--onchain-config", default="configs/onchain.yaml")
+    onchain.add_argument("--market-validation-config", default="configs/market_validation.yaml")
+    onchain_sub = onchain.add_subparsers(dest="onchain_command")
+    onchain_registry = onchain_sub.add_parser("registry")
+    onchain_registry_sub = onchain_registry.add_subparsers(dest="onchain_registry_command")
+    onchain_registry_sub.add_parser("validate")
+    onchain_registry_sub.add_parser("coverage")
+    onchain_sync = onchain_sub.add_parser("sync")
+    onchain_sync.add_argument("project", nargs="?")
+    onchain_sub.add_parser("coverage")
+    onchain_report = onchain_sub.add_parser("report")
+    onchain_report.add_argument("project", nargs="?")
+    onchain_explain = onchain_sub.add_parser("explain")
+    onchain_explain.add_argument("project")
+    onchain_snapshots = onchain_sub.add_parser("snapshots")
+    onchain_snapshots.add_argument("project")
+    onchain_sub.add_parser("providers")
+    capital_flow = sub.add_parser("capital-flow")
+    capital_flow.add_argument("--onchain-config", default="configs/onchain.yaml")
+    capital_flow.add_argument("--market-validation-config", default="configs/market_validation.yaml")
+    capital_flow_sub = capital_flow.add_subparsers(dest="capital_flow_command")
+    capital_flow_sub.add_parser("coverage")
+    capital_flow_sub.add_parser("report")
+    capital_flow_explain = capital_flow_sub.add_parser("explain")
+    capital_flow_explain.add_argument("project")
     narrative = sub.add_parser("narrative")
     narrative.add_argument("--acquisition-config", default="configs/acquisition.yaml")
     narrative.add_argument("--market-validation-config", default="configs/market_validation.yaml")
@@ -552,6 +579,10 @@ def main(argv: list[str] | None = None) -> int:
         return _macro(args)
     if args.command == "whale":
         return _whale(args)
+    if args.command == "onchain":
+        return _onchain(args)
+    if args.command == "capital-flow":
+        return _capital_flow(args)
     if args.command == "narrative":
         return _narrative(args)
     if args.command == "sources":
@@ -3398,6 +3429,133 @@ def _developer(args: object) -> int:
         return 0
     print("developer command required")
     return 1
+
+
+def _onchain(args: object) -> int:
+    config = load_onchain_config(Path(args.onchain_config))
+    registry = SurfaceRegistry(config)
+    command = getattr(args, "onchain_command", None)
+    if command == "registry":
+        subcommand = getattr(args, "onchain_registry_command", None)
+        validation = registry.validate()
+        if subcommand == "validate":
+            print(
+                f"valid={str(validation.valid).lower()} surfaces={validation.surfaces} "
+                f"projects={validation.projects_with_surface} issues={','.join(validation.issues) or '-'}"
+            )
+            return 0 if validation.valid else 2
+        if subcommand == "coverage":
+            total = _configured_project_count(args)
+            coverage = round((validation.projects_with_surface / max(total, 1)) * 100, 2)
+            print(
+                f"projects={total} verified_projects={validation.projects_with_surface} "
+                f"surfaces={validation.surfaces} coverage={coverage:.2f}"
+            )
+            return 0
+    if command == "sync":
+        snapshots = CapitalFlowEngine(config).sync(getattr(args, "project", None))
+        live = sum(1 for item in snapshots if item.status == "live")
+        unavailable = len(snapshots) - live
+        print(f"synced={len(snapshots)} live={live} unavailable={unavailable}")
+        return 0
+    if command == "coverage":
+        return _capital_flow_coverage(config)
+    if command == "report":
+        return _capital_flow_report(config, getattr(args, "project", None))
+    if command == "explain":
+        return _capital_flow_explain(config, str(args.project))
+    if command == "snapshots":
+        return _capital_flow_snapshots(config, str(args.project))
+    if command == "providers":
+        for chain in config.chains:
+            state = "enabled" if chain.enabled else "disabled"
+            endpoint = chain.rpc_env or chain.rpc_endpoint
+            print(f"{chain.network}\tchain_id={chain.chain_id}\tfamily={chain.family}\t{state}\tendpoint={endpoint}")
+        return 0
+    print("onchain command required")
+    return 1
+
+
+def _capital_flow(args: object) -> int:
+    config = load_onchain_config(Path(args.onchain_config))
+    command = getattr(args, "capital_flow_command", None)
+    if command == "coverage":
+        return _capital_flow_coverage(config)
+    if command == "report":
+        return _capital_flow_report(config, None)
+    if command == "explain":
+        return _capital_flow_explain(config, str(args.project))
+    print("capital-flow command required")
+    return 1
+
+
+def _capital_flow_coverage(config: object) -> int:
+    engine = CapitalFlowEngine(config)  # type: ignore[arg-type]
+    coverage = engine.coverage()
+    coverage_value = float(coverage["coverage"])
+    print(
+        f"projects={coverage['projects']} verified_surfaces={coverage['verified_surfaces']} "
+        f"projects_with_surface={coverage['projects_with_surface']} live_projects={coverage['live_projects']} "
+        f"coverage={coverage_value:.2f}"
+    )
+    return 0
+
+
+def _capital_flow_report(config: object, project: str | None) -> int:
+    snapshots = OnChainRepository(str(config.retention.get("runtime_root", "data/onchain/runtime"))).snapshots()  # type: ignore[attr-defined]
+    surfaces = {surface.project: surface for surface in config.surfaces}  # type: ignore[attr-defined]
+    projects = _market_project_ids(_ArgsWithMarketConfig())
+    for project_id in projects:
+        if project and project_id != project:
+            continue
+        if project_id not in surfaces:
+            print(f"{project_id}\tNO_VERIFIED_ONCHAIN_SURFACE")
+            continue
+        project_snapshots = [row for row in snapshots if row.get("project") == project_id]
+        if not project_snapshots:
+            print(f"{project_id}\tverified_surface=true\tstatus=cached_empty\tlive=false")
+            continue
+        latest = sorted(project_snapshots, key=lambda row: str(row.get("generated_at", "")))[-1]
+        print(
+            f"{project_id}\tstatus={latest.get('status')}\tchain_id={latest.get('chain_id')}"
+            f"\twindow={latest.get('window')}\tnet_external_flow={latest.get('net_external_flow')}"
+            f"\tevidence={','.join(latest.get('evidence_ids', ())) or '-'}"
+        )
+    return 0
+
+
+def _capital_flow_explain(config: object, project: str) -> int:
+    surfaces = tuple(surface for surface in config.surfaces if surface.project == project)  # type: ignore[attr-defined]
+    if not surfaces:
+        print(f"{project}\tNO_VERIFIED_ONCHAIN_SURFACE")
+        return 0
+    print(
+        f"{project}\tverified_surfaces={len(surfaces)}"
+        f"\taddresses={','.join(surface.address for surface in surfaces)}"
+        f"\tevidence={','.join(surface.evidence_id for surface in surfaces)}"
+    )
+    return _capital_flow_report(config, project)
+
+
+def _capital_flow_snapshots(config: object, project: str) -> int:
+    snapshots = OnChainRepository(str(config.retention.get("runtime_root", "data/onchain/runtime"))).snapshots()  # type: ignore[attr-defined]
+    found = False
+    for snapshot in snapshots:
+        if snapshot.get("project") != project:
+            continue
+        found = True
+        print(
+            f"{project}\tchain_id={snapshot.get('chain_id')}\twindow={snapshot.get('window')}"
+            f"\tstatus={snapshot.get('status')}\tstart={snapshot.get('start_block')}"
+            f"\tend={snapshot.get('end_block')}\tunavailable={','.join(snapshot.get('unavailable_fields', ())) or '-'}"
+        )
+    if not found:
+        print(f"{project}\tNO_SNAPSHOT")
+    return 0
+
+
+class _ArgsWithMarketConfig:
+    market_validation_config = "configs/market_validation.yaml"
 
 
 def _technology(args: object) -> int:
