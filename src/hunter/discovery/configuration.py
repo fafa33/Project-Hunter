@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -39,14 +40,7 @@ def load_discovery_config(path: str | Path = "configs/discovery.yaml") -> Discov
         msg = "discovery configuration must be a mapping"
         raise ValueError(msg)
     providers = {
-        str(name): DiscoveryProviderConfig(
-            enabled=bool(raw.get("enabled", True)),
-            limit=int(raw.get("limit", 250)),
-            base_url=str(raw["base_url"]) if raw.get("base_url") else None,
-            timeout_seconds=int(raw.get("timeout_seconds", 30)),
-            max_attempts=int(raw.get("max_attempts", 3)),
-            backoff_seconds=float(raw.get("backoff_seconds", 0.5)),
-        )
+        str(name): _provider_config(str(name), raw)
         for name, raw in (payload.get("providers") or {}).items()
         if isinstance(raw, dict)
     }
@@ -62,7 +56,7 @@ def load_discovery_config(path: str | Path = "configs/discovery.yaml") -> Discov
 
 def discovery_config_from_mapping(payload: dict[str, Any]) -> DiscoveryConfig:
     providers = {
-        str(name): DiscoveryProviderConfig(**raw)
+        str(name): _provider_config(str(name), raw)
         for name, raw in (payload.get("providers") or {}).items()
         if isinstance(raw, dict)
     }
@@ -74,3 +68,22 @@ def discovery_config_from_mapping(payload: dict[str, Any]) -> DiscoveryConfig:
         minimum_screening_identifiers=int(payload.get("minimum_screening_identifiers", 1)),
         providers=providers,
     )
+
+
+def _provider_config(name: str, raw: dict[str, Any]) -> DiscoveryProviderConfig:
+    env_prefix = f"HUNTER_DISCOVERY_{name.upper().replace('-', '_')}"
+    return DiscoveryProviderConfig(
+        enabled=_env_bool(f"{env_prefix}_ENABLED", bool(raw.get("enabled", True))),
+        limit=int(os.getenv(f"{env_prefix}_LIMIT", str(raw.get("limit", 250)))),
+        base_url=os.getenv(f"{env_prefix}_BASE_URL") or (str(raw["base_url"]) if raw.get("base_url") else None),
+        timeout_seconds=int(os.getenv(f"{env_prefix}_TIMEOUT_SECONDS", str(raw.get("timeout_seconds", 30)))),
+        max_attempts=int(os.getenv(f"{env_prefix}_MAX_ATTEMPTS", str(raw.get("max_attempts", 3)))),
+        backoff_seconds=float(os.getenv(f"{env_prefix}_BACKOFF_SECONDS", str(raw.get("backoff_seconds", 0.5)))),
+    )
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}

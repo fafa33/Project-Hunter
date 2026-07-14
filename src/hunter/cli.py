@@ -68,6 +68,7 @@ from hunter.data_ops import (
 )
 from hunter.discovery import (
     CandidateDiscoveryEngine,
+    CandidateRecord,
     CandidateRegistryRepository,
     candidate_for_report,
     discovery_automation_status,
@@ -202,7 +203,11 @@ def main(argv: list[str] | None = None) -> int:
     discovery_run = discovery_sub.add_parser("run")
     discovery_run.add_argument("--limit", type=int)
     discovery_sync = discovery_sub.add_parser("sync")
-    discovery_sync.add_argument("--provider", choices=("seed", "coingecko", "defillama", "all"), default="seed")
+    discovery_sync.add_argument(
+        "--provider",
+        choices=("seed", "coingecko", "defillama", "geckoterminal", "dexscreener", "all"),
+        default="seed",
+    )
     discovery_sync.add_argument("--limit", type=int)
     discovery_sub.add_parser("status")
     discovery_sub.add_parser("stats")
@@ -810,6 +815,13 @@ def _discovery(args: object) -> int:
         screening_states = Counter(result.status for result in screening_results)
         missing_evidence = Counter(item for result in screening_results for item in result.missing_evidence)
         queue_count = len(repository.queue_entries(limit=1000))
+        candidates = repository.list_candidates(limit=100_000)
+        contract_identity_count = sum(
+            1
+            for candidate in candidates
+            if any(identifier.namespace.startswith("contract:") for identifier in candidate.identifiers)
+        )
+        official_link_count = sum(1 for candidate in candidates if _has_official_link(candidate))
         enabled_providers = tuple(
             name for name, provider_config in (config.providers or {}).items() if provider_config.enabled
         )
@@ -828,8 +840,12 @@ def _discovery(args: object) -> int:
         print(
             f"canonical_identity_coverage={stats.future_identity_ready_candidates / stats.total_candidates if stats.total_candidates else 0.0:.2%}"
         )
-        print("contract_identity_coverage=0.00%")
-        print("official_link_verification_coverage=0.00%")
+        print(
+            f"contract_identity_coverage={contract_identity_count / stats.total_candidates if stats.total_candidates else 0.0:.2%}"
+        )
+        print(
+            f"official_link_verification_coverage={official_link_count / stats.total_candidates if stats.total_candidates else 0.0:.2%}"
+        )
         print(f"screening_coverage={screening_count / stats.total_candidates if stats.total_candidates else 0.0:.2%}")
         print(
             f"analyzable_coverage={stats.by_status.get('analyzable', 0) / stats.total_candidates if stats.total_candidates else 0.0:.2%}"
@@ -841,11 +857,18 @@ def _discovery(args: object) -> int:
         print(f"screenable_ratio={stats.screenable_ratio:.2%}")
         print(f"identity_ready_candidates={stats.future_identity_ready_candidates}/{stats.total_candidates}")
         print(f"queue_entries={queue_count}")
-        print(f"automation_coverage={automation_status['installed_jobs']}/3")
+        print(f"automation_coverage={automation_status['installed_jobs']}/{automation_status['expected_jobs']}")
         print(f"by_status={json.dumps(stats.by_status, sort_keys=True)}")
         print(f"by_source={json.dumps(stats.by_source, sort_keys=True)}")
         print(f"screening_states={json.dumps(dict(screening_states), sort_keys=True)}")
         print(f"missing_evidence={json.dumps(dict(missing_evidence), sort_keys=True)}")
+        metrics = _discovery_market_metrics(candidates)
+        print(f"assets_by_provider={json.dumps(metrics['assets_by_provider'], sort_keys=True)}")
+        print(f"assets_by_ecosystem={json.dumps(metrics['assets_by_ecosystem'], sort_keys=True)}")
+        print(f"assets_by_chain={json.dumps(metrics['assets_by_chain'], sort_keys=True)}")
+        print(f"assets_by_category={json.dumps(metrics['assets_by_category'], sort_keys=True)}")
+        print(f"provider_overlap={json.dumps(metrics['provider_overlap'], sort_keys=True)}")
+        print(f"provider_uniqueness={json.dumps(metrics['provider_uniqueness'], sort_keys=True)}")
         return 0
     if command == "validate":
         stats = repository.stats()
@@ -926,6 +949,7 @@ def _discovery(args: object) -> int:
         candidates_by_id = {candidate.candidate_id: candidate for candidate in repository.list_candidates(limit=1000)}
         payload = {
             "candidate_counts": repository.stats().__dict__,
+            "market_coverage": _discovery_market_metrics(tuple(candidates_by_id.values())),
             "candidates": [candidate_for_report(candidate) for candidate in candidates],
             "top_prioritized_candidates": [
                 {
@@ -972,6 +996,48 @@ def _discovery(args: object) -> int:
         return 0
     print("discovery command required")
     return 1
+
+
+def _discovery_market_metrics(candidates: tuple[CandidateRecord, ...]) -> dict[str, object]:
+    assets_by_provider = Counter(source.provider for candidate in candidates for source in candidate.sources)
+    assets_by_ecosystem = Counter(
+        str(candidate.metadata.get("ecosystem") or candidate.primary_chain)
+        for candidate in candidates
+        if candidate.metadata.get("ecosystem") or candidate.primary_chain
+    )
+    assets_by_chain = Counter(
+        str(candidate.metadata.get("chain") or candidate.primary_chain)
+        for candidate in candidates
+        if candidate.metadata.get("chain") or candidate.primary_chain
+    )
+    assets_by_category = Counter(
+        str(candidate.metadata.get("category") or candidate.sector)
+        for candidate in candidates
+        if candidate.metadata.get("category") or candidate.sector
+    )
+    providers_by_candidate = {
+        candidate.candidate_id: tuple(sorted({source.provider for source in candidate.sources}))
+        for candidate in candidates
+    }
+    provider_overlap = Counter(
+        ",".join(providers) for providers in providers_by_candidate.values() if len(providers) > 1
+    )
+    provider_uniqueness = Counter(providers[0] for providers in providers_by_candidate.values() if len(providers) == 1)
+    return {
+        "assets_by_provider": dict(assets_by_provider),
+        "assets_by_ecosystem": dict(assets_by_ecosystem),
+        "assets_by_chain": dict(assets_by_chain),
+        "assets_by_category": dict(assets_by_category),
+        "provider_overlap": dict(provider_overlap),
+        "provider_uniqueness": dict(provider_uniqueness),
+        "new_candidates": sum(1 for candidate in candidates if candidate.discovery_source != "seed"),
+        "unique_canonical_candidates": len(candidates),
+    }
+
+
+def _has_official_link(candidate: CandidateRecord) -> bool:
+    links = candidate.metadata.get("official_links")
+    return isinstance(links, (list, tuple)) and any(str(link).strip() for link in links)
 
 
 def _data_ops_coverage_line() -> str:

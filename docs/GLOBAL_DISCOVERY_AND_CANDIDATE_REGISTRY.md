@@ -77,11 +77,25 @@ id, so refreshes update priorities without duplicating entries.
 
 ## Public Sources
 
-Committed defaults support public CoinGecko and DefiLlama discovery endpoints. Provider
-failures are reported as unavailable discovery runs and are not treated as absence of
-market candidates. Adapters use bounded deterministic retry/backoff for timeout,
-rate-limit, and temporary server failures; provider failure records the run as unavailable
-and does not write partial registry state.
+Committed defaults support public CoinGecko, DefiLlama, GeckoTerminal, and DexScreener
+discovery endpoints. CoinGecko contributes broad market-cap-ranked token coverage.
+DefiLlama contributes protocol and TVL coverage. GeckoTerminal contributes decentralized
+liquidity-pool token observations with chain and contract identifiers. DexScreener
+contributes decentralized-market token profiles and boosted-token observations.
+
+GeckoTerminal and DexScreener records are keyed by chain plus contract address when that
+evidence is available. This allows cross-provider overlap without relying on ticker
+symbols. Hunter records provider disagreements and source uniqueness through source
+references and does not treat a single decentralized-market listing as proof of project
+quality, official identity, or long-term investment merit.
+
+Provider failures are reported as unavailable discovery runs and are not treated as
+absence of market candidates. Adapters use bounded deterministic retry/backoff for
+timeout, rate-limit, and temporary server failures; provider failure records the run as
+unavailable and does not write partial registry state. Endpoint configuration can be
+overridden with `HUNTER_DISCOVERY_<PROVIDER>_BASE_URL`, `HUNTER_DISCOVERY_<PROVIDER>_LIMIT`,
+`HUNTER_DISCOVERY_<PROVIDER>_TIMEOUT_SECONDS`, `HUNTER_DISCOVERY_<PROVIDER>_MAX_ATTEMPTS`,
+and `HUNTER_DISCOVERY_<PROVIDER>_BACKOFF_SECONDS`.
 
 ## Coverage
 
@@ -90,11 +104,17 @@ screening coverage, candidate lifecycle distribution, automation job coverage, a
 evidence counts separately. These values are intentionally not collapsed into a single
 completion score.
 
+Discovery reporting also includes assets by provider, ecosystem, chain, category, provider
+overlap, provider uniqueness, new candidates, and unique canonical candidate counts. These
+metrics are designed for market visibility, not investment scoring.
+
 ## CLI
 
 - `hunter discovery sync`
 - `hunter discovery sync --provider coingecko --limit 250`
 - `hunter discovery sync --provider defillama --limit 250`
+- `hunter discovery sync --provider geckoterminal --limit 250`
+- `hunter discovery sync --provider dexscreener --limit 250`
 - `hunter discovery sync --provider all --limit 250`
 - `hunter discovery run --limit 250`
 - `hunter discovery status`

@@ -6,6 +6,7 @@ from typing import Any
 import yaml
 
 DISCOVERY_JOB_IDS = (
+    "discovery-source-health",
     "discovery-market-run",
     "discovery-candidate-screening",
     "discovery-queue-refresh",
@@ -31,11 +32,16 @@ def discovery_automation_status(path: Path = Path("configs/automation.yaml")) ->
     jobs = tuple(
         job for job in payload.get("jobs", ()) if isinstance(job, dict) and job.get("job_id") in DISCOVERY_JOB_IDS
     )
-    return {"installed_jobs": len(jobs), "job_ids": tuple(str(job["job_id"]) for job in jobs)}
+    return {
+        "installed_jobs": len(jobs),
+        "expected_jobs": len(DISCOVERY_JOB_IDS),
+        "job_ids": tuple(str(job["job_id"]) for job in jobs),
+    }
 
 
 def _discovery_jobs() -> tuple[dict[str, Any], ...]:
     return (
+        _job("discovery-source-health", "Discovery source health check", "hourly", "discovery_source_health"),
         _job("discovery-market-run", "Global discovery market run", "every_6_hours", "discovery_market_run"),
         _job("discovery-candidate-screening", "Discovery candidate screening", "every_6_hours", "discovery_screen"),
         _job("discovery-queue-refresh", "Discovery queue refresh", "every_6_hours", "discovery_queue_refresh"),

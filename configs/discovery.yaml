@@ -18,3 +18,17 @@ providers:
     timeout_seconds: 30
     max_attempts: 3
     backoff_seconds: 0.5
+  geckoterminal:
+    enabled: true
+    limit: 250
+    base_url: https://api.geckoterminal.com/api/v2
+    timeout_seconds: 30
+    max_attempts: 3
+    backoff_seconds: 0.5
+  dexscreener:
+    enabled: true
+    limit: 250
+    base_url: https://api.dexscreener.com
+    timeout_seconds: 30
+    max_attempts: 3
+    backoff_seconds: 0.5

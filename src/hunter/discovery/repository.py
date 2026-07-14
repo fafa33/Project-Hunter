@@ -540,7 +540,10 @@ class CandidateRegistryRepository:
         )
         candidate = _with_candidate_id(candidate, candidate_id)
         previous = conn.execute(
-            "SELECT slug, name, first_seen_at, evidence_ids, source_ids FROM candidates WHERE candidate_id = ? LIMIT 1",
+            """
+            SELECT slug, name, first_seen_at, evidence_ids, source_ids, metadata
+            FROM candidates WHERE candidate_id = ? LIMIT 1
+            """,
             (candidate_id,),
         ).fetchone()
         write_slug = str(previous["slug"]) if previous else candidate.slug
@@ -550,6 +553,8 @@ class CandidateRegistryRepository:
         previous_sources = tuple(_loads(previous["source_ids"])) if previous else ()
         evidence_ids = tuple(sorted({*previous_evidence, *candidate.evidence_ids}))
         source_ids = tuple(sorted({*previous_sources, *candidate.source_ids}))
+        previous_metadata = dict(_loads(previous["metadata"])) if previous else {}
+        metadata = _merge_metadata(previous_metadata, candidate.metadata)
         conn.execute(
             """
             INSERT INTO candidates (
@@ -617,7 +622,7 @@ class CandidateRegistryRepository:
                 candidate.intrinsic_value_status,
                 candidate.competition_status,
                 candidate.network_effect_status,
-                _json(candidate.metadata),
+                _json(metadata),
             ),
         )
         self._upsert_identifiers(conn, candidate.identifiers)
@@ -787,6 +792,21 @@ def _with_candidate_id(candidate: CandidateRecord, candidate_id: str) -> Candida
             "sources": sources,
         }
     )
+
+
+def _merge_metadata(previous: dict[str, Any], current: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(previous)
+    for key, value in current.items():
+        if value in (None, "", (), []):
+            continue
+        if key not in merged or merged[key] in (None, "", (), []):
+            merged[key] = value
+        elif merged[key] != value:
+            conflicts = dict(merged.get("provider_disagreements", {}))
+            values = tuple(sorted({str(merged[key]), str(value)}))
+            conflicts[str(key)] = values
+            merged["provider_disagreements"] = conflicts
+    return merged
 
 
 def _json(value: Any) -> str:

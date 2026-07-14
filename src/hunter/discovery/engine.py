@@ -18,8 +18,10 @@ from hunter.discovery.models import (
 from hunter.discovery.providers import (
     CoinGeckoDiscoveryProvider,
     DefiLlamaDiscoveryProvider,
+    DexScreenerDiscoveryProvider,
     DiscoveredCandidate,
     DiscoveryProvider,
+    GeckoTerminalDiscoveryProvider,
 )
 from hunter.discovery.repository import CandidateRegistryRepository
 from hunter.execution.identity import identity
@@ -278,7 +280,7 @@ class CandidateDiscoveryEngine:
         )
 
     def _provider_candidate(self, candidate: DiscoveredCandidate, *, observed_at: datetime) -> CandidateRecord:
-        candidate_id = self._candidate_id(candidate.provider, candidate.provider_id)
+        candidate_id = self._candidate_id_for_provider_candidate(candidate)
         identifiers = [
             CandidateIdentifier(
                 candidate_id,
@@ -290,10 +292,29 @@ class CandidateDiscoveryEngine:
                 observed_at,
             )
         ]
+        metadata = candidate.metadata or {}
+        contract_address = str(metadata.get("contract_address") or "").strip().lower()
+        chain = str(metadata.get("chain") or candidate.primary_chain or "").strip().lower()
+        if chain and contract_address:
+            identifiers.append(
+                CandidateIdentifier(
+                    candidate_id,
+                    f"contract:{chain}",
+                    contract_address,
+                    candidate.provider,
+                    0.98,
+                    observed_at,
+                    observed_at,
+                )
+            )
         aliases = [CandidateAlias(candidate_id, candidate.name, "provider_name", candidate.provider, 0.95)]
         if candidate.symbol:
             aliases.append(
                 CandidateAlias(candidate_id, candidate.symbol.upper(), "ticker_symbol", candidate.provider, 0.55)
+            )
+        if candidate.primary_chain:
+            aliases.append(
+                CandidateAlias(candidate_id, candidate.primary_chain, "ecosystem_or_chain", candidate.provider, 0.75)
             )
         source = CandidateSource(
             source_id=identity(
@@ -326,7 +347,7 @@ class CandidateDiscoveryEngine:
             aliases=tuple(aliases),
             sources=(source,),
             source_ids=(source.source_id,),
-            metadata=candidate.metadata or {},
+            metadata=metadata,
         )
 
     def _configured_providers(self, config: DiscoveryConfig) -> dict[str, DiscoveryProvider]:
@@ -347,7 +368,33 @@ class CandidateDiscoveryEngine:
                 max_attempts=defillama.max_attempts,
                 backoff_seconds=defillama.backoff_seconds,
             )
+        geckoterminal = config.provider("geckoterminal")
+        if geckoterminal.enabled:
+            providers["geckoterminal"] = GeckoTerminalDiscoveryProvider(
+                base_url=geckoterminal.base_url or "https://api.geckoterminal.com/api/v2",
+                timeout_seconds=geckoterminal.timeout_seconds,
+                max_attempts=geckoterminal.max_attempts,
+                backoff_seconds=geckoterminal.backoff_seconds,
+            )
+        dexscreener = config.provider("dexscreener")
+        if dexscreener.enabled:
+            providers["dexscreener"] = DexScreenerDiscoveryProvider(
+                base_url=dexscreener.base_url or "https://api.dexscreener.com",
+                timeout_seconds=dexscreener.timeout_seconds,
+                max_attempts=dexscreener.max_attempts,
+                backoff_seconds=dexscreener.backoff_seconds,
+            )
         return providers
+
+    def _candidate_id_for_provider_candidate(self, candidate: DiscoveredCandidate) -> str:
+        metadata = candidate.metadata or {}
+        contract_address = str(metadata.get("contract_address") or "").strip().lower()
+        chain = str(metadata.get("chain") or candidate.primary_chain or "").strip().lower()
+        if chain and contract_address:
+            existing = self.repository.find_by_identifier(f"contract:{chain}", contract_address)
+            if existing:
+                return existing.candidate_id
+        return self._candidate_id(candidate.provider, candidate.provider_id)
 
     def _candidate_id(self, namespace: str, value: str) -> str:
         existing = self.repository.find_by_identifier(namespace, value)
@@ -378,7 +425,10 @@ class CandidateDiscoveryEngine:
         if candidate.discovery_source != "seed":
             score += 0.15
             reasons.append("observed by live market-wide adapter")
-        if any(item.namespace in {"coingecko", "defillama"} for item in candidate.identifiers):
+        if any(
+            item.namespace in {"coingecko", "defillama"} or item.namespace.startswith("contract:")
+            for item in candidate.identifiers
+        ):
             score += 0.15
             reasons.append("has market or protocol provider identity")
         if candidate.lifecycle_status == "analyzable":
@@ -481,6 +531,7 @@ def candidate_for_report(candidate: CandidateRecord) -> dict[str, object]:
         "competition_status": candidate.competition_status,
         "network_effect_status": candidate.network_effect_status,
         "last_seen_at": candidate.last_seen_at.isoformat(),
+        "metadata": candidate.metadata,
     }
 
 
@@ -489,7 +540,17 @@ def merge_candidate_status(candidate: CandidateRecord, status: str) -> Candidate
 
 
 def _has_market_or_protocol_measure(candidate: CandidateRecord) -> bool:
-    keys = {"market_cap", "market_cap_rank", "tvl", "liquidity", "volume"}
+    keys = {
+        "market_cap",
+        "market_cap_rank",
+        "tvl",
+        "liquidity",
+        "liquidity_usd",
+        "volume",
+        "volume_usd",
+        "reserve_usd",
+        "boost_amount",
+    }
     return any(candidate.metadata.get(key) not in {None, ""} for key in keys)
 
 
