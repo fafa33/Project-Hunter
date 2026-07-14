@@ -9,7 +9,12 @@ from datetime import UTC, datetime
 import pytest
 
 from hunter.acquisition.exceptions import ProviderUnavailableError
-from hunter.discovery import CandidateDiscoveryEngine, CandidateLifecycleTransition, CandidateRegistryRepository
+from hunter.discovery import (
+    CandidateDiscoveryEngine,
+    CandidateIdentityResolutionEngine,
+    CandidateLifecycleTransition,
+    CandidateRegistryRepository,
+)
 from hunter.discovery.automation import discovery_automation_status, install_discovery_jobs
 from hunter.discovery.configuration import DiscoveryConfig
 from hunter.discovery.providers import (
@@ -244,6 +249,168 @@ def test_contract_identity_merges_market_sources_without_symbol_merge(tmp_path) 
     candidate = repository.find_by_identifier("contract:eth", "0xabc")
     assert candidate is not None
     assert {source.provider for source in candidate.sources} == {"geckoterminal", "dexscreener"}
+
+
+def test_identity_resolution_exact_for_configured_seed(tmp_path) -> None:
+    repository = CandidateRegistryRepository(tmp_path / "candidates.sqlite")
+    config = DiscoveryConfig(
+        registry_path=str(tmp_path / "candidates.sqlite"),
+        market_validation_config="configs/market_validation.yaml",
+        project_identifiers_config="configs/project_identifiers.yaml",
+        providers={},
+    )
+    CandidateDiscoveryEngine(repository, config, providers={}).sync(provider="seed")
+
+    summary = CandidateIdentityResolutionEngine(repository).resolve_all()
+    aave = repository.get_by_slug("aave")
+    result = repository.latest_identity_by_candidate()[aave.candidate_id]
+
+    assert summary.by_outcome["exact"] == 50
+    assert result.outcome == "exact"
+    assert result.confidence == 1.0
+    assert repository.get_by_slug("aave").identity_resolution_status == "exact"
+
+
+def test_identity_resolution_probable_for_single_contract_candidate(tmp_path) -> None:
+    repository = CandidateRegistryRepository(tmp_path / "candidates.sqlite")
+    config = DiscoveryConfig(registry_path=str(tmp_path / "candidates.sqlite"), providers={})
+    provider = StaticDiscoveryProvider(
+        "geckoterminal",
+        (
+            DiscoveredCandidate(
+                provider="geckoterminal",
+                provider_id="eth_0xabc",
+                slug="eth-0xabc",
+                name="Contract Token",
+                symbol="CT",
+                primary_chain="eth",
+                candidate_type="token",
+                metadata={"chain": "eth", "contract_address": "0xabc", "reserve_usd": "1000"},
+            ),
+        ),
+    )
+    engine = CandidateDiscoveryEngine(repository, config, providers={"geckoterminal": _provider(provider)})
+    engine.sync(provider="geckoterminal", limit=10)
+
+    CandidateIdentityResolutionEngine(repository).resolve_all()
+    candidate = repository.find_by_identifier("contract:eth", "0xabc")
+    result = repository.latest_identity_by_candidate()[candidate.candidate_id]
+
+    assert result.outcome == "probable"
+    assert repository.get(candidate.candidate_id).lifecycle_status == "identified"
+
+
+def test_identity_resolution_ambiguous_for_ticker_collision(tmp_path) -> None:
+    repository = CandidateRegistryRepository(tmp_path / "candidates.sqlite")
+    config = DiscoveryConfig(registry_path=str(tmp_path / "candidates.sqlite"), providers={})
+    provider = StaticDiscoveryProvider(
+        "coingecko",
+        (
+            DiscoveredCandidate(
+                provider="coingecko",
+                provider_id="alpha-token",
+                slug="alpha-token",
+                name="Alpha Token",
+                symbol="SAME",
+                candidate_type="token",
+                metadata={"market_cap": 100},
+            ),
+            DiscoveredCandidate(
+                provider="coingecko",
+                provider_id="beta-token",
+                slug="beta-token",
+                name="Beta Token",
+                symbol="SAME",
+                candidate_type="token",
+                metadata={"market_cap": 200},
+            ),
+        ),
+    )
+    CandidateDiscoveryEngine(repository, config, providers={"coingecko": _provider(provider)}).sync(
+        provider="coingecko", limit=10
+    )
+
+    summary = CandidateIdentityResolutionEngine(repository).resolve_all()
+
+    assert summary.by_outcome["ambiguous"] == 2
+    assert len(repository.conflicts()) == 2
+    assert all(result.outcome == "ambiguous" for result in repository.identity_results())
+
+
+def test_identity_resolution_conflict_for_provider_disagreement(tmp_path) -> None:
+    repository = CandidateRegistryRepository(tmp_path / "candidates.sqlite")
+    config = DiscoveryConfig(registry_path=str(tmp_path / "candidates.sqlite"), providers={})
+    gecko = DiscoveredCandidate(
+        provider="geckoterminal",
+        provider_id="eth_0xabc",
+        slug="eth-0xabc",
+        name="Shared Token",
+        symbol="SHARED",
+        primary_chain="eth",
+        candidate_type="token",
+        metadata={"chain": "eth", "contract_address": "0xabc", "reserve_usd": "1000"},
+    )
+    screener = DiscoveredCandidate(
+        provider="dexscreener",
+        provider_id="eth:0xabc",
+        slug="eth-0xabc",
+        name="Shared Token profile",
+        symbol="SHARED",
+        primary_chain="eth",
+        candidate_type="token",
+        metadata={"chain": "eth", "contract_address": "0xabc", "reserve_usd": "2000"},
+    )
+    engine = CandidateDiscoveryEngine(
+        repository,
+        config,
+        providers={
+            "geckoterminal": StaticDiscoveryProvider("geckoterminal", (gecko,)),
+            "dexscreener": StaticDiscoveryProvider("dexscreener", (screener,)),
+        },
+    )
+    engine.sync(provider="geckoterminal", limit=10)
+    engine.sync(provider="dexscreener", limit=10)
+
+    CandidateIdentityResolutionEngine(repository).resolve_all()
+    result = repository.identity_results()[0]
+
+    assert result.outcome == "conflict"
+    assert "provider_metadata_disagreement" in result.conflicts
+
+
+def test_identity_resolution_rejected_and_unresolved_outcomes(tmp_path) -> None:
+    repository = CandidateRegistryRepository(tmp_path / "candidates.sqlite")
+    config = DiscoveryConfig(registry_path=str(tmp_path / "candidates.sqlite"), providers={})
+    provider = StaticDiscoveryProvider(
+        "thin",
+        (
+            DiscoveredCandidate(
+                provider="thin",
+                provider_id="bad-token",
+                slug="bad-token",
+                name="Bad Token",
+                symbol="BAD",
+                candidate_type="token",
+                metadata={"blocked": True},
+            ),
+            DiscoveredCandidate(
+                provider="thin",
+                provider_id="unknown-token",
+                slug="unknown-token",
+                name="Unknown Token",
+                symbol="UNK",
+                candidate_type="unknown",
+            ),
+        ),
+    )
+    CandidateDiscoveryEngine(repository, config, providers={"thin": _provider(provider)}).sync(
+        provider="thin", limit=10
+    )
+
+    summary = CandidateIdentityResolutionEngine(repository).resolve_all()
+
+    assert summary.by_outcome["rejected"] == 1
+    assert summary.by_outcome["unresolved"] == 1
 
 
 def test_geckoterminal_provider_normalizes_trending_pool_tokens(monkeypatch) -> None:

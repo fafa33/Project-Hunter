@@ -111,10 +111,39 @@ class CandidateIdentity:
     confidence: float
     evidence_ids: tuple[str, ...]
     reason: str
+    source_candidate_ids: tuple[str, ...] = ()
+    source_ids: tuple[str, ...] = ()
+    missing_evidence: tuple[str, ...] = ()
+    conflicts: tuple[str, ...] = ()
+    related_candidate_ids: tuple[str, ...] = ()
+    evaluated_at: datetime = field(default_factory=lambda: datetime.now(tz=UTC))
 
     def __post_init__(self) -> None:
+        if not self.candidate_id.strip() or not self.reason.strip():
+            msg = "candidate identity requires candidate_id and reason"
+            raise ValueError(msg)
+        if self.evaluated_at.tzinfo is None:
+            msg = "candidate identity evaluated_at must be timezone-aware"
+            raise ValueError(msg)
         _validate_confidence(self.confidence)
         object.__setattr__(self, "evidence_ids", tuple(sorted({str(item) for item in self.evidence_ids})))
+        object.__setattr__(
+            self,
+            "source_candidate_ids",
+            tuple(sorted({str(item) for item in self.source_candidate_ids if str(item)})),
+        )
+        object.__setattr__(self, "source_ids", tuple(sorted({str(item) for item in self.source_ids if str(item)})))
+        object.__setattr__(
+            self,
+            "missing_evidence",
+            tuple(sorted({str(item) for item in self.missing_evidence if str(item)})),
+        )
+        object.__setattr__(self, "conflicts", tuple(sorted({str(item) for item in self.conflicts if str(item)})))
+        object.__setattr__(
+            self,
+            "related_candidate_ids",
+            tuple(sorted({str(item) for item in self.related_candidate_ids if str(item)})),
+        )
 
 
 @dataclass(frozen=True)

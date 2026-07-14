@@ -11,6 +11,7 @@ from typing import Any
 from hunter.discovery.models import (
     CandidateAlias,
     CandidateIdentifier,
+    CandidateIdentity,
     CandidateLifecycleTransition,
     CandidateQueueEntry,
     CandidateRecord,
@@ -214,7 +215,104 @@ class CandidateRegistryRepository:
         with self._connect() as conn:
             rows = conn.execute("PRAGMA index_list(candidates)").fetchall()
             identifier_rows = conn.execute("PRAGMA index_list(identifiers)").fetchall()
-            return tuple(str(row["name"]) for row in (*rows, *identifier_rows))
+            identity_rows = conn.execute("PRAGMA index_list(identity_results)").fetchall()
+            return tuple(str(row["name"]) for row in (*rows, *identifier_rows, *identity_rows))
+
+    def identifier_groups(self, *, namespaces: tuple[str, ...] | None = None) -> dict[tuple[str, str], tuple[str, ...]]:
+        with self._connect() as conn:
+            params: tuple[str, ...] = ()
+            where = ""
+            if namespaces:
+                placeholders = ",".join("?" for _ in namespaces)
+                where = f"WHERE namespace IN ({placeholders})"
+                params = namespaces
+            rows = conn.execute(
+                f"""
+                SELECT namespace, value, candidate_id FROM identifiers
+                {where}
+                ORDER BY namespace, value, candidate_id
+                """,
+                params,
+            ).fetchall()
+        groups: dict[tuple[str, str], list[str]] = {}
+        for row in rows:
+            key = (str(row["namespace"]), str(row["value"]))
+            groups.setdefault(key, []).append(str(row["candidate_id"]))
+        return {key: tuple(value) for key, value in groups.items()}
+
+    def alias_groups(self, *, alias_type: str) -> dict[str, tuple[str, ...]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT alias, candidate_id FROM aliases
+                WHERE alias_type = ?
+                ORDER BY alias, candidate_id
+                """,
+                (alias_type,),
+            ).fetchall()
+        groups: dict[str, list[str]] = {}
+        for row in rows:
+            groups.setdefault(str(row["alias"]).upper(), []).append(str(row["candidate_id"]))
+        return {key: tuple(value) for key, value in groups.items()}
+
+    def save_identity_results(self, results: tuple[CandidateIdentity, ...]) -> None:
+        with self._connect() as conn:
+            conn.execute("BEGIN")
+            for result in results:
+                conn.execute(
+                    """
+                    INSERT INTO identity_results (
+                        candidate_id, outcome, confidence, evidence_ids, source_candidate_ids,
+                        source_ids, reason, missing_evidence, conflicts, related_candidate_ids, evaluated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(candidate_id) DO UPDATE SET
+                        outcome=excluded.outcome,
+                        confidence=excluded.confidence,
+                        evidence_ids=excluded.evidence_ids,
+                        source_candidate_ids=excluded.source_candidate_ids,
+                        source_ids=excluded.source_ids,
+                        reason=excluded.reason,
+                        missing_evidence=excluded.missing_evidence,
+                        conflicts=excluded.conflicts,
+                        related_candidate_ids=excluded.related_candidate_ids,
+                        evaluated_at=excluded.evaluated_at
+                    """,
+                    (
+                        result.candidate_id,
+                        result.outcome,
+                        result.confidence,
+                        _json(result.evidence_ids),
+                        _json(result.source_candidate_ids),
+                        _json(result.source_ids),
+                        result.reason,
+                        _json(result.missing_evidence),
+                        _json(result.conflicts),
+                        _json(result.related_candidate_ids),
+                        _dt(result.evaluated_at),
+                    ),
+                )
+                conn.execute(
+                    "UPDATE candidates SET identity_resolution_status = ? WHERE candidate_id = ?",
+                    (result.outcome, result.candidate_id),
+                )
+                if result.outcome in {"exact", "probable"}:
+                    conn.execute(
+                        """
+                        UPDATE candidates SET lifecycle_status = 'identified'
+                        WHERE candidate_id = ?
+                        AND lifecycle_status IN ('discovered', 'screenable', 'evidence_pending')
+                        """,
+                        (result.candidate_id,),
+                    )
+
+    def identity_results(self) -> tuple[CandidateIdentity, ...]:
+        with self._connect() as conn:
+            rows = conn.execute("SELECT * FROM identity_results ORDER BY outcome, candidate_id").fetchall()
+            return tuple(_identity_from_row(row) for row in rows)
+
+    def latest_identity_by_candidate(self) -> dict[str, CandidateIdentity]:
+        return {result.candidate_id: result for result in self.identity_results()}
 
     def transition_lifecycle(self, transition: CandidateLifecycleTransition) -> None:
         with self._connect() as conn:
@@ -501,15 +599,31 @@ class CandidateRegistryRepository:
                     updated_at TEXT NOT NULL,
                     status TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS identity_results (
+                    candidate_id TEXT PRIMARY KEY,
+                    outcome TEXT NOT NULL,
+                    confidence REAL NOT NULL,
+                    evidence_ids TEXT NOT NULL,
+                    source_candidate_ids TEXT NOT NULL,
+                    source_ids TEXT NOT NULL,
+                    reason TEXT NOT NULL,
+                    missing_evidence TEXT NOT NULL,
+                    conflicts TEXT NOT NULL,
+                    related_candidate_ids TEXT NOT NULL,
+                    evaluated_at TEXT NOT NULL,
+                    FOREIGN KEY(candidate_id) REFERENCES candidates(candidate_id)
+                );
                 CREATE INDEX IF NOT EXISTS candidates_status_idx ON candidates(lifecycle_status);
                 CREATE INDEX IF NOT EXISTS candidates_source_idx ON candidates(discovery_source);
                 CREATE INDEX IF NOT EXISTS candidates_symbol_idx ON candidates(symbol);
                 CREATE INDEX IF NOT EXISTS identifiers_candidate_idx ON identifiers(candidate_id);
+                CREATE INDEX IF NOT EXISTS identifiers_namespace_value_idx ON identifiers(namespace, value);
                 CREATE INDEX IF NOT EXISTS sources_candidate_idx ON sources(candidate_id);
                 CREATE INDEX IF NOT EXISTS runs_finished_idx ON runs(finished_at);
                 CREATE INDEX IF NOT EXISTS screening_candidate_idx ON screening_results(candidate_id);
                 CREATE INDEX IF NOT EXISTS queue_priority_idx ON queue_entries(priority_score);
                 CREATE INDEX IF NOT EXISTS conflicts_candidate_idx ON conflicts(candidate_id);
+                CREATE INDEX IF NOT EXISTS identity_outcome_idx ON identity_results(outcome);
                 """
             )
 
@@ -859,6 +973,22 @@ def _queue_entry_from_row(row: sqlite3.Row) -> CandidateQueueEntry:
     )
 
 
+def _identity_from_row(row: sqlite3.Row) -> CandidateIdentity:
+    return CandidateIdentity(
+        candidate_id=str(row["candidate_id"]),
+        outcome=str(row["outcome"]),  # type: ignore[arg-type]
+        confidence=float(row["confidence"]),
+        evidence_ids=tuple(_loads(row["evidence_ids"])),
+        source_candidate_ids=tuple(_loads(row["source_candidate_ids"])),
+        source_ids=tuple(_loads(row["source_ids"])),
+        reason=str(row["reason"]),
+        missing_evidence=tuple(_loads(row["missing_evidence"])),
+        conflicts=tuple(_loads(row["conflicts"])),
+        related_candidate_ids=tuple(_loads(row["related_candidate_ids"])),
+        evaluated_at=_parse_dt(str(row["evaluated_at"])),
+    )
+
+
 def _valid_transition(previous: str, new: str) -> bool:
     if previous == new:
         return True
@@ -866,7 +996,7 @@ def _valid_transition(previous: str, new: str) -> bool:
         "discovered": {"identified", "evidence_pending", "rejected", "archived"},
         "identified": {"screenable", "evidence_pending", "rejected", "archived"},
         "evidence_pending": {"identified", "screenable", "rejected", "archived"},
-        "screenable": {"analyzable", "ranked", "rejected", "archived"},
+        "screenable": {"identified", "analyzable", "ranked", "rejected", "archived"},
         "analyzable": {"ranked", "deep_research", "archived"},
         "ranked": {"deep_research", "analyzable", "archived"},
         "deep_research": {"ranked", "archived"},

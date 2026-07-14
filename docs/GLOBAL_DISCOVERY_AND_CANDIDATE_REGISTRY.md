@@ -9,8 +9,8 @@ semantics.
 
 The candidate registry is the durable entry point for market-wide discovery. It stores
 candidate assets and protocols before they are eligible for full project analysis, while
-preserving deterministic identifiers and source references that future phases can attach
-to identity resolution, candidate queues, screening, intrinsic value, competition
+preserving deterministic identifiers and source references that support identity
+resolution, candidate queues, screening, and future intrinsic value, competition
 intelligence, and network-effect analysis.
 
 ## Storage
@@ -46,11 +46,11 @@ from discovery alone.
 
 ## Identity Compatibility
 
-This phase does not implement identity resolution. It stores the structures that future
-identity resolution needs: external identifiers, aliases, public source references, and
-placeholder status fields for identity, queue, screening, intrinsic value, competition,
-and network-effect phases. Candidate identity remains deterministic and provider-scoped
-unless an existing slug or identifier proves the candidate already exists.
+The registry stores the structures used by identity resolution: external identifiers,
+aliases, public source references, and status fields for identity, queue, screening,
+intrinsic value, competition, and network-effect phases. Candidate identity remains
+deterministic and evidence-scoped unless a configured slug, trusted provider identifier,
+or chain-aware contract identifier supports a stronger outcome.
 
 Ticker symbols are retained as aliases, not canonical identifiers. Hunter does not merge
 candidates from symbol equality alone, which keeps ticker collisions, wrapped assets, and
@@ -74,6 +74,29 @@ Screening now applies deterministic minimum-quality gates:
 The queue ranks what Hunter should investigate next without treating popularity as
 investment quality or excluding already known assets. Queue entries are keyed by candidate
 id, so refreshes update priorities without duplicating entries.
+
+## Identity Resolution
+
+The Candidate Registry includes a deterministic Identity Resolution layer. Identity
+resolution evaluates existing registry evidence and persists one outcome per candidate:
+
+- `exact`
+- `probable`
+- `ambiguous`
+- `conflict`
+- `rejected`
+- `unresolved`
+
+Resolution uses only persisted registry evidence. Chain-aware contract identifiers,
+configured Hunter project ids, trusted provider ids, official repositories, and official
+links may improve confidence. Ticker equality is never sufficient for a merge. Ticker
+collisions remain ambiguous unless stronger evidence exists. Provider metadata
+disagreements are persisted as conflicts instead of being silently overwritten.
+
+Identity outcomes update `identity_resolution_status` and may move discovered,
+screenable, or evidence-pending candidates into `identified` when evidence supports an
+`exact` or `probable` outcome. Identity Resolution does not implement intrinsic value,
+competition intelligence, network effects, or investment scoring.
 
 ## Public Sources
 
@@ -100,9 +123,9 @@ and `HUNTER_DISCOVERY_<PROVIDER>_BACKOFF_SECONDS`.
 ## Coverage
 
 `hunter discovery coverage` reports registry coverage, source-provider coverage,
-screening coverage, candidate lifecycle distribution, automation job coverage, and missing
-evidence counts separately. These values are intentionally not collapsed into a single
-completion score.
+screening coverage, identity-resolution coverage, candidate lifecycle distribution,
+automation job coverage, and missing evidence counts separately. These values are
+intentionally not collapsed into a single completion score.
 
 Discovery reporting also includes assets by provider, ecosystem, chain, category, provider
 overlap, provider uniqueness, new candidates, and unique canonical candidate counts. These
@@ -121,6 +144,10 @@ metrics are designed for market visibility, not investment scoring.
 - `hunter discovery coverage`
 - `hunter discovery report`
 - `hunter discovery screen`
+- `hunter discovery identity resolve`
+- `hunter discovery identity coverage`
+- `hunter discovery identity report`
+- `hunter discovery identity conflicts`
 - `hunter discovery queue refresh`
 - `hunter discovery automation install`
 - `hunter discovery automation status`

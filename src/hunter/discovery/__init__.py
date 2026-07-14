@@ -1,6 +1,7 @@
 from hunter.discovery.automation import DISCOVERY_JOB_IDS, discovery_automation_status, install_discovery_jobs
 from hunter.discovery.configuration import DiscoveryConfig, DiscoveryProviderConfig, load_discovery_config
 from hunter.discovery.engine import CandidateDiscoveryEngine, candidate_for_report
+from hunter.discovery.identity import CandidateIdentityResolutionEngine, IdentityResolutionSummary
 from hunter.discovery.models import (
     CandidateAlias,
     CandidateContract,
@@ -32,6 +33,7 @@ __all__ = [
     "CandidateEvidenceReference",
     "CandidateIdentity",
     "CandidateIdentifier",
+    "CandidateIdentityResolutionEngine",
     "CandidateLifecycleTransition",
     "CandidateQueueEntry",
     "CandidateRecord",
@@ -47,6 +49,7 @@ __all__ = [
     "DiscoveryProviderConfig",
     "DiscoveryRun",
     "DiscoverySource",
+    "IdentityResolutionSummary",
     "SourceAssetRecord",
     "candidate_for_report",
     "discovery_automation_status",

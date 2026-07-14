@@ -68,6 +68,7 @@ from hunter.data_ops import (
 )
 from hunter.discovery import (
     CandidateDiscoveryEngine,
+    CandidateIdentityResolutionEngine,
     CandidateRecord,
     CandidateRegistryRepository,
     candidate_for_report,
@@ -225,6 +226,9 @@ def main(argv: list[str] | None = None) -> int:
     discovery_queue.add_argument("queue_command", nargs="?", choices=("refresh",))
     discovery_queue.add_argument("--limit", type=int, default=25)
     discovery_sub.add_parser("conflicts")
+    discovery_identity = discovery_sub.add_parser("identity")
+    discovery_identity.add_argument("identity_command", choices=("resolve", "coverage", "report", "conflicts"))
+    discovery_identity.add_argument("--limit", type=int, default=25)
     discovery_automation = discovery_sub.add_parser("automation")
     discovery_automation_sub = discovery_automation.add_subparsers(dest="discovery_automation_command")
     discovery_automation_sub.add_parser("install")
@@ -816,6 +820,8 @@ def _discovery(args: object) -> int:
         missing_evidence = Counter(item for result in screening_results for item in result.missing_evidence)
         queue_count = len(repository.queue_entries(limit=1000))
         candidates = repository.list_candidates(limit=100_000)
+        identity_results = repository.identity_results()
+        identity_counts = Counter(result.outcome for result in identity_results)
         contract_identity_count = sum(
             1
             for candidate in candidates
@@ -856,6 +862,10 @@ def _discovery(args: object) -> int:
         print(f"historical_point_in_time_coverage={(1.0 if stats.total_candidates else 0.0):.2%}")
         print(f"screenable_ratio={stats.screenable_ratio:.2%}")
         print(f"identity_ready_candidates={stats.future_identity_ready_candidates}/{stats.total_candidates}")
+        print(
+            f"identity_resolution_coverage={len(identity_results) / stats.total_candidates if stats.total_candidates else 0.0:.2%}"
+        )
+        print(f"identity_outcomes={json.dumps(dict(identity_counts), sort_keys=True)}")
         print(f"queue_entries={queue_count}")
         print(f"automation_coverage={automation_status['installed_jobs']}/{automation_status['expected_jobs']}")
         print(f"by_status={json.dumps(stats.by_status, sort_keys=True)}")
@@ -928,6 +938,48 @@ def _discovery(args: object) -> int:
             )
         )
         return 0
+    if command == "identity":
+        identity_command = getattr(args, "identity_command", None)
+        identity_engine = CandidateIdentityResolutionEngine(repository)
+        if identity_command == "resolve":
+            summary = identity_engine.resolve_all()
+            print(json.dumps(summary.__dict__, indent=2, sort_keys=True))
+            return 0
+        results = repository.identity_results()
+        counts = Counter(result.outcome for result in results)
+        if identity_command == "coverage":
+            stats = repository.stats()
+            print(
+                f"identity_resolution_coverage={len(results) / stats.total_candidates if stats.total_candidates else 0.0:.2%}"
+            )
+            print(f"identity_results={len(results)}/{stats.total_candidates}")
+            print(f"identity_outcomes={json.dumps(dict(counts), sort_keys=True)}")
+            return 0
+        if identity_command == "report":
+            payload = {
+                "identity_results": len(results),
+                "identity_outcomes": dict(counts),
+                "results": [
+                    {
+                        "candidate_id": result.candidate_id,
+                        "outcome": result.outcome,
+                        "confidence": result.confidence,
+                        "reason": result.reason,
+                        "missing_evidence": result.missing_evidence,
+                        "conflicts": result.conflicts,
+                        "related_candidate_ids": result.related_candidate_ids,
+                    }
+                    for result in results[: int(args.limit)]
+                ],
+            }
+            print(json.dumps(payload, indent=2, sort_keys=True))
+            return 0
+        if identity_command == "conflicts":
+            conflicts = [
+                conflict for conflict in repository.conflicts() if conflict.conflict_type.startswith("identity_")
+            ]
+            print(json.dumps([conflict.__dict__ for conflict in conflicts], indent=2, sort_keys=True, default=str))
+            return 0
     if command == "automation":
         automation_command = getattr(args, "discovery_automation_command", None)
         if automation_command == "install":
