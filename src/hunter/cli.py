@@ -56,6 +56,12 @@ from hunter.committee import (
     load_investment_committee_config,
 )
 from hunter.committee.ranking import rank_investment_committee
+from hunter.competitive import (
+    CompetitiveAutomationManager,
+    CompetitiveReportContext,
+    CompetitiveReporter,
+    CompetitiveRepository,
+)
 from hunter.dashboard import DashboardDataProvider, HtmlDashboardRenderer, load_dashboard_config
 from hunter.dashboard.exceptions import DashboardPersistenceError
 from hunter.data_ops import (
@@ -240,6 +246,25 @@ def main(argv: list[str] | None = None) -> int:
     discovery_automation_sub.add_parser("install")
     discovery_automation_sub.add_parser("status")
     discovery_automation_sub.add_parser("run-now")
+    competitive = sub.add_parser("competitive")
+    competitive.add_argument("--db", default="data/competitive/runtime/competitive.sqlite")
+    competitive.add_argument("--automation-config", default="configs/automation.yaml")
+    competitive.add_argument("--cutoff")
+    competitive.add_argument("--strict-known", action="store_true")
+    competitive_sub = competitive.add_subparsers(dest="competitive_command")
+    competitive_sub.add_parser("coverage")
+    competitive_sub.add_parser("report")
+    competitive_peers = competitive_sub.add_parser("peers")
+    competitive_peers.add_argument("candidate")
+    competitive_competitors = competitive_sub.add_parser("competitors")
+    competitive_competitors.add_argument("candidate")
+    competitive_explain = competitive_sub.add_parser("explain")
+    competitive_explain.add_argument("candidate")
+    competitive_sub.add_parser("conflicts")
+    competitive_automation = competitive_sub.add_parser("automation")
+    competitive_automation_sub = competitive_automation.add_subparsers(dest="competitive_automation_command")
+    competitive_automation_sub.add_parser("install")
+    competitive_automation_sub.add_parser("status")
     dashboard = sub.add_parser("dashboard")
     dashboard.add_argument("--dashboard-config", default="configs/dashboard.yaml")
     dashboard_sub = dashboard.add_subparsers(dest="dashboard_command")
@@ -652,6 +677,8 @@ def main(argv: list[str] | None = None) -> int:
         return _data_ops(args)
     if args.command == "discovery":
         return _discovery(args)
+    if args.command == "competitive":
+        return _competitive(args)
     if args.command == "market-validation":
         return _market_validation(args)
     if args.command == "evidence":
@@ -812,6 +839,66 @@ def _evidence_intelligence_automation(args: object) -> int:
             )
         return 0
     print("evidence-intelligence automation command required")
+    return 1
+
+
+def _competitive(args: object) -> int:
+    repository = CompetitiveRepository(args.db)
+    reporter = CompetitiveReporter(repository)
+    context = CompetitiveReportContext(
+        cutoff=_parse_cutoff(getattr(args, "cutoff", None)),
+        strict_known_by_hunter=bool(getattr(args, "strict_known", False)),
+    )
+    command = getattr(args, "competitive_command", None)
+    if command == "coverage":
+        _print_mapping(reporter.coverage())
+        return 0
+    if command == "report":
+        return _print_rows(reporter.report(context), empty="peer_sets=0")
+    if command == "peers":
+        return _print_rows(reporter.peers(str(args.candidate), context), empty=f"candidate={args.candidate} peers=0")
+    if command == "competitors":
+        return _print_rows(
+            reporter.competitors(str(args.candidate), context),
+            empty=f"candidate={args.candidate} competitors=0",
+        )
+    if command == "explain":
+        return _print_rows(
+            reporter.explain(str(args.candidate), context),
+            empty=f"candidate={args.candidate} competitive_evidence=0",
+        )
+    if command == "conflicts":
+        return _print_rows(reporter.conflicts(context), empty="conflicts=0")
+    if command == "automation":
+        return _competitive_automation(args)
+    print("competitive command required")
+    return 1
+
+
+def _competitive_automation(args: object) -> int:
+    manager = CompetitiveAutomationManager(getattr(args, "automation_config", "configs/automation.yaml"))
+    command = getattr(args, "competitive_automation_command", None)
+    if command == "install":
+        result = manager.install()
+        print(f"installed={result.installed} created={result.created} jobs={','.join(result.jobs)}")
+        return 0
+    if command == "status":
+        rows = manager.status()
+        if not rows:
+            print("jobs=0")
+            return 0
+        for row in rows:
+            schedule = row.get("schedule")
+            schedule_type = schedule.get("type") if isinstance(schedule, dict) else row.get("schedule_type")
+            metadata = row.get("metadata")
+            pipeline_owner = metadata.get("pipeline_owner") if isinstance(metadata, dict) else row.get("pipeline_owner")
+            scheduler_role = metadata.get("scheduler_role") if isinstance(metadata, dict) else row.get("scheduler_role")
+            print(
+                f"{row.get('job_id')}\tenabled={row.get('enabled')}\tschedule={schedule_type}"
+                f"\tpipeline_owner={pipeline_owner}\tscheduler_role={scheduler_role}"
+            )
+        return 0
+    print("competitive automation command required")
     return 1
 
 

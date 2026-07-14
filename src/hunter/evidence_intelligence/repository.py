@@ -65,6 +65,13 @@ class EvidenceIntelligenceRepository:
     def save_entity(self, entity: KnowledgeEntity) -> None:
         self._upsert("knowledge_entities", _payload(entity), key=("entity_id",))
 
+    def entity(self, entity_id: str) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute("SELECT * FROM knowledge_entities WHERE entity_id = ?", (entity_id,)).fetchone()
+            if row is None:
+                return None
+            return dict(row)
+
     def save_predicate(self, predicate: PredicateDefinition) -> None:
         payload = _payload(predicate)
         scalar = {
