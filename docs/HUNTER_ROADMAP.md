@@ -33,7 +33,7 @@ Deliverables:
 - one decentralized-market source when operationally reachable;
 - seeded import of the existing 50 projects;
 - dynamic SQL-backed Candidate Registry;
-- deterministic identity resolution;
+- identity-ready registry structures;
 - candidate lifecycle;
 - lightweight market-wide screening;
 - persistent prioritized Candidate Queue;
@@ -45,17 +45,57 @@ Success test:
 
 Hunter sees materially more than the static universe and produces a defensible prioritized list from live market data.
 
-### v2.7.x — Operational Hardening
+### v2.7.1 — Discovery Hardening and Production Verification
 
-Only if required by real v2.7 results:
+Delivered hardening:
 
-- adapter failover and source health persistence;
+- provider retry and failure isolation;
 - registry merge corrections;
-- retention and compaction;
-- performance indexes;
-- CLI modularization;
-- coverage dashboards;
-- additional source adapters chosen by marginal discovery value.
+- deterministic screening gates;
+- batch registry writes;
+- expanded coverage reporting.
+
+### v2.8.0 — Global Market Expansion
+
+Primary result:
+
+> Hunter materially expands market visibility through additional public discovery sources.
+
+Deliverables:
+
+- GeckoTerminal discovery;
+- DexScreener discovery;
+- chain-plus-contract identifiers for DEX-market candidates;
+- provider overlap and uniqueness reporting;
+- chain, ecosystem, and category coverage reporting;
+- source-health automation job;
+- deterministic tests for adapter normalization and contract-based overlap.
+
+Success test:
+
+Hunter discovers substantially more candidates than the seed universe while preserving evidence provenance and avoiding unsupported identity claims.
+
+## Phase 1.5 — Trust and Identity Foundation
+
+### v2.9.0 — Identity Resolution Foundation
+
+Primary result:
+
+> Hunter safely determines which discovered records refer to the same economic entity and which must remain ambiguous.
+
+Deliverables:
+
+- deterministic Identity Resolution service;
+- exact, probable, ambiguous, conflict, rejected, and unresolved outcomes;
+- chain-aware contract matching;
+- official domain and repository matching when verified;
+- conflict persistence and reporting;
+- lifecycle integration for identified candidates;
+- identity coverage reporting.
+
+Success test:
+
+Hunter reduces duplicate and ambiguous candidates without merging by ticker equality, popularity, or unsupported assumptions.
 
 ## Phase 2 — Better Candidate Selection
 

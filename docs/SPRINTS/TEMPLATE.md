@@ -1,72 +1,58 @@
-# Sprint vX.Y.Z: <Sprint Name>
+# Sprint Specification Template
+
+Use this structure for every Project Hunter sprint specification. A release sprint is not approved for implementation until each section contains concrete release-specific content.
 
 ## Status
 
-- Release: `vX.Y.Z`
-- Status: approved | in progress | released
-- Baseline commit: `<commit>`
-- Release tag: `vX.Y.Z`
+- Sprint name.
+- Release version.
+- Approval or release status.
+- Baseline commit when required.
+- Release tag.
 
 ## Read First
 
 Before implementation, Codex must read:
 
-1. `docs/HUNTER_ARCHITECTURE_MANIFEST.md`
-2. `docs/HUNTER_ARCHITECTURE_SPEC.md`
-3. `docs/HUNTER_ROADMAP.md`
-4. `docs/CODEX_IMPLEMENTATION_GUIDE.md`
-5. `docs/SPRINTS/vX.Y.Z.md`
+1. `docs/PROJECT_PRINCIPLES.md`
+2. `docs/VISION.md`
+3. `docs/HUNTER_ARCHITECTURE_MANIFEST.md`
+4. `docs/HUNTER_ARCHITECTURE_SPEC.md`
+5. `docs/HUNTER_ROADMAP.md`
+6. `docs/CODEX_IMPLEMENTATION_GUIDE.md`
+7. the sprint specification for the release being implemented
 
 ## Mission
 
-Describe the business and architectural objective of the sprint.
+State the architectural and product mission of the sprint.
 
-## In Scope
+## Business Objective
 
-- List the specific capabilities authorized for implementation.
-- Keep scope focused on the smallest production-safe change that improves real investment decisions.
+State the real investment-decision value the sprint must improve.
+
+## Scope
+
+List the implementation work authorized for the sprint.
 
 ## Out of Scope
 
-- List explicitly deferred systems and behaviors.
-- State any frozen architecture boundaries.
+List systems, behaviors, and architectural changes that are explicitly deferred or prohibited.
 
-## Architecture Constraints
+## Engineering Principles
 
-- Preserve canonical runtime boundaries.
-- Preserve deterministic execution identity.
-- Preserve evidence provenance and point-in-time truth.
-- Preserve idempotent persistence.
-- Do not manipulate scoring, weighting, committee logic, replay, historical validation, or calibration unless the sprint explicitly authorizes it.
+State the release-specific engineering principles. Include determinism, evidence provenance, idempotency, simplicity, reuse, and production stability when applicable.
 
-## Data and Evidence Requirements
+## Performance
 
-- Define acceptable public or persisted sources.
-- Define unavailable-state behavior.
-- Define provenance, confidence, freshness, and conflict requirements.
-- Prohibit mock production data, placeholders, fabricated evidence, and unsupported completeness claims.
+State scale assumptions, indexed lookup requirements, batching requirements, incremental update requirements, and algorithms to avoid.
 
-## Performance Requirements
+## Automation
 
-- Define expected scale.
-- Prefer indexed lookup, batching, checkpoints, and incremental synchronization.
-- Avoid full registry scans and avoid O(n²) algorithms where scalable alternatives exist.
+State automation jobs, health checks, retries, checkpoints, idempotency, failure isolation, and operational boundaries.
 
-## Automation Requirements
+## Testing
 
-- Define scheduled jobs, health checks, retries, checkpointing, idempotency, and failure isolation.
-- Scheduler remains operational-only.
-- Pipeline ownership remains with canonical pipeline services.
-
-## Reporting Requirements
-
-- Define CLI/reporting outputs.
-- Require separate coverage dimensions.
-- Require explicit blockers and unavailable states.
-
-## Validation Commands
-
-Run the sprint-specific commands plus:
+List sprint-specific validation commands and the required quality gates:
 
 ```bash
 ruff check .
@@ -77,20 +63,16 @@ pytest
 
 ## Acceptance Criteria
 
-- Define measurable completion criteria.
-- Include live validation requirements for operational providers.
-- Include quality gates and regression requirements.
+List measurable conditions that must be true before the sprint is complete.
 
-## Final Report Fields
+## Definition of Done
 
-- Architecture summary
-- Files added
-- Files modified
-- Coverage before
-- Coverage after
-- Validation results
-- Tests passed
-- Commit hash
-- Push status
-- Release tag
-- Remaining blockers
+Define the final release state, including documentation, validation, git, tag, and release requirements.
+
+## Success Metrics
+
+List the metrics that determine whether the sprint improved market coverage, evidence quality, trust, prioritization, reliability, or investment usefulness.
+
+## Final Report Format
+
+List the exact final report fields required for the sprint.
