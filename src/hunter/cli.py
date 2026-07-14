@@ -78,6 +78,12 @@ from hunter.discovery import (
 )
 from hunter.economic import EconomicDependencyGraphEngine, EconomicGraphRepository
 from hunter.economic.engine import economic_path
+from hunter.evidence_intelligence import (
+    EvidenceIntelligenceAutomationManager,
+    EvidenceIntelligenceReporter,
+    EvidenceIntelligenceRepository,
+    ReportContext,
+)
 from hunter.explainability import DecisionAuditRenderer, DecisionExplainabilityEngine
 from hunter.graph import TechnologyDependencyGraphEngine, TechnologyGraphRepository
 from hunter.graph.engine import dependency_path
@@ -257,6 +263,28 @@ def main(argv: list[str] | None = None) -> int:
     evidence_sub.add_parser("validate")
     evidence_sub.add_parser("sources")
     evidence_sub.add_parser("missing")
+    evidence_intelligence = sub.add_parser("evidence-intelligence")
+    evidence_intelligence.add_argument(
+        "--db", default="data/evidence_intelligence/runtime/evidence_intelligence.sqlite"
+    )
+    evidence_intelligence.add_argument("--cutoff")
+    evidence_intelligence.add_argument("--strict-known", action="store_true")
+    evidence_intelligence_sub = evidence_intelligence.add_subparsers(dest="evidence_intelligence_command")
+    evidence_intelligence_sub.add_parser("coverage")
+    evidence_intelligence_sub.add_parser("source-authority")
+    evidence_intelligence_sub.add_parser("document-lifecycle")
+    evidence_intelligence_sub.add_parser("claim-lifecycle")
+    evidence_intelligence_sub.add_parser("conflict-lifecycle")
+    evidence_explain = evidence_intelligence_sub.add_parser("explain")
+    evidence_explain.add_argument("candidate")
+    evidence_intelligence_sub.add_parser("providers")
+    evidence_intelligence_sub.add_parser("security-audit")
+    evidence_intelligence_automation = evidence_intelligence_sub.add_parser("automation")
+    evidence_intelligence_automation_sub = evidence_intelligence_automation.add_subparsers(
+        dest="evidence_intelligence_automation_command"
+    )
+    evidence_intelligence_automation_sub.add_parser("install")
+    evidence_intelligence_automation_sub.add_parser("status")
     acquisition = sub.add_parser("acquisition")
     acquisition.add_argument("--acquisition-config", default="configs/acquisition.yaml")
     acquisition_sub = acquisition.add_subparsers(dest="acquisition_command")
@@ -628,6 +656,8 @@ def main(argv: list[str] | None = None) -> int:
         return _market_validation(args)
     if args.command == "evidence":
         return _evidence(args)
+    if args.command == "evidence-intelligence":
+        return _evidence_intelligence(args)
     if args.command == "acquisition":
         return _acquisition(args)
     if args.command == "auth":
@@ -722,6 +752,89 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     automation.print_help()
     return 1
+
+
+def _evidence_intelligence(args: object) -> int:
+    repository = EvidenceIntelligenceRepository(args.db)
+    reporter = EvidenceIntelligenceReporter(repository)
+    context = ReportContext(
+        cutoff=_parse_cutoff(getattr(args, "cutoff", None)),
+        strict_known_by_hunter=bool(getattr(args, "strict_known", False)),
+    )
+    command = getattr(args, "evidence_intelligence_command", None)
+    if command == "coverage":
+        _print_mapping(reporter.coverage())
+        return 0
+    if command == "source-authority":
+        return _print_rows(reporter.source_authority(context), empty="source_authority=0")
+    if command == "document-lifecycle":
+        return _print_rows(reporter.document_lifecycle(context), empty="document_lifecycle=0")
+    if command == "claim-lifecycle":
+        return _print_rows(reporter.claim_lifecycle(context), empty="claim_lifecycle=0")
+    if command == "conflict-lifecycle":
+        return _print_rows(reporter.conflict_lifecycle(context), empty="conflict_lifecycle=0")
+    if command == "explain":
+        return _print_rows(
+            reporter.candidate_explain(str(args.candidate), context),
+            empty=f"candidate={args.candidate} claims=0",
+        )
+    if command == "security-audit":
+        return _print_rows(reporter.security_audit(), empty="security_events=0")
+    if command == "providers":
+        return _print_rows(reporter.provider_health(), empty="providers=0")
+    if command == "automation":
+        return _evidence_intelligence_automation(args)
+    print("evidence-intelligence command required")
+    return 1
+
+
+def _evidence_intelligence_automation(args: object) -> int:
+    manager = EvidenceIntelligenceAutomationManager()
+    command = getattr(args, "evidence_intelligence_automation_command", None)
+    if command == "install":
+        result = manager.install()
+        print(f"installed={result.installed} created={result.created} jobs={','.join(result.jobs)}")
+        return 0
+    if command == "status":
+        rows = manager.status()
+        if not rows:
+            print("jobs=0")
+            return 0
+        for row in rows:
+            schedule = row.get("schedule")
+            schedule_type = schedule.get("type") if isinstance(schedule, dict) else row.get("schedule_type")
+            metadata = row.get("metadata")
+            pipeline_owner = metadata.get("pipeline_owner") if isinstance(metadata, dict) else row.get("pipeline_owner")
+            scheduler_role = metadata.get("scheduler_role") if isinstance(metadata, dict) else row.get("scheduler_role")
+            print(
+                f"{row.get('job_id')}\tenabled={row.get('enabled')}\tschedule={schedule_type}"
+                f"\tpipeline_owner={pipeline_owner}\tscheduler_role={scheduler_role}"
+            )
+        return 0
+    print("evidence-intelligence automation command required")
+    return 1
+
+
+def _parse_cutoff(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed
+
+
+def _print_mapping(row: dict[str, object]) -> None:
+    print("\t".join(f"{key}={value}" for key, value in row.items()))
+
+
+def _print_rows(rows: tuple[dict[str, str], ...], *, empty: str) -> int:
+    if not rows:
+        print(empty)
+        return 0
+    for row in rows:
+        _print_mapping(row)
+    return 0
 
 
 def _dashboard(args: object) -> int:
