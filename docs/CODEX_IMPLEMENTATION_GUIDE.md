@@ -9,7 +9,11 @@ Before any implementation, Codex must read:
 1. `docs/HUNTER_ARCHITECTURE_MANIFEST.md`
 2. `docs/HUNTER_ARCHITECTURE_SPEC.md`
 3. `docs/HUNTER_ROADMAP.md`
-4. release-specific instructions
+4. `docs/SPRINTS/<version>.md`
+5. release-specific user instructions
+
+If `docs/SPRINTS/<version>.md` is missing for the requested release, Codex must stop before
+implementation and report that the sprint specification has not been created.
 
 ## Required Working Mode
 
