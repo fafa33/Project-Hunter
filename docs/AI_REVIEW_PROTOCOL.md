@@ -2,7 +2,9 @@
 
 Status: Mandatory engineering standard
 
-This protocol governs every contribution to Project Hunter from Codex, Claude, human contributors, and future AI agents. It supplements `docs/PROJECT_CONSTITUTION.md`, `docs/PROJECT_PRINCIPLES.md`, `docs/VISION.md`, `docs/HUNTER_ARCHITECTURE_MANIFEST.md`, `docs/HUNTER_ARCHITECTURE_SPEC.md`, `docs/HUNTER_ROADMAP.md`, `docs/CANONICAL_RUNTIME_ARCHITECTURE.md`, `docs/DEVELOPMENT_GOVERNANCE.md`, `docs/CODEX_IMPLEMENTATION_GUIDE.md`, and the active sprint specification. When this protocol conflicts with a higher-level project governance document, the contribution must stop until the contradiction is resolved explicitly in documentation.
+This protocol governs every contribution to Project Hunter from Codex, Claude, human contributors, and future AI agents. It is subordinate to `docs/PROJECT_CONSTITUTION.md`, which remains the highest architectural authority. It extends the mandatory lifecycle in `docs/DEVELOPMENT_GOVERNANCE.md` with AI-specific responsibilities, review roles, and report expectations. It does not replace that lifecycle and does not create a parallel approval process.
+
+The canonical document precedence order is maintained in `docs/SPRINTS/README.md`. This document must follow that order rather than restating a competing hierarchy. When this protocol conflicts with a higher-level governance document, the contribution must stop until the contradiction is resolved explicitly in documentation.
 
 ## 1. Purpose
 
@@ -42,23 +44,31 @@ New code must extend approved boundaries rather than create competing runtime pa
 
 Documentation must describe the system that exists. It must not claim unsupported coverage, operational providers, completed roadmap items, migration safety, replay behavior, or architectural status that the implementation does not prove.
 
-## 3. Standard Development Lifecycle
+## 3. AI Extension To The Mandatory Development Lifecycle
 
-Every contribution follows this lifecycle:
+Every contribution follows the lifecycle defined in `docs/DEVELOPMENT_GOVERNANCE.md`:
 
 ```text
-Implementation
--> Self Review
--> Architectural Audit
--> Documentation Consistency Review
--> Fix
--> Re-review
--> Approved For Merge
--> Merge
--> Delete branch
+Planning
+-> Implementation
+-> Mandatory Pre-PR Verification
+-> Independent Architecture Review
+-> Review Change Report
+-> Final Validation
+-> Pull Request Rules
 ```
 
-No step may be skipped because the change appears simple. For documentation-only changes, the same lifecycle applies with the review scope limited to accuracy, consistency, governance hierarchy, and absence of unintended implementation effects.
+This protocol adds role-specific requirements inside those existing phases. It does not authorize skipping, renaming, reordering, or duplicating any phase. For documentation-only changes, the same lifecycle applies with depth scaled under the proportionality rule in `docs/DEVELOPMENT_GOVERNANCE.md`.
+
+AI-specific mapping:
+
+- Planning: identify whether Codex, Claude, a human contributor, or another AI agent is acting as implementer, reviewer, or verifier.
+- Implementation: Codex or another implementer changes only the approved scope and records any discovered ambiguity before expanding scope.
+- Mandatory Pre-PR Verification: the implementer proves deterministic behavior, documentation consistency, and absence of unintended runtime effects for the final diff.
+- Independent Architecture Review: Claude, a human reviewer, or another reviewer not acting as implementer performs an adversarial review against the categories in `docs/DEVELOPMENT_GOVERNANCE.md`.
+- Review Change Report: every AI-discovered or human-discovered issue is recorded using the existing report discipline, with the AI-specific blocker format in this protocol when the issue is release-blocking.
+- Final Validation: the contributor may state that the PR is ready only when the existing final validation fields are complete and no unresolved findings remain.
+- Pull Request Rules: the PR remains draft until the required lifecycle has passed for the final state of the branch.
 
 ## 4. Codex Responsibilities
 
@@ -66,6 +76,7 @@ Codex is responsible for production-safe implementation within the approved scop
 
 Codex must:
 
+- operate within the lifecycle phases in `docs/DEVELOPMENT_GOVERNANCE.md`;
 - read the relevant sprint specification, architecture documents, existing implementation, migrations, configuration, and tests before editing;
 - preserve current runtime behavior unless the approved scope explicitly changes it;
 - reuse existing repositories, provider boundaries, execution identity, evidence, sufficiency, replay, configuration, timestamp, migration, and checkpoint conventions;
@@ -92,6 +103,7 @@ Claude is responsible for independent review. Independence means Claude must ver
 
 Claude must review:
 
+- consistency with `docs/PROJECT_CONSTITUTION.md` as the highest architectural authority;
 - architecture consistency with `docs/HUNTER_ARCHITECTURE_MANIFEST.md`, `docs/HUNTER_ARCHITECTURE_SPEC.md`, `docs/CANONICAL_RUNTIME_ARCHITECTURE.md`, and the active sprint;
 - repository, provider, adapter, service, scheduler, CLI, dashboard, report, and persistence boundaries;
 - documentation consistency across canonical architecture documents and feature-specific specifications;
@@ -108,6 +120,7 @@ Claude must classify findings as blockers only when they meet the blocker defini
 
 A pull request must never be merged before all of the following are true:
 
+- the mandatory lifecycle in `docs/DEVELOPMENT_GOVERNANCE.md` has completed for the final branch state;
 - required tests and quality gates pass or an explicitly approved exception is documented;
 - Codex self-review is complete;
 - independent architectural review is complete;
@@ -156,7 +169,9 @@ Recommendations are non-blocking when:
 
 Reviewers must not inflate preferences into blockers. Conversely, contributors must not downgrade architectural violations to recommendations because a fix is inconvenient.
 
-## 9. Required Review Report Format
+## 9. Required AI Review Report Format
+
+These formats are AI-specific reporting requirements inside the Review Change Report and Final Validation phases defined by `docs/DEVELOPMENT_GOVERNANCE.md`. They do not replace the report fields required by that document.
 
 ### Blocker Report
 
@@ -190,7 +205,7 @@ The fixed report must distinguish implementation changes from verification resul
 
 ### Approval Report
 
-Use this format only when no blockers remain:
+Use this format only when no blockers remain and the Final Validation phase in `docs/DEVELOPMENT_GOVERNANCE.md` has passed:
 
 ```text
 APPROVED FOR MERGE
@@ -204,12 +219,12 @@ If there are no meaningful improvements, state `None` under remaining improvemen
 
 ## 10. Documentation Governance
 
-Every architecture change must keep Project Hunter documentation internally consistent. Documentation is part of the architecture, not a release note afterthought.
+Every architecture change must keep Project Hunter documentation internally consistent. Documentation is part of the architecture, not a release note afterthought. The canonical governance ordering is defined in `docs/SPRINTS/README.md`; the list below identifies documents and surfaces that commonly require consistency checks, not a separate authority hierarchy.
 
 The following documents and surfaces must remain aligned when affected:
 
-- `docs/PROJECT_PRINCIPLES.md`;
 - `docs/PROJECT_CONSTITUTION.md`;
+- `docs/PROJECT_PRINCIPLES.md`;
 - `docs/VISION.md`;
 - `docs/HUNTER_ARCHITECTURE_MANIFEST.md`;
 - `docs/HUNTER_ARCHITECTURE_SPEC.md`;
@@ -237,7 +252,7 @@ Documentation review must verify:
 - strict known-by-Hunter replay and reconstructed replay are described distinctly where relevant;
 - limitations are visible and not disguised as complete coverage.
 
-When documents conflict, contributors must stop and resolve the conflict before merge. A sprint specification may narrow release scope, but it does not override the permanent principles, architecture manifest, or architecture specification.
+When documents conflict, contributors must stop and resolve the conflict before merge. A sprint specification may narrow release scope, but it does not override higher-governance documents in the canonical order maintained by `docs/SPRINTS/README.md`.
 
 ## 11. One-PR Rule
 
@@ -265,12 +280,12 @@ If a change requires multiple architectural concerns to remain safe, the PR desc
 
 The standard collaboration pattern is:
 
-1. Codex implements the approved scope.
-2. Codex runs required tests and performs a self-review.
-3. Claude independently reviews the diff, architecture, documentation, tests, and surrounding boundaries.
-4. Codex fixes only the confirmed blockers.
-5. Claude re-verifies the fixes.
-6. Merge occurs only after approval.
+1. During Planning, assign Codex, Claude, human contributors, or future agents to explicit implementer, reviewer, or verifier roles.
+2. During Implementation, Codex or another implementer changes only the approved scope.
+3. During Mandatory Pre-PR Verification and Final Validation, the implementer performs the required self-review and records the result.
+4. During Independent Architecture Review, Claude, a human reviewer, or another independent reviewer reviews the diff, architecture, documentation, tests, and surrounding boundaries.
+5. During the Review Change Report loop, the implementer fixes only confirmed blockers and re-runs verification for the changed surface.
+6. Merge occurs only after the lifecycle in `docs/DEVELOPMENT_GOVERNANCE.md` reaches an approved final state.
 
 Human contributors follow the same pattern. A human may implement and another human may review, but the independence requirement remains. Future AI agents must be assigned an explicit role: implementer, reviewer, or verifier. An agent must not approve its own implementation without independent review unless the user explicitly limits the task to a local, non-mergeable draft.
 

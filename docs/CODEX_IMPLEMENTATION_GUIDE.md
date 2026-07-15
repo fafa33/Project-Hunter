@@ -2,40 +2,16 @@
 
 ## Purpose
 
-This guide defines how Codex should work on Hunter. It supplements the project constitution, project principles, vision, architecture manifest, specification, roadmap, development governance, AI review protocol, and sprint specifications.
+This guide defines how Codex should work on Hunter. It supplements the canonical governance order maintained in `docs/SPRINTS/README.md` and defines Codex-specific implementation expectations within that order.
 
-Before any implementation, Codex must read:
-
-1. `docs/PROJECT_PRINCIPLES.md`
-2. `docs/PROJECT_CONSTITUTION.md`
-3. `docs/VISION.md`
-4. `docs/HUNTER_ARCHITECTURE_MANIFEST.md`
-5. `docs/HUNTER_ARCHITECTURE_SPEC.md`
-6. `docs/HUNTER_ROADMAP.md`
-7. `docs/DEVELOPMENT_GOVERNANCE.md`
-8. `docs/AI_REVIEW_PROTOCOL.md`
-9. `docs/SPRINTS/<version>.md`
-10. release-specific user instructions
+Before any implementation, Codex must read the documents in the canonical source-of-truth order defined in `docs/SPRINTS/README.md`, then read release-specific user instructions.
 
 If `docs/SPRINTS/<version>.md` is missing for the requested release, Codex must stop before
 implementation and report that the sprint specification has not been created.
 
 ## Documentation Governance
 
-The canonical governance hierarchy is:
-
-1. `docs/PROJECT_PRINCIPLES.md`
-2. `docs/PROJECT_CONSTITUTION.md`
-3. `docs/VISION.md`
-4. `docs/HUNTER_ARCHITECTURE_MANIFEST.md`
-5. `docs/HUNTER_ARCHITECTURE_SPEC.md`
-6. `docs/HUNTER_ROADMAP.md`
-7. `docs/DEVELOPMENT_GOVERNANCE.md`
-8. `docs/AI_REVIEW_PROTOCOL.md`
-9. `docs/SPRINTS/<version>.md`
-10. this implementation guide
-
-Sprint specifications define approved release scope, but they do not override the principles, vision, architecture manifest, or architecture specification. When documents conflict, Codex must stop before implementation and report the conflict.
+The canonical governance hierarchy is defined once in `docs/SPRINTS/README.md`. Sprint specifications define approved release scope, but they do not override higher-governance documents in that order. `docs/PROJECT_CONSTITUTION.md` remains the highest architectural authority. When documents conflict, Codex must stop before implementation and report the conflict.
 
 ## Required Working Mode
 
