@@ -2,17 +2,20 @@
 
 ## Purpose
 
-This guide defines how Codex should work on Hunter. It supplements the project principles, vision, architecture manifest, specification, roadmap, and sprint specifications.
+This guide defines how Codex should work on Hunter. It supplements the project constitution, project principles, vision, architecture manifest, specification, roadmap, development governance, AI review protocol, and sprint specifications.
 
 Before any implementation, Codex must read:
 
 1. `docs/PROJECT_PRINCIPLES.md`
-2. `docs/VISION.md`
-3. `docs/HUNTER_ARCHITECTURE_MANIFEST.md`
-4. `docs/HUNTER_ARCHITECTURE_SPEC.md`
-5. `docs/HUNTER_ROADMAP.md`
-6. `docs/SPRINTS/<version>.md`
-7. release-specific user instructions
+2. `docs/PROJECT_CONSTITUTION.md`
+3. `docs/VISION.md`
+4. `docs/HUNTER_ARCHITECTURE_MANIFEST.md`
+5. `docs/HUNTER_ARCHITECTURE_SPEC.md`
+6. `docs/HUNTER_ROADMAP.md`
+7. `docs/DEVELOPMENT_GOVERNANCE.md`
+8. `docs/AI_REVIEW_PROTOCOL.md`
+9. `docs/SPRINTS/<version>.md`
+10. release-specific user instructions
 
 If `docs/SPRINTS/<version>.md` is missing for the requested release, Codex must stop before
 implementation and report that the sprint specification has not been created.
@@ -22,12 +25,15 @@ implementation and report that the sprint specification has not been created.
 The canonical governance hierarchy is:
 
 1. `docs/PROJECT_PRINCIPLES.md`
-2. `docs/VISION.md`
-3. `docs/HUNTER_ARCHITECTURE_MANIFEST.md`
-4. `docs/HUNTER_ARCHITECTURE_SPEC.md`
-5. `docs/HUNTER_ROADMAP.md`
-6. `docs/SPRINTS/<version>.md`
-7. this implementation guide
+2. `docs/PROJECT_CONSTITUTION.md`
+3. `docs/VISION.md`
+4. `docs/HUNTER_ARCHITECTURE_MANIFEST.md`
+5. `docs/HUNTER_ARCHITECTURE_SPEC.md`
+6. `docs/HUNTER_ROADMAP.md`
+7. `docs/DEVELOPMENT_GOVERNANCE.md`
+8. `docs/AI_REVIEW_PROTOCOL.md`
+9. `docs/SPRINTS/<version>.md`
+10. this implementation guide
 
 Sprint specifications define approved release scope, but they do not override the principles, vision, architecture manifest, or architecture specification. When documents conflict, Codex must stop before implementation and report the conflict.
 
