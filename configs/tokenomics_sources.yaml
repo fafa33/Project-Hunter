@@ -1,0 +1,56 @@
+version: tokenomics-source-registry-v1
+
+unavailable_capabilities:
+  - capability: allocation
+    reason: No reliable free public allocation endpoint with verified response schema has been smoke-validated for Phase B.
+  - capability: vesting
+    reason: No reliable free public vesting endpoint with verified response schema has been smoke-validated for Phase B.
+  - capability: unlock
+    reason: No reliable free public unlock/cliff endpoint with verified response schema has been smoke-validated for Phase B.
+
+sources:
+  - source_id: coingecko:usd-coin
+    provider_id: public-tokenomics-aggregator
+    asset_id: asset:usdc:ethereum
+    candidate_id: usdc
+    symbol: USDC
+    name: USD Coin
+    chain: ethereum
+    contract_address: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
+    decimals: 6
+    source_type: public_aggregator
+    endpoint: https://api.coingecko.com/api/v3/coins/usd-coin?localization=false&tickers=false&market_data=true&community_data=false&developer_data=false&sparkline=false
+    allowed_hosts:
+      - api.coingecko.com
+    response_format: coingecko-coin-v3
+    parser_version: public-tokenomics-aggregator-v1
+    authority_tier: secondary
+    enabled: true
+    capabilities:
+      - supply
+    historical_depth: current CoinGecko coin snapshot only
+    freshness: CoinGecko last_updated when present, otherwise Hunter retrieval time
+    source_limitations: Secondary public aggregator supply fields only; not authoritative project disclosure and not unlock, vesting, allocation, holder, sell-pressure, or circulating-definition truth.
+
+  - source_id: evm-rpc:ethereum:usdc
+    provider_id: evm-erc20-public-rpc
+    asset_id: asset:usdc:ethereum
+    candidate_id: usdc
+    symbol: USDC
+    name: USD Coin
+    chain: ethereum
+    contract_address: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
+    decimals: 6
+    source_type: verified_onchain_rpc
+    endpoint: https://ethereum.publicnode.com
+    allowed_hosts:
+      - ethereum.publicnode.com
+    response_format: evm-json-rpc-eth-call-total-supply
+    parser_version: evm-erc20-public-rpc-v1
+    authority_tier: authoritative
+    enabled: true
+    capabilities:
+      - supply
+    historical_depth: latest public RPC state only unless endpoint provides archive access
+    freshness: endpoint latest state at Hunter retrieval time
+    source_limitations: ERC-20 totalSupply only; does not infer circulating, locked, burned, vested, unlocked, fully unlocked, allocation, vesting, holder, or sell-pressure state.

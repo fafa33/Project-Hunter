@@ -23,6 +23,8 @@ from hunter.tokenomics.models import (
     SupplyDefinitionReconciliation,
     SupplyObservation,
     TokenAsset,
+    TokenomicsAcquisitionAttempt,
+    TokenomicsAcquisitionOutcome,
     TokenomicsEvidenceArtifact,
     TokenomicsEvidenceClaim,
     TokenomicsReportObservationLink,
@@ -53,6 +55,8 @@ IMMUTABLE_TABLES: frozenset[str] = frozenset(
         "tokenomics_report_runs",
         "tokenomics_report_observation_links",
         "tokenomics_report_sufficiency_links",
+        "tokenomics_acquisition_attempts",
+        "tokenomics_acquisition_outcomes",
     }
 )
 
@@ -89,6 +93,8 @@ TABLES: frozenset[str] = frozenset(
         "tokenomics_report_observation_links",
         "tokenomics_sufficiency_assessments",
         "tokenomics_report_sufficiency_links",
+        "tokenomics_acquisition_attempts",
+        "tokenomics_acquisition_outcomes",
     }
 )
 
@@ -151,6 +157,8 @@ CREATE TABLE IF NOT EXISTS tokenomics_evidence_artifacts (
     observed_at TEXT NOT NULL,
     recorded_at TEXT NOT NULL,
     lifecycle_status TEXT NOT NULL,
+    source_authority TEXT NOT NULL,
+    parser_version TEXT NOT NULL,
     schema_version TEXT NOT NULL,
     UNIQUE (source_uri, content_hash)
 );
@@ -218,7 +226,7 @@ CREATE TABLE IF NOT EXISTS tokenomics_supply_observations (
     availability_state TEXT NOT NULL,
     coverage_state TEXT NOT NULL,
     schema_version TEXT NOT NULL,
-    UNIQUE (representation_id, supply_metric, effective_at, observed_at, recorded_at, schema_version),
+    UNIQUE (representation_id, supply_metric, amount, effective_at, observed_at, recorded_at, schema_version),
     FOREIGN KEY (representation_id) REFERENCES token_representation_identities(representation_id)
 );
 
@@ -233,7 +241,7 @@ CREATE TABLE IF NOT EXISTS tokenomics_supply_definition_reconciliations (
     effective_at TEXT NOT NULL,
     recorded_at TEXT NOT NULL,
     schema_version TEXT NOT NULL,
-    UNIQUE (asset_id, supply_metric, effective_at, recorded_at, schema_version),
+    UNIQUE (reconciliation_id, asset_id, supply_metric, effective_at, recorded_at, schema_version),
     FOREIGN KEY (asset_id) REFERENCES token_asset_identities(asset_id)
 );
 
@@ -539,6 +547,44 @@ CREATE TABLE IF NOT EXISTS tokenomics_report_sufficiency_links (
     FOREIGN KEY (report_run_id) REFERENCES tokenomics_report_runs(run_id),
     FOREIGN KEY (assessment_id) REFERENCES tokenomics_sufficiency_assessments(assessment_id)
 );
+
+CREATE TABLE IF NOT EXISTS tokenomics_acquisition_attempts (
+    attempt_id TEXT PRIMARY KEY,
+    provider_id TEXT NOT NULL,
+    adapter_version TEXT NOT NULL,
+    asset_id TEXT NOT NULL,
+    capability TEXT NOT NULL,
+    source_uri TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    recorded_at TEXT NOT NULL,
+    authority_tier TEXT NOT NULL,
+    schema_version TEXT NOT NULL,
+    UNIQUE (provider_id, asset_id, capability, source_uri, started_at, recorded_at, schema_version),
+    FOREIGN KEY (asset_id) REFERENCES token_asset_identities(asset_id)
+);
+
+CREATE INDEX IF NOT EXISTS tokenomics_acquisition_attempts_asset_provider_idx
+ON tokenomics_acquisition_attempts(asset_id, provider_id, capability, recorded_at);
+
+CREATE TABLE IF NOT EXISTS tokenomics_acquisition_outcomes (
+    outcome_id TEXT PRIMARY KEY,
+    attempt_id TEXT NOT NULL,
+    provider_id TEXT NOT NULL,
+    asset_id TEXT NOT NULL,
+    availability_outcome TEXT NOT NULL,
+    coverage_state TEXT NOT NULL,
+    observed_at TEXT NOT NULL,
+    recorded_at TEXT NOT NULL,
+    failure_reason TEXT NOT NULL,
+    source_limitations TEXT NOT NULL,
+    schema_version TEXT NOT NULL,
+    UNIQUE (attempt_id, availability_outcome, observed_at, recorded_at, schema_version),
+    FOREIGN KEY (attempt_id) REFERENCES tokenomics_acquisition_attempts(attempt_id),
+    FOREIGN KEY (asset_id) REFERENCES token_asset_identities(asset_id)
+);
+
+CREATE INDEX IF NOT EXISTS tokenomics_acquisition_outcomes_asset_recorded_idx
+ON tokenomics_acquisition_outcomes(asset_id, availability_outcome, recorded_at);
 """
 
 
@@ -577,6 +623,12 @@ class TokenomicsRepository:
     def save_evidence_artifact(self, artifact: TokenomicsEvidenceArtifact) -> None:
         self._upsert("tokenomics_evidence_artifacts", _payload(artifact), key=("artifact_id",))
 
+    def save_acquisition_attempt(self, attempt: TokenomicsAcquisitionAttempt) -> None:
+        self._upsert("tokenomics_acquisition_attempts", _payload(attempt), key=("attempt_id",))
+
+    def save_acquisition_outcome(self, outcome: TokenomicsAcquisitionOutcome) -> None:
+        self._upsert("tokenomics_acquisition_outcomes", _payload(outcome), key=("outcome_id",))
+
     def save_evidence_claim(self, claim: TokenomicsEvidenceClaim) -> None:
         self._upsert("tokenomics_evidence_claims", _payload(claim), key=("claim_id",))
 
@@ -614,11 +666,80 @@ class TokenomicsRepository:
             key=("reconciliation_id",),
         )
 
+    def save_supply_reconciliation_claim_link(
+        self,
+        *,
+        link_id: str,
+        reconciliation_id: str,
+        claim_id: str,
+        role: str,
+        position: int,
+        schema_version: str,
+    ) -> None:
+        self._upsert(
+            "tokenomics_supply_reconciliation_claim_links",
+            {
+                "link_id": link_id,
+                "reconciliation_id": reconciliation_id,
+                "claim_id": claim_id,
+                "role": role,
+                "position": position,
+                "schema_version": schema_version,
+            },
+            key=("link_id",),
+        )
+
     def save_allocation_definition(self, allocation: AllocationDefinition) -> None:
         self._upsert("tokenomics_allocation_definitions", _payload(allocation), key=("allocation_id",))
 
+    def save_allocation_evidence_link(
+        self,
+        *,
+        link_id: str,
+        allocation_id: str,
+        claim_id: str,
+        role: str,
+        position: int,
+        schema_version: str,
+    ) -> None:
+        self._upsert(
+            "tokenomics_allocation_evidence_links",
+            {
+                "link_id": link_id,
+                "allocation_id": allocation_id,
+                "claim_id": claim_id,
+                "role": role,
+                "position": position,
+                "schema_version": schema_version,
+            },
+            key=("link_id",),
+        )
+
     def save_vesting_schedule(self, schedule: VestingSchedule) -> None:
         self._upsert("tokenomics_vesting_schedules", _payload(schedule), key=("schedule_id",))
+
+    def save_vesting_schedule_evidence_link(
+        self,
+        *,
+        link_id: str,
+        schedule_id: str,
+        claim_id: str,
+        role: str,
+        position: int,
+        schema_version: str,
+    ) -> None:
+        self._upsert(
+            "tokenomics_vesting_schedule_evidence_links",
+            {
+                "link_id": link_id,
+                "schedule_id": schedule_id,
+                "claim_id": claim_id,
+                "role": role,
+                "position": position,
+                "schema_version": schema_version,
+            },
+            key=("link_id",),
+        )
 
     def save_vesting_schedule_segment(self, segment: VestingScheduleSegment) -> None:
         self._upsert("tokenomics_vesting_schedule_segments", _payload(segment), key=("segment_id",))

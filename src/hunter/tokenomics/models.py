@@ -15,6 +15,16 @@ EvidenceLifecycleStatus = Literal[
     "proxy",
 ]
 ReportMode = Literal["known_by_hunter", "reconstructed"]
+SourceAuthorityTier = Literal["authoritative", "secondary", "proxy", "unknown"]
+ProviderAvailabilityOutcome = Literal[
+    "success",
+    "unavailable",
+    "rate_limited",
+    "malformed",
+    "partial",
+    "conflicting",
+    "unsupported",
+]
 SupplyMetric = Literal[
     "circulating_supply",
     "total_supply",
@@ -110,6 +120,8 @@ ResolutionState = Literal["unresolved", "accepted", "rejected", "corrected", "su
 
 EVIDENCE_LIFECYCLE_STATUSES: frozenset[str] = frozenset(EvidenceLifecycleStatus.__args__)  # type: ignore[attr-defined]
 REPORT_MODES: frozenset[str] = frozenset(ReportMode.__args__)  # type: ignore[attr-defined]
+SOURCE_AUTHORITY_TIERS: frozenset[str] = frozenset(SourceAuthorityTier.__args__)  # type: ignore[attr-defined]
+PROVIDER_AVAILABILITY_OUTCOMES: frozenset[str] = frozenset(ProviderAvailabilityOutcome.__args__)  # type: ignore[attr-defined]
 SUPPLY_METRICS: frozenset[str] = frozenset(SupplyMetric.__args__)  # type: ignore[attr-defined]
 SUPPLY_DEFINITION_STATES: frozenset[str] = EVIDENCE_LIFECYCLE_STATUSES
 ALLOCATION_CATEGORIES: frozenset[str] = frozenset(AllocationCategory.__args__)  # type: ignore[attr-defined]
@@ -174,11 +186,14 @@ class TokenomicsEvidenceArtifact:
     observed_at: datetime
     recorded_at: datetime
     lifecycle_status: EvidenceLifecycleStatus
+    source_authority: SourceAuthorityTier = "unknown"
+    parser_version: str = TOKENOMICS_SCHEMA_VERSION
     schema_version: str = TOKENOMICS_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
-        _texts(self, "artifact_id", "source_type", "source_uri", "content_hash", "schema_version")
+        _texts(self, "artifact_id", "source_type", "source_uri", "content_hash", "parser_version", "schema_version")
         _member("lifecycle_status", self.lifecycle_status, EVIDENCE_LIFECYCLE_STATUSES)
+        _member("source_authority", self.source_authority, SOURCE_AUTHORITY_TIERS)
         _aware("observed_at", self.observed_at)
         _aware("recorded_at", self.recorded_at)
 
@@ -640,6 +655,66 @@ class TokenomicsReportSufficiencyLink:
             raise ValueError("position must be non-negative")
 
 
+@dataclass(frozen=True)
+class TokenomicsAcquisitionAttempt:
+    attempt_id: str
+    provider_id: str
+    adapter_version: str
+    asset_id: str
+    capability: str
+    source_uri: str
+    started_at: datetime
+    recorded_at: datetime
+    authority_tier: SourceAuthorityTier
+    schema_version: str = TOKENOMICS_SCHEMA_VERSION
+
+    def __post_init__(self) -> None:
+        _texts(
+            self,
+            "attempt_id",
+            "provider_id",
+            "adapter_version",
+            "asset_id",
+            "capability",
+            "source_uri",
+            "schema_version",
+        )
+        _member("authority_tier", self.authority_tier, SOURCE_AUTHORITY_TIERS)
+        _aware("started_at", self.started_at)
+        _aware("recorded_at", self.recorded_at)
+
+
+@dataclass(frozen=True)
+class TokenomicsAcquisitionOutcome:
+    outcome_id: str
+    attempt_id: str
+    provider_id: str
+    asset_id: str
+    availability_outcome: ProviderAvailabilityOutcome
+    coverage_state: CoverageState
+    observed_at: datetime
+    recorded_at: datetime
+    failure_reason: str
+    source_limitations: str
+    schema_version: str = TOKENOMICS_SCHEMA_VERSION
+
+    def __post_init__(self) -> None:
+        _texts(
+            self,
+            "outcome_id",
+            "attempt_id",
+            "provider_id",
+            "asset_id",
+            "schema_version",
+        )
+        _optional_text("failure_reason", self.failure_reason)
+        _optional_text("source_limitations", self.source_limitations)
+        _member("availability_outcome", self.availability_outcome, PROVIDER_AVAILABILITY_OUTCOMES)
+        _member("coverage_state", self.coverage_state, COVERAGE_STATES)
+        _aware("observed_at", self.observed_at)
+        _aware("recorded_at", self.recorded_at)
+
+
 def _texts(instance: object, *names: str) -> None:
     for name in names:
         _text(name, getattr(instance, name))
@@ -651,7 +726,7 @@ def _text(name: str, value: str) -> None:
 
 
 def _optional_text(name: str, value: str | None) -> None:
-    if value is not None:
+    if value:
         _text(name, value)
 
 
