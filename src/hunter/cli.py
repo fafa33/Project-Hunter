@@ -156,6 +156,12 @@ from hunter.persistence.records import EvidenceRecord, SnapshotRecord
 from hunter.persistence.sql import SessionFactory, UnitOfWork, create_schema, create_sqlite_engine
 from hunter.probability.ranking import rank_probability_assessments
 from hunter.scenario import ScenarioRepository, ScenarioSimulationEngine, compare_scenarios
+from hunter.sufficiency import (
+    DataSufficiencyAutomationManager,
+    DataSufficiencyReporter,
+    DataSufficiencyRepository,
+    SufficiencyReportContext,
+)
 from hunter.timing import (
     OpportunityTimingEvidenceEngine,
     TimingAssessment,
@@ -532,6 +538,25 @@ def main(argv: list[str] | None = None) -> int:
     scenario_sub.add_parser("compare")
     scenario_sub.add_parser("history")
     scenario_sub.add_parser("coverage")
+    sufficiency = sub.add_parser("sufficiency")
+    sufficiency.add_argument("--db", default="data/sufficiency/runtime/sufficiency.sqlite")
+    sufficiency.add_argument("--automation-config", default="configs/automation.yaml")
+    sufficiency.add_argument("--cutoff")
+    sufficiency.add_argument("--strict-known", action="store_true")
+    sufficiency.add_argument("--reconstructed", action="store_true")
+    sufficiency_sub = sufficiency.add_subparsers(dest="sufficiency_command")
+    sufficiency_sub.add_parser("coverage")
+    sufficiency_sub.add_parser("requirements")
+    sufficiency_assess = sufficiency_sub.add_parser("assess")
+    sufficiency_assess.add_argument("candidate")
+    sufficiency_missing = sufficiency_sub.add_parser("missing")
+    sufficiency_missing.add_argument("candidate")
+    sufficiency_sub.add_parser("disagreements")
+    sufficiency_sub.add_parser("report")
+    sufficiency_automation = sufficiency_sub.add_parser("automation")
+    sufficiency_automation_sub = sufficiency_automation.add_subparsers(dest="sufficiency_automation_command")
+    sufficiency_automation_sub.add_parser("install")
+    sufficiency_automation_sub.add_parser("status")
     backtest = sub.add_parser("backtest")
     backtest_sub = backtest.add_subparsers(dest="backtest_command")
     backtest_sub.add_parser("run")
@@ -723,6 +748,8 @@ def main(argv: list[str] | None = None) -> int:
         return _economic(args)
     if args.command == "scenario":
         return _scenario(args)
+    if args.command == "sufficiency":
+        return _sufficiency(args)
     if args.command == "backtest":
         return _backtest(args)
     if args.command == "calibration":
@@ -812,6 +839,53 @@ def _evidence_intelligence(args: object) -> int:
     if command == "automation":
         return _evidence_intelligence_automation(args)
     print("evidence-intelligence command required")
+    return 1
+
+
+def _sufficiency(args: object) -> int:
+    repository = DataSufficiencyRepository(args.db)
+    reporter = DataSufficiencyReporter(repository)
+    context = SufficiencyReportContext(
+        cutoff_at=_parse_cutoff(getattr(args, "cutoff", None)),
+        strict_known_by_hunter=bool(getattr(args, "strict_known", False)),
+        reconstructed_after_cutoff=bool(getattr(args, "reconstructed", False)),
+    )
+    command = getattr(args, "sufficiency_command", None)
+    if command == "coverage":
+        print(json.dumps(reporter.coverage(context), indent=2, sort_keys=True, default=str))
+        return 0
+    if command == "requirements":
+        print(json.dumps(reporter.requirements(context), indent=2, sort_keys=True, default=str))
+        return 0
+    if command == "assess":
+        print(json.dumps(reporter.assess(str(args.candidate), context), indent=2, sort_keys=True, default=str))
+        return 0
+    if command == "missing":
+        print(json.dumps(reporter.missing(str(args.candidate), context), indent=2, sort_keys=True, default=str))
+        return 0
+    if command == "disagreements":
+        print(json.dumps(reporter.disagreement_report(context), indent=2, sort_keys=True, default=str))
+        return 0
+    if command == "report":
+        print(json.dumps(reporter.report(context), indent=2, sort_keys=True, default=str))
+        return 0
+    if command == "automation":
+        return _sufficiency_automation(args)
+    print("sufficiency command required")
+    return 1
+
+
+def _sufficiency_automation(args: object) -> int:
+    manager = DataSufficiencyAutomationManager(getattr(args, "automation_config", "configs/automation.yaml"))
+    command = getattr(args, "sufficiency_automation_command", None)
+    if command == "install":
+        jobs = manager.install()
+        print(f"installed={len(jobs)} jobs={','.join(jobs)}")
+        return 0
+    if command == "status":
+        print(json.dumps(manager.status(), indent=2, sort_keys=True, default=str))
+        return 0
+    print("sufficiency automation command required")
     return 1
 
 
