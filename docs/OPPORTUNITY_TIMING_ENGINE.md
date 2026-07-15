@@ -2,6 +2,8 @@
 
 Status: Experimental for v2.1.x production architecture.
 
+See `docs/OPPORTUNITY_TIMING_ENGINE_ARCHITECTURE.md` for the target architecture of the broader Opportunity Decision Layer, which absorbs this document's phase/window classifier as one internal module.
+
 The Fusion-backed Opportunity Timing Engine in `src/hunter/opportunity/` is not the production timing implementation for v2.1.x. Production timing is `src/hunter/timing/` and is fed by persisted evidence through the canonical Market Validation runtime documented in `docs/CANONICAL_RUNTIME_ARCHITECTURE.md`.
 
 ## Purpose
