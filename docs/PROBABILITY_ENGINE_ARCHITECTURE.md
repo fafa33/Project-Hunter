@@ -8,6 +8,8 @@ Status: Target architecture for the authoritative probability layer of the Oppor
 
 This engine does not replace or duplicate the Opportunity Timing Engine, Pattern Matching, or Historical Validation. It consumes their persisted output as evidence and produces one more persisted, explainable record type. It sits alongside the Opportunity Timing Engine as a peer analytical engine, both upstream of the Investment Committee Engine, neither depending on the other for its own internal correctness.
 
+`docs/CANONICAL_RUNTIME_ARCHITECTURE.md` governs what is production versus experimental in this repository today. It classifies `src/hunter/intelligence/fusion/` and `src/hunter/opportunity/` — the modules the Opportunity Timing Engine's absorbed classifier and this document's evidence graph both build on — as **Experimental**. That same document's coverage semantics already use `probability` as a label for a simpler derived analytical view computed by the current production `EvidenceBackedProjectExecutor` runtime; that existing coverage label is a different, much narrower mechanism than the Probability Engine specified here, and this document does not replace it. This document specifies where the experimental Fusion/probability path evolves to, not a change to the current production runtime.
+
 ## 1. Purpose
 
 The Probability Engine answers one question, and only one question, for a single target at a single point in time:
