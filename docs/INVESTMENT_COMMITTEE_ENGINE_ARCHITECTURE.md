@@ -55,7 +55,7 @@ All inputs are persisted, versioned, and aligned to a single `as_of` boundary. T
 - Probability Engine assessment (outcome probabilities, expected reward/risk bands, evidence and distribution confidence, probability stability and drift).
 - Pattern Matching output.
 - Historical Validation output (point-in-time case records, backtesting summaries).
-- Macro Intelligence, Whale Intelligence, Developer Intelligence, Protocol Intelligence, News Intelligence, Narrative/Social Intelligence, On-chain Intelligence, Technology Intelligence, Capital Rotation Intelligence.
+- Macro Intelligence, Whale Intelligence, Developer Intelligence, Protocol Intelligence, News Intelligence, Narrative Intelligence, Social Intelligence, On-chain Intelligence, Technology Necessity, Capital Rotation Intelligence.
 - Tokenomics, Liquidity, and Market Structure evidence.
 - Evidence Confidence Layer output (corroboration, contradiction, dependency, canonical evidence-group independence).
 - Prior Investment Committee assessments for the same target (for consensus stability and champion continuity).
@@ -158,6 +158,8 @@ Evidence flows in one direction only. The committee reads persisted, explainable
 
 There is no trading decision in this engine — only vote composition and eligibility/champion determination, both fully derived from already-persisted evidence.
 
+Typed, staged invocation with per-stage options — the mechanism this flow assumes the Pipeline Orchestrator uses to request an assessment — is itself a target capability. `docs/PIPELINE_ORCHESTRATOR.md`'s own Known Limitations and Future Extensions state that the current orchestrator has no first-class stage model yet; this flow describes where the Orchestrator needs to evolve to, not what it does today.
+
 1. Align target + `as_of` and load all evidence and upstream-analytical records.
 2. Apply the Evidence Sufficiency Gate per category. Categories below threshold are recorded as `ABSTAIN_MISSING` or `ABSTAIN_STALE`, never silently omitted.
 3. Collect one vote per sufficient category using the fixed vote taxonomy.
@@ -186,7 +188,7 @@ Members that emit more than one score do not leave the vote-collection mapping a
 
 A committee "member" is a canonical evidence category represented by its own persisted, already-scored upstream output — never a human, never a freeform AI opinion. The configured member list is the single source of which categories vote; it is read from the Configuration & Model Fingerprint Registry, not hardcoded in any module.
 
-The default member set includes: Macro Intelligence, Whale Intelligence, Developer Intelligence, Protocol Intelligence, Technology Intelligence, Capital Rotation Intelligence, News Intelligence, Narrative/Social Intelligence, On-chain Intelligence, Tokenomics/Liquidity/Market Structure evidence, Pattern Matching, the Opportunity Timing Engine, and the Probability Engine. Historical Validation participates as an evidence source for other members' votes and for eligibility/champion validation rather than casting its own vote, since it supplies the ground truth those members are measured against.
+The default member set includes: Macro Intelligence, Whale Intelligence, Developer Intelligence, Protocol Intelligence, Technology Necessity, Capital Rotation Intelligence, News Intelligence, Narrative Intelligence, Social Intelligence, On-chain Intelligence, Tokenomics/Liquidity/Market Structure evidence, Pattern Matching, the Opportunity Timing Engine, and the Probability Engine. Narrative Intelligence and Social Intelligence are two independent members, not one combined category — `docs/NARRATIVE_INTELLIGENCE_ENGINE.md` and `docs/SOCIAL_INTELLIGENCE_ENGINE.md` are separately built engines, and merging their votes would understate Evidence Robustness by treating two independent evidence sources as one. Historical Validation participates as an evidence source for other members' votes and for eligibility/champion validation rather than casting its own vote, since it supplies the ground truth those members are measured against.
 
 Adding, removing, or redefining a member category is a configuration change; it produces a new model fingerprint and does not retroactively reinterpret a historical assessment made under the prior membership.
 
@@ -228,7 +230,7 @@ Both cases are resolved by a documented, deterministic tie-break order read from
 
 Eligibility (`ELIGIBLE`, `CONDITIONALLY_ELIGIBLE`, `INELIGIBLE`, `INSUFFICIENT_EVIDENCE`) is determined by the Eligibility Module from evidence completeness, committee confidence, critical alerts, and configured risk limits — reusing the exact model already established in `docs/INVESTMENT_COMMITTEE_ENGINE.md`.
 
-One Project Mode selects at most one cycle champion. A candidate must satisfy configured minimums for committee confidence, consensus, evidence robustness, a conflict ceiling, and a lead margin over the next candidate before it can be selected; ties among qualifying candidates go through Section 15. If no candidate satisfies the minimums, or if the strongest candidate is not sufficiently evidence-backed, the engine reports `NO_QUALIFIED_CANDIDATE`. This is a correct, expected outcome, not an error state, and it is never converted into a forced selection under any configuration.
+One Project Mode selects at most one cycle champion. A candidate must satisfy configured minimums for committee confidence, consensus, evidence robustness, a conflict ceiling, a lead margin over the next candidate, and candidate decision (the candidate's own vote-derived eligibility outcome must itself qualify, not merely its aggregate scores) before it can be selected — the same six criteria already established in `docs/INVESTMENT_COMMITTEE_ENGINE.md`. Ties among qualifying candidates go through Section 15. If no candidate satisfies the minimums, or if the strongest candidate is not sufficiently evidence-backed, the engine reports `NO_QUALIFIED_CANDIDATE`. This is a correct, expected outcome, not an error state, and it is never converted into a forced selection under any configuration.
 
 ## 17. Confidence Calculation
 
@@ -244,9 +246,11 @@ Both figures are reported alongside the assessment, never folded silently into a
 - `CommitteeVoteRecord` — one per member category per assessment: vote state, source score, source confidence, source timestamp, freshness state, supporting references, opposing references, missing fields, and explanation.
 - `CycleChampionSnapshotRecord` — the selected champion (or `NO_QUALIFIED_CANDIDATE`), the tie-break path taken if any, and the qualifying candidate set considered.
 - All records are immutable once written. A changed read produces a new record; nothing is updated in place. Repeated persistence of an identical analytical result is idempotent. Operational timestamps are excluded from analytical conflict semantics, per the existing production model.
+- All three record types comply with the base record contract already established in `docs/PERSISTENCE_CONTRACTS.md`: stable identity, schema version, created time kept distinct from effective analytical time, metadata, validation, and deterministic serialization support — the same contract `FusedIntelligenceRecord` and `OpportunityTimingAssessmentRecord` already follow. This document does not define a bespoke record shape.
 
 ## 19. Replay Requirements
 
+- The `as_of` boundary and every fingerprint in this document are built on the run-identity, canonicalization, and hashing foundation already established in `docs/DETERMINISTIC_EXECUTION_IDENTITY.md` — this engine does not define a competing or parallel identity mechanism.
 - Given the same persisted inputs, the same `as_of`, and the same configuration/model fingerprint, the engine must produce byte-identical `InvestmentCommitteeAssessmentRecord`, `CommitteeVoteRecord`, and `CycleChampionSnapshotRecord` output.
 - Changing the member list, vote-mapping thresholds, evidence weights, eligibility thresholds, One Project Mode minimums, or tie-break order produces a new fingerprint and a new assessment; it never silently reinterprets a historical record.
 - Replays must not depend on wall-clock time, random seeds, or non-deterministic ordering. Tie-break order (Section 15) is the documented mechanism for every point where an ordering decision must be made.
@@ -303,7 +307,7 @@ This section defines *Committee Governance*: how the committee's own voting rule
 - **Minority opinion tests** — every dissenting or abstaining vote in a fixture must appear as an individually addressable Minority Opinion in the output, never merged away.
 - **Tie-break tests** — fixtures engineered to tie at each stage of the configured tie-break order must resolve deterministically through that exact order, and an exhausted tie-break must produce the documented tie/`NO_QUALIFIED_CANDIDATE` state rather than an arbitrary pick.
 - **Fingerprint-change tests** — a configuration change (member list, weights, thresholds, tie-break order) must change the model fingerprint and must not alter the interpretation of already-persisted historical assessments.
-- **Regression/backtest suites** — running the full historical range for known targets and cycles must reproduce previously recorded assessments and champion snapshots unless configuration intentionally changed.
+- **Regression/backtest suites** — running the full historical range for known targets and cycles must reproduce previously recorded assessments and champion snapshots unless configuration intentionally changed, and must report false-positive/false-negative counts against Historical Validation's realized outcomes, matching the existing production backtesting capability in `docs/INVESTMENT_COMMITTEE_ENGINE.md`.
 - **Cross-engine dependency tests** — unavailability of the Opportunity Timing Engine or Probability Engine assessment for a given target/`as_of` must be treated as missing evidence for the dependent vote(s), never as a crash or a silently substituted default.
 
 ## 26. Future Extensibility
