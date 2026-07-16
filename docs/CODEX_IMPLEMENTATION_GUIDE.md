@@ -19,7 +19,7 @@ implementation and report that the sprint specification has not been created.
 
 ## Documentation Governance
 
-The canonical governance hierarchy is defined once in `docs/SPRINTS/README.md`. Sprint specifications define approved release scope, but they do not override higher-governance documents in that order. `docs/PROJECT_CONSTITUTION.md` remains the highest architectural authority. When documents conflict, Codex must stop before implementation and report the conflict.
+The canonical governance hierarchy is defined once in `docs/SPRINTS/README.md`. Sprint specifications define approved release scope, but they do not override higher-governance documents in that order. `docs/PROJECT_CONSTITUTION.md` remains the highest architectural authority, and accepted ADRs remain binding architecture decisions within that hierarchy. When documents conflict, Codex must stop before implementation and report the conflict.
 
 `docs/HUNTER_IMPLEMENTATION_CONTRACT.md` is the mandatory pre-implementation contract for translating that hierarchy into repository, service, provider, engine, replay, transaction, migration, and test obligations.
 

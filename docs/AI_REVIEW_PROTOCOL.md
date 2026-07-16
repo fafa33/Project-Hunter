@@ -4,7 +4,7 @@ Status: Mandatory engineering standard
 
 This protocol governs every contribution to Project Hunter from Codex, Claude, human contributors, and future AI agents. It is subordinate to `docs/PROJECT_CONSTITUTION.md`, which remains the highest architectural authority. It extends the mandatory lifecycle in `docs/DEVELOPMENT_GOVERNANCE.md` with AI-specific responsibilities, review roles, and report expectations. It does not replace that lifecycle and does not create a parallel approval process.
 
-The canonical document precedence order is maintained in `docs/SPRINTS/README.md`. `docs/HUNTER_IMPLEMENTATION_CONTRACT.md` is the mandatory implementation contract within that order and must be checked before coding and during review. This document must follow that order rather than restating a competing hierarchy. When this protocol conflicts with a higher-level governance document, the contribution must stop until the contradiction is resolved explicitly in documentation.
+The canonical document precedence order is defined once in `docs/SPRINTS/README.md`. `docs/HUNTER_IMPLEMENTATION_CONTRACT.md` is the mandatory implementation contract within that order and must be checked before coding and during review. This document must follow that order rather than restating a competing hierarchy. When this protocol conflicts with a higher-level governance document, the contribution must stop until the contradiction is resolved explicitly in documentation.
 
 ## 1. Purpose
 

@@ -12,7 +12,7 @@ This document also governs the architecture specifications it sits alongside (fo
 
 Architecture Decision Records live in `docs/ADR/` and are governed by the same lifecycle. An ADR may record a decision only when it includes Status, Context, Decision, Consequences, and Alternatives Considered, and the ADR index in `docs/ADR/README.md` must be updated in the same change.
 
-`docs/HUNTER_IMPLEMENTATION_CONTRACT.md` is the mandatory implementation contract for converting the Constitution, accepted ADRs, canonical runtime architecture, and this governance lifecycle into pre-coding obligations. Every Sprint must verify that contract before implementation begins.
+The canonical authority hierarchy is defined once in `docs/SPRINTS/README.md`. `docs/HUNTER_IMPLEMENTATION_CONTRACT.md` is the mandatory implementation contract for converting that hierarchy and this governance lifecycle into pre-coding obligations. Every Sprint must verify that contract before implementation begins.
 
 ## 1. Purpose
 

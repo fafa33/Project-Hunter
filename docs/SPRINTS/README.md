@@ -7,15 +7,20 @@ Hunter development is specification-driven. A sprint file defines the approved i
 The canonical source-of-truth order is:
 
 1. `docs/PROJECT_CONSTITUTION.md`
-2. Accepted ADRs in `docs/ADR/`
-3. `docs/CANONICAL_RUNTIME_ARCHITECTURE.md`
-4. `docs/DEVELOPMENT_GOVERNANCE.md`
-5. `docs/HUNTER_IMPLEMENTATION_CONTRACT.md`
-6. `docs/AI_REVIEW_PROTOCOL.md`
-7. `docs/SPRINTS/<version>.md`
-8. `docs/CODEX_IMPLEMENTATION_GUIDE.md`
+2. `docs/PROJECT_PRINCIPLES.md`
+3. Accepted ADRs in `docs/ADR/`
+4. `docs/VISION.md`
+5. `docs/HUNTER_ARCHITECTURE_MANIFEST.md`
+6. `docs/HUNTER_ARCHITECTURE_SPEC.md`
+7. `docs/HUNTER_ROADMAP.md`
+8. `docs/CANONICAL_RUNTIME_ARCHITECTURE.md`
+9. `docs/DEVELOPMENT_GOVERNANCE.md`
+10. `docs/HUNTER_IMPLEMENTATION_CONTRACT.md`
+11. `docs/AI_REVIEW_PROTOCOL.md`
+12. `docs/SPRINTS/<version>.md`
+13. `docs/CODEX_IMPLEMENTATION_GUIDE.md`
 
-`docs/PROJECT_CONSTITUTION.md` remains the highest architectural authority. `docs/HUNTER_IMPLEMENTATION_CONTRACT.md` is the mandatory pre-implementation contract inside this order. This list is the single canonical ordering for governance references in `docs/CODEX_IMPLEMENTATION_GUIDE.md`, `docs/SPRINTS/README.md`, and `docs/AI_REVIEW_PROTOCOL.md`.
+`docs/PROJECT_CONSTITUTION.md` remains the highest architectural authority. Accepted ADRs remain binding architecture decisions within this order until superseded or deprecated by another ADR. `docs/HUNTER_IMPLEMENTATION_CONTRACT.md` is the mandatory pre-implementation contract inside this order. This list is the single canonical authority hierarchy for governance references in Project Hunter documentation.
 
 ## Canonical Workflow
 

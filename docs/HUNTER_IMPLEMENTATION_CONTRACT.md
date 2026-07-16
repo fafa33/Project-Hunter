@@ -2,7 +2,9 @@
 
 Status: Mandatory implementation contract.
 
-This document is the permanent implementation contract for Codex, Claude, human contributors, and future automated contributors. It is not a replacement for architecture documentation. It is the pre-implementation contract that every Sprint must satisfy before code is written.
+This document is the permanent implementation contract for Codex, Claude, human contributors, and future automated contributors. It is not a replacement for architecture documentation. It is the pre-implementation contract that every future Sprint must satisfy before code is written.
+
+This contract governs future implementation work and new architecture changes. It does not retroactively invalidate the current approved runtime. Existing production and experimental classifications remain governed by the canonical authority hierarchy and by `docs/CANONICAL_RUNTIME_ARCHITECTURE.md` until changed through the approved governance lifecycle.
 
 ## 1 Mission
 
@@ -12,22 +14,11 @@ Hunter must remain evidence-first, discovery-first, deterministic, extensible, a
 
 ## 2 Authority Hierarchy
 
-The mandatory authority order is:
+The canonical authority hierarchy is defined once in `docs/SPRINTS/README.md`. This contract follows that hierarchy and must not be used to create a parallel ordering.
 
-1. `docs/PROJECT_CONSTITUTION.md`
-2. Accepted ADRs in `docs/ADR/`
-3. `docs/CANONICAL_RUNTIME_ARCHITECTURE.md`
-4. `docs/DEVELOPMENT_GOVERNANCE.md`
-5. `docs/HUNTER_IMPLEMENTATION_CONTRACT.md`
-6. `docs/AI_REVIEW_PROTOCOL.md`
-7. `docs/SPRINTS/<version>.md`
-8. `docs/CODEX_IMPLEMENTATION_GUIDE.md`
-9. User implementation prompt
-10. Local implementation notes, summaries, and chat history
+`docs/PROJECT_CONSTITUTION.md` remains the highest architectural authority. `docs/PROJECT_PRINCIPLES.md` remains the permanent engineering constitution under it. Accepted ADRs remain binding architecture decision records under those documents until another ADR supersedes or deprecates them.
 
 Higher documents always override lower documents. If two sources conflict, contributors must stop before implementation and report the conflict. Chat history, implementation summaries, and local verification are never architectural authority.
-
-This hierarchy is the implementation-contract view of the governance ordering referenced by `docs/SPRINTS/README.md`. It must not be duplicated with different semantics in other documents.
 
 ## 3 Universal Invariants
 
@@ -40,10 +31,10 @@ This hierarchy is the implementation-contract view of the governance ordering re
 | INV-005 | Atomic persistence | Related authoritative writes must commit or roll back together. Partial authoritative state is a blocker unless explicitly modeled as a replayable pending state. |
 | INV-006 | Explicit conflicts | Disagreement, ambiguity, collision, drift, and unavailable evidence must be persisted or reported explicitly. |
 | INV-007 | No silent merges | Slug, ticker, alias, name, URL, provider listing, or source payload similarity must never silently merge identities. |
-| INV-008 | No caller-controlled authority | Authority cannot be supplied by a provider payload, arbitrary caller flag, mutable context object, fixture, or direct repository call. |
-| INV-009 | No provider-owned persistence | Providers acquire and normalize only. They must not persist, mutate registry state, advance checkpoints, or create analytical state. |
-| INV-010 | No repository-owned business rules | Repositories persist and load. They must not decide trust, identity, conflicts, lifecycle, replay, provenance, or business rules. |
-| INV-011 | One canonical ingress path | Each authoritative mutation type must have exactly one service-owned ingress path. |
+| INV-008 | No caller-controlled authority | Future authority boundaries cannot be supplied by a provider payload, arbitrary caller flag, mutable context object, fixture, or direct repository call. |
+| INV-009 | No provider-owned persistence | Future providers acquire and normalize only. They must not persist, mutate registry state, advance checkpoints, or create analytical state. |
+| INV-010 | No repository-owned business rules | Future repository work must keep repositories to persistence and loading. Repositories must not decide trust, identity, conflicts, lifecycle, replay, provenance, or business rules. |
+| INV-011 | One canonical ingress path | Each new or changed authoritative mutation type must have exactly one service-owned ingress path. |
 | INV-012 | Explicit provenance | Every evidence-bearing record must preserve source identity, provider identity where applicable, source record identity, timestamps, payload identity or evidence reference, confidence, and missing evidence. |
 | INV-013 | Explicit timestamps | Replay-sensitive writes require explicit timestamps owned by the service or orchestration layer. Wall-clock fallback must not create replayable state. |
 | INV-014 | Migration safety | Persistence changes must be additive or explicitly migrated, idempotent, backward compatible, and tested against pre-change data. |
@@ -60,7 +51,7 @@ Providers own source access only:
 - expose source availability, errors, freshness, and source references;
 - return observations to the caller.
 
-Providers must never persist, mutate registry state, advance checkpoints, validate authority, resolve identity, detect canonical conflicts, or create analytical state.
+For future implementation work, providers must never persist, mutate registry state, advance checkpoints, validate authority, resolve identity, detect canonical conflicts, or create analytical state.
 
 ### Service
 
@@ -78,7 +69,7 @@ Services own:
 - orchestration;
 - business rules.
 
-Every authoritative mutation must originate from a service. A service validates authority, provenance, lineage, identity, conflict handling, replay timestamps, migration assumptions, and transaction scope before persistence.
+For new or changed authoritative mutation paths, every authoritative mutation must originate from a service. A service validates authority, provenance, lineage, identity, conflict handling, replay timestamps, migration assumptions, and transaction scope before persistence.
 
 ### Repository
 
@@ -104,7 +95,7 @@ Repositories must never:
 - own business logic;
 - own replay logic.
 
-Repository mutation APIs that would create authoritative state must reject direct use unless invoked through a service-owned persistence plan. Internal persistence primitives must contain storage mechanics only.
+Future repository mutation APIs that would create authoritative state must reject direct use unless invoked through a service-owned persistence plan. Internal persistence primitives must contain storage mechanics only.
 
 ### Registry
 
@@ -130,7 +121,7 @@ Dashboards present persisted state. They may filter, sort, visualize, and explai
 
 ## 5 Service Contract
 
-Every service must declare its authoritative mutation surface. For each authoritative write, the service must prove:
+Every new or changed service must declare its authoritative mutation surface. For each new or changed authoritative write, the service must prove:
 
 - authority source;
 - accepted input contracts;
@@ -143,15 +134,15 @@ Every service must declare its authoritative mutation surface. For each authorit
 - rollback behavior;
 - backward compatibility and migration impact.
 
-Services must reject caller-supplied authority that is not derived from approved execution context, configuration, persisted evidence, or an explicitly trusted system boundary.
+Future service authority boundaries must reject caller-supplied authority that is not derived from approved execution context, configuration, persisted evidence, or an explicitly trusted system boundary.
 
 ## 6 Repository Contract
 
 Repositories are persistence adapters. They may implement tables, indexes, migrations, deterministic serialization, deterministic transactions, and read models.
 
-Repositories must not contain domain decisions hidden inside helper methods, SQL conflict clauses, convenience upserts, default timestamps, source trust checks, identity inference, lifecycle transition validation, checkpoint advancement decisions, or replay cutoffs.
+Future repository work must not add domain decisions hidden inside helper methods, SQL conflict clauses, convenience upserts, default timestamps, source trust checks, identity inference, lifecycle transition validation, checkpoint advancement decisions, or replay cutoffs. Existing approved runtime code is not declared non-compliant by this contract; when repository code is changed, the change must move toward this boundary or explicitly preserve the current approved runtime under the governance lifecycle.
 
-If a repository method mutates authoritative state, it must either:
+If future repository work adds or changes a method that mutates authoritative state, it must either:
 
 - reject direct public use; or
 - accept only a service-owned persistence plan that already contains all domain decisions.
@@ -176,7 +167,7 @@ Provider-emitted fields are observations, not authority. A provider may state wh
 
 ## 8 Engine Contract
 
-Engines only consume persisted evidence or approved persisted analytical inputs. They never consume provider payloads directly.
+Future engine work must consume persisted evidence or approved persisted analytical inputs. New or changed engines must not consume provider payloads directly.
 
 Engines must make every output explainable from persisted inputs. Any engine that needs fresh external data must obtain it through the acquisition/provider layer and consume it only after the service/repository boundary has persisted the approved evidence.
 

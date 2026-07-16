@@ -200,6 +200,8 @@ When a feature conflicts with architecture, architecture governs unless the cons
 
 This constitution is the highest architectural authority of Project Hunter.
 
+The canonical authority hierarchy for implementation and governance references is defined once in `docs/SPRINTS/README.md`. That hierarchy is subordinate to this Constitution and cannot reduce or override any constitutional requirement.
+
 Future implementations, contributors, AI systems, Codex sessions, maintainers, and automated agents must comply with this document unless the constitution itself is formally updated.
 
 Any change that conflicts with this constitution requires an explicit constitutional update. Implementation convenience, milestone pressure, or local optimization is not sufficient justification for violating constitutional principles.
