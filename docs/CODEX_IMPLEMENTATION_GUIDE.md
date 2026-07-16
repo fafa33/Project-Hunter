@@ -6,12 +6,22 @@ This guide defines how Codex should work on Hunter. It supplements the canonical
 
 Before any implementation, Codex must read the documents in the canonical source-of-truth order defined in `docs/SPRINTS/README.md`, then read release-specific user instructions.
 
+Every implementation prompt must be treated as if it begins with:
+
+```text
+Verify compliance with HUNTER_IMPLEMENTATION_CONTRACT.md before writing code.
+```
+
+Codex must verify `docs/HUNTER_IMPLEMENTATION_CONTRACT.md` before writing code, even when the prompt omits that sentence.
+
 If `docs/SPRINTS/<version>.md` is missing for the requested release, Codex must stop before
 implementation and report that the sprint specification has not been created.
 
 ## Documentation Governance
 
 The canonical governance hierarchy is defined once in `docs/SPRINTS/README.md`. Sprint specifications define approved release scope, but they do not override higher-governance documents in that order. `docs/PROJECT_CONSTITUTION.md` remains the highest architectural authority. When documents conflict, Codex must stop before implementation and report the conflict.
+
+`docs/HUNTER_IMPLEMENTATION_CONTRACT.md` is the mandatory pre-implementation contract for translating that hierarchy into repository, service, provider, engine, replay, transaction, migration, and test obligations.
 
 ## Required Working Mode
 
