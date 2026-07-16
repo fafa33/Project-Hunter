@@ -39,6 +39,12 @@ Accepted ADRs remain binding until another ADR supersedes or deprecates them. Ru
 | [0006](0006-knowledge-graph.md) | Future Knowledge Graph | Accepted | Relationship modeling after identity and evidence foundations |
 | [0007](0007-canonical-runtime-option-a.md) | Canonical Runtime Option A | Accepted | v2.1.x production runtime classification |
 | [0008](0008-plugin-sdk-architecture.md) | Plugin SDK Architecture | Accepted | Versioned extension boundary for plugins and external integrations |
+| [0009](0009-repository-purification.md) | Repository Purification | Accepted | Provider, service, repository, and persistence authority boundaries |
+| [0010](0010-intelligence-engine-foundation.md) | Intelligence Engine Foundation | Accepted | Service-owned intelligence engine execution over persisted evidence |
+| [0011](0011-developer-intelligence-engine.md) | Developer Intelligence Engine | Accepted | Deterministic developer findings over persisted developer evidence |
+| [0012](0012-tokenomics-intelligence-engine.md) | Tokenomics Intelligence Engine | Accepted | Deterministic tokenomics findings over persisted tokenomics evidence |
+| [0013](0013-governance-intelligence-engine.md) | Governance Intelligence Engine | Accepted | Deterministic governance findings over persisted governance evidence |
+| [0014](0014-security-intelligence-engine.md) | Security Intelligence Engine | Accepted | Deterministic security findings over persisted security evidence |
 
 ## Creating A New ADR
 
