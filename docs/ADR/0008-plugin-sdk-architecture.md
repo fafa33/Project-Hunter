@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted.
+Accepted as target architecture. This ADR is not an implementation record: external module-path plugins currently execute in-process and must not be treated as sandboxed or capability-isolated until the SDK boundary described here is implemented and verified.
 
 ## Context
 
@@ -45,9 +45,9 @@ Plugins must preserve these boundaries:
 - They must not bypass the Trust Layer for source reliability, identity confidence, conflict status, freshness, or missing-evidence treatment.
 - They must not bypass Canonical Runtime contracts, including `EvidenceBackedProjectExecutor` as the production deep-analysis scoring boundary unless a future ADR explicitly changes that boundary.
 
-Security boundaries apply to every plugin regardless of trust level. A plugin receives only its declared configuration and approved context surface. It must not receive repository handles, arbitrary database access, unrestricted filesystem access, unrestricted network access, schema-mutation rights, or configuration-mutation rights outside its own declared contract.
+The target SDK security boundary applies to every plugin regardless of trust level. Once implemented, a plugin receives only its declared configuration and approved context surface. It must not receive repository handles, arbitrary database access, unrestricted filesystem access, unrestricted network access, schema-mutation rights, or configuration-mutation rights outside its own declared contract.
 
-Failure isolation is part of the SDK contract. Plugin validation failures prevent loading; execution failures produce explicit failure or unavailable states; shutdown still runs where applicable; one plugin failure must not silently corrupt another plugin, Hunter Core, persisted evidence, or canonical analytical outputs.
+Failure isolation is part of the target SDK contract. Plugin validation failures prevent loading; execution failures produce explicit failure or unavailable states; shutdown still runs where applicable; one plugin failure must not silently corrupt another plugin, Hunter Core, persisted evidence, or canonical analytical outputs.
 
 ## Consequences
 
@@ -55,7 +55,7 @@ Failure isolation is part of the SDK contract. Plugin validation failures preven
 - Hunter Core remains responsible for canonical runtime contracts, deterministic identity, persistence boundaries, and production scoring semantics.
 - The Plugin SDK becomes the compatibility layer between external capabilities and Hunter's evidence-first architecture.
 - Plugin authors must declare capabilities, contract versions, dependencies, configuration schema, and lifecycle behavior explicitly.
-- Plugin validation must reject unsupported contract versions, undeclared capabilities, invalid metadata, dependency errors, and security-boundary violations before unsafe execution.
+- Plugin validation must reject unsupported contract versions, undeclared capabilities, invalid metadata, dependency errors, and security-boundary violations before unsafe execution once the SDK boundary is implemented.
 - Plugin-hosted Intelligence Engines remain subject to the same evidence, confidence, determinism, and identity stabilization requirements as first-party engines.
 - Acquisition-style plugins must preserve source provenance, freshness, retry behavior, and unavailable states instead of treating external provider responses as authoritative facts.
 - Backward compatibility becomes a managed SDK concern instead of an implicit promise hidden in core implementation details.

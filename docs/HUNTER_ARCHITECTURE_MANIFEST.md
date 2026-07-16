@@ -121,7 +121,8 @@ Current accepted ADRs cover:
 - trust before intelligence: `docs/ADR/0004-trust-layer.md`;
 - entity model separation: `docs/ADR/0005-entity-model.md`;
 - future knowledge graph boundaries: `docs/ADR/0006-knowledge-graph.md`;
-- canonical runtime Option A: `docs/ADR/0007-canonical-runtime-option-a.md`.
+- canonical runtime Option A: `docs/ADR/0007-canonical-runtime-option-a.md`;
+- Plugin SDK target architecture: `docs/ADR/0008-plugin-sdk-architecture.md`.
 
 ## Engineering Mindset
 
