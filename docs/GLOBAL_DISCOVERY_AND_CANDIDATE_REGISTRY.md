@@ -5,6 +5,14 @@ market discovery registry. The registry is additive and does not change the cano
 analysis runtime, scoring, weighting, committee logic, timing algorithms, or replay
 semantics.
 
+Related ADRs:
+
+- `docs/ADR/0001-discovery-first.md`
+- `docs/ADR/0002-evidence-first.md`
+- `docs/ADR/0003-candidate-registry.md`
+- `docs/ADR/0004-trust-layer.md`
+- `docs/ADR/0005-entity-model.md`
+
 ## Purpose
 
 The candidate registry is the durable entry point for market-wide discovery. It stores

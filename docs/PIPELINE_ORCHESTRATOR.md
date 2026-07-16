@@ -2,7 +2,7 @@
 
 Status: Experimental for v2.1.x production architecture.
 
-Project Hunter v2.1.x production execution is the evidence-backed Market Validation runtime documented in `docs/CANONICAL_RUNTIME_ARCHITECTURE.md`. `PipelineOrchestrator` remains supported for plugin, persistence, automation, and future migration work, but it is not the canonical production analytical path for Market Validation.
+Project Hunter v2.1.x production execution is the evidence-backed Market Validation runtime documented in `docs/CANONICAL_RUNTIME_ARCHITECTURE.md` and accepted in `docs/ADR/0007-canonical-runtime-option-a.md`. `PipelineOrchestrator` remains supported for plugin, persistence, automation, and future migration work, but it is not the canonical production analytical path for Market Validation.
 
 ## Purpose and Responsibility
 

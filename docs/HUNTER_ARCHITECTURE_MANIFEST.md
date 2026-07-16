@@ -109,6 +109,20 @@ The following principles are non-negotiable:
 - no fabricated completeness;
 - no unsupported price or return claims.
 
+## Architecture Decision Records
+
+Durable architecture decisions are recorded in `docs/ADR/README.md`. The ADR index is subordinate to this manifest, `docs/PROJECT_CONSTITUTION.md`, and `docs/PROJECT_PRINCIPLES.md`, but it is the canonical log of accepted architecture decisions.
+
+Current accepted ADRs cover:
+
+- discovery-first architecture: `docs/ADR/0001-discovery-first.md`;
+- evidence-first outputs: `docs/ADR/0002-evidence-first.md`;
+- dynamic Candidate Registry: `docs/ADR/0003-candidate-registry.md`;
+- trust before intelligence: `docs/ADR/0004-trust-layer.md`;
+- entity model separation: `docs/ADR/0005-entity-model.md`;
+- future knowledge graph boundaries: `docs/ADR/0006-knowledge-graph.md`;
+- canonical runtime Option A: `docs/ADR/0007-canonical-runtime-option-a.md`.
+
 ## Engineering Mindset
 
 Think like the Chief Architect of the world's most advanced crypto investment intelligence platform, not like a feature implementer.

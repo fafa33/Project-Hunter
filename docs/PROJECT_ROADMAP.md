@@ -35,6 +35,7 @@
 - Investment Committee Engine: complete.
 - Automation and Scheduler Layer: complete.
 - Dashboard Foundation (Phase 1): complete.
+- Architecture Decision Records framework: complete.
 
 ## Next Milestone
 

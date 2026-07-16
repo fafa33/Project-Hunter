@@ -2,7 +2,7 @@
 
 Status: Production Canonical for v2.1.x
 
-Project Hunter v2.1.x adopts the current evidence-backed Market Validation runtime as the canonical production architecture. This document records the approved Option A architecture decision and separates production components from experimental and deprecated components without changing runtime behavior.
+Project Hunter v2.1.x adopts the current evidence-backed Market Validation runtime as the canonical production architecture. This document implements `docs/ADR/0007-canonical-runtime-option-a.md` and separates production components from experimental and deprecated components without changing runtime behavior.
 
 ## Canonical Runtime
 
@@ -105,7 +105,7 @@ The production committee output in v2.1.x is the deterministic committee decisio
 
 ## Migration Policy
 
-Do not migrate production execution to `PipelineOrchestrator` unless a future architecture decision explicitly replaces Option A.
+Do not migrate production execution to `PipelineOrchestrator` unless a future ADR explicitly replaces `docs/ADR/0007-canonical-runtime-option-a.md`.
 
 Allowed consolidation work:
 

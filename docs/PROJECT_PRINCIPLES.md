@@ -92,7 +92,7 @@ Architectural decisions should make Hunter easier to extend, test, operate, and 
 
 Scheduler, pipeline orchestration, acquisition, discovery, identity, screening, deep analysis, scoring, committee, explainability, and future valuation are separate responsibilities.
 
-Boundary violations create long-term risk. Scheduler remains operational. Pipeline orchestration owns analytical execution. `EvidenceBackedProjectExecutor` remains the canonical deep-analysis scoring boundary until explicitly changed by an approved architecture decision.
+Boundary violations create long-term risk. Scheduler remains operational. Pipeline orchestration owns analytical execution. `EvidenceBackedProjectExecutor` remains the canonical deep-analysis scoring boundary until explicitly changed by an approved ADR in `docs/ADR/`.
 
 ## Principle 15: Release Discipline
 
