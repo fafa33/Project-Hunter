@@ -12,6 +12,8 @@ This document also governs the architecture specifications it sits alongside (fo
 
 Architecture Decision Records live in `docs/ADR/` and are governed by the same lifecycle. An ADR may record a decision only when it includes Status, Context, Decision, Consequences, and Alternatives Considered, and the ADR index in `docs/ADR/README.md` must be updated in the same change.
 
+The canonical authority hierarchy is defined once in `docs/SPRINTS/README.md`. `docs/HUNTER_IMPLEMENTATION_CONTRACT.md` is the mandatory implementation contract for converting that hierarchy and this governance lifecycle into pre-coding obligations. Every Sprint must verify that contract before implementation begins.
+
 ## 1. Purpose
 
 Project Hunter is an evidence-driven investment decision system maintained for the long term. Its value depends entirely on every score being reproducible, every conclusion being explainable, and every guarantee it has already made continuing to hold as the system grows. Ad-hoc review — reading a diff, forming an impression, approving it — cannot reliably protect those properties as the number of engines, documents, and contributors grows. This document exists to make protecting them mechanical rather than a matter of individual discipline or memory.
@@ -63,6 +65,7 @@ The lifecycle is a loop, not a checklist to satisfy once. A failure at Verificat
 
 Before writing any change, the contributor must establish, in writing, as part of the change record:
 
+- Whether `docs/HUNTER_IMPLEMENTATION_CONTRACT.md` applies, and if so, how the planned change satisfies its authority, repository, service, provider, engine, replay, transaction, migration, identity, and test obligations.
 - What was actually requested, stated in the contributor's own words, not copied from the request.
 - Which architecture is affected — which documents, which engines, which module boundaries.
 - Which runtime behavior is affected, if any.

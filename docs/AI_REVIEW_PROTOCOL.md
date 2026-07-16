@@ -4,7 +4,7 @@ Status: Mandatory engineering standard
 
 This protocol governs every contribution to Project Hunter from Codex, Claude, human contributors, and future AI agents. It is subordinate to `docs/PROJECT_CONSTITUTION.md`, which remains the highest architectural authority. It extends the mandatory lifecycle in `docs/DEVELOPMENT_GOVERNANCE.md` with AI-specific responsibilities, review roles, and report expectations. It does not replace that lifecycle and does not create a parallel approval process.
 
-The canonical document precedence order is maintained in `docs/SPRINTS/README.md`. This document must follow that order rather than restating a competing hierarchy. When this protocol conflicts with a higher-level governance document, the contribution must stop until the contradiction is resolved explicitly in documentation.
+The canonical document precedence order is defined once in `docs/SPRINTS/README.md`. `docs/HUNTER_IMPLEMENTATION_CONTRACT.md` is the mandatory implementation contract within that order and must be checked before coding and during review. This document must follow that order rather than restating a competing hierarchy. When this protocol conflicts with a higher-level governance document, the contribution must stop until the contradiction is resolved explicitly in documentation.
 
 ## 1. Purpose
 
@@ -77,6 +77,7 @@ Codex is responsible for production-safe implementation within the approved scop
 Codex must:
 
 - operate within the lifecycle phases in `docs/DEVELOPMENT_GOVERNANCE.md`;
+- verify compliance with `docs/HUNTER_IMPLEMENTATION_CONTRACT.md` before writing code;
 - read the relevant sprint specification, architecture documents, existing implementation, migrations, configuration, and tests before editing;
 - preserve current runtime behavior unless the approved scope explicitly changes it;
 - reuse existing repositories, provider boundaries, execution identity, evidence, sufficiency, replay, configuration, timestamp, migration, and checkpoint conventions;
@@ -104,6 +105,7 @@ Claude is responsible for independent review. Independence means Claude must ver
 Claude must review:
 
 - consistency with `docs/PROJECT_CONSTITUTION.md` as the highest architectural authority;
+- compliance with `docs/HUNTER_IMPLEMENTATION_CONTRACT.md`;
 - architecture consistency with `docs/HUNTER_ARCHITECTURE_MANIFEST.md`, `docs/HUNTER_ARCHITECTURE_SPEC.md`, `docs/CANONICAL_RUNTIME_ARCHITECTURE.md`, and the active sprint;
 - repository, provider, adapter, service, scheduler, CLI, dashboard, report, and persistence boundaries;
 - documentation consistency across canonical architecture documents and feature-specific specifications;

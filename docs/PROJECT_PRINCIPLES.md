@@ -2,6 +2,8 @@
 
 This document is the permanent engineering constitution for Project Hunter. It defines the principles that govern architecture, implementation, documentation, and release decisions.
 
+The canonical authority hierarchy is defined once in `docs/SPRINTS/README.md`. This document sits under `docs/PROJECT_CONSTITUTION.md` in that hierarchy and governs engineering principles for architecture and implementation.
+
 ## Canonical Purpose
 
 Hunter is a market discovery engine before it is a project analysis engine.

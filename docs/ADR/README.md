@@ -4,6 +4,8 @@ This directory contains Project Hunter's Architecture Decision Records (ADRs).
 
 ADRs are subordinate to `docs/PROJECT_CONSTITUTION.md` and `docs/PROJECT_PRINCIPLES.md`. They record durable architecture decisions made under those documents and are governed by `docs/DEVELOPMENT_GOVERNANCE.md`.
 
+The canonical authority hierarchy is defined once in `docs/SPRINTS/README.md`. Accepted ADRs remain binding architecture decision records within that hierarchy until another ADR supersedes or deprecates them.
+
 ## Required Structure
 
 Every ADR must include these sections:

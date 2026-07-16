@@ -8,17 +8,19 @@ The canonical source-of-truth order is:
 
 1. `docs/PROJECT_CONSTITUTION.md`
 2. `docs/PROJECT_PRINCIPLES.md`
-3. `docs/VISION.md`
-4. `docs/HUNTER_ARCHITECTURE_MANIFEST.md`
-5. `docs/HUNTER_ARCHITECTURE_SPEC.md`
-6. `docs/HUNTER_ROADMAP.md`
-7. `docs/CANONICAL_RUNTIME_ARCHITECTURE.md`
-8. `docs/DEVELOPMENT_GOVERNANCE.md`
-9. `docs/AI_REVIEW_PROTOCOL.md`
-10. `docs/SPRINTS/<version>.md`
-11. `docs/CODEX_IMPLEMENTATION_GUIDE.md`
+3. Accepted ADRs in `docs/ADR/`
+4. `docs/VISION.md`
+5. `docs/HUNTER_ARCHITECTURE_MANIFEST.md`
+6. `docs/HUNTER_ARCHITECTURE_SPEC.md`
+7. `docs/HUNTER_ROADMAP.md`
+8. `docs/CANONICAL_RUNTIME_ARCHITECTURE.md`
+9. `docs/DEVELOPMENT_GOVERNANCE.md`
+10. `docs/HUNTER_IMPLEMENTATION_CONTRACT.md`
+11. `docs/AI_REVIEW_PROTOCOL.md`
+12. `docs/SPRINTS/<version>.md`
+13. `docs/CODEX_IMPLEMENTATION_GUIDE.md`
 
-`docs/PROJECT_CONSTITUTION.md` remains the highest architectural authority. This list is the single canonical ordering for governance references in `docs/CODEX_IMPLEMENTATION_GUIDE.md`, `docs/SPRINTS/README.md`, and `docs/AI_REVIEW_PROTOCOL.md`.
+`docs/PROJECT_CONSTITUTION.md` remains the highest architectural authority. Accepted ADRs remain binding architecture decisions within this order until superseded or deprecated by another ADR. `docs/HUNTER_IMPLEMENTATION_CONTRACT.md` is the mandatory pre-implementation contract inside this order. This list is the single canonical authority hierarchy for governance references in Project Hunter documentation.
 
 ## Canonical Workflow
 
@@ -26,14 +28,16 @@ The canonical source-of-truth order is:
 2. Use the exact structure defined in `docs/SPRINTS/TEMPLATE.md`.
 3. Define mission, business objective, scope, out-of-scope boundaries, engineering principles, performance, automation, testing, acceptance criteria, definition of done, success metrics, and final report format.
 4. Confirm the sprint does not conflict with higher-governance documents in the canonical source-of-truth order.
-5. Implement only the approved sprint scope.
-6. Validate with sprint-specific commands and the required quality gates.
-7. Commit, push, tag, and report the verified final state.
+5. Verify compliance with `docs/HUNTER_IMPLEMENTATION_CONTRACT.md` before writing code.
+6. Implement only the approved sprint scope.
+7. Validate with sprint-specific commands and the required quality gates.
+8. Commit, push, tag, and report the verified final state.
 
 ## Governance Rules
 
 - Sprint files specialize release scope; they do not override higher-governance documents in the canonical source-of-truth order.
 - A sprint must not authorize fabricated evidence, silent stale fallback, scoring manipulation, coverage inflation, or a competing canonical runtime.
+- A sprint must satisfy `docs/HUNTER_IMPLEMENTATION_CONTRACT.md` before implementation begins.
 - If a sprint conflicts with higher-order architecture documents, Codex must stop and report the conflict before implementation.
 - Each sprint must preserve deterministic execution, evidence provenance, idempotent persistence, point-in-time truth, and explicit unavailable states.
 - Every sprint must improve market coverage, market understanding, evidence quality, trust, prioritization, reliability, or real investment-decision usefulness.
