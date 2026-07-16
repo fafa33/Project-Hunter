@@ -6,6 +6,19 @@ This document defines the target architecture for evolving Hunter from a static 
 
 The current production scoring boundary remains `EvidenceBackedProjectExecutor`. Discovery expands the market entry point; it does not replace the validated scoring runtime.
 
+## 1.1 Architecture Decisions
+
+This specification implements and expands the accepted ADRs in `docs/ADR/README.md`, especially:
+
+- `docs/ADR/0001-discovery-first.md`;
+- `docs/ADR/0002-evidence-first.md`;
+- `docs/ADR/0003-candidate-registry.md`;
+- `docs/ADR/0004-trust-layer.md`;
+- `docs/ADR/0005-entity-model.md`;
+- `docs/ADR/0006-knowledge-graph.md`.
+
+Any future change that reverses those decisions or changes the production runtime boundary must be captured in a new ADR before this specification is rewritten around the new direction.
+
 ## 2. Target Operating Model
 
 ```text

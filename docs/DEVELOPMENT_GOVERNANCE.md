@@ -10,6 +10,8 @@ This document's role is narrower and more mechanical: it defines the mandatory *
 
 This document also governs the architecture specifications it sits alongside (for example `docs/OPPORTUNITY_TIMING_ENGINE_ARCHITECTURE.md`, `docs/PROBABILITY_ENGINE_ARCHITECTURE.md`, `docs/INVESTMENT_COMMITTEE_ENGINE.md`) and every future document or implementation like them. It does not restate or weaken any guarantee those documents already make.
 
+Architecture Decision Records live in `docs/ADR/` and are governed by the same lifecycle. An ADR may record a decision only when it includes Status, Context, Decision, Consequences, and Alternatives Considered, and the ADR index in `docs/ADR/README.md` must be updated in the same change.
+
 ## 1. Purpose
 
 Project Hunter is an evidence-driven investment decision system maintained for the long term. Its value depends entirely on every score being reproducible, every conclusion being explainable, and every guarantee it has already made continuing to hold as the system grows. Ad-hoc review — reading a diff, forming an impression, approving it — cannot reliably protect those properties as the number of engines, documents, and contributors grows. This document exists to make protecting them mechanical rather than a matter of individual discipline or memory.
