@@ -13,7 +13,9 @@ from hunter.intelligence.engines.contracts import (
     IntelligenceFindingRepository,
     finding_identity,
 )
+from hunter.intelligence.engines.evidence_contracts import evidence_contract_keys
 from hunter.intelligence.engines.exceptions import IntelligenceEngineValidationError
+from hunter.intelligence.evidence import Evidence
 
 
 class IntelligenceEngineService:
@@ -41,7 +43,7 @@ class IntelligenceEngineService:
         bundle = EvidenceBundle(
             candidate_id=candidate_id,
             evidence=evidence,
-            missing_evidence=engine.definition.evidence_contracts,
+            missing_evidence=self._missing_evidence_contracts(engine.definition.evidence_contracts, evidence),
             lineage=tuple(item.reference for item in evidence if item.reference),
         )
         context = EngineContext(
@@ -52,7 +54,7 @@ class IntelligenceEngineService:
                 engine_version=engine.definition.metadata.version,
                 candidate_id=candidate_id,
                 as_of=as_of,
-                evidence_ids=bundle.evidence_ids,
+                evidence_fingerprints=self._evidence_fingerprints(evidence),
                 engine_configuration_fingerprint=engine_configuration_fingerprint,
                 analysis_trace_version=engine.definition.analysis_trace_version,
             ),
@@ -148,7 +150,7 @@ class IntelligenceEngineService:
         engine_version: str,
         candidate_id: str,
         as_of: datetime,
-        evidence_ids: tuple[str, ...],
+        evidence_fingerprints: tuple[str, ...],
         engine_configuration_fingerprint: str,
         analysis_trace_version: str,
     ) -> str:
@@ -159,11 +161,39 @@ class IntelligenceEngineService:
                 "engine_version": engine_version,
                 "candidate_id": candidate_id,
                 "as_of": as_of,
-                "evidence_ids": evidence_ids,
+                "evidence_fingerprints": evidence_fingerprints,
                 "engine_configuration_fingerprint": engine_configuration_fingerprint,
                 "analysis_trace_version": analysis_trace_version,
             },
         )
+
+    def _evidence_fingerprints(self, evidence: tuple[Evidence, ...]) -> tuple[str, ...]:
+        return tuple(
+            sorted(
+                fingerprint(
+                    "intelligence-engine-evidence",
+                    {
+                        "id": item.id,
+                        "source": item.source,
+                        "collected_at": item.collected_at,
+                        "reliability": item.reliability,
+                        "freshness": item.freshness,
+                        "reference": item.reference,
+                        "raw_data": item.raw_data,
+                        "metadata": item.metadata.as_dict(),
+                    },
+                )
+                for item in evidence
+            )
+        )
+
+    def _missing_evidence_contracts(
+        self,
+        evidence_contracts: tuple[str, ...],
+        evidence: tuple[Evidence, ...],
+    ) -> tuple[str, ...]:
+        available = set().union(*(evidence_contract_keys(item) for item in evidence)) if evidence else set()
+        return tuple(sorted(contract for contract in evidence_contracts if contract.strip().lower() not in available))
 
     def _require_timestamp(self, value: datetime, name: str) -> None:
         if value.tzinfo is None:
