@@ -463,25 +463,31 @@ def _contexts(
     required_keys: tuple[str, ...],
 ) -> tuple[FundingContext, ...]:
     grouped: dict[str, list[FundingEvidenceRecord]] = {}
+    affirmed_contexts: set[str] = set()
     for record in records:
-        if not _has_qualifying_any(record, required_keys):
-            continue
         context_id = _context_id(record, context_type=context_type, keys=keys)
         if not context_id:
             continue
         grouped.setdefault(context_id, []).append(record)
+        if _has_qualifying_any(record, required_keys):
+            affirmed_contexts.add(context_id)
+    grouped = {
+        context_id: group_records for context_id, group_records in grouped.items() if context_id in affirmed_contexts
+    }
     return _sorted_contexts(context_type, grouped)
 
 
 def _observation_contexts(records: tuple[FundingEvidenceRecord, ...]) -> tuple[FundingContext, ...]:
     grouped: dict[tuple[str, str], list[FundingEvidenceRecord]] = {}
+    affirmed_contexts: set[tuple[str, str]] = set()
     for record in records:
-        if not _has_qualifying_any(record, _FUNDING_OBSERVATION_EVIDENCE_KEYS):
-            continue
         context = _primary_context(record)
         if context is None:
             continue
-        grouped.setdefault((context.context_type, context.context_id), []).append(record)
+        context_key = (context.context_type, context.context_id)
+        grouped.setdefault(context_key, []).append(record)
+        if _has_qualifying_any(record, _FUNDING_OBSERVATION_EVIDENCE_KEYS):
+            affirmed_contexts.add(context_key)
     contexts = [
         FundingContext(
             context_type=context_type,
@@ -489,6 +495,7 @@ def _observation_contexts(records: tuple[FundingEvidenceRecord, ...]) -> tuple[F
             records=tuple(sorted(group_records, key=lambda item: (_record_sort_key(item), item.evidence.id))),
         )
         for (context_type, context_id), group_records in grouped.items()
+        if (context_type, context_id) in affirmed_contexts
     ]
     return tuple(sorted(contexts, key=lambda item: (item.context_type, item.context_id)))
 
