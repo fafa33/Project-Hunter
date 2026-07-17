@@ -45,6 +45,7 @@ Accepted ADRs remain binding until another ADR supersedes or deprecates them. Ru
 | [0012](0012-tokenomics-intelligence-engine.md) | Tokenomics Intelligence Engine | Accepted | Deterministic tokenomics findings over persisted tokenomics evidence |
 | [0013](0013-governance-intelligence-engine.md) | Governance Intelligence Engine | Accepted | Deterministic governance findings over persisted governance evidence |
 | [0014](0014-security-intelligence-engine.md) | Security Intelligence Engine | Accepted | Deterministic security findings over persisted security evidence |
+| [0015](0015-onchain-intelligence-engine.md) | On-chain Intelligence Engine | Accepted | Deterministic on-chain findings over persisted on-chain evidence |
 
 ## Creating A New ADR
 
