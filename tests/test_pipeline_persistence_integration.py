@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -12,6 +13,7 @@ from hunter.execution.identity import fingerprint
 from hunter.execution.run import PipelineRun
 from hunter.intelligence import Confidence, Evidence, Insight, Intelligence, Observation, Signal
 from hunter.intelligence.engines import BaseIntelligenceEngine, EngineMetadata
+from hunter.operational_corpus import monitor_due_predictions
 from hunter.persistence.integration.adapter import PersistenceEventType, PersistenceIssue, PipelinePersistenceAdapter
 from hunter.persistence.integration.exceptions import (
     ArtifactPersistenceError,
@@ -21,7 +23,11 @@ from hunter.persistence.integration.exceptions import (
 )
 from hunter.persistence.integration.history import PipelineHistory
 from hunter.persistence.integration.lifecycle import RunLifecycle, RunLifecycleState
-from hunter.persistence.integration.policies import PersistencePolicy, PipelinePersistenceSettings
+from hunter.persistence.integration.policies import (
+    OperationalCorpusSettings,
+    PersistencePolicy,
+    PipelinePersistenceSettings,
+)
 from hunter.persistence.integration.snapshots import snapshot_for_run
 from hunter.persistence.records import EvidenceRecord
 from hunter.persistence.sql import RepositoryFactory, SessionFactory, UnitOfWork, create_schema, create_sqlite_engine
@@ -85,6 +91,175 @@ def test_pipeline_persists_pending_running_success_artifacts_and_snapshot(sessio
         PersistenceEventType.ARTIFACT_PERSISTED,
         PersistenceEventType.TRANSACTION_COMMITTED,
     }
+
+
+def test_successful_pipeline_appends_operational_corpus_record(session_factory: SessionFactory, tmp_path: Path) -> None:
+    context = run_context()
+    adapter = enabled_adapter(session_factory, corpus_root=tmp_path / "corpus")
+
+    PipelineOrchestrator().run(context=context, intelligence_engines=[ExampleEngine()], persistence_adapter=adapter)
+
+    corpus_path = tmp_path / "corpus" / "executions.jsonl"
+    rows = [json.loads(line) for line in corpus_path.read_text(encoding="utf-8").splitlines()]
+    assert len(rows) == 1
+    row = rows[0]
+    assert context.run is not None
+    assert row["execution_identity"] == context.run.run_id
+    assert row["execution_status"] == "succeeded"
+    assert row["evidence"][0]["id"] == context.intelligence[0].evidence[0].id
+    assert row["observations"][0]["id"] == context.intelligence[0].observations[0].id
+    assert row["intelligence"][0]["id"] == context.intelligence[0].id
+    assert row["artifact_ids"] == sorted(context.persisted_artifact_ids)
+    assert row["retries"] == 0
+    assert row["failure_summary"] is None
+
+
+def test_operational_corpus_is_idempotent_for_same_attempt(session_factory: SessionFactory, tmp_path: Path) -> None:
+    context = run_context()
+    adapter = enabled_adapter(session_factory, corpus_root=tmp_path / "corpus")
+
+    adapter.run(context, lambda: context.emit_intelligence(sample_intelligence()), engine_manifest=manifest())
+    assert context.run is not None
+    with session_factory.create() as session:
+        attempt = PipelineHistory(RepositoryFactory(session)).attempt_history(context.run.run_id)[-1]
+    adapter._record_operational_corpus(
+        context,
+        run=context.run,
+        attempt=attempt,
+        artifact_ids=tuple(context.persisted_artifact_ids),
+    )
+
+    corpus_path = tmp_path / "corpus" / "executions.jsonl"
+    assert len(corpus_path.read_text(encoding="utf-8").splitlines()) == 1
+
+
+def test_operational_corpus_tracks_completed_opportunities_and_readiness(
+    session_factory: SessionFactory, tmp_path: Path
+) -> None:
+    context = run_context()
+    context.set("rankings", ({"project_id": "bitcoin", "rank": 1, "score": 0.91},))
+    context.set("final_recommendations", ({"project_id": "bitcoin", "decision": "QUALIFIED_CANDIDATE"},))
+    context.set("realized_outcomes", ({"project_id": "bitcoin", "outcome": "OUTPERFORMED_BENCHMARK"},))
+    context.set("benchmark_outcomes", tuple({"benchmark_id": f"benchmark-{index}"} for index in range(5)))
+    context.set("market_cycle_id", "cycle-1")
+    context.set("observation_window_days", 730)
+    adapter = enabled_adapter(session_factory, corpus_root=tmp_path / "corpus")
+
+    PipelineOrchestrator().run(context=context, intelligence_engines=[ExampleEngine()], persistence_adapter=adapter)
+
+    state = json.loads((tmp_path / "corpus" / "opportunities.json").read_text(encoding="utf-8"))
+    readiness = json.loads((tmp_path / "corpus" / "readiness.json").read_text(encoding="utf-8"))
+    opportunity = state["opportunities"][0]
+    assert opportunity["status"] == "closed"
+    assert opportunity["rankings"] == [{"project_id": "bitcoin", "rank": 1, "score": 0.91}]
+    assert opportunity["recommendations"] == [{"decision": "QUALIFIED_CANDIDATE", "project_id": "bitcoin"}]
+    assert opportunity["realized_outcomes"] == [{"outcome": "OUTPERFORMED_BENCHMARK", "project_id": "bitcoin"}]
+    assert opportunity["benchmark_outcomes"] == [{"benchmark_id": f"benchmark-{index}"} for index in range(5)]
+    assert readiness["progress"]["historical_opportunities"] == 1
+    assert readiness["progress"]["completed_outcomes"] == 1
+    assert readiness["progress"]["benchmark_assets"] == 5
+    assert readiness["progress"]["observation_window_days"] == 730
+    assert readiness["corpus_ready"] is False
+
+
+def test_real_market_prediction_outcome_and_validation_sample_are_immutable(
+    session_factory: SessionFactory, tmp_path: Path
+) -> None:
+    context = run_context()
+    context.set("rankings", ({"project_id": "bitcoin", "rank": 1, "score": 0.91},))
+    context.set("final_recommendations", ({"project_id": "bitcoin", "decision": "QUALIFIED_CANDIDATE"},))
+    context.set("benchmark_values", ({"benchmark_id": "bitcoin", "value": 42000.0},))
+    context.set("benchmark_outcomes", ({"benchmark_id": "bitcoin", "excess_return": 0.12},))
+    context.set("realized_outcomes", ({"project_id": "bitcoin", "outcome": "OUTPERFORMED_BENCHMARK"},))
+    context.set("evaluation_horizon_at", datetime(2028, 1, 2, 3, 4, 5, tzinfo=UTC))
+    adapter = enabled_adapter(session_factory, corpus_root=tmp_path / "corpus")
+
+    PipelineOrchestrator().run(context=context, intelligence_engines=[ExampleEngine()], persistence_adapter=adapter)
+    prediction_path = tmp_path / "corpus" / "predictions.jsonl"
+    first_prediction = prediction_path.read_text(encoding="utf-8")
+    assert context.run is not None
+    with session_factory.create() as session:
+        attempt = PipelineHistory(RepositoryFactory(session)).attempt_history(context.run.run_id)[-1]
+    adapter._record_operational_corpus(
+        context,
+        run=context.run,
+        attempt=attempt,
+        artifact_ids=tuple(context.persisted_artifact_ids),
+    )
+
+    predictions = [json.loads(line) for line in prediction_path.read_text(encoding="utf-8").splitlines()]
+    outcomes = [
+        json.loads(line) for line in (tmp_path / "corpus" / "outcomes.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    samples = [
+        json.loads(line)
+        for line in (tmp_path / "corpus" / "validation_samples.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert prediction_path.read_text(encoding="utf-8") == first_prediction
+    assert len(predictions) == 1
+    assert predictions[0]["status"] == "open"
+    assert predictions[0]["evidence"][0]["id"] == context.intelligence[0].evidence[0].id
+    assert predictions[0]["rankings"] == [{"project_id": "bitcoin", "rank": 1, "score": 0.91}]
+    assert predictions[0]["recommendations"] == [{"decision": "QUALIFIED_CANDIDATE", "project_id": "bitcoin"}]
+    assert predictions[0]["confidence_values"][0]["intelligence_id"] == context.intelligence[0].id
+    assert predictions[0]["benchmark_values"] == [{"benchmark_id": "bitcoin", "value": 42000.0}]
+    assert len(outcomes) == 1
+    assert outcomes[0]["prediction_id"] == predictions[0]["prediction_id"]
+    assert outcomes[0]["benchmark_outcomes"] == [{"benchmark_id": "bitcoin", "excess_return": 0.12}]
+    assert len(samples) == 1
+    assert samples[0]["prediction_id"] == predictions[0]["prediction_id"]
+    assert samples[0]["outcome_id"] == outcomes[0]["outcome_id"]
+
+
+def test_due_prediction_monitor_closes_prediction_from_later_benchmark_values(tmp_path: Path) -> None:
+    settings = OperationalCorpusSettings(root=tmp_path / "corpus")
+    root = settings.root
+    root.mkdir(parents=True)
+    prediction = {
+        "prediction_id": "prediction:1",
+        "published_at": "2026-01-01T00:00:00+00:00",
+        "effective_at": "2026-01-01T00:00:00+00:00",
+        "evaluation_horizon_at": "2026-01-02T00:00:00+00:00",
+        "pipeline_run_id": "run:1",
+        "execution_identity": "run:1",
+        "corpus_entry_id": "corpus:1",
+        "target_id": "bitcoin",
+        "target_type": "project",
+        "evidence": [{"id": "evidence:1"}],
+        "intelligence": [{"id": "intelligence:1"}],
+        "rankings": [{"project_id": "bitcoin", "rank": 1}],
+        "recommendations": [{"project_id": "bitcoin", "decision": "QUALIFIED_CANDIDATE"}],
+        "confidence_values": [{"intelligence_id": "intelligence:1", "confidence": 0.8}],
+        "benchmark_values": [{"benchmark_id": "bitcoin", "value": 100.0}],
+        "artifact_ids": ["intelligence:1"],
+        "status": "open",
+    }
+    execution = {
+        "target_id": "bitcoin",
+        "finished_at": "2026-01-03T00:00:00+00:00",
+        "benchmark_values": [{"benchmark_id": "bitcoin", "value": 125.0}],
+    }
+    (root / "predictions.jsonl").write_text(json.dumps(prediction) + "\n", encoding="utf-8")
+    (root / "executions.jsonl").write_text(json.dumps(execution) + "\n", encoding="utf-8")
+
+    monitor_due_predictions(settings, at=datetime(2026, 1, 3, tzinfo=UTC))
+    monitor_due_predictions(settings, at=datetime(2026, 1, 3, tzinfo=UTC))
+
+    state = json.loads((root / "prediction_state.json").read_text(encoding="utf-8"))
+    outcomes = [json.loads(line) for line in (root / "outcomes.jsonl").read_text(encoding="utf-8").splitlines()]
+    samples = [
+        json.loads(line) for line in (root / "validation_samples.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    closures = [
+        json.loads(line) for line in (root / "prediction_closures.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert state["predictions"][0]["status"] == "closed"
+    assert len(outcomes) == 1
+    assert outcomes[0]["benchmark_outcomes"] == [
+        {"benchmark_id": "bitcoin", "end_value": 125.0, "return": 0.25, "start_value": 100.0}
+    ]
+    assert len(samples) == 1
+    assert len(closures) == 1
 
 
 def test_repeated_execution_is_idempotent(session_factory: SessionFactory) -> None:
@@ -157,6 +332,22 @@ def test_pipeline_failure_persists_failed_status(session_factory: SessionFactory
     assert failed.status == "failed"
     assert failed.error_summary is not None
     assert "RuntimeError" in failed.error_summary
+
+
+def test_failed_pipeline_appends_operational_corpus_record(session_factory: SessionFactory, tmp_path: Path) -> None:
+    context = run_context()
+    adapter = enabled_adapter(session_factory, corpus_root=tmp_path / "corpus")
+
+    with pytest.raises(RuntimeError):
+        adapter.run(context, failing_execution, engine_manifest=manifest())
+
+    rows = [
+        json.loads(line) for line in (tmp_path / "corpus" / "executions.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert len(rows) == 1
+    assert rows[0]["execution_status"] == "failed"
+    assert rows[0]["failure_summary"] == "RuntimeError: pipeline failed"
+    assert rows[0]["recovery_information"]
 
 
 def test_stale_pipeline_run_identity_detection(session_factory: SessionFactory) -> None:
@@ -434,10 +625,12 @@ def enabled_adapter(
     session_factory: SessionFactory,
     *,
     policy: PersistencePolicy = PersistencePolicy.ATOMIC,
+    corpus_root: Path | None = None,
 ) -> PipelinePersistenceAdapter:
+    corpus = OperationalCorpusSettings(root=corpus_root or Path("data/operational_corpus"))
     return PipelinePersistenceAdapter(
         lambda: UnitOfWork(session_factory),
-        PipelinePersistenceSettings(enabled=True, policy=policy),
+        PipelinePersistenceSettings(enabled=True, policy=policy, operational_corpus=corpus),
     )
 
 

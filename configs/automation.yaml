@@ -427,3 +427,29 @@ jobs:
   metadata:
     operation: discovery_source_health
     records_metrics: true
+- job_id: real-market-validation-monitor
+  name: Real market validation monitor
+  enabled: true
+  job_kind: real_market_validation
+  schedule:
+    type: daily
+  timezone: UTC
+  target:
+    type: operation
+    id: real_market_validation
+  run_type: scheduled
+  pipeline_options:
+    run_intelligence: false
+    run_fusion: false
+    run_opportunity_timing: false
+    run_investment_committee: false
+  persistence_policy: atomic
+  as_of_policy:
+    mode: current
+  timeout_seconds: 3600
+  concurrency_policy:
+    prevent_overlapping: true
+    scope: job_target
+  metadata:
+    operation: real_market_validation_monitor
+    records_metrics: true
