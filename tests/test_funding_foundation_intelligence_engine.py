@@ -427,6 +427,95 @@ def test_funding_attribution_requires_explicit_evidence(finding_type: str, paylo
     assert not findings_of_type(batch, finding_type)
 
 
+def test_funding_lead_investor_requires_affirmative_value() -> None:
+    affirmative, _repository = execute_funding(
+        (funding_evidence("lead-true", {"investor_id": "investor:lead", "is_lead_investor": True}),)
+    )
+    negative, _repository = execute_funding(
+        (funding_evidence("lead-false", {"investor_id": "investor:lead", "is_lead_investor": False}),)
+    )
+
+    assert findings_of_type(affirmative, "lead_investor")
+    assert negative.findings == ()
+
+
+def test_funding_strategic_investor_requires_affirmative_value() -> None:
+    affirmative, _repository = execute_funding(
+        (funding_evidence("strategic-true", {"investor_id": "investor:strategic", "strategic_investor": True}),)
+    )
+    negative, _repository = execute_funding(
+        (funding_evidence("strategic-false", {"investor_id": "investor:strategic", "strategic_investor": False}),)
+    )
+
+    assert findings_of_type(affirmative, "strategic_investor")
+    assert negative.findings == ()
+
+
+@pytest.mark.parametrize("grant_status", ("approved", "awarded"))
+def test_funding_grant_status_affirmative_values_generate_finding(grant_status: str) -> None:
+    batch, _repository = execute_funding(
+        (funding_evidence("grant", {"grant_id": "grant:1", "grant_status": grant_status}),)
+    )
+
+    assert findings_of_type(batch, "grant_funding")
+
+
+@pytest.mark.parametrize("grant_status", ("rejected", "denied"))
+def test_funding_grant_status_negative_values_do_not_generate_finding(grant_status: str) -> None:
+    batch, _repository = execute_funding(
+        (funding_evidence("grant", {"grant_id": "grant:1", "grant_status": grant_status}),)
+    )
+
+    assert batch.findings == ()
+
+
+def test_funding_treasury_funding_requires_affirmative_value() -> None:
+    affirmative, _repository = execute_funding(
+        (
+            funding_evidence(
+                "treasury-approved",
+                {"treasury_funding_event_id": "treasury:1", "treasury_funding": "approved"},
+            ),
+        )
+    )
+    negative, _repository = execute_funding(
+        (
+            funding_evidence(
+                "treasury-rejected",
+                {"treasury_funding_event_id": "treasury:1", "treasury_funding": "rejected"},
+            ),
+        )
+    )
+
+    assert findings_of_type(affirmative, "treasury_funding")
+    assert negative.findings == ()
+
+
+def test_funding_negative_values_suppress_only_affected_finding() -> None:
+    batch, _repository = execute_funding(
+        (
+            funding_evidence("lead-false", {"investor_id": "investor:lead", "is_lead_investor": False}),
+            funding_evidence("grant-approved", {"grant_id": "grant:1", "grant_status": "approved"}),
+        )
+    )
+
+    assert not findings_of_type(batch, "lead_investor")
+    assert findings_of_type(batch, "grant_funding")
+
+
+def test_funding_negative_values_do_not_create_negative_explanations() -> None:
+    batch, _repository = execute_funding(
+        (
+            funding_evidence("grant-rejected", {"grant_id": "grant:1", "grant_status": "rejected"}),
+            funding_evidence("capital-valid", {"capital_source_id": "source:1", "capital_source": "foundation"}),
+        )
+    )
+
+    assert not findings_of_type(batch, "grant_funding")
+    assert all("rejected" not in finding.explanation.lower() for finding in batch.findings)
+    assert all("no " not in finding.explanation.lower() for finding in batch.findings)
+
+
 def test_funding_transfers_or_balances_do_not_authorize_treasury_funding() -> None:
     evidence = (
         funding_evidence("transfer", {"treasury_funding_event_id": "treasury:1", "transfer_value": "100"}),

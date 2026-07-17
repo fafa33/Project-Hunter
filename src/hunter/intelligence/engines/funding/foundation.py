@@ -371,7 +371,7 @@ def _context_findings(
             engine_context,
             finding_type,
             funding_context,
-            _observed_names(funding_context.records, fields),
+            _observed_qualifying_names(funding_context.records, fields),
             confidence_basis=confidence_basis,
         )
         for funding_context in contexts
@@ -464,7 +464,7 @@ def _contexts(
 ) -> tuple[FundingContext, ...]:
     grouped: dict[str, list[FundingEvidenceRecord]] = {}
     for record in records:
-        if not _has_any(record, required_keys):
+        if not _has_qualifying_any(record, required_keys):
             continue
         context_id = _context_id(record, context_type=context_type, keys=keys)
         if not context_id:
@@ -476,7 +476,7 @@ def _contexts(
 def _observation_contexts(records: tuple[FundingEvidenceRecord, ...]) -> tuple[FundingContext, ...]:
     grouped: dict[tuple[str, str], list[FundingEvidenceRecord]] = {}
     for record in records:
-        if not _has_any(record, _FUNDING_OBSERVATION_EVIDENCE_KEYS):
+        if not _has_qualifying_any(record, _FUNDING_OBSERVATION_EVIDENCE_KEYS):
             continue
         context = _primary_context(record)
         if context is None:
@@ -584,18 +584,18 @@ def _normalized_identifier(value: object) -> str:
     return normalized
 
 
-def _has_any(record: FundingEvidenceRecord, keys: tuple[str, ...]) -> bool:
-    return any(_present(record.payload.get(key)) for key in keys)
+def _has_qualifying_any(record: FundingEvidenceRecord, keys: tuple[str, ...]) -> bool:
+    return any(_affirmative_present(key, record.payload.get(key)) for key in keys)
 
 
-def _observed_names(
+def _observed_qualifying_names(
     records: tuple[FundingEvidenceRecord, ...],
     keys: tuple[str, ...],
 ) -> tuple[str, ...]:
     names = set()
     for record in records:
         for key in keys:
-            if _present(record.payload.get(key)):
+            if _affirmative_present(key, record.payload.get(key)):
                 names.add(key)
     return tuple(sorted(names))
 
@@ -644,6 +644,27 @@ def _present(value: object) -> bool:
     return True
 
 
+def _affirmative_present(key: str, value: object) -> bool:
+    if not _present(value):
+        return False
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int | float):
+        return value != 0
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in _NEGATIVE_FUNDING_VALUES:
+            return False
+        if _requires_explicit_positive_value(key):
+            return normalized in _AFFIRMATIVE_FUNDING_VALUES
+        return True
+    return True
+
+
+def _requires_explicit_positive_value(key: str) -> bool:
+    return key.startswith("is_") or key.endswith("_status") or key in _EXPLICIT_AFFIRMATIVE_KEYS
+
+
 def _text(value: object) -> str:
     if not isinstance(value, str):
         return ""
@@ -660,6 +681,67 @@ _FUNDRAISING_EVENT_CONTEXT_KEYS = ("fundraising_event_id",)
 _CAPITAL_SOURCE_CONTEXT_KEYS = ("capital_source_id",)
 _ORGANIZATION_CONTEXT_KEYS = ("organization_id",)
 _PROJECT_CONTEXT_KEYS = ("project_id",)
+
+_AFFIRMATIVE_FUNDING_VALUES = frozenset(
+    {
+        "accepted",
+        "active",
+        "allocated",
+        "announced",
+        "approved",
+        "awarded",
+        "closed",
+        "committed",
+        "complete",
+        "completed",
+        "confirmed",
+        "funded",
+        "grant",
+        "granted",
+        "lead",
+        "participated",
+        "participating",
+        "provided",
+        "raised",
+        "received",
+        "reported",
+        "secured",
+        "strategic",
+        "true",
+        "yes",
+    }
+)
+_NEGATIVE_FUNDING_VALUES = frozenset(
+    {
+        "0",
+        "cancelled",
+        "canceled",
+        "declined",
+        "denied",
+        "failed",
+        "false",
+        "inactive",
+        "no",
+        "none",
+        "null",
+        "pending",
+        "rejected",
+        "unknown",
+        "withdrawn",
+    }
+)
+_EXPLICIT_AFFIRMATIVE_KEYS = frozenset(
+    {
+        "ecosystem_funding",
+        "fundraising_event",
+        "funding_round",
+        "grant_funding",
+        "is_lead_investor",
+        "lead_investor",
+        "strategic_investor",
+        "treasury_funding",
+    }
+)
 
 _FUNDING_ROUND_KEYS = (
     "funding_round_id",
