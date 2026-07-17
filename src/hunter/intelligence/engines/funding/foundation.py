@@ -472,7 +472,9 @@ def _contexts(
         if _has_qualifying_any(record, required_keys):
             affirmed_contexts.add(context_id)
     grouped = {
-        context_id: group_records for context_id, group_records in grouped.items() if context_id in affirmed_contexts
+        context_id: [group_record for group_record in group_records if _references_any(group_record, required_keys)]
+        for context_id, group_records in grouped.items()
+        if context_id in affirmed_contexts
     }
     return _sorted_contexts(context_type, grouped)
 
@@ -486,13 +488,23 @@ def _observation_contexts(records: tuple[FundingEvidenceRecord, ...]) -> tuple[F
             continue
         context_key = (context.context_type, context.context_id)
         grouped.setdefault(context_key, []).append(record)
-        if _has_qualifying_any(record, _FUNDING_OBSERVATION_EVIDENCE_KEYS):
+        observation_keys = _observation_evidence_keys(context.context_type)
+        if _has_qualifying_any(record, observation_keys):
             affirmed_contexts.add(context_key)
     contexts = [
         FundingContext(
             context_type=context_type,
             context_id=context_id,
-            records=tuple(sorted(group_records, key=lambda item: (_record_sort_key(item), item.evidence.id))),
+            records=tuple(
+                sorted(
+                    (
+                        group_record
+                        for group_record in group_records
+                        if _references_any(group_record, _observation_evidence_keys(context_type))
+                    ),
+                    key=lambda item: (_record_sort_key(item), item.evidence.id),
+                )
+            ),
         )
         for (context_type, context_id), group_records in grouped.items()
         if (context_type, context_id) in affirmed_contexts
@@ -593,6 +605,14 @@ def _normalized_identifier(value: object) -> str:
 
 def _has_qualifying_any(record: FundingEvidenceRecord, keys: tuple[str, ...]) -> bool:
     return any(_affirmative_present(key, record.payload.get(key)) for key in keys)
+
+
+def _references_any(record: FundingEvidenceRecord, keys: tuple[str, ...]) -> bool:
+    return any(key in record.payload for key in keys)
+
+
+def _observation_evidence_keys(context_type: str) -> tuple[str, ...]:
+    return _OBSERVATION_EVIDENCE_KEYS_BY_CONTEXT.get(context_type, _FUNDING_OBSERVATION_EVIDENCE_KEYS)
 
 
 def _observed_qualifying_names(
@@ -887,6 +907,24 @@ _FUNDING_CONTEXT_IDENTIFIER_KEYS = frozenset(
 _FUNDING_OBSERVATION_EVIDENCE_KEYS = tuple(
     key for key in _FUNDING_OBSERVATION_KEYS if key not in _FUNDING_CONTEXT_IDENTIFIER_KEYS
 )
+_GENERIC_FUNDING_OBSERVATION_EVIDENCE_KEYS = ("funding_claim", "funding_observation")
+_OBSERVATION_EVIDENCE_KEYS_BY_CONTEXT = {
+    "funding_round": (*_FUNDING_ROUND_EVIDENCE_KEYS, *_GENERIC_FUNDING_OBSERVATION_EVIDENCE_KEYS),
+    "investor": (
+        *_INVESTOR_PARTICIPATION_EVIDENCE_KEYS,
+        *_LEAD_INVESTOR_EVIDENCE_KEYS,
+        *_STRATEGIC_INVESTOR_EVIDENCE_KEYS,
+        *_GENERIC_FUNDING_OBSERVATION_EVIDENCE_KEYS,
+    ),
+    "syndicate": _GENERIC_FUNDING_OBSERVATION_EVIDENCE_KEYS,
+    "treasury_funding_event": (*_TREASURY_FUNDING_EVIDENCE_KEYS, *_GENERIC_FUNDING_OBSERVATION_EVIDENCE_KEYS),
+    "grant": (*_GRANT_EVIDENCE_KEYS, *_GENERIC_FUNDING_OBSERVATION_EVIDENCE_KEYS),
+    "ecosystem_program": (*_ECOSYSTEM_FUNDING_EVIDENCE_KEYS, *_GENERIC_FUNDING_OBSERVATION_EVIDENCE_KEYS),
+    "fundraising_event": (*_FUNDRAISING_EVENT_EVIDENCE_KEYS, *_GENERIC_FUNDING_OBSERVATION_EVIDENCE_KEYS),
+    "capital_source": (*_CAPITAL_SOURCE_EVIDENCE_KEYS, *_GENERIC_FUNDING_OBSERVATION_EVIDENCE_KEYS),
+    "organization": tuple(key for key in _ORGANIZATION_KEYS if key not in _ORGANIZATION_CONTEXT_KEYS),
+    "project": tuple(key for key in _PROJECT_KEYS if key not in _PROJECT_CONTEXT_KEYS),
+}
 _PRIMARY_CONTEXT_PRECEDENCE = (
     ("funding_round", _FUNDING_ROUND_CONTEXT_KEYS),
     ("investor", _INVESTOR_CONTEXT_KEYS),

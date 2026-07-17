@@ -538,6 +538,46 @@ def test_funding_affirmed_context_preserves_contradictory_grant_record() -> None
     assert "rejected" not in finding.explanation.lower()
 
 
+def test_funding_grant_finding_excludes_unrelated_same_context_records() -> None:
+    relevant = (
+        funding_evidence(
+            "grant-approved",
+            {"grant_id": "grant:1", "grant_status": "approved", "conflict_id": "grant-status-conflict"},
+        ),
+        funding_evidence(
+            "grant-rejected",
+            {"grant_id": "grant:1", "grant_status": "rejected", "conflict_id": "grant-rejection"},
+        ),
+    )
+    with_unrelated = (
+        *relevant,
+        funding_evidence(
+            "grant-investor-note",
+            {"grant_id": "grant:1", "investor_participation": "yes"},
+            reliability=0.1,
+        ),
+        funding_evidence(
+            "grant-treasury-note",
+            {"grant_id": "grant:1", "treasury_funding": "approved"},
+            reliability=0.2,
+        ),
+        funding_evidence(
+            "grant-unrelated-observation",
+            {"grant_id": "grant:1", "ecosystem_funding": "allocated"},
+            reliability=0.3,
+        ),
+    )
+
+    base, _repository = execute_funding(relevant)
+    expanded, _repository = execute_funding(with_unrelated)
+
+    assert finding_by_type(expanded, "grant_funding") == finding_by_type(base, "grant_funding")
+    finding = finding_by_type(expanded, "grant_funding")
+    assert finding.supporting_evidence_ids == ("grant-approved", "grant-rejected")
+    assert finding.evidence_lineage == ("funding:grant-approved", "funding:grant-rejected")
+    assert finding.conflicts == ("grant-rejection", "grant-status-conflict")
+
+
 def test_funding_observation_context_preserves_contradictory_records() -> None:
     batch, _repository = execute_funding(
         (
@@ -562,6 +602,25 @@ def test_funding_observation_context_preserves_contradictory_records() -> None:
     assert finding.conflicts == ("treasury-conflict",)
     assert "treasury_funding" in finding.explanation
     assert "rejected" not in finding.explanation.lower()
+
+
+def test_funding_observation_context_excludes_unrelated_same_context_records() -> None:
+    batch, _repository = execute_funding(
+        (
+            funding_evidence("grant-approved", {"grant_id": "grant:1", "grant_status": "approved"}),
+            funding_evidence(
+                "grant-rejected",
+                {"grant_id": "grant:1", "grant_status": "rejected", "conflict_id": "grant-conflict"},
+            ),
+            funding_evidence("grant-investor-note", {"grant_id": "grant:1", "investor_participation": "yes"}),
+            funding_evidence("grant-treasury-note", {"grant_id": "grant:1", "treasury_funding": "approved"}),
+        )
+    )
+
+    finding = finding_by_type(batch, "funding_observation")
+    assert finding.supporting_evidence_ids == ("grant-approved", "grant-rejected")
+    assert finding.evidence_lineage == ("funding:grant-approved", "funding:grant-rejected")
+    assert finding.conflicts == ("grant-conflict",)
 
 
 def test_funding_contradictory_records_do_not_suppress_affirmative_findings() -> None:
