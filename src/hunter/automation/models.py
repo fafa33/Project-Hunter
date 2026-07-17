@@ -24,6 +24,7 @@ AutomationJobKind = Literal[
     "evaluate_alerts",
     "historical_replay",
     "backtest",
+    "real_market_validation",
 ]
 
 

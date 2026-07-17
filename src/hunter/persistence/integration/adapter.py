@@ -8,6 +8,7 @@ from types import TracebackType
 from typing import Any, Protocol, TypeVar
 
 from hunter.execution.run import PipelineRun
+from hunter.operational_corpus import OperationalCorpusRecorder
 from hunter.persistence.integration.artifacts import records_for_intelligence
 from hunter.persistence.integration.exceptions import (
     ArtifactPersistenceError,
@@ -124,6 +125,8 @@ class PipelinePersistenceAdapter:
     ) -> T:
         deferred_error: BaseException | None = None
         result: T | None = None
+        final_attempt_record: OperationalAttemptRecord | None = None
+        artifact_ids: tuple[str, ...] = ()
         try:
             with self.unit_of_work_factory() as uow:
                 repositories = _repositories(uow)
@@ -141,6 +144,9 @@ class PipelinePersistenceAdapter:
                         context,
                         repositories,
                         failed.to_record(created_at=context.clock.now(), effective_at=run.effective_at),
+                    )
+                    final_attempt_record = failed.to_record(
+                        created_at=context.clock.now(), effective_at=run.effective_at
                     )
                 if deferred_error is None:
                     if not context.validate_run_identity(engine_manifest=engine_manifest):
@@ -161,7 +167,17 @@ class PipelinePersistenceAdapter:
                         repositories,
                         final.to_record(created_at=context.clock.now(), effective_at=run.effective_at),
                     )
+                    final_attempt_record = final.to_record(
+                        created_at=context.clock.now(), effective_at=run.effective_at
+                    )
                     self._maybe_snapshot(context, repositories, run, artifact_ids, final_state)
+            if final_attempt_record is not None:
+                self._record_operational_corpus(
+                    context,
+                    run=run,
+                    attempt=final_attempt_record,
+                    artifact_ids=artifact_ids,
+                )
             self._record(context, run, PersistenceEventType.TRANSACTION_COMMITTED, "pipeline persistence committed")
         except BaseException as exc:
             self._record(context, run, PersistenceEventType.TRANSACTION_ROLLED_BACK, "pipeline persistence rolled back")
@@ -203,11 +219,13 @@ class PipelinePersistenceAdapter:
                     at=context.clock.now(),
                     error_summary=_summary(exc),
                 )
+                failed_record = failed.to_record(created_at=context.clock.now(), effective_at=run.effective_at)
                 self._save_attempt_record(
                     context,
                     repositories,
-                    failed.to_record(created_at=context.clock.now(), effective_at=run.effective_at),
+                    failed_record,
                 )
+            self._record_operational_corpus(context, run=run, attempt=failed_record, artifact_ids=())
             self._record(context, run, PersistenceEventType.TRANSACTION_COMMITTED, "durable failure state committed")
             raise
 
@@ -409,6 +427,21 @@ class PipelinePersistenceAdapter:
                 record_id=record_id,
                 at=context.clock.now(),
             )
+        )
+
+    def _record_operational_corpus(
+        self,
+        context: PipelineContext,
+        *,
+        run: PipelineRun,
+        attempt: OperationalAttemptRecord,
+        artifact_ids: tuple[str, ...],
+    ) -> None:
+        OperationalCorpusRecorder(self.settings.operational_corpus).record(
+            context,
+            run=run,
+            attempt=attempt,
+            artifact_ids=artifact_ids,
         )
 
 

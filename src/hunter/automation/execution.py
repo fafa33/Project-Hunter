@@ -14,6 +14,7 @@ from hunter.intelligence.engines.protocol.engine import ProtocolIntelligenceEngi
 from hunter.intelligence.engines.social.engine import SocialIntelligenceEngine
 from hunter.intelligence.engines.whale.engine import WhaleIntelligenceEngine
 from hunter.intelligence.fusion import CrossEngineFusionEngine
+from hunter.operational_corpus import monitor_due_predictions
 from hunter.opportunity import OpportunityTimingEngine
 from hunter.pipeline import PipelineOrchestrator
 from hunter.plugins.contracts import PersistenceAdapter, PipelineContext
@@ -44,6 +45,9 @@ class AutomationPipelineExecutor:
         self.persistence_adapter = persistence_adapter
 
     def __call__(self, plan: AutomationPipelinePlan, context: PipelineContext) -> PipelineContext:
+        if plan.job_kind == "real_market_validation":
+            monitor_due_predictions()
+            return context
         if plan.replay.as_of is not None:
             context.clock = FixedClock(plan.replay.as_of)
         context.persistence_policy = plan.persistence_policy
