@@ -516,6 +516,67 @@ def test_funding_negative_values_do_not_create_negative_explanations() -> None:
     assert all("no " not in finding.explanation.lower() for finding in batch.findings)
 
 
+def test_funding_affirmed_context_preserves_contradictory_grant_record() -> None:
+    batch, _repository = execute_funding(
+        (
+            funding_evidence(
+                "grant-approved",
+                {"grant_id": "grant:1", "grant_status": "approved", "conflict_id": "grant-status-conflict"},
+            ),
+            funding_evidence(
+                "grant-rejected",
+                {"grant_id": "grant:1", "grant_status": "rejected", "conflict_id": "grant-rejection"},
+            ),
+        )
+    )
+
+    finding = finding_by_type(batch, "grant_funding")
+    assert finding.supporting_evidence_ids == ("grant-approved", "grant-rejected")
+    assert finding.evidence_lineage == ("funding:grant-approved", "funding:grant-rejected")
+    assert finding.conflicts == ("grant-rejection", "grant-status-conflict")
+    assert "grant_status" in finding.explanation
+    assert "rejected" not in finding.explanation.lower()
+
+
+def test_funding_observation_context_preserves_contradictory_records() -> None:
+    batch, _repository = execute_funding(
+        (
+            funding_evidence(
+                "treasury-approved",
+                {"treasury_funding_event_id": "treasury:1", "treasury_funding": "approved"},
+            ),
+            funding_evidence(
+                "treasury-rejected",
+                {
+                    "treasury_funding_event_id": "treasury:1",
+                    "treasury_funding": "rejected",
+                    "conflict_id": "treasury-conflict",
+                },
+            ),
+        )
+    )
+
+    finding = finding_by_type(batch, "funding_observation")
+    assert finding.supporting_evidence_ids == ("treasury-approved", "treasury-rejected")
+    assert finding.evidence_lineage == ("funding:treasury-approved", "funding:treasury-rejected")
+    assert finding.conflicts == ("treasury-conflict",)
+    assert "treasury_funding" in finding.explanation
+    assert "rejected" not in finding.explanation.lower()
+
+
+def test_funding_contradictory_records_do_not_suppress_affirmative_findings() -> None:
+    batch, _repository = execute_funding(
+        (
+            funding_evidence("lead-true", {"investor_id": "investor:lead", "is_lead_investor": True}),
+            funding_evidence("lead-false", {"investor_id": "investor:lead", "is_lead_investor": False}),
+        )
+    )
+
+    finding = finding_by_type(batch, "lead_investor")
+    assert finding.supporting_evidence_ids == ("lead-false", "lead-true")
+    assert finding.evidence_lineage == ("funding:lead-false", "funding:lead-true")
+
+
 def test_funding_transfers_or_balances_do_not_authorize_treasury_funding() -> None:
     evidence = (
         funding_evidence("transfer", {"treasury_funding_event_id": "treasury:1", "transfer_value": "100"}),
