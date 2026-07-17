@@ -1,6 +1,13 @@
 from __future__ import annotations
 
 from hunter.intelligence.engines.onchain.engine import OnchainIntelligenceEngine, create_plugin
+from hunter.intelligence.engines.onchain.foundation import (
+    ONCHAIN_ANALYSIS_TRACE_VERSION,
+    ONCHAIN_EVIDENCE_CONTRACT,
+    ONCHAIN_FINDING_TYPES,
+    OnchainFoundationIntelligenceEngine,
+    onchain_engine_definition,
+)
 from hunter.intelligence.engines.onchain.models import (
     AddressSnapshot,
     AnomalyAssessment,
@@ -34,6 +41,10 @@ __all__ = [
     "GovernanceActivitySnapshot",
     "HolderSnapshot",
     "MintBurnSnapshot",
+    "ONCHAIN_ANALYSIS_TRACE_VERSION",
+    "ONCHAIN_EVIDENCE_CONTRACT",
+    "ONCHAIN_FINDING_TYPES",
+    "OnchainFoundationIntelligenceEngine",
     "OnchainEvent",
     "OnchainIntelligenceEngine",
     "StakingFlowSnapshot",
@@ -43,4 +54,5 @@ __all__ = [
     "TreasuryActivitySnapshot",
     "ValidatorDistributionSnapshot",
     "create_plugin",
+    "onchain_engine_definition",
 ]
