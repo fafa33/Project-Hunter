@@ -7,7 +7,10 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any
 
+from hunter.jsonl_contract import JsonlRecord, JsonlWritePlan, envelope, read_records, strict_known
 from hunter.macro.models import MacroEvidence, MacroMetric, MacroProviderFailure, MacroSnapshot
+
+MACRO_JSONL_SCHEMA = "hunter-macro-jsonl-v1"
 
 
 class MacroRepository:
@@ -21,7 +24,9 @@ class MacroRepository:
         self.run_path = self.root / "runs.jsonl"
         self.failure_path = self.root / "failures.jsonl"
 
-    def save_evidence(self, evidence: tuple[MacroEvidence, ...]) -> tuple[MacroEvidence, ...]:
+    def save_evidence(
+        self, evidence: tuple[MacroEvidence, ...], *, write_plan: JsonlWritePlan | None = None
+    ) -> tuple[MacroEvidence, ...]:
         existing = {item.evidence_id for item in self.evidence()}
         validations = {row["evidence_id"]: row for row in self._read(self.validation_path)}
         for item in evidence:
@@ -38,9 +43,10 @@ class MacroRepository:
                             "status": item.validation_status,
                             "errors": item.validation_errors,
                         },
+                        write_plan=write_plan,
                     )
                 continue
-            self._append(self.raw_path, _metric_payload(item))
+            self._append(self.raw_path, _metric_payload(item), write_plan=write_plan)
             self._append(
                 self.normalized_path,
                 {
@@ -49,6 +55,7 @@ class MacroRepository:
                     "metric": item.metric.name,
                     "normalized_value": item.normalized_value,
                 },
+                write_plan=write_plan,
             )
             self._append(
                 self.validation_path,
@@ -57,12 +64,13 @@ class MacroRepository:
                     "status": item.validation_status,
                     "errors": item.validation_errors,
                 },
+                write_plan=write_plan,
             )
         return evidence
 
-    def save_snapshot(self, snapshot: MacroSnapshot) -> MacroSnapshot:
+    def save_snapshot(self, snapshot: MacroSnapshot, *, write_plan: JsonlWritePlan | None = None) -> MacroSnapshot:
         if snapshot.snapshot_id not in {item.snapshot_id for item in self.snapshots()}:
-            self._append(self.snapshot_path, _snapshot_payload(snapshot))
+            self._append(self.snapshot_path, _snapshot_payload(snapshot), write_plan=write_plan)
             self._append(
                 self.run_path,
                 {
@@ -71,10 +79,13 @@ class MacroRepository:
                     "metrics": len(snapshot.evidence),
                     "valid": sum(1 for item in snapshot.evidence if item.validation_status == "VALID"),
                 },
+                write_plan=write_plan,
             )
         return snapshot
 
-    def save_failures(self, failures: tuple[MacroProviderFailure, ...]) -> tuple[MacroProviderFailure, ...]:
+    def save_failures(
+        self, failures: tuple[MacroProviderFailure, ...], *, write_plan: JsonlWritePlan | None = None
+    ) -> tuple[MacroProviderFailure, ...]:
         for failure in failures:
             self._append(
                 self.failure_path,
@@ -86,6 +97,7 @@ class MacroRepository:
                     "source_url": failure.source_url,
                     "occurred_at": failure.occurred_at.isoformat(),
                 },
+                write_plan=write_plan,
             )
         return failures
 
@@ -161,14 +173,20 @@ class MacroRepository:
             for row in self._read(self.failure_path)
         )
 
-    def _append(self, path: Path, payload: dict[str, Any]) -> None:
+    def records(self, path: Path) -> tuple[JsonlRecord, ...]:
+        return read_records(path, supported_schema=MACRO_JSONL_SCHEMA)
+
+    def strict_known_records(self, path: Path, *, as_of: datetime) -> tuple[JsonlRecord, ...]:
+        return strict_known(self.records(path), as_of=as_of)
+
+    def _append(self, path: Path, payload: dict[str, Any], *, write_plan: JsonlWritePlan | None = None) -> None:
+        if write_plan is not None:
+            payload = envelope(payload, write_plan)
         with path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(_jsonable(payload), sort_keys=True) + "\n")
 
     def _read(self, path: Path) -> tuple[dict[str, Any], ...]:
-        if not path.exists():
-            return ()
-        return tuple(json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip())
+        return tuple(record.payload for record in self.records(path))
 
 
 def _metric_payload(evidence: MacroEvidence) -> dict[str, Any]:

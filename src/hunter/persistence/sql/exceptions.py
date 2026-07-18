@@ -13,3 +13,11 @@ class PersistenceIdentityConflictError(SQLPersistenceError):
 
 class PersistenceRecordDeletedError(SQLPersistenceError):
     """Raised when a deleted record is written again."""
+
+
+class AnalyticalWriteAuthorizationError(SQLPersistenceError):
+    """Raised when an analytical write bypasses a service-authorized plan."""
+
+
+class AnalyticalCorrectionConflictError(SQLPersistenceError):
+    """Raised when a correction does not preserve the authorized lineage."""

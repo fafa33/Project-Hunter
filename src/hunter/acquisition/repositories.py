@@ -14,6 +14,9 @@ from hunter.acquisition.models import (
     RawEvidence,
     ValidationIssue,
 )
+from hunter.jsonl_contract import JsonlRecord, JsonlWritePlan, envelope, read_records, strict_known
+
+ACQUISITION_JSONL_SCHEMA = "hunter-acquisition-jsonl-v1"
 
 
 class InMemoryAcquisitionRepository:
@@ -67,35 +70,51 @@ class FileAcquisitionRepository(InMemoryAcquisitionRepository):
         self.root.mkdir(parents=True, exist_ok=True)
         self._load_existing()
 
-    def save_raw(self, raw: tuple[RawEvidence, ...]) -> tuple[RawEvidence, ...]:
+    def save_raw(
+        self, raw: tuple[RawEvidence, ...], *, write_plan: JsonlWritePlan | None = None
+    ) -> tuple[RawEvidence, ...]:
         saved = super().save_raw(raw)
-        self._append("raw.jsonl", (_raw_payload(item) for item in raw))
+        self._append("raw.jsonl", (_raw_payload(item) for item in raw), write_plan=write_plan)
         return saved
 
-    def save_normalized(self, evidence: tuple[NormalizedEvidence, ...]) -> tuple[NormalizedEvidence, ...]:
+    def save_normalized(
+        self, evidence: tuple[NormalizedEvidence, ...], *, write_plan: JsonlWritePlan | None = None
+    ) -> tuple[NormalizedEvidence, ...]:
         saved = super().save_normalized(evidence)
-        self._append("normalized.jsonl", (_normalized_payload(item) for item in evidence))
+        self._append("normalized.jsonl", (_normalized_payload(item) for item in evidence), write_plan=write_plan)
         return saved
 
-    def save_validations(self, validations: tuple[EvidenceValidation, ...]) -> tuple[EvidenceValidation, ...]:
+    def save_validations(
+        self, validations: tuple[EvidenceValidation, ...], *, write_plan: JsonlWritePlan | None = None
+    ) -> tuple[EvidenceValidation, ...]:
         saved = super().save_validations(validations)
-        self._append("validations.jsonl", (_validation_payload(item) for item in validations))
+        self._append("validations.jsonl", (_validation_payload(item) for item in validations), write_plan=write_plan)
         return saved
 
-    def save_run(self, run: AcquisitionRun) -> AcquisitionRun:
+    def save_run(self, run: AcquisitionRun, *, write_plan: JsonlWritePlan | None = None) -> AcquisitionRun:
         saved = super().save_run(run)
-        self._append("runs.jsonl", (_run_payload(run),))
+        self._append("runs.jsonl", (_run_payload(run),), write_plan=write_plan)
         return saved
 
-    def save_checkpoint(self, checkpoint: AcquisitionCheckpoint) -> AcquisitionCheckpoint:
+    def save_checkpoint(
+        self, checkpoint: AcquisitionCheckpoint, *, write_plan: JsonlWritePlan | None = None
+    ) -> AcquisitionCheckpoint:
         saved = super().save_checkpoint(checkpoint)
-        self._append("checkpoints.jsonl", (_checkpoint_payload(checkpoint),))
+        self._append("checkpoints.jsonl", (_checkpoint_payload(checkpoint),), write_plan=write_plan)
         return saved
 
-    def _append(self, name: str, rows: object) -> None:
+    def records(self, name: str) -> tuple[JsonlRecord, ...]:
+        return read_records(self.root / name, supported_schema=ACQUISITION_JSONL_SCHEMA)
+
+    def strict_known_records(self, name: str, *, as_of: datetime) -> tuple[JsonlRecord, ...]:
+        return strict_known(self.records(name), as_of=as_of)
+
+    def _append(self, name: str, rows: object, *, write_plan: JsonlWritePlan | None = None) -> None:
         path = self.root / name
         with path.open("a", encoding="utf-8") as handle:
             for row in rows:  # type: ignore[union-attr]
+                if write_plan is not None:
+                    row = envelope(row, write_plan)
                 handle.write(json.dumps(row, sort_keys=True, default=_json_default))
                 handle.write("\n")
 
@@ -252,7 +271,10 @@ def _read_jsonl(path: Path) -> tuple[dict[str, Any], ...]:
     rows = []
     for line in path.read_text(encoding="utf-8").splitlines():
         if line.strip():
-            rows.append(json.loads(line))
+            payload = json.loads(line)
+            if isinstance(payload, dict):
+                payload.pop("_record_metadata", None)
+            rows.append(payload)
     return tuple(row for row in rows if isinstance(row, dict))
 
 

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
+
+import pytest
 
 from hunter.acquisition.models import EvidenceValidation, NormalizedEvidence
 from hunter.acquisition.repositories import InMemoryAcquisitionRepository
@@ -101,6 +104,54 @@ def test_graph_metrics_paths_and_persistence_are_deterministic(tmp_path) -> None
     assert ethereum.fan_in == 3
     assert ethereum.infrastructure_centrality > 0
     assert len(loaded.edges) == len(first.edges)
+
+
+def test_technology_graph_snapshots_preserve_history_retry_conflict_and_legacy(tmp_path) -> None:
+    acquisition = InMemoryAcquisitionRepository()
+    acquisition.save_normalized(
+        (
+            _evidence("aave-edge", "aave", raw_metrics={"description": "Ethereum"}),
+            _evidence("ethereum-node", "ethereum", raw_metrics={"description": "base node"}),
+        )
+    )
+    acquisition.save_validations((_validation("aave-edge"), _validation("ethereum-node")))
+    repository = TechnologyGraphRepository(tmp_path)
+    engine = TechnologyDependencyGraphEngine(acquisition_repository=acquisition, graph_repository=repository)
+
+    graph_a, run_a = engine.build(as_of=NOW)
+    persisted_a = repository.runs()[0]
+    assert persisted_a.snapshot_ref is not None
+    snapshot_a = tmp_path / persisted_a.snapshot_ref
+    bytes_a = {path.name: path.read_bytes() for path in snapshot_a.iterdir()}
+
+    graph_b, run_b = engine.build(as_of=NOW + timedelta(days=1))
+
+    assert run_b.run_id != run_a.run_id
+    assert repository.graph(run_a.run_id) == graph_a
+    assert repository.graph(run_b.run_id) == graph_b
+    assert {path.name: path.read_bytes() for path in snapshot_a.iterdir()} == bytes_a
+
+    repository.save(graph_a, run_a)
+    assert len(repository.runs()) == 2
+    with pytest.raises(ValueError, match="snapshot conflict"):
+        repository.save(replace(graph_a, nodes=()), run_a)
+
+    (tmp_path / "nodes.jsonl").write_text("{}\n", encoding="utf-8")
+    assert repository.graph(run_a.run_id) == graph_a
+    assert repository.snapshot_status()["replay_limitation"] is not None
+
+    legacy_root = tmp_path / "legacy"
+    legacy_root.mkdir()
+    for name in ("nodes.jsonl", "edges.jsonl", "metrics.jsonl"):
+        (legacy_root / name).write_bytes((snapshot_a / name).read_bytes())
+    legacy_repository = TechnologyGraphRepository(legacy_root)
+    legacy_graph = legacy_repository.graph()
+    assert (legacy_graph.nodes, legacy_graph.edges, legacy_graph.metrics) == (
+        graph_a.nodes,
+        graph_a.edges,
+        graph_a.metrics,
+    )
+    assert legacy_repository.snapshot_status()["replay_limitation"] is not None
 
 
 def _evidence(

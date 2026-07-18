@@ -3,6 +3,7 @@ from __future__ import annotations
 from sqlalchemy.orm import Session
 
 from hunter.persistence.sql.repositories import (
+    SQLAnalyticalRecordRepository,
     SQLAutomationJobRepository,
     SQLAutomationRunRepository,
     SQLCommitteeVoteRepository,
@@ -32,6 +33,9 @@ class RepositoryFactory:
 
     def pipeline_runs(self) -> SQLPipelineRunRepository:
         return SQLPipelineRunRepository(self._session)
+
+    def analytical_records(self) -> SQLAnalyticalRecordRepository:
+        return SQLAnalyticalRecordRepository(self._session)
 
     def operational_attempts(self) -> SQLOperationalAttemptRepository:
         return SQLOperationalAttemptRepository(self._session)

@@ -2,8 +2,15 @@ from __future__ import annotations
 
 from typing import Generic, Protocol, TypeVar, runtime_checkable
 
-from hunter.persistence.models import HistorySpec, QuerySpec, SnapshotSpec
+from hunter.persistence.models import (
+    AnalyticalReplaySpec,
+    AuthorizedAnalyticalWrite,
+    HistorySpec,
+    QuerySpec,
+    SnapshotSpec,
+)
 from hunter.persistence.records import (
+    AnalyticalRecord,
     AutomationJobRecord,
     AutomationRunRecord,
     CommitteeVoteRecord,
@@ -65,6 +72,20 @@ class Repository(Protocol, Generic[RecordT]):
 
 class PipelineRunRepository(Repository[PipelineRunRecord], Protocol):
     pass
+
+
+class AnalyticalRecordRepository(Protocol):
+    def persist(self, plan: AuthorizedAnalyticalWrite) -> AnalyticalRecord:
+        raise NotImplementedError
+
+    def load(self, identity: str) -> AnalyticalRecord | None:
+        raise NotImplementedError
+
+    def lineage(self, logical_identity: str) -> tuple[AnalyticalRecord, ...]:
+        raise NotImplementedError
+
+    def strict_known(self, spec: AnalyticalReplaySpec) -> AnalyticalRecord | None:
+        raise NotImplementedError
 
 
 class OperationalAttemptRepository(Repository[OperationalAttemptRecord], Protocol):

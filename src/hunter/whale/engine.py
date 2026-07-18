@@ -3,10 +3,11 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from hunter.execution.identity import identity
+from hunter.jsonl_contract import JsonlWritePlan
 from hunter.whale.configuration import WhaleAcquisitionConfig, load_whale_config
 from hunter.whale.models import WhaleEvidence, WhaleSnapshot
 from hunter.whale.providers import WhaleProviderRegistry
-from hunter.whale.repository import WhaleRepository
+from hunter.whale.repository import WHALE_JSONL_SCHEMA, WhaleRepository
 from hunter.whale.validation import validate_metric
 
 REQUIRED_WHALE_METRICS: tuple[str, ...] = (
@@ -70,10 +71,43 @@ class WhaleIntelligenceEvidenceEngine:
                     evidence.append(
                         validate_metric(metric, now=validation_time, stale_after_hours=self.config.stale_after_hours)
                     )
-        saved = self.repository.save_evidence(tuple(evidence))
-        self.repository.save_failures(tuple(failures))
+        saved = tuple(
+            item
+            for evidence_item in evidence
+            for item in self.repository.save_evidence(
+                (evidence_item,),
+                write_plan=JsonlWritePlan(
+                    WHALE_JSONL_SCHEMA,
+                    max(timestamp, evidence_item.metric.retrieval_time),
+                    evidence_item.metric.retrieval_time,
+                    None,
+                    evidence_item.metric.timestamp,
+                ),
+            )
+        )
+        for failure in failures:
+            self.repository.save_failures(
+                (failure,),
+                write_plan=JsonlWritePlan(
+                    WHALE_JSONL_SCHEMA,
+                    max(timestamp, failure.occurred_at),
+                    failure.occurred_at,
+                    None,
+                    failure.occurred_at,
+                ),
+            )
         snapshot = self.build_snapshot((*self.repository.evidence(), *saved), generated_at=timestamp)
-        return self.repository.save_snapshot(snapshot)
+        known_times = tuple(item.metric.retrieval_time for item in snapshot.evidence)
+        return self.repository.save_snapshot(
+            snapshot,
+            write_plan=JsonlWritePlan(
+                WHALE_JSONL_SCHEMA,
+                max((timestamp, *known_times)),
+                max(known_times) if known_times else None,
+                None if known_times else "empty snapshot has no evidence known-time boundary",
+                snapshot.generated_at,
+            ),
+        )
 
     def build_snapshot(
         self, evidence: tuple[WhaleEvidence, ...] | None = None, *, generated_at: datetime | None = None

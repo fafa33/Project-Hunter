@@ -29,6 +29,10 @@ Implemented repositories:
 
 Repositories accept and return immutable persistence records from `src/hunter/persistence/records.py`.
 
+`SQLAnalyticalRecordRepository` is an opt-in generic repository for the bitemporal `AnalyticalRecord` envelope. Unlike legacy generic repositories, it rejects direct `save` and logical deletion. It accepts only a service-completed `AuthorizedAnalyticalWrite`, preserves immutable correction lineage, and mechanically applies service-supplied `AnalyticalReplaySpec` boundaries. It does not decide timestamps, known-time eligibility, lifecycle intent, semantic authority, or correction policy.
+
+The envelope uses the existing `persistence_records` table and deterministic serializer. No migration or database consolidation is required, and no existing domain store is opted in automatically.
+
 ## ORM Boundary
 
 SQLAlchemy is internal to the persistence layer.

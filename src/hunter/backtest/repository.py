@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import json
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -15,28 +16,50 @@ class BacktestRepository:
         self.root.mkdir(parents=True, exist_ok=True)
 
     def save(self, run: BacktestRun) -> BacktestRun:
-        _write_jsonl(self.root / "runs.jsonl", (_run_payload(run),), append=True)
-        _write_jsonl(
-            self.root / "engine_metrics.jsonl", (_engine_payload(run.run_id, item) for item in run.engine_metrics)
+        snapshot_ref = _snapshot_ref(run.run_id)
+        snapshot = self.root / snapshot_ref
+        _write_immutable_jsonl(
+            snapshot / "engine_metrics.jsonl", (_engine_payload(run.run_id, item) for item in run.engine_metrics)
         )
-        _write_jsonl(
-            self.root / "project_metrics.jsonl",
+        _write_immutable_jsonl(
+            snapshot / "project_metrics.jsonl",
             (_project_payload(run.run_id, item) for item in run.project_metrics),
         )
-        _write_jsonl(self.root / "calibration_reports.jsonl", (_calibration_payload(run.calibration),), append=True)
-        return run
+        _write_immutable_json(
+            snapshot / "manifest.json",
+            {
+                "calibration_id": run.calibration.calibration_id,
+                "generated_at": run.generated_at.isoformat(),
+                "run_id": run.run_id,
+            },
+        )
+        persisted = replace(run, snapshot_ref=snapshot_ref, replay_limitation=None)
+        _append_unique(self.root / "runs.jsonl", _run_payload(persisted), identity="run_id")
+        _append_unique(
+            self.root / "calibration_reports.jsonl",
+            _calibration_payload(run.calibration),
+            identity="calibration_id",
+        )
+        return persisted
 
     def runs(self) -> tuple[BacktestRun, ...]:
-        engine_metrics = tuple(_engine_from_payload(item) for item in _read_jsonl(self.root / "engine_metrics.jsonl"))
-        project_metrics = tuple(
-            _project_from_payload(item) for item in _read_jsonl(self.root / "project_metrics.jsonl")
-        )
         calibrations = {item.calibration_id: item for item in self.calibrations()}
         rows = []
         for payload in _read_jsonl(self.root / "runs.jsonl"):
             calibration = calibrations.get(str(payload["calibration_id"]))
             if calibration is None:
                 continue
+            snapshot_ref = str(payload["snapshot_ref"]) if payload.get("snapshot_ref") else None
+            if snapshot_ref is None:
+                engine_path = self.root / "engine_metrics.jsonl"
+                project_path = self.root / "project_metrics.jsonl"
+                replay_limitation = "legacy run uses unversioned current metrics without trustworthy run linkage"
+            else:
+                engine_path = self.root / snapshot_ref / "engine_metrics.jsonl"
+                project_path = self.root / snapshot_ref / "project_metrics.jsonl"
+                replay_limitation = None
+            engine_metrics = tuple(_engine_from_payload(item) for item in _read_jsonl(engine_path))
+            project_metrics = tuple(_project_from_payload(item) for item in _read_jsonl(project_path))
             rows.append(
                 BacktestRun(
                     run_id=str(payload["run_id"]),
@@ -50,12 +73,26 @@ class BacktestRepository:
                     engine_metrics=engine_metrics,
                     project_metrics=project_metrics,
                     calibration=calibration,
+                    snapshot_ref=snapshot_ref,
+                    replay_limitation=replay_limitation,
                 )
             )
         return tuple(rows)
 
     def calibrations(self) -> tuple[CalibrationReport, ...]:
         return tuple(_calibration_from_payload(item) for item in _read_jsonl(self.root / "calibration_reports.jsonl"))
+
+    def run(self, run_id: str) -> BacktestRun:
+        run = next((item for item in self.runs() if item.run_id == run_id), None)
+        if run is None:
+            raise LookupError(f"Unknown backtest run: {run_id}")
+        return run
+
+    def current_metrics_status(self) -> dict[str, str | None]:
+        return {
+            "snapshot_ref": None,
+            "replay_limitation": "legacy current metrics have no trustworthy run linkage",
+        }
 
 
 def _run_payload(item: BacktestRun) -> dict[str, Any]:
@@ -69,6 +106,7 @@ def _run_payload(item: BacktestRun) -> dict[str, Any]:
         "historical_consistency": item.historical_consistency,
         "calibration_completeness": item.calibration_completeness,
         "calibration_id": item.calibration.calibration_id,
+        "snapshot_ref": item.snapshot_ref,
     }
 
 
@@ -142,9 +180,8 @@ def _calibration_from_payload(payload: dict[str, Any]) -> CalibrationReport:
     )
 
 
-def _write_jsonl(path: Path, rows: Any, *, append: bool = False) -> None:
-    mode = "a" if append else "w"
-    with path.open(mode, encoding="utf-8") as handle:
+def _append_jsonl(path: Path, rows: Any) -> None:
+    with path.open("a", encoding="utf-8") as handle:
         for row in rows:
             handle.write(json.dumps(row, sort_keys=True))
             handle.write("\n")
@@ -154,3 +191,39 @@ def _read_jsonl(path: Path) -> tuple[dict[str, Any], ...]:
     if not path.exists():
         return ()
     return tuple(json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip())
+
+
+def _snapshot_ref(identity: str) -> str:
+    digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()
+    return f"snapshots/{digest}"
+
+
+def _canonical_line(payload: dict[str, Any]) -> str:
+    return json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"
+
+
+def _write_immutable_jsonl(path: Path, rows: Any) -> None:
+    _write_immutable(path, "".join(_canonical_line(row) for row in rows))
+
+
+def _write_immutable_json(path: Path, payload: dict[str, Any]) -> None:
+    _write_immutable(path, _canonical_line(payload))
+
+
+def _write_immutable(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        if path.read_text(encoding="utf-8") != content:
+            raise ValueError(f"Immutable backtest snapshot conflict: {path}")
+        return
+    with path.open("x", encoding="utf-8") as handle:
+        handle.write(content)
+
+
+def _append_unique(path: Path, payload: dict[str, Any], *, identity: str) -> None:
+    matches = tuple(item for item in _read_jsonl(path) if item.get(identity) == payload.get(identity))
+    if matches:
+        if any(_canonical_line(item) != _canonical_line(payload) for item in matches):
+            raise ValueError(f"Backtest identity conflict: {payload[identity]}")
+        return
+    _append_jsonl(path, (payload,))

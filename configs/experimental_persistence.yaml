@@ -1,0 +1,3 @@
+experimental_persistence:
+  enabled: false
+  database_path: data/experimental/derived_reasoning.sqlite

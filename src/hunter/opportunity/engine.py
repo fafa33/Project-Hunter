@@ -216,6 +216,25 @@ class OpportunityEngine:
         )
 
 
+def opportunity_factor_trace(
+    snapshot: OpportunityMetricSnapshot,
+    config: OpportunityConfig | None = None,
+) -> tuple[OpportunityFactor, ...]:
+    """Return the exact pure factor contributions used by OpportunityEngine."""
+
+    active_config = config or OpportunityConfig()
+    values = snapshot.values.as_dict()
+    missing_value = max(
+        values.get("missing_evidence", 0.0),
+        len(snapshot.missing_evidence) / max(1, len(dict(active_config.factor_weights))),
+    )
+    validation_health = values.get("validation_health", 1.0)
+    return (
+        *_weighted_factors(values, active_config),
+        *_risk_factors(values, active_config, missing_value, validation_health),
+    )
+
+
 def _weighted_factors(values: dict[str, float], config: OpportunityConfig) -> tuple[OpportunityFactor, ...]:
     factors: list[OpportunityFactor] = []
     for name, weight in config.factor_weights:

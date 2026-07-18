@@ -53,7 +53,8 @@ class BacktestingCalibrationEngine:
         )
         engine_metrics = _engine_metrics(validation_run)
         project_metrics = _project_metrics(validation_run)
-        calibration = _calibration(timestamp, engine_metrics, self.backtest_repository.runs())
+        prior_backtests = tuple(run for run in self.backtest_repository.runs() if run.generated_at < timestamp)
+        calibration = _calibration(timestamp, engine_metrics, prior_backtests)
         coverage = EvidenceCoverageAnalyzer().analyze(validation_run).stats.coverage_percent
         run = BacktestRun(
             run_id=identity(

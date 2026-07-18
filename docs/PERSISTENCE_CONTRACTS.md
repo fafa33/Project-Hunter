@@ -73,6 +73,51 @@ Every record includes:
 
 Records preserve analytical identities. They do not generate replacement analytical IDs.
 
+## Opt-In Bitemporal Analytical Record
+
+`AnalyticalRecord` is the reusable envelope for a future domain whose accepted architecture explicitly opts into generic analytical persistence. The envelope does not authorize a semantic output. A domain service must first own the meaning, identity, timestamps, input selection, provenance, lifecycle decision, and complete `AuthorizedAnalyticalWrite` plan under ADR 0009 and ADR 0010.
+
+The contract contains:
+
+- `effective_at`: when the represented assessment or fact is effective;
+- `created_at`, exposed as `recorded_at`: the immutable time Hunter recorded it, supplied by the authorizing service;
+- `known_at`: the latest explicit known-by boundary represented by the record, or `null` with a required `known_time_limitation`;
+- record schema version, optional model version, and optional methodology/configuration fingerprint;
+- ordered source-record IDs paired one-to-one with immutable source versions;
+- evidence references, confidence, and explicit missing evidence;
+- a stable logical identity and a distinct immutable record identity;
+- optional `supersedes_id` and required correction reason;
+- the domain payload, canonically serialized with the envelope.
+
+Repositories do not create any of these values. Direct `save` on the analytical repository is rejected. The repository accepts only an `AuthorizedAnalyticalWrite` with an explicit `create` or `correct` operation. The plan is a service-facing persistence instruction, not proof that its semantic type has production authority.
+
+### Identity And Idempotency
+
+The existing canonical JSON serialization and canonical hash cover every envelope field and payload field. Repeating the same authorized identity and canonical payload is idempotent. Reusing that identity for different canonical content raises `PersistenceIdentityConflictError`.
+
+The generic `persistence_records` table already stores the serialized envelope, schema version, recorded time, effective time, and canonical hash. Therefore this opt-in contract needs no schema migration and does not change serialization or stored bytes for existing record types.
+
+### Corrections And Supersession
+
+Authoritative analytical rows are never updated in place. A correction is a new record with a new identity, the same logical identity, an explicit predecessor in `supersedes_id`, and a non-empty correction reason. The service authorizes that lifecycle transition; the repository only verifies referential consistency and appends the supplied successor. Both predecessor and successor remain loadable, and `lineage` returns the complete immutable history in recorded order.
+
+### Strict-Known Replay
+
+`AnalyticalReplaySpec` is a service-supplied mechanical query boundary containing logical identity, effective `as_of`, and `known_by` cutoff. Strict-known selection includes only records whose:
+
+- effective time is on or before `as_of`;
+- recorded time is on or before `known_by`;
+- explicit `known_at` is on or before `known_by`; and
+- known-time limitation is absent.
+
+Within that eligible set, an eligible correction supersedes its eligible predecessor. A correction recorded after the cutoff cannot alter the historical selection. A record with unknown legacy known time is preserved and queryable through ordinary history, but is never strict-known eligible. The contract never synthesizes missing legacy timestamps.
+
+### Domain Adoption
+
+A future accepted domain opts in by defining its semantic owner and authority in an ADR/Authority Registry update, constructing `AnalyticalRecord` and `AuthorizedAnalyticalWrite` in its service boundary, and using `RepositoryFactory.analytical_records()` inside an existing UnitOfWork. Rich domain-specific schemas remain valid and need not adopt this envelope.
+
+This foundation does not create Opportunity, ranking, Probability, Pattern Matching, Technology Necessity, Committee, prediction-evaluation, or Dashboard analytical authority, and it does not activate any runtime store.
+
 ## Versioning
 
 Schema-version metadata lives in `src/hunter/persistence/versioning.py`.

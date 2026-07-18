@@ -3,7 +3,9 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import UTC, datetime
 
+from hunter.persistence.models import AnalyticalReplaySpec, AuthorizedAnalyticalWrite
 from hunter.persistence.records import (
+    AnalyticalRecord,
     AutomationJobRecord,
     AutomationRunRecord,
     CommitteeVoteRecord,
@@ -25,6 +27,7 @@ from hunter.persistence.records import (
     SignalRecord,
 )
 from hunter.persistence.serialization import record_to_json
+from hunter.persistence.sql.exceptions import AnalyticalCorrectionConflictError, AnalyticalWriteAuthorizationError
 from hunter.persistence.sql.repositories.base import SQLRecordRepository
 from hunter.persistence.sql.repositories.base import SQLSnapshotRepository as BaseSQLSnapshotRepository
 
@@ -106,8 +109,7 @@ class SQLMarketValidationRunRepository(SQLRecordRepository[MarketValidationRunRe
     record_class = MarketValidationRunRecord
 
     def _canonical_hash_payload(self, record: MarketValidationRunRecord) -> str:
-        analytical = replace(record, created_at=record.effective_at)
-        return record_to_json(analytical)
+        return record_to_json(record)
 
 
 class SQLMarketValidationProjectResultRepository(SQLRecordRepository[MarketValidationProjectResultRecord]):
@@ -115,8 +117,7 @@ class SQLMarketValidationProjectResultRepository(SQLRecordRepository[MarketValid
     record_class = MarketValidationProjectResultRecord
 
     def _canonical_hash_payload(self, record: MarketValidationProjectResultRecord) -> str:
-        analytical = replace(record, created_at=record.effective_at)
-        return record_to_json(analytical)
+        return record_to_json(record)
 
 
 class SQLEvidenceRepository(SQLRecordRepository[EvidenceRecord]):
@@ -183,3 +184,52 @@ class SQLEngineManifestRepository(SQLRecordRepository[EngineManifestRecord]):
 
 class SQLSnapshotRepository(BaseSQLSnapshotRepository):
     pass
+
+
+class SQLAnalyticalRecordRepository(SQLRecordRepository[AnalyticalRecord]):
+    record_type = "analytical-record"
+    record_class = AnalyticalRecord
+
+    def save(self, record: AnalyticalRecord) -> AnalyticalRecord:
+        raise AnalyticalWriteAuthorizationError("analytical records require an AuthorizedAnalyticalWrite")
+
+    def delete(self, identity: str) -> None:
+        raise AnalyticalWriteAuthorizationError(
+            "analytical records are corrected by authorized supersession, not deletion"
+        )
+
+    def persist(self, plan: AuthorizedAnalyticalWrite) -> AnalyticalRecord:
+        if not isinstance(plan, AuthorizedAnalyticalWrite):
+            raise AnalyticalWriteAuthorizationError("analytical records require an AuthorizedAnalyticalWrite")
+        record = plan.record
+        if plan.operation == "correct":
+            predecessor = self.load(record.supersedes_id or "")
+            if predecessor is None:
+                raise AnalyticalCorrectionConflictError("correction predecessor does not exist")
+            if predecessor.logical_identity != record.logical_identity:
+                raise AnalyticalCorrectionConflictError("correction must preserve logical_identity")
+        return super().save(record)
+
+    def lineage(self, logical_identity: str) -> tuple[AnalyticalRecord, ...]:
+        records = [record for record in self._all_records() if record.logical_identity == logical_identity]
+        records.sort(key=lambda record: (record.created_at, record.id))
+        return tuple(records)
+
+    def strict_known(self, spec: AnalyticalReplaySpec) -> AnalyticalRecord | None:
+        if not isinstance(spec, AnalyticalReplaySpec):
+            raise TypeError("strict_known requires AnalyticalReplaySpec")
+        eligible = [
+            record
+            for record in self.lineage(spec.logical_identity)
+            if record.strict_known_eligible
+            and record.effective_at <= spec.effective_as_of
+            and record.recorded_at <= spec.known_by
+            and record.known_at is not None
+            and record.known_at <= spec.known_by
+        ]
+        if not eligible:
+            return None
+        superseded_ids = {record.supersedes_id for record in eligible if record.supersedes_id is not None}
+        current = [record for record in eligible if record.id not in superseded_ids]
+        current.sort(key=lambda record: (record.recorded_at, record.id), reverse=True)
+        return current[0] if current else None

@@ -13,9 +13,14 @@ from hunter.acquisition.models import (
     RawEvidence,
 )
 from hunter.acquisition.normalizer import CanonicalEvidenceNormalizer
-from hunter.acquisition.repositories import InMemoryAcquisitionRepository
+from hunter.acquisition.repositories import (
+    ACQUISITION_JSONL_SCHEMA,
+    FileAcquisitionRepository,
+    InMemoryAcquisitionRepository,
+)
 from hunter.acquisition.validator import EvidenceAcquisitionValidator
 from hunter.execution.identity import identity
+from hunter.jsonl_contract import JsonlWritePlan
 
 
 class AcquisitionPipeline:
@@ -41,9 +46,44 @@ class AcquisitionPipeline:
         raw = self._collect_with_cache(provider, request)
         normalized = self.normalizer.normalize(raw, request)
         validations = self.validator.validate(normalized, as_of=request.requested_at)
-        self.repository.save_raw(raw)
-        self.repository.save_normalized(normalized)
-        self.repository.save_validations(validations)
+        if isinstance(self.repository, FileAcquisitionRepository):
+            for item in raw:
+                self.repository.save_raw(
+                    (item,),
+                    write_plan=JsonlWritePlan(
+                        ACQUISITION_JSONL_SCHEMA,
+                        request.requested_at,
+                        item.retrieved_at,
+                        None,
+                        item.retrieved_at,
+                    ),
+                )
+            for item in normalized:
+                self.repository.save_normalized(
+                    (item,),
+                    write_plan=JsonlWritePlan(
+                        ACQUISITION_JSONL_SCHEMA,
+                        request.requested_at,
+                        item.normalized_at,
+                        None,
+                        item.normalized_at,
+                    ),
+                )
+            for item in validations:
+                self.repository.save_validations(
+                    (item,),
+                    write_plan=JsonlWritePlan(
+                        ACQUISITION_JSONL_SCHEMA,
+                        request.requested_at,
+                        item.validated_at,
+                        None,
+                        item.validated_at,
+                    ),
+                )
+        else:
+            self.repository.save_raw(raw)
+            self.repository.save_normalized(normalized)
+            self.repository.save_validations(validations)
         checkpoint = AcquisitionCheckpoint(
             provider=provider.metadata.name,
             domain=request.domain,
@@ -51,7 +91,17 @@ class AcquisitionPipeline:
             cursor=_checkpoint_cursor(raw, request),
             updated_at=request.requested_at,
         )
-        self.repository.save_checkpoint(checkpoint)
+        checkpoint_plan = JsonlWritePlan(
+            ACQUISITION_JSONL_SCHEMA,
+            request.requested_at,
+            checkpoint.updated_at,
+            None,
+            checkpoint.updated_at,
+        )
+        if isinstance(self.repository, FileAcquisitionRepository):
+            self.repository.save_checkpoint(checkpoint, write_plan=checkpoint_plan)
+        else:
+            self.repository.save_checkpoint(checkpoint)
         run = AcquisitionRun(
             run_id=identity(
                 "acquisition-run",
@@ -73,7 +123,19 @@ class AcquisitionPipeline:
             invalid_count=sum(1 for item in validations if item.status == "invalid"),
             checkpoint=checkpoint,
         )
-        self.repository.save_run(run)
+        if isinstance(self.repository, FileAcquisitionRepository):
+            self.repository.save_run(
+                run,
+                write_plan=JsonlWritePlan(
+                    ACQUISITION_JSONL_SCHEMA,
+                    run.finished_at,
+                    run.finished_at,
+                    None,
+                    run.finished_at,
+                ),
+            )
+        else:
+            self.repository.save_run(run)
         return run
 
     def _collect_with_cache(self, provider: EvidenceProvider, request: AcquisitionRequest) -> tuple[RawEvidence, ...]:

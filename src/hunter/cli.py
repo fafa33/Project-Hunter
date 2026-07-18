@@ -5,7 +5,7 @@ import json
 from collections import Counter
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from hunter.acquisition import (
     AcquisitionConfig,
@@ -64,6 +64,7 @@ from hunter.competitive import (
 )
 from hunter.dashboard import DashboardDataProvider, HtmlDashboardRenderer, load_dashboard_config
 from hunter.dashboard.exceptions import DashboardPersistenceError
+from hunter.dashboard_api import build_dashboard_api, render_dashboard_api
 from hunter.data_ops import (
     DATA_OPS_JOB_IDS,
     data_ops_failures,
@@ -150,12 +151,14 @@ from hunter.onchain import (
     load_onchain_config,
 )
 from hunter.onchain.automation import worker_startup_command
+from hunter.operational_status import build_status, exit_code, render_json, render_text
 from hunter.opportunity.ranking import rank_opportunities
 from hunter.patterns.ranking import rank_pattern_assessments
 from hunter.persistence.records import EvidenceRecord, SnapshotRecord
 from hunter.persistence.sql import SessionFactory, UnitOfWork, create_schema, create_sqlite_engine
 from hunter.probability.ranking import rank_probability_assessments
 from hunter.scenario import ScenarioRepository, ScenarioSimulationEngine, compare_scenarios
+from hunter.store_readiness import CLI_STORE_NAMES, StoreName, bootstrap_store, inspect_store
 from hunter.sufficiency import (
     DataSufficiencyAutomationManager,
     DataSufficiencyReporter,
@@ -208,6 +211,18 @@ def main(argv: list[str] | None = None) -> int:
     run_once.add_argument("job")
     cancel = automation_sub.add_parser("cancel")
     cancel.add_argument("run_id")
+    status = sub.add_parser("status")
+    status.add_argument("--json", action="store_true")
+    analytical_store = sub.add_parser("analytical-store")
+    analytical_store_sub = analytical_store.add_subparsers(dest="analytical_store_command")
+    analytical_store_status = analytical_store_sub.add_parser("status")
+    analytical_store_status.add_argument("store", choices=CLI_STORE_NAMES)
+    analytical_store_status.add_argument("--path")
+    analytical_store_bootstrap = analytical_store_sub.add_parser("bootstrap")
+    analytical_store_bootstrap.add_argument("store", choices=CLI_STORE_NAMES)
+    analytical_store_bootstrap.add_argument("--path", required=True)
+    dashboard_api = sub.add_parser("dashboard-api")
+    dashboard_api.add_argument("--pretty", action="store_true")
     data_ops = sub.add_parser("data-ops")
     data_ops.add_argument("--automation-config", default="configs/automation.yaml")
     data_ops_sub = data_ops.add_subparsers(dest="data_ops_command")
@@ -696,6 +711,20 @@ def main(argv: list[str] | None = None) -> int:
         else:
             rank_opportunities((), sort=args.sort)
         return 0
+    if args.command == "status":
+        status_payload = build_status(config_path=Path(args.config))
+        print(render_json(status_payload) if args.json else render_text(status_payload))
+        return exit_code(status_payload)
+    if args.command == "analytical-store":
+        return _analytical_store(args)
+    if args.command == "dashboard-api":
+        print(
+            render_dashboard_api(
+                build_dashboard_api(config_path=Path(args.config)),
+                pretty=args.pretty,
+            )
+        )
+        return 0
     if args.command == "dashboard":
         return _dashboard(args)
     if args.command == "data-ops":
@@ -806,6 +835,20 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     automation.print_help()
     return 1
+
+
+def _analytical_store(args: object) -> int:
+    store = cast(StoreName, str(args.store).replace("-", "_"))
+    command = getattr(args, "analytical_store_command", None)
+    if command == "status":
+        result = inspect_store(store, getattr(args, "path", None))
+    elif command == "bootstrap":
+        result = bootstrap_store(store, args.path)
+    else:
+        print("analytical-store command required")
+        return 1
+    print(json.dumps(result.as_dict(), indent=2, sort_keys=True))
+    return 0 if result.state in {"schema_only", "populated"} else 2
 
 
 def _evidence_intelligence(args: object) -> int:

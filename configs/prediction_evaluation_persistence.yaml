@@ -1,0 +1,3 @@
+prediction_evaluation_persistence:
+  enabled: false
+  database_path: data/prediction_evaluation/canonical_prediction_evaluation.sqlite

@@ -283,6 +283,18 @@ class MarketValidationRunRecord(BasePersistenceRecord):
     runner_up_project_id: str | None
     no_qualified_candidate: bool
     project_count: int
+    status: str = "complete"
+    known_at: datetime | None = None
+    known_time_limitation: str | None = "known time was not supplied"
+    model_version: str = "market-validation-v1"
+    configuration_fingerprint: str = "legacy-unspecified"
+    methodology_fingerprint: str = "legacy-unspecified"
+    source_record_ids: tuple[str, ...] = ()
+    source_versions: tuple[str, ...] = ()
+    report_artifact_hashes: tuple[str, ...] = ()
+    supersedes_id: str | None = None
+    correction_reason: str | None = None
+    authorized_payload: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -290,6 +302,7 @@ class MarketValidationRunRecord(BasePersistenceRecord):
         object.__setattr__(self, "project_result_ids", _identity_tuple("project_result_ids", self.project_result_ids))
         if self.project_count < 0:
             raise PersistenceValidationError("project_count must be non-negative")
+        _validate_market_validation_authority_fields(self)
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -328,6 +341,17 @@ class MarketValidationProjectResultRecord(BasePersistenceRecord):
     strongest_negative_drivers: tuple[str, ...]
     reasons_for_ranking: tuple[str, ...]
     validation_warnings: tuple[str, ...]
+    known_at: datetime | None = None
+    known_time_limitation: str | None = "known time was not supplied"
+    model_version: str = "market-validation-v1"
+    configuration_fingerprint: str = "legacy-unspecified"
+    methodology_fingerprint: str = "legacy-unspecified"
+    source_record_ids: tuple[str, ...] = ()
+    source_versions: tuple[str, ...] = ()
+    evidence_references: tuple[str, ...] = ()
+    supersedes_id: str | None = None
+    correction_reason: str | None = None
+    authorized_payload: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -364,6 +388,7 @@ class MarketValidationProjectResultRecord(BasePersistenceRecord):
             "validation_warnings",
         ):
             object.__setattr__(self, name, tuple(sorted(str(item) for item in getattr(self, name))))
+        _validate_market_validation_authority_fields(self)
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -715,6 +740,73 @@ class EngineManifestRecord(BasePersistenceRecord):
         object.__setattr__(self, "engines", engines)
 
 
+@dataclass(frozen=True, kw_only=True)
+class AnalyticalRecord(BasePersistenceRecord):
+    """Opt-in envelope for service-authorized analytical state."""
+
+    record_type: ClassVar[str] = "analytical-record"
+
+    logical_identity: str
+    semantic_type: str
+    known_at: datetime | None
+    known_time_limitation: str | None
+    model_version: str | None
+    methodology_fingerprint: str | None
+    source_record_ids: tuple[str, ...]
+    source_versions: tuple[str, ...]
+    evidence_references: tuple[str, ...]
+    confidence: float | None
+    missing_evidence: tuple[str, ...]
+    supersedes_id: str | None
+    correction_reason: str | None
+    payload: dict[str, Any]
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        _require_text("logical_identity", self.logical_identity)
+        _require_text("semantic_type", self.semantic_type)
+        if self.known_at is not None:
+            _require_aware_datetime("known_at", self.known_at)
+            object.__setattr__(self, "known_at", self.known_at.astimezone(UTC))
+            if self.known_at > self.created_at:
+                raise PersistenceValidationError("known_at cannot be later than recorded_at")
+        if self.known_at is None and not self.known_time_limitation:
+            raise PersistenceValidationError("known_time_limitation is required when known_at is unknown")
+        if self.known_at is not None and self.known_time_limitation is not None:
+            raise PersistenceValidationError("known_time_limitation must be absent when known_at is known")
+        if self.model_version is not None:
+            _require_text("model_version", self.model_version)
+        if self.methodology_fingerprint is not None:
+            _require_text("methodology_fingerprint", self.methodology_fingerprint)
+        if len(self.source_record_ids) != len(self.source_versions):
+            raise PersistenceValidationError("source_record_ids and source_versions must have equal length")
+        for name in ("source_record_ids", "source_versions", "evidence_references", "missing_evidence"):
+            values = tuple(str(value) for value in getattr(self, name))
+            if any(not value.strip() for value in values):
+                raise PersistenceValidationError(f"{name} cannot contain blank values")
+            object.__setattr__(self, name, values)
+        if self.confidence is not None:
+            _range("confidence", self.confidence)
+        if self.supersedes_id is not None:
+            object.__setattr__(self, "supersedes_id", preserve_identity(self.supersedes_id))
+            if self.supersedes_id == self.id:
+                raise PersistenceValidationError("an analytical record cannot supersede itself")
+            if not self.correction_reason:
+                raise PersistenceValidationError("correction_reason is required when supersedes_id is set")
+        elif self.correction_reason is not None:
+            raise PersistenceValidationError("correction_reason requires supersedes_id")
+        normalize(self.payload)
+        object.__setattr__(self, "payload", dict(self.payload))
+
+    @property
+    def recorded_at(self) -> datetime:
+        return self.created_at
+
+    @property
+    def strict_known_eligible(self) -> bool:
+        return self.known_at is not None and self.known_time_limitation is None
+
+
 PersistenceRecord = (
     PipelineRunRecord
     | OperationalAttemptRecord
@@ -736,6 +828,7 @@ PersistenceRecord = (
     | SnapshotRecord
     | ConfigurationRecord
     | EngineManifestRecord
+    | AnalyticalRecord
 )
 
 RECORD_TYPES: dict[str, type[PersistenceRecord]] = {
@@ -761,6 +854,7 @@ RECORD_TYPES: dict[str, type[PersistenceRecord]] = {
         SnapshotRecord,
         ConfigurationRecord,
         EngineManifestRecord,
+        AnalyticalRecord,
     )
 }
 
@@ -794,6 +888,40 @@ def _identity_tuple(name: str, values: tuple[str, ...]) -> tuple[str, ...]:
     if not identities:
         raise PersistenceValidationError(f"{name} must include at least one identity")
     return identities
+
+
+def _validate_market_validation_authority_fields(record: Any) -> None:
+    for name in ("status",) if hasattr(record, "status") else ():
+        _require_text(name, getattr(record, name))
+    for name in ("model_version", "configuration_fingerprint", "methodology_fingerprint"):
+        _require_text(name, getattr(record, name))
+    known_at = record.known_at
+    if known_at is not None:
+        _require_aware_datetime("known_at", known_at)
+        object.__setattr__(record, "known_at", known_at.astimezone(UTC))
+        if known_at > record.created_at:
+            raise PersistenceValidationError("known_at cannot be later than recorded_at")
+        if record.known_time_limitation is not None:
+            raise PersistenceValidationError("known_time_limitation must be absent when known_at is known")
+    elif not record.known_time_limitation:
+        raise PersistenceValidationError("known_time_limitation is required when known_at is unknown")
+    source_ids = tuple(preserve_identity(value) for value in record.source_record_ids)
+    source_versions = tuple(str(value) for value in record.source_versions)
+    if len(source_ids) != len(source_versions):
+        raise PersistenceValidationError("source_record_ids and source_versions must have equal length")
+    object.__setattr__(record, "source_record_ids", source_ids)
+    object.__setattr__(record, "source_versions", source_versions)
+    for name in ("report_artifact_hashes", "evidence_references"):
+        if hasattr(record, name):
+            object.__setattr__(record, name, tuple(sorted(str(value) for value in getattr(record, name))))
+    if record.supersedes_id is not None:
+        object.__setattr__(record, "supersedes_id", preserve_identity(record.supersedes_id))
+        if not record.correction_reason:
+            raise PersistenceValidationError("correction_reason is required when supersedes_id is set")
+    elif record.correction_reason is not None:
+        raise PersistenceValidationError("correction_reason requires supersedes_id")
+    normalize(record.authorized_payload)
+    object.__setattr__(record, "authorized_payload", _freeze_payload(record.authorized_payload))
 
 
 def _freeze_payload(value: Any) -> Any:

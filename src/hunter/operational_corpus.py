@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from hunter.corpus_authority import CORPUS_OBSERVATION_SCHEMA_VERSION
 from hunter.execution.canonicalization import normalize
 from hunter.execution.identity import identity
 from hunter.execution.run import PipelineRun
@@ -145,6 +146,7 @@ def _payload(
         },
     )
     normalized["recorded_at"] = _dt(datetime.now(tz=UTC))
+    normalized.update(_authority_boundary("pipeline-execution", analytical=True))
     return normalized
 
 
@@ -303,6 +305,7 @@ def _prediction(payload: dict[str, object]) -> dict[str, object]:
         "benchmark_values": payload.get("benchmark_values", []),
         "artifact_ids": payload.get("artifact_ids", []),
         "status": "open",
+        **_authority_boundary("prediction", analytical=True),
     }
 
 
@@ -350,6 +353,7 @@ def _outcome_records(
                 "realized_outcome": outcome,
                 "benchmark_outcomes": payload.get("benchmark_outcomes", []),
                 "benchmark_values": payload.get("benchmark_values", []),
+                **_authority_boundary("outcome", analytical=True),
             }
         )
     return tuple(records)
@@ -383,6 +387,7 @@ def _validation_samples(
             "confidence_values": payload.get("confidence_values", []),
             "realized_outcome": outcome.get("realized_outcome"),
             "benchmark_outcomes": outcome.get("benchmark_outcomes", []),
+            **_authority_boundary("validation-sample", analytical=True),
         }
         for outcome in outcomes
     )
@@ -482,6 +487,7 @@ def _prediction_closure(
         "closed_at": payload.get("finished_at") or _dt(datetime.now(tz=UTC)),
         "outcome_ids": tuple(outcome["outcome_id"] for outcome in outcomes),
         "benchmark_outcomes": payload.get("benchmark_outcomes", []),
+        **_authority_boundary("prediction-closure", analytical=False),
     }
 
 
@@ -543,6 +549,7 @@ def _opportunity_events(payload: dict[str, object]) -> tuple[dict[str, object], 
             "evidence_ids": _ids(payload.get("evidence")),
             "intelligence_ids": _ids(payload.get("intelligence")),
             "artifact_ids": payload.get("artifact_ids", []),
+            **_authority_boundary("opportunity-observation", analytical=True),
         }
         event_payloads.append(event)
     return tuple(event_payloads)
@@ -658,6 +665,17 @@ def _dt(value: datetime | None) -> str | None:
     if value is None:
         return None
     return value.astimezone(UTC).isoformat()
+
+
+def _authority_boundary(category: str, *, analytical: bool) -> dict[str, object]:
+    return {
+        "corpus_schema_version": CORPUS_OBSERVATION_SCHEMA_VERSION,
+        "observation_category": category,
+        "declared_authority_classification": "unverified" if analytical else "operational-only",
+        "authority_references": [],
+        "payload_status": "unverified" if analytical else "authority_not_required",
+        "ownership_statement": "downstream operational observation; not analytical authority",
+    }
 
 
 def _optional_datetime(value: object) -> str | None:

@@ -67,6 +67,8 @@ class BacktestRun:
     engine_metrics: tuple[EngineBacktestMetric, ...]
     project_metrics: tuple[ProjectBacktestMetric, ...]
     calibration: CalibrationReport
+    snapshot_ref: str | None = None
+    replay_limitation: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "generated_at", self.generated_at.astimezone(UTC))

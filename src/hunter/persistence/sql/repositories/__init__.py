@@ -1,5 +1,6 @@
 from hunter.persistence.sql.repositories.base import SQLRecordRepository
 from hunter.persistence.sql.repositories.records import (
+    SQLAnalyticalRecordRepository,
     SQLAutomationJobRepository,
     SQLAutomationRunRepository,
     SQLCommitteeVoteRepository,
@@ -23,6 +24,7 @@ from hunter.persistence.sql.repositories.records import (
 )
 
 __all__ = [
+    "SQLAnalyticalRecordRepository",
     "SQLConfigurationRepository",
     "SQLAutomationJobRepository",
     "SQLAutomationRunRepository",

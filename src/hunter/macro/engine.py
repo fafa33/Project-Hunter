@@ -3,10 +3,11 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from hunter.execution.identity import identity
+from hunter.jsonl_contract import JsonlWritePlan
 from hunter.macro.configuration import MacroAcquisitionConfig, load_macro_config
 from hunter.macro.models import MacroEvidence, MacroSnapshot
 from hunter.macro.providers import MacroProviderRegistry
-from hunter.macro.repository import MacroRepository
+from hunter.macro.repository import MACRO_JSONL_SCHEMA, MacroRepository
 from hunter.macro.validation import validate_metric
 
 REQUIRED_MACRO_METRICS: tuple[str, ...] = (
@@ -59,10 +60,42 @@ class MacroIntelligenceEvidenceEngine:
                     evidence.append(
                         validate_metric(metric, now=timestamp, stale_after_hours=self.config.stale_after_hours)
                     )
-        saved = self.repository.save_evidence(tuple(evidence))
-        self.repository.save_failures(tuple(failures))
+        saved = tuple(
+            item
+            for evidence_item in evidence
+            for item in self.repository.save_evidence(
+                (evidence_item,),
+                write_plan=JsonlWritePlan(
+                    MACRO_JSONL_SCHEMA,
+                    timestamp,
+                    None,
+                    "provider supplies source/event time but no explicit Hunter known-time provenance",
+                    evidence_item.metric.timestamp,
+                ),
+            )
+        )
+        for failure in failures:
+            self.repository.save_failures(
+                (failure,),
+                write_plan=JsonlWritePlan(
+                    MACRO_JSONL_SCHEMA,
+                    timestamp,
+                    None,
+                    "provider failure has no explicit known-time provenance",
+                    failure.occurred_at,
+                ),
+            )
         snapshot = self.build_snapshot((*self.repository.evidence(), *saved), generated_at=timestamp)
-        return self.repository.save_snapshot(snapshot)
+        return self.repository.save_snapshot(
+            snapshot,
+            write_plan=JsonlWritePlan(
+                MACRO_JSONL_SCHEMA,
+                timestamp,
+                None,
+                "derived snapshot inputs do not yet expose a complete known-time boundary",
+                snapshot.generated_at,
+            ),
+        )
 
     def build_snapshot(
         self, evidence: tuple[MacroEvidence, ...] | None = None, *, generated_at: datetime | None = None

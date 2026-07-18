@@ -90,3 +90,5 @@ class EconomicGraphRun:
     rejected_relationships: int
     graph_coverage: float
     economic_coverage: float
+    snapshot_ref: str | None = None
+    replay_limitation: str | None = None

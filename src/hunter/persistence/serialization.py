@@ -20,6 +20,7 @@ DATETIME_FIELDS = {
     "generated_at",
     "scheduled_for",
     "source_timestamp",
+    "known_at",
 }
 
 TUPLE_FIELDS = {
@@ -73,6 +74,8 @@ TUPLE_FIELDS = {
     "strongest_negative_drivers",
     "reasons_for_ranking",
     "validation_warnings",
+    "source_record_ids",
+    "source_versions",
 }
 
 

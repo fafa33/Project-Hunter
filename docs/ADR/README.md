@@ -46,6 +46,10 @@ Accepted ADRs remain binding until another ADR supersedes or deprecates them. Ru
 | [0013](0013-governance-intelligence-engine.md) | Governance Intelligence Engine | Accepted | Deterministic governance findings over persisted governance evidence |
 | [0014](0014-security-intelligence-engine.md) | Security Intelligence Engine | Accepted | Deterministic security findings over persisted security evidence |
 | [0015](0015-onchain-intelligence-engine.md) | On-chain Intelligence Engine | Accepted | Deterministic on-chain findings over persisted on-chain evidence |
+| [0016](0016-runtime-analytical-authority.md) | Runtime Analytical Authority | Accepted | Canonical runtime, semantic owners, and experimental-output promotion rules |
+| [0017](0017-experimental-opportunity-pipeline.md) | Experimental Opportunity Pipeline | Accepted | Controlled research/replay authorization without production promotion |
+| [0018](0018-experimental-opportunity-factor-sourcing.md) | Experimental Opportunity Factor Sourcing | Accepted | Factor-by-factor persisted-source eligibility and anti-double-counting gate |
+| [0019](0019-prediction-evaluation-authority.md) | Prediction Evaluation Authority | Accepted | Canonical evaluation lifecycle, correctness, accuracy, and calibration authority |
 
 ## Creating A New ADR
 

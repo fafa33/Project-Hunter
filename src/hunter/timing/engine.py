@@ -10,6 +10,7 @@ from hunter.economic.repository import EconomicGraphRepository
 from hunter.execution.identity import identity
 from hunter.graph.repository import TechnologyGraphRepository
 from hunter.historical import HistoricalValidationRepository
+from hunter.jsonl_contract import JsonlWritePlan
 from hunter.macro import MacroRepository
 from hunter.market_validation import MarketValidationRunner, load_market_validation_config
 from hunter.market_validation.acquisition_sources import acquisition_engine_sources
@@ -17,7 +18,7 @@ from hunter.market_validation.models import EngineValidationSource, ProjectValid
 from hunter.market_validation.runner import EvidenceBackedProjectExecutor
 from hunter.scenario import ScenarioRepository
 from hunter.timing.models import TimingAssessment, TimingDependencySnapshot
-from hunter.timing.repository import TimingRepository
+from hunter.timing.repository import TIMING_JSONL_SCHEMA, TimingRepository
 from hunter.whale import WhaleRepository
 
 REQUIRED_TIMING_ENGINES: tuple[str, ...] = (
@@ -56,7 +57,17 @@ class OpportunityTimingEvidenceEngine:
             executor=EvidenceBackedProjectExecutor(timestamp, sources),
         )
         assessments = tuple(self.assess_project(result, as_of=timestamp) for result in runner.run().project_results)
-        self.repository.save(assessments, dependencies=dependencies)
+        self.repository.save(
+            assessments,
+            dependencies=dependencies,
+            write_plan=JsonlWritePlan(
+                TIMING_JSONL_SCHEMA,
+                timestamp,
+                None,
+                "timing dependencies do not yet expose a complete known-time boundary",
+                timestamp,
+            ),
+        )
         return assessments
 
     def assess_project(self, result: ProjectValidationResult, *, as_of: datetime | None = None) -> TimingAssessment:

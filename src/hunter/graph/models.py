@@ -88,3 +88,5 @@ class TechnologyGraphRun:
     rejected_dependencies: int
     graph_coverage: float
     technology_coverage: float
+    snapshot_ref: str | None = None
+    replay_limitation: str | None = None

@@ -1,0 +1,3 @@
+market_validation_persistence:
+  enabled: false
+  database_path: data/market_validation/runtime/canonical_market_validation.sqlite
