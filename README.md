@@ -1,82 +1,107 @@
 # Project Hunter
 
-Project Hunter is a deterministic crypto research platform for discovering evidence-backed asymmetric opportunities before they become obvious to the market.
+Project Hunter is a deterministic, evidence-first cryptocurrency intelligence platform designed to discover, validate, prioritize, and continuously monitor asymmetric investment opportunities through auditable, explainable, and replayable analytical workflows.
 
-Current stable version: `v1.0.0`.
+Project Hunter is governed by a specification-first architecture. Every implementation, runtime behavior, engineering decision, and release must comply with the project's canonical governance hierarchy.
 
-Project Hunter V1 is frozen. Future maintenance belongs on `release/v1`; future development continues on `main`.
+Current stable release: `v1.0.0`
 
-## Architecture
+Project Hunter V1 is frozen. Maintenance continues on `release/v1`, while all future development is performed on `main`.
 
-Project Hunter V1 is organized as a layered analytical platform:
+---
 
-```mermaid
-flowchart TD
-    A[Discovery] --> B[Evidence]
-    B --> C[Validation]
-    C --> D[Intelligence Engines]
-    D --> E[Intelligence Fusion]
-    E --> F[Opportunity Timing]
-    F --> G[Probability]
-    G --> H[Pattern Matching]
-    H --> I[Technology Necessity and Capital Rotation]
-    I --> J[Investment Committee]
-    J --> K[Ranking]
-    J --> L[Reports]
-    K --> M[Dashboard Foundation]
-    L --> M
-```
+# Governance
 
-## Pipeline
+Project Hunter follows a single canonical governance hierarchy.
 
-The V1 pipeline validates the complete analytical flow:
+Every document, implementation, runtime component, ADR, sprint, and engineering decision derives its authority from this hierarchy.
 
-Discovery -> Evidence -> Validation -> Scoring -> Valuation -> Mispricing -> Asymmetry -> Whales -> Macro -> Future Demand -> Opportunity Timing -> Probability -> Pattern Matching -> Technology Necessity -> Investment Committee -> Reports -> Ranking -> Dashboard.
+1. `docs/PROJECT_CONSTITUTION.md`
+2. `docs/PROJECT_PRINCIPLES.md`
+3. `docs/CANONICAL_ARCHITECTURE_MAP.md`
+4. `docs/HUNTER_ARCHITECTURE_MANIFEST.md`
+5. `docs/HUNTER_ARCHITECTURE_SPEC.md`
+6. `docs/CANONICAL_RUNTIME_ARCHITECTURE.md`
+7. Accepted ADRs (`docs/ADR/`)
+8. `docs/VISION.md`
+9. `docs/HUNTER_ROADMAP.md`
+10. `docs/DEVELOPMENT_GOVERNANCE.md`
+11. `docs/HUNTER_IMPLEMENTATION_CONTRACT.md`
+12. `docs/AI_REVIEW_PROTOCOL.md`
+13. Sprint Specifications (`docs/SPRINTS/`)
+14. `docs/CODEX_IMPLEMENTATION_GUIDE.md`
 
-All analytical records are deterministic, explainable, and persisted through repository contracts.
+Nothing lower in the hierarchy may contradict anything above it.
 
-## Major Analytical Engines
+---
 
-- Macro Intelligence
-- Whale Intelligence
+# Major Analytical Engines
+
+Project Hunter currently contains the following analytical engines:
+
+- Discovery
+- Evidence
+- Validation
 - Developer Intelligence
+- Tokenomics Intelligence
+- Governance Intelligence
+- Security Intelligence
+- On-chain Intelligence
 - Protocol Intelligence
+- Whale Intelligence
+- Macro Intelligence
 - News Intelligence
 - Narrative Intelligence
 - Social Intelligence
-- On-chain Intelligence
 - Intelligence Fusion
+- Valuation
+- Comparative Valuation
+- Mispricing
+- Asymmetry
 - Opportunity Timing
 - Probability
 - Pattern Matching
-- Technology Necessity and Capital Rotation
+- Technology Necessity
+- Capital Rotation
 - Investment Committee
 
-## Platform Components
+---
 
-- Plugin Architecture
+# Platform Components
+
+Core platform components include:
+
 - Pipeline Orchestrator
-- Deterministic Execution Identity
-- Persistence Contracts
-- SQL Repository Layer
-- Operational Attempts and Run Lifecycle
-- Automation and Scheduler
-- Dashboard Foundation
+- Plugin Architecture
+- Deterministic Execution
+- Canonical Runtime
+- SQL Persistence Layer
+- Repository Contracts
+- Evidence Layer
+- Intelligence Layer
+- Automation & Scheduler
+- Dashboard
+- Reporting
 - Ranking
-- Reports
+- Historical Replay
 - Backtesting
-- Alerts
+- Validation
+- Operational Monitoring
 
-## Installation
+---
+
+# Installation
 
 ```bash
 python3 -m venv .venv
 .venv/bin/python -m pip install -e ".[dev]"
 ```
 
-## Quick Start
+---
 
-Run quality checks:
+# Quick Start
+
+Run the complete quality gates:
 
 ```bash
 .venv/bin/ruff check .
@@ -85,72 +110,149 @@ Run quality checks:
 .venv/bin/pytest
 ```
 
-Use the CLI:
+Example commands:
 
 ```bash
-hunter analyze bitcoin
 hunter discover
+hunter analyze bitcoin
 hunter validate ethereum
 hunter whales bitcoin
-hunter rank --sort committee
 hunter committee champion
+hunter rank --sort committee
 hunter dashboard build --sqlite-path hunter.sqlite
 hunter automation status
 ```
 
-## Repository Structure
+---
 
-- `src/hunter/automation/` - scheduler, jobs, lifecycle, locking, and runner.
-- `src/hunter/committee/` - Investment Committee Engine and reports.
-- `src/hunter/dashboard/` - Dashboard Foundation presentation layer.
-- `src/hunter/execution/` - deterministic identity, clock, and run models.
-- `src/hunter/intelligence/` - standardized intelligence contracts and engines.
-- `src/hunter/necessity/` - Technology Necessity and Capital Rotation.
-- `src/hunter/opportunity/` - Opportunity Timing Engine.
-- `src/hunter/patterns/` - Pattern Matching Engine.
-- `src/hunter/persistence/` - persistence contracts, integration, and SQL repositories.
-- `src/hunter/probability/` - Probability Engine.
-- `configs/` - V1 configuration files.
-- `docs/` - architecture, component, and release documentation.
-- `tests/` - deterministic regression and end-to-end validation tests.
+# Repository Structure
 
-## Configuration
+```
+docs/               Governance, architecture and documentation
+configs/            Runtime configuration
+src/hunter/         Production source code
+tests/              Automated verification
+alembic/            Database migrations
+```
 
-Configuration is YAML-based and lives under `configs/`. V1 includes configuration for automation, dashboard, intelligence engines, fusion, opportunity timing, probability, pattern matching, technology necessity, capital rotation, persistence, plugins, and the Investment Committee.
+Major packages:
 
-## Documentation Index
+- `automation`
+- `committee`
+- `dashboard`
+- `discovery`
+- `evidence`
+- `execution`
+- `historical`
+- `intelligence`
+- `macro`
+- `necessity`
+- `onchain`
+- `opportunity`
+- `patterns`
+- `persistence`
+- `probability`
+- `providers`
+- `ranking`
+- `reports`
+- `security`
+- `sufficiency`
+- `tokenomics`
+- `validation`
+
+---
+
+# Documentation
+
+## Governance
 
 - `docs/PROJECT_CONSTITUTION.md`
-- `docs/PIPELINE_ORCHESTRATOR.md`
-- `docs/PIPELINE_PERSISTENCE_INTEGRATION.md`
-- `docs/DETERMINISTIC_EXECUTION_IDENTITY.md`
-- `docs/INTELLIGENCE_LAYER.md`
-- `docs/INTELLIGENCE_ENGINE_FRAMEWORK.md`
-- `docs/INTELLIGENCE_FUSION_LAYER.md`
-- `docs/OPPORTUNITY_TIMING_ENGINE.md`
-- `docs/INVESTMENT_COMMITTEE_ENGINE.md`
-- `docs/AUTOMATION_AND_SCHEDULER.md`
-- `docs/DASHBOARD.md`
-- `docs/releases/V1.0.0.md`
+- `docs/PROJECT_PRINCIPLES.md`
+- `docs/CANONICAL_ARCHITECTURE_MAP.md`
+- `docs/DEVELOPMENT_GOVERNANCE.md`
+- `docs/HUNTER_IMPLEMENTATION_CONTRACT.md`
 
-## Release Information
+## Architecture
 
-- Stable release: `v1.0.0`
-- Release branch: `release/v1`
-- V1 status: officially released and frozen
-- Verification: Ruff, Black, mypy, pytest, and end-to-end runtime validation pass
+- `docs/HUNTER_ARCHITECTURE_MANIFEST.md`
+- `docs/HUNTER_ARCHITECTURE_SPEC.md`
+- `docs/CANONICAL_RUNTIME_ARCHITECTURE.md`
 
-## Known Limitations
+## Architecture Decisions
 
-- V1 is deterministic analysis, not investment advice.
-- V1 does not execute trades, allocate portfolios, emit price targets, or call external AI systems.
-- Dashboard Foundation is presentation-only; Dashboard Phase 2 is deferred.
-- Distributed scheduling, external notification integrations, and REST API are deferred.
+- `docs/ADR/README.md`
 
-## Future Roadmap
+## Sprint Specifications
 
-Initial V2 roadmap:
+- `docs/SPRINTS/README.md`
 
-- Technology Dependency Engine
-- Economic Dependency Graph
-- Scenario Simulation Engine
+## Component Documentation
+
+Documentation for individual subsystems is located throughout the `docs/` directory.
+
+---
+
+# Release Information
+
+- Stable Release: `v1.0.0`
+- Stable Branch: `release/v1`
+- Active Development Branch: `main`
+
+---
+
+# Verification
+
+Project Hunter requires deterministic verification before every release.
+
+Required quality gates include:
+
+- Ruff
+- Black
+- mypy
+- pytest
+- Replay validation
+- Runtime validation
+- Architecture compliance
+- Governance compliance
+
+---
+
+# Project Principles
+
+Project Hunter is built around the following engineering principles:
+
+- Evidence before conclusions
+- Deterministic execution
+- Explainable analysis
+- Immutable evidence provenance
+- Replay correctness
+- Point-in-time truth
+- Explicit unavailable states
+- Idempotent persistence
+- Architecture before implementation
+- Governance before engineering
+
+---
+
+# Scope
+
+Project Hunter provides analytical decision support.
+
+Project Hunter does **not**:
+
+- Execute trades
+- Manage portfolios
+- Guarantee investment outcomes
+- Produce fabricated evidence
+- Hide missing data
+- Override governance rules
+
+---
+
+# Roadmap
+
+The canonical roadmap is maintained in:
+
+`docs/HUNTER_ROADMAP.md`
+
+Future work is planned and approved exclusively through the governance process defined by the project's canonical document hierarchy.
