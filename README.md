@@ -2,7 +2,7 @@
 
 Project Hunter is a deterministic, evidence-first cryptocurrency intelligence platform designed to discover, validate, prioritize, and continuously monitor asymmetric investment opportunities through auditable, explainable, and replayable analytical workflows.
 
-Project Hunter is governed by a specification-first architecture. Every implementation, runtime behavior, engineering decision, and release must comply with the project's canonical governance hierarchy.
+Project Hunter is governed by a specification-first governance model. Every implementation, runtime behavior, engineering decision, and release must comply with the project's canonical governance hierarchy.
 
 Current stable release: `v1.0.0`
 
@@ -12,26 +12,21 @@ Project Hunter V1 is frozen. Maintenance continues on `release/v1`, while all fu
 
 # Governance
 
-Project Hunter follows a single canonical governance hierarchy.
+Project Hunter follows a single canonical governance model.
 
-Every document, implementation, runtime component, ADR, sprint, and engineering decision derives its authority from this hierarchy.
+The canonical authority hierarchy for the project is defined exclusively in:
 
-1. `docs/PROJECT_CONSTITUTION.md`
-2. `docs/PROJECT_PRINCIPLES.md`
-3. `docs/CANONICAL_ARCHITECTURE_MAP.md`
-4. `docs/HUNTER_ARCHITECTURE_MANIFEST.md`
-5. `docs/HUNTER_ARCHITECTURE_SPEC.md`
-6. `docs/CANONICAL_RUNTIME_ARCHITECTURE.md`
-7. Accepted ADRs (`docs/ADR/`)
-8. `docs/VISION.md`
-9. `docs/HUNTER_ROADMAP.md`
-10. `docs/DEVELOPMENT_GOVERNANCE.md`
-11. `docs/HUNTER_IMPLEMENTATION_CONTRACT.md`
-12. `docs/AI_REVIEW_PROTOCOL.md`
-13. Sprint Specifications (`docs/SPRINTS/`)
-14. `docs/CODEX_IMPLEMENTATION_GUIDE.md`
+`docs/SPRINTS/README.md`
 
-Nothing lower in the hierarchy may contradict anything above it.
+Every implementation, runtime behavior, engineering decision, architecture document, release, review, and automated engineering agent must comply with that hierarchy.
+
+No other document may define, duplicate, reinterpret, or compete with the canonical authority hierarchy.
+
+Each architectural fact has exactly one owner document. Other documents may summarize or reference an architectural fact, but they must not redefine, reinterpret, or duplicate it.
+
+When an architectural fact changes, its owner document must be updated first before any dependent document is updated.
+
+If a conflict exists between documents, the conflict must be resolved according to the canonical governance hierarchy before implementation continues.
 
 ---
 
@@ -168,23 +163,28 @@ Major packages:
 
 - `docs/PROJECT_CONSTITUTION.md`
 - `docs/PROJECT_PRINCIPLES.md`
-- `docs/CANONICAL_ARCHITECTURE_MAP.md`
 - `docs/DEVELOPMENT_GOVERNANCE.md`
 - `docs/HUNTER_IMPLEMENTATION_CONTRACT.md`
 
 ## Architecture
 
+- `docs/CANONICAL_ARCHITECTURE_MAP.md`
 - `docs/HUNTER_ARCHITECTURE_MANIFEST.md`
 - `docs/HUNTER_ARCHITECTURE_SPEC.md`
 - `docs/CANONICAL_RUNTIME_ARCHITECTURE.md`
 
+## Vision & Roadmap
+
+- `docs/VISION.md`
+- `docs/HUNTER_ROADMAP.md`
+
 ## Architecture Decisions
 
-- `docs/ADR/README.md`
+- `docs/ADR/README.md` (accepted architecture decisions)
 
 ## Sprint Specifications
 
-- `docs/SPRINTS/README.md`
+- `docs/SPRINTS/README.md` (canonical sprint governance)
 
 ## Component Documentation
 
