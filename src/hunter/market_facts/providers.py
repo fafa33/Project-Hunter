@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import urllib.error
 import urllib.request
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from hashlib import sha256
@@ -13,6 +13,7 @@ from hunter.execution.canonicalization import canonicalize
 from hunter.market_facts.models import (
     MarketFactAcquisitionResult,
     MarketFactRequest,
+    MarketFactStatus,
     NormalizedMarketFact,
 )
 from hunter.market_facts.registry import MarketFactSourceRegistry
@@ -38,7 +39,7 @@ class CoinGeckoObservedMarketFactProvider:
         transport: JsonTransport | None = None,
         *,
         timeout_seconds: float = 10.0,
-        clock: callable | None = None,
+        clock: Callable[[], datetime] | None = None,
     ) -> None:
         self.registry = registry or MarketFactSourceRegistry.from_file()
         self.transport = transport or UrllibJsonTransport()
@@ -62,14 +63,13 @@ class CoinGeckoObservedMarketFactProvider:
         try:
             payload = self.transport.get_json(endpoint, self.timeout_seconds)
         except urllib.error.HTTPError as exc:
-            status = "rate_limited" if exc.code == 429 else "unavailable"
+            status: MarketFactStatus = "rate_limited" if exc.code == 429 else "unavailable"
             return self._unavailable(request, acquired_at, status, f"http_{exc.code}", source.fingerprint, endpoint)
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             return self._unavailable(request, acquired_at, "unavailable", type(exc).__name__, source.fingerprint, endpoint)
         if not isinstance(payload, Mapping):
             return self._unavailable(request, acquired_at, "malformed", "payload_not_mapping", source.fingerprint, endpoint)
-        raw_json = canonicalize(payload)
-        raw_hash = f"sha256:{sha256(raw_json.encode('utf-8')).hexdigest()}"
+        raw_hash = f"sha256:{sha256(canonicalize(payload)).hexdigest()}"
         try:
             facts = self._parse(payload, request, source.units, acquired_at)
         except (KeyError, TypeError, ValueError, InvalidOperation) as exc:
@@ -162,7 +162,7 @@ class CoinGeckoObservedMarketFactProvider:
         self,
         request: MarketFactRequest,
         acquired_at: datetime,
-        status: str,
+        status: MarketFactStatus,
         reason: str,
         fingerprint: str,
         endpoint: str = "https://api.coingecko.com/",
@@ -174,7 +174,7 @@ class CoinGeckoObservedMarketFactProvider:
             parser_version="unresolved" if fingerprint in {"unregistered", ""} else "coingecko-coin-v1",
             registry_fingerprint=fingerprint or "unregistered",
             request=request,
-            status=status,  # type: ignore[arg-type]
+            status=status,
             acquired_at=acquired_at,
             known_at=acquired_at,
             raw_payload_hash="sha256:" + ("0" * 64),
