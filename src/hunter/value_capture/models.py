@@ -19,7 +19,6 @@ SupplyBasisType = Literal[
     "burned_supply",
     "protocol_owned_supply",
 ]
-
 ValueCaptureRuleType = Literal[
     "burn",
     "buyback",
@@ -35,7 +34,6 @@ ValueCaptureRuleType = Literal[
     "unavailable",
     "unsupported",
 ]
-
 EvidenceType = Literal[
     "official_disclosure",
     "onchain_observation",
@@ -43,16 +41,7 @@ EvidenceType = Literal[
     "audited_financial_disclosure",
     "market_fact_reference",
 ]
-
-QualityState = Literal[
-    "accepted",
-    "stale",
-    "partial",
-    "ambiguous",
-    "unavailable",
-    "unsupported",
-]
-
+QualityState = Literal["accepted", "stale", "partial", "ambiguous", "unavailable", "unsupported"]
 ConflictState = Literal["none", "open", "contested", "resolved"]
 
 SUPPLY_BASIS_TYPES = frozenset(SupplyBasisType.__args__)  # type: ignore[attr-defined]
@@ -73,14 +62,7 @@ class EconomicClaimIdentity:
     contract_address: str = ""
 
     def __post_init__(self) -> None:
-        _required_text(
-            self,
-            "entity_id",
-            "economic_claim_id",
-            "asset_id",
-            "representation_id",
-            "token_id",
-        )
+        _required_text(self, "entity_id", "economic_claim_id", "asset_id", "representation_id", "token_id")
         if bool(self.chain) != bool(self.contract_address):
             raise ValueError("chain and contract_address must either both be set or both be empty")
 
@@ -109,6 +91,7 @@ class FundamentalEvidenceRecord:
     supersedes_record_id: str | None = None
     correction_reason: str = ""
     content_hash: str = ""
+    acquisition_id: str = ""
 
     def __post_init__(self) -> None:
         _required_text(
@@ -123,13 +106,13 @@ class FundamentalEvidenceRecord:
             "parser_version",
             "extracted_claim",
             "raw_content_hash",
+            "acquisition_id",
         )
         _member("evidence_type", self.evidence_type, EVIDENCE_TYPES)
         _member("quality_state", self.quality_state, QUALITY_STATES)
         _member("conflict_state", self.conflict_state, CONFLICT_STATES)
-        object.__setattr__(self, "effective_at", _utc("effective_at", self.effective_at))
-        object.__setattr__(self, "recorded_at", _utc("recorded_at", self.recorded_at))
-        object.__setattr__(self, "known_at", _utc("known_at", self.known_at))
+        _normalize_chronology(self)
+        _validate_correction(self)
         if self.amount is not None:
             _decimal(self.amount)
             if self.unit is None or not self.unit.strip():
@@ -159,6 +142,7 @@ class SupplyBasisSnapshot:
     supersedes_record_id: str | None = None
     correction_reason: str = ""
     content_hash: str = ""
+    acquisition_id: str = ""
 
     def __post_init__(self) -> None:
         _required_text(
@@ -173,18 +157,17 @@ class SupplyBasisSnapshot:
             "source_id",
             "parser_version",
             "raw_payload_hash",
+            "acquisition_id",
         )
         _member("supply_basis_type", self.supply_basis_type, SUPPLY_BASIS_TYPES)
         _member("quality_state", self.quality_state, QUALITY_STATES)
         _member("conflict_state", self.conflict_state, CONFLICT_STATES)
-        number = _decimal(self.quantity)
-        if number < 0:
+        if _decimal(self.quantity) < 0:
             raise ValueError("supply quantity must not be negative")
         if not self.evidence_record_ids:
             raise ValueError("evidence_record_ids must not be empty")
-        object.__setattr__(self, "effective_at", _utc("effective_at", self.effective_at))
-        object.__setattr__(self, "recorded_at", _utc("recorded_at", self.recorded_at))
-        object.__setattr__(self, "known_at", _utc("known_at", self.known_at))
+        _normalize_chronology(self)
+        _validate_correction(self)
 
 
 @dataclass(frozen=True)
@@ -215,6 +198,7 @@ class ValueCaptureRuleSnapshot:
     supersedes_record_id: str | None = None
     correction_reason: str = ""
     content_hash: str = ""
+    acquisition_id: str = ""
 
     def __post_init__(self) -> None:
         _required_text(
@@ -232,19 +216,17 @@ class ValueCaptureRuleSnapshot:
             "source_id",
             "parser_version",
             "raw_payload_hash",
+            "acquisition_id",
         )
         _member("rule_type", self.rule_type, VALUE_CAPTURE_RULE_TYPES)
         _member("quality_state", self.quality_state, QUALITY_STATES)
         _member("conflict_state", self.conflict_state, CONFLICT_STATES)
-        if self.rate_or_proportion is not None:
-            rate = _decimal(self.rate_or_proportion)
-            if rate < 0:
-                raise ValueError("rate_or_proportion must not be negative")
+        if self.rate_or_proportion is not None and _decimal(self.rate_or_proportion) < 0:
+            raise ValueError("rate_or_proportion must not be negative")
         if not self.evidence_record_ids:
             raise ValueError("evidence_record_ids must not be empty")
-        object.__setattr__(self, "effective_at", _utc("effective_at", self.effective_at))
-        object.__setattr__(self, "recorded_at", _utc("recorded_at", self.recorded_at))
-        object.__setattr__(self, "known_at", _utc("known_at", self.known_at))
+        _normalize_chronology(self)
+        _validate_correction(self)
 
 
 def _required_text(instance: object, *fields: str) -> None:
@@ -259,17 +241,34 @@ def _member(name: str, value: str, allowed: frozenset[str]) -> None:
         raise ValueError(f"unsupported {name}: {value}")
 
 
-def _decimal(value: str) -> Decimal:
-    try:
-        number = Decimal(value)
-    except (InvalidOperation, ValueError) as exc:
-        raise ValueError(f"invalid decimal value: {value}") from exc
-    if not number.is_finite():
-        raise ValueError("decimal value must be finite")
-    return number
+def _normalize_chronology(instance: object) -> None:
+    effective = _utc("effective_at", getattr(instance, "effective_at"))
+    recorded = _utc("recorded_at", getattr(instance, "recorded_at"))
+    known = _utc("known_at", getattr(instance, "known_at"))
+    if effective > recorded:
+        raise ValueError("effective_at must be <= recorded_at")
+    if recorded > known:
+        raise ValueError("recorded_at must be <= known_at")
+    object.__setattr__(instance, "effective_at", effective)
+    object.__setattr__(instance, "recorded_at", recorded)
+    object.__setattr__(instance, "known_at", known)
+
+
+def _validate_correction(instance: object) -> None:
+    predecessor = getattr(instance, "supersedes_record_id")
+    reason = getattr(instance, "correction_reason")
+    if bool(predecessor) != bool(reason.strip()):
+        raise ValueError("supersedes_record_id and correction_reason must be provided together")
 
 
 def _utc(name: str, value: datetime) -> datetime:
     if value.tzinfo is None or value.utcoffset() is None:
         raise ValueError(f"{name} must be timezone-aware")
     return value.astimezone(UTC)
+
+
+def _decimal(value: str) -> Decimal:
+    try:
+        return Decimal(value)
+    except (InvalidOperation, ValueError) as exc:
+        raise ValueError(f"invalid decimal value: {value}") from exc
