@@ -6,59 +6,89 @@ Project Hunter is governed by a specification-first governance model. Every impl
 
 Current stable release: `v1.0.0`
 
-Project Hunter V1 is frozen. Maintenance continues on `release/v1`, while all future development is performed on `main`.
+Project Hunter V1 is frozen. Maintenance continues on `release/v1`, while future development is performed on `main`.
 
 ---
 
 # Governance
 
-Project Hunter follows a single canonical governance model.
+Project Hunter follows one canonical governance model.
 
-The canonical authority hierarchy for the project is defined exclusively in:
+The canonical document-authority hierarchy is owned and defined by:
 
-`docs/SPRINTS/README.md`
+`docs/CANONICAL_ARCHITECTURE_MAP.md`
 
 Every implementation, runtime behavior, engineering decision, architecture document, release, review, and automated engineering agent must comply with that hierarchy.
 
-No other document may define, duplicate, reinterpret, or compete with the canonical authority hierarchy.
+Each architectural fact has one canonical owner. Supporting documents may summarize or reference that fact, but must not create a competing definition.
 
-Each architectural fact has exactly one owner document. Other documents may summarize or reference an architectural fact, but they must not redefine, reinterpret, or duplicate it.
+When an architectural fact changes, its owner document must be updated first or in the same governed change as dependent documents.
 
-When an architectural fact changes, its owner document must be updated first before any dependent document is updated.
-
-If a conflict exists between documents, the conflict must be resolved according to the canonical governance hierarchy before implementation continues.
+Conflicts must be resolved according to the canonical hierarchy before implementation continues.
 
 ---
 
-# Major Analytical Engines
+# Current Authority Classification
 
-Project Hunter currently contains the following analytical engines:
+Implementation existence does not by itself establish production analytical authority. Current classifications are governed by accepted ADRs, especially ADR 0007 and ADR 0016–0021.
 
-- Discovery
-- Evidence
-- Validation
-- Developer Intelligence
-- Tokenomics Intelligence
-- Governance Intelligence
-- Security Intelligence
-- On-chain Intelligence
-- Protocol Intelligence
-- Whale Intelligence
-- Macro Intelligence
-- News Intelligence
-- Narrative Intelligence
-- Social Intelligence
-- Intelligence Fusion
-- Valuation
-- Comparative Valuation
-- Mispricing
-- Asymmetry
-- Opportunity Timing
-- Probability
-- Pattern Matching
-- Technology Necessity
-- Capital Rotation
-- Investment Committee
+## Canonical production analytical authority
+
+- Evidence-backed Market Validation runtime.
+- `EvidenceBackedProjectExecutor` as the production deep-analysis composition and scoring boundary.
+- Market Validation `hunter_score` and project ranking.
+- Canonical production Timing through `hunter.timing.OpportunityTimingEvidenceEngine` as consumed by Market Validation.
+- Canonical committee fields contained in Market Validation project results.
+- Explainability and reports emitted by the canonical Market Validation path.
+
+## Production descriptive intelligence
+
+The following service-owned engines may produce evidence-backed descriptive findings under their accepted ADR contracts. They do not independently own scoring, ranking, timing, recommendation, valuation, or cross-engine composition:
+
+- Developer Intelligence.
+- Tokenomics Intelligence.
+- Governance Intelligence.
+- Security Intelligence.
+- On-chain Intelligence.
+
+Other evidence and domain packages may exist in the repository, but their production authority depends on an explicit accepted contract rather than package presence.
+
+## Experimental or research capabilities
+
+The following remain experimental or research infrastructure unless a later accepted ADR explicitly promotes a defined output:
+
+- `PipelineOrchestrator` and plugin analytical orchestration.
+- Intelligence Fusion.
+- Opportunity scoring and Opportunity ranking.
+- Fusion-backed Opportunity Timing.
+- Probability.
+- Pattern Matching.
+- Technology Necessity.
+- Standalone Investment Committee.
+- General ranking helpers.
+
+Experimental outputs must remain clearly classified and cannot substitute for canonical production outputs.
+
+## Accepted target or currently unavailable capabilities
+
+- Canonical Valuation.
+- Comparative Valuation.
+- Mispricing.
+- Asymmetry.
+- Portfolio Intelligence.
+
+ADR 0021 defines future valuation-family evidence and authority contracts, but all four Market Validation valuation-family scalar inputs remain explicitly unavailable until the required records, methodologies, calibration, normalization, and service-owned persistence paths are implemented and accepted.
+
+## Operational and presentation components
+
+The following are supporting or downstream components, not analytical authorities:
+
+- Automation and Scheduler.
+- Operational Corpus.
+- Persistence and repository infrastructure.
+- Dashboard API.
+- Desktop console and Hunter Terminal.
+- Operational monitoring and health projections.
 
 ---
 
@@ -66,22 +96,16 @@ Project Hunter currently contains the following analytical engines:
 
 Core platform components include:
 
-- Pipeline Orchestrator
-- Plugin Architecture
-- Deterministic Execution
-- Canonical Runtime
-- SQL Persistence Layer
-- Repository Contracts
-- Evidence Layer
-- Intelligence Layer
-- Automation & Scheduler
-- Dashboard
-- Reporting
-- Ranking
-- Historical Replay
-- Backtesting
-- Validation
-- Operational Monitoring
+- Deterministic execution.
+- Canonical runtime.
+- SQL persistence and repository contracts.
+- Evidence acquisition and evidence intelligence.
+- Plugin architecture.
+- Automation and Scheduler.
+- Dashboard API and presentation surfaces.
+- Reporting.
+- Historical replay and backtesting.
+- Validation and operational monitoring.
 
 ---
 
@@ -118,19 +142,21 @@ hunter dashboard build --sqlite-path hunter.sqlite
 hunter automation status
 ```
 
+Command availability does not change the authority classification of the output it invokes.
+
 ---
 
 # Repository Structure
 
-```
-docs/               Governance, architecture and documentation
+```text
+docs/               Governance, architecture, and documentation
 configs/            Runtime configuration
-src/hunter/         Production source code
+src/hunter/         Production and explicitly classified source packages
 tests/              Automated verification
 alembic/            Database migrations
 ```
 
-Major packages:
+Major packages include:
 
 - `automation`
 - `committee`
@@ -155,40 +181,41 @@ Major packages:
 - `tokenomics`
 - `validation`
 
+A package name indicates repository capability, not production authority.
+
 ---
 
 # Documentation
 
-## Governance
-
-- `docs/PROJECT_CONSTITUTION.md`
-- `docs/PROJECT_PRINCIPLES.md`
-- `docs/DEVELOPMENT_GOVERNANCE.md`
-- `docs/HUNTER_IMPLEMENTATION_CONTRACT.md`
-
-## Architecture
+## Canonical hierarchy and architecture
 
 - `docs/CANONICAL_ARCHITECTURE_MAP.md`
+- `docs/PROJECT_CONSTITUTION.md`
+- `docs/PROJECT_PRINCIPLES.md`
 - `docs/HUNTER_ARCHITECTURE_MANIFEST.md`
 - `docs/HUNTER_ARCHITECTURE_SPEC.md`
 - `docs/CANONICAL_RUNTIME_ARCHITECTURE.md`
 
-## Vision & Roadmap
+## Governance and implementation
+
+- `docs/DEVELOPMENT_GOVERNANCE.md`
+- `docs/HUNTER_IMPLEMENTATION_CONTRACT.md`
+- `docs/AI_REVIEW_PROTOCOL.md`
+
+## Vision and roadmap
 
 - `docs/VISION.md`
 - `docs/HUNTER_ROADMAP.md`
 
-## Architecture Decisions
+## Architecture decisions
 
-- `docs/ADR/README.md` (accepted architecture decisions)
+- `docs/ADR/README.md`
 
-## Sprint Specifications
+## Sprint specifications
 
-- `docs/SPRINTS/README.md` (canonical sprint governance)
+- `docs/SPRINTS/README.md`
 
-## Component Documentation
-
-Documentation for individual subsystems is located throughout the `docs/` directory.
+Component-specific documentation is maintained throughout `docs/`.
 
 ---
 
@@ -206,31 +233,31 @@ Project Hunter requires deterministic verification before every release.
 
 Required quality gates include:
 
-- Ruff
-- Black
-- mypy
-- pytest
-- Replay validation
-- Runtime validation
-- Architecture compliance
-- Governance compliance
+- Ruff.
+- Black.
+- mypy.
+- pytest.
+- Replay validation.
+- Runtime validation.
+- Architecture compliance.
+- Governance compliance.
 
 ---
 
 # Project Principles
 
-Project Hunter is built around the following engineering principles:
+Project Hunter is built around:
 
-- Evidence before conclusions
-- Deterministic execution
-- Explainable analysis
-- Immutable evidence provenance
-- Replay correctness
-- Point-in-time truth
-- Explicit unavailable states
-- Idempotent persistence
-- Architecture before implementation
-- Governance before engineering
+- Evidence before conclusions.
+- Deterministic execution.
+- Explainable analysis.
+- Immutable evidence provenance.
+- Replay correctness.
+- Point-in-time truth.
+- Explicit unavailable states.
+- Idempotent persistence.
+- Architecture before implementation.
+- Governance before engineering.
 
 ---
 
@@ -238,14 +265,15 @@ Project Hunter is built around the following engineering principles:
 
 Project Hunter provides analytical decision support.
 
-Project Hunter does **not**:
+Project Hunter does not:
 
-- Execute trades
-- Manage portfolios
-- Guarantee investment outcomes
-- Produce fabricated evidence
-- Hide missing data
-- Override governance rules
+- execute trades;
+- guarantee investment outcomes;
+- fabricate evidence;
+- hide missing data;
+- convert missing information into optimistic defaults;
+- allow operational or presentation components to override analytical authority;
+- override governance rules.
 
 ---
 
@@ -255,4 +283,4 @@ The canonical roadmap is maintained in:
 
 `docs/HUNTER_ROADMAP.md`
 
-Future work is planned and approved exclusively through the governance process defined by the project's canonical document hierarchy.
+Future work is planned and approved exclusively through the governance process defined by the canonical document hierarchy.
