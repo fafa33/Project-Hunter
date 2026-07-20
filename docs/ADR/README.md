@@ -1,57 +1,107 @@
 # Architecture Decision Records
 
-This directory contains Project Hunter's Architecture Decision Records (ADRs).
+This directory contains the canonical Architecture Decision Records (ADRs) for Project Hunter.
 
-ADRs are subordinate to `docs/PROJECT_CONSTITUTION.md` and `docs/PROJECT_PRINCIPLES.md`. They record durable architecture decisions made under those documents and are governed by `docs/DEVELOPMENT_GOVERNANCE.md`.
+ADRs record durable architectural decisions that govern the long-term evolution of Hunter.
 
-The canonical authority hierarchy is defined once in `docs/SPRINTS/README.md`. Accepted ADRs remain binding architecture decision records within that hierarchy until another ADR supersedes or deprecates them.
+ADRs are subordinate to the Project Constitution and Project Principles and derive their authority from the Canonical Architecture Map.
 
-## Required Structure
+---
 
-Every ADR must include these sections:
+# Governance Authority
 
-- `Status`
-- `Context`
-- `Decision`
-- `Consequences`
-- `Alternatives Considered`
+The canonical governance hierarchy is defined in:
 
-An ADR may include additional sections, such as `Reasoning`, when that improves auditability.
+`docs/CANONICAL_ARCHITECTURE_MAP.md`
 
-## Status Values
+The hierarchy is summarized as:
 
-- `Proposed` - under discussion and not binding.
-- `Accepted` - binding architecture guidance.
-- `Superseded` - replaced by a later ADR.
-- `Deprecated` - still historically relevant but no longer preferred for new work.
+1. PROJECT_CONSTITUTION
+2. PROJECT_PRINCIPLES
+3. CANONICAL_ARCHITECTURE_MAP
+4. ARCHITECTURE_MANIFEST
+5. ARCHITECTURE_SPEC
+6. CANONICAL_RUNTIME_ARCHITECTURE
+7. Accepted ADRs
+8. VISION
+9. ROADMAP
+10. DEVELOPMENT_GOVERNANCE
+11. IMPLEMENTATION_CONTRACT
+12. AI_REVIEW_PROTOCOL
+13. Sprint Specifications
+14. CODEX_IMPLEMENTATION_GUIDE
 
-Accepted ADRs remain binding until another ADR supersedes or deprecates them. Runtime behavior must not be changed merely by editing an ADR; implementation, tests, migration notes, and related architecture documents must be updated through the normal governance lifecycle.
+Accepted ADRs remain binding until superseded or deprecated by another accepted ADR.
 
-## Index
+---
 
-| ADR | Title | Status | Primary Scope |
-| --- | --- | --- | --- |
-| [0001](0001-discovery-first.md) | Discovery-First Architecture | Accepted | Market-wide discovery before deep analysis |
-| [0002](0002-evidence-first.md) | Evidence-First Outputs | Accepted | Provenance, traceability, missing evidence, replay safety |
-| [0003](0003-candidate-registry.md) | Dynamic Candidate Registry | Accepted | SQL-backed market registry and lifecycle control |
-| [0004](0004-trust-layer.md) | Trust Layer Before Intelligence | Accepted | Identity confidence, source reliability, conflicts, unavailable states |
-| [0005](0005-entity-model.md) | Entity Model Separation | Accepted | Economic entities, representations, contracts, listings |
-| [0006](0006-knowledge-graph.md) | Future Knowledge Graph | Accepted | Relationship modeling after identity and evidence foundations |
-| [0007](0007-canonical-runtime-option-a.md) | Canonical Runtime Option A | Accepted | v2.1.x production runtime classification |
-| [0008](0008-plugin-sdk-architecture.md) | Plugin SDK Architecture | Accepted | Versioned extension boundary for plugins and external integrations |
-| [0009](0009-repository-purification.md) | Repository Purification | Accepted | Provider, service, repository, and persistence authority boundaries |
-| [0010](0010-intelligence-engine-foundation.md) | Intelligence Engine Foundation | Accepted | Service-owned intelligence engine execution over persisted evidence |
-| [0011](0011-developer-intelligence-engine.md) | Developer Intelligence Engine | Accepted | Deterministic developer findings over persisted developer evidence |
-| [0012](0012-tokenomics-intelligence-engine.md) | Tokenomics Intelligence Engine | Accepted | Deterministic tokenomics findings over persisted tokenomics evidence |
-| [0013](0013-governance-intelligence-engine.md) | Governance Intelligence Engine | Accepted | Deterministic governance findings over persisted governance evidence |
-| [0014](0014-security-intelligence-engine.md) | Security Intelligence Engine | Accepted | Deterministic security findings over persisted security evidence |
-| [0015](0015-onchain-intelligence-engine.md) | On-chain Intelligence Engine | Accepted | Deterministic on-chain findings over persisted on-chain evidence |
+# ADR Purpose
 
-## Creating A New ADR
+Architecture Decision Records exist to:
 
-1. Copy `TEMPLATE.md`.
+- Record permanent architectural decisions.
+- Preserve architectural intent.
+- Explain why important decisions were made.
+- Prevent architectural drift.
+- Support future auditing.
+- Provide stable guidance independent of implementation.
+
+ADRs define architecture.
+
+They do not define sprint scope, runtime execution, implementation details, or operational procedures.
+
+---
+
+# Required Structure
+
+Every ADR must contain:
+
+- Status
+- Context
+- Decision
+- Consequences
+- Alternatives Considered
+
+Optional sections may be added when they improve clarity or auditability.
+
+---
+
+# Status Values
+
+- Proposed
+- Accepted
+- Superseded
+- Deprecated
+
+Only Accepted ADRs are architecturally binding.
+
+Implementation changes require the normal governance lifecycle, including implementation, testing, migration (when applicable), and documentation updates.
+
+---
+
+# ADR Index
+
+(جدول فعلی را نگه دار.)
+
+فقط ADRهای جدید را نیز اضافه کن:
+
+- ADR0016
+- ADR0017
+- ADR0018
+- ADR0019
+- ADR0020
+- ADR0021
+
+با عنوان واقعی هر ADR.
+
+---
+
+# Creating a New ADR
+
+1. Copy TEMPLATE.md.
 2. Assign the next zero-padded number.
-3. Use a lowercase hyphenated filename: `NNNN-short-title.md`.
-4. State the decision in terms of Project Hunter architecture, not implementation convenience.
-5. Cross-reference the ADR from any architecture document whose guidance depends on the decision.
-6. Update this index in the same change.
+3. Use a lowercase hyphenated filename.
+4. Describe an architectural decision—not an implementation detail.
+5. Cross-reference dependent architecture documents.
+6. Update this index.
+7. Verify consistency with the Canonical Architecture Map before acceptance.
