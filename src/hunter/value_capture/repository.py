@@ -5,7 +5,7 @@ import sqlite3
 from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from hunter.value_capture.models import (
     EconomicClaimIdentity,
@@ -13,16 +13,35 @@ from hunter.value_capture.models import (
     SupplyBasisSnapshot,
     ValueCaptureRuleSnapshot,
 )
+from hunter.value_capture.providers import AcquisitionReceipt
 
 DEFAULT_VALUE_CAPTURE_DB = Path("data/value_capture/runtime/value_capture.sqlite")
-VALUE_CAPTURE_MIGRATION_ID = "supply-value-capture-v3.5.0-002"
+VALUE_CAPTURE_MIGRATION_ID = "supply-value-capture-v3.5.0-003"
 Record = FundamentalEvidenceRecord | SupplyBasisSnapshot | ValueCaptureRuleSnapshot
+AuthorityWriter = Callable[[AcquisitionReceipt, Record], None]
 
 SCHEMA_SQL = """
 PRAGMA foreign_keys = ON;
 CREATE TABLE IF NOT EXISTS value_capture_schema_migrations (
     migration_id TEXT PRIMARY KEY,
     applied_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS value_capture_acquisition_receipts (
+    acquisition_id TEXT PRIMARY KEY,
+    receipt_hash TEXT NOT NULL UNIQUE,
+    kind TEXT NOT NULL,
+    capability TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    source_authority_tier TEXT NOT NULL,
+    endpoint TEXT NOT NULL,
+    parser_version TEXT NOT NULL,
+    registry_fingerprint TEXT NOT NULL,
+    acquired_at TEXT NOT NULL,
+    entity_id TEXT NOT NULL,
+    economic_claim_id TEXT NOT NULL,
+    representation_id TEXT NOT NULL,
+    raw_payload_hash TEXT NOT NULL,
+    payload_json TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS fundamental_evidence_records (
     record_id TEXT PRIMARY KEY,
@@ -32,7 +51,7 @@ CREATE TABLE IF NOT EXISTS fundamental_evidence_records (
     representation_id TEXT NOT NULL,
     source_id TEXT NOT NULL,
     parser_version TEXT NOT NULL,
-    acquisition_id TEXT NOT NULL,
+    acquisition_id TEXT NOT NULL UNIQUE,
     effective_at TEXT NOT NULL,
     recorded_at TEXT NOT NULL,
     known_at TEXT NOT NULL,
@@ -42,6 +61,7 @@ CREATE TABLE IF NOT EXISTS fundamental_evidence_records (
     supersedes_record_id TEXT UNIQUE,
     payload_json TEXT NOT NULL,
     UNIQUE(logical_id, content_hash),
+    FOREIGN KEY(acquisition_id) REFERENCES value_capture_acquisition_receipts(acquisition_id),
     FOREIGN KEY(supersedes_record_id) REFERENCES fundamental_evidence_records(record_id)
 );
 CREATE TABLE IF NOT EXISTS supply_basis_snapshots (
@@ -53,7 +73,7 @@ CREATE TABLE IF NOT EXISTS supply_basis_snapshots (
     supply_basis_type TEXT NOT NULL,
     source_id TEXT NOT NULL,
     parser_version TEXT NOT NULL,
-    acquisition_id TEXT NOT NULL,
+    acquisition_id TEXT NOT NULL UNIQUE,
     effective_at TEXT NOT NULL,
     recorded_at TEXT NOT NULL,
     known_at TEXT NOT NULL,
@@ -63,6 +83,7 @@ CREATE TABLE IF NOT EXISTS supply_basis_snapshots (
     supersedes_record_id TEXT UNIQUE,
     payload_json TEXT NOT NULL,
     UNIQUE(logical_id, content_hash),
+    FOREIGN KEY(acquisition_id) REFERENCES value_capture_acquisition_receipts(acquisition_id),
     FOREIGN KEY(supersedes_record_id) REFERENCES supply_basis_snapshots(record_id)
 );
 CREATE INDEX IF NOT EXISTS supply_basis_strict_known_idx ON supply_basis_snapshots(
@@ -77,7 +98,7 @@ CREATE TABLE IF NOT EXISTS value_capture_rule_snapshots (
     rule_type TEXT NOT NULL,
     source_id TEXT NOT NULL,
     parser_version TEXT NOT NULL,
-    acquisition_id TEXT NOT NULL,
+    acquisition_id TEXT NOT NULL UNIQUE,
     effective_at TEXT NOT NULL,
     recorded_at TEXT NOT NULL,
     known_at TEXT NOT NULL,
@@ -87,6 +108,7 @@ CREATE TABLE IF NOT EXISTS value_capture_rule_snapshots (
     supersedes_record_id TEXT UNIQUE,
     payload_json TEXT NOT NULL,
     UNIQUE(logical_id, content_hash),
+    FOREIGN KEY(acquisition_id) REFERENCES value_capture_acquisition_receipts(acquisition_id),
     FOREIGN KEY(supersedes_record_id) REFERENCES value_capture_rule_snapshots(record_id)
 );
 CREATE INDEX IF NOT EXISTS value_capture_rule_strict_known_idx ON value_capture_rule_snapshots(
@@ -103,14 +125,31 @@ class SupplyAndValueCaptureRepository:
     def __init__(self, path: str | Path = DEFAULT_VALUE_CAPTURE_DB) -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._initialize()
+        _initialize(self.path)
 
     def evidence(self, record_id: str) -> FundamentalEvidenceRecord | None:
         payload = self._payload("fundamental_evidence_records", record_id)
         return _evidence_from_payload(payload) if payload is not None else None
 
+    def supply(self, record_id: str) -> SupplyBasisSnapshot | None:
+        payload = self._payload("supply_basis_snapshots", record_id)
+        return _supply_from_payload(payload) if payload is not None else None
+
+    def rule(self, record_id: str) -> ValueCaptureRuleSnapshot | None:
+        payload = self._payload("value_capture_rule_snapshots", record_id)
+        return _rule_from_payload(payload) if payload is not None else None
+
+    def receipt(self, acquisition_id: str) -> AcquisitionReceipt | None:
+        with _connect(self.path) as conn:
+            row = conn.execute(
+                "SELECT payload_json FROM value_capture_acquisition_receipts WHERE acquisition_id = ?",
+                (acquisition_id,),
+            ).fetchone()
+        return _receipt_from_payload(json.loads(str(row["payload_json"]))) if row is not None else None
+
     def count(self, table: str) -> int:
         allowed = {
+            "value_capture_acquisition_receipts",
             "fundamental_evidence_records",
             "supply_basis_snapshots",
             "value_capture_rule_snapshots",
@@ -118,50 +157,22 @@ class SupplyAndValueCaptureRepository:
         }
         if table not in allowed:
             raise ValueError("unsupported value-capture table")
-        with self._connect() as conn:
+        with _connect(self.path) as conn:
             return int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
 
-    def strict_known_supply(
-        self,
-        *,
-        entity_id: str,
-        economic_claim_id: str,
-        representation_id: str,
-        supply_basis_type: str,
-        effective_as_of: datetime,
-        known_by: datetime,
-    ) -> SupplyBasisSnapshot | None:
+    def strict_known_supply(self, **kwargs: Any) -> SupplyBasisSnapshot | None:
         payload = self._strict_known(
             table="supply_basis_snapshots",
             category_column="supply_basis_type",
-            category_value=supply_basis_type,
-            entity_id=entity_id,
-            economic_claim_id=economic_claim_id,
-            representation_id=representation_id,
-            effective_as_of=effective_as_of,
-            known_by=known_by,
+            **kwargs,
         )
         return _supply_from_payload(payload) if payload is not None else None
 
-    def strict_known_rule(
-        self,
-        *,
-        entity_id: str,
-        economic_claim_id: str,
-        representation_id: str,
-        rule_type: str,
-        effective_as_of: datetime,
-        known_by: datetime,
-    ) -> ValueCaptureRuleSnapshot | None:
+    def strict_known_rule(self, **kwargs: Any) -> ValueCaptureRuleSnapshot | None:
         payload = self._strict_known(
             table="value_capture_rule_snapshots",
             category_column="rule_type",
-            category_value=rule_type,
-            entity_id=entity_id,
-            economic_claim_id=economic_claim_id,
-            representation_id=representation_id,
-            effective_as_of=effective_as_of,
-            known_by=known_by,
+            **kwargs,
         )
         return _rule_from_payload(payload) if payload is not None else None
 
@@ -170,34 +181,28 @@ class SupplyAndValueCaptureRepository:
         *,
         table: str,
         category_column: str,
-        category_value: str,
         entity_id: str,
         economic_claim_id: str,
         representation_id: str,
         effective_as_of: datetime,
         known_by: datetime,
+        **category: str,
     ) -> dict[str, Any] | None:
+        category_value = category[category_column]
         effective = _aware(effective_as_of).isoformat()
         known = _aware(known_by).isoformat()
-        with self._connect() as conn:
+        with _connect(self.path) as conn:
             row = conn.execute(
                 f"""
-                SELECT current.payload_json
-                FROM {table} AS current
-                WHERE current.entity_id = ?
-                  AND current.economic_claim_id = ?
-                  AND current.representation_id = ?
-                  AND current.{category_column} = ?
-                  AND current.effective_at <= ?
-                  AND current.recorded_at <= ?
-                  AND current.known_at <= ?
-                  AND current.quality_state = 'accepted'
-                  AND current.conflict_state IN ('none','resolved')
+                SELECT current.payload_json FROM {table} AS current
+                WHERE current.entity_id = ? AND current.economic_claim_id = ?
+                  AND current.representation_id = ? AND current.{category_column} = ?
+                  AND current.effective_at <= ? AND current.recorded_at <= ? AND current.known_at <= ?
+                  AND current.quality_state = 'accepted' AND current.conflict_state IN ('none','resolved')
                   AND NOT EXISTS (
                       SELECT 1 FROM {table} AS successor
                       WHERE successor.supersedes_record_id = current.record_id
-                        AND successor.recorded_at <= ?
-                        AND successor.known_at <= ?
+                        AND successor.recorded_at <= ? AND successor.known_at <= ?
                   )
                 ORDER BY current.effective_at DESC,current.recorded_at DESC,current.known_at DESC,current.record_id DESC
                 LIMIT 1
@@ -217,45 +222,103 @@ class SupplyAndValueCaptureRepository:
         return json.loads(str(row["payload_json"])) if row is not None else None
 
     def _payload(self, table: str, record_id: str) -> dict[str, Any] | None:
-        with self._connect() as conn:
+        with _connect(self.path) as conn:
             row = conn.execute(f"SELECT payload_json FROM {table} WHERE record_id = ?", (record_id,)).fetchone()
         return json.loads(str(row["payload_json"])) if row is not None else None
 
-    def _initialize(self) -> None:
-        with self._connect() as conn:
-            conn.executescript(SCHEMA_SQL)
-            conn.execute(
-                "INSERT OR IGNORE INTO value_capture_schema_migrations (migration_id, applied_at) VALUES (?, ?)",
-                (VALUE_CAPTURE_MIGRATION_ID, datetime.now(UTC).isoformat()),
-            )
 
-    def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.path)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys = ON")
-        return conn
+def open_authoritative_value_capture_store(
+    path: str | Path = DEFAULT_VALUE_CAPTURE_DB,
+) -> tuple[SupplyAndValueCaptureRepository, AuthorityWriter]:
+    repository = SupplyAndValueCaptureRepository(path)
+    database_path = repository.path
 
+    def commit(receipt: AcquisitionReceipt, record: Record) -> None:
+        _validate_receipt_binding(receipt, record)
+        with _connect(database_path) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                _insert_receipt(conn, receipt)
+                _insert_record(conn, _table_for(record), record)
+            except Exception:
+                conn.rollback()
+                raise
+            conn.commit()
 
-def _service_commit(
-    repository: SupplyAndValueCaptureRepository, records: tuple[Record, ...], *, service_token: object
-) -> None:
-    from hunter.value_capture.service import _SERVICE_WRITE_TOKEN
-
-    if service_token is not _SERVICE_WRITE_TOKEN:
-        raise PermissionError("repository writes are service-authorized only")
-    with repository._connect() as conn:
-        conn.execute("BEGIN IMMEDIATE")
-        try:
-            for record in records:
-                _insert(conn, _table_for(record), record)
-        except Exception:
-            conn.rollback()
-            raise
-        conn.commit()
+    return repository, commit
 
 
-def _insert(conn: sqlite3.Connection, table: str, record: Record) -> None:
-    payload = _json_payload(record)
+def _initialize(path: Path) -> None:
+    with _connect(path) as conn:
+        conn.executescript(SCHEMA_SQL)
+        conn.execute(
+            "INSERT OR IGNORE INTO value_capture_schema_migrations (migration_id, applied_at) VALUES (?, ?)",
+            (VALUE_CAPTURE_MIGRATION_ID, datetime.now(UTC).isoformat()),
+        )
+
+
+def _connect(path: Path) -> sqlite3.Connection:
+    conn = sqlite3.connect(path)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    return conn
+
+
+def _validate_receipt_binding(receipt: AcquisitionReceipt, record: Record) -> None:
+    raw_hash = record.raw_content_hash if isinstance(record, FundamentalEvidenceRecord) else record.raw_payload_hash
+    if receipt.acquisition_id != record.acquisition_id:
+        raise ValueCaptureIntegrityError("record acquisition_id does not match receipt")
+    if receipt.raw_payload_hash != raw_hash:
+        raise ValueCaptureIntegrityError("record payload hash does not match receipt")
+    if receipt.source_id != record.source_id or receipt.parser_version != record.parser_version:
+        raise ValueCaptureIntegrityError("record source/parser does not match receipt")
+    if receipt.identity != record.identity:
+        raise ValueCaptureIntegrityError("record identity does not match receipt")
+    if receipt.acquired_at != record.recorded_at or receipt.acquired_at != record.known_at:
+        raise ValueCaptureIntegrityError("record chronology does not match receipt")
+
+
+def _insert_receipt(conn: sqlite3.Connection, receipt: AcquisitionReceipt) -> None:
+    payload = _receipt_payload(receipt)
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    existing = conn.execute(
+        "SELECT payload_json FROM value_capture_acquisition_receipts WHERE acquisition_id = ?",
+        (receipt.acquisition_id,),
+    ).fetchone()
+    if existing is not None:
+        if str(existing["payload_json"]) != canonical:
+            raise ValueCaptureIntegrityError("acquisition_id reused with divergent receipt")
+        return
+    conn.execute(
+        """
+        INSERT INTO value_capture_acquisition_receipts (
+            acquisition_id,receipt_hash,kind,capability,source_id,source_authority_tier,endpoint,
+            parser_version,registry_fingerprint,acquired_at,entity_id,economic_claim_id,
+            representation_id,raw_payload_hash,payload_json
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            receipt.acquisition_id,
+            receipt.receipt_hash,
+            receipt.kind,
+            receipt.capability,
+            receipt.source_id,
+            receipt.source_authority_tier,
+            receipt.endpoint,
+            receipt.parser_version,
+            receipt.registry_fingerprint,
+            receipt.acquired_at.isoformat(),
+            receipt.identity.entity_id,
+            receipt.identity.economic_claim_id,
+            receipt.identity.representation_id,
+            receipt.raw_payload_hash,
+            canonical,
+        ),
+    )
+
+
+def _insert_record(conn: sqlite3.Connection, table: str, record: Record) -> None:
+    payload = _record_payload(record)
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     existing = conn.execute(f"SELECT payload_json FROM {table} WHERE record_id = ?", (record.record_id,)).fetchone()
     if existing is not None:
@@ -287,40 +350,15 @@ def _insert(conn: sqlite3.Connection, table: str, record: Record) -> None:
     elif isinstance(record, ValueCaptureRuleSnapshot):
         category_column, category_value = "rule_type", record.rule_type
     columns = [
-        "record_id",
-        "logical_id",
-        "entity_id",
-        "economic_claim_id",
-        "representation_id",
-        "source_id",
-        "parser_version",
-        "acquisition_id",
-        "effective_at",
-        "recorded_at",
-        "known_at",
-        "quality_state",
-        "conflict_state",
-        "content_hash",
-        "supersedes_record_id",
-        "payload_json",
+        "record_id","logical_id","entity_id","economic_claim_id","representation_id","source_id",
+        "parser_version","acquisition_id","effective_at","recorded_at","known_at","quality_state",
+        "conflict_state","content_hash","supersedes_record_id","payload_json",
     ]
     values: list[object] = [
-        record.record_id,
-        record.logical_id,
-        record.identity.entity_id,
-        record.identity.economic_claim_id,
-        record.identity.representation_id,
-        record.source_id,
-        record.parser_version,
-        record.acquisition_id,
-        record.effective_at.isoformat(),
-        record.recorded_at.isoformat(),
-        record.known_at.isoformat(),
-        record.quality_state,
-        record.conflict_state,
-        record.content_hash,
-        predecessor,
-        canonical,
+        record.record_id,record.logical_id,record.identity.entity_id,record.identity.economic_claim_id,
+        record.identity.representation_id,record.source_id,record.parser_version,record.acquisition_id,
+        record.effective_at.isoformat(),record.recorded_at.isoformat(),record.known_at.isoformat(),
+        record.quality_state,record.conflict_state,record.content_hash,predecessor,canonical,
     ]
     if category_column is not None:
         columns.insert(5, category_column)
@@ -339,10 +377,16 @@ def _table_for(record: Record) -> str:
     return "value_capture_rule_snapshots"
 
 
-def _json_payload(record: Record) -> dict[str, Any]:
+def _record_payload(record: Record) -> dict[str, Any]:
     payload = asdict(record)
     for name in ("effective_at", "recorded_at", "known_at"):
         payload[name] = _aware(payload[name]).isoformat()
+    return payload
+
+
+def _receipt_payload(receipt: AcquisitionReceipt) -> dict[str, Any]:
+    payload = asdict(receipt)
+    payload["acquired_at"] = _aware(receipt.acquired_at).isoformat()
     return payload
 
 
@@ -356,6 +400,13 @@ def _base_payload(payload: dict[str, Any]) -> dict[str, Any]:
     for name in ("effective_at", "recorded_at", "known_at"):
         result[name] = datetime.fromisoformat(result[name]).astimezone(UTC)
     return result
+
+
+def _receipt_from_payload(payload: dict[str, Any]) -> AcquisitionReceipt:
+    result = dict(payload)
+    result["identity"] = _identity(result["identity"])
+    result["acquired_at"] = datetime.fromisoformat(result["acquired_at"]).astimezone(UTC)
+    return AcquisitionReceipt(**result)
 
 
 def _evidence_from_payload(payload: dict[str, Any]) -> FundamentalEvidenceRecord:
