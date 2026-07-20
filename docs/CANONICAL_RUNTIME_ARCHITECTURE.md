@@ -60,7 +60,7 @@ Coverage reporting distinguishes two categories:
 - Independent production engines: direct persisted evidence sources or direct normalized source families.
 - Derived analytical views: deterministic views derived from one or more upstream production evidence sources.
 
-Independent production engines:
+Independent production engine labels:
 
 - valuation
 - comparative_valuation
@@ -74,6 +74,8 @@ Independent production engines:
 - whale_intelligence
 - macro_intelligence
 - validation_health
+
+Under ADR 0020, `valuation`, `comparative_valuation`, `mispricing`, and `asymmetry` are required labels but have no currently authorized numeric contract. They remain explicitly unavailable; CoinGecko profile or completeness metrics cannot populate them. Their presence in the coverage taxonomy does not establish availability or semantic authority.
 
 Derived analytical views:
 
@@ -89,13 +91,15 @@ Derived analytical views:
 
 Coverage percentages remain calculated over the same required evidence surface as before. The reporting labels are clarified so derived views are not mistaken for separately executed engines.
 
+`necessity_gap` likewise remains explicitly unavailable pending a later accepted contract. Technology-graph centrality and `technology_necessity` cannot substitute for it.
+
 ## Timing Policy
 
 Production Timing is `src/hunter/timing/`.
 
 Experimental Timing is `src/hunter/opportunity/`.
 
-Only `src/hunter/timing/` feeds Market Validation coverage, committee fields, explainability, and reports in v2.1.x. The Fusion-backed `src/hunter/opportunity/` package remains available for tests and future architecture work, but it is not the production timing implementation.
+Only strict-known, compatible, persisted `TimingAssessment` records produced by `OpportunityTimingEvidenceEngine` may feed Market Validation coverage, committee fields, explainability, and reports. Selection preserves actual effective, recorded, known, and generated times. Latest/current state and economic-graph, scenario, Fusion, Opportunity, Dashboard, Operational Corpus, or report values cannot substitute. The Fusion-backed `src/hunter/opportunity/` package remains available for tests and future architecture work, but it is not the production timing implementation.
 
 ## Committee Policy
 

@@ -214,6 +214,8 @@ def _source(
     freshness: float = 0.9,
     timestamp: datetime = NOW,
 ) -> EngineValidationSource:
+    source = "opportunity-timing" if engine == "opportunity_timing" else "persisted-upstream"
+    collector = "timing-repository" if engine == "opportunity_timing" else "repository"
     return EngineValidationSource(
         engine=engine,
         score=score,
@@ -223,6 +225,8 @@ def _source(
         source_record_ids=(f"record:{engine}",),
         evidence_ids=(f"evidence:{engine}",),
         repository_ids=(f"repository:{engine}",),
+        source=source,
+        collector=collector,
         raw_input_metrics={"score": score},
         normalized_inputs={"score": score},
         evidence_coverage=1.0,
