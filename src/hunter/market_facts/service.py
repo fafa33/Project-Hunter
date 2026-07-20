@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime
 from hashlib import sha256
 
@@ -39,18 +40,19 @@ class ObservedMarketFactService:
         recorded_at: datetime,
     ) -> tuple[ObservedMarketFactRecord, ...]:
         recorded_at = _utc("recorded_at", recorded_at)
-        source = self._validate_result(request, result)
+        source = self._validate_result(request, result, recorded_at=recorded_at)
         if result.status != "success":
             event = self._availability_event(request, result, recorded_at)
             self.repository.apply(
                 MarketFactWritePlan(
                     availability_events=(event,),
-                    authority=self.repository.authority,
+                    authority=self.repository._authority,
                 )
             )
             return ()
-        records = tuple(self._record(source, request, result, fact, recorded_at) for fact in result.facts)
-        self.repository.apply(MarketFactWritePlan(records=records, authority=self.repository.authority))
+        normalized = tuple(self._apply_quality_policy(source, result, fact) for fact in result.facts)
+        records = tuple(self._record(source, request, result, fact, recorded_at) for fact in normalized)
+        self.repository.apply(MarketFactWritePlan(records=records, authority=self.repository._authority))
         return records
 
     def correct(
@@ -68,11 +70,12 @@ class ObservedMarketFactService:
         if predecessor is None:
             raise MarketFactAuthorityError("predecessor record does not exist")
         recorded_at = _utc("recorded_at", recorded_at)
-        source = self._validate_result(request, result)
+        source = self._validate_result(request, result, recorded_at=recorded_at)
         if result.status != "success":
             raise MarketFactAuthorityError("correction requires successful observed facts")
         replacements: list[ObservedMarketFactRecord] = []
-        for fact in result.facts:
+        for raw_fact in result.facts:
+            fact = self._apply_quality_policy(source, result, raw_fact)
             logical_id = _logical_id(request, fact.fact_type, fact.quote_currency, fact.venue_scope)
             if logical_id != predecessor.logical_id:
                 continue
@@ -90,7 +93,7 @@ class ObservedMarketFactService:
         if len(replacements) != 1:
             raise MarketFactAuthorityError("correction must contain exactly one fact matching predecessor lineage")
         records = tuple(replacements)
-        self.repository.apply(MarketFactWritePlan(records=records, authority=self.repository.authority))
+        self.repository.apply(MarketFactWritePlan(records=records, authority=self.repository._authority))
         return records
 
     def strict_known_fact(
@@ -116,6 +119,8 @@ class ObservedMarketFactService:
         self,
         request: MarketFactRequest,
         result: MarketFactAcquisitionResult,
+        *,
+        recorded_at: datetime,
     ) -> MarketFactSourceConfig:
         source = self.registry.require(request.source_id)
         if result.request != request:
@@ -135,8 +140,8 @@ class ObservedMarketFactService:
             raise MarketFactAuthorityError("quote currency is not source-authorized")
         if not set(request.requested_fact_types).issubset(set(source.capabilities)):
             raise MarketFactAuthorityError("requested capability is not source-authorized")
-        if not request.identity.entity_id or not request.identity.asset_id or not request.identity.representation_id:
-            raise MarketFactAuthorityError("canonical entity, asset, and representation are required")
+        if "canonical_asset_representation" not in source.supported_entity_scope:
+            raise MarketFactAuthorityError("source does not authorize canonical asset representation scope")
         if request.identity.provider_listing_id in {
             request.identity.entity_id,
             request.identity.asset_id,
@@ -147,6 +152,8 @@ class ObservedMarketFactService:
             raise MarketFactAuthorityError("known_at cannot precede request time")
         if result.acquired_at < request.requested_at:
             raise MarketFactAuthorityError("acquired_at cannot precede request time")
+        if recorded_at < result.known_at:
+            raise MarketFactAuthorityError("recorded_at cannot precede known_at")
         if result.status == "success":
             if not result.facts:
                 raise MarketFactAuthorityError("successful result contains no facts")
@@ -171,7 +178,20 @@ class ObservedMarketFactService:
                 validate_fact_value(fact.fact_type, fact.value)
                 if fact.observed_at > result.acquired_at:
                     raise MarketFactAuthorityError("fact observation cannot occur after acquisition")
+                if fact.effective_at > result.acquired_at:
+                    raise MarketFactAuthorityError("fact effective time cannot occur after acquisition")
         return source
+
+    def _apply_quality_policy(
+        self,
+        source: MarketFactSourceConfig,
+        result: MarketFactAcquisitionResult,
+        fact: NormalizedMarketFact,
+    ) -> NormalizedMarketFact:
+        age_seconds = (result.known_at - fact.effective_at).total_seconds()
+        if age_seconds > source.freshness_seconds and fact.quality_state == "accepted":
+            return replace(fact, quality_state="stale")
+        return fact
 
     def _record(
         self,
