@@ -2,39 +2,40 @@
 
 ## Purpose
 
-This document defines the mandatory development lifecycle for every permanent change made to Project Hunter.
+This document defines the mandatory development lifecycle for permanent changes made to Project Hunter.
 
-Its purpose is to ensure that every contribution is planned, implemented, verified, reviewed, documented, and validated before becoming part of the project.
+Its purpose is to ensure that every accepted change is planned, implemented, verified, reviewed, documented, and validated before becoming part of the repository.
 
-This document defines process only.
+This document governs process only.
 
-Engineering principles, constitutional rules, architecture, runtime behavior, and implementation contracts are defined by their respective canonical documents.
+It does not define constitutional authority, engineering principles, architecture, runtime behavior, implementation contracts, or Sprint scope.
 
 ---
 
-## Scope
+# Scope
 
 This governance applies to every permanent repository change, including:
 
 - source code;
-- architecture;
-- documentation;
+- architecture documentation;
+- repository documentation;
 - configuration;
 - database schema;
+- persistence definitions;
 - tests;
 - automation;
 - tooling;
-- this document itself.
+- governance documents.
 
-It applies equally to every contributor, whether human or AI.
+It applies equally to human contributors and AI contributors.
 
-Conversation, brainstorming, research, and exploratory discussions are outside the scope of this document until they become committed repository changes.
+Exploration, brainstorming, research, prototypes, and conversations remain outside this process until they become repository changes.
 
 ---
 
 # Development Lifecycle
 
-Every permanent contribution must complete the following lifecycle.
+Every permanent contribution follows the same lifecycle.
 
 ```text
 Planning
@@ -56,103 +57,91 @@ Pull Request
 Merge
 ```
 
-No stage may be skipped.
+No lifecycle stage may be skipped.
 
-The depth of documentation may scale with the risk of the change, but every stage always exists.
+The amount of documentation scales with the size and risk of the change, but every stage always exists.
 
 ---
 
 # Stage 1 — Planning
 
-Before implementation begins, the contributor shall define:
+Planning defines the intended change before implementation begins.
 
-- purpose of the change;
+Planning should identify, where applicable:
+
+- purpose;
+- scope;
+- affected documents;
 - affected architectural areas;
-- affected runtime behavior;
-- persistence impact;
-- replay impact;
-- compatibility impact;
-- implementation scope;
+- expected implementation impact;
+- expected compatibility impact;
+- expected migration requirements;
 - identified risks.
 
-Planning defines what will change before implementation begins.
+Implementation begins only after the intended scope is understood.
 
 ---
 
 # Stage 2 — Implementation
 
-Implementation shall follow the approved planning.
+Implementation follows the approved plan.
 
 Implementation must not:
 
-- silently expand scope;
-- introduce unrelated refactoring;
-- weaken existing guarantees;
-- introduce temporary placeholders;
-- leave incomplete work.
+- expand scope without approval;
+- introduce unrelated changes;
+- leave incomplete work;
+- introduce temporary placeholders into permanent code or documentation;
+- weaken existing guarantees without explicit approval.
 
-If implementation requires additional scope, planning must be updated before continuing.
+If implementation requires additional scope, planning must be updated before work continues.
 
 ---
 
 # Stage 3 — Verification
 
-Every change must be verified before review.
+Verification confirms that the implemented change is internally complete.
 
-Verification confirms that:
+Verification includes, where applicable:
 
-- implementation is complete;
-- documentation is complete;
-- references are valid;
-- naming is consistent;
-- architecture remains consistent;
-- no placeholder content exists;
-- implementation matches documentation;
-- documentation matches implementation;
-- no documented guarantee has been weakened.
+- successful implementation;
+- completed documentation;
+- completed tests;
+- consistent references;
+- consistent naming;
+- absence of placeholder content;
+- consistency between implementation and documentation.
 
-Verification failures block further progress.
+Verification failures prevent further progression through the lifecycle.
 
 ---
 
 # Stage 4 — Architecture Review
 
-After successful verification, the contributor performs an independent architectural review.
+After successful verification, the change undergoes architectural review.
 
-The review evaluates whether the change:
+Architecture Review evaluates whether the contribution remains consistent with the project's accepted architectural decisions and canonical documents.
 
-- preserves architectural boundaries;
-- maintains deterministic behavior;
-- preserves evidence integrity;
-- maintains replay correctness;
-- preserves explainability;
-- avoids unnecessary coupling;
-- remains maintainable;
-- remains extensible;
-- remains consistent with all canonical documents.
+Any architectural issue returns the change to the appropriate earlier lifecycle stage.
 
-Any identified issue returns the change to Implementation.
+Architecture Review evaluates consistency.
+
+It does not redefine architecture.
 
 ---
 
 # Stage 5 — Review Report
 
-Every review produces a review report.
+Every Architecture Review produces a review report.
 
-Each identified issue records:
+The report records:
 
-- issue;
-- root cause;
-- resolution;
-- architectural impact;
-- runtime impact;
-- persistence impact;
-- replay impact;
-- compatibility impact;
-- risk;
-- verification of the fix.
+- review outcome;
+- identified issues;
+- resolutions;
+- remaining follow-up actions, if any.
 
-If no issues are identified, the report explicitly states:
+If no issues are identified, the report explicitly records:
 
 > No issues were identified during independent review.
 
@@ -160,20 +149,18 @@ If no issues are identified, the report explicitly states:
 
 # Stage 6 — Final Validation
 
-Before review or merge, the contributor records:
+Final Validation confirms that the contribution has successfully completed every required lifecycle stage.
+
+Validation records, where applicable:
 
 - files changed;
-- architecture impact;
-- runtime impact;
-- persistence impact;
-- replay impact;
-- compatibility impact;
-- risk assessment;
 - verification completed;
 - architecture review completed;
-- review report completed.
+- review report completed;
+- outstanding issues;
+- overall readiness.
 
-Only after every required item is complete may the contribution state:
+Only after successful Final Validation may the contribution be declared:
 
 **READY FOR REVIEW**
 
@@ -181,63 +168,85 @@ Only after every required item is complete may the contribution state:
 
 # Pull Request Governance
 
-A pull request may only be opened after Final Validation.
+A Pull Request may be opened only after Final Validation.
 
-A pull request may only leave Draft status after:
+A Pull Request may leave Draft status only after:
 
-- verification has passed;
-- architecture review has completed;
-- review report has completed;
-- final validation has completed.
+- Verification has completed;
+- Architecture Review has completed;
+- Review Report has been recorded;
+- Final Validation has completed.
 
-No unresolved review finding may remain when a pull request is marked Ready for Review.
+A Pull Request marked **Ready for Review** must not contain unresolved blocking findings.
 
 ---
 
 # Proportionality
 
-Every development stage is mandatory.
+Every lifecycle stage is mandatory.
 
-Only the amount of documentation scales with the size and risk of the change.
+Only the depth of documentation scales with the complexity and risk of the change.
 
-Small changes require shorter records.
+Smaller changes require less documentation.
 
-Large architectural changes require more comprehensive records.
+Architecturally significant changes require more comprehensive documentation.
 
-Process steps are never omitted.
+The lifecycle itself never changes.
 
 ---
 
 # Ambiguity
 
-When implementation requires architectural judgment beyond the approved scope, work pauses until clarification is obtained.
+If implementation requires decisions outside the approved scope, work pauses until clarification is obtained.
 
-Ambiguity is resolved through clarification, not assumption.
+Architectural uncertainty is resolved through the project's governance process rather than individual assumption.
 
 ---
 
 # Amendment
 
-Changes to this document follow the same development lifecycle defined within this document.
+Changes to this document follow the same lifecycle defined within this document.
 
-No amendment may reduce guarantees established by:
+No amendment may conflict with:
 
-- PROJECT_CONSTITUTION.md
-- PROJECT_PRINCIPLES.md
+- `PROJECT_CONSTITUTION.md`
+- `PROJECT_PRINCIPLES.md`
 
 ---
 
-## Relationship to Other Canonical Documents
+# Relationship to Other Canonical Documents
 
 | Document | Responsibility |
 |----------|----------------|
 | PROJECT_CONSTITUTION | Constitutional governance |
 | PROJECT_PRINCIPLES | Engineering principles |
-| HUNTER_IMPLEMENTATION_CONTRACT | Implementation obligations |
+| CANONICAL_ARCHITECTURE_MAP | Document authority hierarchy |
+| Architecture documents | System architecture |
 | ADRs | Architectural decisions |
-| Architecture documents | System design |
-| This document | Development process |
+| HUNTER_IMPLEMENTATION_CONTRACT | Implementation obligations |
+| This document | Development lifecycle |
 
-This document governs how Project Hunter evolves.
+---
 
-It does not redefine architecture, implementation, engineering principles, or constitutional authority.
+# Ownership Boundary
+
+This document owns:
+
+- development lifecycle;
+- process stages;
+- review workflow;
+- validation workflow;
+- pull request readiness;
+- process governance.
+
+This document does not own:
+
+- constitutional rules;
+- engineering principles;
+- architecture;
+- runtime behavior;
+- implementation requirements;
+- Sprint planning;
+- operational procedures.
+
+Those responsibilities remain with their respective canonical documents.
