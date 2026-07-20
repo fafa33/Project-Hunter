@@ -1,105 +1,158 @@
 # Project Hunter Principles
 
-This document is the permanent engineering constitution for Project Hunter. It defines the principles that govern architecture, implementation, documentation, and release decisions.
+## Purpose
 
-The canonical authority hierarchy is defined once in `docs/SPRINTS/README.md`. This document sits under `docs/PROJECT_CONSTITUTION.md` in that hierarchy and governs engineering principles for architecture and implementation.
+This document defines the enduring engineering and architectural principles that guide the design, implementation, and long-term evolution of Project Hunter.
+
+These principles describe the qualities that every architectural decision, implementation, and future evolution should preserve.
+
+Governance, implementation rules, runtime architecture, development procedures, and release policies are intentionally maintained in their respective canonical documents.
+
+---
 
 ## Canonical Purpose
 
-Hunter is a market discovery engine before it is a project analysis engine.
+Project Hunter is a market-discovery-first, evidence-driven investment decision-support system.
 
-Hunter exists to discover exceptional long-term cryptocurrency investment opportunities before they become obvious, then validate whether they deserve deeper analysis through evidence-backed workflows.
+Its purpose is to continuously discover the cryptocurrency market, identify promising long-term opportunities, validate them through trustworthy evidence, and produce explainable investment intelligence.
 
-The long-term objective is not short-term price prediction. The long-term objective is to estimate the gap between current market value and intrinsic long-term value only when the evidence base is strong enough to support that judgment.
+Hunter exists to improve investment decisions through better market coverage, better evidence, and better reasoning—not through speculation, opaque models, or unsupported assumptions.
 
-## Principle 1: Discovery First
+---
 
-Hunter must maintain a market-wide view before it narrows attention to deep analysis.
+# Principle 1 — Discovery First
 
-The system must not treat a manually configured project list as the complete investable universe. Configured projects are a compatibility seed and a validation baseline. The operating model is discovery, normalization, identity resolution, evidence validation, screening, prioritization, and then deep analysis.
+Hunter must maintain a market-wide perspective before narrowing attention to deep analysis.
 
-## Principle 2: Evidence First
+The system continuously discovers assets, protocols, ecosystems, and emerging opportunities before determining which candidates deserve further investigation.
 
-No candidate, source, metric, conclusion, or recommendation is trusted without provenance.
+Discovery always precedes analysis.
 
-Hunter must preserve source identity, observation time, evidence links or ids, confidence, freshness, conflicts, missing evidence, and point-in-time availability. Unknown evidence remains unknown. Missing evidence remains missing.
+---
 
-## Principle 3: Trust Before Intelligence
+# Principle 2 — Evidence First
 
-Hunter must establish whether data can be trusted before converting it into intelligence.
+Every analytical conclusion must be supported by evidence.
 
-Trust layers include source provenance, identity resolution, conflict detection, validation status, freshness, and unavailable-state handling. Analysis that bypasses trust validation is not production intelligence.
+Hunter preserves evidence provenance, timestamps, confidence, freshness, conflicts, missingness, and traceability throughout the analytical process.
 
-## Principle 4: Deterministic by Default
+Evidence is never assumed.
 
-Hunter must produce repeatable outcomes from the same inputs.
+---
 
-Determinism applies to execution identity, candidate identity, persistence, screening outcomes, queue entries, evidence references, replay, validation, and explainability. Randomness, hidden state, implicit time assumptions, and silent provider substitution are not acceptable production behavior.
+# Principle 3 — Trust Before Intelligence
 
-## Principle 5: Identity Before Valuation
+Information must be validated before becoming intelligence.
 
-Hunter must know what an entity is before estimating what it may be worth.
+Source reliability, identity resolution, validation status, conflict handling, freshness, and evidence quality are prerequisites for analytical reasoning.
 
-Ticker equality, similar names, popularity, market-cap rank, or social attention are not sufficient identity evidence. Identity resolution must precede intrinsic valuation, competition analysis, network-effect analysis, and any future investment thesis.
+Untrusted information must never become authoritative intelligence.
 
-## Principle 6: Reuse Before Rewrite
+---
 
-Hunter evolves by extending proven production boundaries, not by replacing them casually.
+# Principle 4 — Deterministic by Default
 
-Existing contracts, repositories, adapters, engines, CLI surfaces, and persistence mechanisms should be reused when technically sound. Refactoring is justified only when it removes a real blocker, reduces long-term complexity, or protects production correctness.
+The same evidence must always produce the same analytical outcome.
 
-## Principle 7: Production Stability Before Feature Velocity
+Deterministic execution enables reproducibility, historical replay, auditing, testing, and explainability.
 
-Hunter must remain useful and stable while it evolves.
+Hidden state, implicit assumptions, nondeterministic behavior, and silent substitutions are incompatible with production intelligence.
 
-Every release must preserve backward compatibility unless a migration is explicitly justified and verified. New capabilities must not weaken existing scoring, weighting, committee logic, timing, replay, historical validation, calibration, or explainability semantics.
+---
 
-## Principle 8: Explainability Is Mandatory
+# Principle 5 — Identity Before Valuation
 
-Every meaningful output must be explainable from evidence.
+Hunter must establish what an economic entity is before evaluating its value.
 
-Hunter must show why a candidate was discovered, why it was screened, why it was queued, what evidence supports it, what evidence is missing, and what conflicts or unavailable states remain. Unsupported conclusions are not acceptable outputs.
+Canonical identity precedes valuation, comparison, ranking, investment reasoning, and portfolio decisions.
 
-## Principle 9: Market Coverage Before Market Understanding
+Analytical conclusions built on uncertain identity cannot become authoritative.
 
-Hunter optimizes for market coverage first, market understanding second, and investment intelligence third.
+---
 
-Coverage without trust is not intelligence, but Hunter cannot identify exceptional opportunities if it cannot see the market. Discovery breadth, source diversity, and candidate freshness are first-order architecture concerns.
+# Principle 6 — Explainability Is Mandatory
 
-## Principle 10: Investment Value Over Architectural Complexity
+Every meaningful output must be explainable.
 
-Success is measured by improving real investment decisions, not by increasing architecture, engine count, code volume, or report length.
+Hunter must be able to explain:
 
-Every new component must contribute measurable investment value or measurable market understanding. Components that cannot improve discovery quality, evidence quality, ranking quality, decision usefulness, reliability, or future extensibility should not be added.
+- why something was discovered;
+- why it was analyzed;
+- which evidence supports the conclusion;
+- which evidence contradicts it;
+- which evidence is missing;
+- how the conclusion was produced.
 
-## Principle 11: No Fabricated Evidence
+Unsupported conclusions are never acceptable.
 
-Hunter must never fabricate evidence, mappings, coverage, identities, source results, repository links, contracts, domains, prices, valuations, or completeness.
+---
 
-When evidence is unavailable, Hunter must say so explicitly. When evidence conflicts, Hunter must preserve the conflict. When identity is ambiguous, Hunter must preserve ambiguity.
+# Principle 7 — Market Coverage Before Market Understanding
 
-## Principle 12: Objective Evidence Over Assumptions
+Comprehensive market visibility is the foundation of meaningful investment intelligence.
 
-Hunter prefers objective evidence over assumptions and live verified observations over unverified claims.
+Hunter must continuously expand market coverage while maintaining evidence quality and trust.
 
-Acceptable evidence comes from documented public sources, official project sources, verified provider records, persisted Hunter evidence, and reproducible point-in-time observations. Assumptions may guide research priorities, but they must not be persisted as facts.
+A system cannot identify exceptional opportunities if it cannot observe the market in which those opportunities emerge.
 
-## Principle 13: Ten-Year Maintainability
+---
 
-Hunter must be built as if it will remain actively developed and used for the next ten years.
+# Principle 8 — Investment Value Over Complexity
 
-Architectural decisions should make Hunter easier to extend, test, operate, and audit. Avoid unnecessary abstractions, speculative systems, duplicate runtimes, and irreversible schema choices. Prefer simple, indexed, incremental, evidence-preserving designs.
+Architectural complexity is never an objective.
 
-## Principle 14: Explicit Boundaries
+Every architectural decision should improve one or more of the following:
 
-Scheduler, pipeline orchestration, acquisition, discovery, identity, screening, deep analysis, scoring, committee, explainability, and future valuation are separate responsibilities.
+- discovery quality;
+- evidence quality;
+- analytical quality;
+- decision quality;
+- reliability;
+- maintainability;
+- extensibility.
 
-Boundary violations create long-term risk. Scheduler remains operational. Pipeline orchestration owns analytical execution. `EvidenceBackedProjectExecutor` remains the canonical deep-analysis scoring boundary until explicitly changed by an approved ADR in `docs/ADR/`.
+Complexity without measurable value should not be introduced.
 
-## Principle 15: Release Discipline
+---
 
-Every release must answer the release test:
+# Principle 9 — No Fabricated Evidence
 
-> Does this version help the user make a materially better investment decision than the previous version?
+Hunter never fabricates evidence.
 
-If the answer is no, the release is not successful regardless of technical completeness.
+Unknown information remains unknown.
+
+Missing evidence remains missing.
+
+Conflicting evidence remains conflicting.
+
+Ambiguous identity remains ambiguous until resolved.
+
+Analytical confidence must never be increased by inventing data or silently filling gaps.
+
+---
+
+# Principle 10 — Long-Term Maintainability
+
+Hunter is designed as a long-lived analytical system.
+
+Architectural decisions should favor:
+
+- simplicity;
+- extensibility;
+- durability;
+- testability;
+- replayability;
+- auditability;
+- incremental evolution.
+
+Temporary convenience must never compromise long-term maintainability.
+
+---
+
+## Relationship to Other Canonical Documents
+
+These principles guide every architectural and engineering decision within Project Hunter.
+
+Specific governance rules, implementation requirements, runtime behavior, architectural ownership, engineering procedures, and release policies are defined in their respective canonical documents.
+
+This document defines enduring principles only.
