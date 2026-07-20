@@ -2,112 +2,116 @@
 
 ## Mission
 
-Project Hunter exists to continuously discover, validate, prioritize, and deeply analyze the best long-term cryptocurrency investment opportunities across the entire market.
+Project Hunter exists to continuously discover, validate, prioritize, and deeply analyze the best long-term cryptocurrency investment opportunities across the digital asset ecosystem.
 
-Hunter is not a price prediction system. Hunter is an evidence-backed market discovery and investment intelligence system. Its purpose is to identify where the largest gap may exist between current market value and intrinsic long-term value, then explain the evidence, assumptions, risks, and missing information behind that view.
+Hunter is not a price prediction system. It is an evidence-first investment intelligence platform whose purpose is to identify where significant gaps may exist between observed market value and evidence-supported intrinsic long-term value while making every conclusion explainable, auditable, and evidence-backed.
+
+---
 
 ## Vision
 
-Hunter should become a durable personal investment intelligence platform that sees the crypto market broadly, understands it rigorously, and helps decide what deserves serious research before the opportunity becomes obvious.
+Hunter should become a trusted personal investment intelligence platform that continuously understands the cryptocurrency market, discovers opportunities before they become widely recognized, and supports higher-quality long-term investment decisions through rigorous evidence rather than speculation.
 
-The system must become useful before it becomes complete. Early versions should improve discovery, triage, and evidence quality. Later versions may estimate intrinsic value only after discovery, identity, evidence, historical validation, and explainability are strong enough to support it.
+The platform should become useful before it becomes complete. Every capability should improve decision quality while preserving correctness, explainability, and evidence integrity.
+
+---
 
 ## Long-Term Objectives
 
-- Maintain a dynamic market-wide candidate registry.
-- Discover assets, protocols, networks, and ecosystems from independent public sources.
-- Resolve candidate identity safely and deterministically.
-- Preserve point-in-time evidence and avoid lookahead bias.
-- Screen thousands of candidates cheaply.
-- Prioritize what deserves deeper analysis and explain why.
-- Acquire evidence across market, protocol, developer, social, macro, on-chain, and historical domains.
-- Run deep evidence-backed analysis through the canonical runtime.
-- Build future competition, network-effect, tokenomics, liquidity, revenue, and intrinsic-value layers only when prerequisite evidence exists.
-- Improve real investment decisions through better coverage, evidence quality, prioritization, and explainability.
+Project Hunter aims to:
 
-## Architecture Philosophy
+- Continuously discover market opportunities.
+- Maintain broad coverage across digital assets, protocols, and ecosystems.
+- Improve investment decisions through better evidence rather than stronger opinions.
+- Increase evidence quality over time.
+- Preserve historical truth and eliminate look-ahead bias.
+- Continuously improve explainability.
+- Reduce unsupported assumptions.
+- Prioritize opportunities with the highest long-term asymmetric potential.
+- Expand analytical coverage only after prerequisite evidence is trustworthy.
+- Remain deterministic, replayable, and auditable as the system grows.
 
-Hunter is discovery-first, evidence-first, deterministic, and incrementally extensible.
-
-The architecture must preserve clear boundaries:
-
-- source adapters discover raw market observations;
-- normalization converts source payloads into typed records;
-- the Candidate Registry stores market-wide identity candidates;
-- Identity Resolution determines what records refer to the same economic entity;
-- screening and queueing prioritize research;
-- acquisition gathers evidence;
-- `EvidenceBackedProjectExecutor` remains the canonical deep-analysis scoring boundary;
-- explainability links outputs back to evidence;
-- historical validation preserves point-in-time truth.
-
-Hunter evolves through small production-safe releases. It should reuse existing production contracts unless a change is necessary to remove a real architectural blocker.
+---
 
 ## Investment Philosophy
 
-Hunter seeks long-term asymmetric opportunities, not short-term trading signals.
+Hunter focuses on long-term asymmetric investment opportunities rather than short-term market prediction.
 
-A useful opportunity thesis eventually requires:
+Meaningful investment conclusions require evidence regarding:
 
-- a clearly identified asset or protocol;
-- reliable evidence about market value;
-- evidence about real usage, revenue, developer activity, liquidity, tokenomics, and on-chain flows;
-- understanding of competition and substitutes;
-- network-effect or moat analysis where applicable;
-- historical calibration against both winners and failures;
-- explicit assumptions, risks, missing evidence, and invalidation conditions.
+- Market value.
+- Technology.
+- Adoption.
+- Developer activity.
+- Tokenomics.
+- Liquidity.
+- On-chain behavior.
+- Governance.
+- Competition.
+- Network effects.
+- Historical performance.
+- Macroeconomic context.
+- Risks.
+- Assumptions.
+- Missing evidence.
 
-Hunter must never convert popularity, narratives, current price movement, or incomplete data into unsupported investment conclusions.
+Hunter must never transform popularity, narratives, incomplete information, or short-term price movement into unsupported investment conclusions.
 
-## Success Metrics
+Confidence must always remain proportional to the available evidence.
 
-Primary success is measured by whether Hunter improves real investment decisions.
+---
 
-Supporting metrics include:
+## Success Criteria
 
-- market coverage;
-- source diversity;
-- unique canonical candidates;
-- identity coverage;
-- evidence coverage;
-- provider overlap and disagreement visibility;
-- screening coverage;
-- queue usefulness;
-- freshness;
-- historical point-in-time coverage;
-- explainability completeness;
-- reduction in false confidence;
-- reduction in unsupported assumptions.
+Hunter succeeds only if it improves real investment decision quality.
 
-Architecture quality matters when it improves these outcomes, protects correctness, or enables future capability without rework.
+Success includes:
 
-## Future Evolution
+- Broader market coverage.
+- Stronger evidence quality.
+- Better prioritization.
+- Improved explainability.
+- Reduced false confidence.
+- Lower dependence on unsupported assumptions.
+- Consistent historical correctness.
+- Trustworthy long-term analytical outputs.
 
-Hunter's expected evolution is:
+Technical sophistication is valuable only when it improves these outcomes.
 
-1. market-wide discovery;
-2. identity resolution;
-3. stronger candidate screening;
-4. competition and peer intelligence;
-5. tokenomics, liquidity, revenue, and economic quality;
-6. network effects and moat;
-7. historical pattern and failure calibration;
-8. intrinsic value and asymmetric opportunity;
-9. personal decision support;
-10. productization only after sustained personal usefulness is proven.
+---
 
-Each phase depends on the trustworthiness of the previous phase. Hunter must not implement advanced investment intelligence on top of unresolved identity, weak evidence, missing provenance, or unvalidated historical assumptions.
+## Long-Term Evolution
 
-## Canonical Source of Truth
+Hunter is expected to evolve gradually through validated production releases.
 
-The architecture documents define Hunter's governance hierarchy:
+Its long-term direction includes:
 
-1. `docs/PROJECT_PRINCIPLES.md`
-2. `docs/VISION.md`
-3. `docs/HUNTER_ARCHITECTURE_MANIFEST.md`
-4. `docs/HUNTER_ARCHITECTURE_SPEC.md`
-5. `docs/HUNTER_ROADMAP.md`
-6. `docs/SPRINTS/<version>.md`
-7. `docs/CODEX_IMPLEMENTATION_GUIDE.md`
+1. Comprehensive market discovery.
+2. Strong evidence acquisition.
+3. Higher-quality analytical intelligence.
+4. Better investment prioritization.
+5. Deeper economic understanding.
+6. Stronger valuation capabilities.
+7. Better identification of asymmetric opportunities.
+8. Reliable long-term personal decision support.
 
-Sprint specifications define release scope, but they do not override the principles, vision, manifest, or architecture specification.
+Future capabilities should only be introduced after the required evidence quality and analytical foundations have been established.
+
+---
+
+## Guiding Principles
+
+Project Hunter should always remain:
+
+- Evidence-first.
+- Deterministic.
+- Explainable.
+- Auditable.
+- Replayable.
+- Incrementally evolvable.
+- Conservative under uncertainty.
+- Transparent about assumptions.
+- Honest about missing evidence.
+- Focused on improving investment decisions rather than predicting markets.
+
+The project's governance, architecture, implementation process, and development roadmap are intentionally defined and maintained in their respective canonical documents. This document defines the project's vision only.
