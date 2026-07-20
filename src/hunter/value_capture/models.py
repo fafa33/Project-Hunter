@@ -242,9 +242,9 @@ def _member(name: str, value: str, allowed: frozenset[str]) -> None:
 
 
 def _normalize_chronology(instance: object) -> None:
-    effective = _utc("effective_at", getattr(instance, "effective_at"))
-    recorded = _utc("recorded_at", getattr(instance, "recorded_at"))
-    known = _utc("known_at", getattr(instance, "known_at"))
+    effective = _utc("effective_at", instance.effective_at)
+    recorded = _utc("recorded_at", instance.recorded_at)
+    known = _utc("known_at", instance.known_at)
     if effective > recorded:
         raise ValueError("effective_at must be <= recorded_at")
     if recorded > known:
@@ -255,8 +255,8 @@ def _normalize_chronology(instance: object) -> None:
 
 
 def _validate_correction(instance: object) -> None:
-    predecessor = getattr(instance, "supersedes_record_id")
-    reason = getattr(instance, "correction_reason")
+    predecessor = instance.supersedes_record_id
+    reason = instance.correction_reason
     if bool(predecessor) != bool(reason.strip()):
         raise ValueError("supersedes_record_id and correction_reason must be provided together")
 

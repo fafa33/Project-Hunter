@@ -236,7 +236,9 @@ class SupplyAndValueCaptureRepository:
         return conn
 
 
-def _service_commit(repository: SupplyAndValueCaptureRepository, records: tuple[Record, ...], *, service_token: object) -> None:
+def _service_commit(
+    repository: SupplyAndValueCaptureRepository, records: tuple[Record, ...], *, service_token: object
+) -> None:
     from hunter.value_capture.service import _SERVICE_WRITE_TOKEN
 
     if service_token is not _SERVICE_WRITE_TOKEN:
@@ -285,15 +287,40 @@ def _insert(conn: sqlite3.Connection, table: str, record: Record) -> None:
     elif isinstance(record, ValueCaptureRuleSnapshot):
         category_column, category_value = "rule_type", record.rule_type
     columns = [
-        "record_id","logical_id","entity_id","economic_claim_id","representation_id",
-        "source_id","parser_version","acquisition_id","effective_at","recorded_at","known_at",
-        "quality_state","conflict_state","content_hash","supersedes_record_id","payload_json",
+        "record_id",
+        "logical_id",
+        "entity_id",
+        "economic_claim_id",
+        "representation_id",
+        "source_id",
+        "parser_version",
+        "acquisition_id",
+        "effective_at",
+        "recorded_at",
+        "known_at",
+        "quality_state",
+        "conflict_state",
+        "content_hash",
+        "supersedes_record_id",
+        "payload_json",
     ]
     values: list[object] = [
-        record.record_id,record.logical_id,record.identity.entity_id,record.identity.economic_claim_id,
-        record.identity.representation_id,record.source_id,record.parser_version,record.acquisition_id,
-        record.effective_at.isoformat(),record.recorded_at.isoformat(),record.known_at.isoformat(),
-        record.quality_state,record.conflict_state,record.content_hash,predecessor,canonical,
+        record.record_id,
+        record.logical_id,
+        record.identity.entity_id,
+        record.identity.economic_claim_id,
+        record.identity.representation_id,
+        record.source_id,
+        record.parser_version,
+        record.acquisition_id,
+        record.effective_at.isoformat(),
+        record.recorded_at.isoformat(),
+        record.known_at.isoformat(),
+        record.quality_state,
+        record.conflict_state,
+        record.content_hash,
+        predecessor,
+        canonical,
     ]
     if category_column is not None:
         columns.insert(5, category_column)
