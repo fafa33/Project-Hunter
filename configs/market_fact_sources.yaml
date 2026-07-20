@@ -1,0 +1,32 @@
+sources:
+  - source_id: coingecko-coin-market-facts
+    provider_id: coingecko
+    endpoint_template: https://api.coingecko.com/api/v3/coins/{listing_id}
+    allowed_hosts:
+      - api.coingecko.com
+    parser_version: coingecko-coin-v1
+    enabled: true
+    capabilities:
+      - spot_price
+      - circulating_supply
+      - total_supply
+      - max_supply
+      - market_capitalization
+      - fully_diluted_valuation
+      - trading_volume
+    quote_currencies:
+      - usd
+      - eur
+    units:
+      spot_price: quote_currency_per_unit
+      circulating_supply: native_units
+      total_supply: native_units
+      max_supply: native_units
+      market_capitalization: quote_currency
+      fully_diluted_valuation: quote_currency
+      trading_volume: quote_currency_per_24h
+    supported_entity_scope:
+      - canonical_asset_representation
+    freshness_seconds: 3600
+    historical_support: current endpoint with provider last_updated timestamp only
+    limitations: Provider-observed market facts only; no fair value, valuation, peer, mispricing, asymmetry, ranking, or recommendation authority.
