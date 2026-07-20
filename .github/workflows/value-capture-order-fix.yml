@@ -1,0 +1,39 @@
+name: Value Capture Correction Order Fix
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "src/hunter/value_capture/service.py"
+      - ".github/workflows/value-capture-order-fix.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+      - name: Put correction authorization before evidence compatibility
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path("src/hunter/value_capture/service.py")
+          text = path.read_text()
+          old = "        self._require_evidence(record)\n        self._authorize_correction(record)\n"
+          new = "        self._authorize_correction(record)\n        self._require_evidence(record)\n"
+          if text.count(old) != 2:
+              raise SystemExit("unexpected correction/evidence order count")
+          path.write_text(text.replace(old, new))
+          PY
+      - name: Commit fix
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/hunter/value_capture/service.py
+          git commit -m "Authorize correction source transition before evidence compatibility"
+          git push
