@@ -8,36 +8,15 @@ Sprint specifications authorize implementation scope only. They never redefine a
 
 ---
 
-# Canonical Governance Hierarchy
+# Canonical Authority Reference
 
-The authoritative document hierarchy for Project Hunter is:
+The canonical document-authority hierarchy is owned and defined by:
 
-1. docs/PROJECT_CONSTITUTION.md
-2. docs/PROJECT_PRINCIPLES.md
-3. docs/CANONICAL_ARCHITECTURE_MAP.md
-4. docs/HUNTER_ARCHITECTURE_MANIFEST.md
-5. docs/HUNTER_ARCHITECTURE_SPEC.md
-6. docs/CANONICAL_RUNTIME_ARCHITECTURE.md
-7. Accepted ADRs (`docs/ADR/`)
-8. docs/VISION.md
-9. docs/HUNTER_ROADMAP.md
-10. docs/DEVELOPMENT_GOVERNANCE.md
-11. docs/HUNTER_IMPLEMENTATION_CONTRACT.md
-12. docs/AI_REVIEW_PROTOCOL.md
-13. docs/SPRINTS/<version>.md
-14. docs/CODEX_IMPLEMENTATION_GUIDE.md
+`docs/CANONICAL_ARCHITECTURE_MAP.md`
 
-The Constitution remains the highest authority.
+Every sprint specification must comply with that hierarchy and with all applicable accepted ADRs.
 
-The Canonical Architecture Map defines the complete architectural topology of Hunter.
-
-The Runtime Architecture defines runtime execution only.
-
-Accepted ADRs define binding architectural decisions unless superseded by a newer accepted ADR.
-
-Sprint specifications define implementation scope only.
-
-Nothing below may contradict anything above.
+This document owns sprint governance only. It does not duplicate or redefine canonical document precedence.
 
 ---
 
@@ -45,19 +24,19 @@ Nothing below may contradict anything above.
 
 Every sprint must follow this lifecycle:
 
-1. Create or update `docs/SPRINTS/vX.Y.Z.md`
-2. Validate against all higher-governance documents
-3. Verify ADR compliance
-4. Verify Runtime Architecture compatibility
-5. Verify Canonical Architecture compatibility
-6. Verify Implementation Contract compliance
-7. Freeze sprint scope
-8. Implement only approved scope
-9. Execute required quality gates
-10. Produce implementation report
-11. Commit
-12. Push
-13. Tag release
+1. Create or update `docs/SPRINTS/vX.Y.Z.md`.
+2. Validate against all higher-authority documents.
+3. Verify ADR compliance.
+4. Verify Runtime Architecture compatibility.
+5. Verify Canonical Architecture compatibility.
+6. Verify Implementation Contract compliance.
+7. Freeze sprint scope.
+8. Implement only approved scope.
+9. Execute required quality gates.
+10. Produce an implementation report.
+11. Commit.
+12. Push.
+13. Tag the release when applicable.
 
 ---
 
@@ -102,11 +81,31 @@ A sprint is complete only when:
 
 ---
 
+# Ownership Boundary
+
+This document owns:
+
+- sprint-specification workflow;
+- sprint-scope authorization;
+- sprint acceptance criteria;
+- the index of sprint specifications.
+
+This document does not own:
+
+- canonical document precedence;
+- constitutional governance;
+- architecture;
+- runtime authority;
+- implementation contracts;
+- architectural decisions.
+
+---
+
 # Current Sprint Specifications
 
-- TEMPLATE.md
-- v2.7.0.md
-- v2.7.1.md
-- v2.8.0.md
-- v2.9.0.md
-- v3.x.x series
+- `TEMPLATE.md`
+- `v2.7.0.md`
+- `v2.7.1.md`
+- `v2.8.0.md`
+- `v2.9.0.md`
+- `v3.x.x` series
