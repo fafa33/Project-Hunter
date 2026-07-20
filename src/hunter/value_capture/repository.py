@@ -268,7 +268,12 @@ class SupplyAndValueCaptureRepository:
             row = conn.execute(f"SELECT payload_json FROM {table} WHERE record_id = ?", (record_id,)).fetchone()
         return json.loads(str(row["payload_json"])) if row is not None else None
 
-    def _insert(self, conn: sqlite3.Connection, table: str, record: object) -> None:
+    def _insert(
+        self,
+        conn: sqlite3.Connection,
+        table: str,
+        record: FundamentalEvidenceRecord | SupplyBasisSnapshot | ValueCaptureRuleSnapshot,
+    ) -> None:
         payload = _json_payload(record)
         record_id = str(payload["record_id"])
         existing = conn.execute(f"SELECT payload_json FROM {table} WHERE record_id = ?", (record_id,)).fetchone()
@@ -347,7 +352,9 @@ class SupplyAndValueCaptureRepository:
         return conn
 
 
-def _json_payload(record: object) -> dict[str, Any]:
+def _json_payload(
+    record: FundamentalEvidenceRecord | SupplyBasisSnapshot | ValueCaptureRuleSnapshot,
+) -> dict[str, Any]:
     payload = asdict(record)
     for name in ("effective_at", "recorded_at", "known_at"):
         payload[name] = _aware(payload[name]).isoformat()
