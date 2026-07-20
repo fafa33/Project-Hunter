@@ -377,9 +377,7 @@ def _record_from_row(row: sqlite3.Row) -> ObservedMarketFactRecord:
         quality_state=str(row["quality_state"]),  # type: ignore[arg-type]
         conflict_state=str(row["conflict_state"]),  # type: ignore[arg-type]
         content_hash=str(row["content_hash"]),
-        supersedes_record_id=None
-        if row["supersedes_record_id"] is None
-        else str(row["supersedes_record_id"]),
+        supersedes_record_id=None if row["supersedes_record_id"] is None else str(row["supersedes_record_id"]),
         correction_reason=str(row["correction_reason"]),
     )
 
