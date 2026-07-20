@@ -226,14 +226,18 @@ def validate_fact_value(fact_type: MarketFactType, value: str) -> None:
     number = _decimal(value)
     if fact_type == "spot_price" and number <= 0:
         raise ValueError("spot_price must be positive")
-    if fact_type in {
-        "circulating_supply",
-        "total_supply",
-        "max_supply",
-        "market_capitalization",
-        "fully_diluted_valuation",
-        "trading_volume",
-    } and number < 0:
+    if (
+        fact_type
+        in {
+            "circulating_supply",
+            "total_supply",
+            "max_supply",
+            "market_capitalization",
+            "fully_diluted_valuation",
+            "trading_volume",
+        }
+        and number < 0
+    ):
         raise ValueError(f"{fact_type} must be non-negative")
 
 
