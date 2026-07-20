@@ -1,51 +1,112 @@
 # Project Hunter Sprint Specifications
 
-This directory is the canonical home for Project Hunter sprint specifications.
+This directory contains the canonical sprint specifications for Project Hunter.
 
-Hunter development is specification-driven. A sprint file defines the approved implementation scope for one release. Codex must read the relevant sprint file before implementation, together with the governance and architecture documents below.
+Hunter is a governance-driven, specification-first engineering project. Every implementation must begin from an approved sprint specification that defines the exact scope of a single release.
 
-The canonical source-of-truth order is:
+Sprint specifications authorize implementation scope only. They never redefine architecture, governance, runtime, or engineering principles established by higher-authority documents.
 
-1. `docs/PROJECT_CONSTITUTION.md`
-2. `docs/PROJECT_PRINCIPLES.md`
-3. Accepted ADRs in `docs/ADR/`
-4. `docs/VISION.md`
-5. `docs/HUNTER_ARCHITECTURE_MANIFEST.md`
-6. `docs/HUNTER_ARCHITECTURE_SPEC.md`
-7. `docs/HUNTER_ROADMAP.md`
-8. `docs/CANONICAL_RUNTIME_ARCHITECTURE.md`
-9. `docs/DEVELOPMENT_GOVERNANCE.md`
-10. `docs/HUNTER_IMPLEMENTATION_CONTRACT.md`
-11. `docs/AI_REVIEW_PROTOCOL.md`
-12. `docs/SPRINTS/<version>.md`
-13. `docs/CODEX_IMPLEMENTATION_GUIDE.md`
+---
 
-`docs/PROJECT_CONSTITUTION.md` remains the highest architectural authority. Accepted ADRs remain binding architecture decisions within this order until superseded or deprecated by another ADR. `docs/HUNTER_IMPLEMENTATION_CONTRACT.md` is the mandatory pre-implementation contract inside this order. This list is the single canonical authority hierarchy for governance references in Project Hunter documentation.
+# Canonical Governance Hierarchy
 
-## Canonical Workflow
+The authoritative document hierarchy for Project Hunter is:
 
-1. Create or update `docs/SPRINTS/vX.Y.Z.md` before implementation begins.
-2. Use the exact structure defined in `docs/SPRINTS/TEMPLATE.md`.
-3. Define mission, business objective, scope, out-of-scope boundaries, engineering principles, performance, automation, testing, acceptance criteria, definition of done, success metrics, and final report format.
-4. Confirm the sprint does not conflict with higher-governance documents in the canonical source-of-truth order.
-5. Verify compliance with `docs/HUNTER_IMPLEMENTATION_CONTRACT.md` before writing code.
-6. Implement only the approved sprint scope.
-7. Validate with sprint-specific commands and the required quality gates.
-8. Commit, push, tag, and report the verified final state.
+1. docs/PROJECT_CONSTITUTION.md
+2. docs/PROJECT_PRINCIPLES.md
+3. docs/CANONICAL_ARCHITECTURE_MAP.md
+4. docs/HUNTER_ARCHITECTURE_MANIFEST.md
+5. docs/HUNTER_ARCHITECTURE_SPEC.md
+6. docs/CANONICAL_RUNTIME_ARCHITECTURE.md
+7. Accepted ADRs (`docs/ADR/`)
+8. docs/VISION.md
+9. docs/HUNTER_ROADMAP.md
+10. docs/DEVELOPMENT_GOVERNANCE.md
+11. docs/HUNTER_IMPLEMENTATION_CONTRACT.md
+12. docs/AI_REVIEW_PROTOCOL.md
+13. docs/SPRINTS/<version>.md
+14. docs/CODEX_IMPLEMENTATION_GUIDE.md
 
-## Governance Rules
+The Constitution remains the highest authority.
 
-- Sprint files specialize release scope; they do not override higher-governance documents in the canonical source-of-truth order.
-- A sprint must not authorize fabricated evidence, silent stale fallback, scoring manipulation, coverage inflation, or a competing canonical runtime.
-- A sprint must satisfy `docs/HUNTER_IMPLEMENTATION_CONTRACT.md` before implementation begins.
-- If a sprint conflicts with higher-order architecture documents, Codex must stop and report the conflict before implementation.
-- Each sprint must preserve deterministic execution, evidence provenance, idempotent persistence, point-in-time truth, and explicit unavailable states.
-- Every sprint must improve market coverage, market understanding, evidence quality, trust, prioritization, reliability, or real investment-decision usefulness.
+The Canonical Architecture Map defines the complete architectural topology of Hunter.
 
-## Current Sprint Files
+The Runtime Architecture defines runtime execution only.
 
-- `TEMPLATE.md`: canonical sprint specification template.
-- `v2.7.0.md`: Global Discovery and Candidate Registry.
-- `v2.7.1.md`: Discovery Hardening and Production Verification.
-- `v2.8.0.md`: Global Market Expansion.
-- `v2.9.0.md`: Identity Resolution Foundation.
+Accepted ADRs define binding architectural decisions unless superseded by a newer accepted ADR.
+
+Sprint specifications define implementation scope only.
+
+Nothing below may contradict anything above.
+
+---
+
+# Canonical Sprint Workflow
+
+Every sprint must follow this lifecycle:
+
+1. Create or update `docs/SPRINTS/vX.Y.Z.md`
+2. Validate against all higher-governance documents
+3. Verify ADR compliance
+4. Verify Runtime Architecture compatibility
+5. Verify Canonical Architecture compatibility
+6. Verify Implementation Contract compliance
+7. Freeze sprint scope
+8. Implement only approved scope
+9. Execute required quality gates
+10. Produce implementation report
+11. Commit
+12. Push
+13. Tag release
+
+---
+
+# Governance Rules
+
+Every sprint MUST:
+
+- Preserve deterministic execution.
+- Preserve evidence provenance.
+- Preserve replay correctness.
+- Preserve point-in-time truth.
+- Preserve idempotent persistence.
+- Preserve explicit unavailable states.
+- Preserve architectural boundaries.
+- Preserve backward compatibility unless an approved migration exists.
+
+A sprint MUST NOT:
+
+- Introduce architectural drift.
+- Duplicate architectural ownership.
+- Redefine runtime authority.
+- Introduce competing canonical workflows.
+- Fabricate evidence.
+- Inflate coverage.
+- Hide missing evidence.
+- Bypass approved ADRs.
+
+---
+
+# Sprint Acceptance Criteria
+
+A sprint is complete only when:
+
+- Implementation matches the approved specification.
+- Architecture remains compliant.
+- Runtime remains compliant.
+- ADR compliance is verified.
+- Tests pass.
+- Quality gates pass.
+- Documentation is updated.
+- Governance documents remain consistent.
+
+---
+
+# Current Sprint Specifications
+
+- TEMPLATE.md
+- v2.7.0.md
+- v2.7.1.md
+- v2.8.0.md
+- v2.9.0.md
+- v3.x.x series
