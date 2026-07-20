@@ -50,9 +50,7 @@ def service(tmp_path, *, enabled: bool = True) -> tuple[SupplyAndValueCaptureSer
     config = source(enabled=enabled)
     repository = SupplyAndValueCaptureRepository(tmp_path / "value-capture.sqlite")
     return (
-        SupplyAndValueCaptureService(
-            registry=ValueCaptureSourceRegistry((config,)), repository=repository
-        ),
+        SupplyAndValueCaptureService(registry=ValueCaptureSourceRegistry((config,)), repository=repository),
         config,
     )
 
@@ -145,9 +143,7 @@ def rule_record(evidence_id: str) -> ValueCaptureRuleSnapshot:
 
 
 def persist_evidence(service_: SupplyAndValueCaptureService, config: ValueCaptureSourceConfig):
-    return service_.persist_evidence(
-        evidence_record(), endpoint=ENDPOINT, registry_fingerprint=config.fingerprint
-    )
+    return service_.persist_evidence(evidence_record(), endpoint=ENDPOINT, registry_fingerprint=config.fingerprint)
 
 
 def test_registry_rejects_unregistered_disabled_and_forged_sources(tmp_path) -> None:
@@ -161,13 +157,9 @@ def test_registry_rejects_unregistered_disabled_and_forged_sources(tmp_path) -> 
         )
     disabled_service, disabled = service(tmp_path / "disabled", enabled=False)
     with pytest.raises(ValueError, match="disabled"):
-        disabled_service.persist_evidence(
-            record, endpoint=ENDPOINT, registry_fingerprint=disabled.fingerprint
-        )
+        disabled_service.persist_evidence(record, endpoint=ENDPOINT, registry_fingerprint=disabled.fingerprint)
     with pytest.raises(SupplyAndValueCaptureAuthorityError, match="fingerprint"):
-        service_.persist_evidence(
-            record, endpoint=ENDPOINT, registry_fingerprint="forged"
-        )
+        service_.persist_evidence(record, endpoint=ENDPOINT, registry_fingerprint="forged")
 
 
 def test_repository_rejects_direct_authoritative_mutation(tmp_path) -> None:
@@ -251,9 +243,7 @@ def test_strict_known_replay_enforces_all_cutoffs_and_quality(tmp_path) -> None:
         recorded_at=NOW + timedelta(hours=1),
         known_at=NOW + timedelta(hours=1),
     )
-    service_.persist_supply(
-        stale, endpoint=ENDPOINT, registry_fingerprint=config.fingerprint
-    )
+    service_.persist_supply(stale, endpoint=ENDPOINT, registry_fingerprint=config.fingerprint)
     selected_again = service_.strict_known_supply(
         entity_id=accepted.identity.entity_id,
         economic_claim_id=accepted.identity.economic_claim_id,

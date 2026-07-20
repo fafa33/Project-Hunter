@@ -265,17 +265,13 @@ class SupplyAndValueCaptureRepository:
 
     def _payload(self, table: str, record_id: str) -> dict[str, Any] | None:
         with self._connect() as conn:
-            row = conn.execute(
-                f"SELECT payload_json FROM {table} WHERE record_id = ?", (record_id,)
-            ).fetchone()
+            row = conn.execute(f"SELECT payload_json FROM {table} WHERE record_id = ?", (record_id,)).fetchone()
         return json.loads(str(row["payload_json"])) if row is not None else None
 
     def _insert(self, conn: sqlite3.Connection, table: str, record: object) -> None:
         payload = _json_payload(record)
         record_id = str(payload["record_id"])
-        existing = conn.execute(
-            f"SELECT payload_json FROM {table} WHERE record_id = ?", (record_id,)
-        ).fetchone()
+        existing = conn.execute(f"SELECT payload_json FROM {table} WHERE record_id = ?", (record_id,)).fetchone()
         canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
         if existing is not None:
             if str(existing["payload_json"]) != canonical:
@@ -283,9 +279,7 @@ class SupplyAndValueCaptureRepository:
             return
         predecessor = payload.get("supersedes_record_id")
         if predecessor is not None:
-            row = conn.execute(
-                f"SELECT logical_id FROM {table} WHERE record_id = ?", (predecessor,)
-            ).fetchone()
+            row = conn.execute(f"SELECT logical_id FROM {table} WHERE record_id = ?", (predecessor,)).fetchone()
             if row is None:
                 raise ValueCaptureIntegrityError("superseded record does not exist")
             if str(row["logical_id"]) != str(payload["logical_id"]):

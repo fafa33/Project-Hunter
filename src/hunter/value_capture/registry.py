@@ -69,7 +69,7 @@ class ValueCaptureSourceRegistry:
         self._sources = by_id
 
     @classmethod
-    def from_yaml(cls, path: str | Path) -> "ValueCaptureSourceRegistry":
+    def from_yaml(cls, path: str | Path) -> ValueCaptureSourceRegistry:
         payload = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
         sources = tuple(
             ValueCaptureSourceConfig(

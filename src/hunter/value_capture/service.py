@@ -45,9 +45,7 @@ class SupplyAndValueCaptureService:
         if registry_fingerprint != source.fingerprint:
             raise SupplyAndValueCaptureAuthorityError("registry fingerprint mismatch")
         normalized = self._normalize(record)
-        self.repository.apply(
-            ValueCaptureWritePlan(evidence=(normalized,), authority=self.repository._authority)
-        )
+        self.repository.apply(ValueCaptureWritePlan(evidence=(normalized,), authority=self.repository._authority))
         return normalized
 
     def persist_supply(
@@ -67,9 +65,7 @@ class SupplyAndValueCaptureService:
             raise SupplyAndValueCaptureAuthorityError("registry fingerprint mismatch")
         self._require_evidence(record.evidence_record_ids, record.identity)
         normalized = self._normalize(record)
-        self.repository.apply(
-            ValueCaptureWritePlan(supply=(normalized,), authority=self.repository._authority)
-        )
+        self.repository.apply(ValueCaptureWritePlan(supply=(normalized,), authority=self.repository._authority))
         return normalized
 
     def persist_rule(
@@ -89,9 +85,7 @@ class SupplyAndValueCaptureService:
             raise SupplyAndValueCaptureAuthorityError("registry fingerprint mismatch")
         self._require_evidence(record.evidence_record_ids, record.identity)
         normalized = self._normalize(record)
-        self.repository.apply(
-            ValueCaptureWritePlan(rules=(normalized,), authority=self.repository._authority)
-        )
+        self.repository.apply(ValueCaptureWritePlan(rules=(normalized,), authority=self.repository._authority))
         return normalized
 
     def strict_known_supply(
@@ -136,9 +130,7 @@ class SupplyAndValueCaptureService:
         for evidence_id in evidence_ids:
             evidence = self.repository.evidence(evidence_id)
             if evidence is None:
-                raise SupplyAndValueCaptureAuthorityError(
-                    f"authoritative evidence does not exist: {evidence_id}"
-                )
+                raise SupplyAndValueCaptureAuthorityError(f"authoritative evidence does not exist: {evidence_id}")
             if evidence.identity != identity:
                 raise SupplyAndValueCaptureAuthorityError(
                     "evidence identity does not match supply/value-capture identity"
