@@ -2,255 +2,220 @@
 
 ## Purpose
 
-This document defines the mandatory implementation contracts that every production implementation in Project Hunter must satisfy.
+This document defines the mandatory implementation obligations for Project Hunter.
 
-It translates the architectural design into implementation boundaries.
+Its purpose is to ensure that every implementation conforms to the project's accepted architecture while remaining consistent, maintainable, testable, and deterministic.
 
-This document defines implementation obligations only.
+This document governs implementation obligations only.
 
-Architecture, governance, engineering principles, and strategic direction are defined by their respective canonical documents.
+It does not define constitutional authority, engineering principles, architecture, development workflow, or Sprint planning.
 
 ---
 
-## Scope
+# Scope
 
-This contract applies to every implementation that introduces or modifies:
+This contract applies to every permanent implementation affecting:
 
-- runtime behavior;
-- persistence;
+- runtime components;
 - services;
 - providers;
 - repositories;
-- engines;
+- persistence;
+- analytical engines;
 - orchestration;
-- replay behavior;
+- replay support;
 - migrations;
-- public implementation contracts.
+- public implementation interfaces.
 
-Every implementation must satisfy this contract before code is accepted.
-
----
-
-# Implementation Layers
-
-Project Hunter implementation follows these permanent architectural boundaries.
-
-## Provider
-
-Providers acquire external information.
-
-Providers may:
-
-- access external systems;
-- normalize source data;
-- expose acquisition metadata.
-
-Providers must not:
-
-- persist data;
-- perform business decisions;
-- determine trust;
-- resolve identity;
-- perform analysis.
+Every accepted implementation shall satisfy this contract.
 
 ---
 
-## Service
+# General Implementation Obligations
 
-Services own business behavior.
+Every implementation shall:
 
-Services are responsible for:
+- conform to the accepted architecture;
+- respect architectural ownership boundaries;
+- preserve deterministic behavior where required;
+- preserve replay correctness where applicable;
+- preserve evidence traceability where applicable;
+- remain maintainable;
+- remain testable;
+- remain internally consistent.
 
-- validation;
-- authority;
-- identity decisions;
-- provenance;
-- conflict handling;
-- orchestration;
-- transaction boundaries;
-- replay ownership.
-
-Every authoritative mutation originates from a service.
+No implementation may weaken an accepted architectural guarantee without explicit approval through the project's governance process.
 
 ---
 
-## Repository
+# Component Responsibilities
 
-Repositories own persistence only.
+Each implementation shall remain within the responsibilities assigned by the accepted architecture.
 
-Repositories may:
+Components shall not assume responsibilities owned by other architectural components.
 
-- read;
-- write;
-- update;
-- delete;
-- migrate;
-- index;
-- manage transactions.
+Architectural ownership is defined by:
 
-Repositories must not:
+- accepted ADRs;
+- canonical architecture documents;
+- implementation interfaces established by the project.
 
-- implement business rules;
-- resolve identity;
-- determine trust;
-- perform analysis;
-- own replay logic.
+Implementation must follow those boundaries rather than redefine them.
 
 ---
 
-## Engine
+# Service Contract
 
-Engines consume persisted analytical inputs.
+Business behavior shall be implemented only within the architectural components designated to own that behavior.
 
-Engines produce analytical outputs.
+Authoritative state changes shall originate only through approved implementation paths.
 
-Engines must remain:
-
-- deterministic;
-- explainable;
-- replay-safe;
-- independent.
-
-Engines must not:
-
-- access providers directly;
-- own persistence;
-- own orchestration;
-- own scheduling.
+Business behavior shall not be duplicated across multiple components.
 
 ---
 
-## Dashboard
+# Provider Contract
 
-Dashboards present existing persisted information.
+Provider implementations shall remain responsible only for acquiring and normalizing external information.
 
-Dashboards may:
+Providers shall not introduce implementation that bypasses architectural authority.
 
-- filter;
-- aggregate;
-- visualize;
-- explain.
+---
 
-Dashboards never create authoritative analytical state.
+# Repository Contract
+
+Repository implementations shall remain persistence-oriented.
+
+Repository implementations shall not introduce business behavior outside their approved responsibility.
+
+---
+
+# Engine Contract
+
+Analytical engines shall implement only the analytical responsibilities assigned to them by the accepted architecture.
+
+Engine implementations shall not bypass architectural ownership or introduce hidden execution paths.
+
+---
+
+# Dashboard Contract
+
+Presentation implementations shall present existing authoritative information.
+
+Presentation components shall not become authoritative producers of analytical state.
 
 ---
 
 # Replay Contract
 
-Replay implementations shall:
+Whenever replay capability exists, implementations shall preserve deterministic historical reconstruction according to the accepted replay architecture.
 
-- use explicit timestamps;
-- preserve historical correctness;
-- exclude future information;
-- remain deterministic.
-
-Replay results must depend only on persisted historical state.
+Replay implementations shall not introduce future knowledge or nondeterministic behavior.
 
 ---
 
 # Persistence Contract
 
-Persistent state shall be:
+Persistence implementations shall preserve:
 
-- durable;
-- deterministic;
-- versioned where required;
-- traceable;
-- replayable.
+- consistency;
+- durability;
+- traceability;
+- compatibility where required.
 
-Persistence changes require explicit migration support.
-
----
-
-# Identity Contract
-
-Canonical identity is determined only through approved service logic.
-
-No individual identifier automatically establishes identity.
-
-Similarity alone is never sufficient for entity merging.
-
-Conflicts remain explicit until resolved.
-
----
-
-# Transaction Contract
-
-Authoritative writes follow this sequence:
-
-```text
-Validation
-    ↓
-Authority
-    ↓
-Transaction
-    ↓
-Persistence
-    ↓
-Projection
-```
-
-Related authoritative changes must commit atomically.
-
-Partial authoritative state is prohibited unless explicitly modeled.
+Changes affecting persisted data require an approved migration strategy whenever compatibility cannot otherwise be preserved.
 
 ---
 
 # Migration Contract
 
-Every schema change requires:
+Schema or persistence changes shall include an implementation strategy for safe migration whenever migration is required.
 
-- migration support;
-- backward compatibility or an approved migration path;
-- deterministic upgrades;
+Migration implementations shall be:
+
+- deterministic;
+- repeatable;
+- verifiable.
+
+Previously persisted information shall never be silently reinterpreted.
+
+---
+
+# Testing Contract
+
+Every implementation shall include verification appropriate to its scope.
+
+Verification may include:
+
+- automated tests;
+- integration tests;
 - migration tests;
-- idempotent execution.
+- replay verification;
+- documentation updates.
 
-Existing evidence must never be silently reinterpreted.
-
----
-
-# Implementation Requirements
-
-Every implementation shall demonstrate:
-
-- architectural consistency;
-- deterministic behavior;
-- replay safety;
-- persistence correctness;
-- evidence traceability;
-- backward compatibility;
-- test coverage.
-
-Implementation may not weaken an existing documented guarantee without explicit governance approval.
+The required depth depends on the complexity and risk of the implementation.
 
 ---
 
-# Definition of Done
+# Compatibility Contract
 
-An implementation is complete only when:
+Implementations shall preserve documented compatibility guarantees unless an approved architectural change explicitly authorizes otherwise.
 
-- implementation satisfies this contract;
-- tests pass;
-- documentation is updated;
-- architecture remains consistent;
-- replay remains correct;
-- persistence remains safe;
-- verification completes successfully.
+Breaking changes require corresponding updates to:
+
+- architecture documentation;
+- affected ADRs;
+- migration strategy;
+- implementation documentation.
 
 ---
 
-## Relationship to Other Canonical Documents
+# Completion Criteria
+
+An implementation satisfies this contract when:
+
+- implementation obligations have been met;
+- required verification has completed;
+- required documentation has been updated;
+- architectural consistency has been preserved;
+- required compatibility has been maintained.
+
+Project readiness and repository acceptance remain governed by `DEVELOPMENT_GOVERNANCE.md`.
+
+---
+
+# Relationship to Other Canonical Documents
 
 | Document | Responsibility |
 |----------|----------------|
 | PROJECT_CONSTITUTION | Constitutional governance |
 | PROJECT_PRINCIPLES | Engineering principles |
-| DEVELOPMENT_GOVERNANCE | Development lifecycle |
+| CANONICAL_ARCHITECTURE_MAP | Canonical document authority |
+| Architecture documents | System architecture |
 | ADRs | Architectural decisions |
-| Architecture documents | System design |
-| This document | Implementation contracts |
+| DEVELOPMENT_GOVERNANCE | Development lifecycle |
+| This document | Implementation obligations |
 
-This document defines implementation obligations only.
+---
 
-It does not redefine governance, architecture, engineering principles, or strategic direction.
+# Ownership Boundary
+
+This document owns:
+
+- implementation obligations;
+- implementation boundaries;
+- implementation consistency;
+- implementation compatibility;
+- implementation verification requirements.
+
+This document does not own:
+
+- constitutional governance;
+- engineering principles;
+- architecture;
+- runtime design;
+- development workflow;
+- Sprint management;
+- operational procedures.
+
+Those responsibilities remain with their respective canonical documents.
