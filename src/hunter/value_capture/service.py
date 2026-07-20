@@ -92,8 +92,8 @@ class SupplyAndValueCaptureService:
             correction_reason=str(payload.get("correction_reason", "")),
             acquisition_id=result.acquisition_id,
         )
-        self._require_evidence(record)
         self._authorize_correction(record)
+        self._require_evidence(record)
         normalized = self._normalize(record)
         self.__commit(result.receipt, normalized)
         return normalized
@@ -133,8 +133,8 @@ class SupplyAndValueCaptureService:
             correction_reason=str(payload.get("correction_reason", "")),
             acquisition_id=result.acquisition_id,
         )
-        self._require_evidence(record)
         self._authorize_correction(record)
+        self._require_evidence(record)
         normalized = self._normalize(record)
         self.__commit(result.receipt, normalized)
         return normalized
