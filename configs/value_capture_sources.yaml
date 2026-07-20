@@ -1,0 +1,42 @@
+sources:
+  - source_id: official-tokenomics-disclosure
+    authority_tier: official
+    source_type: official_disclosure
+    allowed_hosts:
+      - example.org
+    endpoint_patterns:
+      - https://example.org/tokenomics/
+    parser_version: official-tokenomics-v1
+    capabilities:
+      - evidence:official_disclosure
+      - evidence:governance_record
+      - supply:circulating_supply
+      - supply:total_supply
+      - supply:max_supply
+      - supply:locked_supply
+      - supply:treasury_held_supply
+      - supply:vested_but_unreleased_supply
+      - supply:burned_supply
+      - rule:burn
+      - rule:buyback
+      - rule:buyback_and_burn
+      - rule:staking_distribution
+      - rule:fee_distribution
+      - rule:revenue_distribution
+      - rule:no_direct_value_capture
+    enabled: false
+
+  - source_id: verified-onchain-value-capture
+    authority_tier: onchain
+    source_type: onchain_observation
+    allowed_hosts:
+      - ethereum.publicnode.com
+    endpoint_patterns:
+      - https://ethereum.publicnode.com
+    parser_version: evm-value-capture-v1
+    capabilities:
+      - evidence:onchain_observation
+      - supply:total_supply
+      - supply:burned_supply
+      - supply:protocol_owned_supply
+    enabled: true
