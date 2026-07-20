@@ -5,7 +5,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from hunter.jsonl_contract import JsonlRecord, JsonlWritePlan, envelope, read_records, strict_known
 from hunter.timing.models import TimingAssessment, TimingDependencySnapshot, TimingRebuildStatus
+
+TIMING_JSONL_SCHEMA = "hunter-timing-jsonl-v1"
 
 
 class TimingRepository:
@@ -20,13 +23,14 @@ class TimingRepository:
         assessments: tuple[TimingAssessment, ...],
         *,
         dependencies: TimingDependencySnapshot | None = None,
+        write_plan: JsonlWritePlan | None = None,
     ) -> tuple[TimingAssessment, ...]:
         existing = {item.assessment_id for item in self.assessments()}
         saved = []
         for item in assessments:
             if item.assessment_id in existing:
                 continue
-            self._append(self.assessment_path, _assessment_payload(item))
+            self._append(self.assessment_path, _assessment_payload(item), write_plan=write_plan)
             saved.append(item)
         if assessments:
             generated_at = max(item.generated_at for item in assessments)
@@ -41,6 +45,7 @@ class TimingRepository:
             self._append(
                 self.run_path,
                 payload,
+                write_plan=write_plan,
             )
         return tuple(saved)
 
@@ -57,6 +62,12 @@ class TimingRepository:
 
     def history(self) -> tuple[dict[str, Any], ...]:
         return _read_jsonl(self.run_path)
+
+    def records(self, path: Path) -> tuple[JsonlRecord, ...]:
+        return read_records(path, supported_schema=TIMING_JSONL_SCHEMA)
+
+    def strict_known_records(self, path: Path, *, as_of: datetime) -> tuple[JsonlRecord, ...]:
+        return strict_known(self.records(path), as_of=as_of)
 
     def latest_dependencies(self) -> TimingDependencySnapshot | None:
         rows = self.history()
@@ -94,7 +105,9 @@ class TimingRepository:
             )
         return TimingRebuildStatus("CURRENT", (), saved.generation_timestamp, current.generation_timestamp)
 
-    def _append(self, path: Path, payload: dict[str, Any]) -> None:
+    def _append(self, path: Path, payload: dict[str, Any], *, write_plan: JsonlWritePlan | None = None) -> None:
+        if write_plan is not None:
+            payload = envelope(payload, write_plan)
         with path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(payload, sort_keys=True) + "\n")
 
@@ -153,6 +166,12 @@ def _assessment_from_payload(payload: dict[str, Any]) -> TimingAssessment:
     )
 
 
+def timing_assessment_from_payload(payload: dict[str, Any]) -> TimingAssessment:
+    """Decode one persisted Timing payload without selecting repository state."""
+
+    return _assessment_from_payload(payload)
+
+
 def _dependency_payload(item: TimingDependencySnapshot) -> dict[str, Any]:
     return {
         "generation_timestamp": item.generation_timestamp.isoformat(),
@@ -197,6 +216,4 @@ def _optional_from_payload(value: object) -> datetime | None:
 
 
 def _read_jsonl(path: Path) -> tuple[dict[str, Any], ...]:
-    if not path.exists():
-        return ()
-    return tuple(json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip())
+    return tuple(record.payload for record in read_records(path, supported_schema=TIMING_JSONL_SCHEMA))

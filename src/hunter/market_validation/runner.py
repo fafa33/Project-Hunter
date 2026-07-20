@@ -70,7 +70,12 @@ class EvidenceBackedProjectExecutor:
     ) -> None:
         self.effective_at = effective_at.astimezone(UTC)
         self.sources_by_project = {
-            str(project_id): tuple(sorted(sources, key=lambda item: item.engine))
+            str(project_id): tuple(
+                sorted(
+                    _enforce_canonical_input_authority(sources, effective_at=self.effective_at),
+                    key=lambda item: item.engine,
+                )
+            )
             for project_id, sources in sources_by_project.items()
         }
 
@@ -81,10 +86,10 @@ class EvidenceBackedProjectExecutor:
         )
         PipelineOrchestrator().run(context=context)
         sources = _collapse_sources_by_engine(self.sources_by_project.get(target.project_id, ()))
-        present_available = tuple(source for source in sources if _source_available(source))
+        present_available = tuple(source for source in sources if _source_available(source, as_of=self.effective_at))
         source_by_engine = {source.engine: source for source in present_available}
         missing_required = tuple(engine for engine in REQUIRED_ENGINES if engine not in source_by_engine)
-        invalid = tuple(source.engine for source in sources if not _source_available(source))
+        invalid = tuple(source.engine for source in sources if not _source_available(source, as_of=self.effective_at))
         unweighted_sources = tuple(
             sorted(
                 (
@@ -99,7 +104,9 @@ class EvidenceBackedProjectExecutor:
             )
         )
         all_sources = WeightEngine().apply(unweighted_sources)
-        available_sources = tuple(source for source in all_sources if _source_available(source))
+        available_sources = tuple(
+            source for source in all_sources if _source_available(source, as_of=self.effective_at)
+        )
         source_by_engine = {source.engine: source for source in available_sources}
         missing = tuple(sorted((*missing_required, *(field for source in sources for field in source.missing_fields))))
         stale = tuple(sorted(source.engine for source in sources if source.freshness < 0.5))
@@ -253,11 +260,17 @@ def _score(sources: dict[str, EngineValidationSource], engine: str) -> float:
     return source.score
 
 
-def _source_available(source: EngineValidationSource) -> bool:
-    return source.status == "AVAILABLE" and source.confidence > 0.0 and not source.missing_fields
+def _source_available(source: EngineValidationSource, *, as_of: datetime | None = None) -> bool:
+    return (
+        source.status == "AVAILABLE"
+        and source.confidence > 0.0
+        and not source.missing_fields
+        and (as_of is None or source.timestamp <= as_of)
+    )
 
 
 def _unavailable_source(engine: str, timestamp: datetime) -> EngineValidationSource:
+    reason = _missing_reason(engine)
     return EngineValidationSource(
         engine=engine,
         score=0.0,
@@ -275,8 +288,62 @@ def _unavailable_source(engine: str, timestamp: datetime) -> EngineValidationSou
         applied_weight=0.0,
         weighted_contribution=0.0,
         missing_fields=(engine,),
-        warnings=(f"missing:{engine}",),
+        warnings=(reason,),
     )
+
+
+DEFERRED_CANONICAL_INPUTS: tuple[str, ...] = (
+    "valuation",
+    "comparative_valuation",
+    "mispricing",
+    "asymmetry",
+    "necessity_gap",
+)
+
+
+def _enforce_canonical_input_authority(
+    sources: tuple[EngineValidationSource, ...], *, effective_at: datetime
+) -> tuple[EngineValidationSource, ...]:
+    accepted = []
+    rejected = set()
+    for source in sources:
+        if source.engine in DEFERRED_CANONICAL_INPUTS and _known_invalid_deferred_alias(source):
+            rejected.add(source.engine)
+            continue
+        if source.engine == "opportunity_timing" and not _canonical_timing_source(source):
+            rejected.add(source.engine)
+            continue
+        accepted.append(source)
+    accepted.extend(_unavailable_source(engine, effective_at) for engine in sorted(rejected))
+    return tuple(accepted)
+
+
+def _canonical_timing_source(source: EngineValidationSource) -> bool:
+    return (
+        source.source == "opportunity-timing"
+        and source.collector == "timing-repository"
+        and source.validation_status == "VALID"
+        and source.status == "AVAILABLE"
+        and bool(source.source_record_ids)
+        and bool(source.evidence_ids)
+        and bool(source.repository_ids)
+    )
+
+
+def _known_invalid_deferred_alias(source: EngineValidationSource) -> bool:
+    if source.engine in {"valuation", "comparative_valuation", "mispricing", "asymmetry"}:
+        return source.source == "coingecko"
+    if source.engine == "necessity_gap":
+        return source.source in {"technology-graph", "scenario-simulation"}
+    return False
+
+
+def _missing_reason(engine: str) -> str:
+    if engine in DEFERRED_CANONICAL_INPUTS:
+        return f"contract_unavailable:{engine}"
+    if engine == "opportunity_timing":
+        return "strict_known_canonical_timing_unavailable"
+    return f"missing:{engine}"
 
 
 def _collapse_sources_by_engine(sources: tuple[EngineValidationSource, ...]) -> tuple[EngineValidationSource, ...]:
