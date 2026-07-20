@@ -2,361 +2,278 @@
 
 ## 1. Purpose
 
-This document defines the target architecture for evolving Hunter from a static project-analysis platform into a discovery-first investment intelligence system.
+This document defines the logical architecture of Project Hunter.
 
-The current production scoring boundary remains `EvidenceBackedProjectExecutor`. Discovery expands the market entry point; it does not replace the validated scoring runtime.
+It specifies the major architectural layers, their responsibilities, their relationships, and the flow of information throughout the system.
 
-## 1.1 Architecture Decisions
+Implementation details, release planning, engineering procedures, persistence technologies, and runtime-specific behavior are intentionally defined in their respective canonical documents.
 
-This specification implements and expands the accepted ADRs in `docs/ADR/README.md`, especially:
+---
 
-- `docs/ADR/0001-discovery-first.md`;
-- `docs/ADR/0002-evidence-first.md`;
-- `docs/ADR/0003-candidate-registry.md`;
-- `docs/ADR/0004-trust-layer.md`;
-- `docs/ADR/0005-entity-model.md`;
-- `docs/ADR/0006-knowledge-graph.md`.
+# 2. Architectural Overview
 
-Any future change that reverses those decisions or changes the production runtime boundary must be captured in a new ADR before this specification is rewritten around the new direction.
+Hunter is organized as a layered investment intelligence architecture.
 
-## 2. Target Operating Model
+Information flows progressively from raw market observations toward increasingly sophisticated analytical intelligence.
+
+Each architectural layer is responsible for improving the quality, trustworthiness, and usefulness of the information produced by the previous layer.
+
+No layer bypasses the responsibilities of an earlier layer.
+
+---
+
+# 3. High-Level Information Flow
 
 ```text
-Market-wide sources
-  -> source adapters
-  -> raw source records
-  -> normalization
-  -> identity resolution
-  -> dynamic candidate registry
-  -> lightweight screening
-  -> prioritized candidate queue
-  -> evidence acquisition
-  -> EvidenceBackedProjectExecutor
-  -> ranking / committee / explainability
-  -> future intrinsic-value thesis
+Market
+    ↓
+Discovery
+    ↓
+Identity
+    ↓
+Evidence
+    ↓
+Screening
+    ↓
+Prioritization
+    ↓
+Deep Analysis
+    ↓
+Investment Intelligence
+    ↓
+Valuation
+    ↓
+Decision Support
 ```
 
-## 3. Discovery Layer
+Information moves only in the forward direction.
 
-The discovery layer continuously enumerates assets and protocols from independent sources.
+Each layer consumes validated outputs from earlier layers and produces higher-value analytical outputs for subsequent layers.
 
-Responsibilities:
+---
 
-- discover new assets;
-- update existing assets;
-- detect renames, migrations, delistings, and abandoned projects;
-- record source observation time;
-- normalize source-specific records;
-- create or reconcile candidate identities;
-- produce coverage and conflict reports.
+# 4. Discovery Layer
 
-One source equals one adapter. Adapters must be independently configured, enabled, disabled, health-checked, rate-limited, retried, checkpointed, and tested.
+Purpose:
 
-Initial source priorities:
+Continuously discover the investable cryptocurrency market.
 
-1. CoinGecko market discovery.
-2. DefiLlama protocol discovery.
-3. GeckoTerminal or DexScreener decentralized-market discovery.
-4. GitHub enrichment only when official identity is verifiable.
-5. Chain RPC and explorer adapters by network.
+Responsibilities include:
 
-No single source is authoritative.
+- discovering assets;
+- discovering protocols;
+- discovering ecosystems;
+- recording market observations;
+- preserving discovery provenance;
+- expanding market coverage.
 
-## 4. Source Adapter Contract
+Outputs:
 
-Each adapter emits typed `SourceAssetRecord` objects containing only normalized source observations and provenance.
+- discovered market entities;
+- discovery observations;
+- discovery metadata.
 
-Required fields should include:
+---
 
-- adapter id;
-- source asset id;
-- observed name and symbol;
-- asset type;
-- chain identifiers;
-- contract addresses;
-- official links when supplied;
-- category labels;
-- market fields when available;
-- observation timestamp;
-- retrieval timestamp;
-- raw evidence reference;
-- source confidence and availability status.
+# 5. Identity Layer
 
-Source payloads must not leak into downstream domains.
+Purpose:
 
-## 5. Dynamic Candidate Registry
+Determine whether multiple observations refer to the same economic entity.
 
-The registry is the durable canonical map of the investable market.
+Responsibilities include:
 
-A registry entry may represent a protocol, network, native asset, token, or other supported economic entity.
+- identity resolution;
+- duplicate detection;
+- ambiguity management;
+- canonical identity creation;
+- identity confidence.
 
-Required registry concepts:
+Outputs:
 
-- canonical candidate id;
-- canonical name;
-- aliases and prior names;
-- source-specific ids;
-- symbols with collision awareness;
-- asset and entity type;
-- chains and deployments;
-- verified contracts;
-- wrapped or bridged representations;
-- official domains;
-- official repositories;
-- categories and sectors;
-- discovery timestamps;
-- latest observation timestamp;
-- lifecycle and validation status;
-- evidence references;
-- confidence;
-- migration and archival history.
+- canonical entities;
+- identity relationships;
+- unresolved ambiguities.
 
-The existing 50-project universe is imported as a compatibility seed, not treated as the complete market.
+---
 
-## 6. Identity Resolution
+# 6. Evidence Layer
 
-Identity resolution must be deterministic and evidence-backed.
+Purpose:
 
-High-confidence evidence:
+Acquire, validate, organize, and preserve trustworthy evidence.
 
-- exact verified contract plus chain;
-- official domain;
-- official repository;
-- trusted provider id;
-- verified migration record;
-- protocol-owned documentation.
+Responsibilities include:
 
-Resolution outcomes:
-
-- exact;
-- probable;
-- ambiguous;
-- conflict;
-- rejected.
-
-Ticker equality is never sufficient for a merge.
-
-The resolver must handle:
-
-- ticker collisions;
-- duplicate listings;
-- wrapped and bridged assets;
-- native versus wrapped assets;
-- token and protocol separation;
-- contract migrations;
-- project renames;
-- forks and impersonators;
-- chain-specific deployments.
-
-Ambiguous records remain separate and unresolved.
-
-## 7. Candidate Lifecycle
-
-Canonical lifecycle states:
-
-- `discovered`;
-- `identified`;
-- `evidence_pending`;
-- `screenable`;
-- `analyzable`;
-- `ranked`;
-- `deep_research`;
-- `rejected`;
-- `archived`.
-
-Every transition records:
-
-- prior state;
-- new state;
-- timestamp;
-- reason;
-- supporting evidence;
-- discovery or screening run id.
-
-Invalid transitions fail explicitly.
-
-## 8. Lightweight Screening
-
-Screening must be cheap enough to apply to thousands of candidates.
-
-It is not intrinsic valuation and must not produce unsupported return forecasts.
-
-Defensible screening dimensions include:
-
-- canonical identity confidence;
-- source agreement;
-- market data availability;
-- liquidity availability;
-- verified contracts or native identity;
-- active official domain;
-- official repository availability;
-- protocol data availability;
+- evidence acquisition;
+- provenance preservation;
+- confidence estimation;
+- evidence traceability;
 - evidence freshness;
-- listing breadth;
-- obvious impersonation or scam conflicts;
-- minimum analyzability threshold.
+- historical correctness.
 
-Every result explains advancement, deferral, rejection, missing evidence, and confidence.
+Outputs:
 
-## 9. Candidate Queue
+- validated evidence;
+- evidence relationships;
+- evidence availability.
 
-The queue answers:
+---
 
-> What should Hunter investigate next, and why?
+# 7. Screening Layer
 
-Queue priority may consider:
+Purpose:
 
-- identity confidence;
-- evidence coverage;
-- freshness;
-- analyzability;
-- unusual cross-source activity;
-- market-cap tier;
-- sector representation;
-- novelty;
-- high-value missing evidence;
-- previous screening outcome.
+Efficiently identify which opportunities deserve deeper analysis.
 
-Popularity must not be equated with investment quality. Known assets and newly discovered assets must both be eligible.
+Responsibilities include:
 
-## 10. Deep Analysis Integration
+- candidate screening;
+- analyzability assessment;
+- evidence sufficiency;
+- readiness evaluation;
+- analytical prioritization.
 
-`EvidenceBackedProjectExecutor` remains the canonical production scoring boundary.
+Outputs:
 
-Only candidates in the `analyzable` state may enter the deep analysis path.
+- screened candidates;
+- readiness assessments;
+- prioritization inputs.
 
-A typed conversion service maps qualified registry entries to the existing canonical project identity.
+---
 
-No second competing scoring runtime is created.
+# 8. Prioritization Layer
 
-## 11. Persistence
+Purpose:
 
-SQL-backed repositories should become authoritative for:
+Determine where analytical effort should be invested.
 
-- candidates;
-- aliases;
-- source identifiers;
-- contracts;
-- lifecycle history;
-- discovery runs;
-- checkpoints;
-- conflicts;
-- screening results;
-- queue entries.
+Responsibilities include:
 
-JSONL remains acceptable for raw immutable acquisition evidence, but not as the authoritative market-wide indexed registry.
+- opportunity prioritization;
+- analytical queue management;
+- investigation ordering;
+- analytical resource allocation.
 
-All writes must be idempotent.
+Outputs:
 
-## 12. Automation
+- prioritized opportunities;
+- analytical work queue.
 
-Discovery automation should install idempotent jobs for:
+---
 
-- source health;
-- incremental discovery;
-- registry reconciliation;
-- lightweight screening;
-- queue refresh;
-- archival and delisting review.
+# 9. Deep Analysis Layer
 
-Jobs require checkpoints, bounded retries, cooldowns, restart recovery, explicit unavailable states, and persisted run status.
+Purpose:
 
-Typed services are preferred over shelling through CLI commands.
+Perform comprehensive evidence-based investment analysis.
 
-## 13. Point-in-Time Semantics
+Responsibilities include:
 
-Hunter must retain when it first knew:
+- multi-domain analysis;
+- evidence integration;
+- analytical reasoning;
+- explainable conclusions.
 
-- that a candidate existed;
-- which evidence was available;
-- when identity was resolved;
-- when lifecycle states changed;
-- when the candidate became analyzable.
+Outputs:
 
-Historical replay must not backfill future knowledge into earlier dates.
+- analytical findings;
+- investment intelligence;
+- confidence assessments.
 
-## 14. Data Quality Governance
+---
 
-Policies must cover:
+# 10. Valuation Layer
 
-- source reliability;
-- conflicting values;
-- stale observations;
-- collisions;
-- unverifiable links;
-- abandoned projects;
-- delistings;
-- migrations;
-- spam and impersonation;
-- evidence expiry.
+Purpose:
 
-Every unresolved, rejected, or archived candidate has a machine-readable reason. No silent drops.
+Estimate long-term investment value using trustworthy analytical evidence.
 
-## 15. Coverage Semantics
+Responsibilities include:
 
-Report coverage separately for:
+- valuation;
+- comparative valuation;
+- mispricing assessment;
+- asymmetry assessment;
+- scenario analysis.
 
-- source discovery;
-- canonical identity;
-- contract identity;
-- official-link verification;
-- screening;
-- analyzable candidates;
-- deep analysis;
-- historical point-in-time evidence.
+Outputs:
 
-Do not compress these dimensions into a misleading completeness score.
+- valuation intelligence;
+- evidence-supported scenarios;
+- uncertainty estimates.
 
-## 16. Practical Output
+---
 
-A live discovery cycle must produce a market-triage report with:
+# 11. Decision Support Layer
 
-- source records observed;
-- unique canonical candidates;
-- new and updated candidates;
-- ambiguity and conflict counts;
-- lifecycle distribution;
-- categories and sectors;
-- market-cap tiers where available;
-- evidence and source coverage;
-- prioritized candidates;
-- priority reasons;
-- missing evidence;
-- readiness for deep analysis.
+Purpose:
 
-This report is not an investment recommendation. It is the decision-useful answer to what deserves further research.
+Transform analytical intelligence into actionable decision support.
 
-## 17. Future Intrinsic-Value Layer
+Responsibilities include:
 
-Intrinsic value becomes a first-class domain only after discovery, registry, queue, and point-in-time evidence are stable.
+- monitoring;
+- watchlists;
+- alerts;
+- portfolio context;
+- review support.
 
-The future thesis engine should combine:
+Outputs:
 
-- historical analogues;
-- present fundamentals;
-- future market size;
-- attainable market share;
-- token value capture;
-- dilution and supply mechanics;
-- competitive moat;
-- network effects;
-- adoption curve;
-- scenario probabilities;
-- failure conditions.
+- decision-support intelligence;
+- user-facing investment guidance.
 
-Outputs must be scenario-based, evidence-linked, and historically calibrated.
+---
 
-## 18. Non-Goals for the Discovery Release
+# 12. Cross-Cutting Architectural Capabilities
 
-Do not prematurely implement:
+The following capabilities span every architectural layer:
 
-- 10x or 100x forecasts;
-- portfolio construction;
-- trade execution;
-- speculative ML without validated training data;
-- distributed workers unless required by proven scale;
-- generic API or dashboard expansion before backend lifecycle stability.
+- Deterministic execution.
+- Evidence traceability.
+- Explainability.
+- Historical replay.
+- Point-in-time correctness.
+- Confidence representation.
+- Missing evidence representation.
+- Failure transparency.
+- Operational observability.
 
-## 19. Acceptance Standard
+No architectural layer is exempt from these requirements.
 
-The architecture is functioning when Hunter can continuously maintain a dynamic market registry, resolve identities safely, screen thousands of candidates cheaply, produce a deterministic queue, and submit qualified candidates into the unchanged evidence-backed analysis path.
+---
+
+# 13. Architectural Boundaries
+
+Architectural layers remain independent.
+
+Each layer:
+
+- has clearly defined responsibilities;
+- consumes validated outputs from earlier layers;
+- does not duplicate another layer's responsibilities;
+- exposes well-defined outputs;
+- remains replaceable without redesigning unrelated layers.
+
+Architectural dependencies always flow forward.
+
+---
+
+# 14. Architectural Evolution
+
+Project Hunter is designed for incremental architectural evolution.
+
+New capabilities should extend existing architectural layers whenever practical instead of introducing parallel architectures or duplicated responsibilities.
+
+Architectural complexity should grow only when it measurably improves investment intelligence.
+
+---
+
+# 15. Relationship to Other Canonical Documents
+
+This document defines the logical architecture of Project Hunter.
+
+Architectural principles, governance, roadmap, implementation contracts, engineering procedures, release planning, and architecture decisions are intentionally maintained in their respective canonical documents.
+
+This document defines the architecture specification only.
