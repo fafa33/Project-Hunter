@@ -12,11 +12,9 @@ from hunter.value_capture.models import (
     SupplyBasisSnapshot,
     ValueCaptureRuleSnapshot,
 )
-from hunter.value_capture.providers import ValueCaptureAcquisitionResult
+from hunter.value_capture.providers import RegisteredValueCaptureProvider, ValueCaptureAcquisitionResult
 from hunter.value_capture.registry import ValueCaptureSourceRegistry
-from hunter.value_capture.repository import SupplyAndValueCaptureRepository, _service_commit
-
-_SERVICE_WRITE_TOKEN = object()
+from hunter.value_capture.repository import SupplyAndValueCaptureRepository, open_authoritative_value_capture_store
 
 
 class SupplyAndValueCaptureAuthorityError(ValueError):
@@ -26,10 +24,14 @@ class SupplyAndValueCaptureAuthorityError(ValueError):
 class SupplyAndValueCaptureService:
     def __init__(self, *, registry: ValueCaptureSourceRegistry, repository: SupplyAndValueCaptureRepository) -> None:
         self.registry = registry
-        self.repository = repository
+        self.repository, self.__commit = open_authoritative_value_capture_store(repository.path)
 
-    def ingest_evidence(self, result: ValueCaptureAcquisitionResult) -> FundamentalEvidenceRecord:
-        self._authorize_result(result, expected_kind="evidence")
+    def ingest_evidence(
+        self,
+        provider: RegisteredValueCaptureProvider,
+        result: ValueCaptureAcquisitionResult,
+    ) -> FundamentalEvidenceRecord:
+        self._authorize_result(provider, result, expected_kind="evidence")
         payload = result.payload
         record = FundamentalEvidenceRecord(
             record_id="pending",
@@ -55,14 +57,18 @@ class SupplyAndValueCaptureService:
             correction_reason=str(payload.get("correction_reason", "")),
             acquisition_id=result.acquisition_id,
         )
+        self._authorize_correction(record)
         normalized = self._normalize(record)
-        _service_commit(self.repository, (normalized,), service_token=_SERVICE_WRITE_TOKEN)
+        self.__commit(result.receipt, normalized)
         return normalized
 
-    def ingest_supply(self, result: ValueCaptureAcquisitionResult) -> SupplyBasisSnapshot:
-        self._authorize_result(result, expected_kind="supply")
+    def ingest_supply(
+        self,
+        provider: RegisteredValueCaptureProvider,
+        result: ValueCaptureAcquisitionResult,
+    ) -> SupplyBasisSnapshot:
+        self._authorize_result(provider, result, expected_kind="supply")
         payload = result.payload
-        evidence_ids = tuple(str(value) for value in payload["evidence_record_ids"])
         record = SupplyBasisSnapshot(
             record_id="pending",
             logical_id="pending",
@@ -78,7 +84,7 @@ class SupplyAndValueCaptureService:
             known_at=result.acquired_at,
             source_id=result.source_id,
             parser_version=result.parser_version,
-            evidence_record_ids=evidence_ids,
+            evidence_record_ids=tuple(str(value) for value in payload["evidence_record_ids"]),
             raw_payload_hash=result.raw_payload_hash,
             quality_state=str(payload.get("quality_state", "accepted")),  # type: ignore[arg-type]
             conflict_state=str(payload.get("conflict_state", "none")),  # type: ignore[arg-type]
@@ -87,14 +93,18 @@ class SupplyAndValueCaptureService:
             acquisition_id=result.acquisition_id,
         )
         self._require_evidence(record)
+        self._authorize_correction(record)
         normalized = self._normalize(record)
-        _service_commit(self.repository, (normalized,), service_token=_SERVICE_WRITE_TOKEN)
+        self.__commit(result.receipt, normalized)
         return normalized
 
-    def ingest_rule(self, result: ValueCaptureAcquisitionResult) -> ValueCaptureRuleSnapshot:
-        self._authorize_result(result, expected_kind="rule")
+    def ingest_rule(
+        self,
+        provider: RegisteredValueCaptureProvider,
+        result: ValueCaptureAcquisitionResult,
+    ) -> ValueCaptureRuleSnapshot:
+        self._authorize_result(provider, result, expected_kind="rule")
         payload = result.payload
-        evidence_ids = tuple(str(value) for value in payload["evidence_record_ids"])
         record = ValueCaptureRuleSnapshot(
             record_id="pending",
             logical_id="pending",
@@ -115,7 +125,7 @@ class SupplyAndValueCaptureService:
             known_at=result.acquired_at,
             source_id=result.source_id,
             parser_version=result.parser_version,
-            evidence_record_ids=evidence_ids,
+            evidence_record_ids=tuple(str(value) for value in payload["evidence_record_ids"]),
             raw_payload_hash=result.raw_payload_hash,
             quality_state=str(payload.get("quality_state", "accepted")),  # type: ignore[arg-type]
             conflict_state=str(payload.get("conflict_state", "none")),  # type: ignore[arg-type]
@@ -124,8 +134,9 @@ class SupplyAndValueCaptureService:
             acquisition_id=result.acquisition_id,
         )
         self._require_evidence(record)
+        self._authorize_correction(record)
         normalized = self._normalize(record)
-        _service_commit(self.repository, (normalized,), service_token=_SERVICE_WRITE_TOKEN)
+        self.__commit(result.receipt, normalized)
         return normalized
 
     def strict_known_supply(self, **kwargs: Any) -> SupplyBasisSnapshot | None:
@@ -134,9 +145,17 @@ class SupplyAndValueCaptureService:
     def strict_known_rule(self, **kwargs: Any) -> ValueCaptureRuleSnapshot | None:
         return self.repository.strict_known_rule(**kwargs)
 
-    def _authorize_result(self, result: ValueCaptureAcquisitionResult, *, expected_kind: str) -> None:
-        if not result.is_provider_sealed:
-            raise SupplyAndValueCaptureAuthorityError("unsealed provider acquisition result")
+    def _authorize_result(
+        self,
+        provider: RegisteredValueCaptureProvider,
+        result: ValueCaptureAcquisitionResult,
+        *,
+        expected_kind: str,
+    ) -> None:
+        if not provider.verify(result):
+            raise SupplyAndValueCaptureAuthorityError("provider signature or acquisition receipt is invalid")
+        if provider.source_id != result.source_id:
+            raise SupplyAndValueCaptureAuthorityError("provider source does not match acquisition receipt")
         if result.kind != expected_kind:
             raise SupplyAndValueCaptureAuthorityError("provider acquisition kind mismatch")
         source = self.registry.require(result.source_id)
@@ -161,6 +180,27 @@ class SupplyAndValueCaptureService:
                 raise SupplyAndValueCaptureAuthorityError("future-known evidence cannot support snapshot")
             if evidence.quality_state != "accepted" or evidence.conflict_state not in {"none", "resolved"}:
                 raise SupplyAndValueCaptureAuthorityError("non-authoritative evidence cannot support snapshot")
+
+    def _authorize_correction(
+        self,
+        record: FundamentalEvidenceRecord | SupplyBasisSnapshot | ValueCaptureRuleSnapshot,
+    ) -> None:
+        predecessor_id = record.supersedes_record_id
+        if predecessor_id is None:
+            return
+        predecessor: FundamentalEvidenceRecord | SupplyBasisSnapshot | ValueCaptureRuleSnapshot | None
+        if isinstance(record, FundamentalEvidenceRecord):
+            predecessor = self.repository.evidence(predecessor_id)
+        elif isinstance(record, SupplyBasisSnapshot):
+            predecessor = self.repository.supply(predecessor_id)
+        else:
+            predecessor = self.repository.rule(predecessor_id)
+        if predecessor is None:
+            raise SupplyAndValueCaptureAuthorityError("correction predecessor does not exist")
+        self.registry.authorize_correction_transition(
+            predecessor_source_id=predecessor.source_id,
+            successor_source_id=record.source_id,
+        )
 
     def _normalize(self, record: Any) -> Any:
         logical_id = _logical_id(record)
