@@ -69,7 +69,7 @@ class MarketFactSourceConfig:
                 "limitations": self.limitations,
             }
         )
-        return f"sha256:{sha256(payload.encode('utf-8')).hexdigest()}"
+        return f"sha256:{sha256(payload).hexdigest()}"
 
     def endpoint_for(self, listing_id: str) -> str:
         if not listing_id.strip():
