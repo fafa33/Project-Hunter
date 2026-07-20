@@ -12,9 +12,15 @@ from hunter.market_facts.models import (
 )
 
 DEFAULT_MARKET_FACTS_DB = Path("data/market_facts/runtime/market_facts.sqlite")
+MARKET_FACTS_MIGRATION_ID = "market-facts-v3.4.0-001"
 
 SCHEMA_SQL = """
 PRAGMA foreign_keys = ON;
+
+CREATE TABLE IF NOT EXISTS market_fact_schema_migrations (
+    migration_id TEXT PRIMARY KEY,
+    applied_at TEXT NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS observed_market_facts (
     record_id TEXT PRIMARY KEY,
@@ -106,7 +112,7 @@ class MarketFactWritePlan:
         *,
         records: tuple[ObservedMarketFactRecord, ...] = (),
         availability_events: tuple[MarketFactAvailabilityEvent, ...] = (),
-        authority: _RepositoryAuthority,
+        authority: object,
     ) -> None:
         self.records = records
         self.availability_events = availability_events
@@ -119,10 +125,6 @@ class ObservedMarketFactRepository:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._authority = _RepositoryAuthority()
         self._initialize()
-
-    @property
-    def authority(self) -> _RepositoryAuthority:
-        return self._authority
 
     def apply(self, plan: MarketFactWritePlan) -> None:
         if plan._authority is not self._authority:
@@ -175,6 +177,8 @@ class ObservedMarketFactRepository:
             "effective_at <= ?",
             "recorded_at <= ?",
             "known_at <= ?",
+            "quality_state = 'accepted'",
+            "conflict_state IN ('none', 'resolved')",
         ]
         params: list[object] = [
             entity_id,
@@ -218,8 +222,19 @@ class ObservedMarketFactRepository:
                 ).fetchall()
         return tuple(dict(row) for row in rows)
 
+    def migration_ids(self) -> tuple[str, ...]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT migration_id FROM market_fact_schema_migrations ORDER BY migration_id"
+            ).fetchall()
+        return tuple(str(row["migration_id"]) for row in rows)
+
     def count(self, table: str) -> int:
-        if table not in {"observed_market_facts", "market_fact_availability_events"}:
+        if table not in {
+            "market_fact_schema_migrations",
+            "observed_market_facts",
+            "market_fact_availability_events",
+        }:
             raise ValueError("unsupported market fact table")
         with self._connect() as conn:
             return int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
@@ -266,6 +281,10 @@ class ObservedMarketFactRepository:
     def _initialize(self) -> None:
         with self._connect() as conn:
             conn.executescript(SCHEMA_SQL)
+            conn.execute(
+                "INSERT OR IGNORE INTO market_fact_schema_migrations (migration_id, applied_at) VALUES (?, ?)",
+                (MARKET_FACTS_MIGRATION_ID, datetime.now(UTC).isoformat()),
+            )
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.path)
