@@ -124,7 +124,8 @@ def test_explain_cli_uses_real_persisted_acquisition_evidence_not_empty_sources(
     assert main(["explain", "aave"]) == 0
     audit = capsys.readouterr().out
 
-    assert "| Valuation | 0.0000 |" not in audit
+    assert "| Valuation | 0.0000 |" in audit
+    assert "contract_unavailable:valuation" in audit
 
 
 def test_market_validation_boundaries() -> None:
@@ -235,6 +236,8 @@ def _source(
     weight: float = 0.1,
     missing_fields: tuple[str, ...] = (),
 ) -> EngineValidationSource:
+    source = "opportunity-timing" if engine == "opportunity_timing" else "persisted-upstream"
+    collector = "timing-repository" if engine == "opportunity_timing" else "repository"
     return EngineValidationSource(
         engine=engine,
         score=score,
@@ -243,6 +246,9 @@ def _source(
         freshness=freshness,
         source_record_ids=(f"record:{prefix}:{engine}",),
         evidence_ids=(f"evidence:{prefix}:{engine}",),
+        repository_ids=(f"repository:{prefix}:{engine}",),
+        source=source,
+        collector=collector,
         raw_input_metrics={"raw": score, "source": prefix},
         normalized_inputs={"normalized": score},
         applied_weight=weight,

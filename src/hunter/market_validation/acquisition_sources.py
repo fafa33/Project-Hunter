@@ -11,19 +11,18 @@ from hunter.economic.models import EconomicEdge, EconomicGraphMetrics
 from hunter.economic.repository import EconomicGraphRepository
 from hunter.graph.models import TechnologyEdge, TechnologyGraphMetrics
 from hunter.graph.repository import TechnologyGraphRepository
+from hunter.jsonl_contract import JsonlRecord
 from hunter.macro import MacroRepository, MacroSnapshot
 from hunter.market_validation.models import EngineValidationSource, Scalar
 from hunter.narrative.provider import NARRATIVE_ENGINES, NARRATIVE_METRIC
 from hunter.scenario import SCENARIO_ENGINES, ScenarioRepository
 from hunter.scenario.models import ScenarioImpact
 from hunter.timing.models import TimingAssessment
-from hunter.timing.repository import TimingRepository
+from hunter.timing.repository import TIMING_JSONL_SCHEMA, TimingRepository, timing_assessment_from_payload
 from hunter.whale import WHALE_ENGINE_TARGETS, WhaleRepository, WhaleSnapshot
 
-MARKET_ENGINES: tuple[str, ...] = ("valuation", "comparative_valuation", "mispricing", "asymmetry")
 GRAPH_ENGINES: tuple[str, ...] = (
     "technology_necessity",
-    "necessity_gap",
     "future_demand",
     "probability",
     "pattern_matching",
@@ -34,7 +33,6 @@ ECONOMIC_GRAPH_ENGINES: tuple[str, ...] = (
     "capital_rotation",
     "future_demand",
     "probability",
-    "opportunity_timing",
     "technology_necessity",
     "committee",
 )
@@ -74,9 +72,6 @@ def acquisition_engine_sources(
         defillama = evidence_by_key.get(("defillama", "defillama_protocol_profile"))
         github = evidence_by_key.get(("github", "github_repository_profile"))
         narrative = evidence_by_key.get(("narrative", NARRATIVE_METRIC))
-        if coingecko is not None:
-            for engine in MARKET_ENGINES:
-                sources[project_id].append(_source_from_evidence(engine, coingecko.evidence, coingecko.validation))
         if github is not None:
             sources[project_id].append(_source_from_evidence("developer", github.evidence, github.validation))
         if defillama is not None:
@@ -91,6 +86,7 @@ def acquisition_engine_sources(
         if health is not None:
             sources[project_id].append(health)
     if hasattr(repository, "root"):
+        timing_repository = TimingRepository()
         macro_sources = _macro_engine_sources(as_of=as_of)
         whale_sources = _whale_engine_sources(as_of=as_of)
         for project_id in evidence_by_project:
@@ -102,7 +98,9 @@ def acquisition_engine_sources(
             sources[project_id].extend(economic_sources)
         for project_id, scenario_sources in _scenario_engine_sources(as_of=as_of).items():
             sources[project_id].extend(scenario_sources)
-        for project_id, timing_sources in _timing_engine_sources(as_of=as_of).items():
+        for project_id, timing_sources in _timing_engine_sources(
+            timing_repository.records(timing_repository.assessment_path), as_of=as_of
+        ).items():
             sources[project_id].extend(timing_sources)
     return {project_id: tuple(sorted(items, key=lambda item: item.engine)) for project_id, items in sources.items()}
 
@@ -111,8 +109,7 @@ def _macro_engine_sources(*, as_of: datetime | None) -> tuple[EngineValidationSo
     snapshot = MacroRepository().latest_snapshot()
     if snapshot is None or not snapshot.evidence:
         return ()
-    timestamp = as_of.astimezone(UTC) if as_of is not None else snapshot.generated_at
-    return tuple(_macro_source(engine, snapshot, timestamp) for engine in MACRO_ENGINE_TARGETS)
+    return tuple(_macro_source(engine, snapshot, snapshot.generated_at) for engine in MACRO_ENGINE_TARGETS)
 
 
 def _macro_source(engine: str, snapshot: MacroSnapshot, timestamp: datetime) -> EngineValidationSource:
@@ -166,8 +163,7 @@ def _whale_engine_sources(*, as_of: datetime | None) -> tuple[EngineValidationSo
     snapshot = WhaleRepository().latest_snapshot()
     if snapshot is None or not snapshot.evidence:
         return ()
-    timestamp = as_of.astimezone(UTC) if as_of is not None else snapshot.generated_at
-    return tuple(_whale_source(engine, snapshot, timestamp) for engine in WHALE_ENGINE_TARGETS)
+    return tuple(_whale_source(engine, snapshot, snapshot.generated_at) for engine in WHALE_ENGINE_TARGETS)
 
 
 def _whale_source(engine: str, snapshot: WhaleSnapshot, timestamp: datetime) -> EngineValidationSource:
@@ -328,7 +324,7 @@ def _validation_health_source(
     score = _mean(tuple(1.0 if item.validation.status == "valid" else 0.0 for item in evidence))
     confidence = _mean(tuple(item.validation.confidence for item in evidence))
     freshness = _mean(tuple(item.validation.freshness for item in evidence))
-    timestamp = as_of.astimezone(UTC) if as_of is not None else newest
+    timestamp = newest
     return EngineValidationSource(
         engine="validation_health",
         score=score,
@@ -367,7 +363,7 @@ def _graph_engine_sources(*, as_of: datetime | None) -> dict[str, tuple[EngineVa
         repository_ids = tuple(sorted({repository_id for edge in edges for repository_id in edge.repository_ids}))
         if not edges or not evidence_ids:
             continue
-        timestamp = as_of.astimezone(UTC) if as_of is not None else graph.generated_at
+        timestamp = graph.generated_at
         confidence = _mean(tuple(edge.dependency_confidence for edge in edges))
         freshness = _mean(tuple(edge.freshness for edge in edges))
         rows[project_id] = tuple(
@@ -421,7 +417,7 @@ def _graph_source(
 
 
 def _graph_score(engine: str, metrics: TechnologyGraphMetrics) -> float:
-    if engine in {"technology_necessity", "necessity_gap"}:
+    if engine == "technology_necessity":
         return _mean((metrics.infrastructure_centrality, metrics.dependency_centrality, metrics.technology_uniqueness))
     if engine == "capital_rotation":
         return _mean((metrics.dependency_centrality, metrics.dependency_concentration))
@@ -453,7 +449,7 @@ def _economic_graph_engine_sources(*, as_of: datetime | None) -> dict[str, tuple
         repository_ids = tuple(sorted({repository_id for edge in edges for repository_id in edge.repository_ids}))
         if not edges or not evidence_ids:
             continue
-        timestamp = as_of.astimezone(UTC) if as_of is not None else graph.generated_at
+        timestamp = graph.generated_at
         confidence = _mean(tuple(edge.dependency_confidence for edge in edges))
         freshness = _mean(tuple(edge.freshness for edge in edges))
         rows[project_id] = tuple(
@@ -518,16 +514,16 @@ def _economic_graph_score(engine: str, metrics: EconomicGraphMetrics) -> float:
         return _mean((metrics.value_capture, metrics.economic_moat, metrics.economic_resilience))
     if engine == "probability":
         return _mean((metrics.economic_resilience, metrics.economic_moat, 1.0 - metrics.economic_fragility))
-    if engine == "opportunity_timing":
-        return _mean((metrics.capital_centrality, metrics.revenue_centrality))
     if engine == "technology_necessity":
         return _mean((metrics.switching_cost, metrics.economic_moat))
     return _mean((metrics.economic_moat, metrics.value_capture, metrics.economic_resilience))
 
 
 def _scenario_engine_sources(*, as_of: datetime | None) -> dict[str, tuple[EngineValidationSource, ...]]:
+    repository = ScenarioRepository()
+    scenario_times = {item.scenario_id: item.created_at for item in repository.scenarios()}
     impacts_by_project: dict[str, list[ScenarioImpact]] = defaultdict(list)
-    for impact in ScenarioRepository().impacts():
+    for impact in repository.impacts():
         if impact.validation_status == "VALID" and impact.evidence_ids:
             impacts_by_project[impact.project_id].append(impact)
     rows: dict[str, tuple[EngineValidationSource, ...]] = {}
@@ -539,12 +535,18 @@ def _scenario_engine_sources(*, as_of: datetime | None) -> dict[str, tuple[Engin
         )
         if not evidence_ids:
             continue
-        timestamp = as_of.astimezone(UTC) if as_of is not None else datetime.now(tz=UTC)
+        timestamps = tuple(
+            scenario_times[item.scenario_id] for item in impact_tuple if item.scenario_id in scenario_times
+        )
+        if len(timestamps) != len(impact_tuple):
+            continue
+        timestamp = max(timestamps)
         confidence = _mean(tuple(impact.confidence for impact in impact_tuple))
         freshness = _mean(tuple(impact.freshness for impact in impact_tuple))
         rows[project_id] = tuple(
             _scenario_source(engine, impact_tuple, timestamp, confidence, freshness, evidence_ids, repository_ids)
             for engine in SCENARIO_ENGINES
+            if engine != "opportunity_timing"
         )
     return rows
 
@@ -601,22 +603,84 @@ def _scenario_score(engine: str, impacts: tuple[ScenarioImpact, ...]) -> float:
         return _mean(tuple(1.0 - impact.system_fragility for impact in impacts))
     if engine == "capital_rotation":
         return _mean(tuple(impact.economic_propagation for impact in impacts))
-    if engine == "opportunity_timing":
-        return _mean(tuple(max(impact.direct_impact, impact.indirect_impact) for impact in impacts))
     return _mean(tuple(impact.infrastructure_resilience + impact.economic_resilience for impact in impacts)) / 2
 
 
-def _timing_engine_sources(*, as_of: datetime | None) -> dict[str, tuple[EngineValidationSource, ...]]:
-    timestamp = as_of.astimezone(UTC) if as_of is not None else datetime.now(tz=UTC)
+def _timing_engine_sources(
+    records: tuple[JsonlRecord, ...], *, as_of: datetime | None
+) -> dict[str, tuple[EngineValidationSource, ...]]:
+    """Select canonical Timing without repository latest/current fallbacks.
+
+    The caller is the service-owned assembly boundary. This adapter is pure: it
+    receives persisted record envelopes and never performs I/O or invents time.
+    """
+
+    if as_of is None:
+        return {}
+    cutoff = as_of.astimezone(UTC)
     rows: dict[str, tuple[EngineValidationSource, ...]] = {}
-    for project_id, assessment in TimingRepository().latest_by_project().items():
-        if assessment.generated_at > timestamp or assessment.classification == "INSUFFICIENT_EVIDENCE":
+    eligible: dict[str, tuple[JsonlRecord, TimingAssessment]] = {}
+    for record in records:
+        if not _strict_known_timing_record(record, cutoff=cutoff):
             continue
-        rows[project_id] = (_timing_source(assessment),)
+        assessment = timing_assessment_from_payload(record.payload)
+        current = eligible.get(assessment.project_id)
+        selection_key = (record.effective_at, record.recorded_at, assessment.assessment_id)
+        if current is None:
+            eligible[assessment.project_id] = (record, assessment)
+            continue
+        current_record, current_assessment = current
+        current_key = (
+            current_record.effective_at,
+            current_record.recorded_at,
+            current_assessment.assessment_id,
+        )
+        if selection_key > current_key:
+            eligible[assessment.project_id] = (record, assessment)
+    for project_id, (record, assessment) in eligible.items():
+        rows[project_id] = (_timing_source(assessment, record=record),)
     return rows
 
 
-def _timing_source(assessment: TimingAssessment) -> EngineValidationSource:
+def _strict_known_timing_record(record: JsonlRecord, *, cutoff: datetime) -> bool:
+    if not record.strict_known_eligible:
+        return False
+    if record.schema_version != TIMING_JSONL_SCHEMA:
+        return False
+    times = (record.effective_at, record.recorded_at, record.known_at)
+    if any(value is None or value > cutoff for value in times):
+        return False
+    payload = record.payload
+    if str(payload.get("lifecycle_status", "ACTIVE")).upper() != "ACTIVE":
+        return False
+    if payload.get("superseded_by_id") not in (None, ""):
+        return False
+    if str(payload.get("validation_status", "VALID")).upper() != "VALID":
+        return False
+    try:
+        assessment = timing_assessment_from_payload(payload)
+    except (KeyError, TypeError, ValueError):
+        return False
+    if assessment.generated_at > cutoff or assessment.generated_at != record.effective_at:
+        return False
+    if assessment.classification == "INSUFFICIENT_EVIDENCE":
+        return False
+    if assessment.freshness < 0.5 or assessment.stale_evidence:
+        return False
+    if not assessment.evidence_ids or not assessment.repository_ids:
+        return False
+    return "opportunity_timing" not in assessment.source_engines
+
+
+def _timing_source(assessment: TimingAssessment, *, record: JsonlRecord | None = None) -> EngineValidationSource:
+    time_diagnostics: dict[str, Scalar] = {}
+    if record is not None:
+        time_diagnostics = {
+            "effective_at": record.effective_at.isoformat() if record.effective_at else None,
+            "recorded_at": record.recorded_at.isoformat() if record.recorded_at else None,
+            "known_at": record.known_at.isoformat() if record.known_at else None,
+            "schema_version": record.schema_version,
+        }
     return EngineValidationSource(
         engine="opportunity_timing",
         score=assessment.entry_score,
@@ -630,7 +694,7 @@ def _timing_source(assessment: TimingAssessment) -> EngineValidationSource:
         repository_ids=assessment.repository_ids,
         validation_status="VALID",
         status="AVAILABLE",
-        raw_input_metrics=dict(assessment.raw_inputs),
+        raw_input_metrics={**dict(assessment.raw_inputs), **time_diagnostics},
         normalized_inputs=dict(assessment.normalized_factors),
         applied_weight=0.0,
         weighted_contribution=0.0,
