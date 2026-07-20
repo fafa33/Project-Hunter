@@ -25,7 +25,9 @@ class JsonTransport(Protocol):
 
 class UrllibJsonTransport:
     def get_json(self, url: str, timeout_seconds: float) -> object:
-        request = urllib.request.Request(url, headers={"Accept": "application/json", "User-Agent": "Project-Hunter/3.4"})
+        request = urllib.request.Request(
+            url, headers={"Accept": "application/json", "User-Agent": "Project-Hunter/3.4"}
+        )
         with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
             return json.loads(response.read().decode("utf-8"))
 
@@ -66,9 +68,13 @@ class CoinGeckoObservedMarketFactProvider:
             status: MarketFactStatus = "rate_limited" if exc.code == 429 else "unavailable"
             return self._unavailable(request, acquired_at, status, f"http_{exc.code}", source.fingerprint, endpoint)
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
-            return self._unavailable(request, acquired_at, "unavailable", type(exc).__name__, source.fingerprint, endpoint)
+            return self._unavailable(
+                request, acquired_at, "unavailable", type(exc).__name__, source.fingerprint, endpoint
+            )
         if not isinstance(payload, Mapping):
-            return self._unavailable(request, acquired_at, "malformed", "payload_not_mapping", source.fingerprint, endpoint)
+            return self._unavailable(
+                request, acquired_at, "malformed", "payload_not_mapping", source.fingerprint, endpoint
+            )
         raw_hash = f"sha256:{sha256(canonicalize(payload)).hexdigest()}"
         try:
             facts = self._parse(payload, request, source.units, acquired_at)
