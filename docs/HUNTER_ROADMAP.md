@@ -1,262 +1,236 @@
 # Project Hunter Roadmap
 
-## Roadmap Rule
+## Purpose
 
-Every release must improve real investment decisions. Features that do not improve discovery quality, evidence quality, ranking quality, or decision usefulness move later.
+The Project Hunter Roadmap defines the long-term strategic evolution of the platform.
 
-## Phase 0 — Preserve the Production Baseline
+It describes **what** Hunter is expected to become over time. It does not define implementation details, release specifications, engineering governance, or sprint scope. Those responsibilities belong to their respective canonical documents.
 
-Status: completed foundation.
+Every roadmap milestone must contribute directly to improving investment decision quality through better discovery, stronger evidence, improved prioritization, or more reliable analytical conclusions.
 
-Preserve:
+---
 
-- deterministic evidence-backed Market Validation;
-- `EvidenceBackedProjectExecutor`;
-- explainability;
-- historical replay discipline;
-- automation lifecycle;
-- existing acquisition and intelligence engines;
-- regression tests.
+## Guiding Principles
 
-## Phase 1 — Investor-Useful Global Discovery
+Roadmap priorities are determined by the following principles:
 
-### v2.7.0 — Global Discovery and Candidate Registry
+- Improve real investment decisions.
+- Strengthen evidence before expanding analysis.
+- Expand market coverage before increasing analytical complexity.
+- Preserve deterministic, explainable, and replayable behavior.
+- Build new capabilities only after prerequisite foundations are trustworthy.
+- Prefer incremental production-safe evolution over large architectural rewrites.
 
-Primary result:
+---
 
-> Hunter continuously tells the user what deserves deeper analysis next and why.
+## Phase 0 — Preserve the Production Foundation
 
-Deliverables:
+Objective:
 
-- independent discovery adapter contract;
-- live CoinGecko and DefiLlama discovery;
-- one decentralized-market source when operationally reachable;
-- seeded import of the existing 50 projects;
-- dynamic SQL-backed Candidate Registry;
-- identity-ready registry structures;
-- candidate lifecycle;
-- lightweight market-wide screening;
-- persistent prioritized Candidate Queue;
-- discovery automation;
-- point-in-time candidate existence;
-- practical market-triage report.
+Preserve the existing production capabilities while ensuring architectural stability.
 
-Success test:
+Focus areas:
 
-Hunter sees materially more than the static universe and produces a defensible prioritized list from live market data.
+- Deterministic execution.
+- Evidence-backed analysis.
+- Historical replay.
+- Explainability.
+- Automation lifecycle.
+- Regression safety.
+- Operational stability.
 
-### v2.7.1 — Discovery Hardening and Production Verification
+---
 
-Delivered hardening:
+## Phase 1 — Global Market Discovery
 
-- provider retry and failure isolation;
-- registry merge corrections;
-- deterministic screening gates;
-- batch registry writes;
-- expanded coverage reporting.
+Objective:
 
-### v2.8.0 — Global Market Expansion
+Continuously discover investment opportunities across the cryptocurrency ecosystem.
 
-Primary result:
+Major capabilities:
 
-> Hunter materially expands market visibility through additional public discovery sources.
+- Global asset discovery.
+- Candidate Registry.
+- Identity-ready candidate lifecycle.
+- Dynamic market screening.
+- Candidate prioritization.
+- Discovery automation.
+- Market coverage reporting.
+- Discovery source expansion.
 
-Deliverables:
+Expected outcome:
 
-- GeckoTerminal discovery;
-- DexScreener discovery;
-- chain-plus-contract identifiers for DEX-market candidates;
-- provider overlap and uniqueness reporting;
-- chain, ecosystem, and category coverage reporting;
-- source-health automation job;
-- deterministic tests for adapter normalization and contract-based overlap.
+Hunter continuously identifies what deserves deeper analysis and explains why.
 
-Success test:
+---
 
-Hunter discovers substantially more candidates than the seed universe while preserving evidence provenance and avoiding unsupported identity claims.
+## Phase 2 — Identity and Candidate Quality
 
-## Phase 1.5 — Trust and Identity Foundation
+Objective:
 
-### v2.9.0 — Identity Resolution Foundation
+Improve confidence in discovered opportunities before deeper analysis.
 
-Primary result:
+Major capabilities:
 
-> Hunter safely determines which discovered records refer to the same economic entity and which must remain ambiguous.
+- Identity resolution.
+- Duplicate elimination.
+- Ambiguity management.
+- Candidate lifecycle refinement.
+- Screening improvements.
+- Trustworthy candidate prioritization.
 
-Deliverables:
+Expected outcome:
 
-- deterministic Identity Resolution service;
-- exact, probable, ambiguous, conflict, rejected, and unresolved outcomes;
-- chain-aware contract matching;
-- official domain and repository matching when verified;
-- conflict persistence and reporting;
-- lifecycle integration for identified candidates;
-- identity coverage reporting.
+Hunter evaluates unique economic entities rather than disconnected market records.
 
-Success test:
+---
 
-Hunter reduces duplicate and ambiguous candidates without merging by ticker equality, popularity, or unsupported assumptions.
+## Phase 3 — Investment Intelligence
 
-## Phase 2 — Better Candidate Selection
+Objective:
 
-### Competitive and Peer Intelligence
+Expand analytical depth only after trustworthy discovery and identity foundations exist.
 
-- direct and indirect competitors;
-- substitute technologies;
-- centralized incumbents;
-- peer-set discovery;
-- competitive density;
-- switching costs;
-- differentiation and replaceability.
+Major capabilities:
 
-### Tokenomics and Supply Mechanics
+- Competitive intelligence.
+- Tokenomics.
+- Liquidity analysis.
+- Revenue quality.
+- Economic quality.
+- Market structure.
+- Capital efficiency.
 
-- circulating float;
-- unlock schedules;
-- emissions;
-- inflation;
-- staking concentration;
-- treasury supply;
-- holder concentration;
-- dilution pressure.
+Expected outcome:
 
-### Revenue and Economic Quality
+Candidate ranking becomes increasingly evidence-driven rather than popularity-driven.
 
-- fees and revenue;
-- sustainability;
-- incentive dependence;
-- user-paid versus subsidized activity;
-- value capture by the token;
-- sector-normalized economic quality.
+---
 
-### Market Structure and Liquidity
+## Phase 4 — Durable Competitive Advantage
 
-- exchange and DEX coverage;
-- depth and slippage;
-- float-adjusted market cap;
-- liquidity concentration;
-- manipulation risk;
-- tradability constraints.
+Objective:
 
-Success test:
+Understand why long-term leaders maintain or lose their position.
 
-The top candidate list becomes more selective and more useful than simple market-cap, narrative, or momentum rankings.
+Major capabilities:
 
-## Phase 3 — Network Effects and Moat
+- Network effects.
+- Competitive moats.
+- Ecosystem growth.
+- Developer ecosystems.
+- Governance durability.
+- Integration density.
+- Long-term competitive positioning.
 
-Build only after reliable peer sets and time series exist.
+Expected outcome:
 
-- developer ecosystem growth;
-- user and liquidity graphs;
-- integration density;
-- validator/miner/provider networks;
-- data and distribution advantages;
-- protocol composability;
-- community and governance durability;
-- moat strengthening or deterioration over time.
+Hunter explains sustainable competitive advantage rather than temporary market leadership.
 
-Success test:
+---
 
-Hunter can explain why a leader is likely to retain its position or why an apparently strong project is replaceable.
+## Phase 5 — Historical Intelligence
 
-## Phase 4 — Historical Pattern and Failure Calibration
+Objective:
 
-Expand historical validation beyond price outcomes.
+Calibrate analytical conclusions against historical reality.
 
-- point-in-time candidate universes;
-- survivor and failed-project cohorts;
-- early Bitcoin, Ethereum, Solana, Chainlink and other winners;
-- projects with similar narratives that failed;
-- feature calibration by sector and market regime;
-- false-positive and false-negative tracking;
-- thesis invalidation history.
+Major capabilities:
 
-Success test:
+- Historical replay.
+- Historical validation.
+- Winner and failure analysis.
+- Point-in-time universes.
+- Calibration.
+- Thesis validation.
+- False-positive reduction.
 
-Hunter's opportunity judgments are calibrated against both historical winners and failures without lookahead bias.
+Expected outcome:
 
-## Phase 5 — Intrinsic Value and Asymmetric Opportunity
+Hunter continuously improves analytical quality using historical evidence rather than hindsight.
 
-The final investment thesis engine combines past, present, and future.
+---
 
-Required inputs:
+## Phase 6 — Valuation and Opportunity Intelligence
 
-- addressable market evolution;
-- plausible market share;
-- adoption curve;
-- competitive position;
-- network effects;
-- economic output;
-- token value capture;
-- supply and dilution;
-- macro regime;
-- historical calibration;
-- execution and regulatory risks.
+Objective:
 
-Required outputs:
+Estimate long-term investment opportunity using evidence-supported valuation.
 
-- current market value;
-- bear, base, and bull intrinsic-value ranges;
-- expected upside multiple by horizon;
-- confidence and evidence coverage;
-- assumptions;
-- invalidation conditions;
-- historical analogues;
-- reasons the market may be mispricing the asset.
+Major capabilities:
 
-Hunter may state that an asset has 10x, 100x, or greater plausible upside only when the number follows from explicit scenarios, defensible market-size assumptions, token value capture, and evidence-linked uncertainty.
+- Intrinsic value estimation.
+- Comparative valuation.
+- Mispricing detection.
+- Asymmetry analysis.
+- Scenario analysis.
+- Confidence estimation.
+- Evidence coverage reporting.
 
-Success test:
+Expected outcome:
 
-Hunter identifies the largest gaps between current valuation and evidence-supported long-term value, regardless of whether the asset is famous or obscure.
+Hunter identifies evidence-supported long-term investment opportunities together with their assumptions, uncertainty, and supporting evidence.
 
-## Phase 6 — Personal Decision Support
+---
 
-After discovery and thesis quality are validated through real personal use:
+## Phase 7 — Personal Decision Support
 
-- watchlists and thesis monitoring;
-- alerts when assumptions strengthen or break;
-- opportunity timing integration;
-- portfolio context and concentration warnings;
-- exit and re-evaluation triggers;
-- personal dashboard.
+Objective:
 
-Success test:
+Transform analytical intelligence into practical investment decision support.
 
-Hunter improves actual entry, sizing, hold, review, and exit decisions.
+Major capabilities:
 
-## Phase 7 — Productization
+- Watchlists.
+- Thesis monitoring.
+- Opportunity alerts.
+- Portfolio context.
+- Review triggers.
+- Personal dashboard.
 
-Only after tracked personal results demonstrate sustained value:
+Expected outcome:
 
-- stable personal UI;
-- external API if needed;
-- multi-user permissions;
-- subscription product;
-- mobile or public web applications;
-- distributed infrastructure.
+Hunter becomes a reliable personal investment decision-support platform.
 
-## Explicitly Deferred
+---
 
-Until discovery and practical decision value are proven, defer:
+## Phase 8 — Productization
 
-- generic dashboard expansion;
-- cosmetic report redesign;
-- broad REST API;
-- distributed workers;
-- additional deep engines without clear marginal value;
-- public product complexity.
+Objective:
 
-## Release Decision Checklist
+Expand beyond personal use only after sustained real-world validation.
 
-Before approving the next milestone:
+Major capabilities:
 
-1. What real investment decision improves?
-2. What new market coverage becomes available?
-3. What false conclusion becomes less likely?
-4. What evidence becomes stronger or more timely?
-5. Can the user benefit immediately after release?
-6. Is this the smallest production-safe implementation?
-7. Does it preserve point-in-time truth and explainability?
+- Stable user interface.
+- Public APIs when justified.
+- Multi-user support.
+- Subscription platform.
+- Mobile applications.
+- Scalable infrastructure.
 
-If these questions cannot be answered clearly, the milestone should not be next.
+Expected outcome:
+
+Hunter evolves from a validated personal platform into a production-ready investment intelligence product.
+
+---
+
+## Deferred Work
+
+The following remain intentionally deferred until earlier phases demonstrate practical value:
+
+- Cosmetic enhancements.
+- Large-scale infrastructure expansion.
+- Public platform complexity.
+- Features without measurable decision value.
+- Analytical capabilities lacking sufficient evidence foundations.
+
+---
+
+## Roadmap Governance
+
+This roadmap defines the long-term direction of Project Hunter.
+
+Implementation details, release planning, sprint scope, engineering governance, architectural ownership, and development procedures are intentionally defined in their respective canonical documents.
+
+This document defines the roadmap only.
