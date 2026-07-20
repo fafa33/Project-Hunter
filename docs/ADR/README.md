@@ -50,6 +50,8 @@ Accepted ADRs remain binding until another ADR supersedes or deprecates them. Ru
 | [0017](0017-experimental-opportunity-pipeline.md) | Experimental Opportunity Pipeline | Accepted | Controlled research/replay authorization without production promotion |
 | [0018](0018-experimental-opportunity-factor-sourcing.md) | Experimental Opportunity Factor Sourcing | Accepted | Factor-by-factor persisted-source eligibility and anti-double-counting gate |
 | [0019](0019-prediction-evaluation-authority.md) | Prediction Evaluation Authority | Accepted | Canonical evaluation lifecycle, correctness, accuracy, and calibration authority |
+| [0020](0020-canonical-market-validation-input-authority.md) | Canonical Market Validation Input Authority and Strict-Known Replay | Accepted | Production input ownership, missingness, anti-aliasing, and cutoff-safe replay |
+| [0021](0021-canonical-valuation-evidence-authority.md) | Canonical Valuation Evidence Authority | Accepted | Evidence contracts for valuation, comparative valuation, mispricing, and asymmetry |
 
 ## Creating A New ADR
 
