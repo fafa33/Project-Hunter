@@ -5,18 +5,15 @@ from hashlib import sha256
 
 from hunter.execution.canonicalization import canonicalize
 from hunter.market_facts.models import (
-    MARKET_FACTS_SCHEMA_VERSION,
     MarketFactAcquisitionResult,
     MarketFactAvailabilityEvent,
     MarketFactRequest,
+    NormalizedMarketFact,
     ObservedMarketFactRecord,
     validate_fact_value,
 )
 from hunter.market_facts.registry import MarketFactSourceConfig, MarketFactSourceRegistry
-from hunter.market_facts.repository import (
-    MarketFactWritePlan,
-    ObservedMarketFactRepository,
-)
+from hunter.market_facts.repository import MarketFactWritePlan, ObservedMarketFactRepository
 
 
 class MarketFactAuthorityError(ValueError):
@@ -53,9 +50,7 @@ class ObservedMarketFactService:
             )
             return ()
         records = tuple(self._record(source, request, result, fact, recorded_at) for fact in result.facts)
-        self.repository.apply(
-            MarketFactWritePlan(records=records, authority=self.repository.authority)
-        )
+        self.repository.apply(MarketFactWritePlan(records=records, authority=self.repository.authority))
         return records
 
     def correct(
@@ -95,9 +90,7 @@ class ObservedMarketFactService:
         if len(replacements) != 1:
             raise MarketFactAuthorityError("correction must contain exactly one fact matching predecessor lineage")
         records = tuple(replacements)
-        self.repository.apply(
-            MarketFactWritePlan(records=records, authority=self.repository.authority)
-        )
+        self.repository.apply(MarketFactWritePlan(records=records, authority=self.repository.authority))
         return records
 
     def strict_known_fact(
@@ -185,16 +178,12 @@ class ObservedMarketFactService:
         source: MarketFactSourceConfig,
         request: MarketFactRequest,
         result: MarketFactAcquisitionResult,
-        fact: object,
+        fact: NormalizedMarketFact,
         recorded_at: datetime,
         *,
         supersedes_record_id: str | None = None,
         correction_reason: str = "",
     ) -> ObservedMarketFactRecord:
-        from hunter.market_facts.models import NormalizedMarketFact
-
-        if not isinstance(fact, NormalizedMarketFact):
-            raise TypeError("fact must be NormalizedMarketFact")
         logical_id = _logical_id(request, fact.fact_type, fact.quote_currency, fact.venue_scope)
         identity_payload = {
             "logical_id": logical_id,
