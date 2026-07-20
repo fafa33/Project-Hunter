@@ -8,12 +8,10 @@ import pytest
 
 from hunter.market_facts import (
     CoinGeckoObservedMarketFactProvider,
-    MarketFactAcquisitionResult,
     MarketFactAuthorityError,
     MarketFactIdentity,
     MarketFactRequest,
     MarketFactSourceRegistry,
-    NormalizedMarketFact,
     ObservedMarketFactRepository,
     ObservedMarketFactService,
     RepositoryAuthorizationError,
