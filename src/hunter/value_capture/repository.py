@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Callable
 from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
@@ -14,12 +13,11 @@ from hunter.value_capture.models import (
     SupplyBasisSnapshot,
     ValueCaptureRuleSnapshot,
 )
-from hunter.value_capture.providers import AcquisitionReceipt
+from hunter.value_capture.providers import AcquisitionReceipt, ValueCaptureVerificationKeyRegistry
 
 DEFAULT_VALUE_CAPTURE_DB = Path("data/value_capture/runtime/value_capture.sqlite")
 VALUE_CAPTURE_MIGRATION_ID = "supply-value-capture-v3.5.0-003"
 Record = FundamentalEvidenceRecord | SupplyBasisSnapshot | ValueCaptureRuleSnapshot
-AuthorityWriter = Callable[[AcquisitionReceipt, Record], None]
 
 SCHEMA_SQL = """
 PRAGMA foreign_keys = ON;
@@ -37,6 +35,8 @@ CREATE TABLE IF NOT EXISTS value_capture_acquisition_receipts (
     endpoint TEXT NOT NULL,
     parser_version TEXT NOT NULL,
     registry_fingerprint TEXT NOT NULL,
+    signing_key_id TEXT NOT NULL,
+    signature TEXT NOT NULL,
     acquired_at TEXT NOT NULL,
     entity_id TEXT NOT NULL,
     economic_claim_id TEXT NOT NULL,
@@ -123,8 +123,14 @@ class ValueCaptureIntegrityError(ValueError):
 
 
 class SupplyAndValueCaptureRepository:
-    def __init__(self, path: str | Path = DEFAULT_VALUE_CAPTURE_DB) -> None:
+    def __init__(
+        self,
+        path: str | Path = DEFAULT_VALUE_CAPTURE_DB,
+        *,
+        verification_keys: ValueCaptureVerificationKeyRegistry | None = None,
+    ) -> None:
         self.path = Path(path)
+        self.__verification_keys = verification_keys
         self.path.parent.mkdir(parents=True, exist_ok=True)
         _initialize(self.path)
 
@@ -227,16 +233,13 @@ class SupplyAndValueCaptureRepository:
             row = conn.execute(f"SELECT payload_json FROM {table} WHERE record_id = ?", (record_id,)).fetchone()
         return json.loads(str(row["payload_json"])) if row is not None else None
 
-
-def open_authoritative_value_capture_store(
-    path: str | Path = DEFAULT_VALUE_CAPTURE_DB,
-) -> tuple[SupplyAndValueCaptureRepository, AuthorityWriter]:
-    repository = SupplyAndValueCaptureRepository(path)
-    database_path = repository.path
-
-    def commit(receipt: AcquisitionReceipt, record: Record) -> None:
+    def _commit_authoritative(self, receipt: AcquisitionReceipt, record: Record) -> None:
+        if self.__verification_keys is None:
+            raise PermissionError("repository is read-only without verification keys")
+        if not self.__verification_keys.verify_receipt(receipt):
+            raise ValueCaptureIntegrityError("receipt signature is not verification-key authorized")
         _validate_receipt_binding(receipt, record)
-        with _connect(database_path) as conn:
+        with _connect(self.path) as conn:
             conn.execute("BEGIN IMMEDIATE")
             try:
                 _insert_receipt(conn, receipt)
@@ -245,8 +248,6 @@ def open_authoritative_value_capture_store(
                 conn.rollback()
                 raise
             conn.commit()
-
-    return repository, commit
 
 
 def _initialize(path: Path) -> None:
@@ -294,9 +295,9 @@ def _insert_receipt(conn: sqlite3.Connection, receipt: AcquisitionReceipt) -> No
         """
         INSERT INTO value_capture_acquisition_receipts (
             acquisition_id,receipt_hash,kind,capability,source_id,source_authority_tier,endpoint,
-            parser_version,registry_fingerprint,acquired_at,entity_id,economic_claim_id,
+            parser_version,registry_fingerprint,signing_key_id,signature,acquired_at,entity_id,economic_claim_id,
             representation_id,raw_payload_hash,payload_json
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """,
         (
             receipt.acquisition_id,
@@ -308,6 +309,8 @@ def _insert_receipt(conn: sqlite3.Connection, receipt: AcquisitionReceipt) -> No
             receipt.endpoint,
             receipt.parser_version,
             receipt.registry_fingerprint,
+            receipt.signing_key_id,
+            receipt.signature,
             receipt.acquired_at.isoformat(),
             receipt.identity.entity_id,
             receipt.identity.economic_claim_id,

@@ -14,7 +14,7 @@ from hunter.value_capture.models import (
 )
 from hunter.value_capture.providers import RegisteredValueCaptureProvider, ValueCaptureAcquisitionResult
 from hunter.value_capture.registry import ValueCaptureSourceRegistry
-from hunter.value_capture.repository import SupplyAndValueCaptureRepository, open_authoritative_value_capture_store
+from hunter.value_capture.repository import SupplyAndValueCaptureRepository
 
 
 class SupplyAndValueCaptureAuthorityError(ValueError):
@@ -24,7 +24,7 @@ class SupplyAndValueCaptureAuthorityError(ValueError):
 class SupplyAndValueCaptureService:
     def __init__(self, *, registry: ValueCaptureSourceRegistry, repository: SupplyAndValueCaptureRepository) -> None:
         self.registry = registry
-        self.repository, self.__commit = open_authoritative_value_capture_store(repository.path)
+        self.repository = repository
 
     def ingest_evidence(
         self,
@@ -59,7 +59,7 @@ class SupplyAndValueCaptureService:
         )
         self._authorize_correction(record)
         normalized = self._normalize(record)
-        self.__commit(result.receipt, normalized)
+        self.repository._commit_authoritative(result.receipt, normalized)
         return normalized
 
     def ingest_supply(
@@ -95,7 +95,7 @@ class SupplyAndValueCaptureService:
         self._authorize_correction(record)
         self._require_evidence(record)
         normalized = self._normalize(record)
-        self.__commit(result.receipt, normalized)
+        self.repository._commit_authoritative(result.receipt, normalized)
         return normalized
 
     def ingest_rule(
@@ -136,7 +136,7 @@ class SupplyAndValueCaptureService:
         self._authorize_correction(record)
         self._require_evidence(record)
         normalized = self._normalize(record)
-        self.__commit(result.receipt, normalized)
+        self.repository._commit_authoritative(result.receipt, normalized)
         return normalized
 
     def strict_known_supply(self, **kwargs: Any) -> SupplyBasisSnapshot | None:
