@@ -1,0 +1,75 @@
+name: Value Capture Persistent Authority Fix
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/value-capture-persistent-authority-fix.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+      - name: Apply authority remediation
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          p = Path('src/hunter/value_capture/repository.py')
+          text = p.read_text()
+          text = text.replace('from collections.abc import Callable\n', '')
+          text = text.replace('from hunter.value_capture.providers import AcquisitionReceipt\n', 'from hunter.value_capture.providers import AcquisitionReceipt, ValueCaptureVerificationKeyRegistry\n')
+          text = text.replace('AuthorityWriter = Callable[[AcquisitionReceipt, Record], None]\n', '')
+          text = text.replace('    registry_fingerprint TEXT NOT NULL,\n    acquired_at TEXT NOT NULL,', '    registry_fingerprint TEXT NOT NULL,\n    signing_key_id TEXT NOT NULL,\n    signature TEXT NOT NULL,\n    acquired_at TEXT NOT NULL,')
+          text = text.replace('    def __init__(self, path: str | Path = DEFAULT_VALUE_CAPTURE_DB) -> None:\n        self.path = Path(path)\n', '    def __init__(\n        self,\n        path: str | Path = DEFAULT_VALUE_CAPTURE_DB,\n        *,\n        verification_keys: ValueCaptureVerificationKeyRegistry | None = None,\n    ) -> None:\n        self.path = Path(path)\n        self.__verification_keys = verification_keys\n')
+          marker = '\n\ndef open_authoritative_value_capture_store('
+          start = text.index(marker)
+          end = text.index('\n\ndef _initialize', start)
+          replacement = '''\n\n    def _commit_authoritative(self, receipt: AcquisitionReceipt, record: Record) -> None:\n        if self.__verification_keys is None:\n            raise PermissionError("repository is read-only without verification keys")\n        if not self.__verification_keys.verify_receipt(receipt):\n            raise ValueCaptureIntegrityError("receipt signature is not verification-key authorized")\n        _validate_receipt_binding(receipt, record)\n        with _connect(self.path) as conn:\n            conn.execute("BEGIN IMMEDIATE")\n            try:\n                _insert_receipt(conn, receipt)\n                _insert_record(conn, _table_for(record), record)\n            except Exception:\n                conn.rollback()\n                raise\n            conn.commit()\n'''
+          text = text[:start] + replacement + text[end:]
+          text = text.replace('            acquisition_id,receipt_hash,kind,capability,source_id,source_authority_tier,endpoint,\n            parser_version,registry_fingerprint,acquired_at,entity_id,economic_claim_id,\n            representation_id,raw_payload_hash,payload_json\n        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', '            acquisition_id,receipt_hash,kind,capability,source_id,source_authority_tier,endpoint,\n            parser_version,registry_fingerprint,signing_key_id,signature,acquired_at,entity_id,economic_claim_id,\n            representation_id,raw_payload_hash,payload_json\n        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
+          text = text.replace('            receipt.registry_fingerprint,\n            receipt.acquired_at.isoformat(),', '            receipt.registry_fingerprint,\n            receipt.signing_key_id,\n            receipt.signature,\n            receipt.acquired_at.isoformat(),')
+          p.write_text(text)
+
+          p = Path('src/hunter/value_capture/service.py')
+          text = p.read_text()
+          text = text.replace('from hunter.value_capture.repository import SupplyAndValueCaptureRepository, open_authoritative_value_capture_store\n', 'from hunter.value_capture.repository import SupplyAndValueCaptureRepository\n')
+          text = text.replace('        self.registry = registry\n        self.repository, self.__commit = open_authoritative_value_capture_store(repository.path)\n', '        self.registry = registry\n        self.repository = repository\n')
+          text = text.replace('        self.__commit(result.receipt, normalized)', '        self.repository._commit_authoritative(result.receipt, normalized)')
+          p.write_text(text)
+
+          p = Path('src/hunter/value_capture/__init__.py')
+          text = p.read_text()
+          text = text.replace('from hunter.value_capture.providers import RegisteredValueCaptureProvider, ValueCaptureAcquisitionResult\n', 'from hunter.value_capture.providers import (\n    RegisteredValueCaptureProvider,\n    ValueCaptureAcquisitionResult,\n    ValueCaptureVerificationKeyRegistry,\n)\n')
+          text = text.replace('    "ValueCaptureIntegrityError",\n', '    "ValueCaptureIntegrityError",\n    "ValueCaptureVerificationKeyRegistry",\n')
+          p.write_text(text)
+
+          p = Path('tests/test_value_capture_v3_5_0.py')
+          text = p.read_text()
+          text = text.replace('from hunter.value_capture.providers import RegisteredValueCaptureProvider, ValueCaptureAcquisitionResult\n', 'from hunter.value_capture.providers import (\n    RegisteredValueCaptureProvider,\n    ValueCaptureAcquisitionResult,\n    ValueCaptureVerificationKeyRegistry,\n)\n')
+          text = text.replace('NOW = datetime(2026, 7, 20, 18, 0, tzinfo=UTC)\n', 'NOW = datetime(2026, 7, 20, 18, 0, tzinfo=UTC)\nSIGNING_KEY = b"v3.5.0-value-capture-test-key-0001"\nSIGNING_KEY_ID = "value-capture-test-key-v1"\n')
+          text = text.replace('repository = SupplyAndValueCaptureRepository(tmp_path / "value-capture.sqlite")', 'repository = SupplyAndValueCaptureRepository(\n        tmp_path / "value-capture.sqlite",\n        verification_keys=ValueCaptureVerificationKeyRegistry({SIGNING_KEY_ID: SIGNING_KEY}),\n    )')
+          text = text.replace('provider = RegisteredValueCaptureProvider(config)', 'provider = RegisteredValueCaptureProvider(\n        config, signing_key_id=SIGNING_KEY_ID, signing_key=SIGNING_KEY\n    )')
+          text = text.replace('other_provider = RegisteredValueCaptureProvider(other_config)', 'other_provider = RegisteredValueCaptureProvider(\n        other_config, signing_key_id=SIGNING_KEY_ID, signing_key=SIGNING_KEY\n    )')
+          p.write_text(text)
+          PY
+      - name: Format and test focused package
+        run: |
+          python -m pip install -e ".[dev]"
+          python -m ruff check --fix src/hunter/value_capture tests/test_value_capture_v3_5_0.py
+          python -m black src/hunter/value_capture tests/test_value_capture_v3_5_0.py
+          python -m pytest -q tests/test_value_capture_v3_5_0.py
+      - name: Commit remediation
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/hunter/value_capture tests/test_value_capture_v3_5_0.py
+          git commit -m "Close persistent value capture authority blockers"
+          git push
