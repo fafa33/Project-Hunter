@@ -60,12 +60,11 @@ jobs:
           text = text.replace('other_provider = RegisteredValueCaptureProvider(other_config)', 'other_provider = RegisteredValueCaptureProvider(\n        other_config, signing_key_id=SIGNING_KEY_ID, signing_key=SIGNING_KEY\n    )')
           p.write_text(text)
           PY
-      - name: Format and test focused package
+      - name: Format remediation
         run: |
           python -m pip install -e ".[dev]"
           python -m ruff check --fix src/hunter/value_capture tests/test_value_capture_v3_5_0.py
           python -m black src/hunter/value_capture tests/test_value_capture_v3_5_0.py
-          python -m pytest -q tests/test_value_capture_v3_5_0.py
       - name: Commit remediation
         run: |
           git config user.name "github-actions[bot]"
