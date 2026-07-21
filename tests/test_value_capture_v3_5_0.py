@@ -58,13 +58,12 @@ def identity() -> EconomicClaimIdentity:
 
 def setup(tmp_path, configs: tuple[ValueCaptureSourceConfig, ...] | None = None):
     configs = configs or (source(),)
-    repository = SupplyAndValueCaptureRepository(
-        tmp_path / "value-capture.sqlite",
-        verification_keys=ValueCaptureVerificationKeyRegistry({SIGNING_KEY_ID: SIGNING_KEY}),
-    )
+    verification_keys = ValueCaptureVerificationKeyRegistry({SIGNING_KEY_ID: SIGNING_KEY})
+    repository = SupplyAndValueCaptureRepository(tmp_path / "value-capture.sqlite")
     service = SupplyAndValueCaptureService(
         registry=ValueCaptureSourceRegistry(configs),
         repository=repository,
+        verification_keys=verification_keys,
     )
     provider = RegisteredValueCaptureProvider(configs[0], signing_key_id=SIGNING_KEY_ID, signing_key=SIGNING_KEY)
     return service, repository, provider
@@ -149,6 +148,21 @@ def test_provider_signature_and_receipt_tampering_are_rejected(tmp_path) -> None
         service.ingest_evidence(provider, tampered)
 
 
+def test_receipt_hash_is_recomputed_before_signature_verification(tmp_path) -> None:
+    service, _, provider = setup(tmp_path)
+    result = evidence_result(provider)
+    forged_hash = "0" * 64
+    forged_signature = (
+        __import__("hmac").new(SIGNING_KEY, forged_hash.encode(), __import__("hashlib").sha256).hexdigest()
+    )
+    forged = replace(
+        result,
+        receipt=replace(result.receipt, receipt_hash=forged_hash, signature=forged_signature),
+    )
+    with pytest.raises(SupplyAndValueCaptureAuthorityError, match="invalid"):
+        service.ingest_evidence(provider, forged)
+
+
 def test_cross_provider_signature_forgery_is_rejected(tmp_path) -> None:
     service, _, provider = setup(tmp_path)
     result = evidence_result(provider)
@@ -176,10 +190,8 @@ def test_forged_or_tampered_acquisition_is_rejected(tmp_path) -> None:
 
 
 def test_repository_exposes_read_only_supported_api(tmp_path) -> None:
-    repository = SupplyAndValueCaptureRepository(
-        tmp_path / "value-capture.sqlite",
-        verification_keys=ValueCaptureVerificationKeyRegistry({SIGNING_KEY_ID: SIGNING_KEY}),
-    )
+    repository = SupplyAndValueCaptureRepository(tmp_path / "value-capture.sqlite")
+    assert not hasattr(repository, "_commit_authoritative")
     assert not hasattr(repository, "apply")
     assert not hasattr(repository, "write")
     assert not hasattr(repository, "commit")
