@@ -6,13 +6,18 @@ from dataclasses import asdict, replace
 from datetime import datetime
 from typing import Any
 
+from hunter.value_capture.authority import _ValueCaptureAuthorityWriter
 from hunter.value_capture.models import (
     VALUE_CAPTURE_SCHEMA_VERSION,
     FundamentalEvidenceRecord,
     SupplyBasisSnapshot,
     ValueCaptureRuleSnapshot,
 )
-from hunter.value_capture.providers import RegisteredValueCaptureProvider, ValueCaptureAcquisitionResult
+from hunter.value_capture.providers import (
+    RegisteredValueCaptureProvider,
+    ValueCaptureAcquisitionResult,
+    ValueCaptureVerificationKeyRegistry,
+)
 from hunter.value_capture.registry import ValueCaptureSourceRegistry
 from hunter.value_capture.repository import SupplyAndValueCaptureRepository
 
@@ -22,9 +27,19 @@ class SupplyAndValueCaptureAuthorityError(ValueError):
 
 
 class SupplyAndValueCaptureService:
-    def __init__(self, *, registry: ValueCaptureSourceRegistry, repository: SupplyAndValueCaptureRepository) -> None:
+    def __init__(
+        self,
+        *,
+        registry: ValueCaptureSourceRegistry,
+        repository: SupplyAndValueCaptureRepository,
+        verification_keys: ValueCaptureVerificationKeyRegistry,
+    ) -> None:
         self.registry = registry
         self.repository = repository
+        self.__writer = _ValueCaptureAuthorityWriter(
+            repository=repository,
+            verification_keys=verification_keys,
+        )
 
     def ingest_evidence(
         self,
@@ -59,7 +74,7 @@ class SupplyAndValueCaptureService:
         )
         self._authorize_correction(record)
         normalized = self._normalize(record)
-        self.repository._commit_authoritative(result.receipt, normalized)
+        self.__writer.persist(result.receipt, normalized)
         return normalized
 
     def ingest_supply(
@@ -95,7 +110,7 @@ class SupplyAndValueCaptureService:
         self._authorize_correction(record)
         self._require_evidence(record)
         normalized = self._normalize(record)
-        self.repository._commit_authoritative(result.receipt, normalized)
+        self.__writer.persist(result.receipt, normalized)
         return normalized
 
     def ingest_rule(
@@ -136,7 +151,7 @@ class SupplyAndValueCaptureService:
         self._authorize_correction(record)
         self._require_evidence(record)
         normalized = self._normalize(record)
-        self.repository._commit_authoritative(result.receipt, normalized)
+        self.__writer.persist(result.receipt, normalized)
         return normalized
 
     def strict_known_supply(self, **kwargs: Any) -> SupplyBasisSnapshot | None:

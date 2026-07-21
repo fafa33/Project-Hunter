@@ -13,7 +13,7 @@ from hunter.value_capture.models import (
     SupplyBasisSnapshot,
     ValueCaptureRuleSnapshot,
 )
-from hunter.value_capture.providers import AcquisitionReceipt, ValueCaptureVerificationKeyRegistry
+from hunter.value_capture.providers import AcquisitionReceipt
 
 DEFAULT_VALUE_CAPTURE_DB = Path("data/value_capture/runtime/value_capture.sqlite")
 VALUE_CAPTURE_MIGRATION_ID = "supply-value-capture-v3.5.0-003"
@@ -123,14 +123,8 @@ class ValueCaptureIntegrityError(ValueError):
 
 
 class SupplyAndValueCaptureRepository:
-    def __init__(
-        self,
-        path: str | Path = DEFAULT_VALUE_CAPTURE_DB,
-        *,
-        verification_keys: ValueCaptureVerificationKeyRegistry | None = None,
-    ) -> None:
+    def __init__(self, path: str | Path = DEFAULT_VALUE_CAPTURE_DB) -> None:
         self.path = Path(path)
-        self.__verification_keys = verification_keys
         self.path.parent.mkdir(parents=True, exist_ok=True)
         _initialize(self.path)
 
@@ -232,22 +226,6 @@ class SupplyAndValueCaptureRepository:
         with _connect(self.path) as conn:
             row = conn.execute(f"SELECT payload_json FROM {table} WHERE record_id = ?", (record_id,)).fetchone()
         return json.loads(str(row["payload_json"])) if row is not None else None
-
-    def _commit_authoritative(self, receipt: AcquisitionReceipt, record: Record) -> None:
-        if self.__verification_keys is None:
-            raise PermissionError("repository is read-only without verification keys")
-        if not self.__verification_keys.verify_receipt(receipt):
-            raise ValueCaptureIntegrityError("receipt signature is not verification-key authorized")
-        _validate_receipt_binding(receipt, record)
-        with _connect(self.path) as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            try:
-                _insert_receipt(conn, receipt)
-                _insert_record(conn, _table_for(record), record)
-            except Exception:
-                conn.rollback()
-                raise
-            conn.commit()
 
 
 def _initialize(path: Path) -> None:

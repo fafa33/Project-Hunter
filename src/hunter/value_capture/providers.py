@@ -98,7 +98,10 @@ class ValueCaptureVerificationKeyRegistry:
         key = self.__keys.get(receipt.signing_key_id)
         if key is None:
             return False
-        expected = hmac.new(key, receipt.receipt_hash.encode(), hashlib.sha256).hexdigest()
+        recomputed_hash = receipt_hash_from_receipt(receipt)
+        if not hmac.compare_digest(recomputed_hash, receipt.receipt_hash):
+            return False
+        expected = hmac.new(key, recomputed_hash.encode(), hashlib.sha256).hexdigest()
         return hmac.compare_digest(expected, receipt.signature)
 
 
@@ -205,6 +208,33 @@ class RegisteredValueCaptureProvider:
             return False
         expected_signature = hmac.new(self.__signing_key, expected_hash.encode(), hashlib.sha256).hexdigest()
         return hmac.compare_digest(expected_signature, receipt.signature)
+
+
+def receipt_hash_from_receipt(receipt: AcquisitionReceipt) -> str:
+    payload = {
+        "acquisition_id": receipt.acquisition_id,
+        "kind": receipt.kind,
+        "capability": receipt.capability,
+        "source_id": receipt.source_id,
+        "source_authority_tier": receipt.source_authority_tier,
+        "endpoint": receipt.endpoint,
+        "parser_version": receipt.parser_version,
+        "registry_fingerprint": receipt.registry_fingerprint,
+        "signing_key_id": receipt.signing_key_id,
+        "acquired_at": receipt.acquired_at.isoformat(),
+        "identity": {
+            "entity_id": receipt.identity.entity_id,
+            "economic_claim_id": receipt.identity.economic_claim_id,
+            "asset_id": receipt.identity.asset_id,
+            "representation_id": receipt.identity.representation_id,
+            "token_id": receipt.identity.token_id,
+            "chain": receipt.identity.chain,
+            "contract_address": receipt.identity.contract_address,
+        },
+        "raw_payload_hash": receipt.raw_payload_hash,
+    }
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode()).hexdigest()
 
 
 def payload_hash_for(payload: dict[str, Any]) -> str:
