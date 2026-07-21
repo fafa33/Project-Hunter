@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sqlite3
 from dataclasses import asdict, replace
 from datetime import datetime
 from typing import Any
@@ -13,20 +14,13 @@ from hunter.value_capture.models import (
     ValueCaptureRuleSnapshot,
 )
 from hunter.value_capture.providers import (
+    AcquisitionReceipt,
     RegisteredValueCaptureProvider,
     ValueCaptureAcquisitionResult,
     ValueCaptureVerificationKeyRegistry,
 )
 from hunter.value_capture.registry import ValueCaptureSourceRegistry
-from hunter.value_capture.repository import (
-    SupplyAndValueCaptureRepository,
-    ValueCaptureIntegrityError,
-    _connect,
-    _insert_receipt,
-    _insert_record,
-    _table_for,
-    _validate_receipt_binding,
-)
+from hunter.value_capture.repository import SupplyAndValueCaptureRepository, ValueCaptureIntegrityError
 
 Record = FundamentalEvidenceRecord | SupplyBasisSnapshot | ValueCaptureRuleSnapshot
 
@@ -174,24 +168,172 @@ class SupplyAndValueCaptureService:
         *,
         expected_kind: str,
     ) -> None:
-        # Re-run every authority check at the actual write boundary so even
-        # accidental direct access to this private method cannot bypass policy.
         self._authorize_result(provider, result, expected_kind=expected_kind)
         self._authorize_correction(record)
         if isinstance(record, (SupplyBasisSnapshot, ValueCaptureRuleSnapshot)):
             self._require_evidence(record)
         if not self.__verification_keys.verify_receipt(result.receipt):
             raise ValueCaptureIntegrityError("receipt hash or signature is not verification-key authorized")
-        _validate_receipt_binding(result.receipt, record)
-        with _connect(self.repository.path) as conn:
+        self.__validate_receipt_binding(result.receipt, record)
+
+        conn = sqlite3.connect(self.repository.path)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
+        try:
             conn.execute("BEGIN IMMEDIATE")
-            try:
-                _insert_receipt(conn, result.receipt)
-                _insert_record(conn, _table_for(record), record)
-            except Exception:
-                conn.rollback()
-                raise
+            self.__insert_receipt(conn, result.receipt)
+            self.__insert_record(conn, self.__table_for(record), record)
+        except Exception:
+            conn.rollback()
+            raise
+        else:
             conn.commit()
+        finally:
+            conn.close()
+
+    @staticmethod
+    def __validate_receipt_binding(receipt: AcquisitionReceipt, record: Record) -> None:
+        raw_hash = record.raw_content_hash if isinstance(record, FundamentalEvidenceRecord) else record.raw_payload_hash
+        if receipt.acquisition_id != record.acquisition_id:
+            raise ValueCaptureIntegrityError("record acquisition_id does not match receipt")
+        if receipt.raw_payload_hash != raw_hash:
+            raise ValueCaptureIntegrityError("record payload hash does not match receipt")
+        if receipt.source_id != record.source_id or receipt.parser_version != record.parser_version:
+            raise ValueCaptureIntegrityError("record source/parser does not match receipt")
+        if receipt.identity != record.identity:
+            raise ValueCaptureIntegrityError("record identity does not match receipt")
+        if receipt.acquired_at != record.recorded_at or receipt.acquired_at != record.known_at:
+            raise ValueCaptureIntegrityError("record chronology does not match receipt")
+
+    @staticmethod
+    def __insert_receipt(conn: sqlite3.Connection, receipt: AcquisitionReceipt) -> None:
+        payload = _json_safe(asdict(receipt))
+        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        existing = conn.execute(
+            "SELECT payload_json FROM value_capture_acquisition_receipts WHERE acquisition_id = ?",
+            (receipt.acquisition_id,),
+        ).fetchone()
+        if existing is not None:
+            if str(existing["payload_json"]) != canonical:
+                raise ValueCaptureIntegrityError("acquisition_id reused with divergent receipt")
+            return
+        conn.execute(
+            """
+            INSERT INTO value_capture_acquisition_receipts (
+                acquisition_id,receipt_hash,kind,capability,source_id,source_authority_tier,endpoint,
+                parser_version,registry_fingerprint,signing_key_id,signature,acquired_at,entity_id,economic_claim_id,
+                representation_id,raw_payload_hash,payload_json
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                receipt.acquisition_id,
+                receipt.receipt_hash,
+                receipt.kind,
+                receipt.capability,
+                receipt.source_id,
+                receipt.source_authority_tier,
+                receipt.endpoint,
+                receipt.parser_version,
+                receipt.registry_fingerprint,
+                receipt.signing_key_id,
+                receipt.signature,
+                receipt.acquired_at.isoformat(),
+                receipt.identity.entity_id,
+                receipt.identity.economic_claim_id,
+                receipt.identity.representation_id,
+                receipt.raw_payload_hash,
+                canonical,
+            ),
+        )
+
+    @staticmethod
+    def __insert_record(conn: sqlite3.Connection, table: str, record: Record) -> None:
+        payload = _json_safe(asdict(record))
+        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        existing = conn.execute(
+            f"SELECT payload_json FROM {table} WHERE record_id = ?", (record.record_id,)
+        ).fetchone()
+        if existing is not None:
+            if str(existing["payload_json"]) != canonical:
+                raise ValueCaptureIntegrityError("record_id reused with divergent content")
+            return
+        predecessor = record.supersedes_record_id
+        if predecessor is not None:
+            row = conn.execute(
+                f"SELECT logical_id,recorded_at,known_at FROM {table} WHERE record_id = ?",
+                (predecessor,),
+            ).fetchone()
+            if row is None:
+                raise ValueCaptureIntegrityError("superseded record does not exist")
+            if str(row["logical_id"]) != record.logical_id:
+                raise ValueCaptureIntegrityError("correction must preserve logical_id")
+            if datetime.fromisoformat(str(row["recorded_at"])) >= record.recorded_at:
+                raise ValueCaptureIntegrityError("correction recorded_at must follow predecessor")
+            if datetime.fromisoformat(str(row["known_at"])) >= record.known_at:
+                raise ValueCaptureIntegrityError("correction known_at must follow predecessor")
+            successor = conn.execute(
+                f"SELECT record_id FROM {table} WHERE supersedes_record_id = ?", (predecessor,)
+            ).fetchone()
+            if successor is not None:
+                raise ValueCaptureIntegrityError("branching correction lineage is prohibited")
+
+        category_column = None
+        category_value = None
+        if isinstance(record, SupplyBasisSnapshot):
+            category_column, category_value = "supply_basis_type", record.supply_basis_type
+        elif isinstance(record, ValueCaptureRuleSnapshot):
+            category_column, category_value = "rule_type", record.rule_type
+        columns = [
+            "record_id",
+            "logical_id",
+            "entity_id",
+            "economic_claim_id",
+            "representation_id",
+            "source_id",
+            "parser_version",
+            "acquisition_id",
+            "effective_at",
+            "recorded_at",
+            "known_at",
+            "quality_state",
+            "conflict_state",
+            "content_hash",
+            "supersedes_record_id",
+            "payload_json",
+        ]
+        values: list[object] = [
+            record.record_id,
+            record.logical_id,
+            record.identity.entity_id,
+            record.identity.economic_claim_id,
+            record.identity.representation_id,
+            record.source_id,
+            record.parser_version,
+            record.acquisition_id,
+            record.effective_at.isoformat(),
+            record.recorded_at.isoformat(),
+            record.known_at.isoformat(),
+            record.quality_state,
+            record.conflict_state,
+            record.content_hash,
+            predecessor,
+            canonical,
+        ]
+        if category_column is not None:
+            columns.insert(5, category_column)
+            values.insert(5, category_value)
+        conn.execute(
+            f"INSERT INTO {table} ({', '.join(columns)}) VALUES ({', '.join('?' for _ in columns)})",
+            tuple(values),
+        )
+
+    @staticmethod
+    def __table_for(record: Record) -> str:
+        if isinstance(record, FundamentalEvidenceRecord):
+            return "fundamental_evidence_records"
+        if isinstance(record, SupplyBasisSnapshot):
+            return "supply_basis_snapshots"
+        return "value_capture_rule_snapshots"
 
     def _authorize_result(
         self,
