@@ -5,7 +5,7 @@ on:
     branches: [main]
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   format:
@@ -22,10 +22,22 @@ jobs:
       - run: python -m black src/hunter/value_capture/service.py || true
       - run: python -m black src/hunter/value_capture/repository.py || true
       - run: python -m black tests/test_value_capture_service_owned_persistence.py || true
-      - uses: actions/upload-artifact@v4
-        with:
-          name: formatted-value-capture-files
-          path: |
-            src/hunter/value_capture/service.py
-            src/hunter/value_capture/repository.py
+      - name: Commit formatted files through Contents API
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: fix/v3.5.0-seal-write-helpers
+        run: |
+          for file in \
+            src/hunter/value_capture/service.py \
+            src/hunter/value_capture/repository.py \
             tests/test_value_capture_service_owned_persistence.py
+          do
+            test -f "$file" || continue
+            sha=$(gh api "repos/$GITHUB_REPOSITORY/contents/$file?ref=$BRANCH" --jq .sha)
+            content=$(base64 -w0 "$file")
+            gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$file" \
+              -f message="Format final value capture remediation" \
+              -f content="$content" \
+              -f branch="$BRANCH" \
+              -f sha="$sha"
+          done
