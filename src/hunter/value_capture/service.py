@@ -6,7 +6,6 @@ from dataclasses import asdict, replace
 from datetime import datetime
 from typing import Any
 
-from hunter.value_capture.authority import _ValueCaptureAuthorityWriter
 from hunter.value_capture.models import (
     VALUE_CAPTURE_SCHEMA_VERSION,
     FundamentalEvidenceRecord,
@@ -19,7 +18,17 @@ from hunter.value_capture.providers import (
     ValueCaptureVerificationKeyRegistry,
 )
 from hunter.value_capture.registry import ValueCaptureSourceRegistry
-from hunter.value_capture.repository import SupplyAndValueCaptureRepository
+from hunter.value_capture.repository import (
+    SupplyAndValueCaptureRepository,
+    ValueCaptureIntegrityError,
+    _connect,
+    _insert_receipt,
+    _insert_record,
+    _table_for,
+    _validate_receipt_binding,
+)
+
+Record = FundamentalEvidenceRecord | SupplyBasisSnapshot | ValueCaptureRuleSnapshot
 
 
 class SupplyAndValueCaptureAuthorityError(ValueError):
@@ -36,10 +45,7 @@ class SupplyAndValueCaptureService:
     ) -> None:
         self.registry = registry
         self.repository = repository
-        self.__writer = _ValueCaptureAuthorityWriter(
-            repository=repository,
-            verification_keys=verification_keys,
-        )
+        self.__verification_keys = verification_keys
 
     def ingest_evidence(
         self,
@@ -74,7 +80,7 @@ class SupplyAndValueCaptureService:
         )
         self._authorize_correction(record)
         normalized = self._normalize(record)
-        self.__writer.persist(result.receipt, normalized)
+        self.__persist_authorized(provider, result, normalized, expected_kind="evidence")
         return normalized
 
     def ingest_supply(
@@ -110,7 +116,7 @@ class SupplyAndValueCaptureService:
         self._authorize_correction(record)
         self._require_evidence(record)
         normalized = self._normalize(record)
-        self.__writer.persist(result.receipt, normalized)
+        self.__persist_authorized(provider, result, normalized, expected_kind="supply")
         return normalized
 
     def ingest_rule(
@@ -151,7 +157,7 @@ class SupplyAndValueCaptureService:
         self._authorize_correction(record)
         self._require_evidence(record)
         normalized = self._normalize(record)
-        self.__writer.persist(result.receipt, normalized)
+        self.__persist_authorized(provider, result, normalized, expected_kind="rule")
         return normalized
 
     def strict_known_supply(self, **kwargs: Any) -> SupplyBasisSnapshot | None:
@@ -159,6 +165,33 @@ class SupplyAndValueCaptureService:
 
     def strict_known_rule(self, **kwargs: Any) -> ValueCaptureRuleSnapshot | None:
         return self.repository.strict_known_rule(**kwargs)
+
+    def __persist_authorized(
+        self,
+        provider: RegisteredValueCaptureProvider,
+        result: ValueCaptureAcquisitionResult,
+        record: Record,
+        *,
+        expected_kind: str,
+    ) -> None:
+        # Re-run every authority check at the actual write boundary so even
+        # accidental direct access to this private method cannot bypass policy.
+        self._authorize_result(provider, result, expected_kind=expected_kind)
+        self._authorize_correction(record)
+        if isinstance(record, (SupplyBasisSnapshot, ValueCaptureRuleSnapshot)):
+            self._require_evidence(record)
+        if not self.__verification_keys.verify_receipt(result.receipt):
+            raise ValueCaptureIntegrityError("receipt hash or signature is not verification-key authorized")
+        _validate_receipt_binding(result.receipt, record)
+        with _connect(self.repository.path) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                _insert_receipt(conn, result.receipt)
+                _insert_record(conn, _table_for(record), record)
+            except Exception:
+                conn.rollback()
+                raise
+            conn.commit()
 
     def _authorize_result(
         self,
