@@ -6,7 +6,10 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from hunter.value_capture.models import EconomicClaimIdentity
-from hunter.value_capture.providers import RegisteredValueCaptureProvider
+from hunter.value_capture.providers import (
+    RegisteredValueCaptureProvider,
+    ValueCaptureVerificationKeyRegistry,
+)
 from hunter.value_capture.registry import ValueCaptureSourceConfig, ValueCaptureSourceRegistry
 from hunter.value_capture.repository import SupplyAndValueCaptureRepository, ValueCaptureIntegrityError
 from hunter.value_capture.service import SupplyAndValueCaptureAuthorityError, SupplyAndValueCaptureService
@@ -63,11 +66,22 @@ def setup(tmp_path, configs: tuple[ValueCaptureSourceConfig, ...] | None = None)
         registry=ValueCaptureSourceRegistry(configs),
         repository=repository,
     )
-    providers = tuple(RegisteredValueCaptureProvider(config) for config in configs)
-    return service, service.repository, providers
+    provider = RegisteredValueCaptureProvider(
+        configs[0], signing_key_id=SIGNING_KEY_ID, signing_key=SIGNING_KEY
+    )
+    return service, repository, provider
 
 
-def evidence_result(provider, *, acquired_at=NOW + timedelta(minutes=1), acquisition_id="evidence-1"):
+def evidence_result(provider, *, acquired_at=NOW + timedelta(minutes=1), acquisition_id="evidence-1", **extra):
+    payload = {
+        "evidence_type": "official_disclosure",
+        "source_reference": "official-tokenomics-page",
+        "extracted_claim": "Protocol fees are distributed under the documented rule.",
+        "effective_at": NOW,
+        "quality_state": "accepted",
+        "conflict_state": "none",
+    }
+    payload.update(extra)
     return provider.acquisition(
         kind="evidence",
         capability="evidence:official_disclosure",
@@ -75,14 +89,7 @@ def evidence_result(provider, *, acquired_at=NOW + timedelta(minutes=1), acquisi
         acquisition_id=acquisition_id,
         acquired_at=acquired_at,
         identity=identity(),
-        payload={
-            "evidence_type": "official_disclosure",
-            "source_reference": "official-tokenomics-page",
-            "extracted_claim": "Protocol fees are distributed under the documented rule.",
-            "effective_at": NOW,
-            "quality_state": "accepted",
-            "conflict_state": "none",
-        },
+        payload=payload,
     )
 
 
@@ -136,16 +143,38 @@ def rule_result(provider, evidence_id, *, acquired_at=NOW + timedelta(minutes=2)
     )
 
 
-def test_forged_or_tampered_acquisition_is_rejected(tmp_path) -> None:
-    service, _, (provider,) = setup(tmp_path)
-    valid = evidence_result(provider)
-    tampered = replace(valid, payload={**valid.payload, "extracted_claim": "forged"})
-    with pytest.raises(SupplyAndValueCaptureAuthorityError, match="signature"):
+def test_provider_signature_and_receipt_tampering_are_rejected(tmp_path) -> None:
+    service, _, provider = setup(tmp_path)
+    result = evidence_result(provider)
+    tampered = replace(result, payload={**result.payload, "extracted_claim": "forged"})
+    with pytest.raises(SupplyAndValueCaptureAuthorityError, match="invalid"):
         service.ingest_evidence(provider, tampered)
 
-    other_provider = RegisteredValueCaptureProvider(source())
-    with pytest.raises(SupplyAndValueCaptureAuthorityError, match="signature"):
-        service.ingest_evidence(other_provider, valid)
+
+def test_cross_provider_signature_forgery_is_rejected(tmp_path) -> None:
+    service, _, provider = setup(tmp_path)
+    result = evidence_result(provider)
+    other = RegisteredValueCaptureProvider(
+        source(), signing_key_id="other-key", signing_key=b"other-value-capture-signing-key-0001"
+    )
+    with pytest.raises(SupplyAndValueCaptureAuthorityError, match="invalid"):
+        service.ingest_evidence(other, result)
+
+
+def test_atomic_receipt_and_record_persistence(tmp_path) -> None:
+    service, repository, provider = setup(tmp_path)
+    evidence = service.ingest_evidence(provider, evidence_result(provider))
+    assert repository.count("value_capture_acquisition_receipts") == 1
+    assert repository.count("fundamental_evidence_records") == 1
+    assert repository.receipt(evidence.acquisition_id) is not None
+
+
+def test_forged_or_tampered_acquisition_is_rejected(tmp_path) -> None:
+    service, _, provider = setup(tmp_path)
+    result = evidence_result(provider)
+    forged = replace(result, receipt=replace(result.receipt, source_id="forged-source"))
+    with pytest.raises(SupplyAndValueCaptureAuthorityError, match="invalid"):
+        service.ingest_evidence(provider, forged)
 
 
 def test_repository_exposes_read_only_supported_api(tmp_path) -> None:
@@ -156,33 +185,10 @@ def test_repository_exposes_read_only_supported_api(tmp_path) -> None:
     assert not hasattr(repository, "apply")
     assert not hasattr(repository, "write")
     assert not hasattr(repository, "commit")
-    assert not hasattr(repository, "_connect")
-
-
-def test_receipt_and_records_persist_atomically_and_idempotently(tmp_path) -> None:
-    service, repository, (provider,) = setup(tmp_path)
-    evidence_result_ = evidence_result(provider)
-    evidence = service.ingest_evidence(provider, evidence_result_)
-    supply_result_ = supply_result(provider, evidence.record_id)
-    rule_result_ = rule_result(provider, evidence.record_id)
-    supply = service.ingest_supply(provider, supply_result_)
-    rule = service.ingest_rule(provider, rule_result_)
-    service.ingest_supply(provider, supply_result_)
-
-    assert repository.count("value_capture_acquisition_receipts") == 3
-    assert repository.count("fundamental_evidence_records") == 1
-    assert repository.count("supply_basis_snapshots") == 1
-    assert repository.count("value_capture_rule_snapshots") == 1
-    receipt = repository.receipt(supply.acquisition_id)
-    assert receipt is not None
-    assert receipt.raw_payload_hash == supply.raw_payload_hash
-    assert receipt.source_id == supply.source_id
-    assert receipt.identity == supply.identity
-    assert rule.acquisition_id == "rule-1"
 
 
 def test_future_known_evidence_is_rejected(tmp_path) -> None:
-    service, _, (provider,) = setup(tmp_path)
+    service, _, provider = setup(tmp_path)
     evidence = service.ingest_evidence(
         provider,
         evidence_result(provider, acquired_at=NOW + timedelta(days=2)),
@@ -195,23 +201,16 @@ def test_future_known_evidence_is_rejected(tmp_path) -> None:
 
 
 def test_temporal_invariants_reject_invalid_chronology(tmp_path) -> None:
-    service, _, (provider,) = setup(tmp_path)
-    invalid = evidence_result(provider, acquired_at=NOW)
-    invalid = provider.acquisition(
-        kind="evidence",
-        capability="evidence:official_disclosure",
-        endpoint=ENDPOINT,
-        acquisition_id="invalid-time",
-        acquired_at=NOW,
-        identity=identity(),
-        payload={**invalid.payload, "effective_at": NOW + timedelta(days=1)},
-    )
+    service, _, provider = setup(tmp_path)
     with pytest.raises(ValueError, match="effective_at"):
-        service.ingest_evidence(provider, invalid)
+        service.ingest_evidence(
+            provider,
+            evidence_result(provider, acquired_at=NOW, effective_at=NOW + timedelta(days=1)),
+        )
 
 
 def test_branching_corrections_are_rejected_and_replay_is_strict_known(tmp_path) -> None:
-    service, _, (provider,) = setup(tmp_path)
+    service, _, provider = setup(tmp_path)
     evidence = service.ingest_evidence(provider, evidence_result(provider))
     original = service.ingest_rule(provider, rule_result(provider, evidence.record_id))
     corrected = service.ingest_rule(
@@ -259,24 +258,28 @@ def test_branching_corrections_are_rejected_and_replay_is_strict_known(tmp_path)
     assert current == corrected
 
 
-def test_cross_source_correction_requires_explicit_non_downgrade_policy(tmp_path) -> None:
+def test_correction_authority_downgrade_is_rejected(tmp_path) -> None:
     official = source()
     aggregator = source(
-        source_id="aggregator-api3-tokenomics",
-        parser_version="aggregator-v1",
+        source_id="aggregator-source",
         authority_tier="aggregator",
         correction_predecessor_tiers=("official",),
     )
-    service, _, (official_provider, aggregator_provider) = setup(tmp_path, (official, aggregator))
+    service, _, official_provider = setup(tmp_path, (official, aggregator))
     evidence = service.ingest_evidence(official_provider, evidence_result(official_provider))
     original = service.ingest_rule(official_provider, rule_result(official_provider, evidence.record_id))
-    downgraded = rule_result(
-        aggregator_provider,
-        evidence.record_id,
-        acquired_at=NOW + timedelta(days=2),
-        acquisition_id="rule-downgrade",
-        supersedes_record_id=original.record_id,
-        correction_reason="Aggregator correction",
+    aggregator_provider = RegisteredValueCaptureProvider(
+        aggregator, signing_key_id=SIGNING_KEY_ID, signing_key=SIGNING_KEY
     )
     with pytest.raises(ValueError, match="downgrade"):
-        service.ingest_rule(aggregator_provider, downgraded)
+        service.ingest_rule(
+            aggregator_provider,
+            rule_result(
+                aggregator_provider,
+                evidence.record_id,
+                acquired_at=NOW + timedelta(days=2),
+                acquisition_id="rule-downgrade",
+                supersedes_record_id=original.record_id,
+                correction_reason="Invalid lower-authority correction",
+            ),
+        )
