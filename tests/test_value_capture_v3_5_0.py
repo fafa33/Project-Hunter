@@ -12,6 +12,8 @@ from hunter.value_capture.repository import SupplyAndValueCaptureRepository, Val
 from hunter.value_capture.service import SupplyAndValueCaptureAuthorityError, SupplyAndValueCaptureService
 
 NOW = datetime(2026, 7, 20, 18, 0, tzinfo=UTC)
+SIGNING_KEY = b"v3.5.0-value-capture-test-key-0001"
+SIGNING_KEY_ID = "value-capture-test-key-v1"
 ENDPOINT = "https://example.org/tokenomics/api3"
 
 
@@ -53,7 +55,10 @@ def identity() -> EconomicClaimIdentity:
 
 def setup(tmp_path, configs: tuple[ValueCaptureSourceConfig, ...] | None = None):
     configs = configs or (source(),)
-    repository = SupplyAndValueCaptureRepository(tmp_path / "value-capture.sqlite")
+    repository = SupplyAndValueCaptureRepository(
+        tmp_path / "value-capture.sqlite",
+        verification_keys=ValueCaptureVerificationKeyRegistry({SIGNING_KEY_ID: SIGNING_KEY}),
+    )
     service = SupplyAndValueCaptureService(
         registry=ValueCaptureSourceRegistry(configs),
         repository=repository,
@@ -144,7 +149,10 @@ def test_forged_or_tampered_acquisition_is_rejected(tmp_path) -> None:
 
 
 def test_repository_exposes_read_only_supported_api(tmp_path) -> None:
-    repository = SupplyAndValueCaptureRepository(tmp_path / "value-capture.sqlite")
+    repository = SupplyAndValueCaptureRepository(
+        tmp_path / "value-capture.sqlite",
+        verification_keys=ValueCaptureVerificationKeyRegistry({SIGNING_KEY_ID: SIGNING_KEY}),
+    )
     assert not hasattr(repository, "apply")
     assert not hasattr(repository, "write")
     assert not hasattr(repository, "commit")

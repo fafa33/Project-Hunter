@@ -5,7 +5,11 @@ from hunter.value_capture.models import (
     SupplyBasisSnapshot,
     ValueCaptureRuleSnapshot,
 )
-from hunter.value_capture.providers import RegisteredValueCaptureProvider, ValueCaptureAcquisitionResult
+from hunter.value_capture.providers import (
+    RegisteredValueCaptureProvider,
+    ValueCaptureAcquisitionResult,
+    ValueCaptureVerificationKeyRegistry,
+)
 from hunter.value_capture.registry import ValueCaptureSourceConfig, ValueCaptureSourceRegistry
 from hunter.value_capture.repository import (
     DEFAULT_VALUE_CAPTURE_DB,
@@ -29,6 +33,7 @@ __all__ = [
     "SupplyBasisSnapshot",
     "ValueCaptureAcquisitionResult",
     "ValueCaptureIntegrityError",
+    "ValueCaptureVerificationKeyRegistry",
     "ValueCaptureRuleSnapshot",
     "ValueCaptureSourceConfig",
     "ValueCaptureSourceRegistry",
