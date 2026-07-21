@@ -236,9 +236,7 @@ class SupplyAndValueCaptureRepository:
 
     def _payload(self, table: str, record_id: str) -> dict[str, Any] | None:
         with self.__connect() as conn:
-            row = conn.execute(
-                f"SELECT payload_json FROM {table} WHERE record_id = ?", (record_id,)
-            ).fetchone()
+            row = conn.execute(f"SELECT payload_json FROM {table} WHERE record_id = ?", (record_id,)).fetchone()
         return json.loads(str(row["payload_json"])) if row is not None else None
 
 
