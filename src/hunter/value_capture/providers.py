@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
-import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Literal
@@ -24,17 +23,18 @@ class AcquisitionReceipt:
     endpoint: str
     parser_version: str
     registry_fingerprint: str
+    signing_key_id: str
     acquired_at: datetime
     identity: EconomicClaimIdentity
     raw_payload_hash: str
     receipt_hash: str
+    signature: str
 
 
 @dataclass(frozen=True)
 class ValueCaptureAcquisitionResult:
     receipt: AcquisitionReceipt
     payload: dict[str, Any]
-    signature: str
 
     @property
     def kind(self) -> AcquisitionKind:
@@ -81,14 +81,50 @@ class ValueCaptureAcquisitionResult:
         return self.receipt.raw_payload_hash
 
 
+class ValueCaptureVerificationKeyRegistry:
+    def __init__(self, keys: dict[str, bytes]) -> None:
+        if not keys:
+            raise ValueError("verification keys must not be empty")
+        normalized: dict[str, bytes] = {}
+        for key_id, key in keys.items():
+            if not key_id.strip():
+                raise ValueError("signing_key_id must not be blank")
+            if len(key) < 32:
+                raise ValueError("verification key must be at least 32 bytes")
+            normalized[key_id] = bytes(key)
+        self.__keys = normalized
+
+    def verify_receipt(self, receipt: AcquisitionReceipt) -> bool:
+        key = self.__keys.get(receipt.signing_key_id)
+        if key is None:
+            return False
+        expected = hmac.new(key, receipt.receipt_hash.encode(), hashlib.sha256).hexdigest()
+        return hmac.compare_digest(expected, receipt.signature)
+
+
 class RegisteredValueCaptureProvider:
-    def __init__(self, source: ValueCaptureSourceConfig) -> None:
+    def __init__(
+        self,
+        source: ValueCaptureSourceConfig,
+        *,
+        signing_key_id: str,
+        signing_key: bytes,
+    ) -> None:
+        if not signing_key_id.strip():
+            raise ValueError("signing_key_id must not be blank")
+        if len(signing_key) < 32:
+            raise ValueError("signing_key must be at least 32 bytes")
         self._source = source
-        self.__signing_key = secrets.token_bytes(32)
+        self.__signing_key_id = signing_key_id
+        self.__signing_key = bytes(signing_key)
 
     @property
     def source_id(self) -> str:
         return self._source.source_id
+
+    @property
+    def signing_key_id(self) -> str:
+        return self.__signing_key_id
 
     def acquisition(
         self,
@@ -113,17 +149,19 @@ class RegisteredValueCaptureProvider:
         if not acquisition_id.strip():
             raise ValueError("acquisition_id must not be blank")
         payload_copy = dict(payload)
-        payload_hash = _payload_hash(payload_copy)
-        receipt_hash = _receipt_hash(
+        payload_hash = payload_hash_for(payload_copy)
+        receipt_hash = receipt_hash_for(
             acquisition_id=acquisition_id,
             kind=kind,
             capability=capability,
             source=self._source,
+            signing_key_id=self.__signing_key_id,
             endpoint=endpoint,
             acquired_at=acquired,
             identity=identity,
             raw_payload_hash=payload_hash,
         )
+        signature = hmac.new(self.__signing_key, receipt_hash.encode(), hashlib.sha256).hexdigest()
         receipt = AcquisitionReceipt(
             acquisition_id=acquisition_id,
             kind=kind,
@@ -133,27 +171,31 @@ class RegisteredValueCaptureProvider:
             endpoint=endpoint,
             parser_version=self._source.parser_version,
             registry_fingerprint=self._source.fingerprint,
+            signing_key_id=self.__signing_key_id,
             acquired_at=acquired,
             identity=identity,
             raw_payload_hash=payload_hash,
             receipt_hash=receipt_hash,
+            signature=signature,
         )
-        signature = hmac.new(self.__signing_key, receipt_hash.encode(), hashlib.sha256).hexdigest()
-        return ValueCaptureAcquisitionResult(receipt=receipt, payload=payload_copy, signature=signature)
+        return ValueCaptureAcquisitionResult(receipt=receipt, payload=payload_copy)
 
     def verify(self, result: ValueCaptureAcquisitionResult) -> bool:
         receipt = result.receipt
         if receipt.source_id != self._source.source_id:
             return False
+        if receipt.signing_key_id != self.__signing_key_id:
+            return False
         if receipt.registry_fingerprint != self._source.fingerprint:
             return False
-        if _payload_hash(result.payload) != receipt.raw_payload_hash:
+        if payload_hash_for(result.payload) != receipt.raw_payload_hash:
             return False
-        expected_hash = _receipt_hash(
+        expected_hash = receipt_hash_for(
             acquisition_id=receipt.acquisition_id,
             kind=receipt.kind,
             capability=receipt.capability,
             source=self._source,
+            signing_key_id=receipt.signing_key_id,
             endpoint=receipt.endpoint,
             acquired_at=receipt.acquired_at,
             identity=receipt.identity,
@@ -162,20 +204,21 @@ class RegisteredValueCaptureProvider:
         if expected_hash != receipt.receipt_hash:
             return False
         expected_signature = hmac.new(self.__signing_key, expected_hash.encode(), hashlib.sha256).hexdigest()
-        return hmac.compare_digest(expected_signature, result.signature)
+        return hmac.compare_digest(expected_signature, receipt.signature)
 
 
-def _payload_hash(payload: dict[str, Any]) -> str:
+def payload_hash_for(payload: dict[str, Any]) -> str:
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(canonical.encode()).hexdigest()
 
 
-def _receipt_hash(
+def receipt_hash_for(
     *,
     acquisition_id: str,
     kind: AcquisitionKind,
     capability: str,
     source: ValueCaptureSourceConfig,
+    signing_key_id: str,
     endpoint: str,
     acquired_at: datetime,
     identity: EconomicClaimIdentity,
@@ -190,6 +233,7 @@ def _receipt_hash(
         "endpoint": endpoint,
         "parser_version": source.parser_version,
         "registry_fingerprint": source.fingerprint,
+        "signing_key_id": signing_key_id,
         "acquired_at": acquired_at.isoformat(),
         "identity": {
             "entity_id": identity.entity_id,
