@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -17,7 +16,6 @@ from hunter.value_capture.providers import AcquisitionReceipt
 
 DEFAULT_VALUE_CAPTURE_DB = Path("data/value_capture/runtime/value_capture.sqlite")
 VALUE_CAPTURE_MIGRATION_ID = "supply-value-capture-v3.5.0-003"
-Record = FundamentalEvidenceRecord | SupplyBasisSnapshot | ValueCaptureRuleSnapshot
 
 SCHEMA_SQL = """
 PRAGMA foreign_keys = ON;
@@ -126,7 +124,21 @@ class SupplyAndValueCaptureRepository:
     def __init__(self, path: str | Path = DEFAULT_VALUE_CAPTURE_DB) -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        _initialize(self.path)
+        self.__initialize()
+
+    def __initialize(self) -> None:
+        with self.__connect() as conn:
+            conn.executescript(SCHEMA_SQL)
+            conn.execute(
+                "INSERT OR IGNORE INTO value_capture_schema_migrations (migration_id, applied_at) VALUES (?, ?)",
+                (VALUE_CAPTURE_MIGRATION_ID, datetime.now(UTC).isoformat()),
+            )
+
+    def __connect(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self.path)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
+        return conn
 
     def evidence(self, record_id: str) -> FundamentalEvidenceRecord | None:
         payload = self._payload("fundamental_evidence_records", record_id)
@@ -141,7 +153,7 @@ class SupplyAndValueCaptureRepository:
         return _rule_from_payload(payload) if payload is not None else None
 
     def receipt(self, acquisition_id: str) -> AcquisitionReceipt | None:
-        with _connect(self.path) as conn:
+        with self.__connect() as conn:
             row = conn.execute(
                 "SELECT payload_json FROM value_capture_acquisition_receipts WHERE acquisition_id = ?",
                 (acquisition_id,),
@@ -158,7 +170,7 @@ class SupplyAndValueCaptureRepository:
         }
         if table not in allowed:
             raise ValueError("unsupported value-capture table")
-        with _connect(self.path) as conn:
+        with self.__connect() as conn:
             return int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
 
     def strict_known_supply(self, **kwargs: Any) -> SupplyBasisSnapshot | None:
@@ -192,7 +204,7 @@ class SupplyAndValueCaptureRepository:
         category_value = category[category_column]
         effective = _aware(effective_as_of).isoformat()
         known = _aware(known_by).isoformat()
-        with _connect(self.path) as conn:
+        with self.__connect() as conn:
             row = conn.execute(
                 f"""
                 SELECT current.payload_json FROM {table} AS current
@@ -223,178 +235,9 @@ class SupplyAndValueCaptureRepository:
         return json.loads(str(row["payload_json"])) if row is not None else None
 
     def _payload(self, table: str, record_id: str) -> dict[str, Any] | None:
-        with _connect(self.path) as conn:
+        with self.__connect() as conn:
             row = conn.execute(f"SELECT payload_json FROM {table} WHERE record_id = ?", (record_id,)).fetchone()
         return json.loads(str(row["payload_json"])) if row is not None else None
-
-
-def _initialize(path: Path) -> None:
-    with _connect(path) as conn:
-        conn.executescript(SCHEMA_SQL)
-        conn.execute(
-            "INSERT OR IGNORE INTO value_capture_schema_migrations (migration_id, applied_at) VALUES (?, ?)",
-            (VALUE_CAPTURE_MIGRATION_ID, datetime.now(UTC).isoformat()),
-        )
-
-
-def _connect(path: Path) -> sqlite3.Connection:
-    conn = sqlite3.connect(path)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    return conn
-
-
-def _validate_receipt_binding(receipt: AcquisitionReceipt, record: Record) -> None:
-    raw_hash = record.raw_content_hash if isinstance(record, FundamentalEvidenceRecord) else record.raw_payload_hash
-    if receipt.acquisition_id != record.acquisition_id:
-        raise ValueCaptureIntegrityError("record acquisition_id does not match receipt")
-    if receipt.raw_payload_hash != raw_hash:
-        raise ValueCaptureIntegrityError("record payload hash does not match receipt")
-    if receipt.source_id != record.source_id or receipt.parser_version != record.parser_version:
-        raise ValueCaptureIntegrityError("record source/parser does not match receipt")
-    if receipt.identity != record.identity:
-        raise ValueCaptureIntegrityError("record identity does not match receipt")
-    if receipt.acquired_at != record.recorded_at or receipt.acquired_at != record.known_at:
-        raise ValueCaptureIntegrityError("record chronology does not match receipt")
-
-
-def _insert_receipt(conn: sqlite3.Connection, receipt: AcquisitionReceipt) -> None:
-    payload = _receipt_payload(receipt)
-    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
-    existing = conn.execute(
-        "SELECT payload_json FROM value_capture_acquisition_receipts WHERE acquisition_id = ?",
-        (receipt.acquisition_id,),
-    ).fetchone()
-    if existing is not None:
-        if str(existing["payload_json"]) != canonical:
-            raise ValueCaptureIntegrityError("acquisition_id reused with divergent receipt")
-        return
-    conn.execute(
-        """
-        INSERT INTO value_capture_acquisition_receipts (
-            acquisition_id,receipt_hash,kind,capability,source_id,source_authority_tier,endpoint,
-            parser_version,registry_fingerprint,signing_key_id,signature,acquired_at,entity_id,economic_claim_id,
-            representation_id,raw_payload_hash,payload_json
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-        """,
-        (
-            receipt.acquisition_id,
-            receipt.receipt_hash,
-            receipt.kind,
-            receipt.capability,
-            receipt.source_id,
-            receipt.source_authority_tier,
-            receipt.endpoint,
-            receipt.parser_version,
-            receipt.registry_fingerprint,
-            receipt.signing_key_id,
-            receipt.signature,
-            receipt.acquired_at.isoformat(),
-            receipt.identity.entity_id,
-            receipt.identity.economic_claim_id,
-            receipt.identity.representation_id,
-            receipt.raw_payload_hash,
-            canonical,
-        ),
-    )
-
-
-def _insert_record(conn: sqlite3.Connection, table: str, record: Record) -> None:
-    payload = _record_payload(record)
-    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
-    existing = conn.execute(f"SELECT payload_json FROM {table} WHERE record_id = ?", (record.record_id,)).fetchone()
-    if existing is not None:
-        if str(existing["payload_json"]) != canonical:
-            raise ValueCaptureIntegrityError("record_id reused with divergent content")
-        return
-    predecessor = record.supersedes_record_id
-    if predecessor is not None:
-        row = conn.execute(
-            f"SELECT logical_id,recorded_at,known_at FROM {table} WHERE record_id = ?", (predecessor,)
-        ).fetchone()
-        if row is None:
-            raise ValueCaptureIntegrityError("superseded record does not exist")
-        if str(row["logical_id"]) != record.logical_id:
-            raise ValueCaptureIntegrityError("correction must preserve logical_id")
-        if datetime.fromisoformat(str(row["recorded_at"])) >= record.recorded_at:
-            raise ValueCaptureIntegrityError("correction recorded_at must follow predecessor")
-        if datetime.fromisoformat(str(row["known_at"])) >= record.known_at:
-            raise ValueCaptureIntegrityError("correction known_at must follow predecessor")
-        successor = conn.execute(
-            f"SELECT record_id FROM {table} WHERE supersedes_record_id = ?", (predecessor,)
-        ).fetchone()
-        if successor is not None:
-            raise ValueCaptureIntegrityError("branching correction lineage is prohibited")
-    category_column = None
-    category_value = None
-    if isinstance(record, SupplyBasisSnapshot):
-        category_column, category_value = "supply_basis_type", record.supply_basis_type
-    elif isinstance(record, ValueCaptureRuleSnapshot):
-        category_column, category_value = "rule_type", record.rule_type
-    columns = [
-        "record_id",
-        "logical_id",
-        "entity_id",
-        "economic_claim_id",
-        "representation_id",
-        "source_id",
-        "parser_version",
-        "acquisition_id",
-        "effective_at",
-        "recorded_at",
-        "known_at",
-        "quality_state",
-        "conflict_state",
-        "content_hash",
-        "supersedes_record_id",
-        "payload_json",
-    ]
-    values: list[object] = [
-        record.record_id,
-        record.logical_id,
-        record.identity.entity_id,
-        record.identity.economic_claim_id,
-        record.identity.representation_id,
-        record.source_id,
-        record.parser_version,
-        record.acquisition_id,
-        record.effective_at.isoformat(),
-        record.recorded_at.isoformat(),
-        record.known_at.isoformat(),
-        record.quality_state,
-        record.conflict_state,
-        record.content_hash,
-        predecessor,
-        canonical,
-    ]
-    if category_column is not None:
-        columns.insert(5, category_column)
-        values.insert(5, category_value)
-    conn.execute(
-        f"INSERT INTO {table} ({', '.join(columns)}) VALUES ({', '.join('?' for _ in columns)})",
-        tuple(values),
-    )
-
-
-def _table_for(record: Record) -> str:
-    if isinstance(record, FundamentalEvidenceRecord):
-        return "fundamental_evidence_records"
-    if isinstance(record, SupplyBasisSnapshot):
-        return "supply_basis_snapshots"
-    return "value_capture_rule_snapshots"
-
-
-def _record_payload(record: Record) -> dict[str, Any]:
-    payload = asdict(record)
-    for name in ("effective_at", "recorded_at", "known_at"):
-        payload[name] = _aware(payload[name]).isoformat()
-    return payload
-
-
-def _receipt_payload(receipt: AcquisitionReceipt) -> dict[str, Any]:
-    payload = asdict(receipt)
-    payload["acquired_at"] = _aware(receipt.acquired_at).isoformat()
-    return payload
 
 
 def _identity(payload: dict[str, Any]) -> EconomicClaimIdentity:
