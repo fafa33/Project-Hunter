@@ -66,9 +66,7 @@ def setup(tmp_path, configs: tuple[ValueCaptureSourceConfig, ...] | None = None)
         registry=ValueCaptureSourceRegistry(configs),
         repository=repository,
     )
-    provider = RegisteredValueCaptureProvider(
-        configs[0], signing_key_id=SIGNING_KEY_ID, signing_key=SIGNING_KEY
-    )
+    provider = RegisteredValueCaptureProvider(configs[0], signing_key_id=SIGNING_KEY_ID, signing_key=SIGNING_KEY)
     return service, repository, provider
 
 
