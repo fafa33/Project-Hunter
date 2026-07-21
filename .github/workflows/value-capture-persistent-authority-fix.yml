@@ -63,7 +63,6 @@ jobs:
       - name: Format remediation
         run: |
           python -m pip install -e ".[dev]"
-          python -m ruff check --fix src/hunter/value_capture tests/test_value_capture_v3_5_0.py
           python -m black src/hunter/value_capture tests/test_value_capture_v3_5_0.py
       - name: Commit remediation
         run: |
