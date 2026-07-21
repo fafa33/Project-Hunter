@@ -250,9 +250,7 @@ class SupplyAndValueCaptureService:
     def __insert_record(conn: sqlite3.Connection, table: str, record: Record) -> None:
         payload = _json_safe(asdict(record))
         canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
-        existing = conn.execute(
-            f"SELECT payload_json FROM {table} WHERE record_id = ?", (record.record_id,)
-        ).fetchone()
+        existing = conn.execute(f"SELECT payload_json FROM {table} WHERE record_id = ?", (record.record_id,)).fetchone()
         if existing is not None:
             if str(existing["payload_json"]) != canonical:
                 raise ValueCaptureIntegrityError("record_id reused with divergent content")
