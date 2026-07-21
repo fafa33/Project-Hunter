@@ -1,16 +1,15 @@
 name: Value Capture Black Once
 
 on:
-  push:
-    branches: [fix/v3.5.0-seal-write-helpers]
-    paths:
-      - ".github/workflows/value-capture-black-once.yml"
+  pull_request:
+    branches: [main]
 
 permissions:
   contents: write
 
 jobs:
   format:
+    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
