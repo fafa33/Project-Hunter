@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -11,6 +12,7 @@ from hunter.committee.models import CommitteeInputSet
 from hunter.committee.repository import InvestmentCommitteeRepository
 from hunter.persistence.sql import RepositoryFactory, SessionFactory, create_schema, create_sqlite_engine
 
+_APPLICATION_ROOT_ENV = "HUNTER_APPLICATION_ROOT"
 _CANONICAL_PERSISTENCE_DATABASE = Path("data/data_ops.sqlite")
 _CANONICAL_COMMITTEE_DATABASE = Path("data/committee/runtime/investment_committee.sqlite")
 
@@ -22,8 +24,9 @@ def main(argv: list[str]) -> int:
     manifest_path = Path(argv[0]).resolve()
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     inputs = _load_inputs(manifest)
-    persistence_path = _canonical_path(_CANONICAL_PERSISTENCE_DATABASE)
-    committee_path = _canonical_path(_CANONICAL_COMMITTEE_DATABASE)
+    application_root = _application_root()
+    persistence_path = _canonical_path(application_root, _CANONICAL_PERSISTENCE_DATABASE)
+    committee_path = _canonical_path(application_root, _CANONICAL_COMMITTEE_DATABASE)
     engine = create_sqlite_engine(persistence_path)
     create_schema(engine)
     session = SessionFactory(engine).create()
@@ -53,11 +56,20 @@ def main(argv: list[str]) -> int:
     return 0
 
 
-def _canonical_path(relative: Path) -> Path:
-    root = Path.cwd().resolve()
+def _application_root() -> Path:
+    configured = os.environ.get(_APPLICATION_ROOT_ENV, "").strip()
+    if not configured:
+        raise ValueError(f"{_APPLICATION_ROOT_ENV} must identify the approved Hunter application root")
+    root = Path(configured).expanduser()
+    if not root.is_absolute():
+        raise ValueError(f"{_APPLICATION_ROOT_ENV} must be an absolute path")
+    return root.resolve()
+
+
+def _canonical_path(root: Path, relative: Path) -> Path:
     candidate = (root / relative).resolve()
-    if root not in candidate.parents:
-        raise ValueError("canonical committee runtime path escaped repository root")
+    if root != candidate and root not in candidate.parents:
+        raise ValueError("canonical committee runtime path escaped application root")
     return candidate
 
 
