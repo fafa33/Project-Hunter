@@ -11,9 +11,17 @@ from hunter.committee.authority import CommitteeInputIdentity
 from hunter.committee.models import CommitteeInputSet
 from hunter.committee.repository import InvestmentCommitteeRepository
 from hunter.committee.resolver import RepositoryBackedCommitteeInputResolver
-from hunter.committee.service import AuthoritativeInvestmentCommitteeService, CommitteeAuthorityError
+from hunter.committee.service import (
+    AuthoritativeInvestmentCommitteeService,
+    CommitteeAuthorityError,
+)
 from hunter.persistence.records import SnapshotRecord
-from hunter.persistence.sql import RepositoryFactory, SessionFactory, create_schema, create_sqlite_engine
+from hunter.persistence.sql import (
+    RepositoryFactory,
+    SessionFactory,
+    create_schema,
+    create_sqlite_engine,
+)
 
 NOW = datetime(2026, 7, 22, 12, 0, tzinfo=UTC)
 IDENTITY = CommitteeInputIdentity(
@@ -24,7 +32,11 @@ IDENTITY = CommitteeInputIdentity(
 )
 
 
-def metadata(*, revision: str = "revision:1", authority: str = "production-authoritative") -> dict[str, str]:
+def metadata(
+    *,
+    revision: str = "revision:1",
+    authority: str = "production-authoritative",
+) -> dict[str, str]:
     return {
         "authority_class": authority,
         "project_id": IDENTITY.project_id,
@@ -56,7 +68,10 @@ def snapshot(
     )
 
 
-def service_with(record: SnapshotRecord, tmp_path: Path) -> tuple[AuthoritativeInvestmentCommitteeService, Session]:
+def service_with(
+    record: SnapshotRecord,
+    tmp_path: Path,
+) -> tuple[AuthoritativeInvestmentCommitteeService, Session]:
     engine = create_sqlite_engine()
     create_schema(engine)
     session = SessionFactory(engine).create()
@@ -65,13 +80,19 @@ def service_with(record: SnapshotRecord, tmp_path: Path) -> tuple[AuthoritativeI
     session.commit()
     resolver = RepositoryBackedCommitteeInputResolver(factory)
     service = AuthoritativeInvestmentCommitteeService(
-        repository=InvestmentCommitteeRepository(tmp_path / f"committee-{record.id.replace(':', '-')}.sqlite"),
+        repository=InvestmentCommitteeRepository(
+            tmp_path / f"committee-{record.id.replace(':', '-')}.sqlite"
+        ),
         input_resolver=resolver,
     )
     return service, session
 
 
-def inputs(record: SnapshotRecord, *, alerts: tuple[str, ...] = ()) -> CommitteeInputSet:
+def inputs(
+    record: SnapshotRecord,
+    *,
+    alerts: tuple[str, ...] = (),
+) -> CommitteeInputSet:
     return CommitteeInputSet(
         project_id="alpha",
         effective_at=NOW,
@@ -81,7 +102,9 @@ def inputs(record: SnapshotRecord, *, alerts: tuple[str, ...] = ()) -> Committee
     )
 
 
-def test_repository_backed_resolver_drives_authoritative_cycle(tmp_path: Path) -> None:
+def test_repository_backed_resolver_drives_authoritative_cycle(
+    tmp_path: Path,
+) -> None:
     record = snapshot()
     service, session = service_with(record, tmp_path)
     try:
@@ -99,7 +122,10 @@ def test_forged_caller_value_and_unknown_id_reject(tmp_path: Path) -> None:
     service, session = service_with(record, tmp_path)
     try:
         forged = replace(record, payload={"risk": 0.9})
-        with pytest.raises(CommitteeAuthorityError, match="differs from authoritative persisted record"):
+        with pytest.raises(
+            CommitteeAuthorityError,
+            match="differs from authoritative persisted record",
+        ):
             service.evaluate_cycle((inputs(forged),))
         unknown = replace(record, id="snapshot:unknown")
         with pytest.raises(CommitteeAuthorityError, match="not known by Hunter"):
@@ -110,7 +136,10 @@ def test_forged_caller_value_and_unknown_id_reject(tmp_path: Path) -> None:
 
 def test_missing_or_nonproduction_authority_rejects(tmp_path: Path) -> None:
     for authority in ("", "experimental", "descriptive-only", "unavailable"):
-        record = snapshot(record_id=f"snapshot:{authority or 'missing'}", record_metadata=metadata(authority=authority))
+        record = snapshot(
+            record_id=f"snapshot:{authority or 'missing'}",
+            record_metadata=metadata(authority=authority),
+        )
         service, session = service_with(record, tmp_path)
         try:
             with pytest.raises(CommitteeAuthorityError):
@@ -119,8 +148,13 @@ def test_missing_or_nonproduction_authority_rejects(tmp_path: Path) -> None:
             session.close()
 
 
-def test_canonical_current_lineage_is_selected_from_persistence(tmp_path: Path) -> None:
-    old = snapshot(record_id="snapshot:alpha:1", record_metadata=metadata(revision="revision:1"))
+def test_canonical_current_lineage_is_selected_from_persistence(
+    tmp_path: Path,
+) -> None:
+    old = snapshot(
+        record_id="snapshot:alpha:1",
+        record_metadata=metadata(revision="revision:1"),
+    )
     current = snapshot(
         record_id="snapshot:alpha:2",
         created_at=NOW - timedelta(minutes=30),
@@ -136,10 +170,15 @@ def test_canonical_current_lineage_is_selected_from_persistence(tmp_path: Path) 
         factory.snapshots().save(current)
         session.commit()
         service = AuthoritativeInvestmentCommitteeService(
-            repository=InvestmentCommitteeRepository(tmp_path / "committee-lineage.sqlite"),
+            repository=InvestmentCommitteeRepository(
+                tmp_path / "committee-lineage.sqlite"
+            ),
             input_resolver=RepositoryBackedCommitteeInputResolver(factory),
         )
-        with pytest.raises(CommitteeAuthorityError, match="superseded correction-lineage member"):
+        with pytest.raises(
+            CommitteeAuthorityError,
+            match="superseded correction-lineage member",
+        ):
             service.evaluate_cycle((inputs(old),))
         service.evaluate_cycle((inputs(current),))
     finally:
@@ -147,7 +186,10 @@ def test_canonical_current_lineage_is_selected_from_persistence(tmp_path: Path) 
 
 
 def test_lineage_resolution_respects_historical_cutoff(tmp_path: Path) -> None:
-    old_metadata = {**metadata(revision="revision:1"), "invalidated_at": (NOW + timedelta(days=1)).isoformat()}
+    old_metadata = {
+        **metadata(revision="revision:1"),
+        "invalidated_at": (NOW + timedelta(days=1)).isoformat(),
+    }
     old = snapshot(record_id="snapshot:alpha:1", record_metadata=old_metadata)
     future = snapshot(
         record_id="snapshot:alpha:2",
@@ -164,7 +206,9 @@ def test_lineage_resolution_respects_historical_cutoff(tmp_path: Path) -> None:
         factory.snapshots().save(future)
         session.commit()
         service = AuthoritativeInvestmentCommitteeService(
-            repository=InvestmentCommitteeRepository(tmp_path / "committee-historical-lineage.sqlite"),
+            repository=InvestmentCommitteeRepository(
+                tmp_path / "committee-historical-lineage.sqlite"
+            ),
             input_resolver=RepositoryBackedCommitteeInputResolver(factory),
         )
         service.evaluate_cycle((inputs(old),))
@@ -172,7 +216,9 @@ def test_lineage_resolution_respects_historical_cutoff(tmp_path: Path) -> None:
         session.close()
 
 
-def test_alerts_and_unavailable_valuation_snapshot_metrics_are_blocked(tmp_path: Path) -> None:
+def test_alerts_and_unavailable_valuation_snapshot_metrics_are_blocked(
+    tmp_path: Path,
+) -> None:
     record = snapshot()
     service, session = service_with(record, tmp_path)
     try:
@@ -181,16 +227,24 @@ def test_alerts_and_unavailable_valuation_snapshot_metrics_are_blocked(tmp_path:
     finally:
         session.close()
 
-    valuation = snapshot(record_id="snapshot:valuation", payload={"valuation": 0.9})
+    valuation = snapshot(
+        record_id="snapshot:valuation",
+        payload={"valuation": 0.9},
+    )
     service, session = service_with(valuation, tmp_path)
     try:
-        with pytest.raises(CommitteeAuthorityError, match="unavailable valuation-family"):
+        with pytest.raises(
+            CommitteeAuthorityError,
+            match="unavailable valuation-family",
+        ):
             service.evaluate_cycle((inputs(valuation),))
     finally:
         session.close()
 
 
-def test_stale_future_known_and_cross_identity_inputs_reject(tmp_path: Path) -> None:
+def test_stale_future_known_and_cross_identity_inputs_reject(
+    tmp_path: Path,
+) -> None:
     stale = snapshot(effective_at=NOW - timedelta(days=8))
     service, session = service_with(stale, tmp_path)
     try:
@@ -199,7 +253,10 @@ def test_stale_future_known_and_cross_identity_inputs_reject(tmp_path: Path) -> 
     finally:
         session.close()
 
-    future = snapshot(created_at=NOW + timedelta(minutes=1), effective_at=NOW + timedelta(minutes=1))
+    future = snapshot(
+        created_at=NOW + timedelta(minutes=1),
+        effective_at=NOW + timedelta(minutes=1),
+    )
     service, session = service_with(future, tmp_path)
     try:
         with pytest.raises(CommitteeAuthorityError, match="not known by Hunter"):
@@ -207,7 +264,13 @@ def test_stale_future_known_and_cross_identity_inputs_reject(tmp_path: Path) -> 
     finally:
         session.close()
 
-    wrong = snapshot(record_metadata={**metadata(), "representation_id": "base:0xalpha", "chain_id": "eip155:8453"})
+    wrong = snapshot(
+        record_metadata={
+            **metadata(),
+            "representation_id": "base:0xalpha",
+            "chain_id": "eip155:8453",
+        }
+    )
     service, session = service_with(wrong, tmp_path)
     try:
         with pytest.raises(CommitteeAuthorityError, match="identity mismatch"):
