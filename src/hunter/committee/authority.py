@@ -55,9 +55,11 @@ class ResolvedCommitteeInput:
     invalidated_at: datetime | None = None
 
     def __post_init__(self) -> None:
-        for name in ("record_id", "family", "authority_class", "lineage_id", "revision_id", "current_revision_id"):
+        for name in ("record_id", "family", "lineage_id", "revision_id", "current_revision_id"):
             if not str(getattr(self, name)).strip():
                 raise ValueError(f"{name} is required")
+        if not isinstance(self.authority_class, str):
+            raise ValueError("authority_class must be a string")
         for name in ("recorded_at", "effective_at", "superseded_at", "invalidated_at"):
             value = getattr(self, name)
             if value is not None:
