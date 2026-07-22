@@ -201,6 +201,7 @@ def _committee_panel(records: tuple[InvestmentCommitteeAssessmentRecord, ...]) -
                     "confidence": record.committee_confidence,
                     "consensus": record.consensus_score,
                     "conflict": record.conflict_score,
+                    "source_record_ids": record.source_record_ids,
                     "effective_at": record.effective_at.isoformat(),
                 },
             )
