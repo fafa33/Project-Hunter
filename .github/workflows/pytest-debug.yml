@@ -17,17 +17,17 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install -e ".[dev]"
-      - name: Capture pytest failure
+      - name: Capture first pytest failure
         id: pytest
         shell: bash
         run: |
           set +e
-          pytest -vv tests/test_committee_final_blockers.py > pytest-output.txt 2>&1
+          pytest -x -vv > pytest-output.txt 2>&1
           status=$?
           {
             echo 'body<<EOF'
             echo '```text'
-            cat pytest-output.txt
+            tail -n 220 pytest-output.txt
             echo '```'
             echo EOF
           } >> "$GITHUB_OUTPUT"
