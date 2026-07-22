@@ -13,7 +13,9 @@ class CommitteeAuthorityError(ValueError):
     pass
 
 
-_UNAVAILABLE_SNAPSHOT_METRICS = frozenset({"valuation", "comparative_valuation", "mispricing", "mispricing_quality", "asymmetry"})
+_UNAVAILABLE_SNAPSHOT_METRICS = frozenset(
+    {"valuation", "comparative_valuation", "mispricing", "mispricing_quality", "asymmetry"}
+)
 
 
 class AuthoritativeInvestmentCommitteeService:
@@ -27,7 +29,9 @@ class AuthoritativeInvestmentCommitteeService:
         engine: InvestmentCommitteeEngine | None = None,
     ) -> None:
         if not isinstance(input_resolver, RepositoryBackedCommitteeInputResolver):
-            raise CommitteeAuthorityError("authoritative committee service requires the approved repository-backed resolver")
+            raise CommitteeAuthorityError(
+                "authoritative committee service requires the approved repository-backed resolver"
+            )
         self.repository = repository
         self.input_resolver = input_resolver
         self.engine = engine or InvestmentCommitteeEngine()
@@ -113,7 +117,11 @@ class AuthoritativeInvestmentCommitteeService:
             raise CommitteeAuthorityError(f"all committee inputs must reference persisted {kind} IDs")
 
         try:
-            resolved = self.input_resolver.resolve(record_id=record_id, family=family, known_at=item.effective_at)
+            resolved = self.input_resolver.resolve(
+                record_id=record_id,
+                family=family,
+                known_at=item.effective_at,
+            )
         except ValueError as exc:
             raise CommitteeAuthorityError(str(exc)) from exc
         if resolved is None:
