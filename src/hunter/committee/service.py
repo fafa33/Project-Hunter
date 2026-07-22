@@ -90,11 +90,7 @@ def _validate_persisted_input(record: object, item: CommitteeInputSet, family: s
     _apply_authority_policy(record, item, family)
 
 
-def _validate_assessment_input(
-    assessment: object,
-    item: CommitteeInputSet,
-    family: str,
-) -> None:
+def _validate_assessment_input(assessment: object, item: CommitteeInputSet, family: str) -> None:
     assessment_id = str(getattr(assessment, "assessment_id", getattr(assessment, "id", ""))).strip()
     if not assessment_id:
         raise CommitteeAuthorityError("all derived committee inputs must reference persisted assessment IDs")
