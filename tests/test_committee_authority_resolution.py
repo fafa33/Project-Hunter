@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 from sqlalchemy.orm import Session
@@ -55,7 +56,7 @@ def snapshot(
     )
 
 
-def service_with(record: SnapshotRecord, tmp_path) -> tuple[AuthoritativeInvestmentCommitteeService, Session]:
+def service_with(record: SnapshotRecord, tmp_path: Path) -> tuple[AuthoritativeInvestmentCommitteeService, Session]:
     engine = create_sqlite_engine()
     create_schema(engine)
     session = SessionFactory(engine).create()
@@ -80,7 +81,7 @@ def inputs(record: SnapshotRecord, *, alerts: tuple[str, ...] = ()) -> Committee
     )
 
 
-def test_repository_backed_resolver_drives_authoritative_cycle(tmp_path) -> None:
+def test_repository_backed_resolver_drives_authoritative_cycle(tmp_path: Path) -> None:
     record = snapshot()
     service, session = service_with(record, tmp_path)
     try:
@@ -93,7 +94,7 @@ def test_repository_backed_resolver_drives_authoritative_cycle(tmp_path) -> None
     assert champion.created_at == assessments[0].created_at
 
 
-def test_forged_caller_value_and_unknown_id_reject(tmp_path) -> None:
+def test_forged_caller_value_and_unknown_id_reject(tmp_path: Path) -> None:
     record = snapshot()
     service, session = service_with(record, tmp_path)
     try:
@@ -107,7 +108,7 @@ def test_forged_caller_value_and_unknown_id_reject(tmp_path) -> None:
         session.close()
 
 
-def test_missing_or_nonproduction_authority_rejects(tmp_path) -> None:
+def test_missing_or_nonproduction_authority_rejects(tmp_path: Path) -> None:
     for authority in ("", "experimental", "descriptive-only", "unavailable"):
         record = snapshot(record_id=f"snapshot:{authority or 'missing'}", record_metadata=metadata(authority=authority))
         service, session = service_with(record, tmp_path)
@@ -118,7 +119,7 @@ def test_missing_or_nonproduction_authority_rejects(tmp_path) -> None:
             session.close()
 
 
-def test_canonical_current_lineage_is_selected_from_persistence(tmp_path) -> None:
+def test_canonical_current_lineage_is_selected_from_persistence(tmp_path: Path) -> None:
     old = snapshot(record_id="snapshot:alpha:1", record_metadata=metadata(revision="revision:1"))
     current = snapshot(
         record_id="snapshot:alpha:2",
@@ -145,7 +146,33 @@ def test_canonical_current_lineage_is_selected_from_persistence(tmp_path) -> Non
         session.close()
 
 
-def test_alerts_and_unavailable_valuation_snapshot_metrics_are_blocked(tmp_path) -> None:
+def test_lineage_resolution_respects_historical_cutoff(tmp_path: Path) -> None:
+    old_metadata = {**metadata(revision="revision:1"), "invalidated_at": (NOW + timedelta(days=1)).isoformat()}
+    old = snapshot(record_id="snapshot:alpha:1", record_metadata=old_metadata)
+    future = snapshot(
+        record_id="snapshot:alpha:2",
+        created_at=NOW - timedelta(minutes=30),
+        effective_at=NOW + timedelta(days=1),
+        record_metadata=metadata(revision="revision:2"),
+    )
+    engine = create_sqlite_engine()
+    create_schema(engine)
+    session = SessionFactory(engine).create()
+    try:
+        factory = RepositoryFactory(session)
+        factory.snapshots().save(old)
+        factory.snapshots().save(future)
+        session.commit()
+        service = AuthoritativeInvestmentCommitteeService(
+            repository=InvestmentCommitteeRepository(tmp_path / "committee-historical-lineage.sqlite"),
+            input_resolver=RepositoryBackedCommitteeInputResolver(factory),
+        )
+        service.evaluate_cycle((inputs(old),))
+    finally:
+        session.close()
+
+
+def test_alerts_and_unavailable_valuation_snapshot_metrics_are_blocked(tmp_path: Path) -> None:
     record = snapshot()
     service, session = service_with(record, tmp_path)
     try:
@@ -163,7 +190,7 @@ def test_alerts_and_unavailable_valuation_snapshot_metrics_are_blocked(tmp_path)
         session.close()
 
 
-def test_stale_future_known_and_cross_identity_inputs_reject(tmp_path) -> None:
+def test_stale_future_known_and_cross_identity_inputs_reject(tmp_path: Path) -> None:
     stale = snapshot(effective_at=NOW - timedelta(days=8))
     service, session = service_with(stale, tmp_path)
     try:
