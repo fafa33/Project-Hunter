@@ -53,6 +53,7 @@ def _manifest(now: datetime, *, duplicate: bool = False) -> dict[str, object]:
 
 def _prepare_runtime(root: Path, now: datetime) -> Path:
     database = root / "data" / "data_ops.sqlite"
+    database.parent.mkdir(parents=True, exist_ok=True)
     engine = create_sqlite_engine(database)
     create_schema(engine)
     session = SessionFactory(engine).create()
