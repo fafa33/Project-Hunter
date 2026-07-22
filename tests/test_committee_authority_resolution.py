@@ -1,16 +1,17 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from hunter.committee.authority import (
-    CommitteeInputIdentity,
-    CommitteeInputPolicyError,
-    ResolvedCommitteeInput,
-    validate_authoritative_input,
-)
+from hunter.committee.authority import CommitteeInputIdentity
+from hunter.committee.models import CommitteeInputSet
+from hunter.committee.repository import InvestmentCommitteeRepository
+from hunter.committee.resolver import RepositoryBackedCommitteeInputResolver
+from hunter.committee.service import AuthoritativeInvestmentCommitteeService, CommitteeAuthorityError
+from hunter.persistence.records import SnapshotRecord
+from hunter.persistence.sql import RepositoryFactory, SessionFactory, create_schema, create_sqlite_engine
 
 NOW = datetime(2026, 7, 22, 12, 0, tzinfo=UTC)
 IDENTITY = CommitteeInputIdentity(
@@ -21,85 +22,165 @@ IDENTITY = CommitteeInputIdentity(
 )
 
 
-@dataclass(frozen=True)
-class Input:
-    id: str
-    effective_at: datetime
+def metadata(*, revision: str = "revision:1", authority: str = "production-authoritative") -> dict[str, str]:
+    return {
+        "authority_class": authority,
+        "project_id": IDENTITY.project_id,
+        "entity_id": IDENTITY.entity_id,
+        "representation_id": IDENTITY.representation_id,
+        "chain_id": IDENTITY.chain_id or "",
+        "lineage_id": "lineage:alpha",
+        "revision_id": revision,
+    }
 
 
-def resolved(value: Input, **changes: object) -> ResolvedCommitteeInput:
-    base = ResolvedCommitteeInput(
-        record_id=value.id,
-        family="snapshot",
-        value=value,
-        authority_class="production-authoritative",
-        identity=IDENTITY,
-        recorded_at=NOW - timedelta(hours=1),
-        effective_at=value.effective_at,
-        lineage_id="lineage:alpha",
-        revision_id="revision:2",
-        current_revision_id="revision:2",
+def snapshot(
+    record_id: str = "snapshot:alpha:1",
+    *,
+    created_at: datetime = NOW - timedelta(hours=1),
+    effective_at: datetime = NOW - timedelta(hours=1),
+    payload: dict[str, float] | None = None,
+    record_metadata: dict[str, str] | None = None,
+) -> SnapshotRecord:
+    return SnapshotRecord(
+        id=record_id,
+        created_at=created_at,
+        effective_at=effective_at,
+        snapshot_type="committee-input",
+        target_id="alpha",
+        record_ids=("evidence:alpha",),
+        payload=payload or {"risk": 0.2, "backtesting_reliability": 0.8},
+        metadata=record_metadata or metadata(),
     )
-    return replace(base, **changes)
 
 
-def validate(value: Input, authority: ResolvedCommitteeInput) -> None:
-    validate_authoritative_input(
-        value,
-        authority,
-        family="snapshot",
-        expected_identity=IDENTITY,
-        cycle_effective_at=NOW,
+def service_with(record: SnapshotRecord, tmp_path):
+    engine = create_sqlite_engine()
+    create_schema(engine)
+    session_manager = SessionFactory(engine).create()
+    session_manager.__enter__()
+    factory = RepositoryFactory(session_manager.session)
+    factory.snapshots().save(record)
+    session_manager.session.commit()
+    resolver = RepositoryBackedCommitteeInputResolver(factory)
+    service = AuthoritativeInvestmentCommitteeService(
+        repository=InvestmentCommitteeRepository(tmp_path / "committee.sqlite"),
+        input_resolver=resolver,
+    )
+    return service, session_manager
+
+
+def inputs(record: SnapshotRecord, *, alerts: tuple[str, ...] = ()) -> CommitteeInputSet:
+    return CommitteeInputSet(
+        project_id="alpha",
+        effective_at=NOW,
+        authority_identity=IDENTITY,
+        snapshots=(record,),
+        alerts=alerts,
     )
 
 
-def test_repository_resolved_record_is_required_and_must_match_supplied_value() -> None:
-    value = Input("snapshot:alpha", NOW - timedelta(hours=1))
-    validate(value, resolved(value))
+def test_repository_backed_resolver_drives_authoritative_cycle(tmp_path) -> None:
+    record = snapshot()
+    service, manager = service_with(record, tmp_path)
+    try:
+        champion, assessments = service.evaluate_cycle((inputs(record),))
+    finally:
+        manager.__exit__(None, None, None)
 
-    forged = replace(value, effective_at=NOW - timedelta(hours=2))
-    with pytest.raises(CommitteeInputPolicyError, match="differs from authoritative persisted record"):
-        validate(forged, resolved(value))
-
-
-def test_authority_class_is_explicit_and_fail_closed() -> None:
-    value = Input("snapshot:alpha", NOW - timedelta(hours=1))
-    with pytest.raises(CommitteeInputPolicyError, match="requires explicit authority class"):
-        validate(value, resolved(value, authority_class=""))
-    for authority_class in ("descriptive-only", "experimental", "unavailable"):
-        with pytest.raises(CommitteeInputPolicyError, match="cannot affect authoritative scoring"):
-            validate(value, resolved(value, authority_class=authority_class))
-    with pytest.raises(CommitteeInputPolicyError, match="unknown committee input authority class"):
-        validate(value, resolved(value, authority_class="legacy"))
+    assert assessments[0].rank == 1
+    assert assessments[0].source_record_ids == (record.id,)
+    assert champion.created_at == assessments[0].created_at
 
 
-def test_full_identity_scope_is_required() -> None:
-    value = Input("snapshot:alpha", NOW - timedelta(hours=1))
-    mismatched = replace(IDENTITY, representation_id="base:0xalpha", chain_id="eip155:8453")
-    with pytest.raises(CommitteeInputPolicyError, match="identity mismatch"):
-        validate(value, resolved(value, identity=mismatched))
+def test_forged_caller_value_and_unknown_id_reject(tmp_path) -> None:
+    record = snapshot()
+    service, manager = service_with(record, tmp_path)
+    try:
+        forged = replace(record, payload={"risk": 0.9})
+        with pytest.raises(CommitteeAuthorityError, match="differs from authoritative persisted record"):
+            service.evaluate_cycle((inputs(forged),))
+        unknown = replace(record, id="snapshot:unknown")
+        with pytest.raises(CommitteeAuthorityError, match="not known by Hunter"):
+            service.evaluate_cycle((inputs(unknown),))
+    finally:
+        manager.__exit__(None, None, None)
 
 
-def test_known_by_hunter_and_effective_cutoffs_are_enforced() -> None:
-    value = Input("snapshot:alpha", NOW - timedelta(hours=1))
-    with pytest.raises(CommitteeInputPolicyError, match="future-known"):
-        validate(value, resolved(value, recorded_at=NOW + timedelta(seconds=1)))
-    future = Input("snapshot:alpha", NOW + timedelta(seconds=1))
-    with pytest.raises(CommitteeInputPolicyError, match="future-effective"):
-        validate(future, resolved(future))
+def test_missing_or_nonproduction_authority_rejects(tmp_path) -> None:
+    for authority in ("", "experimental", "descriptive-only", "unavailable"):
+        record = snapshot(record_metadata=metadata(authority=authority))
+        service, manager = service_with(record, tmp_path)
+        try:
+            with pytest.raises(CommitteeAuthorityError):
+                service.evaluate_cycle((inputs(record),))
+        finally:
+            manager.__exit__(None, None, None)
 
 
-def test_canonical_current_correction_lineage_is_required() -> None:
-    value = Input("snapshot:alpha", NOW - timedelta(hours=1))
-    with pytest.raises(CommitteeInputPolicyError, match="superseded correction-lineage member"):
-        validate(value, resolved(value, revision_id="revision:1"))
-    with pytest.raises(CommitteeInputPolicyError, match="superseded committee input"):
-        validate(value, resolved(value, superseded_at=NOW - timedelta(minutes=1)))
-    with pytest.raises(CommitteeInputPolicyError, match="invalidated committee input"):
-        validate(value, resolved(value, invalidated_at=NOW - timedelta(minutes=1)))
+def test_canonical_current_lineage_is_selected_from_persistence(tmp_path) -> None:
+    old = snapshot(record_id="snapshot:alpha:1", record_metadata=metadata(revision="revision:1"))
+    current = snapshot(
+        record_id="snapshot:alpha:2",
+        created_at=NOW - timedelta(minutes=30),
+        effective_at=NOW - timedelta(minutes=30),
+        record_metadata=metadata(revision="revision:2"),
+    )
+    engine = create_sqlite_engine()
+    create_schema(engine)
+    with SessionFactory(engine).create() as session:
+        factory = RepositoryFactory(session)
+        factory.snapshots().save(old)
+        factory.snapshots().save(current)
+        session.commit()
+        service = AuthoritativeInvestmentCommitteeService(
+            repository=InvestmentCommitteeRepository(tmp_path / "committee.sqlite"),
+            input_resolver=RepositoryBackedCommitteeInputResolver(factory),
+        )
+        with pytest.raises(CommitteeAuthorityError, match="superseded correction-lineage member"):
+            service.evaluate_cycle((inputs(old),))
+        service.evaluate_cycle((inputs(current),))
 
 
-def test_family_freshness_policy_is_enforced() -> None:
-    stale = Input("snapshot:alpha", NOW - timedelta(days=8))
-    with pytest.raises(CommitteeInputPolicyError, match="stale committee input"):
-        validate(stale, resolved(stale))
+def test_alerts_and_unavailable_valuation_snapshot_metrics_are_blocked(tmp_path) -> None:
+    record = snapshot()
+    service, manager = service_with(record, tmp_path)
+    try:
+        with pytest.raises(CommitteeAuthorityError, match="critical alerts"):
+            service.evaluate_cycle((inputs(record, alerts=("critical",)),))
+    finally:
+        manager.__exit__(None, None, None)
+
+    valuation = snapshot(record_id="snapshot:valuation", payload={"valuation": 0.9})
+    service, manager = service_with(valuation, tmp_path)
+    try:
+        with pytest.raises(CommitteeAuthorityError, match="unavailable valuation-family"):
+            service.evaluate_cycle((inputs(valuation),))
+    finally:
+        manager.__exit__(None, None, None)
+
+
+def test_stale_future_known_and_cross_identity_inputs_reject(tmp_path) -> None:
+    stale = snapshot(effective_at=NOW - timedelta(days=8))
+    service, manager = service_with(stale, tmp_path)
+    try:
+        with pytest.raises(CommitteeAuthorityError, match="stale"):
+            service.evaluate_cycle((inputs(stale),))
+    finally:
+        manager.__exit__(None, None, None)
+
+    future = snapshot(created_at=NOW + timedelta(minutes=1), effective_at=NOW + timedelta(minutes=1))
+    service, manager = service_with(future, tmp_path)
+    try:
+        with pytest.raises(CommitteeAuthorityError, match="not known by Hunter"):
+            service.evaluate_cycle((inputs(future),))
+    finally:
+        manager.__exit__(None, None, None)
+
+    wrong = snapshot(record_metadata={**metadata(), "representation_id": "base:0xalpha", "chain_id": "eip155:8453"})
+    service, manager = service_with(wrong, tmp_path)
+    try:
+        with pytest.raises(CommitteeAuthorityError, match="identity mismatch"):
+            service.evaluate_cycle((inputs(wrong),))
+    finally:
+        manager.__exit__(None, None, None)
