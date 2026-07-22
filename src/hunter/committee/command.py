@@ -10,7 +10,7 @@ from hunter.committee.authority import CommitteeInputIdentity
 from hunter.committee.composition import build_authoritative_committee_service
 from hunter.committee.models import CommitteeInputSet
 from hunter.execution.hashing import stable_digest
-from hunter.persistence.records import PipelineRunRecord
+from hunter.persistence.records import MetadataValue, PipelineRunRecord
 from hunter.persistence.sql import RepositoryFactory, SessionFactory, create_schema, create_sqlite_engine
 
 _APPLICATION_ROOT_ENV = "HUNTER_APPLICATION_ROOT"
@@ -159,7 +159,7 @@ def _pipeline_record(
     input_ids = sorted(_manifest_record_ids(manifest))
     fingerprint = stable_digest("committee-authority-manifest", manifest, schema_version="v1")
     now = finished_at or started_at
-    metadata: dict[str, str | int] = {
+    metadata: dict[str, MetadataValue] = {
         "candidate_count": len(manifest["inputs"]),
         "manifest_fingerprint": fingerprint,
     }
