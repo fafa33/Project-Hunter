@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from typing import Protocol
 
 from hunter.committee.authority import CommitteeInputPolicyError, validate_authoritative_input
 from hunter.committee.engine import InvestmentCommitteeEngine, rank_committee_assessments
@@ -11,6 +12,26 @@ from hunter.committee.resolver import RepositoryBackedCommitteeInputResolver
 
 class CommitteeAuthorityError(ValueError):
     pass
+
+
+class CommitteeOutput(Protocol):
+    def persist_cycle(
+        self,
+        champion: CycleChampionSnapshot,
+        assessments: tuple[InvestmentCommitteeAssessment, ...],
+    ) -> None: ...
+
+
+class LegacyCommitteeOutput:
+    def __init__(self, repository: InvestmentCommitteeRepository) -> None:
+        self.repository = repository
+
+    def persist_cycle(
+        self,
+        champion: CycleChampionSnapshot,
+        assessments: tuple[InvestmentCommitteeAssessment, ...],
+    ) -> None:
+        persist_cycle(self.repository, champion, assessments)
 
 
 _UNAVAILABLE_SNAPSHOT_METRICS = frozenset(
@@ -32,7 +53,8 @@ class AuthoritativeInvestmentCommitteeService:
     def __init__(
         self,
         *,
-        repository: InvestmentCommitteeRepository,
+        repository: InvestmentCommitteeRepository | None = None,
+        output: CommitteeOutput | None = None,
         input_resolver: RepositoryBackedCommitteeInputResolver,
         engine: InvestmentCommitteeEngine | None = None,
     ) -> None:
@@ -40,7 +62,9 @@ class AuthoritativeInvestmentCommitteeService:
             raise CommitteeAuthorityError(
                 "authoritative committee service requires the approved repository-backed resolver"
             )
-        self.repository = repository
+        if (repository is None) == (output is None):
+            raise CommitteeAuthorityError("authoritative committee service requires exactly one output authority")
+        self.output = output if output is not None else LegacyCommitteeOutput(repository)  # type: ignore[arg-type]
         self.input_resolver = input_resolver
         self.engine = engine or InvestmentCommitteeEngine()
 
@@ -56,7 +80,7 @@ class AuthoritativeInvestmentCommitteeService:
         ordered = rank_committee_assessments(raw)
         ranked = tuple(replace(item, rank=index) for index, item in enumerate(ordered, start=1))
         champion = _champion_from_ranked(self.engine, inputs, ranked)
-        persist_cycle(self.repository, champion, ranked)
+        self.output.persist_cycle(champion, ranked)
         return champion, ranked
 
     def _validate_inputs(self, inputs: tuple[CommitteeInputSet, ...]) -> None:
