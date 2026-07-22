@@ -51,11 +51,23 @@ class ResolvedCommitteeInput:
     lineage_id: str
     revision_id: str
     current_revision_id: str
+    repository_namespace: str
+    repository_record_type: str
+    repository_fingerprint: str
     superseded_at: datetime | None = None
     invalidated_at: datetime | None = None
 
     def __post_init__(self) -> None:
-        for name in ("record_id", "family", "lineage_id", "revision_id", "current_revision_id"):
+        for name in (
+            "record_id",
+            "family",
+            "lineage_id",
+            "revision_id",
+            "current_revision_id",
+            "repository_namespace",
+            "repository_record_type",
+            "repository_fingerprint",
+        ):
             if not str(getattr(self, name)).strip():
                 raise ValueError(f"{name} is required")
         if not isinstance(self.authority_class, str):
@@ -87,11 +99,21 @@ def validate_authoritative_input(
         raise CommitteeInputPolicyError("resolved committee input ID mismatch")
     if supplied != resolved.value:
         raise CommitteeInputPolicyError("caller-supplied committee input differs from authoritative persisted record")
+    _validate_repository_binding(resolved)
     _validate_authority_class(resolved.authority_class)
     _validate_identity(resolved.identity, expected_identity)
     _validate_chronology(resolved, cycle_effective_at)
     _validate_correction_lineage(resolved, cycle_effective_at)
     _validate_freshness(resolved, family, cycle_effective_at)
+
+
+def _validate_repository_binding(resolved: ResolvedCommitteeInput) -> None:
+    from hunter.committee.resolver import verify_repository_binding
+
+    try:
+        verify_repository_binding(resolved)
+    except ValueError as exc:
+        raise CommitteeInputPolicyError(str(exc)) from exc
 
 
 def _validate_authority_class(authority_class: str) -> None:
