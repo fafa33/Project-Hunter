@@ -9,9 +9,7 @@ class CommitteeInputPolicyError(ValueError):
 
 
 PRODUCTION_AUTHORITY: Final[str] = "production-authoritative"
-NON_SCORING_AUTHORITIES: Final[frozenset[str]] = frozenset(
-    {"descriptive-only", "experimental", "unavailable"}
-)
+NON_SCORING_AUTHORITIES: Final[frozenset[str]] = frozenset({"descriptive-only", "experimental", "unavailable"})
 
 _FRESHNESS: Final[dict[str, timedelta]] = {
     "intelligence": timedelta(days=30),
@@ -41,9 +39,7 @@ def validate_authoritative_input(
 def _validate_authority_class(value: object) -> None:
     authority = str(getattr(value, "authority_class", PRODUCTION_AUTHORITY)).strip().lower()
     if authority in NON_SCORING_AUTHORITIES:
-        raise CommitteeInputPolicyError(
-            f"{authority} committee input cannot affect authoritative scoring"
-        )
+        raise CommitteeInputPolicyError(f"{authority} committee input cannot affect authoritative scoring")
     if authority != PRODUCTION_AUTHORITY:
         raise CommitteeInputPolicyError("unknown committee input authority class")
 
