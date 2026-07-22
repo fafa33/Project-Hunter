@@ -62,11 +62,20 @@ def main(argv: list[str]) -> int:
             )
         )
         session.commit()
-    except Exception:
+    except Exception as exc:
         session.rollback()
+        session.close()
+        _persist_failed_run(
+            session_factory=session_factory,
+            run_id=run_id,
+            manifest=manifest,
+            started_at=started_at,
+            error=exc,
+        )
         raise
     finally:
-        session.close()
+        if session.is_active:
+            session.close()
         engine.dispose()
     print(
         json.dumps(
@@ -82,6 +91,37 @@ def main(argv: list[str]) -> int:
         )
     )
     return 0
+
+
+def _persist_failed_run(
+    *,
+    session_factory: SessionFactory,
+    run_id: str,
+    manifest: dict[str, Any],
+    started_at: datetime,
+    error: Exception,
+) -> None:
+    failure_session = session_factory.create()
+    try:
+        finished_at = datetime.now(UTC)
+        repositories = RepositoryFactory(failure_session)
+        repositories.pipeline_runs().save(
+            _pipeline_record(
+                run_id=f"{run_id}:failed",
+                manifest=manifest,
+                status="failed",
+                started_at=started_at,
+                finished_at=finished_at,
+                parent_run_id=run_id,
+                error_summary=f"{type(error).__name__}: {error}",
+            )
+        )
+        failure_session.commit()
+    except Exception:
+        failure_session.rollback()
+        raise
+    finally:
+        failure_session.close()
 
 
 def _application_root() -> Path:
@@ -114,10 +154,17 @@ def _pipeline_record(
     started_at: datetime,
     finished_at: datetime | None,
     parent_run_id: str | None = None,
+    error_summary: str | None = None,
 ) -> PipelineRunRecord:
     input_ids = sorted(_manifest_record_ids(manifest))
     fingerprint = stable_digest("committee-authority-manifest", manifest, schema_version="v1")
     now = finished_at or started_at
+    metadata: dict[str, str | int] = {
+        "candidate_count": len(manifest["inputs"]),
+        "manifest_fingerprint": fingerprint,
+    }
+    if error_summary is not None:
+        metadata["error_summary"] = error_summary
     return PipelineRunRecord(
         id=run_id,
         created_at=now,
@@ -133,10 +180,7 @@ def _pipeline_record(
         started_at=started_at,
         finished_at=finished_at,
         parent_run_id=parent_run_id,
-        metadata={
-            "candidate_count": len(manifest["inputs"]),
-            "manifest_fingerprint": fingerprint,
-        },
+        metadata=metadata,
     )
 
 
