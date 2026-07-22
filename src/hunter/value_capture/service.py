@@ -5,7 +5,7 @@ import json
 import sqlite3
 from dataclasses import asdict, replace
 from datetime import datetime
-from typing import Any, Callable
+from typing import Any, Callable, cast
 
 from hunter.value_capture.models import (
     VALUE_CAPTURE_SCHEMA_VERSION,
@@ -23,7 +23,7 @@ from hunter.value_capture.registry import ValueCaptureSourceRegistry
 from hunter.value_capture.repository import SupplyAndValueCaptureRepository, ValueCaptureIntegrityError
 
 Record = FundamentalEvidenceRecord | SupplyBasisSnapshot | ValueCaptureRuleSnapshot
-PersistCapability = Callable[[RegisteredValueCaptureProvider, ValueCaptureAcquisitionResult, Record, str], None]
+PersistCapability = Callable[[RegisteredValueCaptureProvider, ValueCaptureAcquisitionResult, str], Record]
 
 
 class SupplyAndValueCaptureAuthorityError(ValueError):
@@ -45,10 +45,10 @@ class SupplyAndValueCaptureService:
         def persist_capability(
             provider: RegisteredValueCaptureProvider,
             result: ValueCaptureAcquisitionResult,
-            record: Record,
             expected_kind: str,
-        ) -> None:
+        ) -> Record:
             self._authorize_result(provider, result, expected_kind=expected_kind)
+            record = self._record_from_result(result, expected_kind=expected_kind)
             self._authorize_correction(record)
             if isinstance(record, (SupplyBasisSnapshot, ValueCaptureRuleSnapshot)):
                 self._require_evidence(record)
@@ -70,6 +70,7 @@ class SupplyAndValueCaptureService:
                 conn.commit()
             finally:
                 conn.close()
+            return record
 
         def validate_receipt_binding(receipt: AcquisitionReceipt, record: Record) -> None:
             raw_hash = (
@@ -222,119 +223,111 @@ class SupplyAndValueCaptureService:
         provider: RegisteredValueCaptureProvider,
         result: ValueCaptureAcquisitionResult,
     ) -> FundamentalEvidenceRecord:
-        self._authorize_result(provider, result, expected_kind="evidence")
-        payload = result.payload
-        record = FundamentalEvidenceRecord(
-            record_id="pending",
-            logical_id="pending",
-            schema_version=VALUE_CAPTURE_SCHEMA_VERSION,
-            semantic_version=str(payload.get("semantic_version", "1.0.0")),
-            identity=result.identity,
-            evidence_type=str(payload["evidence_type"]),  # type: ignore[arg-type]
-            source_id=result.source_id,
-            source_authority_tier=result.source_authority_tier,
-            source_reference=str(payload["source_reference"]),
-            parser_version=result.parser_version,
-            extracted_claim=str(payload["extracted_claim"]),
-            amount=_optional_text(payload.get("amount")),
-            unit=_optional_text(payload.get("unit")),
-            effective_at=_datetime(payload["effective_at"]),
-            recorded_at=result.acquired_at,
-            known_at=result.acquired_at,
-            raw_content_hash=result.raw_payload_hash,
-            quality_state=str(payload.get("quality_state", "accepted")),  # type: ignore[arg-type]
-            conflict_state=str(payload.get("conflict_state", "none")),  # type: ignore[arg-type]
-            supersedes_record_id=_optional_text(payload.get("supersedes_record_id")),
-            correction_reason=str(payload.get("correction_reason", "")),
-            acquisition_id=result.acquisition_id,
-        )
-        self._authorize_correction(record)
-        normalized = self._normalize(record)
-        self.__persist_capability(provider, result, normalized, "evidence")
-        return normalized
+        return cast(FundamentalEvidenceRecord, self.__persist_capability(provider, result, "evidence"))
 
     def ingest_supply(
         self,
         provider: RegisteredValueCaptureProvider,
         result: ValueCaptureAcquisitionResult,
     ) -> SupplyBasisSnapshot:
-        self._authorize_result(provider, result, expected_kind="supply")
-        payload = result.payload
-        record = SupplyBasisSnapshot(
-            record_id="pending",
-            logical_id="pending",
-            schema_version=VALUE_CAPTURE_SCHEMA_VERSION,
-            semantic_version=str(payload.get("semantic_version", "1.0.0")),
-            identity=result.identity,
-            supply_basis_type=str(payload["supply_basis_type"]),  # type: ignore[arg-type]
-            quantity=str(payload["quantity"]),
-            unit=str(payload["unit"]),
-            denominator_meaning=str(payload["denominator_meaning"]),
-            effective_at=_datetime(payload["effective_at"]),
-            recorded_at=result.acquired_at,
-            known_at=result.acquired_at,
-            source_id=result.source_id,
-            parser_version=result.parser_version,
-            evidence_record_ids=tuple(str(value) for value in payload["evidence_record_ids"]),
-            raw_payload_hash=result.raw_payload_hash,
-            quality_state=str(payload.get("quality_state", "accepted")),  # type: ignore[arg-type]
-            conflict_state=str(payload.get("conflict_state", "none")),  # type: ignore[arg-type]
-            supersedes_record_id=_optional_text(payload.get("supersedes_record_id")),
-            correction_reason=str(payload.get("correction_reason", "")),
-            acquisition_id=result.acquisition_id,
-        )
-        self._authorize_correction(record)
-        self._require_evidence(record)
-        normalized = self._normalize(record)
-        self.__persist_capability(provider, result, normalized, "supply")
-        return normalized
+        return cast(SupplyBasisSnapshot, self.__persist_capability(provider, result, "supply"))
 
     def ingest_rule(
         self,
         provider: RegisteredValueCaptureProvider,
         result: ValueCaptureAcquisitionResult,
     ) -> ValueCaptureRuleSnapshot:
-        self._authorize_result(provider, result, expected_kind="rule")
-        payload = result.payload
-        record = ValueCaptureRuleSnapshot(
-            record_id="pending",
-            logical_id="pending",
-            schema_version=VALUE_CAPTURE_SCHEMA_VERSION,
-            semantic_version=str(payload.get("semantic_version", "1.0.0")),
-            identity=result.identity,
-            rule_type=str(payload["rule_type"]),  # type: ignore[arg-type]
-            entitlement_scope=str(payload["entitlement_scope"]),
-            beneficiary_scope=str(payload["beneficiary_scope"]),
-            source_economic_flow=str(payload["source_economic_flow"]),
-            destination_economic_flow=str(payload["destination_economic_flow"]),
-            trigger_condition=str(payload["trigger_condition"]),
-            distribution_formula=str(payload.get("distribution_formula", "")),
-            rate_or_proportion=_optional_text(payload.get("rate_or_proportion")),
-            governance_or_contract_authority=str(payload["governance_or_contract_authority"]),
-            effective_at=_datetime(payload["effective_at"]),
-            recorded_at=result.acquired_at,
-            known_at=result.acquired_at,
-            source_id=result.source_id,
-            parser_version=result.parser_version,
-            evidence_record_ids=tuple(str(value) for value in payload["evidence_record_ids"]),
-            raw_payload_hash=result.raw_payload_hash,
-            quality_state=str(payload.get("quality_state", "accepted")),  # type: ignore[arg-type]
-            conflict_state=str(payload.get("conflict_state", "none")),  # type: ignore[arg-type]
-            supersedes_record_id=_optional_text(payload.get("supersedes_record_id")),
-            correction_reason=str(payload.get("correction_reason", "")),
-            acquisition_id=result.acquisition_id,
-        )
-        self._authorize_correction(record)
-        self._require_evidence(record)
-        normalized = self._normalize(record)
-        self.__persist_capability(provider, result, normalized, "rule")
-        return normalized
+        return cast(ValueCaptureRuleSnapshot, self.__persist_capability(provider, result, "rule"))
 
     def strict_known_supply(self, **kwargs: Any) -> SupplyBasisSnapshot | None:
         return self.repository.strict_known_supply(**kwargs)
 
     def strict_known_rule(self, **kwargs: Any) -> ValueCaptureRuleSnapshot | None:
         return self.repository.strict_known_rule(**kwargs)
+
+    def _record_from_result(self, result: ValueCaptureAcquisitionResult, *, expected_kind: str) -> Record:
+        payload = result.payload
+        if expected_kind == "evidence":
+            record: Record = FundamentalEvidenceRecord(
+                record_id="pending",
+                logical_id="pending",
+                schema_version=VALUE_CAPTURE_SCHEMA_VERSION,
+                semantic_version=str(payload.get("semantic_version", "1.0.0")),
+                identity=result.identity,
+                evidence_type=str(payload["evidence_type"]),  # type: ignore[arg-type]
+                source_id=result.source_id,
+                source_authority_tier=result.source_authority_tier,
+                source_reference=str(payload["source_reference"]),
+                parser_version=result.parser_version,
+                extracted_claim=str(payload["extracted_claim"]),
+                amount=_optional_text(payload.get("amount")),
+                unit=_optional_text(payload.get("unit")),
+                effective_at=_datetime(payload["effective_at"]),
+                recorded_at=result.acquired_at,
+                known_at=result.acquired_at,
+                raw_content_hash=result.raw_payload_hash,
+                quality_state=str(payload.get("quality_state", "accepted")),  # type: ignore[arg-type]
+                conflict_state=str(payload.get("conflict_state", "none")),  # type: ignore[arg-type]
+                supersedes_record_id=_optional_text(payload.get("supersedes_record_id")),
+                correction_reason=str(payload.get("correction_reason", "")),
+                acquisition_id=result.acquisition_id,
+            )
+        elif expected_kind == "supply":
+            record = SupplyBasisSnapshot(
+                record_id="pending",
+                logical_id="pending",
+                schema_version=VALUE_CAPTURE_SCHEMA_VERSION,
+                semantic_version=str(payload.get("semantic_version", "1.0.0")),
+                identity=result.identity,
+                supply_basis_type=str(payload["supply_basis_type"]),  # type: ignore[arg-type]
+                quantity=str(payload["quantity"]),
+                unit=str(payload["unit"]),
+                denominator_meaning=str(payload["denominator_meaning"]),
+                effective_at=_datetime(payload["effective_at"]),
+                recorded_at=result.acquired_at,
+                known_at=result.acquired_at,
+                source_id=result.source_id,
+                parser_version=result.parser_version,
+                evidence_record_ids=tuple(str(value) for value in payload["evidence_record_ids"]),
+                raw_payload_hash=result.raw_payload_hash,
+                quality_state=str(payload.get("quality_state", "accepted")),  # type: ignore[arg-type]
+                conflict_state=str(payload.get("conflict_state", "none")),  # type: ignore[arg-type]
+                supersedes_record_id=_optional_text(payload.get("supersedes_record_id")),
+                correction_reason=str(payload.get("correction_reason", "")),
+                acquisition_id=result.acquisition_id,
+            )
+        elif expected_kind == "rule":
+            record = ValueCaptureRuleSnapshot(
+                record_id="pending",
+                logical_id="pending",
+                schema_version=VALUE_CAPTURE_SCHEMA_VERSION,
+                semantic_version=str(payload.get("semantic_version", "1.0.0")),
+                identity=result.identity,
+                rule_type=str(payload["rule_type"]),  # type: ignore[arg-type]
+                entitlement_scope=str(payload["entitlement_scope"]),
+                beneficiary_scope=str(payload["beneficiary_scope"]),
+                source_economic_flow=str(payload["source_economic_flow"]),
+                destination_economic_flow=str(payload["destination_economic_flow"]),
+                trigger_condition=str(payload["trigger_condition"]),
+                distribution_formula=str(payload.get("distribution_formula", "")),
+                rate_or_proportion=_optional_text(payload.get("rate_or_proportion")),
+                governance_or_contract_authority=str(payload["governance_or_contract_authority"]),
+                effective_at=_datetime(payload["effective_at"]),
+                recorded_at=result.acquired_at,
+                known_at=result.acquired_at,
+                source_id=result.source_id,
+                parser_version=result.parser_version,
+                evidence_record_ids=tuple(str(value) for value in payload["evidence_record_ids"]),
+                raw_payload_hash=result.raw_payload_hash,
+                quality_state=str(payload.get("quality_state", "accepted")),  # type: ignore[arg-type]
+                conflict_state=str(payload.get("conflict_state", "none")),  # type: ignore[arg-type]
+                supersedes_record_id=_optional_text(payload.get("supersedes_record_id")),
+                correction_reason=str(payload.get("correction_reason", "")),
+                acquisition_id=result.acquisition_id,
+            )
+        else:
+            raise SupplyAndValueCaptureAuthorityError("unsupported canonical record kind")
+        return self._normalize(record)
 
     def _authorize_result(
         self,
