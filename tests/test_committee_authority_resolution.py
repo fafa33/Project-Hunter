@@ -86,11 +86,13 @@ def test_repository_backed_resolver_accepts_persisted_authoritative_input(tmp_pa
     record = snapshot()
     service, session = service_with(record, tmp_path)
     try:
-        champion, ranked = service.evaluate_cycle((inputs(record),))
-        assert champion.selected_project_id == "alpha"
-        assert ranked[0].project_id == "alpha"
+        champion, assessments = service.evaluate_cycle((inputs(record),))
     finally:
         session.close()
+
+    assert assessments[0].rank == 1
+    assert assessments[0].source_record_ids == (record.id,)
+    assert champion.created_at == assessments[0].created_at
 
 
 def test_caller_forged_snapshot_is_rejected(tmp_path: Path) -> None:
@@ -98,7 +100,7 @@ def test_caller_forged_snapshot_is_rejected(tmp_path: Path) -> None:
     forged = replace(persisted, payload={"signal": 0.1})
     service, session = service_with(persisted, tmp_path)
     try:
-        with pytest.raises(CommitteeAuthorityError, match="does not match the authoritative persisted value"):
+        with pytest.raises(CommitteeAuthorityError, match="differs from authoritative persisted record"):
             service.evaluate_cycle((inputs(forged),))
     finally:
         session.close()
