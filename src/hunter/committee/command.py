@@ -74,7 +74,9 @@ def main(argv: list[str]) -> int:
                 error=exc,
             )
         except Exception as persistence_error:
-            exc.add_note(f"failed to persist committee failure: {type(persistence_error).__name__}: {persistence_error}")
+            exc.add_note(
+                f"failed to persist committee failure: {type(persistence_error).__name__}: {persistence_error}"
+            )
         raise
     finally:
         if session.is_active:
