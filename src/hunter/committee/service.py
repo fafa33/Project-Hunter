@@ -2,18 +2,18 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from hunter.committee.authority import (
-    CommitteeInputPolicyError,
-    CommitteeInputResolver,
-    validate_authoritative_input,
-)
+from hunter.committee.authority import CommitteeInputPolicyError, validate_authoritative_input
 from hunter.committee.engine import InvestmentCommitteeEngine, rank_committee_assessments
 from hunter.committee.models import CommitteeInputSet, CycleChampionSnapshot, InvestmentCommitteeAssessment
 from hunter.committee.repository import InvestmentCommitteeRepository, persist_cycle
+from hunter.committee.resolver import RepositoryBackedCommitteeInputResolver
 
 
 class CommitteeAuthorityError(ValueError):
     pass
+
+
+_UNAVAILABLE_SNAPSHOT_METRICS = frozenset({"valuation", "comparative_valuation", "mispricing", "mispricing_quality", "asymmetry"})
 
 
 class AuthoritativeInvestmentCommitteeService:
@@ -23,9 +23,11 @@ class AuthoritativeInvestmentCommitteeService:
         self,
         *,
         repository: InvestmentCommitteeRepository,
-        input_resolver: CommitteeInputResolver,
+        input_resolver: RepositoryBackedCommitteeInputResolver,
         engine: InvestmentCommitteeEngine | None = None,
     ) -> None:
+        if not isinstance(input_resolver, RepositoryBackedCommitteeInputResolver):
+            raise CommitteeAuthorityError("authoritative committee service requires the approved repository-backed resolver")
         self.repository = repository
         self.input_resolver = input_resolver
         self.engine = engine or InvestmentCommitteeEngine()
@@ -58,6 +60,10 @@ class AuthoritativeInvestmentCommitteeService:
     def _validate_sources(self, item: CommitteeInputSet) -> None:
         if item.authority_identity is None:
             raise CommitteeAuthorityError("authoritative committee input requires typed candidate identity")
+        if item.alerts:
+            raise CommitteeAuthorityError(
+                "critical alerts cannot affect authoritative decisions until a persisted typed alert authority exists"
+            )
 
         record_groups = (
             ("intelligence", item.intelligence),
@@ -67,6 +73,8 @@ class AuthoritativeInvestmentCommitteeService:
         )
         for family, records in record_groups:
             for record in records:
+                if family == "snapshot":
+                    self._reject_unavailable_snapshot_metrics(record)
                 self._resolve_and_validate(record, item, family, derived=False)
 
         assessments = (
@@ -78,6 +86,18 @@ class AuthoritativeInvestmentCommitteeService:
         for family, assessment in assessments:
             if assessment is not None:
                 self._resolve_and_validate(assessment, item, family, derived=True)
+
+    @staticmethod
+    def _reject_unavailable_snapshot_metrics(record: object) -> None:
+        payload = getattr(record, "payload", None)
+        if not isinstance(payload, dict):
+            return
+        forbidden = _UNAVAILABLE_SNAPSHOT_METRICS.intersection(str(key) for key in payload)
+        if forbidden:
+            names = ", ".join(sorted(forbidden))
+            raise CommitteeAuthorityError(
+                f"unavailable valuation-family snapshot metrics cannot affect authoritative scoring: {names}"
+            )
 
     def _resolve_and_validate(
         self,
@@ -92,7 +112,10 @@ class AuthoritativeInvestmentCommitteeService:
             kind = "assessment" if derived else "record"
             raise CommitteeAuthorityError(f"all committee inputs must reference persisted {kind} IDs")
 
-        resolved = self.input_resolver.resolve(record_id=record_id, family=family, known_at=item.effective_at)
+        try:
+            resolved = self.input_resolver.resolve(record_id=record_id, family=family, known_at=item.effective_at)
+        except ValueError as exc:
+            raise CommitteeAuthorityError(str(exc)) from exc
         if resolved is None:
             raise CommitteeAuthorityError("committee input was not known by Hunter at the cycle cutoff")
         try:
