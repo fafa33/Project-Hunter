@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import datetime
 
+from hunter.committee.authority import CommitteeInputPolicyError, validate_authoritative_input
 from hunter.committee.engine import InvestmentCommitteeEngine, rank_committee_assessments
 from hunter.committee.models import CommitteeInputSet, CycleChampionSnapshot, InvestmentCommitteeAssessment
 from hunter.committee.repository import InvestmentCommitteeRepository, persist_cycle
@@ -52,31 +53,44 @@ def _validate_inputs(inputs: tuple[CommitteeInputSet, ...]) -> None:
 
 
 def _validate_sources(item: CommitteeInputSet) -> None:
-    records = (*item.intelligence, *item.fused_intelligence, *item.evidence, *item.snapshots)
-    for record in records:
-        _validate_persisted_input(record, item.effective_at)
+    record_groups = (
+        ("intelligence", item.intelligence),
+        ("fused_intelligence", item.fused_intelligence),
+        ("evidence", item.evidence),
+        ("snapshot", item.snapshots),
+    )
+    for family, records in record_groups:
+        for record in records:
+            _validate_persisted_input(record, item, family)
 
-    assessments = (item.opportunity, item.probability, item.pattern, item.necessity)
-    for assessment in assessments:
+    assessments = (
+        ("opportunity", item.opportunity),
+        ("probability", item.probability),
+        ("pattern", item.pattern),
+        ("necessity", item.necessity),
+    )
+    for family, assessment in assessments:
         if assessment is not None:
-            _validate_assessment_input(assessment, item.effective_at)
+            _validate_assessment_input(assessment, item, family)
 
 
-def _validate_persisted_input(record: object, cycle_effective_at: datetime) -> None:
+def _validate_persisted_input(record: object, item: CommitteeInputSet, family: str) -> None:
     record_id = str(getattr(record, "id", "")).strip()
     if not record_id:
         raise CommitteeAuthorityError("all committee inputs must reference persisted record IDs")
 
     recorded_at = getattr(record, "recorded_at", getattr(record, "created_at", None))
-    if isinstance(recorded_at, datetime) and recorded_at > cycle_effective_at:
+    if isinstance(recorded_at, datetime) and recorded_at > item.effective_at:
         raise CommitteeAuthorityError("future-known input cannot enter committee evaluation")
 
     effective_at = getattr(record, "effective_at", None)
-    if isinstance(effective_at, datetime) and effective_at > cycle_effective_at:
+    if isinstance(effective_at, datetime) and effective_at > item.effective_at:
         raise CommitteeAuthorityError("future-effective input cannot enter committee evaluation")
 
+    _apply_authority_policy(record, item, family)
 
-def _validate_assessment_input(assessment: object, cycle_effective_at: datetime) -> None:
+
+def _validate_assessment_input(assessment: object, item: CommitteeInputSet, family: str) -> None:
     assessment_id = str(getattr(assessment, "assessment_id", getattr(assessment, "id", ""))).strip()
     if not assessment_id:
         raise CommitteeAuthorityError("all derived committee inputs must reference persisted assessment IDs")
@@ -84,12 +98,26 @@ def _validate_assessment_input(assessment: object, cycle_effective_at: datetime)
     effective_at = getattr(assessment, "effective_at", None)
     if not isinstance(effective_at, datetime):
         raise CommitteeAuthorityError("derived committee inputs must define effective_at")
-    if effective_at > cycle_effective_at:
+    if effective_at > item.effective_at:
         raise CommitteeAuthorityError("future-effective assessment cannot enter committee evaluation")
 
     recorded_at = getattr(assessment, "recorded_at", getattr(assessment, "created_at", None))
-    if isinstance(recorded_at, datetime) and recorded_at > cycle_effective_at:
+    if isinstance(recorded_at, datetime) and recorded_at > item.effective_at:
         raise CommitteeAuthorityError("future-known assessment cannot enter committee evaluation")
+
+    _apply_authority_policy(assessment, item, family)
+
+
+def _apply_authority_policy(value: object, item: CommitteeInputSet, family: str) -> None:
+    try:
+        validate_authoritative_input(
+            value,
+            family=family,
+            project_id=item.project_id,
+            cycle_effective_at=item.effective_at,
+        )
+    except CommitteeInputPolicyError as exc:
+        raise CommitteeAuthorityError(str(exc)) from exc
 
 
 def _champion_from_ranked(
