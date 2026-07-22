@@ -11,6 +11,7 @@ from hunter.persistence.serialization import record_to_json
 from hunter.persistence.sql import RepositoryFactory
 
 _REPOSITORY_NAMESPACE: Final[str] = "hunter.persistence.sql"
+_ACTIVE_LIFECYCLE_STATES: Final[frozenset[str]] = frozenset({"active", "current"})
 
 
 class RepositoryBackedCommitteeInputResolver:
@@ -26,6 +27,7 @@ class RepositoryBackedCommitteeInputResolver:
         record = repository.load(record_id)
         if record is None or record.created_at > known_at:
             return None
+        _validate_lifecycle(record)
 
         lineage_id = _required_metadata(record, "lineage_id")
         revision_id = str(record.metadata.get("revision_id") or record.id)
@@ -80,6 +82,7 @@ class RepositoryBackedCommitteeInputResolver:
             and record.effective_at <= known_at
             and str(record.metadata.get("lineage_id", "")).strip() == lineage_id
             and not _invalidated_at_cutoff(record, known_at)
+            and _lifecycle_is_current(record)
         )
         if not candidates:
             return None
@@ -132,3 +135,14 @@ def _optional_datetime(record: BasePersistenceRecord, name: str) -> datetime | N
 def _invalidated_at_cutoff(record: BasePersistenceRecord, known_at: datetime) -> bool:
     invalidated_at = _optional_datetime(record, "invalidated_at")
     return invalidated_at is not None and invalidated_at <= known_at
+
+
+def _lifecycle_is_current(record: BasePersistenceRecord) -> bool:
+    state = _optional_metadata(record, "lifecycle_state")
+    return state is None or state.strip().lower() in _ACTIVE_LIFECYCLE_STATES
+
+
+def _validate_lifecycle(record: BasePersistenceRecord) -> None:
+    state = _optional_metadata(record, "lifecycle_state")
+    if state is not None and state.strip().lower() not in _ACTIVE_LIFECYCLE_STATES:
+        raise ValueError(f"non-current committee input lifecycle cannot be scored: {state}")
