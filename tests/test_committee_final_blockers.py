@@ -9,17 +9,9 @@ from hunter.committee.authority import CommitteeInputIdentity
 from hunter.committee.models import CommitteeInputSet
 from hunter.committee.repository import InvestmentCommitteeRepository
 from hunter.committee.resolver import RepositoryBackedCommitteeInputResolver
-from hunter.committee.service import (
-    AuthoritativeInvestmentCommitteeService,
-    CommitteeAuthorityError,
-)
+from hunter.committee.service import AuthoritativeInvestmentCommitteeService, CommitteeAuthorityError
 from hunter.persistence.records import SnapshotRecord
-from hunter.persistence.sql import (
-    RepositoryFactory,
-    SessionFactory,
-    create_schema,
-    create_sqlite_engine,
-)
+from hunter.persistence.sql import RepositoryFactory, SessionFactory, create_schema, create_sqlite_engine
 
 NOW = datetime(2026, 7, 22, 12, 0, tzinfo=UTC)
 IDENTITY = CommitteeInputIdentity(
@@ -30,11 +22,7 @@ IDENTITY = CommitteeInputIdentity(
 )
 
 
-def _record(
-    *,
-    payload: dict[str, float],
-    lifecycle_state: str | None = None,
-) -> SnapshotRecord:
+def _record(*, payload: dict[str, float], lifecycle_state: str | None = None) -> SnapshotRecord:
     metadata = {
         "authority_class": "production-authoritative",
         "project_id": IDENTITY.project_id,
@@ -86,37 +74,14 @@ def _evaluate(record: SnapshotRecord, tmp_path: Path) -> None:
 
 @pytest.mark.parametrize(
     "lifecycle_state",
-    (
-        "inactive",
-        "withdrawn",
-        "deprecated",
-        "disabled",
-        "archived",
-        "rejected",
-        "unknown",
-    ),
+    ("inactive", "withdrawn", "deprecated", "disabled", "archived", "rejected", "unknown"),
 )
-def test_non_current_lifecycle_states_fail_closed(
-    tmp_path: Path,
-    lifecycle_state: str,
-) -> None:
-    with pytest.raises(
-        CommitteeAuthorityError,
-        match="non-current committee input lifecycle",
-    ):
-        _evaluate(
-            _record(payload={"signal": 0.8}, lifecycle_state=lifecycle_state),
-            tmp_path,
-        )
+def test_non_current_lifecycle_states_fail_closed(tmp_path: Path, lifecycle_state: str) -> None:
+    with pytest.raises(CommitteeAuthorityError, match="non-current committee input lifecycle"):
+        _evaluate(_record(payload={"signal": 0.8}, lifecycle_state=lifecycle_state), tmp_path)
 
 
 @pytest.mark.parametrize("metric", ("risk", "backtesting_reliability"))
-def test_generic_snapshot_risk_metrics_fail_closed(
-    tmp_path: Path,
-    metric: str,
-) -> None:
-    with pytest.raises(
-        CommitteeAuthorityError,
-        match="unavailable snapshot metrics",
-    ):
+def test_generic_snapshot_risk_metrics_fail_closed(tmp_path: Path, metric: str) -> None:
+    with pytest.raises(CommitteeAuthorityError, match="unavailable snapshot metrics"):
         _evaluate(_record(payload={metric: 0.8}), tmp_path)
