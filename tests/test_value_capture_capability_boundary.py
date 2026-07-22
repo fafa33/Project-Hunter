@@ -3,7 +3,6 @@ from __future__ import annotations
 import inspect
 
 import pytest
-
 from test_value_capture_v3_5_0 import evidence_result, setup
 
 
