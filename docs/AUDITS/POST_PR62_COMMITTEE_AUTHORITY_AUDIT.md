@@ -17,10 +17,10 @@ PR #62 materially strengthens the committee boundary, but the full Issue #61 com
 ## Verified improvements
 
 - `src/hunter/committee/authority.py` introduces explicit freshness policies for each currently scored input family.
-- Non-production authority classes are rejected before scoring.
+- Non-production authority classes are rejected before scoring when an authority class is explicitly present.
 - Future-known and future-effective checks from PR #59 remain in the service boundary.
 - Project-ID mismatches are rejected when the input exposes `project_id`.
-- Inputs explicitly marked superseded, invalidated, retracted, or inactive are rejected.
+- Inputs marked by `is_superseded` or `is_invalidated`, and lifecycle states exactly equal to `superseded`, `invalidated`, or `retracted`, are rejected.
 - Existing deterministic ranking, champion consistency, and atomic persistence flow remains in `AuthoritativeInvestmentCommitteeService`.
 - Valuation, comparative valuation, mispricing, and asymmetry remain unactivated and no neutral defaults are introduced.
 
@@ -67,10 +67,11 @@ File: `src/hunter/committee/authority.py`
 
 Symbol: `_validate_correction_state`
 
-The implementation rejects local flags such as `is_superseded` and selected lifecycle strings, but it does not verify that the record is the authoritative current member of its correction lineage as known by Hunter at the cycle cutoff. A stale predecessor without those convenience flags can still pass.
+The implementation rejects local flags such as `is_superseded` and `is_invalidated`, plus lifecycle values exactly equal to `superseded`, `invalidated`, or `retracted`. It does **not** reject a generic lifecycle value such as `inactive`, and it does not verify that the record is the authoritative current member of its correction lineage as known by Hunter at the cycle cutoff. A stale predecessor without the recognized flags or lifecycle strings can still pass.
 
 Required remediation:
 
+- Reject every non-active lifecycle state according to a typed lifecycle policy; specifically, `lifecycle_state="inactive"` must not pass.
 - Validate correction lineage through authoritative persisted lineage identifiers or repository resolution.
 - Resolve the record valid and known at the replay cutoff.
 - Reject superseded predecessors even when caller-visible convenience flags are absent or forged.
@@ -98,6 +99,7 @@ PR #62 changes production code but does not establish the complete test coverage
 - descriptive, experimental, unavailable, and unknown authority classes;
 - stale raw and derived inputs;
 - missing and mismatched identity dimensions;
+- generic inactive lifecycle state;
 - superseded correction lineage resolved from persistence;
 - known-by-Hunter cutoff reconstruction;
 - unavailable valuation families producing no neutral eligibility;
