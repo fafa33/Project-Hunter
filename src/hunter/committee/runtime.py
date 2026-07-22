@@ -4,18 +4,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from hunter.committee.composition import build_authoritative_committee_service
-from hunter.committee.models import (
-    CommitteeInputSet,
-    CycleChampionSnapshot,
-    InvestmentCommitteeAssessment,
-)
+from hunter.committee.models import CommitteeInputSet, CycleChampionSnapshot, InvestmentCommitteeAssessment
 from hunter.committee.repository import InvestmentCommitteeRepository
-from hunter.persistence.sql import (
-    RepositoryFactory,
-    SessionFactory,
-    create_schema,
-    create_sqlite_engine,
-)
+from hunter.persistence.sql import RepositoryFactory, SessionFactory, create_schema, create_sqlite_engine
 
 
 @dataclass(frozen=True)
@@ -24,15 +15,10 @@ class ApprovedCommitteeRuntimePaths:
     committee_database: Path
 
     def __post_init__(self) -> None:
-        if (
-            not self.persistence_database.is_absolute()
-            or not self.committee_database.is_absolute()
-        ):
+        if not self.persistence_database.is_absolute() or not self.committee_database.is_absolute():
             raise ValueError("approved committee runtime paths must be absolute")
         if self.persistence_database == self.committee_database:
-            raise ValueError(
-                "input persistence and committee output databases must be distinct"
-            )
+            raise ValueError("input persistence and committee output databases must be distinct")
 
 
 class ProductionCommitteeRuntime:
@@ -50,9 +36,7 @@ class ProductionCommitteeRuntime:
         session = SessionFactory(engine).create()
         try:
             service = build_authoritative_committee_service(
-                output_repository=InvestmentCommitteeRepository(
-                    self.paths.committee_database
-                ),
+                output_repository=InvestmentCommitteeRepository(self.paths.committee_database),
                 persistence_repositories=RepositoryFactory(session),
             )
             return service.evaluate_cycle(inputs)
