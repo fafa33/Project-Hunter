@@ -44,8 +44,20 @@ jobs:
       - name: Ruff
         run: ruff check .
 
-      - name: Black
-        run: black --check --diff .
+      - name: Apply Black formatting for diagnosis
+        run: black .
+
+      - name: Upload Black-formatted files
+        uses: actions/upload-artifact@v4
+        with:
+          name: black-formatted-files
+          path: |
+            src/hunter/committee/command.py
+            src/hunter/dashboard/data.py
+            tests/test_committee_authority_final_e2e.py
+
+      - name: Verify Black formatting
+        run: git diff --exit-code
 
       - name: Mypy
         run: mypy
