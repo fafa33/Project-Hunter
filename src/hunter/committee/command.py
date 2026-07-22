@@ -2,19 +2,19 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from hunter.committee.authority import CommitteeInputIdentity
 from hunter.committee.composition import build_authoritative_committee_service
 from hunter.committee.models import CommitteeInputSet
-from hunter.committee.repository import InvestmentCommitteeRepository
+from hunter.execution.hashing import stable_digest
+from hunter.persistence.records import PipelineRunRecord
 from hunter.persistence.sql import RepositoryFactory, SessionFactory, create_schema, create_sqlite_engine
 
 _APPLICATION_ROOT_ENV = "HUNTER_APPLICATION_ROOT"
 _CANONICAL_PERSISTENCE_DATABASE = Path("data/data_ops.sqlite")
-_CANONICAL_COMMITTEE_DATABASE = Path("data/committee/runtime/investment_committee.sqlite")
 
 
 def main(argv: list[str]) -> int:
@@ -26,29 +26,57 @@ def main(argv: list[str]) -> int:
     inputs = _load_inputs(manifest)
     application_root = _application_root()
     persistence_path = _canonical_path(application_root, _CANONICAL_PERSISTENCE_DATABASE)
-    committee_path = _canonical_path(application_root, _CANONICAL_COMMITTEE_DATABASE)
     engine = create_sqlite_engine(persistence_path)
     create_schema(engine)
-    session = SessionFactory(engine).create()
+    session_factory = SessionFactory(engine)
+    session = session_factory.create()
+    run_id = _pipeline_run_id(manifest)
+    started_at = datetime.now(UTC)
     try:
         repositories = RepositoryFactory(session)
         hydrated = tuple(_hydrate_input(item, repositories) for item in inputs)
+        repositories.pipeline_runs().save(
+            _pipeline_record(
+                run_id=run_id,
+                manifest=manifest,
+                status="running",
+                started_at=started_at,
+                finished_at=None,
+            )
+        )
+        session.flush()
         service = build_authoritative_committee_service(
-            output_repository=InvestmentCommitteeRepository(committee_path),
             persistence_repositories=repositories,
+            pipeline_run_id=run_id,
         )
         champion, assessments = service.evaluate_cycle(hydrated)
+        completed_id = f"{run_id}:completed"
+        repositories.pipeline_runs().save(
+            _pipeline_record(
+                run_id=completed_id,
+                manifest=manifest,
+                status="succeeded",
+                started_at=started_at,
+                finished_at=datetime.now(UTC),
+                parent_run_id=run_id,
+            )
+        )
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
     finally:
         session.close()
         engine.dispose()
     print(
         json.dumps(
             {
+                "pipeline_run_id": run_id,
                 "champion_id": champion.id,
                 "selected_project_id": champion.selected_project_id,
                 "decision": champion.decision,
                 "assessment_ids": [assessment.id for assessment in assessments],
-                "committee_database": str(committee_path),
+                "persistence_database": str(persistence_path),
             },
             sort_keys=True,
         )
@@ -71,6 +99,55 @@ def _canonical_path(root: Path, relative: Path) -> Path:
     if root != candidate and root not in candidate.parents:
         raise ValueError("canonical committee runtime path escaped application root")
     return candidate
+
+
+def _pipeline_run_id(manifest: dict[str, Any]) -> str:
+    fingerprint = stable_digest("committee-authority-manifest", manifest, schema_version="v1")
+    return f"pipeline-run:committee-authority:{fingerprint}"
+
+
+def _pipeline_record(
+    *,
+    run_id: str,
+    manifest: dict[str, Any],
+    status: str,
+    started_at: datetime,
+    finished_at: datetime | None,
+    parent_run_id: str | None = None,
+) -> PipelineRunRecord:
+    input_ids = sorted(_manifest_record_ids(manifest))
+    fingerprint = stable_digest("committee-authority-manifest", manifest, schema_version="v1")
+    now = finished_at or started_at
+    return PipelineRunRecord(
+        id=run_id,
+        created_at=now,
+        effective_at=now,
+        run_type="committee-authority",
+        target_id="committee-cycle",
+        target_type="investment-committee",
+        configuration_fingerprint=fingerprint,
+        input_fingerprint=stable_digest("committee-authority-inputs", input_ids, schema_version="v1"),
+        engine_manifest_fingerprint="committee-authority-engine:v1",
+        status=status,
+        requested_at=started_at,
+        started_at=started_at,
+        finished_at=finished_at,
+        parent_run_id=parent_run_id,
+        metadata={
+            "candidate_count": len(manifest["inputs"]),
+            "manifest_fingerprint": fingerprint,
+        },
+    )
+
+
+def _manifest_record_ids(manifest: dict[str, Any]) -> tuple[str, ...]:
+    identifiers: list[str] = []
+    for item in manifest["inputs"]:
+        for key in ("intelligence_ids", "fused_intelligence_ids", "evidence_ids", "snapshot_ids"):
+            values = item.get(key, [])
+            if isinstance(values, list):
+                identifiers.extend(str(value) for value in values)
+    return tuple(identifiers)
 
 
 def _load_inputs(manifest: Any) -> tuple[dict[str, Any], ...]:
