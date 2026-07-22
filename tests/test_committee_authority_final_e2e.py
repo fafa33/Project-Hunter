@@ -114,9 +114,7 @@ def test_installed_cli_persists_canonical_output_consumed_read_only_by_dashboard
         after = _record_count(database)
         assert after == before
 
-        committee = next(
-            panel for panel in dashboard.panels if panel.panel_id == "investment-committee"
-        )
+        committee = next(panel for panel in dashboard.panels if panel.panel_id == "investment-committee")
         assert len(committee.rows) == 1
         assert committee.rows[0].row_id == assessments[0].id
         assert committee.rows[0].values["project"] == "alpha"
@@ -129,9 +127,7 @@ def test_installed_cli_persists_canonical_output_consumed_read_only_by_dashboard
         session.close()
         engine.dispose()
 
-    assert not (
-        root / "data" / "committee" / "runtime" / "investment_committee.sqlite"
-    ).exists()
+    assert not (root / "data" / "committee" / "runtime" / "investment_committee.sqlite").exists()
     assert not (unrelated_cwd / "data" / "data_ops.sqlite").exists()
 
 
@@ -153,9 +149,7 @@ def test_failed_cli_rolls_back_all_outputs_and_persists_only_durable_failed_run(
     session = SessionFactory(engine).create()
     try:
         repositories = RepositoryFactory(session)
-        assert repositories.committee_votes().query(
-            QuerySpec(record_kind="committee-vote")
-        ) == ()
+        assert repositories.committee_votes().query(QuerySpec(record_kind="committee-vote")) == ()
         assert repositories.investment_committee_assessments().query(
             QuerySpec(record_kind="investment-committee-assessment")
         ) == ()
