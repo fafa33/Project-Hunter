@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import datetime
 
 from hunter.committee.engine import InvestmentCommitteeEngine, rank_committee_assessments
 from hunter.committee.models import CommitteeInputSet, CycleChampionSnapshot, InvestmentCommitteeAssessment
@@ -47,18 +48,48 @@ def _validate_inputs(inputs: tuple[CommitteeInputSet, ...]) -> None:
     if any(item.effective_at != effective_at for item in inputs):
         raise CommitteeAuthorityError("all candidates in a cycle must share effective_at")
     for item in inputs:
-        _validate_source_ids(item)
+        _validate_sources(item)
 
 
-def _validate_source_ids(item: CommitteeInputSet) -> None:
+def _validate_sources(item: CommitteeInputSet) -> None:
     records = (*item.intelligence, *item.fused_intelligence, *item.evidence, *item.snapshots)
     for record in records:
-        record_id = str(getattr(record, "id", "")).strip()
-        if not record_id:
-            raise CommitteeAuthorityError("all committee inputs must reference persisted record IDs")
-        recorded_at = getattr(record, "recorded_at", getattr(record, "created_at", None))
-        if recorded_at is not None and recorded_at > item.effective_at:
-            raise CommitteeAuthorityError("future-known input cannot enter committee evaluation")
+        _validate_persisted_input(record, item.effective_at)
+
+    assessments = (item.opportunity, item.probability, item.pattern, item.necessity)
+    for assessment in assessments:
+        if assessment is not None:
+            _validate_assessment_input(assessment, item.effective_at)
+
+
+def _validate_persisted_input(record: object, cycle_effective_at: datetime) -> None:
+    record_id = str(getattr(record, "id", "")).strip()
+    if not record_id:
+        raise CommitteeAuthorityError("all committee inputs must reference persisted record IDs")
+
+    recorded_at = getattr(record, "recorded_at", getattr(record, "created_at", None))
+    if isinstance(recorded_at, datetime) and recorded_at > cycle_effective_at:
+        raise CommitteeAuthorityError("future-known input cannot enter committee evaluation")
+
+    effective_at = getattr(record, "effective_at", None)
+    if isinstance(effective_at, datetime) and effective_at > cycle_effective_at:
+        raise CommitteeAuthorityError("future-effective input cannot enter committee evaluation")
+
+
+def _validate_assessment_input(assessment: object, cycle_effective_at: datetime) -> None:
+    assessment_id = str(getattr(assessment, "assessment_id", getattr(assessment, "id", ""))).strip()
+    if not assessment_id:
+        raise CommitteeAuthorityError("all derived committee inputs must reference persisted assessment IDs")
+
+    effective_at = getattr(assessment, "effective_at", None)
+    if not isinstance(effective_at, datetime):
+        raise CommitteeAuthorityError("derived committee inputs must define effective_at")
+    if effective_at > cycle_effective_at:
+        raise CommitteeAuthorityError("future-effective assessment cannot enter committee evaluation")
+
+    recorded_at = getattr(assessment, "recorded_at", getattr(assessment, "created_at", None))
+    if isinstance(recorded_at, datetime) and recorded_at > cycle_effective_at:
+        raise CommitteeAuthorityError("future-known assessment cannot enter committee evaluation")
 
 
 def _champion_from_ranked(
