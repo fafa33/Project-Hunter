@@ -155,7 +155,7 @@ def test_stale_identity_and_authority_mismatch_are_rejected(tmp_path: Path) -> N
     )
     service, session = service_with(experimental, tmp_path)
     try:
-        with pytest.raises(CommitteeAuthorityError, match="production-authoritative"):
+        with pytest.raises(CommitteeAuthorityError, match="experimental committee input"):
             service.evaluate_cycle((inputs(experimental),))
     finally:
         session.close()
