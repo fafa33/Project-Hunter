@@ -107,9 +107,7 @@ class AuthoritativeInvestmentCommitteeService:
         forbidden = _UNAVAILABLE_SNAPSHOT_METRICS.intersection(str(key) for key in payload)
         if forbidden:
             names = ", ".join(sorted(forbidden))
-            raise CommitteeAuthorityError(
-                f"unavailable snapshot metrics cannot affect authoritative scoring: {names}"
-            )
+            raise CommitteeAuthorityError(f"unavailable snapshot metrics cannot affect authoritative scoring: {names}")
 
     def _resolve_and_validate(
         self,
