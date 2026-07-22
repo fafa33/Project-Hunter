@@ -95,9 +95,7 @@ def test_installed_cli_persists_canonical_output_consumed_read_only_by_dashboard
         assessments = repositories.investment_committee_assessments().query(
             QuerySpec(record_kind="investment-committee-assessment")
         )
-        champions = repositories.cycle_champion_snapshots().query(
-            QuerySpec(record_kind="cycle-champion-snapshot")
-        )
+        champions = repositories.cycle_champion_snapshots().query(QuerySpec(record_kind="cycle-champion-snapshot"))
         runs = repositories.pipeline_runs().query(QuerySpec(record_kind="pipeline-run"))
         assert len(assessments) == 1
         assert len(champions) == 1
@@ -143,12 +141,13 @@ def test_failed_cli_rolls_back_all_outputs_and_persists_only_durable_failed_run(
     try:
         repositories = RepositoryFactory(session)
         assert repositories.committee_votes().query(QuerySpec(record_kind="committee-vote")) == ()
-        assert repositories.investment_committee_assessments().query(
-            QuerySpec(record_kind="investment-committee-assessment")
-        ) == ()
-        assert repositories.cycle_champion_snapshots().query(
-            QuerySpec(record_kind="cycle-champion-snapshot")
-        ) == ()
+        assert (
+            repositories.investment_committee_assessments().query(
+                QuerySpec(record_kind="investment-committee-assessment")
+            )
+            == ()
+        )
+        assert repositories.cycle_champion_snapshots().query(QuerySpec(record_kind="cycle-champion-snapshot")) == ()
         runs = repositories.pipeline_runs().query(QuerySpec(record_kind="pipeline-run"))
         assert len(runs) == 1
         assert runs[0].status == "failed"
