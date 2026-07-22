@@ -50,7 +50,7 @@ This does not independently bind committee input resolution to Hunter's approved
 PR #68 was merged after repeated failing pytest runs. No independent post-merge evidence currently demonstrates all four issue #61 gates on the merged main commit:
 
 - `ruff check .`
-- `black --check src tests config alembic`
+- `black --check .`
 - `mypy`
 - `pytest`
 
