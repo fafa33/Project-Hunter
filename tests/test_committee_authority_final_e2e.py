@@ -113,7 +113,7 @@ def test_installed_cli_persists_canonical_output_consumed_read_only_by_dashboard
         assert committee.rows[0].values["project"] == "alpha"
         assert committee.rows[0].values["decision"] == assessments[0].decision
         assert committee.rows[0].values["confidence"] == assessments[0].committee_confidence
-        assert committee.rows[0].values["source_record_ids"] == ("snapshot:committee-e2e:alpha",)
+        assert committee.rows[0].values["source_record_ids"] == "snapshot:committee-e2e:alpha"
     finally:
         session.close()
         engine.dispose()
