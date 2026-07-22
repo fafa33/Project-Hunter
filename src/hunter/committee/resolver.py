@@ -67,7 +67,12 @@ class RepositoryBackedCommitteeInputResolver:
         return repositories.get(family)
 
     @staticmethod
-    def _current_lineage_record(repository: Any, *, lineage_id: str, known_at: datetime) -> BasePersistenceRecord | None:
+    def _current_lineage_record(
+        repository: Any,
+        *,
+        lineage_id: str,
+        known_at: datetime,
+    ) -> BasePersistenceRecord | None:
         candidates = tuple(
             record
             for record in repository.query(QuerySpec(record_kind=repository.record_type))
