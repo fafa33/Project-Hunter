@@ -20,7 +20,13 @@ class RepositoryBackedCommitteeInputResolver:
     def __init__(self, repositories: RepositoryFactory) -> None:
         self._repositories = repositories
 
-    def resolve(self, *, record_id: str, family: str, known_at: datetime) -> ResolvedCommitteeInput | None:
+    def resolve(
+        self,
+        *,
+        record_id: str,
+        family: str,
+        known_at: datetime,
+    ) -> ResolvedCommitteeInput | None:
         repository = self._repository_for(family)
         if repository is None:
             return None
@@ -30,7 +36,11 @@ class RepositoryBackedCommitteeInputResolver:
 
         lineage_id = _required_metadata(record, "lineage_id")
         revision_id = str(record.metadata.get("revision_id") or record.id)
-        current = self._current_lineage_record(repository, lineage_id=lineage_id, known_at=known_at)
+        current = self._current_lineage_record(
+            repository,
+            lineage_id=lineage_id,
+            known_at=known_at,
+        )
         if current is None:
             return None
         current_revision_id = str(current.metadata.get("revision_id") or current.id)
@@ -70,7 +80,10 @@ class RepositoryBackedCommitteeInputResolver:
 
     @staticmethod
     def _current_lineage_record(
-        repository: SQLRecordRepository[PersistenceRecord], *, lineage_id: str, known_at: datetime
+        repository: SQLRecordRepository[PersistenceRecord],
+        *,
+        lineage_id: str,
+        known_at: datetime,
     ) -> PersistenceRecord | None:
         candidates = tuple(
             record
@@ -97,7 +110,11 @@ def verify_repository_binding(resolved: ResolvedCommitteeInput) -> None:
 
 
 def _fingerprint(record: PersistenceRecord) -> str:
-    return stable_digest("committee-authority-record", record_to_json(record), schema_version=record.schema_version)
+    return stable_digest(
+        "committee-authority-record",
+        record_to_json(record),
+        schema_version=record.schema_version,
+    )
 
 
 def _required_metadata(record: PersistenceRecord, name: str) -> str:
