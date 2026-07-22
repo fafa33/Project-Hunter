@@ -22,12 +22,12 @@ jobs:
         shell: bash
         run: |
           set +e
-          pytest -x -vv > pytest-output.txt 2>&1
+          pytest -x -q > pytest-output.txt 2>&1
           status=$?
           {
             echo 'body<<EOF'
             echo '```text'
-            tail -n 60 pytest-output.txt
+            tail -n 35 pytest-output.txt
             echo '```'
             echo EOF
           } >> "$GITHUB_OUTPUT"
