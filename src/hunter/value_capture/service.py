@@ -3,9 +3,10 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from collections.abc import Callable
 from dataclasses import asdict, replace
 from datetime import datetime
-from typing import Any, Callable, cast
+from typing import Any, cast
 
 from hunter.value_capture.models import (
     VALUE_CAPTURE_SCHEMA_VERSION,
