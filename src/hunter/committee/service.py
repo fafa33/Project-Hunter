@@ -14,7 +14,15 @@ class CommitteeAuthorityError(ValueError):
 
 
 _UNAVAILABLE_SNAPSHOT_METRICS = frozenset(
-    {"valuation", "comparative_valuation", "mispricing", "mispricing_quality", "asymmetry"}
+    {
+        "valuation",
+        "comparative_valuation",
+        "mispricing",
+        "mispricing_quality",
+        "asymmetry",
+        "risk",
+        "backtesting_reliability",
+    }
 )
 
 
@@ -99,9 +107,7 @@ class AuthoritativeInvestmentCommitteeService:
         forbidden = _UNAVAILABLE_SNAPSHOT_METRICS.intersection(str(key) for key in payload)
         if forbidden:
             names = ", ".join(sorted(forbidden))
-            raise CommitteeAuthorityError(
-                f"unavailable valuation-family snapshot metrics cannot affect authoritative scoring: {names}"
-            )
+            raise CommitteeAuthorityError(f"unavailable snapshot metrics cannot affect authoritative scoring: {names}")
 
     def _resolve_and_validate(
         self,

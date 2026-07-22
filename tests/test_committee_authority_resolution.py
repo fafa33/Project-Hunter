@@ -51,7 +51,7 @@ def snapshot(
         snapshot_type="committee-input",
         target_id="alpha",
         record_ids=("evidence:alpha",),
-        payload=payload or {"risk": 0.2, "backtesting_reliability": 0.8},
+        payload=payload or {"signal": 0.8},
         metadata=record_metadata or metadata(),
     )
 
@@ -82,7 +82,7 @@ def inputs(record: SnapshotRecord, *, alerts: tuple[str, ...] = ()) -> Committee
     )
 
 
-def test_repository_backed_resolver_drives_authoritative_cycle(tmp_path: Path) -> None:
+def test_repository_backed_resolver_accepts_persisted_authoritative_input(tmp_path: Path) -> None:
     record = snapshot()
     service, session = service_with(record, tmp_path)
     try:
@@ -95,35 +95,73 @@ def test_repository_backed_resolver_drives_authoritative_cycle(tmp_path: Path) -
     assert champion.created_at == assessments[0].created_at
 
 
-def test_forged_caller_value_and_unknown_id_reject(tmp_path: Path) -> None:
-    record = snapshot()
-    service, session = service_with(record, tmp_path)
+def test_caller_forged_snapshot_is_rejected(tmp_path: Path) -> None:
+    persisted = snapshot()
+    forged = replace(persisted, payload={"signal": 0.1})
+    service, session = service_with(persisted, tmp_path)
     try:
-        forged = replace(record, payload={"risk": 0.9})
         with pytest.raises(CommitteeAuthorityError, match="differs from authoritative persisted record"):
             service.evaluate_cycle((inputs(forged),))
-        unknown = replace(record, id="snapshot:unknown")
-        with pytest.raises(CommitteeAuthorityError, match="not known by Hunter"):
-            service.evaluate_cycle((inputs(unknown),))
     finally:
         session.close()
 
 
-def test_missing_or_nonproduction_authority_rejects(tmp_path: Path) -> None:
-    for authority in ("", "experimental", "descriptive-only", "unavailable"):
-        record = snapshot(
-            record_id=f"snapshot:{authority or 'missing'}",
-            record_metadata=metadata(authority=authority),
-        )
-        service, session = service_with(record, tmp_path)
-        try:
-            with pytest.raises(CommitteeAuthorityError):
-                service.evaluate_cycle((inputs(record),))
-        finally:
-            session.close()
+def test_missing_unavailable_and_future_inputs_fail_closed(tmp_path: Path) -> None:
+    persisted = snapshot()
+    service, session = service_with(persisted, tmp_path)
+    try:
+        missing = replace(persisted, id="snapshot:missing")
+        with pytest.raises(CommitteeAuthorityError, match="not known by Hunter"):
+            service.evaluate_cycle((inputs(missing),))
+    finally:
+        session.close()
+
+    future = snapshot(
+        record_id="snapshot:future",
+        created_at=NOW + timedelta(minutes=1),
+        effective_at=NOW + timedelta(minutes=1),
+    )
+    service, session = service_with(future, tmp_path)
+    try:
+        with pytest.raises(CommitteeAuthorityError, match="not known by Hunter"):
+            service.evaluate_cycle((inputs(future),))
+    finally:
+        session.close()
 
 
-def test_canonical_current_lineage_is_selected_from_persistence(tmp_path: Path) -> None:
+def test_stale_identity_and_authority_mismatch_are_rejected(tmp_path: Path) -> None:
+    stale = snapshot(effective_at=NOW - timedelta(days=31))
+    service, session = service_with(stale, tmp_path)
+    try:
+        with pytest.raises(CommitteeAuthorityError, match="stale"):
+            service.evaluate_cycle((inputs(stale),))
+    finally:
+        session.close()
+
+    wrong_identity = snapshot(
+        record_id="snapshot:wrong-identity",
+        record_metadata={**metadata(), "project_id": "beta"},
+    )
+    service, session = service_with(wrong_identity, tmp_path)
+    try:
+        with pytest.raises(CommitteeAuthorityError, match="identity mismatch"):
+            service.evaluate_cycle((inputs(wrong_identity),))
+    finally:
+        session.close()
+
+    experimental = snapshot(
+        record_id="snapshot:experimental",
+        record_metadata=metadata(authority="experimental"),
+    )
+    service, session = service_with(experimental, tmp_path)
+    try:
+        with pytest.raises(CommitteeAuthorityError, match="experimental committee input"):
+            service.evaluate_cycle((inputs(experimental),))
+    finally:
+        session.close()
+
+
+def test_superseded_lineage_member_is_rejected(tmp_path: Path) -> None:
     old = snapshot(record_id="snapshot:alpha:1", record_metadata=metadata(revision="revision:1"))
     current = snapshot(
         record_id="snapshot:alpha:2",
@@ -189,38 +227,20 @@ def test_alerts_and_unavailable_valuation_snapshot_metrics_are_blocked(tmp_path:
     valuation = snapshot(record_id="snapshot:valuation", payload={"valuation": 0.9})
     service, session = service_with(valuation, tmp_path)
     try:
-        with pytest.raises(CommitteeAuthorityError, match="unavailable valuation-family"):
+        with pytest.raises(CommitteeAuthorityError, match="unavailable snapshot metrics"):
             service.evaluate_cycle((inputs(valuation),))
     finally:
         session.close()
 
 
-def test_stale_future_known_and_cross_identity_inputs_reject(tmp_path: Path) -> None:
-    stale = snapshot(effective_at=NOW - timedelta(days=8))
-    service, session = service_with(stale, tmp_path)
+@pytest.mark.parametrize("family", ("opportunity", "probability", "pattern", "necessity"))
+def test_unavailable_derived_families_fail_closed(tmp_path: Path, family: str) -> None:
+    record = snapshot()
+    service, session = service_with(record, tmp_path)
     try:
-        with pytest.raises(CommitteeAuthorityError, match="stale"):
-            service.evaluate_cycle((inputs(stale),))
-    finally:
-        session.close()
-
-    future = snapshot(created_at=NOW + timedelta(minutes=1), effective_at=NOW + timedelta(minutes=1))
-    service, session = service_with(future, tmp_path)
-    try:
-        with pytest.raises(CommitteeAuthorityError, match="not known by Hunter"):
-            service.evaluate_cycle((inputs(future),))
-    finally:
-        session.close()
-
-    wrong_metadata = {
-        **metadata(),
-        "representation_id": "base:0xalpha",
-        "chain_id": "eip155:8453",
-    }
-    wrong = snapshot(record_metadata=wrong_metadata)
-    service, session = service_with(wrong, tmp_path)
-    try:
-        with pytest.raises(CommitteeAuthorityError, match="identity mismatch"):
-            service.evaluate_cycle((inputs(wrong),))
+        kwargs = {family: object()}
+        candidate = replace(inputs(record), **kwargs)
+        with pytest.raises(CommitteeAuthorityError, match="persisted assessment IDs|not known by Hunter"):
+            service.evaluate_cycle((candidate,))
     finally:
         session.close()
