@@ -11,7 +11,12 @@ from hunter.__main__ import main as installed_main
 from hunter.dashboard.data import DashboardDataProvider
 from hunter.persistence.models import QuerySpec
 from hunter.persistence.records import SnapshotRecord
-from hunter.persistence.sql import RepositoryFactory, SessionFactory, create_schema, create_sqlite_engine
+from hunter.persistence.sql import (
+    RepositoryFactory,
+    SessionFactory,
+    create_schema,
+    create_sqlite_engine,
+)
 
 
 def _snapshot(now: datetime) -> SnapshotRecord:
@@ -109,18 +114,24 @@ def test_installed_cli_persists_canonical_output_consumed_read_only_by_dashboard
         after = _record_count(database)
         assert after == before
 
-        committee = next(panel for panel in dashboard.panels if panel.panel_id == "investment-committee")
+        committee = next(
+            panel for panel in dashboard.panels if panel.panel_id == "investment-committee"
+        )
         assert len(committee.rows) == 1
         assert committee.rows[0].row_id == assessments[0].id
         assert committee.rows[0].values["project"] == "alpha"
         assert committee.rows[0].values["decision"] == assessments[0].decision
         assert committee.rows[0].values["confidence"] == assessments[0].committee_confidence
-        assert committee.rows[0].values["source_record_ids"] == ("snapshot:committee-e2e:alpha",)
+        assert committee.rows[0].values["source_record_ids"] == (
+            "snapshot:committee-e2e:alpha",
+        )
     finally:
         session.close()
         engine.dispose()
 
-    assert not (root / "data" / "committee" / "runtime" / "investment_committee.sqlite").exists()
+    assert not (
+        root / "data" / "committee" / "runtime" / "investment_committee.sqlite"
+    ).exists()
     assert not (unrelated_cwd / "data" / "data_ops.sqlite").exists()
 
 
@@ -142,7 +153,9 @@ def test_failed_cli_rolls_back_all_outputs_and_persists_only_durable_failed_run(
     session = SessionFactory(engine).create()
     try:
         repositories = RepositoryFactory(session)
-        assert repositories.committee_votes().query(QuerySpec(record_kind="committee-vote")) == ()
+        assert repositories.committee_votes().query(
+            QuerySpec(record_kind="committee-vote")
+        ) == ()
         assert repositories.investment_committee_assessments().query(
             QuerySpec(record_kind="investment-committee-assessment")
         ) == ()
