@@ -22,12 +22,12 @@ jobs:
         shell: bash
         run: |
           set +e
-          pytest > pytest-output.txt 2>&1
+          pytest -vv tests/test_committee_final_blockers.py > pytest-output.txt 2>&1
           status=$?
           {
             echo 'body<<EOF'
             echo '```text'
-            tail -n 160 pytest-output.txt
+            cat pytest-output.txt
             echo '```'
             echo EOF
           } >> "$GITHUB_OUTPUT"
