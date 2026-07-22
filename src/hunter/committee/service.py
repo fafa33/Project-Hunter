@@ -77,9 +77,7 @@ def _validate_persisted_input(record: object, cycle_effective_at: datetime) -> N
 
 
 def _validate_assessment_input(assessment: object, cycle_effective_at: datetime) -> None:
-    assessment_id = str(
-        getattr(assessment, "assessment_id", getattr(assessment, "id", ""))
-    ).strip()
+    assessment_id = str(getattr(assessment, "assessment_id", getattr(assessment, "id", ""))).strip()
     if not assessment_id:
         raise CommitteeAuthorityError("all derived committee inputs must reference persisted assessment IDs")
 
