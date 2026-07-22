@@ -24,7 +24,6 @@ PR #64 materially strengthens the service boundary, but the repository still doe
 - Candidate identity is typed and compared exactly across project, entity, representation, and optional chain scope.
 - Future-known, future-effective, freshness, superseded revision, superseded timestamp, and invalidated timestamp checks are enforced against the resolved envelope.
 - Ranking, champion consistency, and atomic committee-output persistence remain service-owned.
-- Valuation, comparative valuation, mispricing, and asymmetry remain unavailable and are not synthesized.
 
 ## Blocking defects
 
@@ -81,10 +80,46 @@ The added tests validate envelope policy behavior, but do not prove:
 
 Required remediation:
 
-Add deterministic integration tests using real repositories and the production resolver. The tests must cover current, stale, future-known, future-effective, superseded, invalidated, cross-project, cross-chain, cross-representation, unknown ID, forged resolver, and corrected-record cases.
+Add deterministic integration tests using real repositories and the production resolver. The tests must cover current, stale, future-known, future-effective, superseded, invalidated, cross-project, cross-chain, cross-representation, unknown ID, forged resolver, corrected-record, valuation-family snapshot, and critical-alert cases.
+
+### 5. Unavailable valuation families can still affect authoritative scoring through generic snapshots
+
+Files:
+
+- `src/hunter/committee/engine.py`
+- `src/hunter/committee/service.py`
+
+A resolved `SnapshotRecord` may carry `valuation`, `mispricing_quality`, or `asymmetry` in its payload. The committee engine consumes those keys through `_snapshot()` and converts them into weighted votes, while the service validates the record only as the generic `snapshot` family.
+
+Therefore valuation, mispricing, and asymmetry are not actually blocked from authoritative scoring merely because no dedicated canonical services are active.
+
+Required remediation:
+
+- Prevent generic snapshots from supplying unavailable valuation, comparative-valuation, mispricing, or asymmetry inputs.
+- Require dedicated authoritative families and repositories before those dimensions can affect scoring.
+- Add deterministic tests proving generic snapshot payloads cannot activate unavailable dimensions or produce neutral defaults.
+
+### 6. Critical alerts bypass authoritative input resolution
+
+Files:
+
+- `src/hunter/committee/models.py`
+- `src/hunter/committee/service.py`
+- `src/hunter/committee/engine.py`
+
+`CommitteeInputSet.alerts` contains plain strings. The service does not include alerts in `_validate_sources()`, but the engine uses alert count in `_eligibility()` and can mark a candidate `INELIGIBLE`.
+
+Alerts are therefore decision-changing inputs that bypass record ID, known-at cutoff, authority class, identity, lineage, freshness, and repository-resolution checks.
+
+Required remediation:
+
+- Replace raw alert strings with persisted typed alert records or an equivalent authoritative alert contract.
+- Resolve alerts through the approved production resolver before evaluation.
+- Enforce cutoff, identity, lineage, and authority classification for every alert that can change eligibility.
+- Add deterministic tests proving forged, future-known, stale, mismatched, superseded, and unavailable alerts cannot affect committee decisions.
 
 ## Scope conclusion
 
 PR #64 closes the local validation-envelope defects from PR #63, but it does not yet establish that authoritative committee inputs are actually resolved from approved production persistence.
 
-Issue #61 must remain open until a concrete repository-backed resolver, production wiring, and end-to-end regression coverage are merged and a fresh audit of canonical `main` is approved.
+Issue #61 must remain open until a concrete repository-backed resolver, production wiring, valuation-family isolation, critical-alert authority coverage, and complete end-to-end regression coverage are merged and a fresh audit of canonical `main` is approved.
