@@ -123,7 +123,7 @@ def test_installed_cli_persists_canonical_output_consumed_read_only_by_dashboard
     assert not (unrelated_cwd / "data" / "data_ops.sqlite").exists()
 
 
-def test_failed_cli_rolls_back_all_outputs_and_persists_only_durable_failed_run(
+def test_failed_cli_retries_preserve_original_error_and_single_durable_failed_run(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -134,8 +134,9 @@ def test_failed_cli_rolls_back_all_outputs_and_persists_only_durable_failed_run(
     manifest_path.write_text(json.dumps(_manifest(now, duplicate=True)), encoding="utf-8")
     monkeypatch.setenv("HUNTER_APPLICATION_ROOT", str(root.resolve()))
 
-    with pytest.raises(ValueError, match="duplicate project_id"):
-        installed_main(["committee-authority", str(manifest_path)])
+    for _ in range(2):
+        with pytest.raises(ValueError, match="duplicate project_id"):
+            installed_main(["committee-authority", str(manifest_path)])
 
     engine = create_sqlite_engine(database)
     session = SessionFactory(engine).create()
