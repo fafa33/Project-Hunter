@@ -65,13 +65,16 @@ def main(argv: list[str]) -> int:
     except Exception as exc:
         session.rollback()
         session.close()
-        _persist_failed_run(
-            session_factory=session_factory,
-            run_id=run_id,
-            manifest=manifest,
-            started_at=started_at,
-            error=exc,
-        )
+        try:
+            _persist_failed_run(
+                session_factory=session_factory,
+                run_id=run_id,
+                manifest=manifest,
+                started_at=started_at,
+                error=exc,
+            )
+        except Exception as persistence_error:
+            exc.add_note(f"failed to persist committee failure: {type(persistence_error).__name__}: {persistence_error}")
         raise
     finally:
         if session.is_active:
@@ -103,11 +106,17 @@ def _persist_failed_run(
 ) -> None:
     failure_session = session_factory.create()
     try:
-        finished_at = datetime.now(UTC)
         repositories = RepositoryFactory(failure_session)
+        failed_id = f"{run_id}:failed"
+        existing = repositories.pipeline_runs().load(failed_id)
+        if existing is not None:
+            if existing.status != "failed":
+                raise ValueError(f"pipeline run {failed_id} exists with non-failed status")
+            return
+        finished_at = datetime.now(UTC)
         repositories.pipeline_runs().save(
             _pipeline_record(
-                run_id=f"{run_id}:failed",
+                run_id=failed_id,
                 manifest=manifest,
                 status="failed",
                 started_at=started_at,
