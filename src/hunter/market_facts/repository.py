@@ -67,9 +67,7 @@ class ObservedMarketFactRepository:
 
     def apply(self, plan: MarketFactWritePlan) -> None:
         if plan._authority is not self._authority:
-            raise RepositoryAuthorizationError(
-                "market fact write plan was not authorized for this repository"
-            )
+            raise RepositoryAuthorizationError("market fact write plan was not authorized for this repository")
         engine = create_sqlite_engine(self.path)
         session = SessionFactory(engine).create()
         try:
@@ -126,15 +124,13 @@ class ObservedMarketFactRepository:
             for item in self._snapshots(_FACT_SNAPSHOT_TYPE)
             if item.payload.get("identity", {}).get("entity_id") == entity_id
             and item.payload.get("identity", {}).get("asset_id") == asset_id
-            and item.payload.get("identity", {}).get("representation_id")
-            == representation_id
+            and item.payload.get("identity", {}).get("representation_id") == representation_id
             and item.payload.get("fact_type") == fact_type
         )
         filtered = tuple(
             item
             for item in records
-            if effective_at is None
-            or item.effective_at == _aware("effective_at", effective_at)
+            if effective_at is None or item.effective_at == _aware("effective_at", effective_at)
         )
         return tuple(
             sorted(
@@ -181,25 +177,17 @@ class ObservedMarketFactRepository:
             _record_from_snapshot(item)
             for item in self._snapshots(_FACT_SNAPSHOT_TYPE)
             if item.payload.get("identity", {}).get("entity_id") == entity_id
-            and item.payload.get("identity", {}).get("representation_id")
-            == representation_id
+            and item.payload.get("identity", {}).get("representation_id") == representation_id
             and item.payload.get("fact_type") == fact_type
             and item.effective_at <= effective_as_of
             and item.recorded_at <= known_by
             and item.known_at <= known_by
             and item.quality_state == "accepted"
             and item.conflict_state in {"none", "resolved"}
-            and item.quote_currency
-            == (quote_currency.lower() if quote_currency is not None else None)
+            and item.quote_currency == (quote_currency.lower() if quote_currency is not None else None)
         ]
-        superseded_ids = {
-            item.supersedes_record_id
-            for item in eligible
-            if item.supersedes_record_id is not None
-        }
-        candidates = [
-            item for item in eligible if item.record_id not in superseded_ids
-        ]
+        superseded_ids = {item.supersedes_record_id for item in eligible if item.supersedes_record_id is not None}
+        candidates = [item for item in eligible if item.record_id not in superseded_ids]
         candidates.sort(
             key=lambda item: (
                 item.effective_at,
@@ -211,20 +199,11 @@ class ObservedMarketFactRepository:
         )
         return candidates[0] if candidates else None
 
-    def availability_events(
-        self, *, source_id: str | None = None
-    ) -> tuple[dict[str, Any], ...]:
-        payloads = [
-            dict(item.payload)
-            for item in self._snapshots(_AVAILABILITY_SNAPSHOT_TYPE)
-        ]
+    def availability_events(self, *, source_id: str | None = None) -> tuple[dict[str, Any], ...]:
+        payloads = [dict(item.payload) for item in self._snapshots(_AVAILABILITY_SNAPSHOT_TYPE)]
         if source_id is not None:
-            payloads = [
-                item for item in payloads if item.get("source_id") == source_id
-            ]
-        payloads.sort(
-            key=lambda item: (str(item["requested_at"]), str(item["event_id"]))
-        )
+            payloads = [item for item in payloads if item.get("source_id") == source_id]
+        payloads.sort(key=lambda item: (str(item["requested_at"]), str(item["event_id"])))
         return tuple(payloads)
 
     def migration_ids(self) -> tuple[str, ...]:
@@ -234,9 +213,7 @@ class ObservedMarketFactRepository:
         mapping = {
             "market_fact_schema_migrations": 1,
             "observed_market_facts": len(self._snapshots(_FACT_SNAPSHOT_TYPE)),
-            "market_fact_availability_events": len(
-                self._snapshots(_AVAILABILITY_SNAPSHOT_TYPE)
-            ),
+            "market_fact_availability_events": len(self._snapshots(_AVAILABILITY_SNAPSHOT_TYPE)),
         }
         if table not in mapping:
             raise ValueError("unsupported market fact table")
@@ -247,15 +224,11 @@ class ObservedMarketFactRepository:
             return
         predecessor = self.record(record.supersedes_record_id)
         if predecessor is None:
-            raise MarketFactIntegrityError(
-                "superseded market fact record does not exist"
-            )
+            raise MarketFactIntegrityError("superseded market fact record does not exist")
         if predecessor.logical_id != record.logical_id:
             raise MarketFactIntegrityError("correction must preserve logical_id")
 
-    def _load_snapshot(
-        self, identity: str, snapshot_type: str
-    ) -> SnapshotRecord | None:
+    def _load_snapshot(self, identity: str, snapshot_type: str) -> SnapshotRecord | None:
         engine = create_sqlite_engine(self.path)
         session = SessionFactory(engine).create()
         try:
@@ -271,14 +244,8 @@ class ObservedMarketFactRepository:
         engine = create_sqlite_engine(self.path)
         session = SessionFactory(engine).create()
         try:
-            records = (
-                RepositoryFactory(session)
-                .snapshots()
-                .query(QuerySpec(record_kind="snapshot"))
-            )
-            return tuple(
-                item for item in records if item.snapshot_type == snapshot_type
-            )
+            records = RepositoryFactory(session).snapshots().query(QuerySpec(record_kind="snapshot"))
+            return tuple(item for item in records if item.snapshot_type == snapshot_type)
         finally:
             session.close()
             engine.dispose()
@@ -397,11 +364,7 @@ def _record_from_snapshot(snapshot: SnapshotRecord) -> ObservedMarketFactRecord:
         fact_type=str(payload["fact_type"]),  # type: ignore[arg-type]
         value=str(payload["value"]),
         unit=str(payload["unit"]),
-        quote_currency=(
-            str(payload["quote_currency"])
-            if payload["quote_currency"] is not None
-            else None
-        ),
+        quote_currency=(str(payload["quote_currency"]) if payload["quote_currency"] is not None else None),
         venue_scope=str(payload["venue_scope"]),
         effective_at=_deserialize(str(payload["effective_at"])),
         observed_at=_deserialize(str(payload["observed_at"])),
@@ -412,9 +375,7 @@ def _record_from_snapshot(snapshot: SnapshotRecord) -> ObservedMarketFactRecord:
         conflict_state=str(payload["conflict_state"]),  # type: ignore[arg-type]
         content_hash=str(payload["content_hash"]),
         supersedes_record_id=(
-            str(payload["supersedes_record_id"])
-            if payload["supersedes_record_id"] is not None
-            else None
+            str(payload["supersedes_record_id"]) if payload["supersedes_record_id"] is not None else None
         ),
         correction_reason=str(payload["correction_reason"]),
     )
