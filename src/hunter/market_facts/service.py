@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import UTC, datetime
+from decimal import Decimal
 from hashlib import sha256
 
 from hunter.execution.canonicalization import canonicalize
 from hunter.market_facts.models import (
     MarketFactAcquisitionResult,
     MarketFactAvailabilityEvent,
+    MarketFactConflictResolution,
     MarketFactRequest,
     NormalizedMarketFact,
     ObservedMarketFactRecord,
@@ -23,6 +25,8 @@ class MarketFactAuthorityError(ValueError):
 
 class ObservedMarketFactService:
     semantic_version = "observed-market-fact-v2"
+    conflict_resolution_policy_id = "highest-confidence-then-record-id"
+    conflict_resolution_policy_version = "1.0.0"
 
     def __init__(
         self,
@@ -121,6 +125,103 @@ class ObservedMarketFactService:
             quote_currency=quote_currency,
         )
 
+    def resolve_conflict(
+        self,
+        *,
+        logical_id: str,
+        candidate_record_ids: tuple[str, ...],
+        selected_record_id: str,
+        policy_id: str,
+        policy_version: str,
+        rationale: str,
+        effective_at: datetime,
+        known_at: datetime,
+        recorded_at: datetime,
+    ) -> MarketFactConflictResolution:
+        for name, value in (
+            ("logical_id", logical_id),
+            ("selected_record_id", selected_record_id),
+            ("policy_id", policy_id),
+            ("policy_version", policy_version),
+            ("rationale", rationale),
+        ):
+            if not value.strip():
+                raise MarketFactAuthorityError(f"{name} must not be blank")
+        effective_at = _utc("effective_at", effective_at)
+        known_at = _utc("known_at", known_at)
+        recorded_at = _utc("recorded_at", recorded_at)
+        lineage = self.repository.lineage(logical_id)
+        selected = next((item for item in lineage if item.record_id == selected_record_id), None)
+        if selected is None:
+            raise MarketFactAuthorityError("selected conflict record does not exist in logical lineage")
+        superseded_ids = {item.supersedes_record_id for item in lineage if item.supersedes_record_id is not None}
+        expected_candidates = tuple(
+            sorted(
+                item.record_id
+                for item in lineage
+                if item.effective_at == selected.effective_at
+                and item.quality_state == "accepted"
+                and item.record_id not in superseded_ids
+            )
+        )
+        supplied_candidates = tuple(sorted(candidate_record_ids))
+        if supplied_candidates != expected_candidates:
+            raise MarketFactAuthorityError("conflict resolution must include the complete candidate set")
+        values = {
+            (item.value, item.unit, item.quote_currency, item.venue_scope)
+            for item in lineage
+            if item.record_id in supplied_candidates
+        }
+        if len(values) < 2:
+            raise MarketFactAuthorityError("conflict resolution requires divergent candidate values")
+        if policy_id != self.conflict_resolution_policy_id or policy_version != self.conflict_resolution_policy_version:
+            raise MarketFactAuthorityError("conflict resolution policy is not authorized")
+        candidate_records = tuple(item for item in lineage if item.record_id in supplied_candidates)
+        policy_selected = max(
+            candidate_records,
+            key=lambda item: (Decimal(item.confidence), item.record_id),
+        )
+        if selected_record_id != policy_selected.record_id:
+            raise MarketFactAuthorityError("selected conflict record does not match the authorized policy")
+        policy_fingerprint = _hash(
+            "conflict-policy",
+            {"policy_id": policy_id, "policy_version": policy_version},
+        )
+        payload = {
+            "logical_id": logical_id,
+            "candidate_record_ids": supplied_candidates,
+            "selected_record_id": selected_record_id,
+            "policy_id": policy_id,
+            "policy_version": policy_version,
+            "policy_fingerprint": policy_fingerprint,
+            "rationale": rationale,
+            "candidate_effective_at": selected.effective_at,
+            "effective_at": effective_at,
+            "known_at": known_at,
+            "recorded_at": recorded_at,
+        }
+        resolution = MarketFactConflictResolution(
+            resolution_id=_hash("conflict-resolution", payload),
+            logical_id=logical_id,
+            candidate_record_ids=supplied_candidates,
+            selected_record_id=selected_record_id,
+            policy_id=policy_id,
+            policy_version=policy_version,
+            policy_fingerprint=policy_fingerprint,
+            rationale=rationale,
+            candidate_effective_at=selected.effective_at,
+            effective_at=effective_at,
+            known_at=known_at,
+            recorded_at=recorded_at,
+        )
+        self.repository.apply(
+            MarketFactWritePlan(
+                conflict_resolutions=(resolution,),
+                authority=self.repository._authority,
+            )
+        )
+        return resolution
+
     def _validate_result(
         self,
         request: MarketFactRequest,
@@ -170,6 +271,8 @@ class ObservedMarketFactService:
             if not result.facts:
                 raise MarketFactAuthorityError("successful result contains no facts")
             for fact in result.facts:
+                if fact.conflict_state == "resolved":
+                    raise MarketFactAuthorityError("providers cannot assert resolved conflict state")
                 if fact.fact_type not in request.requested_fact_types:
                     raise MarketFactAuthorityError("result contains an unrequested fact")
                 if fact.fact_type not in source.capabilities:

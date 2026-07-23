@@ -152,6 +152,37 @@ def service(tmp_path: Path, source_registry: MarketFactSourceRegistry | None = N
     return repo, ObservedMarketFactService(repo, source_registry or registry())
 
 
+def conflicted_service(tmp_path: Path):
+    source_registry = multi_provider_registry()
+    repo, svc = service(tmp_path, source_registry)
+    first = svc.ingest(
+        request(),
+        provider_result(price=100, source_registry=source_registry),
+        recorded_at=T2,
+    )[0]
+    secondary_source = source_registry.require("secondary-market-facts")
+    secondary_request = replace(
+        request(),
+        source_id=secondary_source.source_id,
+        provider_id=secondary_source.provider_id,
+    )
+    divergent_result = replace(
+        provider_result(price=120, source_registry=source_registry),
+        source_id=secondary_source.source_id,
+        provider_id=secondary_source.provider_id,
+        endpoint=secondary_source.endpoint_for("bitcoin"),
+        parser_version=secondary_source.parser_version,
+        registry_fingerprint=secondary_source.fingerprint,
+        request=secondary_request,
+    )
+    second = svc.ingest(
+        secondary_request,
+        divergent_result,
+        recorded_at=T2 + timedelta(minutes=1),
+    )[0]
+    return repo, svc, first, second
+
+
 def test_provider_parses_only_requested_observed_facts() -> None:
     result = provider_result()
     assert result.status == "success"
@@ -403,33 +434,7 @@ def test_registry_rejects_semantically_mismatched_canonical_identity(tmp_path: P
 
 
 def test_divergent_observations_open_conflict_and_disable_strict_known_selection(tmp_path: Path) -> None:
-    source_registry = multi_provider_registry()
-    repo, svc = service(tmp_path, source_registry)
-    first = svc.ingest(
-        request(),
-        provider_result(price=100, source_registry=source_registry),
-        recorded_at=T2,
-    )[0]
-    secondary_source = source_registry.require("secondary-market-facts")
-    secondary_request = replace(
-        request(),
-        source_id=secondary_source.source_id,
-        provider_id=secondary_source.provider_id,
-    )
-    divergent_result = replace(
-        provider_result(price=120, source_registry=source_registry),
-        source_id=secondary_source.source_id,
-        provider_id=secondary_source.provider_id,
-        endpoint=secondary_source.endpoint_for("bitcoin"),
-        parser_version=secondary_source.parser_version,
-        registry_fingerprint=secondary_source.fingerprint,
-        request=secondary_request,
-    )
-    second = svc.ingest(
-        secondary_request,
-        divergent_result,
-        recorded_at=T2 + timedelta(minutes=1),
-    )[0]
+    repo, svc, first, second = conflicted_service(tmp_path)
 
     assert first.conflict_state == "none"
     assert second.conflict_state == "open"
@@ -445,3 +450,124 @@ def test_divergent_observations_open_conflict_and_disable_strict_known_selection
         )
         is None
     )
+
+
+def test_provider_cannot_assert_resolved_conflict_state(tmp_path: Path) -> None:
+    _, svc = service(tmp_path)
+    valid = provider_result()
+    resolved = replace(valid.facts[0], conflict_state="resolved")
+
+    with pytest.raises(MarketFactAuthorityError, match="cannot assert resolved"):
+        svc.ingest(request(), replace(valid, facts=(resolved,)), recorded_at=T2)
+
+
+def test_versioned_resolution_is_immutable_and_cutoff_safe(tmp_path: Path) -> None:
+    repo, svc, first, second = conflicted_service(tmp_path)
+    selected = max((first, second), key=lambda item: (item.confidence, item.record_id))
+    resolution_effective = T2 + timedelta(minutes=2)
+    resolution_known = T2 + timedelta(minutes=3)
+    resolution_recorded = T2 + timedelta(minutes=4)
+    common = {
+        "entity_id": first.identity.entity_id,
+        "representation_id": first.identity.representation_id,
+        "fact_type": first.fact_type,
+        "quote_currency": first.quote_currency,
+    }
+
+    resolution = svc.resolve_conflict(
+        logical_id=first.logical_id,
+        candidate_record_ids=(second.record_id, first.record_id),
+        selected_record_id=selected.record_id,
+        policy_id="highest-confidence-then-record-id",
+        policy_version="1.0.0",
+        rationale="authorized confidence and deterministic record-ID policy",
+        effective_at=resolution_effective,
+        known_at=resolution_known,
+        recorded_at=resolution_recorded,
+    )
+    repeated = svc.resolve_conflict(
+        logical_id=first.logical_id,
+        candidate_record_ids=(first.record_id, second.record_id),
+        selected_record_id=selected.record_id,
+        policy_id="highest-confidence-then-record-id",
+        policy_version="1.0.0",
+        rationale="authorized confidence and deterministic record-ID policy",
+        effective_at=resolution_effective,
+        known_at=resolution_known,
+        recorded_at=resolution_recorded,
+    )
+
+    assert resolution == repeated
+    assert resolution.policy_fingerprint.startswith("conflict-policy:sha256:")
+    assert repo.conflict_resolutions(first.logical_id) == (resolution,)
+    assert second not in repo.unresolved_conflicts()
+    assert (
+        svc.strict_known_fact(
+            effective_as_of=resolution_effective - timedelta(seconds=1),
+            known_by=resolution_recorded,
+            **common,
+        )
+        is None
+    )
+    assert (
+        svc.strict_known_fact(
+            effective_as_of=resolution_effective,
+            known_by=resolution_known - timedelta(seconds=1),
+            **common,
+        )
+        is None
+    )
+    assert (
+        svc.strict_known_fact(
+            effective_as_of=resolution_effective,
+            known_by=resolution_recorded,
+            **common,
+        )
+        == selected
+    )
+
+
+def test_resolution_requires_complete_candidate_set(tmp_path: Path) -> None:
+    _, svc, first, _ = conflicted_service(tmp_path)
+
+    with pytest.raises(MarketFactAuthorityError, match="complete candidate set"):
+        svc.resolve_conflict(
+            logical_id=first.logical_id,
+            candidate_record_ids=(first.record_id,),
+            selected_record_id=first.record_id,
+            policy_id="highest-confidence-then-record-id",
+            policy_version="1.0.0",
+            rationale="incomplete candidate set must fail",
+            effective_at=T2 + timedelta(minutes=2),
+            known_at=T2 + timedelta(minutes=3),
+            recorded_at=T2 + timedelta(minutes=4),
+        )
+
+
+def test_resolution_rejects_unauthorized_policy_and_wrong_selection(tmp_path: Path) -> None:
+    _, svc, first, second = conflicted_service(tmp_path)
+    selected = max((first, second), key=lambda item: (item.confidence, item.record_id))
+    rejected = first if selected == second else second
+    common = {
+        "logical_id": first.logical_id,
+        "candidate_record_ids": (first.record_id, second.record_id),
+        "rationale": "must follow the authorized deterministic policy",
+        "effective_at": T2 + timedelta(minutes=2),
+        "known_at": T2 + timedelta(minutes=3),
+        "recorded_at": T2 + timedelta(minutes=4),
+    }
+
+    with pytest.raises(MarketFactAuthorityError, match="policy is not authorized"):
+        svc.resolve_conflict(
+            selected_record_id=selected.record_id,
+            policy_id="arbitrary-policy",
+            policy_version="1.0.0",
+            **common,
+        )
+    with pytest.raises(MarketFactAuthorityError, match="does not match"):
+        svc.resolve_conflict(
+            selected_record_id=rejected.record_id,
+            policy_id="highest-confidence-then-record-id",
+            policy_version="1.0.0",
+            **common,
+        )

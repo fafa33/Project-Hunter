@@ -6,6 +6,7 @@ from typing import Any
 
 from hunter.market_facts.models import (
     MarketFactAvailabilityEvent,
+    MarketFactConflictResolution,
     MarketFactIdentity,
     ObservedMarketFactRecord,
 )
@@ -23,6 +24,7 @@ DEFAULT_MARKET_FACTS_DB = Path("data/data_ops.sqlite")
 MARKET_FACTS_MIGRATION_ID = "generic-sql-observed-market-facts-v1"
 _FACT_SNAPSHOT_TYPE = "observed-market-fact"
 _AVAILABILITY_SNAPSHOT_TYPE = "observed-market-fact-availability"
+_CONFLICT_RESOLUTION_SNAPSHOT_TYPE = "observed-market-fact-conflict-resolution"
 
 
 class MarketFactIntegrityError(ValueError):
@@ -38,17 +40,19 @@ class _RepositoryAuthority:
 
 
 class MarketFactWritePlan:
-    __slots__ = ("records", "availability_events", "_authority")
+    __slots__ = ("records", "availability_events", "conflict_resolutions", "_authority")
 
     def __init__(
         self,
         *,
         records: tuple[ObservedMarketFactRecord, ...] = (),
         availability_events: tuple[MarketFactAvailabilityEvent, ...] = (),
+        conflict_resolutions: tuple[MarketFactConflictResolution, ...] = (),
         authority: object,
     ) -> None:
         self.records = records
         self.availability_events = availability_events
+        self.conflict_resolutions = conflict_resolutions
         self._authority = authority
 
 
@@ -77,6 +81,9 @@ class ObservedMarketFactRepository:
                 snapshots.save(_record_snapshot(record))
             for event in plan.availability_events:
                 snapshots.save(_availability_snapshot(event))
+            for resolution in plan.conflict_resolutions:
+                self._validate_resolution(resolution)
+                snapshots.save(_conflict_resolution_snapshot(resolution))
             session.commit()
         except PersistenceIdentityConflictError as exc:
             session.rollback()
@@ -145,18 +152,49 @@ class ObservedMarketFactRepository:
         )
 
     def unresolved_conflicts(self) -> tuple[ObservedMarketFactRecord, ...]:
-        records = (
-            _record_from_snapshot(item)
-            for item in self._snapshots(_FACT_SNAPSHOT_TYPE)
-            if item.payload.get("conflict_state") in {"open", "contested"}
-        )
+        records = tuple(_record_from_snapshot(item) for item in self._snapshots(_FACT_SNAPSHOT_TYPE))
+        superseded_ids = {item.supersedes_record_id for item in records if item.supersedes_record_id is not None}
+        groups: dict[tuple[str, datetime], list[ObservedMarketFactRecord]] = {}
+        for item in records:
+            if item.quality_state == "accepted" and item.record_id not in superseded_ids:
+                groups.setdefault((item.logical_id, item.effective_at), []).append(item)
+        unresolved: list[ObservedMarketFactRecord] = []
+        for (logical_id, candidate_effective_at), group in groups.items():
+            open_records = [item for item in group if item.conflict_state in {"open", "contested"}]
+            if not open_records:
+                continue
+            candidate_ids = tuple(sorted(item.record_id for item in group))
+            resolved = any(
+                item.candidate_effective_at == candidate_effective_at and item.candidate_record_ids == candidate_ids
+                for item in self.conflict_resolutions(logical_id)
+            )
+            if not resolved:
+                unresolved.extend(open_records)
         return tuple(
             sorted(
-                records,
+                unresolved,
                 key=lambda item: (
                     item.logical_id,
                     item.effective_at,
                     item.record_id,
+                ),
+            )
+        )
+
+    def conflict_resolutions(self, logical_id: str) -> tuple[MarketFactConflictResolution, ...]:
+        resolutions = tuple(
+            _conflict_resolution_from_snapshot(item)
+            for item in self._snapshots(_CONFLICT_RESOLUTION_SNAPSHOT_TYPE)
+            if item.payload.get("logical_id") == logical_id
+        )
+        return tuple(
+            sorted(
+                resolutions,
+                key=lambda item: (
+                    item.effective_at,
+                    item.recorded_at,
+                    item.known_at,
+                    item.resolution_id,
                 ),
             )
         )
@@ -186,18 +224,38 @@ class ObservedMarketFactRepository:
             and item.quality_state == "accepted"
             and item.quote_currency == (quote_currency.lower() if quote_currency is not None else None)
         ]
-        if any(item.conflict_state in {"open", "contested"} for item in temporal_eligible):
-            return None
-        eligible = [item for item in temporal_eligible if item.conflict_state in {"none", "resolved"}]
-        superseded_ids = {item.supersedes_record_id for item in eligible if item.supersedes_record_id is not None}
-        candidates = [item for item in eligible if item.record_id not in superseded_ids]
-        grouped_values: dict[tuple[str, datetime], set[tuple[str, str, str | None, str]]] = {}
-        for item in candidates:
-            grouped_values.setdefault((item.logical_id, item.effective_at), set()).add(
-                (item.value, item.unit, item.quote_currency, item.venue_scope)
+        superseded_ids = {
+            item.supersedes_record_id for item in temporal_eligible if item.supersedes_record_id is not None
+        }
+        unsuperseded = [item for item in temporal_eligible if item.record_id not in superseded_ids]
+        groups: dict[tuple[str, datetime], list[ObservedMarketFactRecord]] = {}
+        for item in unsuperseded:
+            groups.setdefault((item.logical_id, item.effective_at), []).append(item)
+        candidates: list[ObservedMarketFactRecord] = []
+        for (logical_id, candidate_effective_at), group in groups.items():
+            values = {(item.value, item.unit, item.quote_currency, item.venue_scope) for item in group}
+            conflicted = len(values) > 1 or any(
+                item.conflict_state in {"open", "contested", "resolved"} for item in group
             )
-        if any(len(values) > 1 for values in grouped_values.values()):
-            return None
+            if not conflicted:
+                candidates.extend(group)
+                continue
+            resolution = self._eligible_resolution(
+                logical_id=logical_id,
+                candidate_effective_at=candidate_effective_at,
+                candidate_record_ids=tuple(item.record_id for item in group),
+                effective_as_of=effective_as_of,
+                known_by=known_by,
+            )
+            if resolution is None:
+                return None
+            selected = next(
+                (item for item in group if item.record_id == resolution.selected_record_id),
+                None,
+            )
+            if selected is None:
+                return None
+            candidates.append(selected)
         candidates.sort(
             key=lambda item: (
                 item.effective_at,
@@ -224,6 +282,7 @@ class ObservedMarketFactRepository:
             "market_fact_schema_migrations": 1,
             "observed_market_facts": len(self._snapshots(_FACT_SNAPSHOT_TYPE)),
             "market_fact_availability_events": len(self._snapshots(_AVAILABILITY_SNAPSHOT_TYPE)),
+            "market_fact_conflict_resolutions": len(self._snapshots(_CONFLICT_RESOLUTION_SNAPSHOT_TYPE)),
         }
         if table not in mapping:
             raise ValueError("unsupported market fact table")
@@ -237,6 +296,49 @@ class ObservedMarketFactRepository:
             raise MarketFactIntegrityError("superseded market fact record does not exist")
         if predecessor.logical_id != record.logical_id:
             raise MarketFactIntegrityError("correction must preserve logical_id")
+
+    def _validate_resolution(self, resolution: MarketFactConflictResolution) -> None:
+        candidates = tuple(self.record(record_id) for record_id in resolution.candidate_record_ids)
+        if any(item is None for item in candidates):
+            raise MarketFactIntegrityError("conflict resolution candidate does not exist")
+        records = tuple(item for item in candidates if item is not None)
+        if any(item.logical_id != resolution.logical_id for item in records):
+            raise MarketFactIntegrityError("conflict resolution candidates must share logical_id")
+        if any(item.effective_at != resolution.candidate_effective_at for item in records):
+            raise MarketFactIntegrityError("conflict resolution candidates must share effective_at")
+        values = {(item.value, item.unit, item.quote_currency, item.venue_scope) for item in records}
+        if len(values) < 2:
+            raise MarketFactIntegrityError("conflict resolution requires divergent candidate values")
+
+    def _eligible_resolution(
+        self,
+        *,
+        logical_id: str,
+        candidate_effective_at: datetime,
+        candidate_record_ids: tuple[str, ...],
+        effective_as_of: datetime,
+        known_by: datetime,
+    ) -> MarketFactConflictResolution | None:
+        expected_ids = tuple(sorted(candidate_record_ids))
+        eligible = [
+            item
+            for item in self.conflict_resolutions(logical_id)
+            if item.candidate_effective_at == candidate_effective_at
+            and item.candidate_record_ids == expected_ids
+            and item.effective_at <= effective_as_of
+            and item.recorded_at <= known_by
+            and item.known_at <= known_by
+        ]
+        eligible.sort(
+            key=lambda item: (
+                item.effective_at,
+                item.recorded_at,
+                item.known_at,
+                item.resolution_id,
+            ),
+            reverse=True,
+        )
+        return eligible[0] if eligible else None
 
     def _load_snapshot(self, identity: str, snapshot_type: str) -> SnapshotRecord | None:
         engine = create_sqlite_engine(self.path)
@@ -292,6 +394,24 @@ def _availability_snapshot(event: MarketFactAvailabilityEvent) -> SnapshotRecord
             "authority_class": "operational-availability-evidence",
             "domain": "observed-market-facts",
             "known_at": _serialize(event.known_at),
+        },
+    )
+
+
+def _conflict_resolution_snapshot(resolution: MarketFactConflictResolution) -> SnapshotRecord:
+    return SnapshotRecord(
+        id=resolution.resolution_id,
+        created_at=resolution.recorded_at,
+        effective_at=resolution.effective_at,
+        snapshot_type=_CONFLICT_RESOLUTION_SNAPSHOT_TYPE,
+        target_id=resolution.logical_id,
+        record_ids=resolution.candidate_record_ids,
+        payload=_conflict_resolution_payload(resolution),
+        metadata={
+            "authority_class": "production-authoritative",
+            "domain": "observed-market-fact-conflict-resolution",
+            "known_at": _serialize(resolution.known_at),
+            "policy_fingerprint": resolution.policy_fingerprint,
         },
     )
 
@@ -354,6 +474,24 @@ def _availability_payload(event: MarketFactAvailabilityEvent) -> dict[str, Any]:
     }
 
 
+def _conflict_resolution_payload(resolution: MarketFactConflictResolution) -> dict[str, Any]:
+    return {
+        "resolution_id": resolution.resolution_id,
+        "logical_id": resolution.logical_id,
+        "candidate_record_ids": resolution.candidate_record_ids,
+        "selected_record_id": resolution.selected_record_id,
+        "policy_id": resolution.policy_id,
+        "policy_version": resolution.policy_version,
+        "policy_fingerprint": resolution.policy_fingerprint,
+        "rationale": resolution.rationale,
+        "candidate_effective_at": _serialize(resolution.candidate_effective_at),
+        "effective_at": _serialize(resolution.effective_at),
+        "recorded_at": _serialize(resolution.recorded_at),
+        "known_at": _serialize(resolution.known_at),
+        "schema_version": resolution.schema_version,
+    }
+
+
 def _record_from_snapshot(snapshot: SnapshotRecord) -> ObservedMarketFactRecord:
     payload = snapshot.payload
     identity = payload["identity"]
@@ -402,6 +540,25 @@ def _record_from_snapshot(snapshot: SnapshotRecord) -> ObservedMarketFactRecord:
             str(payload["supersedes_record_id"]) if payload["supersedes_record_id"] is not None else None
         ),
         correction_reason=str(payload["correction_reason"]),
+    )
+
+
+def _conflict_resolution_from_snapshot(snapshot: SnapshotRecord) -> MarketFactConflictResolution:
+    payload = snapshot.payload
+    return MarketFactConflictResolution(
+        resolution_id=str(payload["resolution_id"]),
+        logical_id=str(payload["logical_id"]),
+        candidate_record_ids=tuple(str(item) for item in payload["candidate_record_ids"]),
+        selected_record_id=str(payload["selected_record_id"]),
+        policy_id=str(payload["policy_id"]),
+        policy_version=str(payload["policy_version"]),
+        policy_fingerprint=str(payload["policy_fingerprint"]),
+        rationale=str(payload["rationale"]),
+        candidate_effective_at=_deserialize(str(payload["candidate_effective_at"])),
+        effective_at=_deserialize(str(payload["effective_at"])),
+        recorded_at=_deserialize(str(payload["recorded_at"])),
+        known_at=_deserialize(str(payload["known_at"])),
+        schema_version=str(payload["schema_version"]),
     )
 
 
