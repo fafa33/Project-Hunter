@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import json
+import shutil
 import sqlite3
+import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
-from hunter.__main__ import main as installed_main
 from hunter.dashboard.data import DashboardDataProvider
 from hunter.persistence.models import QuerySpec
 from hunter.persistence.records import SnapshotRecord
@@ -73,6 +74,22 @@ def _record_count(database: Path) -> int:
     return int(row[0])
 
 
+def _installed_hunter() -> str:
+    executable = shutil.which("hunter")
+    assert executable is not None, "installed hunter console script is not available on PATH"
+    return executable
+
+
+def _run_hunter(manifest_path: Path, *, cwd: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [_installed_hunter(), "committee-authority", str(manifest_path)],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
 def test_installed_cli_persists_canonical_output_consumed_read_only_by_dashboard(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -85,9 +102,11 @@ def test_installed_cli_persists_canonical_output_consumed_read_only_by_dashboard
     unrelated_cwd = tmp_path / "unrelated-cwd"
     unrelated_cwd.mkdir()
     monkeypatch.setenv("HUNTER_APPLICATION_ROOT", str(root.resolve()))
-    monkeypatch.chdir(unrelated_cwd)
 
-    assert installed_main(["committee-authority", str(manifest_path)]) == 0
+    completed = _run_hunter(manifest_path, cwd=unrelated_cwd)
+    assert completed.returncode == 0, completed.stderr
+    result = json.loads(completed.stdout)
+    assert result["persistence_database"] == str(database.resolve())
 
     engine = create_sqlite_engine(database)
     session = SessionFactory(engine).create()
@@ -132,11 +151,15 @@ def test_failed_cli_retries_preserve_original_error_and_single_durable_failed_ru
     database = _prepare_runtime(root, now)
     manifest_path = tmp_path / "duplicate-manifest.json"
     manifest_path.write_text(json.dumps(_manifest(now, duplicate=True)), encoding="utf-8")
+    unrelated_cwd = tmp_path / "unrelated-failure-cwd"
+    unrelated_cwd.mkdir()
     monkeypatch.setenv("HUNTER_APPLICATION_ROOT", str(root.resolve()))
 
     for _ in range(2):
-        with pytest.raises(ValueError, match="duplicate project_id"):
-            installed_main(["committee-authority", str(manifest_path)])
+        completed = _run_hunter(manifest_path, cwd=unrelated_cwd)
+        assert completed.returncode != 0
+        assert "duplicate project_id" in completed.stderr
+        assert "PersistenceIdentityConflictError" not in completed.stderr
 
     engine = create_sqlite_engine(database)
     session = SessionFactory(engine).create()
@@ -158,3 +181,5 @@ def test_failed_cli_retries_preserve_original_error_and_single_durable_failed_ru
     finally:
         session.close()
         engine.dispose()
+
+    assert not (unrelated_cwd / "data" / "data_ops.sqlite").exists()
