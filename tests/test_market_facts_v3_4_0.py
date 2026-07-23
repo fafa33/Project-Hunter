@@ -65,13 +65,37 @@ def registry(*, enabled: bool = True) -> MarketFactSourceRegistry:
                         "trading_volume": "quote_currency_per_24h",
                     },
                     "supported_entity_scope": ["canonical_asset_representation"],
+                    "identity_bindings": [
+                        {
+                            "entity_id": "entity:bitcoin",
+                            "asset_id": "asset:btc",
+                            "representation_id": "representation:btc-native",
+                            "chain": "",
+                            "contract_address": "",
+                            "provider_listing_id": "bitcoin",
+                        }
+                    ],
                     "freshness_seconds": 3600,
+                    "observation_confidence": "0.80",
                     "historical_support": "current-only",
                     "limitations": "observed facts only",
                 }
             ]
         }
     )
+
+
+def multi_provider_registry() -> MarketFactSourceRegistry:
+    primary = registry().require("coingecko-coin-market-facts")
+    secondary = replace(
+        primary,
+        source_id="secondary-market-facts",
+        provider_id="marketdata",
+        endpoint_template="https://api.example.com/v1/assets/{listing_id}",
+        allowed_hosts=("api.example.com",),
+        parser_version="marketdata-v1",
+    )
+    return MarketFactSourceRegistry((primary, secondary))
 
 
 def identity() -> MarketFactIdentity:
@@ -323,3 +347,101 @@ def test_models_reject_naive_time_and_identity_scope_mismatch() -> None:
         replace(request(), requested_at=datetime(2026, 1, 1))
     with pytest.raises(ValueError, match="chain and contract_address"):
         replace(identity(), chain="ethereum", contract_address="")
+
+
+def test_confidence_and_provider_source_identity_round_trip(tmp_path: Path) -> None:
+    repo, svc = service(tmp_path)
+    valid = provider_result()
+    record = svc.ingest(request(), valid, recorded_at=T2)[0]
+
+    assert record.confidence == "0.80"
+    assert record.provider_source_record_id == "bitcoin"
+    assert record.provider_source_record_version == "2026-01-01T00:04:00Z"
+    assert repo.record(record.record_id) == record
+
+    with pytest.raises(ValueError, match="confidence"):
+        replace(valid.facts[0], confidence="1.01")
+    with pytest.raises(ValueError, match="confidence"):
+        replace(valid.facts[0], confidence="-0.01")
+
+
+def test_provider_source_identity_and_impossible_known_order_are_rejected(tmp_path: Path) -> None:
+    _, svc = service(tmp_path)
+    valid = provider_result()
+
+    with pytest.raises(MarketFactAuthorityError, match="provider source record"):
+        svc.ingest(
+            request(),
+            replace(valid, provider_source_record_id="ethereum"),
+            recorded_at=T2,
+        )
+
+    future_fact = replace(valid.facts[0], observed_at=T1 + timedelta(seconds=1))
+    with pytest.raises(MarketFactAuthorityError, match="known_at cannot precede observation"):
+        svc.ingest(
+            request(),
+            replace(valid, acquired_at=T1 + timedelta(seconds=2), facts=(future_fact,)),
+            recorded_at=T2,
+        )
+
+    future_fact = replace(valid.facts[0], effective_at=T1 + timedelta(seconds=1))
+    with pytest.raises(MarketFactAuthorityError, match="known_at cannot precede effective"):
+        svc.ingest(
+            request(),
+            replace(valid, acquired_at=T1 + timedelta(seconds=2), facts=(future_fact,)),
+            recorded_at=T2,
+        )
+
+
+def test_registry_rejects_semantically_mismatched_canonical_identity(tmp_path: Path) -> None:
+    _, svc = service(tmp_path)
+    mismatched_request = replace(request(), identity=replace(identity(), entity_id="entity:ethereum"))
+    mismatched_result = replace(provider_result(), request=mismatched_request)
+
+    with pytest.raises(MarketFactAuthorityError, match="not bound"):
+        svc.ingest(mismatched_request, mismatched_result, recorded_at=T2)
+
+
+def test_divergent_observations_open_conflict_and_disable_strict_known_selection(tmp_path: Path) -> None:
+    source_registry = multi_provider_registry()
+    repo, svc = service(tmp_path, source_registry)
+    first = svc.ingest(
+        request(),
+        provider_result(price=100, source_registry=source_registry),
+        recorded_at=T2,
+    )[0]
+    secondary_source = source_registry.require("secondary-market-facts")
+    secondary_request = replace(
+        request(),
+        source_id=secondary_source.source_id,
+        provider_id=secondary_source.provider_id,
+    )
+    divergent_result = replace(
+        provider_result(price=120, source_registry=source_registry),
+        source_id=secondary_source.source_id,
+        provider_id=secondary_source.provider_id,
+        endpoint=secondary_source.endpoint_for("bitcoin"),
+        parser_version=secondary_source.parser_version,
+        registry_fingerprint=secondary_source.fingerprint,
+        request=secondary_request,
+    )
+    second = svc.ingest(
+        secondary_request,
+        divergent_result,
+        recorded_at=T2 + timedelta(minutes=1),
+    )[0]
+
+    assert first.conflict_state == "none"
+    assert second.conflict_state == "open"
+    assert second in repo.unresolved_conflicts()
+    assert (
+        svc.strict_known_fact(
+            entity_id=first.identity.entity_id,
+            representation_id=first.identity.representation_id,
+            fact_type=first.fact_type,
+            quote_currency=first.quote_currency,
+            effective_as_of=T2,
+            known_by=T2 + timedelta(minutes=1),
+        )
+        is None
+    )

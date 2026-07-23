@@ -174,7 +174,7 @@ class ObservedMarketFactRepository:
         effective_as_of = _aware("effective_as_of", effective_as_of)
         known_by = _aware("known_by", known_by)
         records = (_record_from_snapshot(item) for item in self._snapshots(_FACT_SNAPSHOT_TYPE))
-        eligible = [
+        temporal_eligible = [
             item
             for item in records
             if item.identity.entity_id == entity_id
@@ -184,11 +184,20 @@ class ObservedMarketFactRepository:
             and item.recorded_at <= known_by
             and item.known_at <= known_by
             and item.quality_state == "accepted"
-            and item.conflict_state in {"none", "resolved"}
             and item.quote_currency == (quote_currency.lower() if quote_currency is not None else None)
         ]
+        if any(item.conflict_state in {"open", "contested"} for item in temporal_eligible):
+            return None
+        eligible = [item for item in temporal_eligible if item.conflict_state in {"none", "resolved"}]
         superseded_ids = {item.supersedes_record_id for item in eligible if item.supersedes_record_id is not None}
         candidates = [item for item in eligible if item.record_id not in superseded_ids]
+        grouped_values: dict[tuple[str, datetime], set[tuple[str, str, str | None, str]]] = {}
+        for item in candidates:
+            grouped_values.setdefault((item.logical_id, item.effective_at), set()).add(
+                (item.value, item.unit, item.quote_currency, item.venue_scope)
+            )
+        if any(len(values) > 1 for values in grouped_values.values()):
+            return None
         candidates.sort(
             key=lambda item: (
                 item.effective_at,
@@ -315,6 +324,9 @@ def _record_payload(record: ObservedMarketFactRecord) -> dict[str, Any]:
         "recorded_at": _serialize(record.recorded_at),
         "known_at": _serialize(record.known_at),
         "raw_payload_hash": record.raw_payload_hash,
+        "provider_source_record_id": record.provider_source_record_id,
+        "provider_source_record_version": record.provider_source_record_version,
+        "confidence": record.confidence,
         "quality_state": record.quality_state,
         "conflict_state": record.conflict_state,
         "content_hash": record.content_hash,
@@ -345,6 +357,14 @@ def _availability_payload(event: MarketFactAvailabilityEvent) -> dict[str, Any]:
 def _record_from_snapshot(snapshot: SnapshotRecord) -> ObservedMarketFactRecord:
     payload = snapshot.payload
     identity = payload["identity"]
+    has_canonical_provenance = all(
+        payload.get(name)
+        for name in (
+            "provider_source_record_id",
+            "provider_source_record_version",
+            "confidence",
+        )
+    )
     return ObservedMarketFactRecord(
         record_id=str(payload["record_id"]),
         logical_id=str(payload["logical_id"]),
@@ -372,7 +392,10 @@ def _record_from_snapshot(snapshot: SnapshotRecord) -> ObservedMarketFactRecord:
         recorded_at=_deserialize(str(payload["recorded_at"])),
         known_at=_deserialize(str(payload["known_at"])),
         raw_payload_hash=str(payload["raw_payload_hash"]),
-        quality_state=str(payload["quality_state"]),  # type: ignore[arg-type]
+        provider_source_record_id=str(payload.get("provider_source_record_id", identity["provider_listing_id"])),
+        provider_source_record_version=str(payload.get("provider_source_record_version", "legacy-unversioned")),
+        confidence=str(payload.get("confidence", "0")),
+        quality_state=str(payload["quality_state"] if has_canonical_provenance else "unavailable"),  # type: ignore[arg-type]
         conflict_state=str(payload["conflict_state"]),  # type: ignore[arg-type]
         content_hash=str(payload["content_hash"]),
         supersedes_record_id=(

@@ -27,6 +27,14 @@ sources:
       trading_volume: quote_currency_per_24h
     supported_entity_scope:
       - canonical_asset_representation
+    identity_bindings:
+      - entity_id: entity:bitcoin
+        asset_id: asset:btc
+        representation_id: representation:btc-native
+        chain: ""
+        contract_address: ""
+        provider_listing_id: bitcoin
     freshness_seconds: 3600
+    observation_confidence: "0.80"
     historical_support: current endpoint with provider last_updated timestamp only
     limitations: Provider-observed market facts only; no fair value, valuation, peer, mispricing, asymmetry, ranking, or recommendation authority.

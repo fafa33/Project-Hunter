@@ -194,9 +194,11 @@ def test_evidence_backed_validation_uses_distinct_confidence_freshness_and_evide
     assert bitcoin.hunter_score != ethereum.hunter_score
     assert bitcoin.confidence != ethereum.confidence
     assert bitcoin.data_freshness != ethereum.data_freshness
-    assert bitcoin.committee_decision == "QUALIFIED_CANDIDATE"
-    assert bitcoin.engine_sources[0].source_record_ids[0].startswith("record:alpha")
-    assert bitcoin.engine_sources[0].evidence_ids[0].startswith("evidence:alpha")
+    assert bitcoin.committee_decision == "INSUFFICIENT_EVIDENCE"
+    assert {"valuation", "comparative_valuation", "mispricing", "asymmetry"}.issubset(set(bitcoin.missing_evidence))
+    available_source = next(source for source in bitcoin.engine_sources if source.source_record_ids)
+    assert available_source.source_record_ids[0].startswith("record:alpha")
+    assert available_source.evidence_ids[0].startswith("evidence:alpha")
 
 
 def test_placeholder_scores_cannot_qualify_project_when_required_engine_is_missing() -> None:
@@ -216,6 +218,21 @@ def test_placeholder_scores_cannot_qualify_project_when_required_engine_is_missi
 
     assert safe.committee_decision == "INSUFFICIENT_EVIDENCE"
     assert "committee" in safe.missing_evidence
+
+
+def test_valuation_family_inputs_remain_unavailable_for_every_source_label() -> None:
+    config = load_market_validation_config()
+    sources = _sources(score=0.95, confidence=0.95, freshness=0.95, prefix="forged")
+    executor = EvidenceBackedProjectExecutor(config.effective_at, {"bitcoin": sources})
+
+    bitcoin = next(
+        result
+        for result in MarketValidationRunner(config, executor=executor).run().project_results
+        if result.project_id == "bitcoin"
+    )
+
+    assert bitcoin.committee_decision == "INSUFFICIENT_EVIDENCE"
+    assert {"valuation", "comparative_valuation", "mispricing", "asymmetry"}.issubset(set(bitcoin.missing_evidence))
 
 
 def _sources(*, score: float, confidence: float, freshness: float, prefix: str) -> tuple[EngineValidationSource, ...]:
