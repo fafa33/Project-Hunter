@@ -9,57 +9,68 @@ from pathlib import Path
 
 import pytest
 
+from hunter.committee import command as committee_command
+from hunter.committee.models import CycleChampionSnapshot, InvestmentCommitteeAssessment
+from hunter.committee.sql_output import GenericSQLCommitteeOutput
 from hunter.dashboard.data import DashboardDataProvider
+from hunter.execution.hashing import stable_digest
 from hunter.persistence.models import QuerySpec
 from hunter.persistence.records import SnapshotRecord
 from hunter.persistence.sql import RepositoryFactory, SessionFactory, create_schema, create_sqlite_engine
 
 
-def _snapshot(now: datetime) -> SnapshotRecord:
+def _snapshot(now: datetime, project_id: str, signal: float) -> SnapshotRecord:
     return SnapshotRecord(
-        id="snapshot:committee-e2e:alpha",
+        id=f"snapshot:committee-e2e:{project_id}",
         created_at=now - timedelta(minutes=30),
         effective_at=now - timedelta(minutes=30),
         snapshot_type="committee-input",
-        target_id="alpha",
-        record_ids=("evidence:alpha",),
-        payload={"signal": 0.9},
+        target_id=project_id,
+        record_ids=(f"evidence:{project_id}",),
+        payload={"signal": signal},
         metadata={
             "authority_class": "production-authoritative",
-            "project_id": "alpha",
-            "entity_id": "entity:alpha",
-            "representation_id": "ethereum:0xalpha",
+            "project_id": project_id,
+            "entity_id": f"entity:{project_id}",
+            "representation_id": f"ethereum:0x{project_id}",
             "chain_id": "eip155:1",
-            "lineage_id": "lineage:alpha",
+            "lineage_id": f"lineage:{project_id}",
             "revision_id": "revision:1",
             "lifecycle_state": "active",
         },
     )
 
 
-def _manifest(now: datetime, *, duplicate: bool = False) -> dict[str, object]:
-    item = {
-        "project_id": "alpha",
-        "effective_at": now.isoformat(),
-        "identity": {
-            "project_id": "alpha",
-            "entity_id": "entity:alpha",
-            "representation_id": "ethereum:0xalpha",
-            "chain_id": "eip155:1",
-        },
-        "snapshot_ids": ["snapshot:committee-e2e:alpha"],
-    }
-    return {"inputs": [item, dict(item)] if duplicate else [item]}
+def _manifest(now: datetime, projects: tuple[str, ...] = ("alpha",), *, duplicate: bool = False) -> dict[str, object]:
+    items = [
+        {
+            "project_id": project_id,
+            "effective_at": now.isoformat(),
+            "identity": {
+                "project_id": project_id,
+                "entity_id": f"entity:{project_id}",
+                "representation_id": f"ethereum:0x{project_id}",
+                "chain_id": "eip155:1",
+            },
+            "snapshot_ids": [f"snapshot:committee-e2e:{project_id}"],
+        }
+        for project_id in projects
+    ]
+    if duplicate:
+        items.append(dict(items[0]))
+    return {"inputs": items}
 
 
-def _prepare_runtime(root: Path, now: datetime) -> Path:
+def _prepare_runtime(root: Path, now: datetime, projects: tuple[str, ...] = ("alpha", "beta")) -> Path:
     database = root / "data" / "data_ops.sqlite"
     database.parent.mkdir(parents=True, exist_ok=True)
     engine = create_sqlite_engine(database)
     create_schema(engine)
     session = SessionFactory(engine).create()
     try:
-        RepositoryFactory(session).snapshots().save(_snapshot(now))
+        snapshots = RepositoryFactory(session).snapshots()
+        for index, project_id in enumerate(projects, start=1):
+            snapshots.save(_snapshot(now, project_id, signal=1.0 - (index * 0.1)))
         session.commit()
     finally:
         session.close()
@@ -90,15 +101,16 @@ def _run_hunter(manifest_path: Path, *, cwd: Path) -> subprocess.CompletedProces
     )
 
 
-def test_installed_cli_persists_canonical_output_consumed_read_only_by_dashboard(
+def test_installed_cli_persists_ranked_output_consumed_read_only_by_dashboard(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     now = datetime.now(UTC)
+    projects = ("alpha", "beta")
     root = tmp_path / "application-root"
-    database = _prepare_runtime(root, now)
+    database = _prepare_runtime(root, now, projects)
     manifest_path = tmp_path / "committee-manifest.json"
-    manifest_path.write_text(json.dumps(_manifest(now)), encoding="utf-8")
+    manifest_path.write_text(json.dumps(_manifest(now, projects)), encoding="utf-8")
     unrelated_cwd = tmp_path / "unrelated-cwd"
     unrelated_cwd.mkdir()
     monkeypatch.setenv("HUNTER_APPLICATION_ROOT", str(root.resolve()))
@@ -117,9 +129,9 @@ def test_installed_cli_persists_canonical_output_consumed_read_only_by_dashboard
         )
         champions = repositories.cycle_champion_snapshots().query(QuerySpec(record_kind="cycle-champion-snapshot"))
         runs = repositories.pipeline_runs().query(QuerySpec(record_kind="pipeline-run"))
-        assert len(assessments) == 1
+        assert len(assessments) == 2
         assert len(champions) == 1
-        assert assessments[0].source_record_ids == ("snapshot:committee-e2e:alpha",)
+        assert tuple(sorted(item.rank for item in assessments)) == (1, 2)
         assert any(record.status == "succeeded" for record in runs)
 
         before = _record_count(database)
@@ -128,12 +140,16 @@ def test_installed_cli_persists_canonical_output_consumed_read_only_by_dashboard
         assert after == before
 
         committee = next(panel for panel in dashboard.panels if panel.panel_id == "investment-committee")
-        assert len(committee.rows) == 1
-        assert committee.rows[0].row_id == assessments[0].id
-        assert committee.rows[0].values["project"] == "alpha"
-        assert committee.rows[0].values["decision"] == assessments[0].decision
-        assert committee.rows[0].values["confidence"] == assessments[0].committee_confidence
-        assert committee.rows[0].values["source_record_ids"] == "snapshot:committee-e2e:alpha"
+        assert len(committee.rows) == 2
+        rows_by_id = {row.row_id: row for row in committee.rows}
+        assert set(rows_by_id) == {assessment.id for assessment in assessments}
+        for assessment in assessments:
+            row = rows_by_id[assessment.id]
+            assert row.values["project"] == assessment.project_id
+            assert row.values["decision"] == assessment.decision
+            assert row.values["confidence"] == assessment.committee_confidence
+            assert row.values["rank"] == assessment.rank
+            assert row.values["source_record_ids"] == ",".join(assessment.source_record_ids)
     finally:
         session.close()
         engine.dispose()
@@ -148,7 +164,7 @@ def test_failed_cli_retries_preserve_original_error_and_single_durable_failed_ru
 ) -> None:
     now = datetime.now(UTC)
     root = tmp_path / "application-root"
-    database = _prepare_runtime(root, now)
+    database = _prepare_runtime(root, now, ("alpha",))
     manifest_path = tmp_path / "duplicate-manifest.json"
     manifest_path.write_text(json.dumps(_manifest(now, duplicate=True)), encoding="utf-8")
     unrelated_cwd = tmp_path / "unrelated-failure-cwd"
@@ -183,3 +199,64 @@ def test_failed_cli_retries_preserve_original_error_and_single_durable_failed_ru
         engine.dispose()
 
     assert not (unrelated_cwd / "data" / "data_ops.sqlite").exists()
+
+
+def test_post_evaluation_persistence_failure_rolls_back_staged_output_and_persists_failed_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = datetime.now(UTC)
+    projects = ("alpha", "beta")
+    root = tmp_path / "application-root"
+    database = _prepare_runtime(root, now, projects)
+    manifest = _manifest(now, projects)
+    manifest_path = tmp_path / "persistence-failure-manifest.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    monkeypatch.setenv("HUNTER_APPLICATION_ROOT", str(root.resolve()))
+
+    original_persist_cycle = GenericSQLCommitteeOutput.persist_cycle
+
+    def persist_then_fail(
+        self: GenericSQLCommitteeOutput,
+        champion: CycleChampionSnapshot,
+        assessments: tuple[InvestmentCommitteeAssessment, ...],
+    ) -> None:
+        original_persist_cycle(self, champion, assessments)
+        raise RuntimeError("forced post-evaluation persistence failure")
+
+    monkeypatch.setattr(GenericSQLCommitteeOutput, "persist_cycle", persist_then_fail)
+
+    for _ in range(2):
+        with pytest.raises(RuntimeError, match="forced post-evaluation persistence failure"):
+            committee_command.main([str(manifest_path)])
+
+    manifest_fingerprint = stable_digest("committee-authority-manifest", manifest, schema_version="v1")
+    input_ids = sorted(f"snapshot:committee-e2e:{project_id}" for project_id in projects)
+    input_fingerprint = stable_digest("committee-authority-inputs", input_ids, schema_version="v1")
+    attempted_run_id = f"pipeline-run:committee-authority:{manifest_fingerprint}"
+
+    engine = create_sqlite_engine(database)
+    session = SessionFactory(engine).create()
+    try:
+        repositories = RepositoryFactory(session)
+        assert repositories.committee_votes().query(QuerySpec(record_kind="committee-vote")) == ()
+        assert (
+            repositories.investment_committee_assessments().query(
+                QuerySpec(record_kind="investment-committee-assessment")
+            )
+            == ()
+        )
+        assert repositories.cycle_champion_snapshots().query(QuerySpec(record_kind="cycle-champion-snapshot")) == ()
+        runs = repositories.pipeline_runs().query(QuerySpec(record_kind="pipeline-run"))
+        assert len(runs) == 1
+        failed = runs[0]
+        assert failed.id == f"{attempted_run_id}:failed"
+        assert failed.status == "failed"
+        assert failed.parent_run_id == attempted_run_id
+        assert failed.configuration_fingerprint == manifest_fingerprint
+        assert failed.input_fingerprint == input_fingerprint
+        assert failed.metadata["manifest_fingerprint"] == manifest_fingerprint
+        assert "forced post-evaluation persistence failure" in str(failed.metadata["error_summary"])
+    finally:
+        session.close()
+        engine.dispose()
