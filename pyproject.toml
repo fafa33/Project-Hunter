@@ -50,6 +50,9 @@ target-version = "py311"
 select = ["E", "F", "I", "UP", "B"]
 ignore = ["E501"]
 
+[tool.ruff.lint.per-file-ignores]
+"src/hunter/committee/engine.py" = ["B009"]
+
 [tool.black]
 line-length = 120
 target-version = ["py311"]
