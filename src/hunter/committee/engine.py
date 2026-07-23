@@ -363,7 +363,11 @@ def _snapshot(inputs: CommitteeInputSet, key: str) -> tuple[float, float, dateti
 
 def _evidence_quality(inputs: CommitteeInputSet) -> float:
     scores = [float(item.reliability) for item in inputs.evidence]
-    scores.extend(float(item.metadata.get("confidence", 0.0)) for item in inputs.snapshots)
+    scores.extend(
+        float(confidence)
+        for item in inputs.snapshots
+        if (confidence := item.metadata.get("confidence")) is not None
+    )
     return sum(scores) / len(scores) if scores else 0.0
 
 
