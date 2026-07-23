@@ -108,8 +108,11 @@ def test_installed_cli_loads_run_votes_assessments_and_champion_from_generic_sql
         )
         champions = repositories.cycle_champion_snapshots().query(QuerySpec(record_kind="cycle-champion-snapshot"))
 
-        assert len(runs) == 1
-        assert runs[0].status == "succeeded"
+        succeeded_runs = tuple(run for run in runs if run.status == "succeeded")
+        running_runs = tuple(run for run in runs if run.status == "running")
+        assert len(succeeded_runs) == 1
+        assert len(running_runs) == 1
+        assert succeeded_runs[0].parent_run_id == running_runs[0].id
         assert len(assessments) == len(projects)
         assert len(champions) == 1
         assert votes
