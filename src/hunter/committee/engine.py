@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import replace
 from datetime import UTC, datetime
 
@@ -123,19 +124,18 @@ class InvestmentCommitteeEngine:
 def rank_committee_assessments(
     assessments: tuple[InvestmentCommitteeAssessment, ...]
 ) -> tuple[InvestmentCommitteeAssessment, ...]:
-    return tuple(
-        sorted(
-            assessments,
-            key=lambda item: (
-                item.eligibility_state not in {"ELIGIBLE", "CONDITIONALLY_ELIGIBLE"},
-                -item.committee_confidence,
-                -item.consensus_score,
-                -item.evidence_robustness,
-                item.conflict_score,
-                item.project_id,
-            ),
-        )
+    ordered = sorted(
+        assessments,
+        key=lambda item: (
+            item.eligibility_state not in {"ELIGIBLE", "CONDITIONALLY_ELIGIBLE"},
+            -item.committee_confidence,
+            -item.consensus_score,
+            -item.evidence_robustness,
+            item.conflict_score,
+            item.project_id,
+        ),
     )
+    return tuple(replace(item, rank=index) for index, item in enumerate(ordered, start=1))
 
 
 def _votes(inputs: CommitteeInputSet, config: InvestmentCommitteeConfig) -> tuple[CommitteeVote, ...]:
@@ -362,7 +362,7 @@ def _snapshot(inputs: CommitteeInputSet, key: str) -> tuple[float, float, dateti
 
 
 def _evidence_quality(inputs: CommitteeInputSet) -> float:
-    scores = [float(item.confidence) for item in inputs.evidence]
+    scores = [float(item.reliability) for item in inputs.evidence]
     scores.extend(float(item.metadata.get("confidence", 0.0)) for item in inputs.snapshots)
     return sum(scores) / len(scores) if scores else 0.0
 
@@ -373,12 +373,14 @@ def _intelligence_score(record: object) -> float:
 
 
 def _avg_conf(value: object) -> float:
-    if hasattr(value, "aggregate"):
-        return float(getattr(value, "aggregate"))
-    if isinstance(value, dict):
+    if isinstance(value, Mapping):
         numeric = [float(item) for item in value.values() if isinstance(item, (int, float))]
         return sum(numeric) / len(numeric) if numeric else 0.0
-    return float(value)
+    try:
+        aggregate = value.aggregate  # type: ignore[attr-defined]
+    except AttributeError:
+        return float(value)
+    return float(aggregate)
 
 
 def _risks(inputs: CommitteeInputSet, votes: tuple[CommitteeVote, ...]) -> tuple[str, ...]:
