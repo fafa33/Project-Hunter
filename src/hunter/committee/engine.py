@@ -212,10 +212,14 @@ def _votes(inputs: CommitteeInputSet, config: InvestmentCommitteeConfig) -> tupl
             ",".join(record.id for record in inputs.evidence),
         ),
     }
-    return tuple(_vote(name, raw[name], weights.get(name, 0.0), inputs.effective_at, config) for name in weights)
+    return tuple(
+        _vote(inputs.project_id, name, raw[name], weights.get(name, 0.0), inputs.effective_at, config)
+        for name in weights
+    )
 
 
 def _vote(
+    project_id: str,
     name: str,
     payload: tuple[float, float, datetime, str] | None,
     weight: float,
@@ -248,7 +252,14 @@ def _vote(
             state = "NEUTRAL"
     return CommitteeVote(
         id=identity(
-            "committee-vote", {"engine": name, "score": score, "confidence": confidence, "reference": reference}
+            "committee-vote",
+            {
+                "project_id": project_id,
+                "engine": name,
+                "score": score,
+                "confidence": confidence,
+                "reference": reference,
+            },
         ),
         assessment_id="pending",
         engine_name=name,
@@ -332,77 +343,72 @@ def _source_ids(inputs: CommitteeInputSet) -> tuple[str, ...]:
 
 
 def _engine(inputs: CommitteeInputSet, token: str) -> tuple[float, float, datetime, str] | None:
-    matches = [record for record in inputs.intelligence if token in record.engine_id]
-    if not matches:
-        return None
-    score = _avg(tuple(_avg_conf(record.confidence) for record in matches))
-    return score, score, max(record.effective_at for record in matches), ",".join(record.id for record in matches)
+    for record in inputs.fused_intelligence:
+        categories = tuple(str(item) for item in record.metadata.get("categories", ()))
+        if token in categories or token in record.fusion_strategy:
+            return record.fused_score, _avg_conf(record.confidence), record.effective_at, record.id
+    for record in inputs.intelligence:
+        if token in record.engine_id:
+            return _intelligence_score(record), _avg_conf(record.confidence), record.effective_at, record.id
+    return None
 
 
 def _snapshot(inputs: CommitteeInputSet, key: str) -> tuple[float, float, datetime, str]:
-    values = [
-        (float(record.payload[key]), record.effective_at, record.id)
-        for record in inputs.snapshots
-        if key in record.payload and isinstance(record.payload[key], int | float)
-    ]
-    if not values:
-        return 0.0, 0.0, inputs.effective_at, ""
-    return (
-        _avg(tuple(value for value, _, _ in values)),
-        0.75,
-        max(item[1] for item in values),
-        ",".join(item[2] for item in values),
-    )
+    for record in inputs.snapshots:
+        if key in record.payload:
+            value = float(record.payload[key])
+            return value, float(record.metadata.get("confidence", 0.0)), record.effective_at, record.id
+    return 0.0, 0.0, inputs.effective_at, ""
 
 
 def _evidence_quality(inputs: CommitteeInputSet) -> float:
-    return _avg(tuple(record.reliability for record in inputs.evidence))
+    scores = [float(item.confidence) for item in inputs.evidence]
+    scores.extend(float(item.metadata.get("confidence", 0.0)) for item in inputs.snapshots)
+    return sum(scores) / len(scores) if scores else 0.0
 
 
-def _avg_conf(payload: object) -> float:
-    if isinstance(payload, dict):
-        values = [float(value) for value in payload.values() if isinstance(value, int | float)]
-        return _avg(tuple(values))
-    if hasattr(payload, "as_dict"):
-        return _avg_conf(payload.as_dict())
-    return 0.0
+def _intelligence_score(record: object) -> float:
+    strengths = tuple(float(item) for item in getattr(record, "signal_strengths", ()))
+    return sum(strengths) / len(strengths) if strengths else 0.0
 
 
-def _avg(values: tuple[float, ...]) -> float:
-    if not values:
-        return 0.0
-    return _clamp(sum(_clamp(value) for value in values) / len(values))
+def _avg_conf(value: object) -> float:
+    if hasattr(value, "aggregate"):
+        return float(getattr(value, "aggregate"))
+    if isinstance(value, dict):
+        numeric = [float(item) for item in value.values() if isinstance(item, (int, float))]
+        return sum(numeric) / len(numeric) if numeric else 0.0
+    return float(value)
 
 
 def _risks(inputs: CommitteeInputSet, votes: tuple[CommitteeVote, ...]) -> tuple[str, ...]:
-    return tuple(
-        sorted({*(inputs.alerts), *(vote.engine_name for vote in votes if vote.vote in {"OPPOSE", "STRONG_OPPOSE"})})
-    )
+    risks = [f"{vote.engine_name}:{vote.vote}" for vote in votes if vote.vote in {"STRONG_OPPOSE", "OPPOSE"}]
+    risks.extend(inputs.alerts)
+    return tuple(sorted(set(risks)))
 
 
 def _invalidation_conditions(config: InvestmentCommitteeConfig) -> tuple[str, ...]:
     return (
-        f"Probability reliability falls below {config.eligibility.minimum_probability_reliability:.4f}",
-        "Opportunity Timing weakens below configured eligibility",
-        "Capital Rotation becomes negative",
-        "Technology Necessity weakens below configured winner minimum",
-        "Risk rises above configured maximum",
-        "Validation health falls below configured minimum",
-        "Evidence becomes stale or incomplete",
-        "Critical alerts trigger",
+        f"committee_confidence_below_{config.winner_minimums.committee_confidence}",
+        f"consensus_below_{config.winner_minimums.consensus}",
+        f"conflict_above_{config.winner_minimums.maximum_conflict}",
     )
 
 
 def _change(
-    previous: InvestmentCommitteeAssessment | None, decision: str, confidence: float, consensus: float, conflict: float
+    previous: InvestmentCommitteeAssessment | None,
+    decision: CommitteeDecision,
+    confidence: float,
+    consensus: float,
+    conflict: float,
 ) -> tuple[str, ...]:
     if previous is None:
-        return ("no previous committee assessment",)
+        return ("first committee assessment",)
     return (
-        f"previous_decision={previous.decision}; current_decision={decision}",
-        f"confidence_change={confidence - previous.committee_confidence:.4f}",
-        f"consensus_change={consensus - previous.consensus_score:.4f}",
-        f"conflict_change={conflict - previous.conflict_score:.4f}",
+        f"decision:{previous.decision}->{decision}",
+        f"confidence_delta={confidence - previous.committee_confidence:+.4f}",
+        f"consensus_delta={consensus - previous.consensus_score:+.4f}",
+        f"conflict_delta={conflict - previous.conflict_score:+.4f}",
     )
 
 
