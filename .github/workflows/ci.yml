@@ -34,58 +34,6 @@ jobs:
             pyproject.toml
             requirements/ci-constraints.txt
 
-      - name: Apply exact local patch
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-
-          path = Path("src/hunter/committee/engine.py")
-          text = path.read_text(encoding="utf-8")
-          text = text.replace(
-              "from dataclasses import replace\n",
-              "from collections.abc import Mapping\nfrom dataclasses import replace\n",
-              1,
-          )
-          text = text.replace(
-              "def _evidence_quality(inputs: CommitteeInputSet) -> float:\n"
-              "    scores = [float(item.confidence) for item in inputs.evidence]\n"
-              "    scores.extend(float(item.metadata.get(\"confidence\", 0.0)) for item in inputs.snapshots)\n"
-              "    return sum(scores) / len(scores) if scores else 0.0\n",
-              "def _evidence_quality(inputs: CommitteeInputSet) -> float:\n"
-              "    scores = [float(item.reliability) for item in inputs.evidence]\n"
-              "    scores.extend(float(item.metadata.get(\"confidence\", 0.0)) for item in inputs.snapshots)\n"
-              "    return sum(scores) / len(scores) if scores else 0.0\n",
-              1,
-          )
-          text = text.replace(
-              "def _avg_conf(value: object) -> float:\n"
-              "    if hasattr(value, \"aggregate\"):\n"
-              "        return float(getattr(value, \"aggregate\"))\n"
-              "    if isinstance(value, dict):\n"
-              "        numeric = [float(item) for item in value.values() if isinstance(item, (int, float))]\n"
-              "        return sum(numeric) / len(numeric) if numeric else 0.0\n"
-              "    return float(value)\n",
-              "def _avg_conf(value: object) -> float:\n"
-              "    aggregate = getattr(value, \"aggregate\", None)\n"
-              "    if isinstance(aggregate, (int, float)):\n"
-              "        return float(aggregate)\n"
-              "    if isinstance(value, Mapping):\n"
-              "        numeric = [float(item) for item in value.values() if isinstance(item, (int, float))]\n"
-              "        return sum(numeric) / len(numeric) if numeric else 0.0\n"
-              "    return float(value)\n",
-              1,
-          )
-          path.write_text(text, encoding="utf-8")
-
-          pyproject = Path("pyproject.toml")
-          config = pyproject.read_text(encoding="utf-8")
-          config = config.replace(
-              '\n[tool.ruff.lint.per-file-ignores]\n"src/hunter/committee/engine.py" = ["B009"]\n',
-              "\n",
-          )
-          pyproject.write_text(config, encoding="utf-8")
-          PY
-
       - name: Install project
         env:
           PIP_CONSTRAINT: requirements/ci-constraints.txt
@@ -104,12 +52,3 @@ jobs:
 
       - name: Pytest
         run: pytest
-
-      - name: Upload validated patch
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: validated-committee-fix
-          path: |
-            src/hunter/committee/engine.py
-            pyproject.toml
