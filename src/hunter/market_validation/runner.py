@@ -332,7 +332,7 @@ def _canonical_timing_source(source: EngineValidationSource) -> bool:
 
 def _known_invalid_deferred_alias(source: EngineValidationSource) -> bool:
     if source.engine in {"valuation", "comparative_valuation", "mispricing", "asymmetry"}:
-        return source.source == "coingecko"
+        return True
     if source.engine == "necessity_gap":
         return source.source in {"technology-graph", "scenario-simulation"}
     return False

@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Literal
 
-MARKET_FACTS_SCHEMA_VERSION = "market-facts-v3.4.0"
+MARKET_FACTS_SCHEMA_VERSION = "market-facts-v3.4.1"
 
 MarketFactType = Literal[
     "spot_price",
@@ -76,6 +76,7 @@ class NormalizedMarketFact:
     quote_currency: str | None
     effective_at: datetime
     observed_at: datetime
+    confidence: str = "1"
     quality_state: QualityState = "accepted"
     conflict_state: ConflictState = "none"
     venue_scope: str = "provider_aggregate"
@@ -84,6 +85,7 @@ class NormalizedMarketFact:
         _member("fact_type", self.fact_type, MARKET_FACT_TYPES)
         _required_text(self, "value", "unit", "venue_scope")
         _decimal(self.value)
+        _confidence(self.confidence)
         object.__setattr__(self, "effective_at", _utc("effective_at", self.effective_at))
         object.__setattr__(self, "observed_at", _utc("observed_at", self.observed_at))
         _member("quality_state", self.quality_state, QUALITY_STATES)
@@ -101,6 +103,8 @@ class MarketFactAcquisitionResult:
     endpoint: str
     parser_version: str
     registry_fingerprint: str
+    provider_source_record_id: str
+    provider_source_record_version: str
     request: MarketFactRequest
     status: MarketFactStatus
     acquired_at: datetime
@@ -117,6 +121,8 @@ class MarketFactAcquisitionResult:
             "endpoint",
             "parser_version",
             "registry_fingerprint",
+            "provider_source_record_id",
+            "provider_source_record_version",
             "raw_payload_hash",
         )
         _member("status", self.status, MARKET_FACT_STATUSES)
@@ -148,6 +154,9 @@ class ObservedMarketFactRecord:
     recorded_at: datetime
     known_at: datetime
     raw_payload_hash: str
+    provider_source_record_id: str
+    provider_source_record_version: str
+    confidence: str
     quality_state: QualityState
     conflict_state: ConflictState
     content_hash: str
@@ -169,11 +178,15 @@ class ObservedMarketFactRecord:
             "unit",
             "venue_scope",
             "raw_payload_hash",
+            "provider_source_record_id",
+            "provider_source_record_version",
+            "confidence",
             "content_hash",
             "schema_version",
         )
         _member("fact_type", self.fact_type, MARKET_FACT_TYPES)
         _decimal(self.value)
+        _confidence(self.confidence)
         _member("quality_state", self.quality_state, QUALITY_STATES)
         _member("conflict_state", self.conflict_state, CONFLICT_STATES)
         object.__setattr__(self, "effective_at", _utc("effective_at", self.effective_at))
@@ -248,6 +261,13 @@ def _decimal(value: str) -> Decimal:
         raise ValueError("value must be a finite decimal string") from exc
     if not number.is_finite():
         raise ValueError("value must be finite")
+    return number
+
+
+def _confidence(value: str) -> Decimal:
+    number = _decimal(value)
+    if number < 0 or number > 1:
+        raise ValueError("confidence must be between 0 and 1")
     return number
 
 

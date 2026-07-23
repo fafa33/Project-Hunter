@@ -76,8 +76,32 @@ class CoinGeckoObservedMarketFactProvider:
                 request, acquired_at, "malformed", "payload_not_mapping", source.fingerprint, endpoint
             )
         raw_hash = f"sha256:{sha256(canonicalize(payload)).hexdigest()}"
+        provider_source_record_id = str(payload.get("id", "")).strip()
+        provider_source_record_version = str(payload.get("last_updated", "")).strip()
+        if not provider_source_record_id or not provider_source_record_version:
+            return MarketFactAcquisitionResult(
+                source_id=source.source_id,
+                provider_id=self.provider_id,
+                endpoint=endpoint,
+                parser_version=source.parser_version,
+                registry_fingerprint=source.fingerprint,
+                provider_source_record_id=provider_source_record_id or request.identity.provider_listing_id,
+                provider_source_record_version=provider_source_record_version or "missing",
+                request=request,
+                status="malformed",
+                acquired_at=acquired_at,
+                known_at=acquired_at,
+                raw_payload_hash=raw_hash,
+                failure_reason="provider_source_identity_missing",
+            )
         try:
-            facts = self._parse(payload, request, source.units, acquired_at)
+            facts = self._parse(
+                payload,
+                request,
+                source.units,
+                acquired_at,
+                source.observation_confidence,
+            )
         except (KeyError, TypeError, ValueError, InvalidOperation) as exc:
             return MarketFactAcquisitionResult(
                 source_id=source.source_id,
@@ -85,6 +109,8 @@ class CoinGeckoObservedMarketFactProvider:
                 endpoint=endpoint,
                 parser_version=source.parser_version,
                 registry_fingerprint=source.fingerprint,
+                provider_source_record_id=provider_source_record_id,
+                provider_source_record_version=provider_source_record_version,
                 request=request,
                 status="malformed",
                 acquired_at=acquired_at,
@@ -99,6 +125,8 @@ class CoinGeckoObservedMarketFactProvider:
                 endpoint=endpoint,
                 parser_version=source.parser_version,
                 registry_fingerprint=source.fingerprint,
+                provider_source_record_id=provider_source_record_id,
+                provider_source_record_version=provider_source_record_version,
                 request=request,
                 status="unavailable",
                 acquired_at=acquired_at,
@@ -112,6 +140,8 @@ class CoinGeckoObservedMarketFactProvider:
             endpoint=endpoint,
             parser_version=source.parser_version,
             registry_fingerprint=source.fingerprint,
+            provider_source_record_id=provider_source_record_id,
+            provider_source_record_version=provider_source_record_version,
             request=request,
             status="success",
             acquired_at=acquired_at,
@@ -126,6 +156,7 @@ class CoinGeckoObservedMarketFactProvider:
         request: MarketFactRequest,
         units: Mapping[str, str],
         acquired_at: datetime,
+        confidence: str,
     ) -> list[NormalizedMarketFact]:
         market_data = payload.get("market_data")
         if not isinstance(market_data, Mapping):
@@ -160,6 +191,7 @@ class CoinGeckoObservedMarketFactProvider:
                     quote_currency=quote if quoted else None,
                     effective_at=effective_at,
                     observed_at=acquired_at,
+                    confidence=confidence,
                 )
             )
         return facts
@@ -179,6 +211,8 @@ class CoinGeckoObservedMarketFactProvider:
             endpoint=endpoint,
             parser_version="unresolved" if fingerprint in {"unregistered", ""} else "coingecko-coin-v1",
             registry_fingerprint=fingerprint or "unregistered",
+            provider_source_record_id=request.identity.provider_listing_id,
+            provider_source_record_version=f"unavailable:{status}",
             request=request,
             status=status,
             acquired_at=acquired_at,

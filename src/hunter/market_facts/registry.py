@@ -3,13 +3,14 @@ from __future__ import annotations
 import urllib.parse
 from collections.abc import Mapping
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from hashlib import sha256
 from pathlib import Path
 
 import yaml
 
 from hunter.execution.canonicalization import canonicalize
-from hunter.market_facts.models import MARKET_FACT_TYPES, MarketFactType
+from hunter.market_facts.models import MARKET_FACT_TYPES, MarketFactIdentity, MarketFactType
 
 
 @dataclass(frozen=True)
@@ -25,8 +26,10 @@ class MarketFactSourceConfig:
     unit_by_fact: tuple[tuple[str, str], ...]
     supported_entity_scope: tuple[str, ...]
     freshness_seconds: int
+    observation_confidence: str
     historical_support: str
     limitations: str
+    identity_bindings: tuple[tuple[str, str, str, str, str, str], ...]
 
     def __post_init__(self) -> None:
         for name in ("source_id", "provider_id", "endpoint_template", "parser_version"):
@@ -45,6 +48,16 @@ class MarketFactSourceConfig:
             raise ValueError("quote_currencies must not be empty")
         if self.freshness_seconds <= 0:
             raise ValueError("freshness_seconds must be positive")
+        try:
+            confidence = Decimal(self.observation_confidence)
+        except InvalidOperation as exc:
+            raise ValueError("observation_confidence must be a decimal") from exc
+        if not confidence.is_finite() or confidence < 0 or confidence > 1:
+            raise ValueError("observation_confidence must be between 0 and 1")
+        if not self.identity_bindings:
+            raise ValueError("identity_bindings must not be empty")
+        if len({binding[5] for binding in self.identity_bindings}) != len(self.identity_bindings):
+            raise ValueError("provider listing IDs must be unique within a market fact source")
 
     @property
     def units(self) -> dict[str, str]:
@@ -65,8 +78,10 @@ class MarketFactSourceConfig:
                 "unit_by_fact": self.unit_by_fact,
                 "supported_entity_scope": self.supported_entity_scope,
                 "freshness_seconds": self.freshness_seconds,
+                "observation_confidence": self.observation_confidence,
                 "historical_support": self.historical_support,
                 "limitations": self.limitations,
+                "identity_bindings": self.identity_bindings,
             }
         )
         return f"sha256:{sha256(payload).hexdigest()}"
@@ -79,6 +94,18 @@ class MarketFactSourceConfig:
         if parsed.scheme != "https" or parsed.hostname not in self.allowed_hosts:
             raise ValueError("resolved endpoint is not registry-approved")
         return endpoint
+
+    def authorize_identity(self, identity: MarketFactIdentity) -> None:
+        candidate = (
+            identity.entity_id,
+            identity.asset_id,
+            identity.representation_id,
+            identity.chain,
+            identity.contract_address,
+            identity.provider_listing_id,
+        )
+        if candidate not in self.identity_bindings:
+            raise ValueError("market fact identity is not bound to the provider listing")
 
 
 class MarketFactSourceRegistry:
@@ -111,6 +138,7 @@ class MarketFactSourceRegistry:
             if not isinstance(units, Mapping):
                 raise ValueError("market fact source units must be a mapping")
             capabilities = tuple(str(item) for item in _list(row, "capabilities"))
+            identity_bindings = tuple(_identity_binding(item) for item in _list(row, "identity_bindings"))
             sources.append(
                 MarketFactSourceConfig(
                     source_id=_text(row, "source_id"),
@@ -124,8 +152,10 @@ class MarketFactSourceRegistry:
                     unit_by_fact=tuple(sorted((str(key), str(value)) for key, value in units.items())),
                     supported_entity_scope=tuple(str(item) for item in _list(row, "supported_entity_scope")),
                     freshness_seconds=int(row.get("freshness_seconds", 3600)),
+                    observation_confidence=_text(row, "observation_confidence"),
                     historical_support=str(row.get("historical_support", "current-only")),
                     limitations=str(row.get("limitations", "")),
+                    identity_bindings=identity_bindings,
                 )
             )
         return cls(tuple(sources))
@@ -154,3 +184,16 @@ def _list(row: Mapping[str, object], key: str) -> list[object]:
     if not isinstance(value, list):
         raise ValueError(f"{key} must be a list")
     return value
+
+
+def _identity_binding(value: object) -> tuple[str, str, str, str, str, str]:
+    if not isinstance(value, Mapping):
+        raise ValueError("identity binding must be a mapping")
+    return (
+        _text(value, "entity_id"),
+        _text(value, "asset_id"),
+        _text(value, "representation_id"),
+        str(value.get("chain", "")),
+        str(value.get("contract_address", "")),
+        _text(value, "provider_listing_id"),
+    )

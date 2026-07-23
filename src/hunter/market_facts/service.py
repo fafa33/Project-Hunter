@@ -22,7 +22,7 @@ class MarketFactAuthorityError(ValueError):
 
 
 class ObservedMarketFactService:
-    semantic_version = "observed-market-fact-v1"
+    semantic_version = "observed-market-fact-v2"
 
     def __init__(
         self,
@@ -50,7 +50,13 @@ class ObservedMarketFactService:
                 )
             )
             return ()
-        normalized = tuple(self._apply_quality_policy(source, result, fact) for fact in result.facts)
+        normalized = tuple(
+            self._apply_conflict_policy(
+                request,
+                self._apply_quality_policy(source, result, fact),
+            )
+            for fact in result.facts
+        )
         records = tuple(self._record(source, request, result, fact, recorded_at) for fact in normalized)
         self.repository.apply(MarketFactWritePlan(records=records, authority=self.repository._authority))
         return records
@@ -129,6 +135,12 @@ class ObservedMarketFactService:
             raise MarketFactAuthorityError("acquisition source or provider mismatch")
         if request.provider_id != source.provider_id:
             raise MarketFactAuthorityError("request provider is not source-authorized")
+        try:
+            source.authorize_identity(request.identity)
+        except ValueError as exc:
+            raise MarketFactAuthorityError(str(exc)) from exc
+        if result.provider_source_record_id != request.identity.provider_listing_id:
+            raise MarketFactAuthorityError("provider source record does not match authorized listing")
         expected_endpoint = source.endpoint_for(request.identity.provider_listing_id)
         if result.endpoint != expected_endpoint:
             raise MarketFactAuthorityError("acquisition endpoint is not registry-authorized")
@@ -180,6 +192,10 @@ class ObservedMarketFactService:
                     raise MarketFactAuthorityError("fact observation cannot occur after acquisition")
                 if fact.effective_at > result.acquired_at:
                     raise MarketFactAuthorityError("fact effective time cannot occur after acquisition")
+                if result.known_at < fact.observed_at:
+                    raise MarketFactAuthorityError("known_at cannot precede observation time")
+                if result.known_at < fact.effective_at:
+                    raise MarketFactAuthorityError("known_at cannot precede effective time")
         return source
 
     def _apply_quality_policy(
@@ -191,6 +207,30 @@ class ObservedMarketFactService:
         age_seconds = (result.known_at - fact.effective_at).total_seconds()
         if age_seconds > source.freshness_seconds and fact.quality_state == "accepted":
             return replace(fact, quality_state="stale")
+        return fact
+
+    def _apply_conflict_policy(
+        self,
+        request: MarketFactRequest,
+        fact: NormalizedMarketFact,
+    ) -> NormalizedMarketFact:
+        existing = self.repository.facts(
+            entity_id=request.identity.entity_id,
+            asset_id=request.identity.asset_id,
+            representation_id=request.identity.representation_id,
+            fact_type=fact.fact_type,
+            effective_at=fact.effective_at,
+        )
+        divergent = any(
+            item.value != fact.value
+            or item.unit != fact.unit
+            or item.quote_currency != fact.quote_currency
+            or item.venue_scope != fact.venue_scope
+            for item in existing
+            if item.quality_state == "accepted"
+        )
+        if divergent and fact.conflict_state == "none":
+            return replace(fact, conflict_state="open")
         return fact
 
     def _record(
@@ -220,6 +260,9 @@ class ObservedMarketFactService:
             "recorded_at": recorded_at,
             "known_at": result.known_at,
             "raw_payload_hash": result.raw_payload_hash,
+            "provider_source_record_id": result.provider_source_record_id,
+            "provider_source_record_version": result.provider_source_record_version,
+            "confidence": fact.confidence,
             "quality_state": fact.quality_state,
             "conflict_state": fact.conflict_state,
             "supersedes_record_id": supersedes_record_id,
@@ -246,6 +289,9 @@ class ObservedMarketFactService:
             recorded_at=recorded_at,
             known_at=result.known_at,
             raw_payload_hash=result.raw_payload_hash,
+            provider_source_record_id=result.provider_source_record_id,
+            provider_source_record_version=result.provider_source_record_version,
+            confidence=fact.confidence,
             quality_state=fact.quality_state,
             conflict_state=fact.conflict_state,
             content_hash=content_hash,
