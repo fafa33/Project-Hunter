@@ -2,63 +2,62 @@
 
 ## Verdict
 
-**APPROVED**
+**BLOCKED**
 
-No remaining blocker was identified against the final committee-authority contract or Issue #61 completion criteria.
+The original `APPROVED` verdict merged in PR #85 was incorrect and is superseded by this correction.
+
+## Remaining blocker
+
+The final contract requires the installed-CLI success-path E2E test to load the resulting pipeline run, committee votes, assessments, and champion from generic SQL.
+
+At the audited PR #84 state, the success-path test loaded assessments, champion snapshots, and pipeline runs, but did not load or assert persisted committee votes. A regression in successful CLI vote persistence could therefore pass the audit.
 
 ## Audited repository state
 
-- Canonical `main` merge commit: `3db1052a1daf7aec320b30f6f48658c2cf61c45c`
-- Merged implementation PR: #84
+- Canonical PR #84 merge commit: `3db1052a1daf7aec320b30f6f48658c2cf61c45c`
+- Merged audit PR #85 commit: `4651b57882106e8901bfad1f188967d24897540f`
 - Audited implementation HEAD: `f969924b4a55ea333caa820be1ddacc57ed7e981`
-- Final-head CI run: #285 (`29996266163`)
+- Final-head CI run for PR #84: #285 (`29996266163`)
 
-## Independent findings
+## Verified findings retained
 
-### 1. Installed CLI and canonical persistence
-
-Verified.
-
-`tests/test_committee_authority_final_e2e.py` resolves the installed `hunter` console script from `PATH`, executes `hunter committee-authority` through `subprocess.run` from an unrelated working directory, requires exit code zero, and verifies the reported canonical database path. The test also proves that neither a standalone committee database nor a wrong-working-directory `data_ops.sqlite` is created.
-
-### 2. Persisted ranking and exact Dashboard projection
+### Installed CLI and canonical persistence
 
 Verified.
 
-The installed-CLI test executes a two-candidate cycle, loads the canonical SQL assessments, requires contiguous ranks `(1, 2)`, and verifies every Dashboard row against the exact persisted assessment identity, project ID, decision, confidence, rank, and source-record IDs. `src/hunter/dashboard/data.py` directly exposes `record.rank` and persisted source IDs. Record counts before and after Dashboard construction are identical, proving read-only projection.
+The E2E test resolves the installed `hunter` console script from `PATH`, executes `hunter committee-authority` from an unrelated working directory, verifies the canonical database path, and proves that no standalone committee database or wrong-working-directory database is created.
 
-### 3. Post-evaluation persistence failure and atomic rollback
-
-Verified.
-
-The failure test wraps `GenericSQLCommitteeOutput.persist_cycle`, invokes the real persistence method first so votes, assessments, and champion are staged after evaluation, and then raises a forced error. Two identical executions prove:
-
-- no committee votes persist;
-- no assessments persist;
-- no champion persists;
-- exactly one deterministic durable failed run remains;
-- no successful run is substituted;
-- parent attempted-run identity is preserved;
-- manifest and input fingerprints are exact;
-- the original forced persistence error remains visible.
-
-This closes the rollback blocker recorded by the post-PR82 audit.
-
-### 4. Cross-candidate vote identity
+### Persisted ranking and exact Dashboard projection
 
 Verified.
 
-Committee vote identity includes `project_id`, preventing identical engine scores and references from colliding across candidates while retaining deterministic identity and divergent-duplicate protection.
+The two-candidate cycle persists contiguous ranks `(1, 2)`. Dashboard rows match exact persisted assessment identity, project ID, decision, confidence, rank, and source-record IDs. Record counts remain unchanged across Dashboard construction.
 
-### 5. Final-head quality gates
+### Post-evaluation persistence failure and atomic rollback
 
-Verified on the exact implementation HEAD `f969924b4a55ea333caa820be1ddacc57ed7e981` in CI run #285:
+Verified.
+
+The forced failure occurs after real output staging and proves rollback of votes, assessments, champion, and success state while preserving one deterministic failed run with exact fingerprints and the original error.
+
+### Cross-candidate vote identity
+
+Verified.
+
+Committee vote identity includes `project_id`, preventing collisions between candidates with otherwise identical vote payloads.
+
+### Quality gates
+
+Verified on implementation HEAD `f969924b4a55ea333caa820be1ddacc57ed7e981` in CI run #285:
 
 - `ruff check .` — passed
 - `black --check .` — passed
 - `mypy` — passed
 - `pytest` — passed
 
-## Issue #61 disposition
+## Required closure sequence
 
-The remaining blockers from the prior audit are closed. Issue #61 satisfies its completion criterion after this audit is merged into `main`.
+1. Add an installed-CLI success-path E2E assertion that loads persisted committee votes from generic SQL.
+2. Prove vote IDs are unique and every vote is linked to the correct persisted assessment and project.
+3. Merge the implementation only after Ruff, Black, mypy, and pytest pass on the same exact HEAD.
+4. Run a new independent post-merge audit.
+5. Close Issue #61 only if that later audit returns `APPROVED`.
