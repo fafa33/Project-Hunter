@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Literal
 
-MARKET_FACTS_SCHEMA_VERSION = "market-facts-v3.4.1"
+MARKET_FACTS_SCHEMA_VERSION = "market-facts-v3.4.2"
 
 MarketFactType = Literal[
     "spot_price",
@@ -233,6 +233,54 @@ class MarketFactAvailabilityEvent:
         object.__setattr__(self, "requested_at", _utc("requested_at", self.requested_at))
         object.__setattr__(self, "recorded_at", _utc("recorded_at", self.recorded_at))
         object.__setattr__(self, "known_at", _utc("known_at", self.known_at))
+
+
+@dataclass(frozen=True)
+class MarketFactConflictResolution:
+    resolution_id: str
+    logical_id: str
+    candidate_record_ids: tuple[str, ...]
+    selected_record_id: str
+    policy_id: str
+    policy_version: str
+    policy_fingerprint: str
+    rationale: str
+    candidate_effective_at: datetime
+    effective_at: datetime
+    recorded_at: datetime
+    known_at: datetime
+    schema_version: str = MARKET_FACTS_SCHEMA_VERSION
+
+    def __post_init__(self) -> None:
+        _required_text(
+            self,
+            "resolution_id",
+            "logical_id",
+            "selected_record_id",
+            "policy_id",
+            "policy_version",
+            "policy_fingerprint",
+            "rationale",
+            "schema_version",
+        )
+        candidate_ids = tuple(sorted(self.candidate_record_ids))
+        if len(candidate_ids) < 2 or len(candidate_ids) != len(set(candidate_ids)):
+            raise ValueError("candidate_record_ids must contain at least two unique records")
+        if self.selected_record_id not in candidate_ids:
+            raise ValueError("selected_record_id must belong to candidate_record_ids")
+        object.__setattr__(self, "candidate_record_ids", candidate_ids)
+        object.__setattr__(
+            self,
+            "candidate_effective_at",
+            _utc("candidate_effective_at", self.candidate_effective_at),
+        )
+        object.__setattr__(self, "effective_at", _utc("effective_at", self.effective_at))
+        object.__setattr__(self, "recorded_at", _utc("recorded_at", self.recorded_at))
+        object.__setattr__(self, "known_at", _utc("known_at", self.known_at))
+        if self.known_at < self.effective_at:
+            raise ValueError("resolution known_at cannot precede effective_at")
+        if self.recorded_at < self.known_at:
+            raise ValueError("resolution recorded_at cannot precede known_at")
 
 
 def validate_fact_value(fact_type: MarketFactType, value: str) -> None:
