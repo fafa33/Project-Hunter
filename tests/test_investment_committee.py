@@ -67,6 +67,8 @@ def intelligence_record(record_id: str, engine_id: str, *, generated_at: datetim
         engine_version="1.0.0",
         plugin_id=f"plugin-{engine_id}",
         plugin_version="1.0.0",
+        signal_strengths=(0.84,),
+        signal_confidences=(0.84,),
     )
 
 
