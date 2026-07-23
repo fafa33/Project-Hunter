@@ -173,10 +173,7 @@ class ObservedMarketFactRepository:
     ) -> ObservedMarketFactRecord | None:
         effective_as_of = _aware("effective_as_of", effective_as_of)
         known_by = _aware("known_by", known_by)
-        records = (
-            _record_from_snapshot(item)
-            for item in self._snapshots(_FACT_SNAPSHOT_TYPE)
-        )
+        records = (_record_from_snapshot(item) for item in self._snapshots(_FACT_SNAPSHOT_TYPE))
         eligible = [
             item
             for item in records
