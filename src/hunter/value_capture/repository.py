@@ -115,6 +115,8 @@ class SupplyAndValueCaptureRepository:
         )
 
     def _unresolved_conflicts(self, snapshot_type: str) -> tuple[Record, ...]:
+        # A record superseded by a correction is excluded even if it was once
+        # flagged open/contested: only the current lineage tip is queryable.
         records = tuple(_record_from_snapshot(item) for item in self._snapshots(snapshot_type))
         superseded_ids = {item.supersedes_record_id for item in records if item.supersedes_record_id is not None}
         current = (item for item in records if item.record_id not in superseded_ids)
