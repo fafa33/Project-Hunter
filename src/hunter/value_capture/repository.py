@@ -280,8 +280,31 @@ def _supply_from_payload(payload: dict[str, Any]) -> SupplyBasisSnapshot:
 
 
 def _rule_from_payload(payload: dict[str, Any]) -> ValueCaptureRuleSnapshot:
+    required_v2_fields = (
+        "mechanism_policy_id",
+        "mechanism_policy_version",
+        "dilution_treatment",
+        "claim_seniority",
+        "applicability_start",
+        "applicability_end",
+        "limitations",
+        "evidence_record_versions",
+        "source_record_id",
+        "source_record_version",
+        "confidence",
+        "uncertainty",
+    )
+    missing = tuple(name for name in required_v2_fields if name not in payload)
+    if missing:
+        raise ValueCaptureIntegrityError(
+            "legacy value capture rule snapshot is not authoritative under the current contract: " + ",".join(missing)
+        )
     result = _base_payload(payload)
     result["evidence_record_ids"] = tuple(result["evidence_record_ids"])
+    result["evidence_record_versions"] = tuple(result["evidence_record_versions"])
+    result["limitations"] = tuple(result["limitations"])
+    for name in ("applicability_start", "applicability_end"):
+        result[name] = datetime.fromisoformat(str(result[name])).astimezone(UTC)
     return ValueCaptureRuleSnapshot(**result)
 
 

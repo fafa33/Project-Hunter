@@ -155,6 +155,21 @@ def rule_result(provider, evidence_id, *, acquired_at=NOW + timedelta(minutes=2)
         "trigger_condition": "Documented rule conditions are met",
         "distribution_formula": "Documented formula only",
         "governance_or_contract_authority": "Official enacted tokenomics rule",
+        "mechanism_policy_id": "canonical-fee-distribution-v1",
+        "mechanism_policy_version": "1.0.0",
+        "dilution_treatment": "Distribution entitlement is measured after documented dilution.",
+        "claim_seniority": "Pro rata eligible-holder claim after protocol liabilities.",
+        "applicability_start": NOW,
+        "applicability_end": NOW + timedelta(days=365),
+        "limitations": [
+            "No entitlement outside the enacted applicability period.",
+            "No inference from undistributed protocol revenue.",
+        ],
+        "evidence_record_versions": ["1.0.0"],
+        "source_record_id": "official-api3-fee-rule",
+        "source_record_version": "2026-07-20",
+        "confidence": "0.9",
+        "uncertainty": "0.1",
         "effective_at": NOW,
         "evidence_record_ids": [evidence_id],
         "quality_state": "accepted",
@@ -437,6 +452,110 @@ def test_branching_corrections_are_rejected_and_replay_is_strict_known(tmp_path)
     )
     assert historical == original
     assert current == corrected
+
+
+def test_value_capture_rule_contract_round_trips_policy_and_limitations(tmp_path) -> None:
+    service, repository, provider = setup(tmp_path)
+    evidence = service.ingest_evidence(provider, evidence_result(provider))
+    record = service.ingest_rule(provider, rule_result(provider, evidence.record_id))
+    restored = repository.rule(record.record_id)
+    assert restored == record
+    assert record.mechanism_policy_version == "1.0.0"
+    assert record.evidence_record_versions == ("1.0.0",)
+    assert len(record.limitations) == 2
+
+
+def test_value_capture_rule_contract_rejects_invalid_period_and_rate(tmp_path) -> None:
+    service, _, provider = setup(tmp_path)
+    evidence = service.ingest_evidence(provider, evidence_result(provider))
+    with pytest.raises(ValueError, match="applicability_start"):
+        service.ingest_rule(
+            provider,
+            rule_result(
+                provider,
+                evidence.record_id,
+                applicability_start=NOW + timedelta(days=2),
+                applicability_end=NOW + timedelta(days=1),
+            ),
+        )
+    with pytest.raises(ValueError, match="rate_or_proportion"):
+        service.ingest_rule(
+            provider,
+            rule_result(
+                provider,
+                evidence.record_id,
+                acquisition_id="invalid-rule-rate",
+                rate_or_proportion="1.1",
+            ),
+        )
+
+
+def test_value_capture_rule_model_rejects_blank_evidence_versions(tmp_path) -> None:
+    service, _, provider = setup(tmp_path)
+    evidence = service.ingest_evidence(provider, evidence_result(provider))
+    record = service.ingest_rule(provider, rule_result(provider, evidence.record_id))
+    with pytest.raises(ValueError, match="evidence_record_versions"):
+        replace(record, evidence_record_versions=("",))
+
+
+def test_value_capture_rule_rejects_mismatched_evidence_version(tmp_path) -> None:
+    service, _, provider = setup(tmp_path)
+    evidence = service.ingest_evidence(provider, evidence_result(provider))
+    with pytest.raises(SupplyAndValueCaptureAuthorityError, match="evidence version"):
+        service.ingest_rule(
+            provider,
+            rule_result(
+                provider,
+                evidence.record_id,
+                evidence_record_versions=["2.0.0"],
+            ),
+        )
+
+
+def test_snapshot_rejects_future_effective_evidence(tmp_path) -> None:
+    service, _, provider = setup(tmp_path)
+    evidence = service.ingest_evidence(
+        provider,
+        evidence_result(
+            provider,
+            effective_at=NOW + timedelta(days=1),
+            acquired_at=NOW + timedelta(days=1),
+        ),
+    )
+    with pytest.raises(SupplyAndValueCaptureAuthorityError, match="future-effective"):
+        service.ingest_rule(
+            provider,
+            rule_result(
+                provider,
+                evidence.record_id,
+                acquired_at=NOW + timedelta(days=2),
+            ),
+        )
+
+
+def test_value_capture_rule_rejects_duplicate_evidence_references(tmp_path) -> None:
+    service, _, provider = setup(tmp_path)
+    evidence = service.ingest_evidence(provider, evidence_result(provider))
+    with pytest.raises(ValueError, match="evidence_record_ids must be unique"):
+        service.ingest_rule(
+            provider,
+            rule_result(
+                provider,
+                evidence.record_id,
+                evidence_record_ids=[evidence.record_id, evidence.record_id],
+                evidence_record_versions=["1.0.0", "1.0.0"],
+            ),
+        )
+
+
+def test_value_capture_rule_contract_rejects_null_policy_before_coercion(tmp_path) -> None:
+    service, _, provider = setup(tmp_path)
+    evidence = service.ingest_evidence(provider, evidence_result(provider))
+    with pytest.raises(SupplyAndValueCaptureAuthorityError, match="mechanism_policy_id"):
+        service.ingest_rule(
+            provider,
+            rule_result(provider, evidence.record_id, mechanism_policy_id=None),
+        )
 
 
 def test_concurrent_corrections_cannot_branch_lineage(tmp_path) -> None:
