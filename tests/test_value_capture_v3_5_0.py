@@ -19,6 +19,7 @@ from hunter.value_capture.repository import (
     DEFAULT_VALUE_CAPTURE_DB,
     SupplyAndValueCaptureRepository,
     ValueCaptureIntegrityError,
+    record_snapshot,
 )
 from hunter.value_capture.service import SupplyAndValueCaptureAuthorityError, SupplyAndValueCaptureService
 
@@ -524,6 +525,23 @@ def test_logical_history_rejects_blank_identity(tmp_path) -> None:
     service, _, _ = setup(tmp_path)
     with pytest.raises(ValueError, match="logical_id"):
         service.evidence_history(" ")
+
+
+def test_logical_history_uses_authoritative_payload_when_metadata_is_missing(tmp_path) -> None:
+    service, _, provider = setup(tmp_path / "source")
+    evidence = service.ingest_evidence(provider, evidence_result(provider))
+    imported_repository = SupplyAndValueCaptureRepository(tmp_path / "imported.sqlite")
+    engine = create_sqlite_engine(imported_repository.path)
+    session = SessionFactory(engine).create()
+    try:
+        RepositoryFactory(session).snapshots().save(replace(record_snapshot(evidence), metadata={}))
+        session.commit()
+    finally:
+        session.close()
+        engine.dispose()
+
+    assert imported_repository.evidence(evidence.record_id) == evidence
+    assert imported_repository.evidence_history(evidence.logical_id) == (evidence,)
 
 
 def test_value_capture_rule_contract_round_trips_policy_and_limitations(tmp_path) -> None:

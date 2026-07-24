@@ -165,7 +165,7 @@ class SupplyAndValueCaptureRepository:
         records = [
             _record_from_snapshot(item)
             for item in self._snapshots(snapshot_type)
-            if item.metadata.get("logical_id") == logical_id
+            if item.payload.get("logical_id") == logical_id
         ]
         records.sort(
             key=lambda item: (
