@@ -196,11 +196,13 @@ def _committee_panel(records: tuple[InvestmentCommitteeAssessmentRecord, ...]) -
                 values={
                     "assessment_id": record.id,
                     "project": record.project_id,
+                    "rank": record.rank,
                     "eligibility": record.eligibility_state,
                     "decision": record.decision,
                     "confidence": record.committee_confidence,
                     "consensus": record.consensus_score,
                     "conflict": record.conflict_score,
+                    "source_record_ids": ",".join(record.source_record_ids),
                     "effective_at": record.effective_at.isoformat(),
                 },
             )

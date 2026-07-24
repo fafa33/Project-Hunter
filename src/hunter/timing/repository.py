@@ -166,6 +166,12 @@ def _assessment_from_payload(payload: dict[str, Any]) -> TimingAssessment:
     )
 
 
+def timing_assessment_from_payload(payload: dict[str, Any]) -> TimingAssessment:
+    """Decode one persisted Timing payload without selecting repository state."""
+
+    return _assessment_from_payload(payload)
+
+
 def _dependency_payload(item: TimingDependencySnapshot) -> dict[str, Any]:
     return {
         "generation_timestamp": item.generation_timestamp.isoformat(),

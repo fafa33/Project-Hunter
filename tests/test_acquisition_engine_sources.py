@@ -11,7 +11,7 @@ from hunter.market_validation.runner import EvidenceBackedProjectExecutor
 NOW = datetime(2026, 7, 11, tzinfo=UTC)
 
 
-def test_engine_consumes_persisted_acquisition_evidence_and_preserves_trace() -> None:
+def test_coingecko_profile_cannot_populate_valuation_family() -> None:
     repository = InMemoryAcquisitionRepository()
     evidence = _evidence(
         "cg-1",
@@ -25,13 +25,15 @@ def test_engine_consumes_persisted_acquisition_evidence_and_preserves_trace() ->
 
     sources = acquisition_engine_sources(repository, as_of=NOW)
     result = _execute(sources)
-    valuation = next(source for source in result.engine_sources if source.engine == "valuation")
+    source_by_engine = {source.engine: source for source in result.engine_sources}
 
-    assert result.valuation == 0.9
-    assert valuation.evidence_ids == ("cg-1",)
-    assert valuation.repository_ids == ("coingecko:bitcoin",)
-    assert valuation.validation_status == "VALID"
-    assert valuation.status == "AVAILABLE"
+    for engine in ("valuation", "comparative_valuation", "mispricing", "asymmetry"):
+        assert getattr(result, engine) == 0.0
+        assert source_by_engine[engine].status == "UNAVAILABLE"
+        assert source_by_engine[engine].evidence_ids == ()
+        assert f"contract_unavailable:{engine}" in source_by_engine[engine].warnings
+        assert engine in result.missing_evidence
+    assert result.committee_decision == "INSUFFICIENT_EVIDENCE"
 
 
 def test_missing_evidence_returns_unavailable_without_provider_access() -> None:
@@ -70,12 +72,12 @@ def test_repository_only_sources_connect_developer_protocol_risk_and_validation_
     assert source_by_engine["validation_health"].evidence_ids == ("dl-1", "gh-1")
 
 
-def test_different_evidence_changes_outputs_and_identical_evidence_is_deterministic() -> None:
+def test_different_coingecko_profile_values_remain_unavailable_and_deterministic() -> None:
     low = _run_with_market_score(0.25)
     high = _run_with_market_score(0.75)
     repeated = _run_with_market_score(0.75)
 
-    assert low.valuation != high.valuation
+    assert low.valuation == high.valuation == 0.0
     assert high.valuation == repeated.valuation
     assert high.result_id == repeated.result_id
 

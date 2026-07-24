@@ -1,147 +1,156 @@
 # Project Hunter Architecture Manifest
 
-## Mission
+## Purpose
 
-Hunter is a market discovery engine before it is a project analysis engine.
+This document defines the fundamental architectural direction of Project Hunter.
 
-Hunter exists to continuously inspect the entire crypto market, identify projects whose future intrinsic value may be materially greater than their current market valuation, validate that thesis with evidence, and prioritize what deserves deeper analysis.
+It establishes the high-level architectural principles that every implementation must follow while remaining independent of release planning, sprint execution, engineering procedures, and implementation details.
 
-Hunter is not limited to unknown projects. A widely known asset may still be a major opportunity if most of its economic potential remains unrealized.
+---
 
-## Primary Success Metric
+## Architectural Mission
 
-A release is successful only when it meaningfully improves real investment decisions compared with the previous release.
+Hunter is a market discovery platform before it is a project analysis platform.
 
-Architectural completeness, engine count, code size, technical elegance, and feature volume are secondary to practical investment value.
+Its architecture is designed to continuously discover the cryptocurrency market, identify opportunities that may warrant deeper investigation, validate them through evidence, and prioritize analytical effort where it is most valuable.
 
-## Practical Usefulness
+Architecture exists to improve investment decision quality rather than to maximize technical complexity.
 
-Hunter must become useful long before it becomes complete.
+---
 
-Each release must provide immediate decision value while also moving the system toward the long-term architecture.
+## Architectural Objectives
 
-Never delay practical usefulness in pursuit of architectural perfection.
+The architecture is designed to:
 
-## Discovery-First Principle
+- Continuously discover the investable market.
+- Preserve trustworthy evidence.
+- Support deterministic analytical execution.
+- Enable explainable investment intelligence.
+- Preserve historical correctness.
+- Scale analytical depth incrementally.
+- Support long-term evidence-based valuation.
+- Remain maintainable as the system evolves.
 
-Hunter must not depend on a manually maintained project list as its complete investable universe.
+---
 
-The operating model is:
+## Discovery-First Architecture
+
+Hunter must never depend on a manually maintained project list as its complete investment universe.
+
+The architectural workflow is:
 
 1. Discover the market.
-2. Normalize and resolve identities.
-3. Validate evidence.
-4. Screen candidates cheaply.
-5. Prioritize what deserves deeper work.
-6. Run evidence-backed deep analysis.
-7. Estimate long-term intrinsic value only after the necessary evidence exists.
+2. Resolve identities.
+3. Acquire and validate evidence.
+4. Screen opportunities efficiently.
+5. Prioritize analytical effort.
+6. Perform evidence-backed analysis.
+7. Produce investment intelligence.
+8. Support evidence-based valuation.
 
-## Evidence-First Principle
+Each stage exists to improve the quality of the stages that follow.
 
-No project, source, metric, or conclusion is trusted without provenance.
+---
 
-Hunter must preserve:
+## Evidence-First Architecture
 
-- source identity;
-- observation time;
-- evidence links or ids;
-- confidence;
-- freshness;
-- conflicts;
-- missing evidence;
-- point-in-time availability.
+Evidence is the foundation of every analytical capability.
 
-Ambiguity must remain explicit. Hunter must never guess when identity, evidence, or state is unresolved.
+Architectural components must preserve:
 
-## Market-Wide Scope
+- Source provenance.
+- Observation identity.
+- Observation time.
+- Evidence traceability.
+- Confidence.
+- Freshness.
+- Missing information.
+- Conflicts.
+- Point-in-time correctness.
 
-Hunter must support known and lesser-known assets across:
+When uncertainty exists, the architecture preserves uncertainty instead of replacing it with assumptions.
 
-- layer 1 and layer 2 networks;
-- DeFi;
-- AI;
-- DePIN;
-- oracles;
-- RWA;
-- storage;
-- interoperability;
-- consumer and gaming;
-- exchanges and market infrastructure;
-- native assets, tokens, protocols, and networks.
+---
 
-## Long-Term Investment Thesis
+## Market Scope
 
-Hunter's final goal is not short-term price prediction.
+The architecture is designed to support the complete cryptocurrency ecosystem, including but not limited to:
 
-Hunter must estimate the gap between:
+- Layer 1 and Layer 2 networks.
+- DeFi.
+- AI.
+- DePIN.
+- Oracles.
+- RWA.
+- Storage.
+- Interoperability.
+- Consumer applications.
+- Gaming.
+- Exchanges.
+- Market infrastructure.
+- Protocols.
+- Networks.
+- Native assets.
+- Tokens.
 
-- current market value; and
-- estimated intrinsic long-term value.
+The supported universe is expected to expand over time without requiring architectural redesign.
 
-That estimate should eventually combine:
+---
 
-- historical evidence;
-- current fundamentals;
-- future market evolution;
-- macro conditions;
-- developer activity;
-- protocol usage;
-- on-chain capital flows;
-- tokenomics;
-- competition;
-- network effects;
-- market structure;
-- revenue quality;
-- risk;
-- historical validation.
+## Long-Term Analytical Direction
+
+The architecture is intended to support increasingly sophisticated investment intelligence as reliable evidence becomes available.
+
+Long-term analytical capabilities include:
+
+- Historical intelligence.
+- Fundamental analysis.
+- Competitive intelligence.
+- Tokenomics.
+- Network effects.
+- Liquidity analysis.
+- Market structure.
+- Macroeconomic context.
+- Valuation.
+- Mispricing analysis.
+- Opportunity assessment.
+
+These capabilities are introduced incrementally as their prerequisite evidence foundations become trustworthy.
+
+---
 
 ## Architectural Boundaries
 
-The following principles are non-negotiable:
+Every implementation must preserve:
 
-- deterministic execution identity;
-- immutable evidence-backed records;
-- idempotent persistence;
-- historical replay cutoff discipline;
-- explainability as a first-class output;
-- separation of scheduling from analytical execution;
-- no silent drops;
-- no fabricated completeness;
-- no unsupported price or return claims.
+- Deterministic execution.
+- Immutable evidence.
+- Idempotent persistence.
+- Historical replay correctness.
+- Explainability.
+- Separation of operational orchestration from analytical execution.
+- Explicit uncertainty.
+- Explicit missing evidence.
+- Explicit failure handling.
 
-## Architecture Decision Records
+Architectural shortcuts must never compromise analytical correctness.
 
-Durable architecture decisions are recorded in `docs/ADR/README.md`. The ADR index is subordinate to this manifest, `docs/PROJECT_CONSTITUTION.md`, and `docs/PROJECT_PRINCIPLES.md`, but it is the canonical log of accepted architecture decisions.
+---
 
-Current accepted ADRs cover:
+## Architectural Evolution
 
-- discovery-first architecture: `docs/ADR/0001-discovery-first.md`;
-- evidence-first outputs: `docs/ADR/0002-evidence-first.md`;
-- dynamic Candidate Registry: `docs/ADR/0003-candidate-registry.md`;
-- trust before intelligence: `docs/ADR/0004-trust-layer.md`;
-- entity model separation: `docs/ADR/0005-entity-model.md`;
-- future knowledge graph boundaries: `docs/ADR/0006-knowledge-graph.md`;
-- canonical runtime Option A: `docs/ADR/0007-canonical-runtime-option-a.md`;
-- Plugin SDK target architecture: `docs/ADR/0008-plugin-sdk-architecture.md`.
+The architecture is intentionally evolutionary.
 
-## Engineering Mindset
+New capabilities should extend existing architectural foundations whenever practical instead of replacing stable production components.
 
-Think like the Chief Architect of the world's most advanced crypto investment intelligence platform, not like a feature implementer.
+Architectural growth should prioritize correctness, maintainability, and evidence quality over implementation speed.
 
-When multiple implementation choices exist, choose the option that:
+---
 
-- best supports the discovery-first mission;
-- produces practical investment value in the shortest safe time;
-- preserves production stability;
-- maximizes sound code reuse;
-- improves evidence quality;
-- remains modular and extensible;
-- enables future intrinsic-value estimation without implementing it prematurely.
+## Relationship to Other Canonical Documents
 
-## Release Test
+This document defines the architectural direction of Project Hunter.
 
-Before approving any release, answer:
+Project governance, engineering principles, implementation rules, release planning, roadmap, development procedures, and architecture decisions are intentionally defined in their respective canonical documents.
 
-> Does this version help the user make a materially better investment decision than the previous version?
-
-If not, the release is not successful regardless of technical complexity.
+This document defines the architecture only.

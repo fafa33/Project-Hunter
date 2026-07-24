@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -182,7 +183,7 @@ def test_missing_timing_dependency_metadata_requires_rebuild(tmp_path: Path) -> 
 
 def _result(sources: tuple[EngineValidationSource, ...]):
     config = load_market_validation_config()
-    return next(
+    result = next(
         item
         for item in MarketValidationRunner(
             config,
@@ -192,6 +193,10 @@ def _result(sources: tuple[EngineValidationSource, ...]):
         .project_results
         if item.project_id == "bitcoin"
     )
+    # Timing unit tests exercise the experimental engine with a complete synthetic
+    # evidence set. Production Market Validation still rejects all valuation-family
+    # sources until their canonical authorities are separately authorized.
+    return replace(result, engine_sources=tuple(sorted(sources, key=lambda item: item.engine)))
 
 
 def _sources(*, freshness: float = 0.9) -> tuple[EngineValidationSource, ...]:
@@ -214,6 +219,8 @@ def _source(
     freshness: float = 0.9,
     timestamp: datetime = NOW,
 ) -> EngineValidationSource:
+    source = "opportunity-timing" if engine == "opportunity_timing" else "persisted-upstream"
+    collector = "timing-repository" if engine == "opportunity_timing" else "repository"
     return EngineValidationSource(
         engine=engine,
         score=score,
@@ -223,6 +230,8 @@ def _source(
         source_record_ids=(f"record:{engine}",),
         evidence_ids=(f"evidence:{engine}",),
         repository_ids=(f"repository:{engine}",),
+        source=source,
+        collector=collector,
         raw_input_metrics={"score": score},
         normalized_inputs={"score": score},
         evidence_coverage=1.0,

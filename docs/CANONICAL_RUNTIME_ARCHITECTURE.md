@@ -1,128 +1,288 @@
 # Project Hunter Canonical Runtime Architecture
 
-Status: Production Canonical for v2.1.x
+## Purpose
 
-Project Hunter v2.1.x adopts the current evidence-backed Market Validation runtime as the canonical production architecture. This document implements `docs/ADR/0007-canonical-runtime-option-a.md` and separates production components from experimental and deprecated components without changing runtime behavior.
+This document defines the canonical runtime architecture of Project Hunter.
 
-## Canonical Runtime
+It describes how the major runtime components collaborate to transform market observations into investment intelligence during system execution.
 
-The production execution path is:
+Implementation details, release-specific classifications, engineering policies, and migration decisions are intentionally maintained in their respective canonical documents.
 
-CLI
--> Acquisition
--> Validation
--> Repositories
--> EngineValidationSource
--> EvidenceBackedProjectExecutor
--> Weight Engine
--> Production Timing
--> Committee Fields
--> Explainability
--> Reports
+---
 
-Implementation mapping:
+# Runtime Overview
 
-| Runtime Step | Production Implementation | Classification |
-| --- | --- | --- |
-| CLI | `src/hunter/cli.py` | Production |
-| Acquisition | `src/hunter/acquisition/`, `src/hunter/narrative/`, `src/hunter/macro/`, `src/hunter/whale/` | Production |
-| Validation | Acquisition validators plus Macro, Whale, and Narrative validation | Production |
-| Repositories | `FileAcquisitionRepository`, `MacroRepository`, `WhaleRepository`, graph/economic/scenario repositories, `TimingRepository` | Production |
-| EngineValidationSource | `src/hunter/market_validation/acquisition_sources.py` | Production |
-| Project Executor | `EvidenceBackedProjectExecutor` | Production |
-| Weight Engine | `src/hunter/weights/` | Production |
-| Timing | `src/hunter/timing/` | Production |
-| Committee | Market Validation committee fields on `ProjectValidationResult` | Production |
-| Explainability | `src/hunter/explainability/` over `MarketValidationRun` | Production |
-| Reports | `MarketValidationRenderer`, `EvidenceReportRenderer`, timing CLI renderers | Production |
+Project Hunter executes as a deterministic evidence-driven processing pipeline.
 
-`SourceBackedV1ProjectExecutor` and `DeterministicV1ProjectExecutor` remain import aliases for backward compatibility only. New production code should use `EvidenceBackedProjectExecutor` and `DeterministicProjectExecutor`.
+Each runtime stage consumes validated outputs from previous stages and produces structured outputs for subsequent stages.
 
-## Component Classification
+No runtime stage bypasses earlier stages.
 
-| Component | Classification | Policy |
-| --- | --- | --- |
-| Market Validation runtime | Production | Canonical production path |
-| Evidence-backed acquisition sources | Production | Canonical bridge from persisted evidence to scoring inputs |
-| `src/hunter/weights/` | Production | Canonical weighting implementation |
-| `src/hunter/timing/` | Production | Canonical timing implementation |
-| Market Validation committee fields | Production | Canonical v2.1 committee output |
-| `PipelineOrchestrator` | Experimental | Retained for plugin, persistence, automation, and future migration work |
-| Plugin Intelligence Engines | Experimental | Retained for tests and future Option B-style migration only |
-| `src/hunter/intelligence/fusion/` | Experimental | Not part of the v2.1 production runtime |
-| `src/hunter/opportunity/` | Experimental | Fusion-backed timing model, not production timing in v2.1 |
-| Legacy V1 executor names | Deprecated aliases | Preserve imports, do not use for new code |
+---
 
-## Coverage Semantics
+# Canonical Runtime Flow
 
-Coverage reporting distinguishes two categories:
+```text
+External Market Sources
+        ↓
+Acquisition
+        ↓
+Validation
+        ↓
+Persistence
+        ↓
+Discovery
+        ↓
+Identity Resolution
+        ↓
+Evidence Processing
+        ↓
+Screening
+        ↓
+Prioritization
+        ↓
+Deep Analysis
+        ↓
+Investment Intelligence
+        ↓
+Valuation
+        ↓
+Decision Support
+        ↓
+Reports
+```
 
-- Independent production engines: direct persisted evidence sources or direct normalized source families.
-- Derived analytical views: deterministic views derived from one or more upstream production evidence sources.
+Every stage executes deterministically using only the evidence available at that point in time.
 
-Independent production engines:
+---
 
-- valuation
-- comparative_valuation
-- mispricing
-- asymmetry
-- developer
-- protocol
-- news
-- social
-- narrative
-- whale_intelligence
-- macro_intelligence
-- validation_health
+# Runtime Stages
 
-Derived analytical views:
+## Acquisition
 
-- future_demand
-- opportunity_timing
-- probability
-- pattern_matching
-- technology_necessity
-- capital_rotation
-- necessity_gap
-- risk
-- committee
+Collects observations from external sources.
 
-Coverage percentages remain calculated over the same required evidence surface as before. The reporting labels are clarified so derived views are not mistaken for separately executed engines.
+Responsibilities include:
 
-## Timing Policy
+- acquiring observations;
+- preserving provenance;
+- recording acquisition metadata;
+- handling unavailable sources.
 
-Production Timing is `src/hunter/timing/`.
+Outputs:
 
-Experimental Timing is `src/hunter/opportunity/`.
+- acquired observations.
 
-Only `src/hunter/timing/` feeds Market Validation coverage, committee fields, explainability, and reports in v2.1.x. The Fusion-backed `src/hunter/opportunity/` package remains available for tests and future architecture work, but it is not the production timing implementation.
+---
 
-## Committee Policy
+## Validation
 
-The production committee output in v2.1.x is the deterministic committee decision and committee confidence produced on `ProjectValidationResult` by the evidence-backed Market Validation runtime.
+Determines whether acquired observations satisfy trust requirements.
 
-`src/hunter/committee/` remains an experimental/persisted committee engine. It is retained for historical tests, dashboard persistence contracts, and future consolidation, but it is not the current production committee decision path for Market Validation.
+Responsibilities include:
 
-## Migration Policy
+- validation;
+- normalization;
+- quality verification;
+- conflict detection.
 
-Do not migrate production execution to `PipelineOrchestrator` unless a future ADR explicitly replaces `docs/ADR/0007-canonical-runtime-option-a.md`.
+Outputs:
 
-Allowed consolidation work:
+- validated observations.
 
-- Rename legacy identifiers to production-neutral names.
-- Preserve backward-compatible aliases.
-- Improve documentation and reporting labels.
-- Add characterization tests for the current runtime.
+---
 
-Disallowed consolidation work:
+## Persistence
 
-- Changing scoring formulas.
-- Changing weights.
-- Changing timing calculations.
-- Replacing `EvidenceBackedProjectExecutor` with `PipelineOrchestrator`.
-- Removing experimental modules.
-- Reclassifying derived views as independent engines.
+Preserves validated information for future analytical use.
 
-## Future V3 Direction
+Responsibilities include:
 
-Future V3 work should either continue hardening the evidence-backed production runtime or explicitly schedule a separate migration decision. Until then, the production runtime remains the evidence-backed Market Validation path defined in this document.
+- durable storage;
+- historical preservation;
+- point-in-time correctness;
+- replay support.
+
+Outputs:
+
+- persistent evidence.
+
+---
+
+## Discovery
+
+Continuously expands market coverage.
+
+Responsibilities include:
+
+- discovering new entities;
+- updating existing entities;
+- preserving discovery history.
+
+Outputs:
+
+- discovered candidates.
+
+---
+
+## Identity Resolution
+
+Determines canonical economic entities.
+
+Responsibilities include:
+
+- identity reconciliation;
+- ambiguity preservation;
+- duplicate handling.
+
+Outputs:
+
+- canonical entities.
+
+---
+
+## Evidence Processing
+
+Transforms validated observations into structured analytical evidence.
+
+Responsibilities include:
+
+- evidence organization;
+- evidence relationships;
+- evidence sufficiency.
+
+Outputs:
+
+- analytical evidence.
+
+---
+
+## Screening
+
+Determines analytical readiness.
+
+Responsibilities include:
+
+- candidate screening;
+- readiness assessment;
+- analytical eligibility.
+
+Outputs:
+
+- screened candidates.
+
+---
+
+## Prioritization
+
+Determines analytical order.
+
+Responsibilities include:
+
+- prioritization;
+- analytical queue management.
+
+Outputs:
+
+- prioritized opportunities.
+
+---
+
+## Deep Analysis
+
+Produces comprehensive investment analysis.
+
+Responsibilities include:
+
+- evidence integration;
+- analytical reasoning;
+- explainable conclusions.
+
+Outputs:
+
+- investment intelligence.
+
+---
+
+## Valuation
+
+Produces evidence-supported valuation intelligence.
+
+Responsibilities include:
+
+- valuation;
+- comparative valuation;
+- scenario analysis;
+- uncertainty estimation.
+
+Outputs:
+
+- valuation intelligence.
+
+---
+
+## Decision Support
+
+Transforms analytical intelligence into practical user guidance.
+
+Responsibilities include:
+
+- monitoring;
+- alerts;
+- watchlists;
+- decision context.
+
+Outputs:
+
+- decision-support intelligence.
+
+---
+
+## Reporting
+
+Presents runtime outputs.
+
+Responsibilities include:
+
+- explainability;
+- reporting;
+- operational visibility.
+
+Outputs:
+
+- user-facing reports.
+
+---
+
+# Runtime Characteristics
+
+The runtime preserves:
+
+- deterministic execution;
+- evidence traceability;
+- point-in-time correctness;
+- historical replay;
+- explainability;
+- explicit uncertainty;
+- explicit missing evidence;
+- explicit failures.
+
+Every runtime execution must remain reproducible from the available evidence.
+
+---
+
+# Runtime Evolution
+
+The runtime may evolve by extending existing stages or introducing new stages when justified by architectural requirements.
+
+Evolution must preserve deterministic execution, historical correctness, and evidence integrity.
+
+---
+
+# Relationship to Other Canonical Documents
+
+This document defines the canonical runtime architecture of Project Hunter.
+
+Logical architecture, architectural principles, governance, implementation details, engineering procedures, release planning, runtime inventories, and architecture decisions are intentionally maintained in their respective canonical documents.
+
+This document defines the runtime architecture only.

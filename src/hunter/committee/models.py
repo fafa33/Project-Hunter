@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Literal
 
+from hunter.committee.authority import CommitteeInputIdentity
 from hunter.intelligence.fusion.models import FrozenFloatMap, FrozenScalarMap
 from hunter.necessity.models import TechnologyNecessityAssessment
 from hunter.opportunity.models import OpportunityTimingAssessment
@@ -39,6 +40,7 @@ CommitteeDecision = Literal[
 class CommitteeInputSet:
     project_id: str
     effective_at: datetime
+    authority_identity: CommitteeInputIdentity | None = None
     intelligence: tuple[IntelligenceRecord, ...] = ()
     fused_intelligence: tuple[FusedIntelligenceRecord, ...] = ()
     opportunity: OpportunityTimingAssessment | None = None
@@ -51,6 +53,8 @@ class CommitteeInputSet:
 
     def __post_init__(self) -> None:
         _text("project_id", self.project_id)
+        if self.authority_identity is not None and self.authority_identity.project_id != self.project_id:
+            raise ValueError("authority_identity project_id must match project_id")
         if self.effective_at.tzinfo is None:
             msg = "effective_at must be timezone-aware"
             raise ValueError(msg)

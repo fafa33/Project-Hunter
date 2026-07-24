@@ -124,7 +124,8 @@ def test_explain_cli_uses_real_persisted_acquisition_evidence_not_empty_sources(
     assert main(["explain", "aave"]) == 0
     audit = capsys.readouterr().out
 
-    assert "| Valuation | 0.0000 |" not in audit
+    assert "| Valuation | 0.0000 |" in audit
+    assert "contract_unavailable:valuation" in audit
 
 
 def test_market_validation_boundaries() -> None:
@@ -193,9 +194,11 @@ def test_evidence_backed_validation_uses_distinct_confidence_freshness_and_evide
     assert bitcoin.hunter_score != ethereum.hunter_score
     assert bitcoin.confidence != ethereum.confidence
     assert bitcoin.data_freshness != ethereum.data_freshness
-    assert bitcoin.committee_decision == "QUALIFIED_CANDIDATE"
-    assert bitcoin.engine_sources[0].source_record_ids[0].startswith("record:alpha")
-    assert bitcoin.engine_sources[0].evidence_ids[0].startswith("evidence:alpha")
+    assert bitcoin.committee_decision == "INSUFFICIENT_EVIDENCE"
+    assert {"valuation", "comparative_valuation", "mispricing", "asymmetry"}.issubset(set(bitcoin.missing_evidence))
+    available_source = next(source for source in bitcoin.engine_sources if source.source_record_ids)
+    assert available_source.source_record_ids[0].startswith("record:alpha")
+    assert available_source.evidence_ids[0].startswith("evidence:alpha")
 
 
 def test_placeholder_scores_cannot_qualify_project_when_required_engine_is_missing() -> None:
@@ -217,6 +220,21 @@ def test_placeholder_scores_cannot_qualify_project_when_required_engine_is_missi
     assert "committee" in safe.missing_evidence
 
 
+def test_valuation_family_inputs_remain_unavailable_for_every_source_label() -> None:
+    config = load_market_validation_config()
+    sources = _sources(score=0.95, confidence=0.95, freshness=0.95, prefix="forged")
+    executor = EvidenceBackedProjectExecutor(config.effective_at, {"bitcoin": sources})
+
+    bitcoin = next(
+        result
+        for result in MarketValidationRunner(config, executor=executor).run().project_results
+        if result.project_id == "bitcoin"
+    )
+
+    assert bitcoin.committee_decision == "INSUFFICIENT_EVIDENCE"
+    assert {"valuation", "comparative_valuation", "mispricing", "asymmetry"}.issubset(set(bitcoin.missing_evidence))
+
+
 def _sources(*, score: float, confidence: float, freshness: float, prefix: str) -> tuple[EngineValidationSource, ...]:
     weight = round(1.0 / len(REQUIRED_ENGINES), 6)
     return tuple(
@@ -235,6 +253,8 @@ def _source(
     weight: float = 0.1,
     missing_fields: tuple[str, ...] = (),
 ) -> EngineValidationSource:
+    source = "opportunity-timing" if engine == "opportunity_timing" else "persisted-upstream"
+    collector = "timing-repository" if engine == "opportunity_timing" else "repository"
     return EngineValidationSource(
         engine=engine,
         score=score,
@@ -243,6 +263,9 @@ def _source(
         freshness=freshness,
         source_record_ids=(f"record:{prefix}:{engine}",),
         evidence_ids=(f"evidence:{prefix}:{engine}",),
+        repository_ids=(f"repository:{prefix}:{engine}",),
+        source=source,
+        collector=collector,
         raw_input_metrics={"raw": score, "source": prefix},
         normalized_inputs={"normalized": score},
         applied_weight=weight,

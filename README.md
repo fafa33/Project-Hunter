@@ -1,82 +1,126 @@
 # Project Hunter
 
-Project Hunter is a deterministic crypto research platform for discovering evidence-backed asymmetric opportunities before they become obvious to the market.
+Project Hunter is a deterministic, evidence-first cryptocurrency intelligence platform designed to discover, validate, prioritize, and continuously monitor asymmetric investment opportunities through auditable, explainable, and replayable analytical workflows.
 
-Current stable version: `v1.0.0`.
+Project Hunter is governed by a specification-first governance model. Every implementation, runtime behavior, engineering decision, and release must comply with the project's canonical governance hierarchy.
 
-Project Hunter V1 is frozen. Future maintenance belongs on `release/v1`; future development continues on `main`.
+Current stable release: `v1.0.0`
 
-## Architecture
+Project Hunter V1 is frozen. Maintenance continues on `release/v1`, while future development is performed on `main`.
 
-Project Hunter V1 is organized as a layered analytical platform:
+---
 
-```mermaid
-flowchart TD
-    A[Discovery] --> B[Evidence]
-    B --> C[Validation]
-    C --> D[Intelligence Engines]
-    D --> E[Intelligence Fusion]
-    E --> F[Opportunity Timing]
-    F --> G[Probability]
-    G --> H[Pattern Matching]
-    H --> I[Technology Necessity and Capital Rotation]
-    I --> J[Investment Committee]
-    J --> K[Ranking]
-    J --> L[Reports]
-    K --> M[Dashboard Foundation]
-    L --> M
-```
+# Governance
 
-## Pipeline
+Project Hunter follows one canonical governance model.
 
-The V1 pipeline validates the complete analytical flow:
+The canonical document-authority hierarchy is owned and defined by:
 
-Discovery -> Evidence -> Validation -> Scoring -> Valuation -> Mispricing -> Asymmetry -> Whales -> Macro -> Future Demand -> Opportunity Timing -> Probability -> Pattern Matching -> Technology Necessity -> Investment Committee -> Reports -> Ranking -> Dashboard.
+`docs/CANONICAL_ARCHITECTURE_MAP.md`
 
-All analytical records are deterministic, explainable, and persisted through repository contracts.
+Every implementation, runtime behavior, engineering decision, architecture document, release, review, and automated engineering agent must comply with that hierarchy.
 
-## Major Analytical Engines
+Each architectural fact has one canonical owner. Supporting documents may summarize or reference that fact, but must not create a competing definition.
 
-- Macro Intelligence
-- Whale Intelligence
-- Developer Intelligence
-- Protocol Intelligence
-- News Intelligence
-- Narrative Intelligence
-- Social Intelligence
-- On-chain Intelligence
-- Intelligence Fusion
-- Opportunity Timing
-- Probability
-- Pattern Matching
-- Technology Necessity and Capital Rotation
-- Investment Committee
+When an architectural fact changes, its owner document must be updated first or in the same governed change as dependent documents.
 
-## Platform Components
+Conflicts must be resolved according to the canonical hierarchy before implementation continues.
 
-- Plugin Architecture
-- Pipeline Orchestrator
-- Deterministic Execution Identity
-- Persistence Contracts
-- SQL Repository Layer
-- Operational Attempts and Run Lifecycle
-- Automation and Scheduler
-- Dashboard Foundation
-- Ranking
-- Reports
-- Backtesting
-- Alerts
+---
 
-## Installation
+# Current Authority Classification
+
+Implementation existence does not by itself establish production analytical authority. Current classifications are governed by accepted ADRs, especially ADR 0007 and ADR 0016–0021.
+
+## Canonical production analytical authority
+
+- Evidence-backed Market Validation runtime.
+- `EvidenceBackedProjectExecutor` as the production deep-analysis composition and scoring boundary.
+- Market Validation `hunter_score` and project ranking.
+- Canonical production Timing through `hunter.timing.OpportunityTimingEvidenceEngine` as consumed by Market Validation.
+- Canonical committee fields contained in Market Validation project results.
+- Explainability and reports emitted by the canonical Market Validation path.
+
+## Production descriptive intelligence
+
+The following service-owned engines may produce evidence-backed descriptive findings under their accepted ADR contracts. They do not independently own scoring, ranking, timing, recommendation, valuation, or cross-engine composition:
+
+- Developer Intelligence.
+- Tokenomics Intelligence.
+- Governance Intelligence.
+- Security Intelligence.
+- On-chain Intelligence.
+
+Other evidence and domain packages may exist in the repository, but their production authority depends on an explicit accepted contract rather than package presence.
+
+## Experimental or research capabilities
+
+The following remain experimental or research infrastructure unless a later accepted ADR explicitly promotes a defined output:
+
+- `PipelineOrchestrator` and plugin analytical orchestration.
+- Intelligence Fusion.
+- Opportunity scoring and Opportunity ranking.
+- Fusion-backed Opportunity Timing.
+- Probability.
+- Pattern Matching.
+- Technology Necessity.
+- Standalone Investment Committee.
+- General ranking helpers.
+
+Experimental outputs must remain clearly classified and cannot substitute for canonical production outputs.
+
+## Accepted target or currently unavailable capabilities
+
+- Canonical Valuation.
+- Comparative Valuation.
+- Mispricing.
+- Asymmetry.
+- Portfolio Intelligence.
+
+ADR 0021 defines future valuation-family evidence and authority contracts, but all four Market Validation valuation-family scalar inputs remain explicitly unavailable until the required records, methodologies, calibration, normalization, and service-owned persistence paths are implemented and accepted.
+
+## Operational and presentation components
+
+The following are supporting or downstream components, not analytical authorities:
+
+- Automation and Scheduler.
+- Operational Corpus.
+- Persistence and repository infrastructure.
+- Dashboard API.
+- Desktop console and Hunter Terminal.
+- Operational monitoring and health projections.
+
+---
+
+# Platform Components
+
+Core platform components include:
+
+- Deterministic execution.
+- Canonical runtime.
+- SQL persistence and repository contracts.
+- Evidence acquisition and evidence intelligence.
+- Plugin architecture.
+- Automation and Scheduler.
+- Dashboard API and presentation surfaces.
+- Reporting.
+- Historical replay and backtesting.
+- Validation and operational monitoring.
+
+---
+
+# Installation
 
 ```bash
 python3 -m venv .venv
 .venv/bin/python -m pip install -e ".[dev]"
 ```
 
-## Quick Start
+---
 
-Run quality checks:
+# Quick Start
+
+Run the complete quality gates:
 
 ```bash
 .venv/bin/ruff check .
@@ -85,72 +129,158 @@ Run quality checks:
 .venv/bin/pytest
 ```
 
-Use the CLI:
+Example commands:
 
 ```bash
-hunter analyze bitcoin
 hunter discover
+hunter analyze bitcoin
 hunter validate ethereum
 hunter whales bitcoin
-hunter rank --sort committee
 hunter committee champion
+hunter rank --sort committee
 hunter dashboard build --sqlite-path hunter.sqlite
 hunter automation status
 ```
 
-## Repository Structure
+Command availability does not change the authority classification of the output it invokes.
 
-- `src/hunter/automation/` - scheduler, jobs, lifecycle, locking, and runner.
-- `src/hunter/committee/` - Investment Committee Engine and reports.
-- `src/hunter/dashboard/` - Dashboard Foundation presentation layer.
-- `src/hunter/execution/` - deterministic identity, clock, and run models.
-- `src/hunter/intelligence/` - standardized intelligence contracts and engines.
-- `src/hunter/necessity/` - Technology Necessity and Capital Rotation.
-- `src/hunter/opportunity/` - Opportunity Timing Engine.
-- `src/hunter/patterns/` - Pattern Matching Engine.
-- `src/hunter/persistence/` - persistence contracts, integration, and SQL repositories.
-- `src/hunter/probability/` - Probability Engine.
-- `configs/` - V1 configuration files.
-- `docs/` - architecture, component, and release documentation.
-- `tests/` - deterministic regression and end-to-end validation tests.
+---
 
-## Configuration
+# Repository Structure
 
-Configuration is YAML-based and lives under `configs/`. V1 includes configuration for automation, dashboard, intelligence engines, fusion, opportunity timing, probability, pattern matching, technology necessity, capital rotation, persistence, plugins, and the Investment Committee.
+```text
+docs/               Governance, architecture, and documentation
+configs/            Runtime configuration
+src/hunter/         Production and explicitly classified source packages
+tests/              Automated verification
+alembic/            Database migrations
+```
 
-## Documentation Index
+Major packages include:
 
+- `automation`
+- `committee`
+- `dashboard`
+- `discovery`
+- `evidence`
+- `execution`
+- `historical`
+- `intelligence`
+- `macro`
+- `necessity`
+- `onchain`
+- `opportunity`
+- `patterns`
+- `persistence`
+- `probability`
+- `providers`
+- `ranking`
+- `reports`
+- `security`
+- `sufficiency`
+- `tokenomics`
+- `validation`
+
+A package name indicates repository capability, not production authority.
+
+---
+
+# Documentation
+
+## Canonical hierarchy and architecture
+
+- `docs/CANONICAL_ARCHITECTURE_MAP.md`
 - `docs/PROJECT_CONSTITUTION.md`
-- `docs/PIPELINE_ORCHESTRATOR.md`
-- `docs/PIPELINE_PERSISTENCE_INTEGRATION.md`
-- `docs/DETERMINISTIC_EXECUTION_IDENTITY.md`
-- `docs/INTELLIGENCE_LAYER.md`
-- `docs/INTELLIGENCE_ENGINE_FRAMEWORK.md`
-- `docs/INTELLIGENCE_FUSION_LAYER.md`
-- `docs/OPPORTUNITY_TIMING_ENGINE.md`
-- `docs/INVESTMENT_COMMITTEE_ENGINE.md`
-- `docs/AUTOMATION_AND_SCHEDULER.md`
-- `docs/DASHBOARD.md`
-- `docs/releases/V1.0.0.md`
+- `docs/PROJECT_PRINCIPLES.md`
+- `docs/HUNTER_ARCHITECTURE_MANIFEST.md`
+- `docs/HUNTER_ARCHITECTURE_SPEC.md`
+- `docs/CANONICAL_RUNTIME_ARCHITECTURE.md`
 
-## Release Information
+## Governance and implementation
 
-- Stable release: `v1.0.0`
-- Release branch: `release/v1`
-- V1 status: officially released and frozen
-- Verification: Ruff, Black, mypy, pytest, and end-to-end runtime validation pass
+- `docs/DEVELOPMENT_GOVERNANCE.md`
+- `docs/HUNTER_IMPLEMENTATION_CONTRACT.md`
+- `docs/AI_REVIEW_PROTOCOL.md`
 
-## Known Limitations
+## Vision and roadmap
 
-- V1 is deterministic analysis, not investment advice.
-- V1 does not execute trades, allocate portfolios, emit price targets, or call external AI systems.
-- Dashboard Foundation is presentation-only; Dashboard Phase 2 is deferred.
-- Distributed scheduling, external notification integrations, and REST API are deferred.
+- `docs/VISION.md`
+- `docs/HUNTER_ROADMAP.md`
 
-## Future Roadmap
+## Architecture decisions
 
-Initial V2 roadmap:
+- `docs/ADR/README.md`
 
-- Technology Dependency Engine
-- Economic Dependency Graph
-- Scenario Simulation Engine
+## Sprint specifications
+
+- `docs/SPRINTS/README.md`
+
+Component-specific documentation is maintained throughout `docs/`.
+
+---
+
+# Release Information
+
+- Stable Release: `v1.0.0`
+- Stable Branch: `release/v1`
+- Active Development Branch: `main`
+
+---
+
+# Verification
+
+Project Hunter requires deterministic verification before every release.
+
+Required quality gates include:
+
+- Ruff.
+- Black.
+- mypy.
+- pytest.
+- Replay validation.
+- Runtime validation.
+- Architecture compliance.
+- Governance compliance.
+
+---
+
+# Project Principles
+
+Project Hunter is built around:
+
+- Evidence before conclusions.
+- Deterministic execution.
+- Explainable analysis.
+- Immutable evidence provenance.
+- Replay correctness.
+- Point-in-time truth.
+- Explicit unavailable states.
+- Idempotent persistence.
+- Architecture before implementation.
+- Governance before engineering.
+
+---
+
+# Scope
+
+Project Hunter provides analytical decision support.
+
+Project Hunter does not:
+
+- execute trades;
+- guarantee investment outcomes;
+- fabricate evidence;
+- hide missing data;
+- convert missing information into optimistic defaults;
+- allow operational or presentation components to override analytical authority;
+- override governance rules.
+
+---
+
+# Roadmap
+
+The canonical roadmap is maintained in:
+
+`docs/HUNTER_ROADMAP.md`
+
+Future work is planned and approved exclusively through the governance process defined by the canonical document hierarchy.
