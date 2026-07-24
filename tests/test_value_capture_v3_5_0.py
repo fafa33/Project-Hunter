@@ -80,6 +80,15 @@ def evidence_result(provider, *, acquired_at=NOW + timedelta(minutes=1), acquisi
         "evidence_type": "official_disclosure",
         "source_reference": "official-tokenomics-page",
         "extracted_claim": "Protocol fees are distributed under the documented rule.",
+        "accounting_period_start": NOW - timedelta(days=30),
+        "accounting_period_end": NOW,
+        "attribution_rule_id": "api3-fee-distribution-rule-v1",
+        "source_methodology": "official-accrual-disclosure-v1",
+        "source_record_id": "official-tokenomics-page",
+        "source_record_version": "2026-07-20",
+        "entity_link_confidence": "1",
+        "evidence_confidence": "0.95",
+        "uncertainty": "0.05",
         "effective_at": NOW,
         "quality_state": "accepted",
         "conflict_state": "none",
@@ -236,6 +245,38 @@ def test_temporal_invariants_reject_invalid_chronology(tmp_path) -> None:
             provider,
             evidence_result(provider, acquired_at=NOW, effective_at=NOW + timedelta(days=1)),
         )
+
+
+def test_fundamental_evidence_contract_rejects_invalid_period_and_confidence(tmp_path) -> None:
+    service, _, provider = setup(tmp_path)
+    with pytest.raises(ValueError, match="accounting_period_start"):
+        service.ingest_evidence(
+            provider,
+            evidence_result(
+                provider,
+                accounting_period_start=NOW,
+                accounting_period_end=NOW - timedelta(days=1),
+            ),
+        )
+    with pytest.raises(ValueError, match="evidence_confidence"):
+        service.ingest_evidence(
+            provider,
+            evidence_result(
+                provider,
+                acquisition_id="invalid-confidence",
+                evidence_confidence="1.01",
+            ),
+        )
+
+
+def test_fundamental_evidence_contract_round_trips_authority_fields(tmp_path) -> None:
+    service, repository, provider = setup(tmp_path)
+    record = service.ingest_evidence(provider, evidence_result(provider))
+    restored = repository.evidence(record.record_id)
+    assert restored == record
+    assert record.attribution_rule_id == "api3-fee-distribution-rule-v1"
+    assert record.source_record_version == "2026-07-20"
+    assert record.accounting_period_start == NOW - timedelta(days=30)
 
 
 def test_branching_corrections_are_rejected_and_replay_is_strict_known(tmp_path) -> None:

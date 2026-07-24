@@ -232,7 +232,10 @@ def _receipt_from_payload(payload: dict[str, Any]) -> AcquisitionReceipt:
 
 
 def _evidence_from_payload(payload: dict[str, Any]) -> FundamentalEvidenceRecord:
-    return FundamentalEvidenceRecord(**_base_payload(payload))
+    result = _base_payload(payload)
+    for name in ("accounting_period_start", "accounting_period_end"):
+        result[name] = datetime.fromisoformat(str(result[name])).astimezone(UTC)
+    return FundamentalEvidenceRecord(**result)
 
 
 def _supply_from_payload(payload: dict[str, Any]) -> SupplyBasisSnapshot:
