@@ -82,6 +82,15 @@ class FundamentalEvidenceRecord:
     extracted_claim: str
     amount: str | None
     unit: str | None
+    accounting_period_start: datetime
+    accounting_period_end: datetime
+    attribution_rule_id: str
+    source_methodology: str
+    source_record_id: str
+    source_record_version: str
+    entity_link_confidence: str
+    evidence_confidence: str
+    uncertainty: str
     effective_at: datetime
     recorded_at: datetime
     known_at: datetime
@@ -105,6 +114,10 @@ class FundamentalEvidenceRecord:
             "source_reference",
             "parser_version",
             "extracted_claim",
+            "attribution_rule_id",
+            "source_methodology",
+            "source_record_id",
+            "source_record_version",
             "raw_content_hash",
             "acquisition_id",
         )
@@ -113,10 +126,25 @@ class FundamentalEvidenceRecord:
         _member("conflict_state", self.conflict_state, CONFLICT_STATES)
         _normalize_chronology(self)
         _validate_correction(self)
+        period_start = _utc("accounting_period_start", self.accounting_period_start)
+        period_end = _utc("accounting_period_end", self.accounting_period_end)
+        if period_start > period_end:
+            raise ValueError("accounting_period_start must be <= accounting_period_end")
+        if period_end > self.effective_at:
+            raise ValueError("accounting_period_end must be <= effective_at")
+        object.__setattr__(self, "accounting_period_start", period_start)
+        object.__setattr__(self, "accounting_period_end", period_end)
+        _bounded_decimal("entity_link_confidence", self.entity_link_confidence)
+        _bounded_decimal("evidence_confidence", self.evidence_confidence)
+        _bounded_decimal("uncertainty", self.uncertainty)
+        _hash("raw_content_hash", self.raw_content_hash)
         if self.amount is not None:
-            _decimal(self.amount)
+            if not _decimal(self.amount).is_finite():
+                raise ValueError("amount must be finite")
             if self.unit is None or not self.unit.strip():
                 raise ValueError("unit is required when amount is present")
+        elif self.unit is not None:
+            raise ValueError("unit must be absent when amount is absent")
 
 
 @dataclass(frozen=True)
@@ -272,3 +300,14 @@ def _decimal(value: str) -> Decimal:
         return Decimal(value)
     except (InvalidOperation, ValueError) as exc:
         raise ValueError(f"invalid decimal value: {value}") from exc
+
+
+def _bounded_decimal(name: str, value: str) -> None:
+    number = _decimal(value)
+    if not number.is_finite() or number < 0 or number > 1:
+        raise ValueError(f"{name} must be between 0 and 1")
+
+
+def _hash(name: str, value: str) -> None:
+    if len(value) != 64 or any(character not in "0123456789abcdef" for character in value.lower()):
+        raise ValueError(f"{name} must be a 64-character hexadecimal hash")

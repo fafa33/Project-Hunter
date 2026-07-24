@@ -177,6 +177,15 @@ class SupplyAndValueCaptureService:
                 extracted_claim=str(payload["extracted_claim"]),
                 amount=_optional_text(payload.get("amount")),
                 unit=_optional_text(payload.get("unit")),
+                accounting_period_start=_datetime(payload["accounting_period_start"]),
+                accounting_period_end=_datetime(payload["accounting_period_end"]),
+                attribution_rule_id=_required_payload_text(payload, "attribution_rule_id"),
+                source_methodology=_required_payload_text(payload, "source_methodology"),
+                source_record_id=_required_payload_text(payload, "source_record_id"),
+                source_record_version=_required_payload_text(payload, "source_record_version"),
+                entity_link_confidence=_required_payload_text(payload, "entity_link_confidence"),
+                evidence_confidence=_required_payload_text(payload, "evidence_confidence"),
+                uncertainty=_required_payload_text(payload, "uncertainty"),
                 effective_at=_datetime(payload["effective_at"]),
                 recorded_at=result.acquired_at,
                 known_at=result.acquired_at,
@@ -358,3 +367,10 @@ def _datetime(value: Any) -> datetime:
 
 def _optional_text(value: Any) -> str | None:
     return None if value is None else str(value)
+
+
+def _required_payload_text(payload: dict[str, Any], name: str) -> str:
+    value = payload.get(name)
+    if not isinstance(value, str) or not value.strip():
+        raise SupplyAndValueCaptureAuthorityError(f"{name} must be a nonblank string")
+    return value
