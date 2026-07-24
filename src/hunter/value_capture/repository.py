@@ -97,6 +97,35 @@ class SupplyAndValueCaptureRepository:
             if isinstance(record, ValueCaptureRuleSnapshot)
         )
 
+    def unresolved_evidence_conflicts(self) -> tuple[FundamentalEvidenceRecord, ...]:
+        return tuple(
+            record
+            for record in self._unresolved_conflicts(_EVIDENCE_TYPE)
+            if isinstance(record, FundamentalEvidenceRecord)
+        )
+
+    def unresolved_supply_conflicts(self) -> tuple[SupplyBasisSnapshot, ...]:
+        return tuple(
+            record for record in self._unresolved_conflicts(_SUPPLY_TYPE) if isinstance(record, SupplyBasisSnapshot)
+        )
+
+    def unresolved_rule_conflicts(self) -> tuple[ValueCaptureRuleSnapshot, ...]:
+        return tuple(
+            record for record in self._unresolved_conflicts(_RULE_TYPE) if isinstance(record, ValueCaptureRuleSnapshot)
+        )
+
+    def _unresolved_conflicts(self, snapshot_type: str) -> tuple[Record, ...]:
+        records = tuple(_record_from_snapshot(item) for item in self._snapshots(snapshot_type))
+        superseded_ids = {item.supersedes_record_id for item in records if item.supersedes_record_id is not None}
+        current = (item for item in records if item.record_id not in superseded_ids)
+        unresolved = [item for item in current if item.conflict_state in {"open", "contested"}]
+        return tuple(
+            sorted(
+                unresolved,
+                key=lambda item: (item.logical_id, item.effective_at, item.record_id),
+            )
+        )
+
     def strict_known_supply(self, **kwargs: Any) -> SupplyBasisSnapshot | None:
         record = self._strict_known(
             snapshot_type=_SUPPLY_TYPE,

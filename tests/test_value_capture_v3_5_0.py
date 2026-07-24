@@ -746,3 +746,91 @@ def test_correction_authority_downgrade_is_rejected(tmp_path) -> None:
                 correction_reason="Invalid lower-authority correction",
             ),
         )
+
+
+def test_divergent_evidence_submissions_are_flagged_and_queryable_as_unresolved_conflicts(
+    tmp_path,
+) -> None:
+    service, repository, provider = setup(tmp_path)
+    first = service.ingest_evidence(provider, evidence_result(provider, acquisition_id="evidence-conflict-1"))
+    assert first.conflict_state == "none"
+
+    second = service.ingest_evidence(
+        provider,
+        evidence_result(
+            provider,
+            acquisition_id="evidence-conflict-2",
+            acquired_at=NOW + timedelta(minutes=5),
+            extracted_claim="Protocol fees are distributed under a materially different disclosed rule.",
+        ),
+    )
+
+    assert second.conflict_state == "open"
+    assert [item.record_id for item in repository.unresolved_evidence_conflicts()] == [second.record_id]
+    assert repository.unresolved_supply_conflicts() == ()
+    assert repository.unresolved_rule_conflicts() == ()
+
+
+def test_matching_duplicate_evidence_is_not_flagged_as_conflict(tmp_path) -> None:
+    service, repository, provider = setup(tmp_path)
+    service.ingest_evidence(provider, evidence_result(provider, acquisition_id="evidence-agree-1"))
+    second = service.ingest_evidence(
+        provider,
+        evidence_result(
+            provider,
+            acquisition_id="evidence-agree-2",
+            acquired_at=NOW + timedelta(minutes=5),
+        ),
+    )
+
+    assert second.conflict_state == "none"
+    assert repository.unresolved_evidence_conflicts() == ()
+
+
+def test_correction_diverging_from_its_own_predecessor_is_not_flagged_as_conflict(tmp_path) -> None:
+    service, repository, provider = setup(tmp_path)
+    original = service.ingest_evidence(provider, evidence_result(provider, acquisition_id="evidence-correction-1"))
+
+    corrected = service.ingest_evidence(
+        provider,
+        evidence_result(
+            provider,
+            acquisition_id="evidence-correction-2",
+            acquired_at=NOW + timedelta(minutes=5),
+            extracted_claim="Protocol fees are distributed under the corrected disclosed rule.",
+            supersedes_record_id=original.record_id,
+            correction_reason="Corrected the disclosed distribution rule.",
+        ),
+    )
+
+    assert corrected.conflict_state == "none"
+    assert repository.unresolved_evidence_conflicts() == ()
+
+
+def test_divergent_supply_snapshots_are_flagged_and_queryable_as_unresolved_conflicts(tmp_path) -> None:
+    service, repository, provider = setup(tmp_path)
+    evidence = service.ingest_evidence(provider, evidence_result(provider, acquisition_id="evidence-supply-conflict"))
+    service.ingest_supply(
+        provider,
+        supply_result(provider, evidence.record_id, acquisition_id="supply-conflict-1"),
+    )
+    second = service.ingest_supply(
+        provider,
+        supply_result(
+            provider,
+            evidence.record_id,
+            acquisition_id="supply-conflict-2",
+            acquired_at=NOW + timedelta(minutes=6),
+            quantity="77000000",
+            quantity_components=[
+                ["circulating_supply", "77000000"],
+                ["total_supply", "100000000"],
+                ["fully_diluted_supply", "115000000"],
+                ["locked_supply", "10000000"],
+                ["treasury_held_supply", "2000000"],
+            ],
+        ),
+    )
+
+    assert second.conflict_state == "open"
+    assert [item.record_id for item in repository.unresolved_supply_conflicts()] == [second.record_id]

@@ -57,6 +57,7 @@ class SupplyAndValueCaptureService:
         ) -> Record:
             self._authorize_result(provider, result, expected_kind=expected_kind)
             record = self._record_from_result(result, expected_kind=expected_kind)
+            record = self._apply_conflict_policy(record)
             self._authorize_correction(record)
             if isinstance(record, (SupplyBasisSnapshot, ValueCaptureRuleSnapshot)):
                 self._require_evidence(record)
@@ -168,6 +169,15 @@ class SupplyAndValueCaptureService:
 
     def strict_known_rule(self, **kwargs: Any) -> ValueCaptureRuleSnapshot | None:
         return self.repository.strict_known_rule(**kwargs)
+
+    def unresolved_evidence_conflicts(self) -> tuple[FundamentalEvidenceRecord, ...]:
+        return self.repository.unresolved_evidence_conflicts()
+
+    def unresolved_supply_conflicts(self) -> tuple[SupplyBasisSnapshot, ...]:
+        return self.repository.unresolved_supply_conflicts()
+
+    def unresolved_rule_conflicts(self) -> tuple[ValueCaptureRuleSnapshot, ...]:
+        return self.repository.unresolved_rule_conflicts()
 
     def _record_from_result(self, result: ValueCaptureAcquisitionResult, *, expected_kind: str) -> Record:
         payload = result.payload
@@ -328,6 +338,27 @@ class SupplyAndValueCaptureService:
             if evidence.quality_state != "accepted" or evidence.conflict_state not in {"none", "resolved"}:
                 raise SupplyAndValueCaptureAuthorityError("non-authoritative evidence cannot support snapshot")
 
+    def _apply_conflict_policy(self, record: Record) -> Record:
+        if isinstance(record, FundamentalEvidenceRecord):
+            history = self.repository.evidence_history(record.logical_id)
+        elif isinstance(record, SupplyBasisSnapshot):
+            history = self.repository.supply_history(record.logical_id)
+        else:
+            history = self.repository.rule_history(record.logical_id)
+        superseded_ids = {item.supersedes_record_id for item in history if item.supersedes_record_id is not None}
+        current_fingerprint = _value_fingerprint(record)
+        divergent = any(
+            item.record_id not in superseded_ids
+            and item.record_id != record.supersedes_record_id
+            and item.quality_state == "accepted"
+            and item.effective_at == record.effective_at
+            and _value_fingerprint(item) != current_fingerprint
+            for item in history
+        )
+        if divergent and record.conflict_state == "none":
+            return replace(record, conflict_state="open")
+        return record
+
     def _authorize_correction(
         self,
         record: FundamentalEvidenceRecord | SupplyBasisSnapshot | ValueCaptureRuleSnapshot,
@@ -377,6 +408,28 @@ def _logical_id(record: Any) -> str:
         )
     )
     return hashlib.sha256(raw.encode()).hexdigest()
+
+
+_CONFLICT_POLICY_EXCLUDED_FIELDS = frozenset(
+    {
+        "record_id",
+        "logical_id",
+        "content_hash",
+        "recorded_at",
+        "known_at",
+        "quality_state",
+        "conflict_state",
+        "supersedes_record_id",
+        "correction_reason",
+        "acquisition_id",
+    }
+)
+
+
+def _value_fingerprint(record: Any) -> str:
+    payload = {key: value for key, value in asdict(record).items() if key not in _CONFLICT_POLICY_EXCLUDED_FIELDS}
+    raw = json.dumps(_json_safe(payload), sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(raw).hexdigest()
 
 
 def _content_hash(record: Any, *, logical_id: str) -> str:
