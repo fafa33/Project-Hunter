@@ -427,6 +427,7 @@ _CONFLICT_POLICY_EXCLUDED_FIELDS = frozenset(
 
 
 def _value_fingerprint(record: Any) -> str:
+    # Excludes bookkeeping fields only; any other differing field counts as divergence.
     payload = {key: value for key, value in asdict(record).items() if key not in _CONFLICT_POLICY_EXCLUDED_FIELDS}
     raw = json.dumps(_json_safe(payload), sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(raw).hexdigest()
