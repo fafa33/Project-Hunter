@@ -465,6 +465,35 @@ def test_value_capture_rule_contract_round_trips_policy_and_limitations(tmp_path
     assert len(record.limitations) == 2
 
 
+def test_strict_known_rule_excludes_expired_applicability_period(tmp_path) -> None:
+    service, _, provider = setup(tmp_path)
+    evidence = service.ingest_evidence(provider, evidence_result(provider))
+    record = service.ingest_rule(provider, rule_result(provider, evidence.record_id))
+
+    assert (
+        service.strict_known_rule(
+            entity_id=record.identity.entity_id,
+            economic_claim_id=record.identity.economic_claim_id,
+            representation_id=record.identity.representation_id,
+            rule_type=record.rule_type,
+            effective_as_of=record.applicability_end,
+            known_by=record.known_at,
+        )
+        == record
+    )
+    assert (
+        service.strict_known_rule(
+            entity_id=record.identity.entity_id,
+            economic_claim_id=record.identity.economic_claim_id,
+            representation_id=record.identity.representation_id,
+            rule_type=record.rule_type,
+            effective_as_of=record.applicability_end + timedelta(microseconds=1),
+            known_by=record.known_at,
+        )
+        is None
+    )
+
+
 def test_value_capture_rule_contract_rejects_invalid_period_and_rate(tmp_path) -> None:
     service, _, provider = setup(tmp_path)
     evidence = service.ingest_evidence(provider, evidence_result(provider))

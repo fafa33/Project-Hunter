@@ -116,6 +116,10 @@ class SupplyAndValueCaptureRepository:
             and item.identity.representation_id == representation_id
             and getattr(item, category_name) == category_value
             and item.effective_at <= effective_as_of
+            and (
+                not isinstance(item, ValueCaptureRuleSnapshot)
+                or item.applicability_start <= effective_as_of <= item.applicability_end
+            )
             and item.recorded_at <= known_by
             and item.known_at <= known_by
             and item.quality_state == "accepted"
