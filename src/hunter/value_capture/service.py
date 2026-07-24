@@ -7,6 +7,7 @@ from dataclasses import asdict, replace
 from datetime import datetime
 from typing import Any, cast
 
+from hunter.persistence.models import QuerySpec
 from hunter.persistence.sql import RepositoryFactory, SessionFactory, create_sqlite_engine
 from hunter.persistence.sql.exceptions import PersistenceIdentityConflictError
 from hunter.value_capture.models import (
@@ -66,6 +67,7 @@ class SupplyAndValueCaptureService:
             engine = create_sqlite_engine(self.repository.path)
             session = SessionFactory(engine).create()
             try:
+                session.connection().exec_driver_sql("BEGIN IMMEDIATE")
                 snapshots = RepositoryFactory(session).snapshots()
                 insert_receipt(snapshots, result.receipt)
                 insert_record(snapshots, table_for(record), record)
@@ -100,30 +102,27 @@ class SupplyAndValueCaptureService:
             snapshots.save(receipt_snapshot(receipt))
 
         def insert_record(snapshots: Any, table: str, record: Record) -> None:
+            snapshot = record_snapshot(record)
             predecessor = record.supersedes_record_id
             if predecessor is not None:
-                if isinstance(record, FundamentalEvidenceRecord):
-                    prior = self.repository.evidence(predecessor)
-                elif isinstance(record, SupplyBasisSnapshot):
-                    prior = self.repository.supply(predecessor)
-                else:
-                    prior = self.repository.rule(predecessor)
-                if prior is None:
+                prior = snapshots.load(predecessor)
+                if prior is None or prior.snapshot_type != snapshot.snapshot_type:
                     raise ValueCaptureIntegrityError("superseded record does not exist")
-                if prior.logical_id != record.logical_id:
+                if str(prior.payload.get("logical_id")) != record.logical_id:
                     raise ValueCaptureIntegrityError("correction must preserve logical_id")
-                if prior.recorded_at >= record.recorded_at:
+                if datetime.fromisoformat(str(prior.payload["recorded_at"])) >= record.recorded_at:
                     raise ValueCaptureIntegrityError("correction recorded_at must follow predecessor")
-                if prior.known_at >= record.known_at:
+                if datetime.fromisoformat(str(prior.payload["known_at"])) >= record.known_at:
                     raise ValueCaptureIntegrityError("correction known_at must follow predecessor")
                 successors = (
                     item
-                    for item in self.repository._snapshots(record_snapshot(record).snapshot_type)
+                    for item in snapshots.query(QuerySpec(record_kind="snapshot"))
+                    if item.snapshot_type == snapshot.snapshot_type
                     if item.payload.get("supersedes_record_id") == predecessor
                 )
                 if next(successors, None) is not None:
                     raise ValueCaptureIntegrityError("branching correction lineage is prohibited")
-            snapshots.save(record_snapshot(record))
+            snapshots.save(snapshot)
 
         def table_for(record: Record) -> str:
             if isinstance(record, FundamentalEvidenceRecord):
