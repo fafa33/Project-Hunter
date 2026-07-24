@@ -113,6 +113,21 @@ def supply_result(provider, evidence_id, *, acquired_at=NOW + timedelta(minutes=
         "quantity": "86000000",
         "unit": "native_units",
         "denominator_meaning": "Provider-observed circulating units for the canonical representation.",
+        "supply_policy_id": "canonical-token-supply-v1",
+        "supply_policy_version": "1.0.0",
+        "quantity_components": [
+            ["circulating_supply", "86000000"],
+            ["total_supply", "100000000"],
+            ["fully_diluted_supply", "115000000"],
+            ["locked_supply", "10000000"],
+            ["treasury_held_supply", "2000000"],
+        ],
+        "observed_market_fact_ids": ["market-fact-api3-circulating"],
+        "observed_market_fact_versions": ["observed-market-fact-v2"],
+        "source_record_id": "official-api3-supply-disclosure",
+        "source_record_version": "2026-07-20",
+        "confidence": "0.9",
+        "uncertainty": "0.1",
         "effective_at": NOW,
         "evidence_record_ids": [evidence_id],
         "quality_state": "accepted",
@@ -237,6 +252,45 @@ def test_future_known_evidence_is_rejected(tmp_path) -> None:
         service.ingest_supply(
             provider,
             supply_result(provider, evidence.record_id, acquired_at=NOW + timedelta(days=1)),
+        )
+
+
+def test_supply_basis_contract_rejects_incoherent_components(tmp_path) -> None:
+    service, _, provider = setup(tmp_path)
+    evidence = service.ingest_evidence(provider, evidence_result(provider))
+    with pytest.raises(ValueError, match="circulating supply"):
+        service.ingest_supply(
+            provider,
+            supply_result(
+                provider,
+                evidence.record_id,
+                quantity_components=[
+                    ["circulating_supply", "101000000"],
+                    ["total_supply", "100000000"],
+                ],
+                quantity="101000000",
+            ),
+        )
+
+
+def test_supply_basis_contract_round_trips_policy_and_fact_versions(tmp_path) -> None:
+    service, repository, provider = setup(tmp_path)
+    evidence = service.ingest_evidence(provider, evidence_result(provider))
+    record = service.ingest_supply(provider, supply_result(provider, evidence.record_id))
+    restored = repository.supply(record.record_id)
+    assert restored == record
+    assert record.supply_policy_version == "1.0.0"
+    assert record.observed_market_fact_versions == ("observed-market-fact-v2",)
+    assert dict(record.quantity_components)["fully_diluted_supply"] == "115000000"
+
+
+def test_supply_basis_contract_rejects_null_policy_before_string_coercion(tmp_path) -> None:
+    service, _, provider = setup(tmp_path)
+    evidence = service.ingest_evidence(provider, evidence_result(provider))
+    with pytest.raises(SupplyAndValueCaptureAuthorityError, match="supply_policy_id"):
+        service.ingest_supply(
+            provider,
+            supply_result(provider, evidence.record_id, supply_policy_id=None),
         )
 
 
