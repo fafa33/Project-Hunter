@@ -245,6 +245,18 @@ class SupplyAndValueCaptureService:
                 distribution_formula=str(payload.get("distribution_formula", "")),
                 rate_or_proportion=_optional_text(payload.get("rate_or_proportion")),
                 governance_or_contract_authority=str(payload["governance_or_contract_authority"]),
+                mechanism_policy_id=_required_payload_text(payload, "mechanism_policy_id"),
+                mechanism_policy_version=_required_payload_text(payload, "mechanism_policy_version"),
+                dilution_treatment=_required_payload_text(payload, "dilution_treatment"),
+                claim_seniority=_required_payload_text(payload, "claim_seniority"),
+                applicability_start=_datetime(payload["applicability_start"]),
+                applicability_end=_datetime(payload["applicability_end"]),
+                limitations=_required_payload_tuple(payload, "limitations"),
+                evidence_record_versions=_required_payload_tuple(payload, "evidence_record_versions"),
+                source_record_id=_required_payload_text(payload, "source_record_id"),
+                source_record_version=_required_payload_text(payload, "source_record_version"),
+                confidence=_required_payload_text(payload, "confidence"),
+                uncertainty=_required_payload_text(payload, "uncertainty"),
                 effective_at=_datetime(payload["effective_at"]),
                 recorded_at=result.acquired_at,
                 known_at=result.acquired_at,
@@ -285,14 +297,23 @@ class SupplyAndValueCaptureService:
             raise SupplyAndValueCaptureAuthorityError("registry fingerprint mismatch")
 
     def _require_evidence(self, record: SupplyBasisSnapshot | ValueCaptureRuleSnapshot) -> None:
-        for evidence_id in record.evidence_record_ids:
+        evidence_versions = (
+            record.evidence_record_versions
+            if isinstance(record, ValueCaptureRuleSnapshot)
+            else (None,) * len(record.evidence_record_ids)
+        )
+        for evidence_id, expected_version in zip(record.evidence_record_ids, evidence_versions, strict=True):
             evidence = self.repository.evidence(evidence_id)
             if evidence is None:
                 raise SupplyAndValueCaptureAuthorityError(f"authoritative evidence does not exist: {evidence_id}")
             if evidence.identity != record.identity:
                 raise SupplyAndValueCaptureAuthorityError("evidence identity does not match snapshot identity")
+            if expected_version is not None and evidence.semantic_version != expected_version:
+                raise SupplyAndValueCaptureAuthorityError("evidence version does not match snapshot reference")
             if evidence.source_id != record.source_id or evidence.parser_version != record.parser_version:
                 raise SupplyAndValueCaptureAuthorityError("evidence source/parser provenance mismatch")
+            if evidence.effective_at > record.effective_at:
+                raise SupplyAndValueCaptureAuthorityError("future-effective evidence cannot support snapshot")
             if evidence.recorded_at > record.recorded_at or evidence.known_at > record.known_at:
                 raise SupplyAndValueCaptureAuthorityError("future-known evidence cannot support snapshot")
             if evidence.quality_state != "accepted" or evidence.conflict_state not in {"none", "resolved"}:

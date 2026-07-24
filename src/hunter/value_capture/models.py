@@ -270,6 +270,18 @@ class ValueCaptureRuleSnapshot:
     distribution_formula: str
     rate_or_proportion: str | None
     governance_or_contract_authority: str
+    mechanism_policy_id: str
+    mechanism_policy_version: str
+    dilution_treatment: str
+    claim_seniority: str
+    applicability_start: datetime
+    applicability_end: datetime
+    limitations: tuple[str, ...]
+    evidence_record_versions: tuple[str, ...]
+    source_record_id: str
+    source_record_version: str
+    confidence: str
+    uncertainty: str
     effective_at: datetime
     recorded_at: datetime
     known_at: datetime
@@ -297,6 +309,12 @@ class ValueCaptureRuleSnapshot:
             "destination_economic_flow",
             "trigger_condition",
             "governance_or_contract_authority",
+            "mechanism_policy_id",
+            "mechanism_policy_version",
+            "dilution_treatment",
+            "claim_seniority",
+            "source_record_id",
+            "source_record_version",
             "source_id",
             "parser_version",
             "raw_payload_hash",
@@ -305,10 +323,36 @@ class ValueCaptureRuleSnapshot:
         _member("rule_type", self.rule_type, VALUE_CAPTURE_RULE_TYPES)
         _member("quality_state", self.quality_state, QUALITY_STATES)
         _member("conflict_state", self.conflict_state, CONFLICT_STATES)
-        if self.rate_or_proportion is not None and _decimal(self.rate_or_proportion) < 0:
-            raise ValueError("rate_or_proportion must not be negative")
+        if self.rate_or_proportion is not None:
+            rate = _decimal(self.rate_or_proportion)
+            if not rate.is_finite() or rate < 0 or rate > 1:
+                raise ValueError("rate_or_proportion must be between 0 and 1")
         if not self.evidence_record_ids:
             raise ValueError("evidence_record_ids must not be empty")
+        if any(not isinstance(item, str) or not item.strip() for item in self.evidence_record_ids):
+            raise ValueError("evidence_record_ids must contain nonblank strings")
+        if len(set(self.evidence_record_ids)) != len(self.evidence_record_ids):
+            raise ValueError("evidence_record_ids must be unique")
+        if len(self.evidence_record_ids) != len(self.evidence_record_versions):
+            raise ValueError("evidence record IDs and versions must have equal length")
+        if any(not isinstance(item, str) or not item.strip() for item in self.evidence_record_versions):
+            raise ValueError("evidence_record_versions must contain nonblank strings")
+        if not self.limitations:
+            raise ValueError("limitations must not be empty")
+        if any(not isinstance(item, str) or not item.strip() for item in self.limitations):
+            raise ValueError("limitations must contain nonblank strings")
+        applicability_start = _utc("applicability_start", self.applicability_start)
+        applicability_end = _utc("applicability_end", self.applicability_end)
+        if applicability_start > applicability_end:
+            raise ValueError("applicability_start must be <= applicability_end")
+        if not applicability_start <= self.effective_at <= applicability_end:
+            raise ValueError("effective_at must fall within the applicability period")
+        object.__setattr__(self, "applicability_start", applicability_start)
+        object.__setattr__(self, "applicability_end", applicability_end)
+        object.__setattr__(self, "limitations", tuple(sorted(self.limitations)))
+        _bounded_decimal("confidence", self.confidence)
+        _bounded_decimal("uncertainty", self.uncertainty)
+        _hash("raw_payload_hash", self.raw_payload_hash)
         _normalize_chronology(self)
         _validate_correction(self)
 
