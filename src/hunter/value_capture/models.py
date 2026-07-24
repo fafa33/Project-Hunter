@@ -158,6 +158,15 @@ class SupplyBasisSnapshot:
     quantity: str
     unit: str
     denominator_meaning: str
+    supply_policy_id: str
+    supply_policy_version: str
+    quantity_components: tuple[tuple[SupplyBasisType, str], ...]
+    observed_market_fact_ids: tuple[str, ...]
+    observed_market_fact_versions: tuple[str, ...]
+    source_record_id: str
+    source_record_version: str
+    confidence: str
+    uncertainty: str
     effective_at: datetime
     recorded_at: datetime
     known_at: datetime
@@ -182,6 +191,10 @@ class SupplyBasisSnapshot:
             "quantity",
             "unit",
             "denominator_meaning",
+            "supply_policy_id",
+            "supply_policy_version",
+            "source_record_id",
+            "source_record_version",
             "source_id",
             "parser_version",
             "raw_payload_hash",
@@ -190,10 +203,49 @@ class SupplyBasisSnapshot:
         _member("supply_basis_type", self.supply_basis_type, SUPPLY_BASIS_TYPES)
         _member("quality_state", self.quality_state, QUALITY_STATES)
         _member("conflict_state", self.conflict_state, CONFLICT_STATES)
-        if _decimal(self.quantity) < 0:
+        quantity = _decimal(self.quantity)
+        if not quantity.is_finite() or quantity < 0:
             raise ValueError("supply quantity must not be negative")
         if not self.evidence_record_ids:
             raise ValueError("evidence_record_ids must not be empty")
+        if not self.observed_market_fact_ids:
+            raise ValueError("observed_market_fact_ids must not be empty")
+        if len(self.observed_market_fact_ids) != len(self.observed_market_fact_versions):
+            raise ValueError("observed market fact IDs and versions must have equal length")
+        if len(set(self.observed_market_fact_ids)) != len(self.observed_market_fact_ids):
+            raise ValueError("observed_market_fact_ids must be unique")
+        _bounded_decimal("confidence", self.confidence)
+        _bounded_decimal("uncertainty", self.uncertainty)
+        _hash("raw_payload_hash", self.raw_payload_hash)
+        components: dict[str, Decimal] = {}
+        for component_type, component_value in self.quantity_components:
+            _member("supply_basis_type", component_type, SUPPLY_BASIS_TYPES)
+            if component_type in components:
+                raise ValueError("quantity_components must contain unique supply basis types")
+            component = _decimal(component_value)
+            if not component.is_finite() or component < 0:
+                raise ValueError("supply component quantities must be finite and non-negative")
+            components[component_type] = component
+        if components.get(self.supply_basis_type) != quantity:
+            raise ValueError("selected supply quantity must match its quantity component")
+        circulating = components.get("circulating_supply")
+        total = components.get("total_supply")
+        diluted = components.get("fully_diluted_supply")
+        locked = components.get("locked_supply")
+        excluded = components.get("treasury_held_supply")
+        if circulating is not None and total is not None and circulating > total:
+            raise ValueError("circulating supply must not exceed total supply")
+        if total is not None and diluted is not None and total > diluted:
+            raise ValueError("total supply must not exceed fully diluted supply")
+        if locked is not None and total is not None and locked > total:
+            raise ValueError("locked supply must not exceed total supply")
+        if excluded is not None and total is not None and excluded > total:
+            raise ValueError("excluded supply must not exceed total supply")
+        object.__setattr__(
+            self,
+            "quantity_components",
+            tuple(sorted(self.quantity_components)),
+        )
         _normalize_chronology(self)
         _validate_correction(self)
 

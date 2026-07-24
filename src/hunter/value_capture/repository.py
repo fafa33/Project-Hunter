@@ -255,8 +255,27 @@ def _evidence_from_payload(payload: dict[str, Any]) -> FundamentalEvidenceRecord
 
 
 def _supply_from_payload(payload: dict[str, Any]) -> SupplyBasisSnapshot:
+    required_v2_fields = (
+        "supply_policy_id",
+        "supply_policy_version",
+        "quantity_components",
+        "observed_market_fact_ids",
+        "observed_market_fact_versions",
+        "source_record_id",
+        "source_record_version",
+        "confidence",
+        "uncertainty",
+    )
+    missing = tuple(name for name in required_v2_fields if name not in payload)
+    if missing:
+        raise ValueCaptureIntegrityError(
+            "legacy supply basis snapshot is not authoritative under the current contract: " + ",".join(missing)
+        )
     result = _base_payload(payload)
     result["evidence_record_ids"] = tuple(result["evidence_record_ids"])
+    result["quantity_components"] = tuple((str(item[0]), str(item[1])) for item in result["quantity_components"])
+    result["observed_market_fact_ids"] = tuple(result["observed_market_fact_ids"])
+    result["observed_market_fact_versions"] = tuple(result["observed_market_fact_versions"])
     return SupplyBasisSnapshot(**result)
 
 
