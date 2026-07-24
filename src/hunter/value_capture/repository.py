@@ -232,6 +232,22 @@ def _receipt_from_payload(payload: dict[str, Any]) -> AcquisitionReceipt:
 
 
 def _evidence_from_payload(payload: dict[str, Any]) -> FundamentalEvidenceRecord:
+    required_v2_fields = (
+        "accounting_period_start",
+        "accounting_period_end",
+        "attribution_rule_id",
+        "source_methodology",
+        "source_record_id",
+        "source_record_version",
+        "entity_link_confidence",
+        "evidence_confidence",
+        "uncertainty",
+    )
+    missing = tuple(name for name in required_v2_fields if name not in payload)
+    if missing:
+        raise ValueCaptureIntegrityError(
+            "legacy fundamental evidence snapshot is not authoritative under the current contract: " + ",".join(missing)
+        )
     result = _base_payload(payload)
     for name in ("accounting_period_start", "accounting_period_end"):
         result[name] = datetime.fromisoformat(str(result[name])).astimezone(UTC)

@@ -7,6 +7,8 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from hunter.persistence.records import SnapshotRecord
+from hunter.persistence.sql import RepositoryFactory, SessionFactory, create_sqlite_engine
 from hunter.value_capture.models import EconomicClaimIdentity
 from hunter.value_capture.providers import (
     RegisteredValueCaptureProvider,
@@ -277,6 +279,61 @@ def test_fundamental_evidence_contract_round_trips_authority_fields(tmp_path) ->
     assert record.attribution_rule_id == "api3-fee-distribution-rule-v1"
     assert record.source_record_version == "2026-07-20"
     assert record.accounting_period_start == NOW - timedelta(days=30)
+
+
+def test_legacy_fundamental_evidence_snapshot_fails_closed_with_compatibility_error(
+    tmp_path,
+) -> None:
+    service, repository, provider = setup(tmp_path)
+    record = service.ingest_evidence(provider, evidence_result(provider))
+    engine = create_sqlite_engine(repository.path)
+    session = SessionFactory(engine).create()
+    try:
+        snapshots = RepositoryFactory(session).snapshots()
+        current = snapshots.load(record.record_id)
+        assert current is not None
+        payload = dict(current.payload)
+        for name in (
+            "accounting_period_start",
+            "accounting_period_end",
+            "attribution_rule_id",
+            "source_methodology",
+            "source_record_id",
+            "source_record_version",
+            "entity_link_confidence",
+            "evidence_confidence",
+            "uncertainty",
+        ):
+            payload.pop(name)
+        payload["record_id"] = "legacy-evidence"
+        snapshots.save(
+            SnapshotRecord(
+                id="legacy-evidence",
+                created_at=current.created_at,
+                effective_at=current.effective_at,
+                snapshot_type=current.snapshot_type,
+                target_id=current.target_id,
+                record_ids=("legacy-evidence",),
+                payload=payload,
+                metadata=current.metadata,
+            )
+        )
+        session.commit()
+    finally:
+        session.close()
+        engine.dispose()
+
+    with pytest.raises(ValueCaptureIntegrityError, match="legacy fundamental evidence"):
+        repository.evidence("legacy-evidence")
+
+
+def test_null_required_provenance_is_rejected_before_string_coercion(tmp_path) -> None:
+    service, _, provider = setup(tmp_path)
+    with pytest.raises(SupplyAndValueCaptureAuthorityError, match="attribution_rule_id"):
+        service.ingest_evidence(
+            provider,
+            evidence_result(provider, attribution_rule_id=None),
+        )
 
 
 def test_branching_corrections_are_rejected_and_replay_is_strict_known(tmp_path) -> None:
