@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
@@ -11,7 +12,11 @@ from hunter.value_capture.providers import (
     ValueCaptureVerificationKeyRegistry,
 )
 from hunter.value_capture.registry import ValueCaptureSourceConfig, ValueCaptureSourceRegistry
-from hunter.value_capture.repository import SupplyAndValueCaptureRepository, ValueCaptureIntegrityError
+from hunter.value_capture.repository import (
+    DEFAULT_VALUE_CAPTURE_DB,
+    SupplyAndValueCaptureRepository,
+    ValueCaptureIntegrityError,
+)
 from hunter.value_capture.service import SupplyAndValueCaptureAuthorityError, SupplyAndValueCaptureService
 
 NOW = datetime(2026, 7, 20, 18, 0, tzinfo=UTC)
@@ -179,6 +184,19 @@ def test_atomic_receipt_and_record_persistence(tmp_path) -> None:
     assert repository.count("value_capture_acquisition_receipts") == 1
     assert repository.count("fundamental_evidence_records") == 1
     assert repository.receipt(evidence.acquisition_id) is not None
+
+
+def test_canonical_default_and_generic_sql_persistence(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    repository = SupplyAndValueCaptureRepository()
+    assert repository.path == DEFAULT_VALUE_CAPTURE_DB
+    assert repository.path.resolve() == tmp_path / "data/data_ops.sqlite"
+    with sqlite3.connect(repository.path) as connection:
+        tables = {str(row[0]) for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    assert "persistence_records" in tables
+    assert "fundamental_evidence_records" not in tables
+    assert "supply_basis_snapshots" not in tables
+    assert "value_capture_rule_snapshots" not in tables
 
 
 def test_forged_or_tampered_acquisition_is_rejected(tmp_path) -> None:

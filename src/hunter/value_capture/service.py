@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import hashlib
 import json
-import sqlite3
 from collections.abc import Callable
 from dataclasses import asdict, replace
 from datetime import datetime
 from typing import Any, cast
 
+from hunter.persistence.sql import RepositoryFactory, SessionFactory, create_sqlite_engine
+from hunter.persistence.sql.exceptions import PersistenceIdentityConflictError
 from hunter.value_capture.models import (
     VALUE_CAPTURE_SCHEMA_VERSION,
     FundamentalEvidenceRecord,
@@ -21,7 +22,12 @@ from hunter.value_capture.providers import (
     ValueCaptureVerificationKeyRegistry,
 )
 from hunter.value_capture.registry import ValueCaptureSourceRegistry
-from hunter.value_capture.repository import SupplyAndValueCaptureRepository, ValueCaptureIntegrityError
+from hunter.value_capture.repository import (
+    SupplyAndValueCaptureRepository,
+    ValueCaptureIntegrityError,
+    receipt_snapshot,
+    record_snapshot,
+)
 
 Record = FundamentalEvidenceRecord | SupplyBasisSnapshot | ValueCaptureRuleSnapshot
 PersistCapability = Callable[[RegisteredValueCaptureProvider, ValueCaptureAcquisitionResult, str], Record]
@@ -57,20 +63,22 @@ class SupplyAndValueCaptureService:
                 raise ValueCaptureIntegrityError("receipt hash or signature is not verification-key authorized")
             validate_receipt_binding(result.receipt, record)
 
-            conn = sqlite3.connect(self.repository.path)
-            conn.row_factory = sqlite3.Row
-            conn.execute("PRAGMA foreign_keys = ON")
+            engine = create_sqlite_engine(self.repository.path)
+            session = SessionFactory(engine).create()
             try:
-                conn.execute("BEGIN IMMEDIATE")
-                insert_receipt(conn, result.receipt)
-                insert_record(conn, table_for(record), record)
+                snapshots = RepositoryFactory(session).snapshots()
+                insert_receipt(snapshots, result.receipt)
+                insert_record(snapshots, table_for(record), record)
+                session.commit()
+            except PersistenceIdentityConflictError as exc:
+                session.rollback()
+                raise ValueCaptureIntegrityError(str(exc)) from exc
             except Exception:
-                conn.rollback()
+                session.rollback()
                 raise
-            else:
-                conn.commit()
             finally:
-                conn.close()
+                session.close()
+                engine.dispose()
             return record
 
         def validate_receipt_binding(receipt: AcquisitionReceipt, record: Record) -> None:
@@ -88,127 +96,34 @@ class SupplyAndValueCaptureService:
             if receipt.acquired_at != record.recorded_at or receipt.acquired_at != record.known_at:
                 raise ValueCaptureIntegrityError("record chronology does not match receipt")
 
-        def insert_receipt(conn: sqlite3.Connection, receipt: AcquisitionReceipt) -> None:
-            payload = _json_safe(asdict(receipt))
-            canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
-            existing = conn.execute(
-                "SELECT payload_json FROM value_capture_acquisition_receipts WHERE acquisition_id = ?",
-                (receipt.acquisition_id,),
-            ).fetchone()
-            if existing is not None:
-                if str(existing["payload_json"]) != canonical:
-                    raise ValueCaptureIntegrityError("acquisition_id reused with divergent receipt")
-                return
-            conn.execute(
-                """
-                INSERT INTO value_capture_acquisition_receipts (
-                    acquisition_id,receipt_hash,kind,capability,source_id,source_authority_tier,endpoint,
-                    parser_version,registry_fingerprint,signing_key_id,signature,acquired_at,entity_id,
-                    economic_claim_id,representation_id,raw_payload_hash,payload_json
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                """,
-                (
-                    receipt.acquisition_id,
-                    receipt.receipt_hash,
-                    receipt.kind,
-                    receipt.capability,
-                    receipt.source_id,
-                    receipt.source_authority_tier,
-                    receipt.endpoint,
-                    receipt.parser_version,
-                    receipt.registry_fingerprint,
-                    receipt.signing_key_id,
-                    receipt.signature,
-                    receipt.acquired_at.isoformat(),
-                    receipt.identity.entity_id,
-                    receipt.identity.economic_claim_id,
-                    receipt.identity.representation_id,
-                    receipt.raw_payload_hash,
-                    canonical,
-                ),
-            )
+        def insert_receipt(snapshots: Any, receipt: AcquisitionReceipt) -> None:
+            snapshots.save(receipt_snapshot(receipt))
 
-        def insert_record(conn: sqlite3.Connection, table: str, record: Record) -> None:
-            payload = _json_safe(asdict(record))
-            canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
-            existing = conn.execute(
-                f"SELECT payload_json FROM {table} WHERE record_id = ?",
-                (record.record_id,),
-            ).fetchone()
-            if existing is not None:
-                if str(existing["payload_json"]) != canonical:
-                    raise ValueCaptureIntegrityError("record_id reused with divergent content")
-                return
+        def insert_record(snapshots: Any, table: str, record: Record) -> None:
             predecessor = record.supersedes_record_id
             if predecessor is not None:
-                row = conn.execute(
-                    f"SELECT logical_id,recorded_at,known_at FROM {table} WHERE record_id = ?",
-                    (predecessor,),
-                ).fetchone()
-                if row is None:
+                if isinstance(record, FundamentalEvidenceRecord):
+                    prior = self.repository.evidence(predecessor)
+                elif isinstance(record, SupplyBasisSnapshot):
+                    prior = self.repository.supply(predecessor)
+                else:
+                    prior = self.repository.rule(predecessor)
+                if prior is None:
                     raise ValueCaptureIntegrityError("superseded record does not exist")
-                if str(row["logical_id"]) != record.logical_id:
+                if prior.logical_id != record.logical_id:
                     raise ValueCaptureIntegrityError("correction must preserve logical_id")
-                if datetime.fromisoformat(str(row["recorded_at"])) >= record.recorded_at:
+                if prior.recorded_at >= record.recorded_at:
                     raise ValueCaptureIntegrityError("correction recorded_at must follow predecessor")
-                if datetime.fromisoformat(str(row["known_at"])) >= record.known_at:
+                if prior.known_at >= record.known_at:
                     raise ValueCaptureIntegrityError("correction known_at must follow predecessor")
-                successor = conn.execute(
-                    f"SELECT record_id FROM {table} WHERE supersedes_record_id = ?",
-                    (predecessor,),
-                ).fetchone()
-                if successor is not None:
+                successors = (
+                    item
+                    for item in self.repository._snapshots(record_snapshot(record).snapshot_type)
+                    if item.payload.get("supersedes_record_id") == predecessor
+                )
+                if next(successors, None) is not None:
                     raise ValueCaptureIntegrityError("branching correction lineage is prohibited")
-
-            category_column = None
-            category_value = None
-            if isinstance(record, SupplyBasisSnapshot):
-                category_column, category_value = "supply_basis_type", record.supply_basis_type
-            elif isinstance(record, ValueCaptureRuleSnapshot):
-                category_column, category_value = "rule_type", record.rule_type
-            columns = [
-                "record_id",
-                "logical_id",
-                "entity_id",
-                "economic_claim_id",
-                "representation_id",
-                "source_id",
-                "parser_version",
-                "acquisition_id",
-                "effective_at",
-                "recorded_at",
-                "known_at",
-                "quality_state",
-                "conflict_state",
-                "content_hash",
-                "supersedes_record_id",
-                "payload_json",
-            ]
-            values: list[object] = [
-                record.record_id,
-                record.logical_id,
-                record.identity.entity_id,
-                record.identity.economic_claim_id,
-                record.identity.representation_id,
-                record.source_id,
-                record.parser_version,
-                record.acquisition_id,
-                record.effective_at.isoformat(),
-                record.recorded_at.isoformat(),
-                record.known_at.isoformat(),
-                record.quality_state,
-                record.conflict_state,
-                record.content_hash,
-                predecessor,
-                canonical,
-            ]
-            if category_column is not None:
-                columns.insert(5, category_column)
-                values.insert(5, category_value)
-            conn.execute(
-                f"INSERT INTO {table} ({', '.join(columns)}) VALUES ({', '.join('?' for _ in columns)})",
-                tuple(values),
-            )
+            snapshots.save(record_snapshot(record))
 
         def table_for(record: Record) -> str:
             if isinstance(record, FundamentalEvidenceRecord):
