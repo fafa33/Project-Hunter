@@ -154,6 +154,15 @@ class SupplyAndValueCaptureService:
     ) -> ValueCaptureRuleSnapshot:
         return cast(ValueCaptureRuleSnapshot, self.__persist_capability(provider, result, "rule"))
 
+    def evidence_history(self, logical_id: str) -> tuple[FundamentalEvidenceRecord, ...]:
+        return self.repository.evidence_history(logical_id)
+
+    def supply_history(self, logical_id: str) -> tuple[SupplyBasisSnapshot, ...]:
+        return self.repository.supply_history(logical_id)
+
+    def rule_history(self, logical_id: str) -> tuple[ValueCaptureRuleSnapshot, ...]:
+        return self.repository.rule_history(logical_id)
+
     def strict_known_supply(self, **kwargs: Any) -> SupplyBasisSnapshot | None:
         return self.repository.strict_known_supply(**kwargs)
 

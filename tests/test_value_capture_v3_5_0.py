@@ -454,6 +454,78 @@ def test_branching_corrections_are_rejected_and_replay_is_strict_known(tmp_path)
     assert current == corrected
 
 
+def test_logical_history_reads_are_stable_for_all_record_families(tmp_path) -> None:
+    service, _, provider = setup(tmp_path)
+    evidence = service.ingest_evidence(provider, evidence_result(provider))
+    corrected_evidence = service.ingest_evidence(
+        provider,
+        evidence_result(
+            provider,
+            acquired_at=NOW + timedelta(days=1),
+            acquisition_id="evidence-2",
+            supersedes_record_id=evidence.record_id,
+            correction_reason="Corrected source claim",
+            extracted_claim="Corrected attributable protocol fees",
+        ),
+    )
+    supply = service.ingest_supply(
+        provider,
+        supply_result(
+            provider,
+            corrected_evidence.record_id,
+            acquired_at=NOW + timedelta(days=2),
+        ),
+    )
+    corrected_supply = service.ingest_supply(
+        provider,
+        supply_result(
+            provider,
+            corrected_evidence.record_id,
+            acquired_at=NOW + timedelta(days=3),
+            acquisition_id="supply-2",
+            supersedes_record_id=supply.record_id,
+            correction_reason="Corrected official supply",
+            quantity="87000000",
+            quantity_components=[
+                ["circulating_supply", "87000000"],
+                ["total_supply", "100000000"],
+                ["fully_diluted_supply", "115000000"],
+            ],
+        ),
+    )
+    rule = service.ingest_rule(
+        provider,
+        rule_result(
+            provider,
+            corrected_evidence.record_id,
+            acquired_at=NOW + timedelta(days=2),
+        ),
+    )
+    corrected_rule = service.ingest_rule(
+        provider,
+        rule_result(
+            provider,
+            corrected_evidence.record_id,
+            acquired_at=NOW + timedelta(days=3),
+            acquisition_id="rule-2",
+            supersedes_record_id=rule.record_id,
+            correction_reason="Corrected value pathway",
+            source_economic_flow="Corrected protocol fees",
+        ),
+    )
+
+    assert service.evidence_history(evidence.logical_id) == (evidence, corrected_evidence)
+    assert service.supply_history(supply.logical_id) == (supply, corrected_supply)
+    assert service.rule_history(rule.logical_id) == (rule, corrected_rule)
+    assert service.evidence_history("0" * 64) == ()
+
+
+def test_logical_history_rejects_blank_identity(tmp_path) -> None:
+    service, _, _ = setup(tmp_path)
+    with pytest.raises(ValueError, match="logical_id"):
+        service.evidence_history(" ")
+
+
 def test_value_capture_rule_contract_round_trips_policy_and_limitations(tmp_path) -> None:
     service, repository, provider = setup(tmp_path)
     evidence = service.ingest_evidence(provider, evidence_result(provider))

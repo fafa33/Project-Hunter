@@ -76,6 +76,27 @@ class SupplyAndValueCaptureRepository:
     def migration_ids(self) -> tuple[str, ...]:
         return (VALUE_CAPTURE_MIGRATION_ID,)
 
+    def evidence_history(self, logical_id: str) -> tuple[FundamentalEvidenceRecord, ...]:
+        return tuple(
+            record
+            for record in self._logical_history(snapshot_type=_EVIDENCE_TYPE, logical_id=logical_id)
+            if isinstance(record, FundamentalEvidenceRecord)
+        )
+
+    def supply_history(self, logical_id: str) -> tuple[SupplyBasisSnapshot, ...]:
+        return tuple(
+            record
+            for record in self._logical_history(snapshot_type=_SUPPLY_TYPE, logical_id=logical_id)
+            if isinstance(record, SupplyBasisSnapshot)
+        )
+
+    def rule_history(self, logical_id: str) -> tuple[ValueCaptureRuleSnapshot, ...]:
+        return tuple(
+            record
+            for record in self._logical_history(snapshot_type=_RULE_TYPE, logical_id=logical_id)
+            if isinstance(record, ValueCaptureRuleSnapshot)
+        )
+
     def strict_known_supply(self, **kwargs: Any) -> SupplyBasisSnapshot | None:
         record = self._strict_known(
             snapshot_type=_SUPPLY_TYPE,
@@ -137,6 +158,24 @@ class SupplyAndValueCaptureRepository:
             reverse=True,
         )
         return current[0] if current else None
+
+    def _logical_history(self, *, snapshot_type: str, logical_id: str) -> tuple[Record, ...]:
+        if not logical_id.strip():
+            raise ValueError("logical_id must not be blank")
+        records = [
+            _record_from_snapshot(item)
+            for item in self._snapshots(snapshot_type)
+            if item.metadata.get("logical_id") == logical_id
+        ]
+        records.sort(
+            key=lambda item: (
+                item.effective_at,
+                item.recorded_at,
+                item.known_at,
+                item.record_id,
+            )
+        )
+        return tuple(records)
 
     def _load(self, identity: str, snapshot_type: str) -> SnapshotRecord | None:
         engine = create_sqlite_engine(self.path)
