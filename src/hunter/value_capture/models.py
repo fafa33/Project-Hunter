@@ -212,6 +212,10 @@ class SupplyBasisSnapshot:
             raise ValueError("observed_market_fact_ids must not be empty")
         if len(self.observed_market_fact_ids) != len(self.observed_market_fact_versions):
             raise ValueError("observed market fact IDs and versions must have equal length")
+        if any(not isinstance(value, str) or not value.strip() for value in self.observed_market_fact_ids):
+            raise ValueError("observed_market_fact_ids must contain non-blank strings")
+        if any(not isinstance(value, str) or not value.strip() for value in self.observed_market_fact_versions):
+            raise ValueError("observed_market_fact_versions must contain non-blank strings")
         if len(set(self.observed_market_fact_ids)) != len(self.observed_market_fact_ids):
             raise ValueError("observed_market_fact_ids must be unique")
         _bounded_decimal("confidence", self.confidence)
