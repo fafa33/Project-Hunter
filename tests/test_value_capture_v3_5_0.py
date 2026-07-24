@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
@@ -11,7 +13,11 @@ from hunter.value_capture.providers import (
     ValueCaptureVerificationKeyRegistry,
 )
 from hunter.value_capture.registry import ValueCaptureSourceConfig, ValueCaptureSourceRegistry
-from hunter.value_capture.repository import SupplyAndValueCaptureRepository, ValueCaptureIntegrityError
+from hunter.value_capture.repository import (
+    DEFAULT_VALUE_CAPTURE_DB,
+    SupplyAndValueCaptureRepository,
+    ValueCaptureIntegrityError,
+)
 from hunter.value_capture.service import SupplyAndValueCaptureAuthorityError, SupplyAndValueCaptureService
 
 NOW = datetime(2026, 7, 20, 18, 0, tzinfo=UTC)
@@ -181,6 +187,19 @@ def test_atomic_receipt_and_record_persistence(tmp_path) -> None:
     assert repository.receipt(evidence.acquisition_id) is not None
 
 
+def test_canonical_default_and_generic_sql_persistence(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    repository = SupplyAndValueCaptureRepository()
+    assert repository.path == DEFAULT_VALUE_CAPTURE_DB
+    assert repository.path.resolve() == tmp_path / "data/data_ops.sqlite"
+    with sqlite3.connect(repository.path) as connection:
+        tables = {str(row[0]) for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    assert "persistence_records" in tables
+    assert "fundamental_evidence_records" not in tables
+    assert "supply_basis_snapshots" not in tables
+    assert "value_capture_rule_snapshots" not in tables
+
+
 def test_forged_or_tampered_acquisition_is_rejected(tmp_path) -> None:
     service, _, provider = setup(tmp_path)
     result = evidence_result(provider)
@@ -266,6 +285,50 @@ def test_branching_corrections_are_rejected_and_replay_is_strict_known(tmp_path)
     )
     assert historical == original
     assert current == corrected
+
+
+def test_concurrent_corrections_cannot_branch_lineage(tmp_path) -> None:
+    service, repository, provider = setup(tmp_path)
+    evidence = service.ingest_evidence(provider, evidence_result(provider))
+    original = service.ingest_rule(provider, rule_result(provider, evidence.record_id))
+    second_service = SupplyAndValueCaptureService(
+        registry=service.registry,
+        repository=SupplyAndValueCaptureRepository(repository.path),
+        verification_keys=ValueCaptureVerificationKeyRegistry({SIGNING_KEY_ID: SIGNING_KEY}),
+    )
+    corrections = (
+        rule_result(
+            provider,
+            evidence.record_id,
+            acquired_at=NOW + timedelta(days=2),
+            acquisition_id="concurrent-rule-1",
+            supersedes_record_id=original.record_id,
+            correction_reason="First concurrent correction",
+            source_economic_flow="Concurrent scope one",
+        ),
+        rule_result(
+            provider,
+            evidence.record_id,
+            acquired_at=NOW + timedelta(days=3),
+            acquisition_id="concurrent-rule-2",
+            supersedes_record_id=original.record_id,
+            correction_reason="Second concurrent correction",
+            source_economic_flow="Concurrent scope two",
+        ),
+    )
+
+    def ingest(item):
+        active_service, result = item
+        try:
+            return active_service.ingest_rule(provider, result)
+        except ValueCaptureIntegrityError as exc:
+            return exc
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        outcomes = tuple(executor.map(ingest, ((service, corrections[0]), (second_service, corrections[1]))))
+
+    assert sum(not isinstance(item, Exception) for item in outcomes) == 1
+    assert sum(isinstance(item, ValueCaptureIntegrityError) for item in outcomes) == 1
 
 
 def test_correction_authority_downgrade_is_rejected(tmp_path) -> None:
