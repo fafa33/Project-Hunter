@@ -207,6 +207,15 @@ class SupplyAndValueCaptureService:
                 quantity=str(payload["quantity"]),
                 unit=str(payload["unit"]),
                 denominator_meaning=str(payload["denominator_meaning"]),
+                supply_policy_id=_required_payload_text(payload, "supply_policy_id"),
+                supply_policy_version=_required_payload_text(payload, "supply_policy_version"),
+                quantity_components=_quantity_components(payload),
+                observed_market_fact_ids=_required_payload_tuple(payload, "observed_market_fact_ids"),
+                observed_market_fact_versions=_required_payload_tuple(payload, "observed_market_fact_versions"),
+                source_record_id=_required_payload_text(payload, "source_record_id"),
+                source_record_version=_required_payload_text(payload, "source_record_version"),
+                confidence=_required_payload_text(payload, "confidence"),
+                uncertainty=_required_payload_text(payload, "uncertainty"),
                 effective_at=_datetime(payload["effective_at"]),
                 recorded_at=result.acquired_at,
                 known_at=result.acquired_at,
@@ -374,3 +383,32 @@ def _required_payload_text(payload: dict[str, Any], name: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise SupplyAndValueCaptureAuthorityError(f"{name} must be a nonblank string")
     return value
+
+
+def _required_payload_tuple(payload: dict[str, Any], name: str) -> tuple[str, ...]:
+    value = payload.get(name)
+    if not isinstance(value, (list, tuple)) or not value:
+        raise SupplyAndValueCaptureAuthorityError(f"{name} must be a nonempty sequence")
+    result = tuple(value)
+    if any(not isinstance(item, str) or not item.strip() for item in result):
+        raise SupplyAndValueCaptureAuthorityError(f"{name} must contain nonblank strings")
+    return result
+
+
+def _quantity_components(
+    payload: dict[str, Any],
+) -> tuple[tuple[Any, str], ...]:
+    value = payload.get("quantity_components")
+    if not isinstance(value, (list, tuple)) or not value:
+        raise SupplyAndValueCaptureAuthorityError("quantity_components must be a nonempty sequence")
+    result: list[tuple[Any, str]] = []
+    for item in value:
+        if not isinstance(item, (list, tuple)) or len(item) != 2:
+            raise SupplyAndValueCaptureAuthorityError("quantity_components entries must be type/value pairs")
+        component_type, component_value = item
+        if not isinstance(component_type, str) or not component_type.strip():
+            raise SupplyAndValueCaptureAuthorityError("quantity component type must be nonblank")
+        if not isinstance(component_value, str) or not component_value.strip():
+            raise SupplyAndValueCaptureAuthorityError("quantity component value must be nonblank")
+        result.append((component_type, component_value))
+    return tuple(result)
