@@ -1,13 +1,36 @@
 name: "Acquire Sky SupplyBasisSnapshot (Milestone 1)"
 
-# One-shot workflow: acquires Sky's SupplyBasisSnapshot from CoinGecko,
-# persists it into data/data_ops.sqlite, and commits the updated database
-# back to the PR branch. Requires two repository secrets:
+# ──────────────────────────────────────────────────────────────────────────────
+# TEMPORARY OPERATIONAL ESCAPE HATCH — NOT PRODUCTION ARCHITECTURE
+#
+# This workflow exists solely to complete Milestone 1 under the current
+# execution constraints, where the agent/CI environment blocks outbound HTTPS
+# to api.coingecko.com. It must be run once from a GitHub-hosted runner that
+# has open egress.
+#
+# This workflow:
+#   - is NOT part of Hunter's production acquisition architecture;
+#   - must be removed once the normal acquisition path (PR #110) can run in
+#     the supported execution environment.
+#
+# Idempotency: the Python step checks whether an authoritative
+# SupplyBasisSnapshot for Sky already exists in the canonical database before
+# attempting acquisition. If a record is found, the step exits early with no
+# database writes. Re-running the workflow is therefore safe.
+#
+# Signing key lifecycle:
+#   HUNTER_VALUE_CAPTURE_SIGNING_KEY_ID and HUNTER_VALUE_CAPTURE_SIGNING_KEY
+#   are intended only for this one-shot workflow. Both repository secrets MUST
+#   be deleted after successful Milestone 1 completion. The key is not rotated
+#   — it is temporary by design and should not be kept beyond this milestone.
+#
+# Requires two repository secrets (see above for lifecycle):
 #   HUNTER_VALUE_CAPTURE_SIGNING_KEY_ID
 #   HUNTER_VALUE_CAPTURE_SIGNING_KEY  (hex-encoded 32-byte key)
 #
 # Run manually via Actions → "Run workflow" on branch
 # claude/issue-107-milestone-1-entity-registration.
+# ──────────────────────────────────────────────────────────────────────────────
 
 on:
   workflow_dispatch:
@@ -56,7 +79,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 - <<'PYEOF'
-          import os, sys
+          import hashlib, os, sys
           from datetime import datetime, timezone
           from pathlib import Path
 
@@ -80,6 +103,33 @@ jobs:
           SIGNING_KEY = bytes.fromhex(os.environ["HUNTER_VALUE_CAPTURE_SIGNING_KEY"])
           now = datetime.now(timezone.utc)
           print(f"Acquisition timestamp: {now.isoformat()}", flush=True)
+
+          # ── Idempotency guard ───────────────────────────────────────────────
+          # Compute the canonical logical_id for Sky's circulating-supply
+          # snapshot and check whether any record already exists.  This mirrors
+          # the _logical_id() function in hunter.value_capture.service so that
+          # the check is stable across runs regardless of acquisition timestamp.
+          _raw = "|".join((
+              "entity:sky",
+              "economic-claim:sky-smart-burn-engine",
+              "asset:sky",
+              "representation:sky-ethereum",
+              "sky",
+              "ethereum",
+              "0x56072c95faa701256059aa122697b133aded9279",
+              "supply:circulating_supply",
+          ))
+          _logical_id = hashlib.sha256(_raw.encode()).hexdigest()
+          vc_repository_check = SupplyAndValueCaptureRepository(DB_PATH)
+          existing_supply = vc_repository_check.supply_history(_logical_id)
+          if existing_supply:
+              print(
+                  f"SupplyBasisSnapshot already exists ({len(existing_supply)} record(s))"
+                  f" for logical_id={_logical_id[:16]}... — skipping acquisition (idempotent).",
+                  flush=True,
+              )
+              sys.exit(0)
+          print("No existing SupplyBasisSnapshot found — proceeding with acquisition.", flush=True)
 
           # ── Step 1: CoinGecko market facts for Sky ──────────────────────────
           mf_registry = MarketFactSourceRegistry.from_file(
@@ -230,7 +280,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add data/data_ops.sqlite
           if git diff --staged --quiet; then
-            echo "No database changes to commit (SupplyBasisSnapshot may already exist)."
+            echo "No database changes to commit (idempotency guard exited early — snapshot already present)."
           else
             git commit -m "Milestone 1: persist Sky SupplyBasisSnapshot via CoinGecko market-fact leg"
             git push origin HEAD:claude/issue-107-milestone-1-entity-registration
