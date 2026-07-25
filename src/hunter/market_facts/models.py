@@ -125,6 +125,7 @@ class MarketFactAcquisitionResult:
             "provider_source_record_version",
             "raw_payload_hash",
         )
+        _sha256_hash("raw_payload_hash", self.raw_payload_hash)
         _member("status", self.status, MARKET_FACT_STATUSES)
         object.__setattr__(self, "acquired_at", _utc("acquired_at", self.acquired_at))
         object.__setattr__(self, "known_at", _utc("known_at", self.known_at))
@@ -184,6 +185,7 @@ class ObservedMarketFactRecord:
             "content_hash",
             "schema_version",
         )
+        _sha256_hash("raw_payload_hash", self.raw_payload_hash)
         _member("fact_type", self.fact_type, MARKET_FACT_TYPES)
         _decimal(self.value)
         _confidence(self.confidence)
@@ -229,6 +231,7 @@ class MarketFactAvailabilityEvent:
             "raw_payload_hash",
             "schema_version",
         )
+        _sha256_hash("raw_payload_hash", self.raw_payload_hash)
         _member("status", self.status, MARKET_FACT_STATUSES)
         object.__setattr__(self, "requested_at", _utc("requested_at", self.requested_at))
         object.__setattr__(self, "recorded_at", _utc("recorded_at", self.recorded_at))
@@ -330,6 +333,15 @@ def _required_text(instance: object, *names: str) -> None:
         value = getattr(instance, name)
         if not isinstance(value, str) or not value.strip():
             raise ValueError(f"{name} must not be blank")
+
+
+def _sha256_hash(name: str, value: str) -> None:
+    prefix = "sha256:"
+    if not value.startswith(prefix):
+        raise ValueError(f"{name} must be a sha256:-prefixed hexadecimal hash")
+    digest = value[len(prefix) :]
+    if len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest.lower()):
+        raise ValueError(f"{name} must be a sha256:-prefixed 64-character hexadecimal hash")
 
 
 def _member(name: str, value: str, allowed: frozenset[str]) -> None:

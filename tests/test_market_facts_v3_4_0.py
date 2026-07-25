@@ -9,6 +9,7 @@ import pytest
 from hunter.market_facts import (
     CoinGeckoObservedMarketFactProvider,
     MarketFactAuthorityError,
+    MarketFactAvailabilityEvent,
     MarketFactIdentity,
     MarketFactRequest,
     MarketFactSourceRegistry,
@@ -378,6 +379,49 @@ def test_models_reject_naive_time_and_identity_scope_mismatch() -> None:
         replace(request(), requested_at=datetime(2026, 1, 1))
     with pytest.raises(ValueError, match="chain and contract_address"):
         replace(identity(), chain="ethereum", contract_address="")
+
+
+def test_acquisition_result_rejects_malformed_raw_payload_hash() -> None:
+    valid = provider_result()
+    with pytest.raises(ValueError, match="sha256:-prefixed"):
+        replace(valid, raw_payload_hash="not-a-hash")
+    with pytest.raises(ValueError, match="sha256:-prefixed"):
+        replace(valid, raw_payload_hash="a" * 64)
+    with pytest.raises(ValueError, match="sha256:-prefixed"):
+        replace(valid, raw_payload_hash="sha256:" + "a" * 63)
+    with pytest.raises(ValueError, match="sha256:-prefixed"):
+        replace(valid, raw_payload_hash="sha256:" + "z" * 64)
+
+
+def test_acquisition_result_accepts_uppercase_hex_digest() -> None:
+    valid = provider_result()
+    replace(valid, raw_payload_hash="sha256:" + "A" * 64)
+
+
+def test_observed_market_fact_record_rejects_malformed_raw_payload_hash(tmp_path: Path) -> None:
+    _, svc = service(tmp_path)
+    record = svc.ingest(request(), provider_result(), recorded_at=T2)[0]
+    with pytest.raises(ValueError, match="sha256:-prefixed"):
+        replace(record, raw_payload_hash="sha256:not-hex")
+
+
+def test_availability_event_rejects_malformed_raw_payload_hash() -> None:
+    with pytest.raises(ValueError, match="sha256:-prefixed"):
+        MarketFactAvailabilityEvent(
+            event_id="event-1",
+            source_id="coingecko-coin-market-facts",
+            provider_id="coingecko",
+            entity_id="entity:bitcoin",
+            representation_id="representation:btc-native",
+            status="unavailable",
+            requested_at=T0,
+            recorded_at=T2,
+            known_at=T1,
+            endpoint="https://api.coingecko.com/api/v3/coins/bitcoin",
+            parser_version="coingecko-coin-v1",
+            raw_payload_hash="deadbeef",
+            failure_reason="provider_down",
+        )
 
 
 def test_confidence_and_provider_source_identity_round_trip(tmp_path: Path) -> None:
