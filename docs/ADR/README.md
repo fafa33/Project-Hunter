@@ -126,6 +126,7 @@ Conflicts must be resolved before implementation proceeds.
 | [0019](0019-prediction-evaluation-authority.md) | Prediction Evaluation Authority | Accepted | Canonical evaluation lifecycle, correctness, accuracy, and calibration authority |
 | [0020](0020-canonical-market-validation-input-authority.md) | Canonical Market Validation Input Authority and Strict-Known Replay | Accepted | Input ownership, missingness, anti-aliasing, and cutoff-safe replay |
 | [0021](0021-canonical-valuation-evidence-authority.md) | Canonical Valuation Evidence Authority | Accepted | Valuation-family evidence and service-authority contracts |
+| [0022](0022-canonical-valuation-methodology.md) | Canonical Valuation Methodology | Proposed | First-entity-class fair-value model, permitted/prohibited methodologies, calibration and audit gate |
 
 ## Creating a New ADR
 
