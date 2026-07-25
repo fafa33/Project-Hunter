@@ -834,3 +834,96 @@ def test_divergent_supply_snapshots_are_flagged_and_queryable_as_unresolved_conf
 
     assert second.conflict_state == "open"
     assert [item.record_id for item in repository.unresolved_supply_conflicts()] == [second.record_id]
+
+
+def test_strict_known_evidence_selects_correction_by_cutoff(tmp_path) -> None:
+    service, _, provider = setup(tmp_path)
+    original = service.ingest_evidence(provider, evidence_result(provider))
+    corrected = service.ingest_evidence(
+        provider,
+        evidence_result(
+            provider,
+            acquired_at=NOW + timedelta(days=2),
+            acquisition_id="evidence-correction-strict-known",
+            supersedes_record_id=original.record_id,
+            correction_reason="Corrected the disclosed claim.",
+            extracted_claim="Corrected attributable protocol fees.",
+        ),
+    )
+
+    historical = service.strict_known_evidence(
+        entity_id=original.identity.entity_id,
+        economic_claim_id=original.identity.economic_claim_id,
+        representation_id=original.identity.representation_id,
+        evidence_type=original.evidence_type,
+        effective_as_of=NOW + timedelta(days=3),
+        known_by=NOW + timedelta(days=1),
+    )
+    current = service.strict_known_evidence(
+        entity_id=original.identity.entity_id,
+        economic_claim_id=original.identity.economic_claim_id,
+        representation_id=original.identity.representation_id,
+        evidence_type=original.evidence_type,
+        effective_as_of=NOW + timedelta(days=3),
+        known_by=NOW + timedelta(days=3),
+    )
+
+    assert historical == original
+    assert current == corrected
+
+
+def test_strict_known_evidence_excludes_future_known_correction(tmp_path) -> None:
+    service, _, provider = setup(tmp_path)
+    original = service.ingest_evidence(provider, evidence_result(provider))
+
+    assert (
+        service.strict_known_evidence(
+            entity_id=original.identity.entity_id,
+            economic_claim_id=original.identity.economic_claim_id,
+            representation_id=original.identity.representation_id,
+            evidence_type=original.evidence_type,
+            effective_as_of=original.effective_at,
+            known_by=original.known_at,
+        )
+        == original
+    )
+    assert (
+        service.strict_known_evidence(
+            entity_id=original.identity.entity_id,
+            economic_claim_id=original.identity.economic_claim_id,
+            representation_id=original.identity.representation_id,
+            evidence_type=original.evidence_type,
+            effective_as_of=original.effective_at - timedelta(microseconds=1),
+            known_by=original.known_at,
+        )
+        is None
+    )
+
+
+def test_exact_duplicate_evidence_submission_is_idempotent(tmp_path) -> None:
+    service, repository, provider = setup(tmp_path)
+    result = evidence_result(provider)
+
+    first = service.ingest_evidence(provider, result)
+    second = service.ingest_evidence(provider, result)
+
+    assert first == second
+    assert first.record_id == second.record_id
+    assert repository.count("fundamental_evidence_records") == 1
+    assert repository.count("value_capture_acquisition_receipts") == 1
+    assert repository.evidence_history(first.logical_id) == (first,)
+
+
+def test_divergent_duplicate_acquisition_id_is_rejected(tmp_path) -> None:
+    service, repository, provider = setup(tmp_path)
+    service.ingest_evidence(provider, evidence_result(provider))
+
+    divergent = evidence_result(
+        provider,
+        extracted_claim="A materially different disclosed claim reusing the same acquisition id.",
+    )
+    with pytest.raises(ValueCaptureIntegrityError):
+        service.ingest_evidence(provider, divergent)
+
+    assert repository.count("fundamental_evidence_records") == 1
+    assert repository.count("value_capture_acquisition_receipts") == 1

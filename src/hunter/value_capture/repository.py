@@ -128,6 +128,14 @@ class SupplyAndValueCaptureRepository:
             )
         )
 
+    def strict_known_evidence(self, **kwargs: Any) -> FundamentalEvidenceRecord | None:
+        record = self._strict_known(
+            snapshot_type=_EVIDENCE_TYPE,
+            category_name="evidence_type",
+            **kwargs,
+        )
+        return record if isinstance(record, FundamentalEvidenceRecord) else None
+
     def strict_known_supply(self, **kwargs: Any) -> SupplyBasisSnapshot | None:
         record = self._strict_known(
             snapshot_type=_SUPPLY_TYPE,

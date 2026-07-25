@@ -164,6 +164,9 @@ class SupplyAndValueCaptureService:
     def rule_history(self, logical_id: str) -> tuple[ValueCaptureRuleSnapshot, ...]:
         return self.repository.rule_history(logical_id)
 
+    def strict_known_evidence(self, **kwargs: Any) -> FundamentalEvidenceRecord | None:
+        return self.repository.strict_known_evidence(**kwargs)
+
     def strict_known_supply(self, **kwargs: Any) -> SupplyBasisSnapshot | None:
         return self.repository.strict_known_supply(**kwargs)
 
