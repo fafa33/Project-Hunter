@@ -40,3 +40,19 @@ sources:
       - supply:burned_supply
       - supply:protocol_owned_supply
     enabled: true
+
+  - source_id: sky-protocol-tokenomics-disclosure
+    authority_tier: official
+    source_type: official_disclosure
+    allowed_hosts:
+      - developers.sky.money
+    endpoint_patterns:
+      - https://developers.sky.money/
+    parser_version: official-tokenomics-v1
+    capabilities:
+      - evidence:official_disclosure
+      - supply:circulating_supply
+      - supply:total_supply
+      - supply:burned_supply
+      - rule:buyback_and_burn
+    enabled: true
