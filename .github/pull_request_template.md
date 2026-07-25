@@ -54,12 +54,12 @@ Replace with commands, record IDs, query/replay results, and environment details
 
 List every known incomplete item, environmental blocker, deferred requirement, and residual risk. Write `None` only after explicit verification.
 
-## Merge-readiness verdict
+## Implementer readiness declaration
 
-Select exactly one:
+Select exactly one. This is the implementer's self-assessment, not an approval — per `docs/AI_REVIEW_PROTOCOL.md`, the implementer does not approve the implementation. `APPROVED` is not a valid selection here; it is recorded only by an independent reviewer, in a separate review, after required review and verification have completed.
 
-- [ ] `APPROVED` — all acceptance criteria and required operational validations pass.
+- [ ] `READY FOR REVIEW` — all acceptance criteria and required operational validations pass from the implementer's own assessment.
 - [ ] `CHANGES REQUIRED` — implementation or evidence remains incomplete.
 - [ ] `BLOCKED` — completion depends on an unavailable environment, provider, credential, or external condition.
 
-> Green CI and absence of review comments are necessary signals, not proof of completion. A PR with any unsatisfied required acceptance criterion or operational validation must not be merged.
+> Green CI and the absence of unresolved blocking review comments are necessary signals, not proof of completion. Non-blocking recommendations and already-resolved review comments do not prevent merge. A PR with any unsatisfied required acceptance criterion or operational validation, or any unresolved blocking review comment, must not be merged.

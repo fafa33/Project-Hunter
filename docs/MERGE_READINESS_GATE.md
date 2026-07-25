@@ -1,20 +1,25 @@
 # Merge Readiness Gate
 
+## Status
+
+This document is a reference and implementation guide. It does not define an independent governance authority.
+
+The mandatory Merge Readiness rule is owned by `docs/DEVELOPMENT_GOVERNANCE.md` (Pull Request Governance / Merge Readiness section), consistent with that document's Ownership Boundary over pull request readiness, review workflow, validation workflow, and process governance. This document elaborates that rule with required review dimensions, the acceptance-criteria matrix format, the evidence package a Pull Request must include, and the pull request template that operationalizes it. Where anything below appears to restate the rule, `docs/DEVELOPMENT_GOVERNANCE.md` is authoritative and this document must be read as consistent with it, not as a second source of the rule.
+
 ## Purpose
 
-Project Hunter pull requests must not be merged solely because automated checks are green or because no reviewer has left a blocking comment. Those signals establish code health only; they do not prove that the governing Issue, ADR, evidence, replay, persistence, or operational requirements are complete.
+Project Hunter pull requests must not be merged solely because automated checks are green or because no unresolved blocking review comment remains. Those signals establish code health only; they do not prove that the governing Issue, ADR, evidence, replay, persistence, or operational requirements are complete.
 
 ## Mandatory rule
 
 A pull request is merge-ready only when all required acceptance criteria and operational validations are explicitly evidenced as passing.
 
-The allowed final verdicts are:
+Two distinct declarations exist, and they are never made by the same role:
 
-- `APPROVED`: every required acceptance criterion and operational validation passes.
-- `CHANGES REQUIRED`: implementation, tests, evidence, or documentation remains incomplete.
-- `BLOCKED`: completion depends on an unavailable environment, provider, credential, network route, or external condition.
+- The **implementer** declares one of `READY FOR REVIEW`, `CHANGES REQUIRED`, or `BLOCKED` on the Pull Request, per `docs/DEVELOPMENT_GOVERNANCE.md`'s Merge Readiness section. The implementer never declares `APPROVED`.
+- The **independent reviewer** alone declares the final verdict of `APPROVED`, `CHANGES REQUIRED`, or `BLOCKED`, per `docs/AI_REVIEW_PROTOCOL.md`'s Approval section, only after required review and verification have completed.
 
-A `FAIL` or `BLOCKED` required criterion prohibits merge.
+A `FAIL` or `BLOCKED` required criterion prohibits merge regardless of which role is declaring readiness.
 
 ## Required review dimensions
 
@@ -62,7 +67,7 @@ Reviewers must distinguish code correctness from completion correctness. An appr
 
 ## Author responsibility
 
-Authors must keep incomplete PRs in draft status or clearly mark them `CHANGES REQUIRED` or `BLOCKED`. Environmental limitations must be reported immediately and must not be converted into fabricated evidence, narrowed acceptance criteria, or an undocumented scope change.
+Authors declare `READY FOR REVIEW` only when required verification and self-assessment are complete; otherwise the PR remains in draft status or is clearly marked `CHANGES REQUIRED` or `BLOCKED`. Authors never declare `APPROVED`. Environmental limitations must be reported immediately and must not be converted into fabricated evidence, narrowed acceptance criteria, or an undocumented scope change.
 
 ## Maintainer responsibility
 
