@@ -1,5 +1,36 @@
 # Changelog
 
+## v3.5.2 - 2026-07-25
+
+Issue #88 hardening release. Closes the two follow-up gaps identified in the
+independent post-remediation architecture analysis of the observed-market-facts
+foundation (Issue #88) and its relationship to the fundamental-evidence
+foundation (Issue #95).
+
+### Changed
+
+- `hunter.market_facts`: `raw_payload_hash` is now validated as a well-formed
+  `sha256:`-prefixed 64-hex digest on `MarketFactAcquisitionResult`,
+  `ObservedMarketFactRecord`, and `MarketFactAvailabilityEvent`, closing a
+  previously-unenforced "malformed hashes" acceptance criterion.
+- `hunter.value_capture`: `SupplyAndValueCaptureService` now cross-validates
+  every `SupplyBasisSnapshot.observed_market_fact_ids`/`observed_market_fact_versions`
+  reference against real `hunter.market_facts.ObservedMarketFactRecord` entries
+  for existence, version match, identity compatibility, temporal compatibility,
+  and quality/conflict state, closing a referential-integrity gap between the
+  two completed evidence foundations.
+
+### Documentation
+
+- Proposed ADR 0022 (Canonical Valuation Methodology) and opened Issue #107,
+  defining the methodology required by ADR 0021 before `CanonicalValuationService`
+  implementation may begin. Documentation only; no runtime, schema, or
+  migration change.
+
+No persistence schema, migration ID, or ADR was changed by the code changes in
+this release. `valuation`, `comparative_valuation`, `mispricing`, and
+`asymmetry` remain unavailable in Market Validation, unchanged.
+
 ## v1.0.0 - 2026-07-11
 
 Project Hunter V1 stable release.

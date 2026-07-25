@@ -5,7 +5,7 @@ backend-path = ["build_backend"]
 
 [project]
 name = "project-hunter"
-version = "1.0.0"
+version = "3.5.2"
 description = "Project Hunter architecture and plugin infrastructure."
 requires-python = ">=3.11"
 dependencies = [
