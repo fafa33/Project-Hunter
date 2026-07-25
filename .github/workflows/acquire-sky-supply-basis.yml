@@ -158,7 +158,7 @@ jobs:
           )
           mf_provider = CoinGeckoObservedMarketFactProvider(mf_registry)
           mf_result = mf_provider.collect(mf_request)
-          if mf_result.status != "ok":
+          if mf_result.status != "success":
               print(
                   f"CoinGecko acquisition failed: status={mf_result.status!r}"
                   f" reason={mf_result.failure_reason!r}",
