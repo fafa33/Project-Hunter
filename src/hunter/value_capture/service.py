@@ -7,6 +7,7 @@ from dataclasses import asdict, replace
 from datetime import datetime
 from typing import Any, cast
 
+from hunter.market_facts.repository import ObservedMarketFactRepository
 from hunter.persistence.models import QuerySpec
 from hunter.persistence.sql import RepositoryFactory, SessionFactory, create_sqlite_engine
 from hunter.persistence.sql.exceptions import PersistenceIdentityConflictError
@@ -45,10 +46,12 @@ class SupplyAndValueCaptureService:
         registry: ValueCaptureSourceRegistry,
         repository: SupplyAndValueCaptureRepository,
         verification_keys: ValueCaptureVerificationKeyRegistry,
+        market_fact_repository: ObservedMarketFactRepository | None = None,
     ) -> None:
         self.registry = registry
         self.repository = repository
         self.__verification_keys = verification_keys
+        self.market_fact_repository = market_fact_repository or ObservedMarketFactRepository(repository.path)
 
         def persist_capability(
             provider: RegisteredValueCaptureProvider,
@@ -61,6 +64,8 @@ class SupplyAndValueCaptureService:
             self._authorize_correction(record)
             if isinstance(record, (SupplyBasisSnapshot, ValueCaptureRuleSnapshot)):
                 self._require_evidence(record)
+            if isinstance(record, SupplyBasisSnapshot):
+                self._require_observed_market_facts(record)
             if not self.__verification_keys.verify_receipt(result.receipt):
                 raise ValueCaptureIntegrityError("receipt hash or signature is not verification-key authorized")
             validate_receipt_binding(result.receipt, record)
@@ -340,6 +345,35 @@ class SupplyAndValueCaptureService:
                 raise SupplyAndValueCaptureAuthorityError("future-known evidence cannot support snapshot")
             if evidence.quality_state != "accepted" or evidence.conflict_state not in {"none", "resolved"}:
                 raise SupplyAndValueCaptureAuthorityError("non-authoritative evidence cannot support snapshot")
+
+    def _require_observed_market_facts(self, record: SupplyBasisSnapshot) -> None:
+        references = zip(record.observed_market_fact_ids, record.observed_market_fact_versions, strict=True)
+        for fact_id, expected_version in references:
+            fact = self.market_fact_repository.record(fact_id)
+            if fact is None:
+                raise SupplyAndValueCaptureAuthorityError(
+                    f"authoritative observed market fact does not exist: {fact_id}"
+                )
+            if fact.semantic_version != expected_version:
+                raise SupplyAndValueCaptureAuthorityError(
+                    "observed market fact version does not match snapshot reference"
+                )
+            if (
+                fact.identity.entity_id != record.identity.entity_id
+                or fact.identity.asset_id != record.identity.asset_id
+                or fact.identity.representation_id != record.identity.representation_id
+                or fact.identity.chain != record.identity.chain
+                or fact.identity.contract_address != record.identity.contract_address
+            ):
+                raise SupplyAndValueCaptureAuthorityError(
+                    "observed market fact identity does not match snapshot identity"
+                )
+            if fact.effective_at > record.effective_at:
+                raise SupplyAndValueCaptureAuthorityError("future-effective market fact cannot support snapshot")
+            if fact.recorded_at > record.recorded_at or fact.known_at > record.known_at:
+                raise SupplyAndValueCaptureAuthorityError("future-known market fact cannot support snapshot")
+            if fact.quality_state != "accepted" or fact.conflict_state not in {"none", "resolved"}:
+                raise SupplyAndValueCaptureAuthorityError("non-authoritative market fact cannot support snapshot")
 
     def _apply_conflict_policy(self, record: Record) -> Record:
         if isinstance(record, FundamentalEvidenceRecord):

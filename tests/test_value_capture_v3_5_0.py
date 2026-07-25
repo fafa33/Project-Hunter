@@ -7,6 +7,16 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from hunter.market_facts.models import (
+    MarketFactAcquisitionResult,
+    MarketFactIdentity,
+    MarketFactRequest,
+    NormalizedMarketFact,
+    ObservedMarketFactRecord,
+)
+from hunter.market_facts.registry import MarketFactSourceRegistry
+from hunter.market_facts.repository import ObservedMarketFactRepository
+from hunter.market_facts.service import ObservedMarketFactService
 from hunter.persistence.records import SnapshotRecord
 from hunter.persistence.sql import RepositoryFactory, SessionFactory, create_sqlite_engine
 from hunter.value_capture.models import EconomicClaimIdentity
@@ -63,6 +73,102 @@ def identity() -> EconomicClaimIdentity:
         chain="ethereum",
         contract_address="0x0b38210ea11411557c13457d4da7dc6ea731b88a",
     )
+
+
+def market_fact_registry() -> MarketFactSourceRegistry:
+    return MarketFactSourceRegistry.from_mapping(
+        {
+            "sources": [
+                {
+                    "source_id": "official-api3-market-facts",
+                    "provider_id": "official-api3-market-facts-provider",
+                    "endpoint_template": "https://example.org/market-facts/{listing_id}",
+                    "allowed_hosts": ["example.org"],
+                    "parser_version": "official-market-facts-v1",
+                    "enabled": True,
+                    "capabilities": ["circulating_supply"],
+                    "quote_currencies": ["usd"],
+                    "units": {"circulating_supply": "native_units"},
+                    "supported_entity_scope": ["canonical_asset_representation"],
+                    "identity_bindings": [
+                        {
+                            "entity_id": "api3-project",
+                            "asset_id": "api3-token",
+                            "representation_id": "api3-ethereum",
+                            "chain": "ethereum",
+                            "contract_address": "0x0b38210ea11411557c13457d4da7dc6ea731b88a",
+                            "provider_listing_id": "api3-listing",
+                        },
+                        {
+                            "entity_id": "other-project",
+                            "asset_id": "other-token",
+                            "representation_id": "other-ethereum",
+                            "chain": "",
+                            "contract_address": "",
+                            "provider_listing_id": "other-listing",
+                        },
+                    ],
+                    "freshness_seconds": 3600,
+                    "observation_confidence": "0.9",
+                    "historical_support": "current-only",
+                    "limitations": "test fixture observed market fact only",
+                }
+            ]
+        }
+    )
+
+
+def seed_observed_market_fact(
+    tmp_path,
+    *,
+    quantity: str = "86000000",
+    effective_at: datetime = NOW,
+    known_at: datetime | None = None,
+) -> ObservedMarketFactRecord:
+    known_at = known_at or effective_at
+    market_fact_repository = ObservedMarketFactRepository(tmp_path / "value-capture.sqlite")
+    market_fact_service = ObservedMarketFactService(market_fact_repository, market_fact_registry())
+    request = MarketFactRequest(
+        source_id="official-api3-market-facts",
+        provider_id="official-api3-market-facts-provider",
+        identity=MarketFactIdentity(
+            entity_id="api3-project",
+            asset_id="api3-token",
+            representation_id="api3-ethereum",
+            chain="ethereum",
+            contract_address="0x0b38210ea11411557c13457d4da7dc6ea731b88a",
+            provider_listing_id="api3-listing",
+        ),
+        quote_currency="usd",
+        requested_fact_types=("circulating_supply",),
+        requested_at=effective_at,
+    )
+    fact = NormalizedMarketFact(
+        fact_type="circulating_supply",
+        value=quantity,
+        unit="native_units",
+        quote_currency=None,
+        effective_at=effective_at,
+        observed_at=effective_at,
+        confidence="0.9",
+    )
+    result = MarketFactAcquisitionResult(
+        source_id="official-api3-market-facts",
+        provider_id="official-api3-market-facts-provider",
+        endpoint="https://example.org/market-facts/api3-listing",
+        parser_version="official-market-facts-v1",
+        registry_fingerprint=market_fact_registry().require("official-api3-market-facts").fingerprint,
+        provider_source_record_id="api3-listing",
+        provider_source_record_version="2026-07-20",
+        request=request,
+        status="success",
+        acquired_at=known_at,
+        known_at=known_at,
+        raw_payload_hash="sha256:" + "a" * 64,
+        facts=(fact,),
+    )
+    records = market_fact_service.ingest(request, result, recorded_at=known_at)
+    return records[0]
 
 
 def setup(tmp_path, configs: tuple[ValueCaptureSourceConfig, ...] | None = None):
@@ -292,12 +398,149 @@ def test_supply_basis_contract_rejects_incoherent_components(tmp_path) -> None:
 def test_supply_basis_contract_round_trips_policy_and_fact_versions(tmp_path) -> None:
     service, repository, provider = setup(tmp_path)
     evidence = service.ingest_evidence(provider, evidence_result(provider))
-    record = service.ingest_supply(provider, supply_result(provider, evidence.record_id))
+    fact = seed_observed_market_fact(tmp_path)
+    record = service.ingest_supply(
+        provider,
+        supply_result(
+            provider,
+            evidence.record_id,
+            observed_market_fact_ids=[fact.record_id],
+            observed_market_fact_versions=[fact.semantic_version],
+        ),
+    )
     restored = repository.supply(record.record_id)
     assert restored == record
     assert record.supply_policy_version == "1.0.0"
+    assert record.observed_market_fact_ids == (fact.record_id,)
     assert record.observed_market_fact_versions == ("observed-market-fact-v2",)
     assert dict(record.quantity_components)["fully_diluted_supply"] == "115000000"
+
+
+def test_supply_basis_rejects_nonexistent_observed_market_fact(tmp_path) -> None:
+    service, _, provider = setup(tmp_path)
+    evidence = service.ingest_evidence(provider, evidence_result(provider))
+    with pytest.raises(SupplyAndValueCaptureAuthorityError, match="does not exist"):
+        service.ingest_supply(
+            provider,
+            supply_result(
+                provider,
+                evidence.record_id,
+                observed_market_fact_ids=["nonexistent-market-fact"],
+                observed_market_fact_versions=["observed-market-fact-v2"],
+            ),
+        )
+
+
+def test_supply_basis_rejects_observed_market_fact_version_mismatch(tmp_path) -> None:
+    service, _, provider = setup(tmp_path)
+    evidence = service.ingest_evidence(provider, evidence_result(provider))
+    fact = seed_observed_market_fact(tmp_path)
+    with pytest.raises(SupplyAndValueCaptureAuthorityError, match="version does not match"):
+        service.ingest_supply(
+            provider,
+            supply_result(
+                provider,
+                evidence.record_id,
+                observed_market_fact_ids=[fact.record_id],
+                observed_market_fact_versions=["wrong-version"],
+            ),
+        )
+
+
+def test_supply_basis_rejects_observed_market_fact_identity_mismatch(tmp_path) -> None:
+    service, _, provider = setup(tmp_path)
+    evidence = service.ingest_evidence(provider, evidence_result(provider))
+    mismatched_repository = ObservedMarketFactRepository(tmp_path / "value-capture.sqlite")
+    mismatched_service = ObservedMarketFactService(mismatched_repository, market_fact_registry())
+    other_identity = MarketFactIdentity(
+        entity_id="other-project",
+        asset_id="other-token",
+        representation_id="other-ethereum",
+        chain="",
+        contract_address="",
+        provider_listing_id="other-listing",
+    )
+    request = MarketFactRequest(
+        source_id="official-api3-market-facts",
+        provider_id="official-api3-market-facts-provider",
+        identity=other_identity,
+        quote_currency="usd",
+        requested_fact_types=("circulating_supply",),
+        requested_at=NOW,
+    )
+    result = MarketFactAcquisitionResult(
+        source_id="official-api3-market-facts",
+        provider_id="official-api3-market-facts-provider",
+        endpoint="https://example.org/market-facts/other-listing",
+        parser_version="official-market-facts-v1",
+        registry_fingerprint=market_fact_registry().require("official-api3-market-facts").fingerprint,
+        provider_source_record_id="other-listing",
+        provider_source_record_version="2026-07-20",
+        request=request,
+        status="success",
+        acquired_at=NOW,
+        known_at=NOW,
+        raw_payload_hash="sha256:" + "b" * 64,
+        facts=(
+            NormalizedMarketFact(
+                fact_type="circulating_supply",
+                value="86000000",
+                unit="native_units",
+                quote_currency=None,
+                effective_at=NOW,
+                observed_at=NOW,
+                confidence="0.9",
+            ),
+        ),
+    )
+    other_fact = mismatched_service.ingest(request, result, recorded_at=NOW)[0]
+    with pytest.raises(SupplyAndValueCaptureAuthorityError, match="identity does not match"):
+        service.ingest_supply(
+            provider,
+            supply_result(
+                provider,
+                evidence.record_id,
+                observed_market_fact_ids=[other_fact.record_id],
+                observed_market_fact_versions=[other_fact.semantic_version],
+            ),
+        )
+
+
+def test_supply_basis_rejects_future_known_observed_market_fact(tmp_path) -> None:
+    service, _, provider = setup(tmp_path)
+    evidence = service.ingest_evidence(provider, evidence_result(provider))
+    fact = seed_observed_market_fact(tmp_path, effective_at=NOW, known_at=NOW + timedelta(days=1))
+    with pytest.raises(SupplyAndValueCaptureAuthorityError, match="future-known market fact"):
+        service.ingest_supply(
+            provider,
+            supply_result(
+                provider,
+                evidence.record_id,
+                observed_market_fact_ids=[fact.record_id],
+                observed_market_fact_versions=[fact.semantic_version],
+            ),
+        )
+
+
+def test_supply_basis_rejects_future_effective_observed_market_fact(tmp_path) -> None:
+    service, _, provider = setup(tmp_path)
+    evidence = service.ingest_evidence(provider, evidence_result(provider))
+    fact = seed_observed_market_fact(
+        tmp_path,
+        effective_at=NOW + timedelta(days=1),
+        known_at=NOW + timedelta(days=1),
+    )
+    with pytest.raises(SupplyAndValueCaptureAuthorityError, match="future-effective market fact"):
+        service.ingest_supply(
+            provider,
+            supply_result(
+                provider,
+                evidence.record_id,
+                acquired_at=NOW + timedelta(days=2),
+                observed_market_fact_ids=[fact.record_id],
+                observed_market_fact_versions=[fact.semantic_version],
+            ),
+        )
 
 
 def test_supply_basis_contract_rejects_null_policy_before_string_coercion(tmp_path) -> None:
@@ -469,12 +712,15 @@ def test_logical_history_reads_are_stable_for_all_record_families(tmp_path) -> N
             extracted_claim="Corrected attributable protocol fees",
         ),
     )
+    fact = seed_observed_market_fact(tmp_path)
     supply = service.ingest_supply(
         provider,
         supply_result(
             provider,
             corrected_evidence.record_id,
             acquired_at=NOW + timedelta(days=2),
+            observed_market_fact_ids=[fact.record_id],
+            observed_market_fact_versions=[fact.semantic_version],
         ),
     )
     corrected_supply = service.ingest_supply(
@@ -492,6 +738,8 @@ def test_logical_history_reads_are_stable_for_all_record_families(tmp_path) -> N
                 ["total_supply", "100000000"],
                 ["fully_diluted_supply", "115000000"],
             ],
+            observed_market_fact_ids=[fact.record_id],
+            observed_market_fact_versions=[fact.semantic_version],
         ),
     )
     rule = service.ingest_rule(
@@ -810,9 +1058,16 @@ def test_correction_diverging_from_its_own_predecessor_is_not_flagged_as_conflic
 def test_divergent_supply_snapshots_are_flagged_and_queryable_as_unresolved_conflicts(tmp_path) -> None:
     service, repository, provider = setup(tmp_path)
     evidence = service.ingest_evidence(provider, evidence_result(provider, acquisition_id="evidence-supply-conflict"))
+    fact = seed_observed_market_fact(tmp_path)
     service.ingest_supply(
         provider,
-        supply_result(provider, evidence.record_id, acquisition_id="supply-conflict-1"),
+        supply_result(
+            provider,
+            evidence.record_id,
+            acquisition_id="supply-conflict-1",
+            observed_market_fact_ids=[fact.record_id],
+            observed_market_fact_versions=[fact.semantic_version],
+        ),
     )
     second = service.ingest_supply(
         provider,
@@ -829,6 +1084,8 @@ def test_divergent_supply_snapshots_are_flagged_and_queryable_as_unresolved_conf
                 ["locked_supply", "10000000"],
                 ["treasury_held_supply", "2000000"],
             ],
+            observed_market_fact_ids=[fact.record_id],
+            observed_market_fact_versions=[fact.semantic_version],
         ),
     )
 
