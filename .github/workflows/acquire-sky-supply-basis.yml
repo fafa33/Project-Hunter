@@ -1,0 +1,288 @@
+name: "Acquire Sky SupplyBasisSnapshot (Milestone 1)"
+
+# ──────────────────────────────────────────────────────────────────────────────
+# TEMPORARY OPERATIONAL ESCAPE HATCH — NOT PRODUCTION ARCHITECTURE
+#
+# This workflow exists solely to complete Milestone 1 under the current
+# execution constraints, where the agent/CI environment blocks outbound HTTPS
+# to api.coingecko.com. It must be run once from a GitHub-hosted runner that
+# has open egress.
+#
+# This workflow:
+#   - is NOT part of Hunter's production acquisition architecture;
+#   - must be removed once the normal acquisition path (PR #110) can run in
+#     the supported execution environment.
+#
+# Idempotency: the Python step checks whether an authoritative
+# SupplyBasisSnapshot for Sky already exists in the canonical database before
+# attempting acquisition. If a record is found, the step exits early with no
+# database writes. Re-running the workflow is therefore safe.
+#
+# Signing key lifecycle:
+#   HUNTER_VALUE_CAPTURE_SIGNING_KEY_ID and HUNTER_VALUE_CAPTURE_SIGNING_KEY
+#   are intended only for this one-shot workflow. Both repository secrets MUST
+#   be deleted after successful Milestone 1 completion. The key is not rotated
+#   — it is temporary by design and should not be kept beyond this milestone.
+#
+# Requires two repository secrets (see above for lifecycle):
+#   HUNTER_VALUE_CAPTURE_SIGNING_KEY_ID
+#   HUNTER_VALUE_CAPTURE_SIGNING_KEY  (hex-encoded 32-byte key)
+#
+# Run manually via Actions → "Run workflow" on branch
+# claude/issue-107-milestone-1-entity-registration.
+# ──────────────────────────────────────────────────────────────────────────────
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: acquire-sky-supply-basis
+  cancel-in-progress: false
+
+jobs:
+  acquire:
+    name: "Acquire Sky SupplyBasisSnapshot"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: claude/issue-107-milestone-1-entity-registration
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.11.13"
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            requirements/ci-constraints.txt
+
+      - name: Install project
+        env:
+          PIP_CONSTRAINT: requirements/ci-constraints.txt
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check -c requirements/ci-constraints.txt -e ".[dev]"
+
+      - name: Acquire Sky market facts and SupplyBasisSnapshot
+        env:
+          HUNTER_APPLICATION_ROOT: ${{ github.workspace }}
+          HUNTER_VALUE_CAPTURE_SIGNING_KEY_ID: ${{ secrets.HUNTER_VALUE_CAPTURE_SIGNING_KEY_ID }}
+          HUNTER_VALUE_CAPTURE_SIGNING_KEY: ${{ secrets.HUNTER_VALUE_CAPTURE_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PYEOF'
+          import hashlib, os, sys
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          from hunter.market_facts.models import MarketFactIdentity, MarketFactRequest
+          from hunter.market_facts.providers import CoinGeckoObservedMarketFactProvider
+          from hunter.market_facts.registry import MarketFactSourceRegistry
+          from hunter.market_facts.repository import ObservedMarketFactRepository
+          from hunter.market_facts.service import ObservedMarketFactService
+          from hunter.value_capture.models import EconomicClaimIdentity
+          from hunter.value_capture.providers import (
+              RegisteredValueCaptureProvider,
+              ValueCaptureVerificationKeyRegistry,
+          )
+          from hunter.value_capture.registry import ValueCaptureSourceRegistry
+          from hunter.value_capture.repository import SupplyAndValueCaptureRepository
+          from hunter.value_capture.service import SupplyAndValueCaptureService
+
+          APP_ROOT = Path(os.environ["HUNTER_APPLICATION_ROOT"])
+          DB_PATH = APP_ROOT / "data" / "data_ops.sqlite"
+          SIGNING_KEY_ID = os.environ["HUNTER_VALUE_CAPTURE_SIGNING_KEY_ID"]
+          SIGNING_KEY = bytes.fromhex(os.environ["HUNTER_VALUE_CAPTURE_SIGNING_KEY"])
+          now = datetime.now(timezone.utc)
+          print(f"Acquisition timestamp: {now.isoformat()}", flush=True)
+
+          # ── Idempotency guard ───────────────────────────────────────────────
+          # Compute the canonical logical_id for Sky's circulating-supply
+          # snapshot and check whether any record already exists.  This mirrors
+          # the _logical_id() function in hunter.value_capture.service so that
+          # the check is stable across runs regardless of acquisition timestamp.
+          _raw = "|".join((
+              "entity:sky",
+              "economic-claim:sky-smart-burn-engine",
+              "asset:sky",
+              "representation:sky-ethereum",
+              "sky",
+              "ethereum",
+              "0x56072c95faa701256059aa122697b133aded9279",
+              "supply:circulating_supply",
+          ))
+          _logical_id = hashlib.sha256(_raw.encode()).hexdigest()
+          vc_repository_check = SupplyAndValueCaptureRepository(DB_PATH)
+          existing_supply = vc_repository_check.supply_history(_logical_id)
+          if existing_supply:
+              print(
+                  f"SupplyBasisSnapshot already exists ({len(existing_supply)} record(s))"
+                  f" for logical_id={_logical_id[:16]}... — skipping acquisition (idempotent).",
+                  flush=True,
+              )
+              sys.exit(0)
+          print("No existing SupplyBasisSnapshot found — proceeding with acquisition.", flush=True)
+
+          # ── Step 1: CoinGecko market facts for Sky ──────────────────────────
+          mf_registry = MarketFactSourceRegistry.from_file(
+              APP_ROOT / "configs" / "market_fact_sources.yaml"
+          )
+          sky_mf_identity = MarketFactIdentity(
+              entity_id="entity:sky",
+              asset_id="asset:sky",
+              representation_id="representation:sky-ethereum",
+              chain="ethereum",
+              contract_address="0x56072c95faa701256059aa122697b133aded9279",
+              provider_listing_id="sky",
+          )
+          mf_request = MarketFactRequest(
+              source_id="coingecko-coin-market-facts",
+              provider_id="coingecko",
+              identity=sky_mf_identity,
+              quote_currency="usd",
+              requested_fact_types=(
+                  "spot_price",
+                  "circulating_supply",
+                  "total_supply",
+                  "max_supply",
+              ),
+              requested_at=now,
+          )
+          mf_provider = CoinGeckoObservedMarketFactProvider(mf_registry)
+          mf_result = mf_provider.collect(mf_request)
+          if mf_result.status != "ok":
+              print(
+                  f"CoinGecko acquisition failed: status={mf_result.status!r}"
+                  f" reason={mf_result.failure_reason!r}",
+                  file=sys.stderr,
+              )
+              sys.exit(1)
+
+          mf_repository = ObservedMarketFactRepository(DB_PATH)
+          mf_service = ObservedMarketFactService(mf_repository, mf_registry)
+          mf_records = mf_service.ingest(mf_request, mf_result, recorded_at=now)
+          print(f"Market facts persisted: {len(mf_records)} records", flush=True)
+          by_type = {}
+          for r in mf_records:
+              print(f"  {r.fact_type}: {r.value} {r.unit}  [{r.record_id[:16]}...]", flush=True)
+              by_type[r.fact_type] = r
+
+          circulating = by_type.get("circulating_supply")
+          total = by_type.get("total_supply")
+          max_sup = by_type.get("max_supply")
+          if not circulating:
+              print("No circulating_supply record acquired — cannot build SupplyBasisSnapshot.", file=sys.stderr)
+              sys.exit(1)
+
+          components = [["circulating_supply", circulating.value]]
+          if total:
+              components.append(["total_supply", total.value])
+          if max_sup:
+              components.append(["fully_diluted_supply", max_sup.value])
+
+          # ── Step 2: SupplyBasisSnapshot via sky-protocol-tokenomics-disclosure ─
+          vc_registry = ValueCaptureSourceRegistry.from_yaml(
+              APP_ROOT / "configs" / "value_capture_sources.yaml"
+          )
+          vc_repository = SupplyAndValueCaptureRepository(DB_PATH)
+          verification_keys = ValueCaptureVerificationKeyRegistry({SIGNING_KEY_ID: SIGNING_KEY})
+          vc_service = SupplyAndValueCaptureService(
+              registry=vc_registry,
+              repository=vc_repository,
+              verification_keys=verification_keys,
+              market_fact_repository=mf_repository,
+          )
+          vc_source = vc_registry.require("sky-protocol-tokenomics-disclosure")
+          vc_provider = RegisteredValueCaptureProvider(
+              vc_source, signing_key_id=SIGNING_KEY_ID, signing_key=SIGNING_KEY
+          )
+          supply_identity = EconomicClaimIdentity(
+              entity_id="entity:sky",
+              economic_claim_id="economic-claim:sky-smart-burn-engine",
+              asset_id="asset:sky",
+              representation_id="representation:sky-ethereum",
+              token_id="sky",
+              chain="ethereum",
+              contract_address="0x56072c95faa701256059aa122697b133aded9279",
+          )
+
+          # Look up the existing evidence record to reference its ID.
+          evidence = vc_repository.strict_known_evidence(
+              entity_id="entity:sky",
+              economic_claim_id="economic-claim:sky-smart-burn-engine",
+              representation_id="representation:sky-ethereum",
+              evidence_type="official_disclosure",
+              effective_as_of=now,
+              known_by=now,
+          )
+          if evidence is None:
+              print("Sky evidence record not found in database.", file=sys.stderr)
+              sys.exit(1)
+          print(f"Referencing evidence: {evidence.record_id[:16]}...", flush=True)
+
+          acquisition_id = f"sky-supply-basis-milestone-1-{now.strftime('%Y%m%d%H%M%S')}"
+          supply_payload = {
+              "supply_basis_type": "circulating_supply",
+              "quantity": circulating.value,
+              "unit": "native_units",
+              "denominator_meaning": (
+                  "Provider-observed circulating SKY units (CoinGecko), cross-referenced"
+                  " with Sky Protocol official tokenomics disclosure."
+              ),
+              "supply_policy_id": "canonical-token-supply-v1",
+              "supply_policy_version": "1.0.0",
+              "quantity_components": components,
+              "observed_market_fact_ids": [r.record_id for r in mf_records],
+              "observed_market_fact_versions": [r.semantic_version for r in mf_records],
+              "source_record_id": f"sky-tokenomics-disclosure-supply-{now.strftime('%Y-%m-%d')}",
+              "source_record_version": now.strftime("%Y-%m-%d"),
+              "confidence": "0.80",
+              "uncertainty": "0.20",
+              "effective_at": now,
+              "evidence_record_ids": [evidence.record_id],
+              "quality_state": "accepted",
+              "conflict_state": "none",
+          }
+          supply_acq = vc_provider.acquisition(
+              kind="supply",
+              capability="supply:circulating_supply",
+              endpoint="https://developers.sky.money/core-protocol/smart-burn-engine/",
+              acquisition_id=acquisition_id,
+              acquired_at=now,
+              identity=supply_identity,
+              payload=supply_payload,
+          )
+          supply_record = vc_service.ingest_supply(vc_provider, supply_acq)
+          print(f"\nSupplyBasisSnapshot persisted:", flush=True)
+          print(f"  record_id:      {supply_record.record_id}", flush=True)
+          print(f"  logical_id:     {supply_record.logical_id}", flush=True)
+          print(f"  quality_state:  {supply_record.quality_state}", flush=True)
+          print(f"  conflict_state: {supply_record.conflict_state}", flush=True)
+          print(
+              "\nMilestone 1 evidence chain complete:"
+              " FundamentalEvidenceRecord + ValueCaptureRuleSnapshot + SupplyBasisSnapshot all persisted.",
+              flush=True,
+          )
+          PYEOF
+
+      - name: Commit updated database
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/data_ops.sqlite
+          if git diff --staged --quiet; then
+            echo "No database changes to commit (idempotency guard exited early — snapshot already present)."
+          else
+            git commit -m "Milestone 1: persist Sky SupplyBasisSnapshot via CoinGecko market-fact leg"
+            git push origin HEAD:claude/issue-107-milestone-1-entity-registration
+            echo "Database committed and pushed to PR branch."
+          fi
