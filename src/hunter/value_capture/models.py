@@ -259,7 +259,15 @@ class SupplyBasisSnapshot:
             # already surfaces divergent-duplicate conflicts elsewhere in this record family.
             relative_gap = (total - diluted) / diluted if diluted != 0 else None
             if relative_gap is None or relative_gap > SUPPLY_COHERENCE_RELATIVE_TOLERANCE:
-                if self.conflict_state == "none":
+                if self.supersedes_record_id is None:
+                    # An initial record (no correction predecessor) cannot legitimately claim
+                    # "resolved" or "contested" for a conflict that never had a prior, authorized
+                    # correction to resolve — a material incoherence must surface as an open
+                    # conflict regardless of what conflict_state the payload itself claims,
+                    # otherwise a caller could bypass conflict surfacing entirely by pre-labeling
+                    # a first-ever record "resolved".
+                    object.__setattr__(self, "conflict_state", "open")
+                elif self.conflict_state == "none":
                     object.__setattr__(self, "conflict_state", "open")
         if locked is not None and total is not None and locked > total:
             raise ValueError("locked supply must not exceed total supply")

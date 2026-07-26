@@ -454,6 +454,33 @@ def test_supply_basis_flags_conflict_when_total_exceeds_fully_diluted_beyond_tol
     assert record.conflict_state == "open"
 
 
+def test_supply_basis_initial_record_cannot_claim_resolved_for_unauthorized_conflict(tmp_path) -> None:
+    """An initial record (no supersedes_record_id, i.e. no correction lineage) has no prior,
+    authorized correction that could have legitimately resolved anything. A caller pre-labeling
+    such a record conflict_state="resolved" must not bypass conflict surfacing for a material
+    total>fully_diluted incoherence — this is forced to "open" regardless of the claimed state."""
+    service, _, provider = setup(tmp_path)
+    evidence = service.ingest_evidence(provider, evidence_result(provider))
+    fact = seed_observed_market_fact(tmp_path)
+    record = service.ingest_supply(
+        provider,
+        supply_result(
+            provider,
+            evidence.record_id,
+            observed_market_fact_ids=[fact.record_id],
+            observed_market_fact_versions=[fact.semantic_version],
+            quantity_components=[
+                ["circulating_supply", "86000000"],
+                ["total_supply", "100100000"],
+                ["fully_diluted_supply", "100000000"],
+            ],
+            conflict_state="resolved",
+        ),
+    )
+    assert record.supersedes_record_id is None
+    assert record.conflict_state == "open"
+
+
 def test_supply_basis_contract_round_trips_policy_and_fact_versions(tmp_path) -> None:
     service, repository, provider = setup(tmp_path)
     evidence = service.ingest_evidence(provider, evidence_result(provider))
