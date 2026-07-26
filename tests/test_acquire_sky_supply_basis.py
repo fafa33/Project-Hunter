@@ -386,3 +386,61 @@ def test_build_supply_payload_references_exactly_the_returned_market_facts(tmp_p
     assert len(payload["observed_market_fact_ids"]) == len(payload["observed_market_fact_versions"])
     component_types = {component[0] for component in payload["quantity_components"]}
     assert component_types == {"circulating_supply", "total_supply"}
+
+
+def test_build_supply_payload_omits_fully_diluted_supply_when_max_supply_is_below_total_supply(
+    tmp_path: Path,
+) -> None:
+    """Reproduces real CoinGecko data observed for Sky: max_supply reported
+    fractionally below total_supply for the same snapshot. Passing both
+    through unchanged would violate SupplyBasisSnapshot's canonical
+    total<=fully_diluted invariant, so fully_diluted_supply must be omitted
+    rather than fabricating or rounding either value."""
+    root = _application_root(tmp_path)
+    registry = MarketFactSourceRegistry.from_file(root / "configs" / "market_fact_sources.yaml")
+    repository = script.ObservedMarketFactRepository(root / "data" / "data_ops.sqlite")
+    now = datetime.now(UTC)
+    payload_source = {
+        "id": "sky",
+        "last_updated": now.isoformat(),
+        "market_data": {
+            "circulating_supply": 23355983976.864086,
+            "total_supply": 23462665147.36596,
+            "max_supply": 23462665147.3,
+        },
+    }
+    transport = StaticTransport(payload_source)
+    records = script.acquire_market_facts(registry=registry, repository=repository, now=now, transport=transport)
+
+    payload = script.build_supply_payload(records=records, evidence_record_id="evidence-record-id", now=now)
+
+    component_types = {component[0] for component in payload["quantity_components"]}
+    assert component_types == {"circulating_supply", "total_supply"}
+    assert "fully_diluted_supply" not in component_types
+
+
+def test_build_supply_payload_includes_fully_diluted_supply_when_max_supply_meets_total_supply(
+    tmp_path: Path,
+) -> None:
+    root = _application_root(tmp_path)
+    registry = MarketFactSourceRegistry.from_file(root / "configs" / "market_fact_sources.yaml")
+    repository = script.ObservedMarketFactRepository(root / "data" / "data_ops.sqlite")
+    now = datetime.now(UTC)
+    payload_source = {
+        "id": "sky",
+        "last_updated": now.isoformat(),
+        "market_data": {
+            "circulating_supply": 1_000_000_000,
+            "total_supply": 1_200_000_000,
+            "max_supply": 1_200_000_000,
+        },
+    }
+    transport = StaticTransport(payload_source)
+    records = script.acquire_market_facts(registry=registry, repository=repository, now=now, transport=transport)
+
+    payload = script.build_supply_payload(records=records, evidence_record_id="evidence-record-id", now=now)
+
+    component_types = {component[0] for component in payload["quantity_components"]}
+    assert component_types == {"circulating_supply", "total_supply", "fully_diluted_supply"}
+    fully_diluted = next(v for t, v in payload["quantity_components"] if t == "fully_diluted_supply")
+    assert fully_diluted == "1200000000"
