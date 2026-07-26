@@ -5,7 +5,6 @@ import sqlite3
 import sys
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -229,13 +228,13 @@ def build_supply_payload(
     if total is not None:
         quantity_components.append(["total_supply", total.value])
     max_supply = by_type.get("max_supply")
-    if max_supply is not None and (total is None or Decimal(max_supply.value) >= Decimal(total.value)):
-        # CoinGecko's max_supply is sometimes fractionally below its own
-        # total_supply for the same snapshot (observed for Sky). Passing that
-        # through as fully_diluted_supply would violate the canonical
-        # SupplyBasisSnapshot invariant (total <= fully_diluted). Omitting an
-        # incoherent optional component is correct: it is not fabrication,
-        # since fully_diluted_supply is already optional in this payload.
+    if max_supply is not None:
+        # Always persist the observed max_supply as fully_diluted_supply, verbatim, even when it
+        # is fractionally below total_supply (observed for Sky: a provider rounding/timing
+        # artifact, not a real economic distinction). SupplyBasisSnapshot's own coherence check
+        # now absorbs this case itself (persisting as accepted within a small precision tolerance,
+        # or flagging conflict_state="open" for a larger gap) rather than this script silently
+        # deciding whether to include the value.
         quantity_components.append(["fully_diluted_supply", max_supply.value])
 
     return {

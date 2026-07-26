@@ -343,6 +343,42 @@ def test_run_end_to_end_persists_and_links_supply_snapshot(tmp_path: Path, monke
         assert fact.known_at <= persisted.known_at
 
 
+def test_run_end_to_end_persists_incoherent_fully_diluted_supply_within_tolerance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """End-to-end reproduction of the real CoinGecko response observed for Sky
+    (max_supply fractionally below total_supply). The full acquire-and-persist
+    pipeline must succeed, with both values persisted verbatim and the record
+    remaining accepted (no conflict) because the gap is within provider
+    precision/timing tolerance."""
+    now = datetime.now(UTC)
+    root = _application_root(tmp_path)
+    _set_env(monkeypatch, root)
+    _seed_evidence_and_rule(root, now=now)
+    payload_source = {
+        "id": "sky",
+        "last_updated": now.isoformat(),
+        "market_data": {
+            "circulating_supply": 23355983976.864086,
+            "total_supply": 23462665147.36596,
+            "max_supply": 23462665147.3,
+        },
+    }
+    transport = StaticTransport(payload_source)
+
+    record_id = script.run(root=root, transport=transport, now=now + timedelta(minutes=5))
+
+    assert record_id is not None
+    repository = SupplyAndValueCaptureRepository(root / "data" / "data_ops.sqlite")
+    persisted = repository.supply(record_id)
+    assert persisted is not None
+    assert persisted.quality_state == "accepted"
+    assert persisted.conflict_state == "none"
+    components = dict(persisted.quantity_components)
+    assert components["total_supply"] == "23462665147.36596"
+    assert components["fully_diluted_supply"] == "23462665147.3"
+
+
 def test_run_is_idempotent_on_rerun(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     now = datetime.now(UTC)
     root = _application_root(tmp_path)
@@ -388,14 +424,15 @@ def test_build_supply_payload_references_exactly_the_returned_market_facts(tmp_p
     assert component_types == {"circulating_supply", "total_supply"}
 
 
-def test_build_supply_payload_omits_fully_diluted_supply_when_max_supply_is_below_total_supply(
+def test_build_supply_payload_includes_fully_diluted_supply_even_when_below_total_supply(
     tmp_path: Path,
 ) -> None:
     """Reproduces real CoinGecko data observed for Sky: max_supply reported
-    fractionally below total_supply for the same snapshot. Passing both
-    through unchanged would violate SupplyBasisSnapshot's canonical
-    total<=fully_diluted invariant, so fully_diluted_supply must be omitted
-    rather than fabricating or rounding either value."""
+    fractionally below total_supply for the same snapshot. Both values are
+    persisted exactly as observed, verbatim, with no fabrication or rounding —
+    SupplyBasisSnapshot's own coherence check (a small precision tolerance,
+    else conflict_state="open") absorbs the incoherence instead of this
+    script deciding whether to include the component."""
     root = _application_root(tmp_path)
     registry = MarketFactSourceRegistry.from_file(root / "configs" / "market_fact_sources.yaml")
     repository = script.ObservedMarketFactRepository(root / "data" / "data_ops.sqlite")
@@ -415,8 +452,9 @@ def test_build_supply_payload_omits_fully_diluted_supply_when_max_supply_is_belo
     payload = script.build_supply_payload(records=records, evidence_record_id="evidence-record-id", now=now)
 
     component_types = {component[0] for component in payload["quantity_components"]}
-    assert component_types == {"circulating_supply", "total_supply"}
-    assert "fully_diluted_supply" not in component_types
+    assert component_types == {"circulating_supply", "total_supply", "fully_diluted_supply"}
+    fully_diluted = next(v for t, v in payload["quantity_components"] if t == "fully_diluted_supply")
+    assert fully_diluted == "23462665147.3"
 
 
 def test_build_supply_payload_includes_fully_diluted_supply_when_max_supply_meets_total_supply(
