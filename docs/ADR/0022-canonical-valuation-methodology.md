@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted.
+Accepted. Scope criterion 3 (supply coherence) amended by ADR 0023 (Supply Basis Provider-Data Coherence Tolerance) — see that ADR for the exact change; unaffected sections of this ADR are unchanged.
 
 ## Context
 
@@ -27,7 +27,7 @@ The first supported entity class is defined by the following criteria, all of wh
 
 1. Single-chain, non-wrapped, non-bridged native representation (excludes wrapped/bridged assets and multi-chain aggregate representations — ADR 0005's entity/representation boundaries apply without exception).
 2. Exactly one explicit, officially disclosed or on-chain-observable value-capture mechanism drawn from the existing `ValueCaptureRuleType` allow-list already implemented in `hunter.value_capture.models` — specifically one of `fee_distribution`, `revenue_distribution`, `buyback_and_burn`, `staking_distribution`, `redemption_entitlement`, or `collateral_entitlement`. An entity whose only available rule is `no_direct_value_capture`, `unavailable`, or `unsupported` is out of scope for this methodology (it may still be valued under a future, separately authorized methodology for value-less-by-design assets, which this ADR does not define).
-3. Circulating, total, and fully diluted supply are each independently observable and internally coherent under the existing `SupplyBasisSnapshot` contract (`circulating <= total <= fully_diluted`).
+3. Circulating, total, and fully diluted supply are each independently observable and internally coherent under the existing `SupplyBasisSnapshot` contract (`circulating <= total <= fully_diluted`). *(As amended by ADR 0023: `total <= fully_diluted` is evaluated against a fixed, versioned, entity-agnostic relative tolerance for provider precision/timing noise, not as a zero-tolerance inequality; `circulating <= total` remains tolerance-free. See ADR 0023 for the exact rule and its governance.)*
 4. At least one accepted, non-conflicted `FundamentalEvidenceRecord` exists whose `attribution_rule_id` matches an accepted `ValueCaptureRuleSnapshot` for the same economic claim, with an accounting period fully contained within the valuation horizon's lookback window.
 
 No specific project is named as satisfying these criteria today. Registering a concrete entity that satisfies all four criteria — including acquiring real evidence through `hunter.value_capture`'s existing service boundary — is implementation work, not an architectural decision, and is out of scope for this ADR.
