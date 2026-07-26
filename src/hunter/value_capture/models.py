@@ -44,6 +44,15 @@ EvidenceType = Literal[
 QualityState = Literal["accepted", "stale", "partial", "ambiguous", "unavailable", "unsupported"]
 ConflictState = Literal["none", "open", "contested", "resolved"]
 
+# Real market-data providers occasionally report total_supply fractionally above their own
+# max_supply for the same snapshot (rounding, caching, or asynchronous field publication within
+# one provider response) even though a hard total<=fully_diluted violation of this magnitude is
+# not real. This tolerance defines "provider precision/timing noise": a relative gap this small
+# or smaller between total_supply and fully_diluted_supply is treated as coherent and persisted
+# as ordinary accepted data. Entity-agnostic and provider-agnostic by construction — it is applied
+# uniformly to whatever quantities are present in `quantity_components`, never to a named entity.
+SUPPLY_COHERENCE_RELATIVE_TOLERANCE = Decimal("0.0001")
+
 SUPPLY_BASIS_TYPES = frozenset(SupplyBasisType.__args__)  # type: ignore[attr-defined]
 VALUE_CAPTURE_RULE_TYPES = frozenset(ValueCaptureRuleType.__args__)  # type: ignore[attr-defined]
 EVIDENCE_TYPES = frozenset(EvidenceType.__args__)  # type: ignore[attr-defined]
@@ -240,7 +249,26 @@ class SupplyBasisSnapshot:
         if circulating is not None and total is not None and circulating > total:
             raise ValueError("circulating supply must not exceed total supply")
         if total is not None and diluted is not None and total > diluted:
-            raise ValueError("total supply must not exceed fully diluted supply")
+            # A provider-reported total_supply fractionally above its own fully_diluted_supply for
+            # the same snapshot is real (rounding, caching, asynchronous field publication) and must
+            # not be rejected, clamped, or fabricated away — both raw values are preserved exactly as
+            # observed. A gap within SUPPLY_COHERENCE_RELATIVE_TOLERANCE is treated as provider
+            # precision/timing noise and persisted as ordinary accepted data. A larger gap is a real
+            # data conflict: it is not rejected either, but is surfaced via conflict_state rather than
+            # silently accepted, mirroring how SupplyAndValueCaptureService._apply_conflict_policy
+            # already surfaces divergent-duplicate conflicts elsewhere in this record family.
+            relative_gap = (total - diluted) / diluted if diluted != 0 else None
+            if relative_gap is None or relative_gap > SUPPLY_COHERENCE_RELATIVE_TOLERANCE:
+                if self.supersedes_record_id is None:
+                    # An initial record (no correction predecessor) cannot legitimately claim
+                    # "resolved" or "contested" for a conflict that never had a prior, authorized
+                    # correction to resolve — a material incoherence must surface as an open
+                    # conflict regardless of what conflict_state the payload itself claims,
+                    # otherwise a caller could bypass conflict surfacing entirely by pre-labeling
+                    # a first-ever record "resolved".
+                    object.__setattr__(self, "conflict_state", "open")
+                elif self.conflict_state == "none":
+                    object.__setattr__(self, "conflict_state", "open")
         if locked is not None and total is not None and locked > total:
             raise ValueError("locked supply must not exceed total supply")
         if excluded is not None and total is not None and excluded > total:

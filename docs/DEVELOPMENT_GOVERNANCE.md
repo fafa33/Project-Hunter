@@ -181,6 +181,26 @@ A Pull Request marked **Ready for Review** must not contain unresolved blocking 
 
 ---
 
+# Merge Readiness
+
+Green automated checks and the absence of unresolved blocking findings are necessary conditions for merge. Neither is sufficient on its own.
+
+A Pull Request must not be merged while any required acceptance criterion or required operational validation is missing, `FAIL`, or `BLOCKED`. This applies regardless of automated check status and regardless of how much review discussion has occurred.
+
+The implementer declares one of the following states on a Pull Request:
+
+- **Ready for Review** — required verification and self-assessment are complete, per Stage 6.
+- **Changes Required** — implementation, evidence, or documentation remains incomplete.
+- **Blocked** — completion depends on an unavailable environment, provider, credential, or external condition.
+
+The implementer does not declare a Pull Request **Approved**. Approval is an outcome of independent review, governed by `docs/AI_REVIEW_PROTOCOL.md`, and is recorded only by the reviewer after required review and verification have completed.
+
+A Pull Request must not be merged while any unresolved blocking finding remains open, consistent with Stage 6 and with `docs/AI_REVIEW_PROTOCOL.md`'s Blocking Findings section. Non-blocking recommendations, and findings that have already been resolved, do not prevent merge.
+
+`docs/MERGE_READINESS_GATE.md` is the implementation guide for this rule: it defines the required review dimensions, the acceptance-criteria matrix format, the evidence package a Pull Request must include, and the pull request template that operationalizes the rule stated here. It does not define an independent governance authority and must not be read as one.
+
+---
+
 # Proportionality
 
 Every lifecycle stage is mandatory.
@@ -225,6 +245,7 @@ No amendment may conflict with:
 | ADRs | Architectural decisions |
 | HUNTER_IMPLEMENTATION_CONTRACT | Implementation obligations |
 | This document | Development lifecycle |
+| MERGE_READINESS_GATE | Implementation guide for the Merge Readiness rule owned by this document |
 
 ---
 
