@@ -155,7 +155,7 @@ def evidence_result(provider, *, acquired_at=NOW + timedelta(minutes=1), acquisi
         "extracted_claim": "Protocol fees are distributed under the documented rule.",
         "amount": "1000000",
         "unit": "usd",
-        "accounting_period_start": NOW - timedelta(days=30),
+        "accounting_period_start": NOW - timedelta(days=365),
         "accounting_period_end": NOW,
         "attribution_rule_id": "canonical-fee-distribution-v1",
         "source_methodology": "official-accrual-disclosure-v1",
@@ -227,6 +227,7 @@ def rule_result(provider, evidence_id, *, acquired_at=NOW + timedelta(minutes=2)
         "destination_economic_flow": "Eligible represented claim",
         "trigger_condition": "Documented rule conditions are met",
         "distribution_formula": "Documented formula only",
+        "rate_or_proportion": "1",
         "governance_or_contract_authority": "Official enacted tokenomics rule",
         "mechanism_policy_id": "canonical-fee-distribution-v1",
         "mechanism_policy_version": "1.0.0",
@@ -628,6 +629,7 @@ def test_attribution_mismatch_between_evidence_and_rule_is_rejected(tmp_path: Pa
         evidence_result(
             fixture.provider,
             acquisition_id="evidence-mismatched",
+            acquired_at=NOW + timedelta(minutes=6),
             source_reference="official-tokenomics-page-mismatched",
             attribution_rule_id="some-unrelated-rule-id",
         ),
@@ -639,6 +641,7 @@ def test_attribution_mismatch_between_evidence_and_rule_is_rejected(tmp_path: Pa
             mismatched_evidence.record_id,
             fixture.market_fact,
             acquisition_id="supply-mismatched",
+            acquired_at=NOW + timedelta(minutes=6),
         ),
     )
     with pytest.raises(CanonicalValuationAuthorityError, match="Scope condition 4"):
@@ -677,6 +680,7 @@ def test_currency_mismatch_is_rejected(tmp_path: Path) -> None:
         evidence_result(
             fixture.provider,
             acquisition_id="evidence-eur",
+            acquired_at=NOW + timedelta(minutes=7),
             source_reference="official-tokenomics-page-eur",
             unit="eur",
         ),
@@ -684,12 +688,21 @@ def test_currency_mismatch_is_rejected(tmp_path: Path) -> None:
     fixture.vc_service.ingest_supply(
         fixture.provider,
         supply_result(
-            fixture.provider, mismatched_evidence.record_id, fixture.market_fact, acquisition_id="supply-eur"
+            fixture.provider,
+            mismatched_evidence.record_id,
+            fixture.market_fact,
+            acquisition_id="supply-eur",
+            acquired_at=NOW + timedelta(minutes=7),
         ),
     )
     fixture.vc_service.ingest_rule(
         fixture.provider,
-        rule_result(fixture.provider, mismatched_evidence.record_id, acquisition_id="rule-eur"),
+        rule_result(
+            fixture.provider,
+            mismatched_evidence.record_id,
+            acquisition_id="rule-eur",
+            acquired_at=NOW + timedelta(minutes=7),
+        ),
     )
     with pytest.raises(CanonicalValuationAuthorityError, match="currency conversion is not authorized"):
         fixture.estimate()
@@ -702,6 +715,7 @@ def test_negative_flow_amount_is_rejected(tmp_path: Path) -> None:
         evidence_result(
             fixture.provider,
             acquisition_id="evidence-negative",
+            acquired_at=NOW + timedelta(minutes=8),
             source_reference="official-tokenomics-page-negative",
             amount="-500",
         ),
@@ -709,12 +723,21 @@ def test_negative_flow_amount_is_rejected(tmp_path: Path) -> None:
     fixture.vc_service.ingest_supply(
         fixture.provider,
         supply_result(
-            fixture.provider, negative_evidence.record_id, fixture.market_fact, acquisition_id="supply-negative"
+            fixture.provider,
+            negative_evidence.record_id,
+            fixture.market_fact,
+            acquisition_id="supply-negative",
+            acquired_at=NOW + timedelta(minutes=8),
         ),
     )
     fixture.vc_service.ingest_rule(
         fixture.provider,
-        rule_result(fixture.provider, negative_evidence.record_id, acquisition_id="rule-negative"),
+        rule_result(
+            fixture.provider,
+            negative_evidence.record_id,
+            acquisition_id="rule-negative",
+            acquired_at=NOW + timedelta(minutes=8),
+        ),
     )
     with pytest.raises(CanonicalValuationAuthorityError, match="non-negative"):
         fixture.estimate()
@@ -800,3 +823,126 @@ def test_relative_application_root_is_rejected(tmp_path: Path) -> None:
             market_fact_repository=ObservedMarketFactRepository(fixture.db_path),
             application_root=Path("relative/root"),
         )
+
+
+# 15. Post-merge review fix: input chronology bound to the estimate's own recorded_at ------------
+
+
+def test_input_recorded_after_estimate_recorded_at_is_rejected(tmp_path: Path) -> None:
+    fixture = setup(tmp_path)
+    future_known_evidence = fixture.vc_service.ingest_evidence(
+        fixture.provider,
+        evidence_result(
+            fixture.provider,
+            acquisition_id="evidence-future-known",
+            acquired_at=NOW + timedelta(minutes=20),
+            source_reference="official-tokenomics-page-future-known",
+        ),
+    )
+    assert future_known_evidence.recorded_at == NOW + timedelta(minutes=20)
+    with pytest.raises(CanonicalValuationAuthorityError, match="cannot support this estimate"):
+        fixture.estimate(
+            recorded_at=NOW + timedelta(minutes=10),
+            known_at=NOW + timedelta(minutes=30),
+        )
+
+
+# 16. Post-merge review fix: rate_or_proportion attribution --------------------------------------
+
+
+def test_rate_or_proportion_scales_attributable_value(tmp_path: Path) -> None:
+    db_path = tmp_path / "canonical-valuation.sqlite"
+    market_fact = seed_observed_market_fact(db_path)
+
+    verification_keys = ValueCaptureVerificationKeyRegistry({SIGNING_KEY_ID: SIGNING_KEY})
+    vc_repository = SupplyAndValueCaptureRepository(db_path)
+    vc_service = SupplyAndValueCaptureService(
+        registry=ValueCaptureSourceRegistry((source(),)),
+        repository=vc_repository,
+        verification_keys=verification_keys,
+    )
+    provider = RegisteredValueCaptureProvider(source(), signing_key_id=SIGNING_KEY_ID, signing_key=SIGNING_KEY)
+
+    evidence = vc_service.ingest_evidence(provider, evidence_result(provider))
+    vc_service.ingest_supply(provider, supply_result(provider, evidence.record_id, market_fact))
+    rule = vc_service.ingest_rule(provider, rule_result(provider, evidence.record_id, rate_or_proportion="0.1"))
+    assert rule.rate_or_proportion == "0.1"
+
+    vm_repository = ValuationMethodologyRepository(db_path)
+    methodology_authority = CanonicalValuationMethodologyAuthority(repository=vm_repository, application_root=tmp_path)
+    methodology_authority.persist_methodology(**methodology_payload())
+
+    service = CanonicalValuationService(
+        repository=CanonicalValuationRepository(db_path),
+        methodology_authority=methodology_authority,
+        value_capture_repository=vc_repository,
+        market_fact_repository=ObservedMarketFactRepository(db_path),
+        application_root=tmp_path,
+    )
+    estimate, _ = service.estimate_fair_value(
+        identity=identity(),
+        evidence_type="official_disclosure",
+        rule_type="fee_distribution",
+        effective_at=NOW,
+        recorded_at=NOW + timedelta(minutes=10),
+        known_at=NOW + timedelta(minutes=10),
+    )
+    # flow = 1_000_000 * 0.1 = 100_000; rate=0.15 => pv=86956.521739...
+    assert estimate.discount_rate_applied == "0.15"
+    assert estimate.total_diluted_value_p50.startswith("86956.521739")
+
+
+def test_missing_rate_or_proportion_fails_closed(tmp_path: Path) -> None:
+    fixture = setup(tmp_path)
+    no_rate_evidence = fixture.vc_service.ingest_evidence(
+        fixture.provider,
+        evidence_result(
+            fixture.provider,
+            acquisition_id="evidence-no-rate",
+            acquired_at=NOW + timedelta(minutes=3),
+            source_reference="official-tokenomics-page-no-rate",
+            attribution_rule_id="canonical-revenue-distribution-v1",
+        ),
+    )
+    fixture.vc_service.ingest_rule(
+        fixture.provider,
+        rule_result(
+            fixture.provider,
+            no_rate_evidence.record_id,
+            acquisition_id="rule-no-rate",
+            acquired_at=NOW + timedelta(minutes=5),
+            rule_type="revenue_distribution",
+            mechanism_policy_id="canonical-revenue-distribution-v1",
+            rate_or_proportion=None,
+        ),
+    )
+    with pytest.raises(CanonicalValuationAuthorityError, match="rate_or_proportion"):
+        fixture.service.estimate_fair_value(
+            identity=identity(),
+            evidence_type="official_disclosure",
+            rule_type="revenue_distribution",
+            effective_at=NOW,
+            recorded_at=NOW + timedelta(minutes=10),
+            known_at=NOW + timedelta(minutes=10),
+        )
+
+
+# 17. Post-merge review fix: accounting-period length must match the horizon ---------------------
+
+
+def test_evidence_accounting_period_length_not_matching_horizon_is_rejected(tmp_path: Path) -> None:
+    fixture = setup(tmp_path)
+    short_period_evidence = fixture.vc_service.ingest_evidence(
+        fixture.provider,
+        evidence_result(
+            fixture.provider,
+            acquisition_id="evidence-short-period",
+            acquired_at=NOW + timedelta(minutes=4),
+            source_reference="official-tokenomics-page-short-period",
+            accounting_period_start=NOW - timedelta(days=30),
+            accounting_period_end=NOW,
+        ),
+    )
+    assert short_period_evidence.conflict_state == "none"
+    with pytest.raises(CanonicalValuationAuthorityError, match="horizon"):
+        fixture.estimate()
