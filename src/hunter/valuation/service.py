@@ -131,6 +131,10 @@ class CanonicalValuationService:
         )
         if methodology is None:
             raise CanonicalValuationAuthorityError("no strict-known ValuationMethodologySnapshot is available")
+        if methodology.recorded_at > recorded_at or methodology.known_at > known_at:
+            raise CanonicalValuationAuthorityError(
+                "future-known ValuationMethodologySnapshot cannot support this estimate"
+            )
 
         supply = self.value_capture_repository.strict_known_supply(
             entity_id=identity.entity_id,
@@ -142,6 +146,8 @@ class CanonicalValuationService:
         )
         if supply is None:
             raise CanonicalValuationAuthorityError("no strict-known SupplyBasisSnapshot is available")
+        if supply.recorded_at > recorded_at or supply.known_at > known_at:
+            raise CanonicalValuationAuthorityError("future-known SupplyBasisSnapshot cannot support this estimate")
         if supply.identity != identity:
             raise CanonicalValuationAuthorityError("supply basis identity does not match requested target identity")
         components = dict(supply.quantity_components)
@@ -162,6 +168,10 @@ class CanonicalValuationService:
         )
         if evidence is None:
             raise CanonicalValuationAuthorityError("no strict-known FundamentalEvidenceRecord is available")
+        if evidence.recorded_at > recorded_at or evidence.known_at > known_at:
+            raise CanonicalValuationAuthorityError(
+                "future-known FundamentalEvidenceRecord cannot support this estimate"
+            )
         if evidence.identity != identity:
             raise CanonicalValuationAuthorityError("evidence identity does not match requested target identity")
 
@@ -175,6 +185,8 @@ class CanonicalValuationService:
         )
         if rule is None:
             raise CanonicalValuationAuthorityError("no strict-known ValueCaptureRuleSnapshot is available")
+        if rule.recorded_at > recorded_at or rule.known_at > known_at:
+            raise CanonicalValuationAuthorityError("future-known ValueCaptureRuleSnapshot cannot support this estimate")
         if rule.identity != identity:
             raise CanonicalValuationAuthorityError("rule identity does not match requested target identity")
         if rule.rule_type not in PERMITTED_VALUE_CAPTURE_RULE_TYPES:
@@ -194,6 +206,13 @@ class CanonicalValuationService:
                 "evidence accounting period is not fully contained within the valuation horizon's "
                 "lookback window (ADR 0022 Scope condition 4)"
             )
+        accounting_period_days = (evidence.accounting_period_end - evidence.accounting_period_start).days
+        if accounting_period_days != methodology.horizon_days:
+            raise CanonicalValuationAuthorityError(
+                "evidence accounting period length does not match the valuation horizon; an arbitrary-"
+                "period amount cannot be treated as a fixed 365-day flow without an authorized "
+                "annualization policy (ADR 0022 Prohibited methodologies)"
+            )
 
         market_facts = []
         if not supply.observed_market_fact_ids:
@@ -210,7 +229,7 @@ class CanonicalValuationService:
                 raise CanonicalValuationAuthorityError(
                     "non-authoritative observed market fact cannot support valuation"
                 )
-            if fact.recorded_at > known_at or fact.known_at > known_at or fact.effective_at > effective_at:
+            if fact.recorded_at > recorded_at or fact.known_at > known_at or fact.effective_at > effective_at:
                 raise CanonicalValuationAuthorityError(
                     "observed market fact is not strict-known at the requested cutoff"
                 )
@@ -243,9 +262,15 @@ class CanonicalValuationService:
                 "methodology declares a supply-basis selection rule this implementation does not support"
             )
 
-        flow = Decimal(evidence.amount)
-        if not flow.is_finite() or flow < 0:
+        raw_flow = Decimal(evidence.amount)
+        if not raw_flow.is_finite() or raw_flow < 0:
             raise CanonicalValuationAuthorityError("attributable value-capture flow must be finite and non-negative")
+        if rule.rate_or_proportion is None:
+            raise CanonicalValuationAuthorityError(
+                "ValueCaptureRuleSnapshot does not declare rate_or_proportion; attributable value cannot be "
+                "determined with certainty (ADR 0022 Missingness)"
+            )
+        flow = raw_flow * Decimal(rule.rate_or_proportion)
         supply_quantity = Decimal(components["fully_diluted_supply"])
         if not supply_quantity.is_finite() or supply_quantity <= 0:
             raise CanonicalValuationAuthorityError("fully diluted supply must be a positive, finite quantity")
