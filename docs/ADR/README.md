@@ -127,6 +127,7 @@ Conflicts must be resolved before implementation proceeds.
 | [0020](0020-canonical-market-validation-input-authority.md) | Canonical Market Validation Input Authority and Strict-Known Replay | Accepted | Input ownership, missingness, anti-aliasing, and cutoff-safe replay |
 | [0021](0021-canonical-valuation-evidence-authority.md) | Canonical Valuation Evidence Authority | Accepted | Valuation-family evidence and service-authority contracts |
 | [0022](0022-canonical-valuation-methodology.md) | Canonical Valuation Methodology | Accepted | First-entity-class fair-value model, permitted/prohibited methodologies, calibration and audit gate |
+| [0023](0023-supply-basis-coherence-tolerance.md) | Supply Basis Provider-Data Coherence Tolerance | Accepted | Amends ADR 0022 Scope criterion 3: entity-agnostic relative tolerance for provider precision/timing noise in supply coherence |
 
 ## Creating a New ADR
 
