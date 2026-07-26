@@ -75,9 +75,14 @@ class ObservedMarketFactRepository:
         engine = create_sqlite_engine(self.path)
         session = SessionFactory(engine).create()
         try:
+            # BEGIN IMMEDIATE acquires SQLite's write lock before the branching-correction
+            # check below runs, so two concurrent corrections of the same predecessor cannot
+            # both observe "no existing successor" and both commit — mirroring the identical
+            # transactional pattern already audited in hunter.value_capture's persist_capability.
+            session.connection().exec_driver_sql("BEGIN IMMEDIATE")
             snapshots = RepositoryFactory(session).snapshots()
             for record in plan.records:
-                self._validate_successor(record)
+                self._validate_successor(snapshots, record)
                 snapshots.save(_record_snapshot(record))
             for event in plan.availability_events:
                 snapshots.save(_availability_snapshot(event))
@@ -288,14 +293,35 @@ class ObservedMarketFactRepository:
             raise ValueError("unsupported market fact table")
         return mapping[table]
 
-    def _validate_successor(self, record: ObservedMarketFactRecord) -> None:
+    def _validate_successor(self, snapshots: Any, record: ObservedMarketFactRecord) -> None:
         if record.supersedes_record_id is None:
             return
-        predecessor = self.record(record.supersedes_record_id)
-        if predecessor is None:
+        predecessor_snapshot = snapshots.load(record.supersedes_record_id)
+        if predecessor_snapshot is None or predecessor_snapshot.snapshot_type != _FACT_SNAPSHOT_TYPE:
             raise MarketFactIntegrityError("superseded market fact record does not exist")
+        predecessor = _record_from_snapshot(predecessor_snapshot)
         if predecessor.logical_id != record.logical_id:
             raise MarketFactIntegrityError("correction must preserve logical_id")
+        if predecessor.recorded_at >= record.recorded_at:
+            raise MarketFactIntegrityError("correction recorded_at must follow predecessor")
+        if predecessor.known_at >= record.known_at:
+            raise MarketFactIntegrityError("correction known_at must follow predecessor")
+        # A retried, byte-identical correction (same content-addressed record_id) is an
+        # idempotent no-op, not a branch: it is excluded here and handled by the ordinary
+        # save()-time canonical-hash upsert below. Only a *different* record claiming the
+        # same predecessor is a genuine branching correction.
+        competing_successor = next(
+            (
+                item
+                for item in snapshots.query(QuerySpec(record_kind="snapshot"))
+                if item.snapshot_type == _FACT_SNAPSHOT_TYPE
+                and item.payload.get("supersedes_record_id") == predecessor.record_id
+                and item.id != record.record_id
+            ),
+            None,
+        )
+        if competing_successor is not None:
+            raise MarketFactIntegrityError("branching correction lineage is prohibited")
 
     def _validate_resolution(self, resolution: MarketFactConflictResolution) -> None:
         candidates = tuple(self.record(record_id) for record_id in resolution.candidate_record_ids)
