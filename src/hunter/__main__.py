@@ -4,12 +4,15 @@ import sys
 
 from hunter.cli import main as cli_main
 from hunter.committee.command import main as committee_authority_main
+from hunter.valuation_evidence.command import main as valuation_evidence_main
 
 
 def main(argv: list[str] | None = None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
     if arguments and arguments[0] == "committee-authority":
         return committee_authority_main(arguments[1:])
+    if arguments and arguments[0] == "valuation-evidence":
+        return valuation_evidence_main(arguments[1:])
     return cli_main(arguments)
 
 

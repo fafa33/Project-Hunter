@@ -34,6 +34,12 @@ sources:
         chain: ""
         contract_address: ""
         provider_listing_id: bitcoin
+      - entity_id: entity:sky
+        asset_id: asset:sky
+        representation_id: representation:sky-ethereum
+        chain: ethereum
+        contract_address: "0x56072c95faa701256059aa122697b133aded9279"
+        provider_listing_id: sky
     freshness_seconds: 3600
     observation_confidence: "0.80"
     historical_support: current endpoint with provider last_updated timestamp only
