@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -11,6 +12,7 @@ from hunter.market_facts import (
     MarketFactAuthorityError,
     MarketFactAvailabilityEvent,
     MarketFactIdentity,
+    MarketFactIntegrityError,
     MarketFactRequest,
     MarketFactSourceRegistry,
     ObservedMarketFactRepository,
@@ -372,6 +374,151 @@ def test_corrections_are_append_only_and_historical_selection_is_cutoff_safe(tmp
     )
     assert before == original
     assert after == corrected
+
+
+def _correction_result(price: int, *, acquired_at: datetime, effective_at: datetime):
+    return replace(
+        provider_result(price=price),
+        acquired_at=acquired_at,
+        known_at=acquired_at,
+        facts=(
+            replace(
+                provider_result(price=price).facts[0],
+                observed_at=acquired_at,
+                effective_at=effective_at,
+            ),
+        ),
+    )
+
+
+def test_correction_recorded_at_not_advancing_predecessor_is_rejected(tmp_path: Path) -> None:
+    _, svc = service(tmp_path)
+    original = svc.ingest(request(), provider_result(), recorded_at=T2)[0]
+    assert original.recorded_at == T2
+
+    stalled = _correction_result(120, acquired_at=T1, effective_at=T0)
+    with pytest.raises(MarketFactIntegrityError, match="recorded_at must follow predecessor"):
+        svc.correct(
+            original.record_id,
+            request(),
+            stalled,
+            recorded_at=T2,
+            reason="Attempted non-advancing correction",
+        )
+
+
+def test_correction_known_at_not_advancing_predecessor_is_rejected(tmp_path: Path) -> None:
+    _, svc = service(tmp_path)
+    original = svc.ingest(request(), provider_result(), recorded_at=T2)[0]
+    assert original.known_at == T1
+
+    stalled = _correction_result(130, acquired_at=T1, effective_at=T0)
+    with pytest.raises(MarketFactIntegrityError, match="known_at must follow predecessor"):
+        svc.correct(
+            original.record_id,
+            request(),
+            stalled,
+            recorded_at=T2 + timedelta(minutes=10),
+            reason="Attempted correction with non-advancing known_at",
+        )
+
+
+def test_branching_market_fact_corrections_are_rejected_and_replay_is_strict_known(tmp_path: Path) -> None:
+    _, svc = service(tmp_path)
+    original = svc.ingest(request(), provider_result(), recorded_at=T2)[0]
+
+    first_known = T2 + timedelta(minutes=10)
+    corrected = svc.correct(
+        original.record_id,
+        request(),
+        _correction_result(120, acquired_at=first_known, effective_at=T1),
+        recorded_at=first_known + timedelta(minutes=1),
+        reason="Official correction",
+    )[0]
+    assert corrected.quality_state == "accepted"
+
+    second_known = T2 + timedelta(minutes=20)
+    with pytest.raises(MarketFactIntegrityError, match="branching"):
+        svc.correct(
+            original.record_id,
+            request(),
+            _correction_result(140, acquired_at=second_known, effective_at=T1),
+            recorded_at=second_known + timedelta(minutes=1),
+            reason="Competing correction",
+        )
+
+    historical = svc.strict_known_fact(
+        entity_id=original.identity.entity_id,
+        representation_id=original.identity.representation_id,
+        fact_type=original.fact_type,
+        quote_currency=original.quote_currency,
+        effective_as_of=second_known,
+        known_by=T2,
+    )
+    current = svc.strict_known_fact(
+        entity_id=original.identity.entity_id,
+        representation_id=original.identity.representation_id,
+        fact_type=original.fact_type,
+        quote_currency=original.quote_currency,
+        effective_as_of=second_known,
+        known_by=first_known + timedelta(minutes=1),
+    )
+    assert historical == original
+    assert current == corrected
+
+
+def test_retrying_identical_market_fact_correction_is_idempotent(tmp_path: Path) -> None:
+    repo, svc = service(tmp_path)
+    original = svc.ingest(request(), provider_result(), recorded_at=T2)[0]
+
+    correction_known = T2 + timedelta(minutes=10)
+    correction_result = _correction_result(120, acquired_at=correction_known, effective_at=T1)
+    first = svc.correct(
+        original.record_id,
+        request(),
+        correction_result,
+        recorded_at=correction_known + timedelta(minutes=1),
+        reason="Official correction",
+    )[0]
+    second = svc.correct(
+        original.record_id,
+        request(),
+        correction_result,
+        recorded_at=correction_known + timedelta(minutes=1),
+        reason="Official correction",
+    )[0]
+
+    assert first == second
+    assert first.record_id == second.record_id
+    assert repo.lineage(original.logical_id) == (original, first)
+
+
+def test_concurrent_market_fact_corrections_cannot_branch_lineage(tmp_path: Path) -> None:
+    repo, svc = service(tmp_path)
+    original = svc.ingest(request(), provider_result(), recorded_at=T2)[0]
+    second_service = ObservedMarketFactService(ObservedMarketFactRepository(repo.path), registry())
+
+    first_known = T2 + timedelta(minutes=10)
+    second_known = T2 + timedelta(minutes=20)
+
+    def attempt(item: tuple[ObservedMarketFactService, int, datetime]):
+        active_service, price, known_at = item
+        try:
+            return active_service.correct(
+                original.record_id,
+                request(),
+                _correction_result(price, acquired_at=known_at, effective_at=T1),
+                recorded_at=known_at + timedelta(minutes=1),
+                reason="Concurrent correction",
+            )[0]
+        except MarketFactIntegrityError as exc:
+            return exc
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        outcomes = tuple(executor.map(attempt, ((svc, 120, first_known), (second_service, 140, second_known))))
+
+    assert sum(not isinstance(item, Exception) for item in outcomes) == 1
+    assert sum(isinstance(item, MarketFactIntegrityError) for item in outcomes) == 1
 
 
 def test_models_reject_naive_time_and_identity_scope_mismatch() -> None:
