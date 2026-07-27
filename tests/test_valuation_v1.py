@@ -15,6 +15,7 @@ from hunter.market_facts.models import (
 from hunter.market_facts.registry import MarketFactSourceRegistry
 from hunter.market_facts.repository import ObservedMarketFactRepository
 from hunter.market_facts.service import ObservedMarketFactService
+from hunter.valuation.models import FairValueEstimateRecord, ValuationAssessmentRecord
 from hunter.valuation.repository import CanonicalValuationIntegrityError, CanonicalValuationRepository
 from hunter.valuation.service import (
     CANONICAL_DISCOUNT_RATE_POLICY_ID,
@@ -31,7 +32,7 @@ from hunter.value_capture.models import EconomicClaimIdentity
 from hunter.value_capture.providers import RegisteredValueCaptureProvider, ValueCaptureVerificationKeyRegistry
 from hunter.value_capture.registry import ValueCaptureSourceConfig, ValueCaptureSourceRegistry
 from hunter.value_capture.repository import SupplyAndValueCaptureRepository
-from hunter.value_capture.service import SupplyAndValueCaptureService
+from hunter.value_capture.service import SupplyAndValueCaptureAuthorityError, SupplyAndValueCaptureService
 
 NOW = datetime(2026, 1, 1, tzinfo=UTC)
 SIGNING_KEY = b"canonical-valuation-test-key-00001"
@@ -946,3 +947,202 @@ def test_evidence_accounting_period_length_not_matching_horizon_is_rejected(tmp_
     assert short_period_evidence.conflict_state == "none"
     with pytest.raises(CanonicalValuationAuthorityError, match="horizon"):
         fixture.estimate()
+
+
+# 18. Prohibited methodologies: price-derived market facts cannot influence output ----
+#
+# ADR 0022 "Prohibited methodologies": "Any methodology whose output is derived, directly
+# or indirectly, from ObservedMarketFactRecord.spot_price, market_capitalization, or
+# fully_diluted_valuation -- this is circular (using price to value price) and directly
+# contradicts ADR 0020's prohibition on market-cap/completeness-derived valuation." Milestone
+# 3's arithmetic (service.py's estimate_fair_value) never reads a referenced market fact's
+# `value`/`fact_type` -- market facts are only strict-known/version/quality checked, never
+# dereferenced into the discounted-value-capture-flow computation. The tests below prove this
+# by construction: attaching a `spot_price`/`market_capitalization`/`fully_diluted_valuation`
+# market fact to the strict-known SupplyBasisSnapshot, with values that differ by many orders
+# of magnitude between two otherwise-identical runs, produces byte-identical fair-value output.
+
+
+def _price_market_fact_registry() -> MarketFactSourceRegistry:
+    return MarketFactSourceRegistry.from_mapping(
+        {
+            "sources": [
+                {
+                    "source_id": "official-canonical-test-price-facts",
+                    "provider_id": "official-canonical-test-price-facts-provider",
+                    "endpoint_template": "https://example.org/market-facts/{listing_id}",
+                    "allowed_hosts": ["example.org"],
+                    "parser_version": "official-market-facts-v1",
+                    "enabled": True,
+                    "capabilities": ["spot_price", "market_capitalization", "fully_diluted_valuation"],
+                    "quote_currencies": ["usd"],
+                    "units": {
+                        "spot_price": "usd",
+                        "market_capitalization": "usd",
+                        "fully_diluted_valuation": "usd",
+                    },
+                    "supported_entity_scope": ["canonical_asset_representation"],
+                    "identity_bindings": [
+                        {
+                            "entity_id": "entity:canonical-test",
+                            "asset_id": "asset:canonical-test",
+                            "representation_id": "representation:canonical-test-ethereum",
+                            "chain": "ethereum",
+                            "contract_address": "0x0b38210ea11411557c13457d4da7dc6ea731b88a",
+                            "provider_listing_id": "canonical-test-listing",
+                        }
+                    ],
+                    "freshness_seconds": 3600,
+                    "observation_confidence": "0.9",
+                    "historical_support": "current-only",
+                    "limitations": "test fixture price-type market fact only, never consumed by valuation arithmetic",
+                }
+            ]
+        }
+    )
+
+
+def _seed_price_market_fact(
+    db_path: Path, *, fact_type: str, value: str, acquired_at: datetime
+) -> ObservedMarketFactRecord:
+    repository = ObservedMarketFactRepository(db_path)
+    registry = _price_market_fact_registry()
+    service = ObservedMarketFactService(repository, registry)
+    request = MarketFactRequest(
+        source_id="official-canonical-test-price-facts",
+        provider_id="official-canonical-test-price-facts-provider",
+        identity=MarketFactIdentity(
+            entity_id="entity:canonical-test",
+            asset_id="asset:canonical-test",
+            representation_id="representation:canonical-test-ethereum",
+            chain="ethereum",
+            contract_address="0x0b38210ea11411557c13457d4da7dc6ea731b88a",
+            provider_listing_id="canonical-test-listing",
+        ),
+        quote_currency="usd",
+        requested_fact_types=(fact_type,),
+        requested_at=acquired_at,
+    )
+    fact = NormalizedMarketFact(
+        fact_type=fact_type,
+        value=value,
+        unit="usd",
+        quote_currency="usd",
+        effective_at=acquired_at,
+        observed_at=acquired_at,
+        confidence="0.9",
+    )
+    result = MarketFactAcquisitionResult(
+        source_id="official-canonical-test-price-facts",
+        provider_id="official-canonical-test-price-facts-provider",
+        endpoint="https://example.org/market-facts/canonical-test-listing",
+        parser_version="official-market-facts-v1",
+        registry_fingerprint=registry.require("official-canonical-test-price-facts").fingerprint,
+        provider_source_record_id="canonical-test-listing",
+        provider_source_record_version="2026-01-01",
+        request=request,
+        status="success",
+        acquired_at=acquired_at,
+        known_at=acquired_at,
+        raw_payload_hash="sha256:" + "c" * 64,
+        facts=(fact,),
+    )
+    return service.ingest(request, result, recorded_at=acquired_at)[0]
+
+
+def _estimate_with_price_reference(
+    tmp_path: Path, *, fact_type: str, price_value: str
+) -> tuple[FairValueEstimateRecord, ValuationAssessmentRecord]:
+    """Build one full, isolated canonical-valuation fixture whose strict-known
+    SupplyBasisSnapshot additionally references one `fact_type`-typed
+    ObservedMarketFactRecord carrying `price_value`, via a normal append-only correction.
+    Everything else is identical to `setup()`."""
+    fixture = setup(tmp_path)
+    price_fact = _seed_price_market_fact(
+        fixture.db_path,
+        fact_type=fact_type,
+        value=price_value,
+        acquired_at=NOW - timedelta(minutes=5),
+    )
+    fixture.vc_service.ingest_supply(
+        fixture.provider,
+        supply_result(
+            fixture.provider,
+            fixture.evidence.record_id,
+            fixture.market_fact,
+            acquisition_id="supply-2-price-reference",
+            acquired_at=NOW + timedelta(minutes=4),
+            observed_market_fact_ids=[fixture.market_fact.record_id, price_fact.record_id],
+            observed_market_fact_versions=[fixture.market_fact.semantic_version, price_fact.semantic_version],
+            supersedes_record_id=fixture.supply.record_id,
+            correction_reason="attach a price-type market fact reference for prohibited-methodology testing",
+        ),
+    )
+    return fixture.estimate()
+
+
+@pytest.mark.parametrize("fact_type", ["spot_price", "market_capitalization", "fully_diluted_valuation"])
+def test_prohibited_market_price_data_cannot_influence_fair_value_output(tmp_path: Path, fact_type: str) -> None:
+    low_estimate, low_assessment = _estimate_with_price_reference(
+        tmp_path / "low", fact_type=fact_type, price_value="1"
+    )
+    high_estimate, high_assessment = _estimate_with_price_reference(
+        tmp_path / "high", fact_type=fact_type, price_value="999999999999"
+    )
+
+    assert low_estimate.fair_value_per_diluted_unit_p10 == high_estimate.fair_value_per_diluted_unit_p10
+    assert low_estimate.fair_value_per_diluted_unit_p50 == high_estimate.fair_value_per_diluted_unit_p50
+    assert low_estimate.fair_value_per_diluted_unit_p90 == high_estimate.fair_value_per_diluted_unit_p90
+    assert low_estimate.total_diluted_value_p10 == high_estimate.total_diluted_value_p10
+    assert low_estimate.total_diluted_value_p50 == high_estimate.total_diluted_value_p50
+    assert low_estimate.total_diluted_value_p90 == high_estimate.total_diluted_value_p90
+    assert low_estimate.model_dispersion_ratio == high_estimate.model_dispersion_ratio
+    assert low_estimate.confidence == high_estimate.confidence
+    assert low_assessment.confidence == high_assessment.confidence
+
+
+def test_prohibited_price_fact_is_still_strict_known_validated_not_merely_ignored(tmp_path: Path) -> None:
+    """The invariance proved above must not be achieved by silently skipping strict-known
+    validation of the referenced price fact. Making the referenced spot_price fact
+    conflicted must still fail the estimate closed, exactly as for any other referenced
+    market fact (ADR 0022 Missingness) -- the price value is never used, but the record
+    carrying it is still held to the same authority standard as every other input."""
+    fixture = setup(tmp_path)
+    same_effective_at = NOW - timedelta(minutes=5)
+    _seed_price_market_fact(
+        fixture.db_path,
+        fact_type="spot_price",
+        value="123",
+        acquired_at=same_effective_at,
+    )
+    conflicting_price_fact = _seed_price_market_fact(
+        fixture.db_path,
+        fact_type="spot_price",
+        value="999",
+        acquired_at=same_effective_at,
+    )
+    assert conflicting_price_fact.conflict_state == "open"
+    # hunter.value_capture's own ingest-time gate (SupplyAndValueCaptureService.
+    # _require_observed_market_facts) rejects the conflicted reference before a
+    # SupplyBasisSnapshot referencing it can even be persisted -- a stronger, earlier
+    # defense-in-depth boundary than CanonicalValuationService's own equivalent check,
+    # matching the pattern already established for value_capture/market_facts leakage
+    # (see hunter.historical.valuation_calibration's leakage tests).
+    with pytest.raises(SupplyAndValueCaptureAuthorityError, match="non-authoritative market fact"):
+        fixture.vc_service.ingest_supply(
+            fixture.provider,
+            supply_result(
+                fixture.provider,
+                fixture.evidence.record_id,
+                fixture.market_fact,
+                acquisition_id="supply-2-conflicted-price-reference",
+                acquired_at=NOW + timedelta(minutes=4),
+                observed_market_fact_ids=[fixture.market_fact.record_id, conflicting_price_fact.record_id],
+                observed_market_fact_versions=[
+                    fixture.market_fact.semantic_version,
+                    conflicting_price_fact.semantic_version,
+                ],
+                supersedes_record_id=fixture.supply.record_id,
+                correction_reason="attach a conflicted price-type market fact reference",
+            ),
+        )
