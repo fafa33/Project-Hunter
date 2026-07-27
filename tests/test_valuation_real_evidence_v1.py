@@ -39,6 +39,7 @@ audited service/authority surfaces.
 
 from __future__ import annotations
 
+import json
 import shutil
 from datetime import UTC, datetime
 from pathlib import Path
@@ -56,6 +57,7 @@ from hunter.valuation.service import (
     CanonicalValuationAuthorityError,
     CanonicalValuationService,
 )
+from hunter.valuation_authority import command as valuation_authority_command
 from hunter.valuation_methodology.repository import ValuationMethodologyRepository
 from hunter.valuation_methodology.service import CanonicalValuationMethodologyAuthority
 from hunter.value_capture.models import EconomicClaimIdentity
@@ -245,3 +247,81 @@ def test_real_evidence_fail_closed_behavior_is_deterministic_across_repeated_att
     assert first_message == second_message
     assert "accounting period length" in first_message
     assert CanonicalValuationRepository(db_path).count("fair_value_estimate_records") == 0
+
+
+def _copy_of_real_database_at_canonical_path(application_root: Path) -> Path:
+    """Same real, tracked database, copied to the exact canonical path
+    `hunter valuation-authority` (and `hunter valuation-evidence`) resolve via
+    `HUNTER_APPLICATION_ROOT`: `<application_root>/data/data_ops.sqlite`."""
+    assert REAL_TRACKED_DATABASE.exists(), "tracked data/data_ops.sqlite must exist for real-evidence validation"
+    destination = application_root / "data" / "data_ops.sqlite"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(REAL_TRACKED_DATABASE, destination)
+    return destination
+
+
+def test_real_persisted_sky_evidence_still_fails_closed_through_production_entry_point(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Requirement 9 item M: the new `hunter valuation-authority run` production entry
+    point (`hunter.valuation_authority.command`, orchestrating
+    `CanonicalValuationMethodologyAuthority` and `CanonicalValuationService`) must not
+    weaken, bypass, or route around the fail-closed behavior proven above via direct
+    construction. Run for real, through the CLI, against the real tracked Sky evidence
+    chain, it must fail for the identical, disclosed reason."""
+    db_path = _copy_of_real_database_at_canonical_path(tmp_path)
+    monkeypatch.setenv("HUNTER_APPLICATION_ROOT", str(tmp_path))
+
+    methodology_manifest = tmp_path / "methodology-manifest.json"
+    methodology_manifest.write_text(
+        json.dumps(
+            {
+                "operation": "methodology",
+                "payload": {
+                    "entity_class_criteria_id": "adr-0022-first-entity-class-v1",
+                    "entity_class_criteria_version": "1.0.0",
+                    "currency": "usd",
+                    "discount_rate_policy_id": CANONICAL_DISCOUNT_RATE_POLICY_ID,
+                    "discount_rate_policy_version": CANONICAL_DISCOUNT_RATE_POLICY_VERSION,
+                    "sensitivity_policy_id": CANONICAL_SENSITIVITY_POLICY_ID,
+                    "sensitivity_policy_version": CANONICAL_SENSITIVITY_POLICY_VERSION,
+                    "supply_basis_selection_rule": CANONICAL_SUPPLY_BASIS_SELECTION_RULE,
+                    "effective_at": REAL_EVIDENCE_PROBE_AT.isoformat(),
+                    "recorded_at": REAL_EVIDENCE_PROBE_AT.isoformat(),
+                    "known_at": REAL_EVIDENCE_PROBE_AT.isoformat(),
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert valuation_authority_command.main(["run", str(methodology_manifest)]) == 0
+    capsys.readouterr()
+
+    estimate_manifest = tmp_path / "estimate-manifest.json"
+    estimate_manifest.write_text(
+        json.dumps(
+            {
+                "operation": "estimate",
+                "identity": {
+                    "entity_id": SKY_IDENTITY.entity_id,
+                    "economic_claim_id": SKY_IDENTITY.economic_claim_id,
+                    "asset_id": SKY_IDENTITY.asset_id,
+                    "representation_id": SKY_IDENTITY.representation_id,
+                    "token_id": SKY_IDENTITY.token_id,
+                    "chain": SKY_IDENTITY.chain,
+                    "contract_address": SKY_IDENTITY.contract_address,
+                },
+                "evidence_type": "official_disclosure",
+                "rule_type": "buyback_and_burn",
+                "effective_at": REAL_EVIDENCE_PROBE_AT.isoformat(),
+                "recorded_at": REAL_EVIDENCE_PROBE_AT.isoformat(),
+                "known_at": REAL_EVIDENCE_PROBE_AT.isoformat(),
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(CanonicalValuationAuthorityError, match="accounting period length"):
+        valuation_authority_command.main(["run", str(estimate_manifest)])
+
+    assert CanonicalValuationRepository(db_path).count("fair_value_estimate_records") == 0
+    assert CanonicalValuationRepository(db_path).count("valuation_assessment_records") == 0
