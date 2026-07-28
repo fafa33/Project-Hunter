@@ -41,12 +41,24 @@ Deep Analysis
     ↓
 Investment Intelligence
     ↓
-Valuation
+Canonical Valuation
+    ↓
+Comparative Valuation
+    ↓
+Mispricing
+    ↓
+Asymmetry
+    ↓
+Opportunity
+    ↓
+Prediction
+    ↓
+Portfolio
     ↓
 Decision Support
 ```
 
-Information moves only in the forward direction.
+This flow mirrors the ownership and dependency direction defined by `docs/CANONICAL_ARCHITECTURE_MAP.md`. Information moves only in the forward direction.
 
 Each layer consumes validated outputs from earlier layers and produces higher-value analytical outputs for subsequent layers.
 
@@ -183,29 +195,140 @@ Outputs:
 
 ---
 
-# 10. Valuation Layer
+# 10. Canonical Valuation Layer
 
 Purpose:
 
-Estimate long-term investment value using trustworthy analytical evidence.
+Produce authoritative, structured fair-value intelligence for a qualifying economic entity under one immutable, versioned methodology.
 
 Responsibilities include:
 
-- valuation;
-- comparative valuation;
-- mispricing assessment;
-- asymmetry assessment;
-- scenario analysis.
+- fair-value estimation under the accepted methodology;
+- confidence and uncertainty decomposition;
+- strict-known replay and correction lineage.
 
 Outputs:
 
-- valuation intelligence;
-- evidence-supported scenarios;
-- uncertainty estimates.
+- structured, non-scalar fair-value assessment.
+
+Classification: Architecture accepted (ADR 0021, ADR 0022, ADR 0024). Implementation is in progress under the governing issue and is not yet independently validated as operationally complete. Per ADR 0024, this output does not become a Market Validation composition input until a separate accepted ADR authorizes that composition.
 
 ---
 
-# 11. Decision Support Layer
+# 11. Comparative Valuation Layer
+
+Purpose:
+
+Compare a target's valuation against economically compatible peers under a declared cohort policy.
+
+Responsibilities include:
+
+- peer-universe eligibility and comparability;
+- relative valuation measurement.
+
+Outputs:
+
+- comparative valuation assessment.
+
+Classification: Unavailable target. Its semantic contract is defined by ADR 0021; ADR 0024 confirms comparative valuation remains unavailable pending its own accepted methodology.
+
+---
+
+# 12. Mispricing Layer
+
+Purpose:
+
+Evaluate the divergence between an authorized fair-value estimate and a compatible observed market value.
+
+Responsibilities include:
+
+- fair-value-to-market-value comparison for compatible representations;
+- directional divergence measurement.
+
+Outputs:
+
+- mispricing assessment.
+
+Classification: Unavailable target. Its semantic contract is defined by ADR 0021; ADR 0024 confirms mispricing remains unavailable pending its own accepted methodology.
+
+---
+
+# 13. Asymmetry Layer
+
+Purpose:
+
+Evaluate the probability-weighted balance of favorable and adverse payoff across an immutable, predeclared scenario set.
+
+Responsibilities include:
+
+- scenario-based upside/downside evaluation;
+- payoff asymmetry measurement.
+
+Outputs:
+
+- asymmetry assessment.
+
+Classification: Unavailable target. Its semantic contract is defined by ADR 0021; ADR 0024 confirms asymmetry remains unavailable pending its own accepted methodology.
+
+---
+
+# 14. Opportunity Layer
+
+Purpose:
+
+Determine investment opportunity quality from authorized analytical factors.
+
+Responsibilities include:
+
+- factor-contract-gated opportunity assessment;
+- opportunity ranking.
+
+Outputs:
+
+- opportunity assessment and ranking.
+
+Classification: Experimental/research only (ADR 0016, ADR 0017, ADR 0018). Not a production analytical output and not exposed through Dashboard API, alerts, or other operational projections. Production promotion requires a future accepted ADR satisfying ADR 0017's promotion gate.
+
+---
+
+# 15. Prediction Layer
+
+Purpose:
+
+Estimate and evaluate future outcomes.
+
+Responsibilities include:
+
+- immutable prediction-contract evaluation;
+- correctness, accuracy, and calibration assessment.
+
+Outputs:
+
+- prediction evaluation records, accuracy and calibration snapshots.
+
+Classification: Partial. A canonical prediction-evaluation authority is accepted (ADR 0019) for auditing already-made, fully-contracted predictions, but the authorizing service is not yet implemented; production correctness and accuracy evaluation remain unavailable (ADR 0016).
+
+---
+
+# 16. Portfolio Layer
+
+Purpose:
+
+Produce portfolio-level decision support from authorized analytical outputs.
+
+Responsibilities include:
+
+- portfolio-level context and aggregation across authorized analytical outputs.
+
+Outputs:
+
+- portfolio-level decision-support intelligence.
+
+Classification: Unavailable target. No accepted ADR yet establishes implementation authority for this domain; ownership is named only in `docs/CANONICAL_ARCHITECTURE_MAP.md`.
+
+---
+
+# 17. Decision Support Layer
 
 Purpose:
 
@@ -226,7 +349,7 @@ Outputs:
 
 ---
 
-# 12. Cross-Cutting Architectural Capabilities
+# 18. Cross-Cutting Architectural Capabilities
 
 The following capabilities span every architectural layer:
 
@@ -244,7 +367,7 @@ No architectural layer is exempt from these requirements.
 
 ---
 
-# 13. Architectural Boundaries
+# 19. Architectural Boundaries
 
 Architectural layers remain independent.
 
@@ -260,7 +383,7 @@ Architectural dependencies always flow forward.
 
 ---
 
-# 14. Architectural Evolution
+# 20. Architectural Evolution
 
 Project Hunter is designed for incremental architectural evolution.
 
@@ -270,7 +393,7 @@ Architectural complexity should grow only when it measurably improves investment
 
 ---
 
-# 15. Relationship to Other Canonical Documents
+# 21. Relationship to Other Canonical Documents
 
 This document defines the logical architecture of Project Hunter.
 
