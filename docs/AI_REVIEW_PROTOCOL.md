@@ -27,6 +27,8 @@ This protocol applies to every permanent repository contribution, including:
 
 The protocol applies equally to human contributors and AI contributors.
 
+Independent audits of Architecture Decision Preparation Records and architecture-decision readiness are governed by `docs/ARCHITECTURE_AUDIT_PROTOCOL.md`. This document governs implementation and contribution review and must not be used to replace the architecture-audit severity, materiality, verdict, or re-audit rules.
+
 ---
 
 # Relationship To The Development Lifecycle
@@ -159,6 +161,8 @@ Examples include:
 
 Blocking findings must be resolved before approval.
 
+For architecture-preparation audits, blocking classification is determined only by `docs/ARCHITECTURE_AUDIT_PROTOCOL.md`. A documentation defect does not become architecture-decision-blocking merely because it is listed here as a possible implementation-review concern.
+
 ---
 
 # Non-blocking Findings
@@ -191,6 +195,8 @@ The report records:
 If no blocking findings exist, the report explicitly records:
 
 > No blocking findings were identified.
+
+Architecture-preparation audit reports must use `docs/ARCHITECTURE_AUDIT_TEMPLATE.md` and the verdict rules defined by `docs/ARCHITECTURE_AUDIT_PROTOCOL.md`.
 
 ---
 
@@ -239,8 +245,9 @@ Every accepted contribution should remain understandable, reviewable, and mainta
 | CANONICAL_ARCHITECTURE_MAP | Canonical document hierarchy |
 | Architecture documents | System architecture |
 | DEVELOPMENT_GOVERNANCE | Development lifecycle |
+| ARCHITECTURE_AUDIT_PROTOCOL | Architecture-preparation audit classification, materiality, verdicts, and re-audit |
 | HUNTER_IMPLEMENTATION_CONTRACT | Implementation obligations |
-| This document | Independent review protocol |
+| This document | Independent contribution and implementation review protocol |
 
 ---
 
@@ -250,8 +257,8 @@ This document owns:
 
 - review roles;
 - review responsibilities;
-- independent review;
-- review reporting;
+- independent implementation review;
+- contribution review reporting;
 - approval protocol.
 
 This document does not own:
@@ -259,6 +266,7 @@ This document does not own:
 - constitutional governance;
 - engineering principles;
 - architecture;
+- architecture-preparation audit verdicts;
 - implementation contracts;
 - development lifecycle;
 - Sprint planning;
