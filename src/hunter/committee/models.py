@@ -3,15 +3,20 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from hunter.committee.authority import CommitteeInputIdentity
 from hunter.intelligence.fusion.models import FrozenFloatMap, FrozenScalarMap
 from hunter.necessity.models import TechnologyNecessityAssessment
-from hunter.opportunity.models import OpportunityTimingAssessment
 from hunter.patterns.models import PatternMatchingAssessment
 from hunter.persistence.records import EvidenceRecord, FusedIntelligenceRecord, IntelligenceRecord, SnapshotRecord
 from hunter.probability.models import ProbabilityAssessment
+
+if TYPE_CHECKING:
+    # Deferred: hunter.opportunity's package __init__ transitively imports
+    # hunter.persistence.experimental, which imports InvestmentCommitteeAssessment
+    # from this module, creating a circular import at runtime if resolved eagerly.
+    from hunter.opportunity.models import OpportunityTimingAssessment
 
 EligibilityState = Literal["ELIGIBLE", "CONDITIONALLY_ELIGIBLE", "INELIGIBLE", "INSUFFICIENT_EVIDENCE"]
 VoteState = Literal[
