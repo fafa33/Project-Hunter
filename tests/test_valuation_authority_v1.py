@@ -444,6 +444,194 @@ def test_repository_bypass_remains_impossible() -> None:
         assert not hasattr(ValuationMethodologyRepository, method_name)
 
 
+# M. Read-only status query ----------------------------------------------------------
+
+
+def _status_manifest(
+    tmp_path: Path,
+    *,
+    filename: str = "status-manifest.json",
+    target: str,
+    effective_as_of: datetime = NOW,
+    known_by: datetime,
+    logical_id: str | None = None,
+) -> Path:
+    manifest: dict[str, object] = {
+        "operation": "status",
+        "target": target,
+        "effective_as_of": effective_as_of.isoformat(),
+        "known_by": known_by.isoformat(),
+    }
+    if logical_id is not None:
+        manifest["logical_id"] = logical_id
+    path = tmp_path / filename
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+    return path
+
+
+def test_status_reports_unavailable_before_any_methodology_exists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    manifest = _status_manifest(tmp_path, target="methodology", known_by=NOW)
+    output = _run(monkeypatch, tmp_path, manifest, capsys)
+    assert output == {
+        "operation": "status",
+        "target": "methodology",
+        "persistence_database": str(_db_path(tmp_path)),
+        "available": False,
+    }
+
+
+def test_status_reports_persisted_methodology_matching_the_repository_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    written = _run(monkeypatch, tmp_path, _methodology_manifest(tmp_path), capsys)
+    manifest = _status_manifest(tmp_path, target="methodology", known_by=NOW + timedelta(days=1))
+    output = _run(monkeypatch, tmp_path, manifest, capsys)
+    assert output["available"] is True
+    assert output["record"]["record_id"] == written["record_id"]
+    assert output["record"]["logical_id"] == written["logical_id"]
+
+    repository = ValuationMethodologyRepository(_db_path(tmp_path))
+    direct = repository.strict_known_methodology(effective_as_of=NOW, known_by=NOW + timedelta(days=1))
+    assert direct is not None
+    assert output["record"]["content_hash"] == direct.content_hash
+
+
+def test_status_reports_unavailable_for_estimate_and_assessment_before_creation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    InputFixture(tmp_path)
+    _run(monkeypatch, tmp_path, _methodology_manifest(tmp_path), capsys)
+    for target in ("fair_value_estimate", "valuation_assessment"):
+        manifest = _status_manifest(
+            tmp_path,
+            filename=f"status-{target}-before.json",
+            target=target,
+            known_by=NOW + timedelta(minutes=10),
+            logical_id="does-not-exist-yet",
+        )
+        output = _run(monkeypatch, tmp_path, manifest, capsys)
+        assert output["available"] is False
+
+
+def test_status_query_selects_strict_known_version_not_latest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Proves the `status` operation reuses the same strict-known cutoff discipline as
+    Test E above (`strict_known_fair_value_estimate`), rather than always returning the
+    newest record: queried at a `known_by` before the correction, it reports the
+    original estimate; queried at/after the correction's `known_at`, it reports the
+    correction."""
+    InputFixture(tmp_path)
+    _run(monkeypatch, tmp_path, _methodology_manifest(tmp_path), capsys)
+    original = _run(monkeypatch, tmp_path, _estimate_manifest(tmp_path, filename="estimate-v1.json"), capsys)
+    correction = _run(
+        monkeypatch,
+        tmp_path,
+        _estimate_manifest(
+            tmp_path,
+            filename="estimate-correction.json",
+            recorded_at=NOW + timedelta(minutes=30),
+            known_at=NOW + timedelta(minutes=30),
+            supersedes_estimate_record_id=original["fair_value_estimate_record_id"],
+            supersedes_assessment_record_id=original["valuation_assessment_record_id"],
+            correction_reason="status strict-known regression coverage",
+        ),
+        capsys,
+    )
+
+    original_record = CanonicalValuationRepository(_db_path(tmp_path)).get_fair_value_estimate(
+        original["fair_value_estimate_record_id"]
+    )
+    assert original_record is not None
+    logical_id = original_record.logical_id
+
+    before_correction = _run(
+        monkeypatch,
+        tmp_path,
+        _status_manifest(
+            tmp_path,
+            filename="status-before.json",
+            target="fair_value_estimate",
+            known_by=NOW + timedelta(minutes=20),
+            logical_id=logical_id,
+        ),
+        capsys,
+    )
+    assert before_correction["record"]["record_id"] == original["fair_value_estimate_record_id"]
+
+    at_or_after_correction = _run(
+        monkeypatch,
+        tmp_path,
+        _status_manifest(
+            tmp_path,
+            filename="status-after.json",
+            target="fair_value_estimate",
+            known_by=NOW + timedelta(minutes=30),
+            logical_id=logical_id,
+        ),
+        capsys,
+    )
+    assert at_or_after_correction["record"]["record_id"] == correction["fair_value_estimate_record_id"]
+
+
+def test_status_reports_persisted_valuation_assessment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    InputFixture(tmp_path)
+    _run(monkeypatch, tmp_path, _methodology_manifest(tmp_path), capsys)
+    written = _run(monkeypatch, tmp_path, _estimate_manifest(tmp_path), capsys)
+    assessment_record = CanonicalValuationRepository(_db_path(tmp_path)).get_valuation_assessment(
+        written["valuation_assessment_record_id"]
+    )
+    assert assessment_record is not None
+    logical_id = assessment_record.logical_id
+
+    output = _run(
+        monkeypatch,
+        tmp_path,
+        _status_manifest(
+            tmp_path,
+            target="valuation_assessment",
+            known_by=NOW + timedelta(minutes=10),
+            logical_id=logical_id,
+        ),
+        capsys,
+    )
+    assert output["available"] is True
+    assert output["record"]["record_id"] == written["valuation_assessment_record_id"]
+    assert output["record"]["fair_value_estimate_record_id"] == written["fair_value_estimate_record_id"]
+
+
+def test_status_rejects_unknown_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    manifest = _status_manifest(tmp_path, target="not-a-real-target", known_by=NOW)
+    monkeypatch.setenv("HUNTER_APPLICATION_ROOT", str(tmp_path))
+    with pytest.raises(ValueError, match="status manifest requires target"):
+        valuation_authority_command.main(["run", str(manifest)])
+
+
+def test_status_does_not_persist_or_mutate_anything(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A status query, run repeatedly, must never itself create, correct, or otherwise
+    write a record -- it is a pure read over the two existing repositories."""
+    _run(monkeypatch, tmp_path, _methodology_manifest(tmp_path), capsys)
+    repository = ValuationMethodologyRepository(_db_path(tmp_path))
+    before = repository.count("valuation_methodology_snapshots")
+    for _ in range(3):
+        _run(
+            monkeypatch,
+            tmp_path,
+            _status_manifest(tmp_path, target="methodology", known_by=NOW + timedelta(days=1)),
+            capsys,
+        )
+    after = repository.count("valuation_methodology_snapshots")
+    assert after == before
+
+
 # Dispatch smoke test -------------------------------------------------------------------
 
 

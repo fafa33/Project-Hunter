@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime
+from dataclasses import asdict
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -16,12 +17,14 @@ from hunter.value_capture.repository import SupplyAndValueCaptureRepository
 
 _APPLICATION_ROOT_ENV = "HUNTER_APPLICATION_ROOT"
 _CANONICAL_PERSISTENCE_DATABASE = Path("data/data_ops.sqlite")
-_OPERATIONS = ("methodology", "estimate")
+_OPERATIONS = ("methodology", "estimate", "status")
+_STATUS_TARGETS = ("methodology", "fair_value_estimate", "valuation_assessment")
 
 
 def main(argv: list[str]) -> int:
     """Thin orchestration entry point for the two existing canonical valuation
-    authorities (`CanonicalValuationMethodologyAuthority`, `CanonicalValuationService`).
+    authorities (`CanonicalValuationMethodologyAuthority`, `CanonicalValuationService`),
+    plus a read-only status query over their two repositories.
 
     This module performs no validation, formula, replay, or persistence logic of its
     own. Every check -- strict-known selection, missingness, conflict rejection,
@@ -31,7 +34,13 @@ def main(argv: list[str]) -> int:
     does for `hunter.value_capture`/`hunter.market_facts`. No caller-supplied value can
     select "latest"/"current" state: every lookup this module triggers is bounded by the
     exact `effective_at`/`recorded_at`/`known_at` coordinates the manifest declares,
-    resolved deterministically by the underlying services' own strict-known logic.
+    resolved deterministically by the underlying services'/repositories' own
+    strict-known logic. The `status` operation adds no new authority: it calls exactly
+    the same `strict_known_methodology`/`strict_known_fair_value_estimate`/
+    `strict_known_valuation_assessment` repository read methods already exercised by
+    the existing test suite, making them independently invocable by an operator or
+    auditor without ad hoc scripting, mirroring the read-only projection role ADR 0016
+    assigns to Dashboard API.
     """
     if len(argv) != 2 or argv[0] != "run":
         print("usage: hunter valuation-authority run MANIFEST.json")
@@ -46,6 +55,8 @@ def main(argv: list[str]) -> int:
         output = _persist_methodology(manifest, application_root)
     elif operation == "estimate":
         output = _persist_estimate(manifest, application_root)
+    elif operation == "status":
+        output = _status(manifest, application_root)
     else:
         raise ValueError(f"valuation-authority manifest requires operation: {' or '.join(_OPERATIONS)}")
     print(json.dumps(output, sort_keys=True))
@@ -120,6 +131,54 @@ def _persist_estimate(manifest: dict[str, Any], application_root: Path) -> dict[
         "valuation_assessment_logical_id": assessment.logical_id,
         "valuation_assessment_quality_state": assessment.quality_state,
     }
+
+
+def _status(manifest: dict[str, Any], application_root: Path) -> dict[str, Any]:
+    persistence_path = _canonical_path(application_root, _CANONICAL_PERSISTENCE_DATABASE)
+    target = manifest.get("target")
+    if target not in _STATUS_TARGETS:
+        raise ValueError(f"valuation-authority status manifest requires target: {' or '.join(_STATUS_TARGETS)}")
+    effective_as_of = _datetime(manifest["effective_as_of"])
+    known_by = _datetime(manifest["known_by"])
+    if target == "methodology":
+        record: Any = ValuationMethodologyRepository(persistence_path).strict_known_methodology(
+            effective_as_of=effective_as_of, known_by=known_by
+        )
+    else:
+        logical_id = str(manifest["logical_id"])
+        valuation_repository = CanonicalValuationRepository(persistence_path)
+        if target == "fair_value_estimate":
+            record = valuation_repository.strict_known_fair_value_estimate(
+                effective_as_of=effective_as_of, known_by=known_by, logical_id=logical_id
+            )
+        else:
+            record = valuation_repository.strict_known_valuation_assessment(
+                effective_as_of=effective_as_of, known_by=known_by, logical_id=logical_id
+            )
+    if record is None:
+        return {
+            "operation": "status",
+            "target": target,
+            "persistence_database": str(persistence_path),
+            "available": False,
+        }
+    return {
+        "operation": "status",
+        "target": target,
+        "persistence_database": str(persistence_path),
+        "available": True,
+        "record": _json_safe(asdict(record)),
+    }
+
+
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, datetime):
+        return value.astimezone(UTC).isoformat()
+    if isinstance(value, dict):
+        return {key: _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    return value
 
 
 def _identity(payload: Any) -> EconomicClaimIdentity:
