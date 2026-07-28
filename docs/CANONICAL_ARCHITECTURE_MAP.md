@@ -30,6 +30,7 @@ The authoritative document hierarchy for Project Hunter is:
 8. `docs/VISION.md`
 9. `docs/HUNTER_ROADMAP.md`
 10. `docs/DEVELOPMENT_GOVERNANCE.md`
+    - `docs/ARCHITECTURE_DECISION_PREPARATION_GUIDE.md` is a mandatory Stage 1 preparation standard for architecturally significant changes. It derives authority from Development Governance and creates no independent governance or architectural authority.
 11. `docs/HUNTER_IMPLEMENTATION_CONTRACT.md`
 12. `docs/AI_REVIEW_PROTOCOL.md`
 13. Versioned sprint specifications in `docs/SPRINTS/`
@@ -38,6 +39,10 @@ The authoritative document hierarchy for Project Hunter is:
 The Constitution remains the highest authority.
 
 Accepted ADRs are binding architectural decisions unless explicitly superseded or deprecated by a later accepted ADR.
+
+Architecture Decision Preparation Records in `docs/architecture-records/` are permanent, non-authoritative decision-basis records. They preserve evidence, assumptions, alternatives, falsification, and readiness reasoning but do not approve architecture or implementation.
+
+`docs/architecture-index.md` is a navigation and traceability registry only. It creates no independent authority and does not replace the records or decisions it links.
 
 Sprint specifications authorize implementation scope only. They do not redefine architecture, runtime authority, governance, or engineering principles.
 
@@ -189,9 +194,9 @@ These components coordinate, store, expose, or visualize analytical outputs but 
 
 ---
 
-# Relationship to Other Canonical Documents
+# Relationship to Other Canonical Documents and Records
 
-| Document | Responsibility |
+| Document or artifact | Responsibility |
 |----------|----------------|
 | PROJECT_CONSTITUTION | Constitutional governance |
 | PROJECT_PRINCIPLES | Engineering and architectural principles |
@@ -202,7 +207,10 @@ These components coordinate, store, expose, or visualize analytical outputs but 
 | Accepted ADRs | Binding architectural decisions |
 | VISION | Long-term purpose |
 | HUNTER_ROADMAP | Strategic evolution |
-| DEVELOPMENT_GOVERNANCE | Development process |
+| DEVELOPMENT_GOVERNANCE | Development process authority |
+| ARCHITECTURE_DECISION_PREPARATION_GUIDE | Mandatory Stage 1 preparation standard under Development Governance; no independent authority |
+| Architecture Decision Preparation Records | Permanent evidence and reasoning records; non-authoritative |
+| architecture-index.md | Navigation and traceability registry only |
 | HUNTER_IMPLEMENTATION_CONTRACT | Production implementation rules |
 | AI_REVIEW_PROTOCOL | Independent review protocol |
 | Sprint specifications | Versioned implementation scope |

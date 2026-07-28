@@ -128,7 +128,7 @@ Conflicts must be resolved before implementation proceeds.
 | [0021](0021-canonical-valuation-evidence-authority.md) | Canonical Valuation Evidence Authority | Accepted | Valuation-family evidence and service-authority contracts |
 | [0022](0022-canonical-valuation-methodology.md) | Canonical Valuation Methodology | Accepted | First-entity-class fair-value model, permitted/prohibited methodologies, calibration and audit gate |
 | [0023](0023-supply-basis-coherence-tolerance.md) | Supply Basis Provider-Data Coherence Tolerance | Accepted | Amends ADR 0022 Scope criterion 3: entity-agnostic relative tolerance for provider precision/timing noise in supply coherence |
-| [0024](0024-valuation-scalar-semantics-boundary.md) | Valuation Scalar Semantics Boundary | Proposed | Amends ADR 0020/0021/0022 `valuation`-specific language to keep valuation structured and non-directional; reserves market-relative scoring for mispricing |
+| [0024](0024-valuation-scalar-semantics-boundary.md) | Valuation Scalar Semantics Boundary | Accepted | Amends ADR 0020/0021/0022 `valuation`-specific language to keep valuation structured and non-directional; reserves market-relative scoring for mispricing |
 
 ## Creating a New ADR
 

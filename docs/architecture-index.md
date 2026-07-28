@@ -22,7 +22,8 @@ Use only the lifecycle states defined by `docs/ARCHITECTURE_DECISION_PREPARATION
 ## Decision Registry
 
 | ADPR | Title | Status | Epic | Issue | ADR | Implementation PR | Merge commit | Release | Supersedes | Superseded by |
-|---|---|---|---|---|---|---|---|---|---|---|
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| [ADPR-0001](architecture-records/ADPR-0001-architecture-decision-preparation-framework.md) | Architecture Decision Preparation Framework | IMPLEMENTED | not applicable | #133 | not applicable | #132 | not yet recorded | not yet assigned | not applicable | not applicable |
 
 ## Active Preparation Records
 
@@ -35,6 +36,7 @@ Records in `PROPOSED`, `IN_RESEARCH`, or `READY_FOR_REVIEW` state are listed her
 
 | ADPR | ADR | Status | Implementation | Validation |
 |---|---|---|---|---|
+| [ADPR-0001](architecture-records/ADPR-0001-architecture-decision-preparation-framework.md) | not applicable | IMPLEMENTED | PR #132 | Post-merge coherence remediation tracked by Issue #133 |
 
 ## Superseded and Archived Records
 
@@ -45,11 +47,13 @@ Records in `PROPOSED`, `IN_RESEARCH`, or `READY_FOR_REVIEW` state are listed her
 
 | ADR | Governing ADPR | Decision scope | Current status |
 |---|---|---|---|
+| not applicable | [ADPR-0001](architecture-records/ADPR-0001-architecture-decision-preparation-framework.md) | Governance Stage 1 preparation framework; no architectural decision created | not applicable |
 
 ## Epic and Issue Mapping
 
 | Epic or Issue | ADPRs | ADRs | Implementation PRs | Status |
 |---|---|---|---|---|
+| Issue #133 | [ADPR-0001](architecture-records/ADPR-0001-architecture-decision-preparation-framework.md) | not applicable | PR #132; remediation PR not yet created | Open remediation |
 
 ## Component Mapping
 
@@ -63,7 +67,7 @@ Records in `PROPOSED`, `IN_RESEARCH`, or `READY_FOR_REVIEW` state are listed her
 | Historical validation and replay | | | |
 | Persistence and correction | | | |
 | Automation and operations | | | |
-| Governance | | | |
+| Governance | none | not applicable | [ADPR-0001](architecture-records/ADPR-0001-architecture-decision-preparation-framework.md) records the implemented preparation framework |
 
 ## Maintenance Rules
 

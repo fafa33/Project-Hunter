@@ -42,7 +42,11 @@ Planning
     ↓
 Implementation
     ↓
-Verification
+Local Verification
+    ↓
+Draft Pull Request
+    ↓
+CI Verification
     ↓
 Architecture Review
     ↓
@@ -51,8 +55,6 @@ Review Report
 Final Validation
     ↓
 Ready for Review
-    ↓
-Pull Request
     ↓
 Merge
 ```
@@ -100,27 +102,44 @@ If implementation requires additional scope, planning must be updated before wor
 
 ---
 
-# Stage 3 — Verification
+# Stage 3 — Local Verification
 
-Verification confirms that the implemented change is internally complete.
+Local Verification confirms that the implemented change is internally coherent enough to open a Draft Pull Request and request repository CI.
 
-Verification includes, where applicable:
+Local Verification includes, where applicable:
 
 - successful implementation;
 - completed documentation;
-- completed tests;
+- locally completed tests and static checks that are available in the contributor environment;
 - consistent references;
 - consistent naming;
 - absence of placeholder content;
 - consistency between implementation and documentation.
 
-Verification failures prevent further progression through the lifecycle.
+Known environment limitations must be recorded before the Draft Pull Request is opened.
+
+A Draft Pull Request may be opened only after Local Verification is complete.
 
 ---
 
-# Stage 4 — Architecture Review
+# Stage 4 — Draft Pull Request and CI Verification
 
-After successful verification, the change undergoes architectural review.
+The Draft Pull Request is the governed integration surface for repository checks, review evidence, and discussion.
+
+While the Pull Request remains Draft:
+
+- repository CI and required automated checks run against the exact proposed commit;
+- failures return the change to implementation or verification;
+- evidence and acceptance-criteria status are updated as results become available;
+- the contribution must not be represented as merge-ready.
+
+CI Verification confirms that all required automated checks pass on the exact Pull Request head. Green CI is necessary but not sufficient for later approval or merge.
+
+---
+
+# Stage 5 — Architecture Review
+
+After successful Local Verification and required CI Verification, the change undergoes architectural review.
 
 Architecture Review evaluates whether the contribution remains consistent with the project's accepted architectural decisions and canonical documents.
 
@@ -132,7 +151,7 @@ It does not redefine architecture.
 
 ---
 
-# Stage 5 — Review Report
+# Stage 6 — Review Report
 
 Every Architecture Review produces a review report.
 
@@ -149,16 +168,17 @@ If no issues are identified, the report explicitly records:
 
 ---
 
-# Stage 6 — Final Validation
+# Stage 7 — Final Validation
 
 Final Validation confirms that the contribution has successfully completed every required lifecycle stage.
 
 Validation records, where applicable:
 
 - files changed;
-- verification completed;
-- architecture review completed;
-- review report completed;
+- Local Verification completed;
+- CI Verification completed;
+- Architecture Review completed;
+- Review Report completed;
 - outstanding issues;
 - overall readiness.
 
@@ -170,16 +190,18 @@ Only after successful Final Validation may the contribution be declared:
 
 # Pull Request Governance
 
-A Pull Request may be opened only after Final Validation.
+A Draft Pull Request may be opened only after implementation and Local Verification are complete.
 
 A Pull Request may leave Draft status only after:
 
-- Verification has completed;
+- required CI Verification has completed successfully;
 - Architecture Review has completed;
 - Review Report has been recorded;
 - Final Validation has completed.
 
 A Pull Request marked **Ready for Review** must not contain unresolved blocking findings.
+
+Opening a Draft Pull Request does not approve implementation, satisfy Architecture Review, establish merge readiness, or authorize merge.
 
 ---
 
@@ -191,13 +213,13 @@ A Pull Request must not be merged while any required acceptance criterion or req
 
 The implementer declares one of the following states on a Pull Request:
 
-- **Ready for Review** — required verification and self-assessment are complete, per Stage 6.
+- **Ready for Review** — required verification and self-assessment are complete, per Stage 7.
 - **Changes Required** — implementation, evidence, or documentation remains incomplete.
 - **Blocked** — completion depends on an unavailable environment, provider, credential, or external condition.
 
 The implementer does not declare a Pull Request **Approved**. Approval is an outcome of independent review, governed by `docs/AI_REVIEW_PROTOCOL.md`, and is recorded only by the reviewer after required review and verification have completed.
 
-A Pull Request must not be merged while any unresolved blocking finding remains open, consistent with Stage 6 and with `docs/AI_REVIEW_PROTOCOL.md`'s Blocking Findings section. Non-blocking recommendations, and findings that have already been resolved, do not prevent merge.
+A Pull Request must not be merged while any unresolved blocking finding remains open, consistent with Stage 7 and with `docs/AI_REVIEW_PROTOCOL.md`'s Blocking Findings section. Non-blocking recommendations, and findings that have already been resolved, do not prevent merge.
 
 `docs/MERGE_READINESS_GATE.md` is the implementation guide for this rule: it defines the required review dimensions, the acceptance-criteria matrix format, the evidence package a Pull Request must include, and the pull request template that operationalizes the rule stated here. It does not define an independent governance authority and must not be read as one.
 
