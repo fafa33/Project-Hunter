@@ -6,6 +6,8 @@ This standard defines the minimum quality expected of Architecture Decision Prep
 
 It evaluates decision quality, not merely whether a template was completed.
 
+Independent audit classification, materiality, verdicts, and re-audit scope are governed by `docs/ARCHITECTURE_AUDIT_PROTOCOL.md`.
+
 ## Applicability
 
 Apply this standard to architecturally significant changes governed by `docs/ARCHITECTURE_DECISION_PREPARATION_GUIDE.md`.
@@ -20,7 +22,9 @@ Use one rating for every quality dimension:
 - `NEEDS_IMPROVEMENT` — material weakness prevents reliable decision-making.
 - `UNACCEPTABLE` — missing, contradictory, misleading, or incompatible with canonical authority.
 
-An ADPR is not `READY_FOR_ADR` when any mandatory dimension is `NEEDS_IMPROVEMENT` or `UNACCEPTABLE`.
+An ADPR self-assessment is not `READY_FOR_ADR` when any mandatory dimension is `NEEDS_IMPROVEMENT` or `UNACCEPTABLE`.
+
+Independent auditors must apply the materiality and decision-consequence rules in `docs/ARCHITECTURE_AUDIT_PROTOCOL.md` before assigning a blocking verdict.
 
 ## Quality Dimensions
 
@@ -72,32 +76,40 @@ Where applicable, evidence lineage, source identity, collection method, confiden
 
 Failure behavior, observability, availability, recoverability, deployment, migration, rollback, and operational cost are addressed.
 
-### 13. Testability and Validation
+### 13. Implementation and Migration Impact
+
+Implementation consequences, required subsystem changes, migration obligations, compatibility risks, transition states, and reversibility are analyzed at a depth proportional to decision risk.
+
+A separate heading is not mandatory when the substance is clearly present and comparable across options, unless a controlling template explicitly requires one.
+
+### 14. Testability and Validation
 
 The proposed architecture can be verified deterministically. Acceptance criteria and required operational validation are derivable from the decision.
 
-### 14. Maintainability and Extensibility
+### 15. Maintainability and Extensibility
 
 The decision minimizes hidden coupling, duplicated authority, accidental complexity, and foreseeable redesign while avoiding speculative abstraction.
 
-### 15. Risk Quality
+### 16. Risk Quality
 
 Material technical, governance, operational, migration, and long-term risks include likelihood, impact, mitigation, and residual uncertainty.
 
-### 16. Traceability
+### 17. Traceability
 
 The relationship among Issue or Epic, ADPR, ADR, implementation, PR, commit, validation, supersession, and release is accurate and auditable.
 
 ## Mandatory Decision Gate
 
-A preparation may be declared `READY_FOR_ADR` only when:
+A preparation author may declare `READY_FOR_ADR` only when:
 
 - every dimension has a recorded rating and rationale;
 - no mandatory dimension is below `ACCEPTABLE`;
 - Constitution and Governance dimensions are at least `GOOD`;
 - evidence integrity, option completeness, comparative fairness, and falsifiability are at least `ACCEPTABLE`;
-- all blocking questions are resolved;
+- all self-identified blocking questions are resolved;
 - residual limitations are explicitly carried into the proposed ADR scope.
+
+This gate governs preparation self-assessment. Independent audit verdicts must be derived under `docs/ARCHITECTURE_AUDIT_PROTOCOL.md`.
 
 ## Prohibited Scoring Practices
 
@@ -109,7 +121,9 @@ Do not:
 - reward complexity or number of options by itself;
 - allow strong implementation detail to compensate for unresolved architecture;
 - allow reviewer preference to replace stated criteria;
-- declare readiness from a total score while a mandatory dimension fails.
+- declare readiness from a total score while a mandatory dimension materially fails;
+- classify an issue as blocking solely because a heading, label, table row, or diagram element is absent while equivalent substantive analysis is present elsewhere;
+- derive an audit verdict from PASS or FAIL counts without materiality analysis.
 
 ## Assessment Record
 
@@ -129,6 +143,7 @@ Use this table in each ADPR:
 | Persistence and replay quality | | | |
 | Evidence and provenance quality | | | |
 | Operational quality | | | |
+| Implementation and migration impact | | | |
 | Testability and validation | | | |
 | Maintainability and extensibility | | | |
 | Risk quality | | | |
@@ -136,4 +151,6 @@ Use this table in each ADPR:
 
 ## Relationship to Review
 
-This standard supports preparation review and later independent architecture review. It does not replace `docs/AI_REVIEW_PROTOCOL.md`, Final Validation, or `docs/MERGE_READINESS_GATE.md`.
+This standard supports preparation authoring, self-assessment, and independent architecture review. It does not replace `docs/ARCHITECTURE_AUDIT_PROTOCOL.md`, `docs/AI_REVIEW_PROTOCOL.md`, Final Validation, or `docs/MERGE_READINESS_GATE.md`.
+
+When this standard and `docs/ARCHITECTURE_AUDIT_PROTOCOL.md` appear to conflict about audit severity or verdict, the audit protocol controls.
