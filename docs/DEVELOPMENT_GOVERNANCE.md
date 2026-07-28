@@ -84,6 +84,8 @@ Implementation begins only after the intended scope is understood.
 
 For architecturally significant changes, Stage 1 planning must follow `docs/ARCHITECTURE_DECISION_PREPARATION_GUIDE.md`. The guide standardizes problem validation, evidence assessment, option enumeration, falsification, readiness review, and the creation of Architecture Decision Preparation Records before an ADR or implementation proceeds. It elaborates this stage and does not create an independent governance or architectural authority.
 
+Independent audits of architecture preparation records must follow `docs/ARCHITECTURE_AUDIT_PROTOCOL.md` and use `docs/ARCHITECTURE_AUDIT_TEMPLATE.md`.
+
 ---
 
 # Stage 2 — Implementation
@@ -143,9 +145,13 @@ After successful Local Verification and required CI Verification, the change und
 
 Architecture Review evaluates whether the contribution remains consistent with the project's accepted architectural decisions and canonical documents.
 
-Any architectural issue returns the change to the appropriate earlier lifecycle stage.
+For implementation and contribution review, `docs/AI_REVIEW_PROTOCOL.md` applies.
 
-Architecture Review evaluates consistency.
+For ADPR and architecture-decision-readiness review, `docs/ARCHITECTURE_AUDIT_PROTOCOL.md` controls finding classification, materiality, verdicts, and re-audit scope.
+
+Any unresolved blocking architectural issue returns the change to the appropriate earlier lifecycle stage. Editorial and non-blocking documentation-quality findings do not by themselves require lifecycle regression.
+
+Architecture Review evaluates consistency and decision readiness.
 
 It does not redefine architecture.
 
@@ -165,6 +171,8 @@ The report records:
 If no issues are identified, the report explicitly records:
 
 > No issues were identified during independent review.
+
+Architecture-preparation audit reports must use `docs/ARCHITECTURE_AUDIT_TEMPLATE.md`. A blocking architecture-readiness verdict is invalid unless it satisfies the evidence and materiality requirements in `docs/ARCHITECTURE_AUDIT_PROTOCOL.md`.
 
 ---
 
@@ -221,6 +229,8 @@ The implementer does not declare a Pull Request **Approved**. Approval is an out
 
 A Pull Request must not be merged while any unresolved blocking finding remains open, consistent with Stage 7 and with `docs/AI_REVIEW_PROTOCOL.md`'s Blocking Findings section. Non-blocking recommendations, and findings that have already been resolved, do not prevent merge.
 
+For architecture-preparation artifacts, whether a finding blocks ADR progression is governed by `docs/ARCHITECTURE_AUDIT_PROTOCOL.md`, not by raw defect count or PASS and FAIL counts.
+
 `docs/MERGE_READINESS_GATE.md` is the implementation guide for this rule: it defines the required review dimensions, the acceptance-criteria matrix format, the evidence package a Pull Request must include, and the pull request template that operationalizes the rule stated here. It does not define an independent governance authority and must not be read as one.
 
 ---
@@ -268,6 +278,8 @@ No amendment may conflict with:
 | Architecture documents | System architecture |
 | ADRs | Architectural decisions |
 | ARCHITECTURE_DECISION_PREPARATION_GUIDE | Stage 1 preparation standard for architecturally significant changes |
+| ARCHITECTURE_DECISION_QUALITY_STANDARD | Preparation quality dimensions and self-assessment |
+| ARCHITECTURE_AUDIT_PROTOCOL | Architecture audit materiality, verdicts, and re-audit protocol |
 | HUNTER_IMPLEMENTATION_CONTRACT | Implementation obligations |
 | This document | Development lifecycle |
 | MERGE_READINESS_GATE | Implementation guide for the Merge Readiness rule owned by this document |
@@ -292,6 +304,7 @@ This document does not own:
 - architecture;
 - runtime behavior;
 - implementation requirements;
+- architecture-audit severity definitions;
 - Sprint planning;
 - operational procedures.
 
