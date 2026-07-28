@@ -80,6 +80,8 @@ Planning should identify, where applicable:
 
 Implementation begins only after the intended scope is understood.
 
+For architecturally significant changes, Stage 1 planning must follow `docs/ARCHITECTURE_DECISION_PREPARATION_GUIDE.md`. The guide standardizes problem validation, evidence assessment, option enumeration, falsification, readiness review, and the creation of Architecture Decision Preparation Records before an ADR or implementation proceeds. It elaborates this stage and does not create an independent governance or architectural authority.
+
 ---
 
 # Stage 2 — Implementation
@@ -243,6 +245,7 @@ No amendment may conflict with:
 | CANONICAL_ARCHITECTURE_MAP | Document authority hierarchy |
 | Architecture documents | System architecture |
 | ADRs | Architectural decisions |
+| ARCHITECTURE_DECISION_PREPARATION_GUIDE | Stage 1 preparation standard for architecturally significant changes |
 | HUNTER_IMPLEMENTATION_CONTRACT | Implementation obligations |
 | This document | Development lifecycle |
 | MERGE_READINESS_GATE | Implementation guide for the Merge Readiness rule owned by this document |
