@@ -3,7 +3,7 @@
 ## Status
 
 - Status: Accepted
-- Version: 1.0
+- Version: 1.1
 - Authority: `docs/DEVELOPMENT_GOVERNANCE.md`
 - Scope: Architecturally significant changes
 
@@ -14,6 +14,8 @@ This document standardizes preparation of major architectural decisions before i
 It provides an evidence-based, falsifiable, repeatable, auditable, and traceable process for turning an architectural problem into ADR-ready input.
 
 This document governs preparation only. It does not define architecture, approve decisions, replace ADRs, perform review, authorize implementation, determine merge readiness, or own validation.
+
+Independent audit of preparation records is governed by `docs/ARCHITECTURE_AUDIT_PROTOCOL.md`.
 
 ## Scope
 
@@ -43,6 +45,7 @@ When significance is uncertain, the change is treated as architecturally signifi
 8. ADR before implementation when an ADR is required.
 9. Missing evidence remains explicit; it is not replaced with convenience assumptions.
 10. Preparation depth is proportional to risk, but no required lifecycle stage is silently skipped.
+11. Readiness depends on material decision quality, not defect count or document formatting alone.
 
 ## Decision Preparation Lifecycle
 
@@ -68,7 +71,7 @@ Classify evidence by authority, relevance, completeness, recency, reproducibilit
 
 ### 6. Architectural Dimension Discovery
 
-Identify every material dimension of the decision, including authority, ownership, boundaries, persistence, identity, versioning, correction, replay, provenance, missingness, confidence, scalability, security, testability, migration, and operability.
+Identify every material dimension of the decision, including authority, ownership, boundaries, persistence, identity, versioning, correction, replay, provenance, missingness, confidence, scalability, security, testability, migration, implementation impact, operability, and maintainability.
 
 ### 7. Option Enumeration
 
@@ -76,7 +79,9 @@ Enumerate all materially distinct options that satisfy the fixed constraints. Do
 
 ### 8. Option Normalization
 
-Describe every option at comparable depth and against the same dimensions. Composite options and partial variants must be made explicit.
+Describe every option at comparable depth and against the same material dimensions. Composite options and partial variants must be made explicit.
+
+A preparation may normalize dimensions through headings, tables, or clearly comparable prose. Independent audit evaluates whether the substance is present and comparable, not merely whether each dimension has a separately labeled field, unless a controlling template explicitly requires one.
 
 ### 9. Comparative Evaluation
 
@@ -101,6 +106,8 @@ Determine whether the problem, evidence, constraints, dimensions, and option set
 ### 14. ADR Readiness
 
 Determine whether the preparation record can be converted into an ADR without inventing missing evidence, collapsing unresolved conflicts, or silently selecting an option.
+
+Independent readiness review must use the finding classifications, materiality rules, and verdicts in `docs/ARCHITECTURE_AUDIT_PROTOCOL.md`.
 
 ## Required Outputs
 
@@ -143,12 +150,14 @@ A preparation is not ready for ADR unless all of the following are true:
 - the proposed ADR scope is precise;
 - no implementation work is required to conceal an unresolved decision.
 
-The allowed readiness outcomes are:
+The allowed preparation self-assessment outcomes are:
 
 - `READY_FOR_ADR`
 - `NEEDS_REVISION`
 - `BLOCKED`
 - `NOT_AN_ARCHITECTURE_DECISION`
+
+These are author self-assessments only. Independent audit verdicts are defined exclusively by `docs/ARCHITECTURE_AUDIT_PROTOCOL.md` and may include `READY_FOR_ADR_WITH_MINOR_FINDINGS`, `CONDITIONAL_ADR_READY`, `ADPR_REVISION_REQUIRED`, and `ARCHITECTURE_NOT_READY`.
 
 ## Lifecycle States
 
@@ -177,8 +186,8 @@ It does not own:
 - ADR acceptance;
 - implementation scope;
 - runtime behavior;
-- architecture review;
-- AI review;
+- architecture audit classification or verdicts;
+- AI implementation review;
 - final validation;
 - pull request readiness;
 - merge authorization.
@@ -193,10 +202,11 @@ It does not own:
 | Canonical architecture documents | Source of existing authority and constraints |
 | Accepted ADRs | Binding architectural decisions and evidence inputs |
 | Preparation template | Working artifact used during research |
-| Preparation checklist | Independent readiness review aid |
+| Preparation checklist | Author self-review aid |
 | ADPR | Permanent preparation and reasoning record |
+| `ARCHITECTURE_AUDIT_PROTOCOL.md` | Independent audit materiality, verdict, and re-audit authority |
 | ADR | Formal architectural decision produced after readiness |
-| AI Review Protocol | Independent post-implementation review |
+| AI Review Protocol | Independent implementation and contribution review |
 | Merge Readiness Gate | Independent implementation guide for merge readiness |
 
 ## Traceability
@@ -207,7 +217,8 @@ The intended traceability chain is:
 Idea
   -> Issue or Epic
   -> Architecture Decision Preparation
-  -> Preparation Review Checklist
+  -> Preparation Self-Assessment
+  -> Independent Architecture Audit
   -> ADPR
   -> ADR
   -> Implementation
@@ -230,6 +241,7 @@ This process succeeds when:
 - alternatives and rejected options remain auditable;
 - the same process can be executed by humans or different AI systems;
 - architecture review finds fewer preventable design defects after implementation;
+- non-material editorial findings do not create endless architecture-revision cycles;
 - the framework remains proportionate and does not burden ordinary low-risk changes.
 
 ## Amendment Policy
