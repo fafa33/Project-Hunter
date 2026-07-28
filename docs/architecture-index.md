@@ -24,6 +24,7 @@ Use only the lifecycle states defined by `docs/ARCHITECTURE_DECISION_PREPARATION
 | ADPR | Title | Status | Epic | Issue | ADR | Implementation PR | Merge commit | Release | Supersedes | Superseded by |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | [ADPR-0001](architecture-records/ADPR-0001-architecture-decision-preparation-framework.md) | Architecture Decision Preparation Framework | IMPLEMENTED | not applicable | #133 | not applicable | #132 | not yet recorded | not yet assigned | not applicable | not applicable |
+| [ADPR-0002](architecture-records/ADPR-0002-disclosure-architecture-classification.md) | Disclosure Architecture Classification | IN_RESEARCH | not yet created | not yet created | none produced | not yet created | not yet recorded | not yet assigned | not applicable | not applicable |
 
 ## Active Preparation Records
 
@@ -31,6 +32,7 @@ Records in `PROPOSED`, `IN_RESEARCH`, or `READY_FOR_REVIEW` state are listed her
 
 | ADPR | Title | Status | Blocking questions | Owner |
 |---|---|---|---|---|
+| [ADPR-0002](architecture-records/ADPR-0002-disclosure-architecture-classification.md) | Disclosure Architecture Classification | IN_RESEARCH | Which option across the four decision axes should be selected (see record's Open Questions); no ADR can be created until a future session selects | not yet assigned |
 
 ## Approved and Implemented Records
 
@@ -61,8 +63,8 @@ Records in `PROPOSED`, `IN_RESEARCH`, or `READY_FOR_REVIEW` state are listed her
 |---|---|---|---|
 | Discovery | | | |
 | Validation | | | |
-| Evidence | | | |
-| Valuation | | | |
+| Evidence | [ADPR-0002](architecture-records/ADPR-0002-disclosure-architecture-classification.md) | not applicable | Enumerates options for classifying disclosure structure prior to or independent of acquisition; no ADR produced yet |
+| Valuation | [ADPR-0002](architecture-records/ADPR-0002-disclosure-architecture-classification.md) | ADR 0021, ADR 0022, ADR 0024 (unmodified, checked for compatibility only) | Follow-on architecture exploration prompted by Issue #107's operational blocker; does not change any accepted ADR |
 | Opportunity assessment and ranking | | | |
 | Historical validation and replay | | | |
 | Persistence and correction | | | |
