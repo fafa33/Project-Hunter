@@ -45,12 +45,26 @@ Deep Analysis
         ↓
 Investment Intelligence
         ↓
-Valuation
+Canonical Valuation
+        ↓
+Comparative Valuation
+        ↓
+Mispricing Intelligence
+        ↓
+Asymmetry Intelligence
+        ↓
+Opportunity Intelligence
+        ↓
+Prediction Intelligence
+        ↓
+Portfolio Intelligence
         ↓
 Decision Support
         ↓
 Reports
 ```
+
+This flow mirrors the ownership and dependency direction defined by `docs/CANONICAL_ARCHITECTURE_MAP.md`. Each stage below carries an explicit classification (production, experimental, in progress, or unavailable target); the classification source is the accepted ADR(s) named for that stage, not this diagram.
 
 Every stage executes deterministically using only the evidence available at that point in time.
 
@@ -204,20 +218,122 @@ Outputs:
 
 ---
 
-## Valuation
+## Canonical Valuation
 
-Produces evidence-supported valuation intelligence.
+Produces authoritative, structured fair-value intelligence for a qualifying economic entity under one immutable, versioned methodology.
 
 Responsibilities include:
 
-- valuation;
-- comparative valuation;
-- scenario analysis;
-- uncertainty estimation.
+- fair-value estimation under the accepted methodology;
+- confidence and uncertainty decomposition;
+- strict-known replay and correction lineage.
 
 Outputs:
 
-- valuation intelligence.
+- structured, non-scalar fair-value assessment.
+
+**Classification:** Architecture accepted (ADR 0021, ADR 0022, ADR 0024). Implementation is in progress under the governing issue and is not yet independently validated as operationally complete. Per ADR 0024, this output does not become a Market Validation composition input until a separate accepted ADR authorizes that composition.
+
+---
+
+## Comparative Valuation
+
+Compares a target's valuation against economically compatible peers under a declared cohort policy.
+
+Responsibilities include:
+
+- peer-universe eligibility and comparability;
+- relative valuation measurement.
+
+Outputs:
+
+- comparative valuation assessment.
+
+**Classification:** Unavailable target. Its semantic contract is defined by ADR 0021; ADR 0024 confirms comparative valuation remains unavailable pending its own accepted methodology.
+
+---
+
+## Mispricing Intelligence
+
+Evaluates the divergence between an authorized fair-value estimate and a compatible observed market value.
+
+Responsibilities include:
+
+- fair-value-to-market-value comparison for compatible representations;
+- directional divergence measurement.
+
+Outputs:
+
+- mispricing assessment.
+
+**Classification:** Unavailable target. Its semantic contract is defined by ADR 0021; ADR 0024 confirms mispricing remains unavailable pending its own accepted methodology.
+
+---
+
+## Asymmetry Intelligence
+
+Evaluates the probability-weighted balance of favorable and adverse payoff across an immutable, predeclared scenario set.
+
+Responsibilities include:
+
+- scenario-based upside/downside evaluation;
+- payoff asymmetry measurement.
+
+Outputs:
+
+- asymmetry assessment.
+
+**Classification:** Unavailable target. Its semantic contract is defined by ADR 0021; ADR 0024 confirms asymmetry remains unavailable pending its own accepted methodology.
+
+---
+
+## Opportunity Intelligence
+
+Determines investment opportunity quality from authorized analytical factors.
+
+Responsibilities include:
+
+- factor-contract-gated opportunity assessment;
+- opportunity ranking.
+
+Outputs:
+
+- opportunity assessment and ranking.
+
+**Classification:** Experimental/research only (ADR 0016, ADR 0017, ADR 0018). Not a production analytical output and not exposed through Dashboard API, alerts, or other operational projections. Production promotion requires a future accepted ADR satisfying ADR 0017's promotion gate.
+
+---
+
+## Prediction Intelligence
+
+Estimates and evaluates future outcomes.
+
+Responsibilities include:
+
+- immutable prediction-contract evaluation;
+- correctness, accuracy, and calibration assessment.
+
+Outputs:
+
+- prediction evaluation records, accuracy and calibration snapshots.
+
+**Classification:** Partial. A canonical prediction-evaluation authority is accepted (ADR 0019) for auditing already-made, fully-contracted predictions, but the authorizing service is not yet implemented; production correctness and accuracy evaluation remain unavailable (ADR 0016).
+
+---
+
+## Portfolio Intelligence
+
+Produces portfolio-level decision support from authorized analytical outputs.
+
+Responsibilities include:
+
+- portfolio-level context and aggregation across authorized analytical outputs.
+
+Outputs:
+
+- portfolio-level decision-support intelligence.
+
+**Classification:** Unavailable target. No accepted ADR yet establishes implementation authority for this domain; ownership is named only in `docs/CANONICAL_ARCHITECTURE_MAP.md`.
 
 ---
 
