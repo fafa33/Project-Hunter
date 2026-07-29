@@ -69,7 +69,7 @@ class ValuationMethodologySnapshot:
     authorized_by: str
     accepts_assembled_evidence: bool = False
     accepted_evidence_shape_ids: tuple[str, ...] = ()
-    accepted_native_evidence_families: tuple[str, ...] = ()
+    accepted_native_evidence_families: tuple[str, ...] = ("fundamental-evidence",)
     accepted_assembly_rule_versions: tuple[str, ...] = ()
     assembled_evidence_granularity_override: str | None = None
     assembly_requires_exact_coverage: bool = True
@@ -133,6 +133,8 @@ class ValuationMethodologySnapshot:
         if self.authorizing_adr_reference != AUTHORIZING_ADR_REFERENCE:
             raise ValueError(f"authorizing_adr_reference must be {AUTHORIZING_ADR_REFERENCE!r} for Milestone 2")
         _normalize_chronology(self)
+        if not self.accepted_native_evidence_families:
+            raise ValueError("canonical methodology must declare accepted native evidence families")
         if self.accepts_assembled_evidence:
             if (
                 not self.accepted_evidence_shape_ids

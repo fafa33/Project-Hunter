@@ -113,7 +113,7 @@ class CanonicalValuationMethodologyAuthority:
             authorized_by=CANONICAL_AUTHORITY_ID,
             accepts_assembled_evidence=False,
             accepted_evidence_shape_ids=(),
-            accepted_native_evidence_families=(),
+            accepted_native_evidence_families=("fundamental-evidence",),
             accepted_assembly_rule_versions=(),
             assembled_evidence_granularity_override=None,
             supersedes_record_id=supersedes_record_id,
@@ -300,6 +300,16 @@ def _content_hash(record: ValuationMethodologySnapshot, *, logical_id: str) -> s
     payload["logical_id"] = logical_id
     raw = json.dumps(_json_safe(payload), sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(raw).hexdigest()
+
+
+def canonical_methodology_content_hash(record: ValuationMethodologySnapshot) -> str:
+    """Return the canonical payload hash for a materialized methodology snapshot."""
+    return _content_hash(record, logical_id=record.logical_id)
+
+
+def verify_methodology_content_hash(record: ValuationMethodologySnapshot) -> bool:
+    """Verify canonical methodology payload integrity without trusting its embedded hash."""
+    return record.content_hash == canonical_methodology_content_hash(record)
 
 
 def _json_safe(value: Any) -> Any:

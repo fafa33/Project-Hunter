@@ -29,6 +29,62 @@ _CADENCE_RANK: dict[Cadence, int] = {
     "semiannual": 4,
     "annual": 5,
 }
+_CALENDAR_CADENCES: tuple[Cadence, ...] = (
+    "daily",
+    "monthly",
+    "quarterly",
+    "semiannual",
+    "annual",
+)
+CANONICAL_INITIAL_SHAPES: tuple[EvidenceShape, ...] = tuple(
+    EvidenceShape(
+        shape_id=f"{cadence}-revenue",
+        evidence_type="audited_financial_disclosure",
+        source_methodology=f"reported-{cadence}" if cadence != "semiannual" else "reported",
+        accounting_meaning="period_specific",
+        cadence=cadence,
+        composition_operation="none" if cadence == "annual" else "exact_sum",
+        active=True,
+        currency="USD",
+        unit="USD",
+        compatible_cadences=tuple(item for item in _CALENDAR_CADENCES if item != cadence),
+    )
+    for cadence in _CALENDAR_CADENCES
+) + (
+    EvidenceShape(
+        shape_id="irregular",
+        evidence_type="audited_financial_disclosure",
+        source_methodology="reported-irregular",
+        accounting_meaning="period_specific",
+        cadence="irregular",
+        composition_operation="exact_sum",
+        active=True,
+        currency="USD",
+        unit="USD",
+    ),
+    EvidenceShape(
+        shape_id="event-driven",
+        evidence_type="audited_financial_disclosure",
+        source_methodology="reported-event",
+        accounting_meaning="event",
+        cadence="event_driven",
+        composition_operation="none",
+        active=False,
+        currency="USD",
+        unit="USD",
+    ),
+    EvidenceShape(
+        shape_id="epoch-based",
+        evidence_type="onchain_observation",
+        source_methodology="reported-epoch",
+        accounting_meaning="cumulative",
+        cadence="epoch_based",
+        composition_operation="none",
+        active=False,
+        currency="USD",
+        unit="USD",
+    ),
+)
 
 
 class EvidenceShapeRegistryError(ValueError):
@@ -212,7 +268,6 @@ class EvidenceShapeRegistryAuthority:
         *,
         registry_id: str,
         registry_version: str,
-        shapes: tuple[EvidenceShape, ...],
         effective_start: datetime,
         effective_end: datetime,
         recorded_at: datetime,
@@ -235,7 +290,7 @@ class EvidenceShapeRegistryAuthority:
             registry_id=registry_id,
             registry_version=registry_version,
             schema_version=REGISTRY_SCHEMA_VERSION,
-            shapes=shapes,
+            shapes=CANONICAL_INITIAL_SHAPES,
             effective_start=effective_start,
             effective_end=effective_end,
             recorded_at=recorded_at,

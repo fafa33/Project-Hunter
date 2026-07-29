@@ -22,13 +22,17 @@ from hunter.evidence_assembly.registry import (
 )
 from hunter.evidence_assembly.repository import AssembledEvidenceRepository
 from hunter.valuation_methodology.models import ValuationMethodologySnapshot
-from hunter.valuation_methodology.service import CanonicalValuationMethodologyAuthority
+from hunter.valuation_methodology.service import (
+    CanonicalValuationMethodologyAuthority,
+    verify_methodology_content_hash,
+)
 from hunter.value_capture.models import (
     FundamentalEvidenceRecord,
     SupplyBasisSnapshot,
     ValueCaptureRuleSnapshot,
 )
 from hunter.value_capture.repository import SupplyAndValueCaptureRepository
+from hunter.value_capture.service import verify_value_capture_content_hash
 
 
 class CanonicalEvidenceAssemblyError(ValueError):
@@ -91,6 +95,8 @@ class CanonicalEvidenceAssemblyService:
         )
         if methodology is None:
             raise CanonicalEvidenceAssemblyError("no strict-known canonical methodology snapshot")
+        if not verify_methodology_content_hash(methodology):
+            raise CanonicalEvidenceAssemblyError("canonical methodology content hash is invalid")
         self._validate_methodology(methodology)
         if end - start != timedelta(days=methodology.horizon_days):
             raise CanonicalEvidenceAssemblyError("accounting window does not match canonical methodology horizon")
@@ -262,6 +268,7 @@ class CanonicalEvidenceAssemblyService:
         registry = self.registry_authority.repository.get(record.registry_record_id)
         if (
             methodology is None
+            or not verify_methodology_content_hash(methodology)
             or methodology.logical_id != record.methodology_logical_id
             or methodology.semantic_version != record.methodology_version
             or methodology.content_hash != record.methodology_content_hash
@@ -290,6 +297,7 @@ class CanonicalEvidenceAssemblyService:
             constituent = self.value_capture_repository.evidence(record_id)
             if (
                 constituent is None
+                or not verify_value_capture_content_hash(constituent)
                 or constituent.semantic_version != version
                 or constituent.content_hash != content_hash
                 or constituent.effective_at > record.effective_at
@@ -303,12 +311,14 @@ class CanonicalEvidenceAssemblyService:
         rule = self.value_capture_repository.rule(record.value_capture_pathway_record_id)
         if (
             supply is None
+            or not verify_value_capture_content_hash(supply)
             or supply.semantic_version != record.supply_basis_version
             or supply.content_hash != record.supply_basis_content_hash
             or supply.effective_at > record.effective_at
             or supply.recorded_at > known_by
             or supply.known_at > known_by
             or rule is None
+            or not verify_value_capture_content_hash(rule)
             or rule.semantic_version != record.value_capture_pathway_version
             or rule.content_hash != record.value_capture_pathway_content_hash
             or rule.effective_at > record.effective_at
@@ -404,6 +414,8 @@ class CanonicalEvidenceAssemblyService:
         if record is None or supply is None or rule is None:
             raise CanonicalEvidenceAssemblyError("constituent canonical dependency is missing")
         for dependency in (record, supply, rule):
+            if not verify_value_capture_content_hash(dependency):
+                raise CanonicalEvidenceAssemblyError("canonical dependency content hash is invalid")
             if (
                 dependency.effective_at > replay_cutoff
                 or dependency.recorded_at > replay_cutoff
@@ -546,6 +558,8 @@ class CanonicalEvidenceAssemblyService:
             accounting_window_end=end,
             known_by=replay_cutoff,
         )
+        if any(not verify_value_capture_content_hash(record) for record in universe):
+            raise CanonicalEvidenceAssemblyError("candidate-universe content hash is invalid")
         if not selected_ids <= {record.record_id for record in universe}:
             raise CanonicalEvidenceAssemblyError("selected record is absent from strict-known universe")
         unresolved = tuple(
@@ -595,6 +609,7 @@ class CanonicalEvidenceAssemblyService:
                 registry=registry,
                 methodology=methodology,
                 rule=resolved[0][3],
+                selected_shape=resolved[0][1],
                 native=True,
             )
         )
@@ -607,6 +622,7 @@ class CanonicalEvidenceAssemblyService:
                 registry=registry,
                 methodology=methodology,
                 rule=resolved[0][3],
+                selected_shape=resolved[0][1],
                 native=False,
             )
         )
@@ -695,6 +711,7 @@ class CanonicalEvidenceAssemblyService:
         registry: EvidenceShapeRegistrySnapshot,
         methodology: ValuationMethodologySnapshot,
         rule: ValueCaptureRuleSnapshot,
+        selected_shape: EvidenceShape,
         native: bool,
     ) -> bool:
         try:
@@ -702,14 +719,15 @@ class CanonicalEvidenceAssemblyService:
             _validate_cadence_window(shape, record)
         except CanonicalEvidenceAssemblyError:
             return False
-        family = f"{record.evidence_type}:{record.source_methodology}"
-        methodology_compatible = (
-            family in methodology.accepted_native_evidence_families
-            if native
-            else shape.shape_id in methodology.accepted_evidence_shape_ids
-        )
+        if native:
+            return (
+                shape.currency.casefold() == selected_shape.currency.casefold()
+                and shape.unit == selected_shape.unit
+                and shape.accounting_meaning == "period_specific"
+                and record.attribution_rule_id == rule.mechanism_policy_id
+            )
         return (
-            methodology_compatible
+            shape.shape_id in methodology.accepted_evidence_shape_ids
             and shape.currency.casefold() == methodology.currency.casefold()
             and shape.accounting_meaning == "period_specific"
             and (native or shape.composition_operation == "exact_sum")

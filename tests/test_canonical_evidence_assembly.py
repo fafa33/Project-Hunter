@@ -41,6 +41,7 @@ from hunter.value_capture.models import (
     ValueCaptureRuleSnapshot,
 )
 from hunter.value_capture.repository import SupplyAndValueCaptureRepository, record_snapshot
+from hunter.value_capture.service import canonical_value_capture_content_hash
 
 T0 = datetime(2025, 1, 1, tzinfo=UTC)
 T1 = datetime(2025, 7, 1, tzinfo=UTC)
@@ -248,21 +249,28 @@ def _save_snapshots(path: Path, *snapshots: SnapshotRecord) -> None:
         engine.dispose()
 
 
+def _canonical_value_capture(record):
+    return replace(record, content_hash=canonical_value_capture_content_hash(record))
+
+
 def _service(
     tmp_path: Path,
     *,
     evidence: tuple[FundamentalEvidenceRecord, ...] | None = None,
-    shapes: tuple[EvidenceShape, ...] | None = None,
     methodology: ValuationMethodologySnapshot | None = None,
     supply: SupplyBasisSnapshot | None = None,
     rule: ValueCaptureRuleSnapshot | None = None,
 ) -> tuple[CanonicalEvidenceAssemblyService, EvidenceShapeRegistryAuthority]:
     tmp_path.mkdir(parents=True, exist_ok=True)
     path = tmp_path / "data_ops.sqlite"
-    records = evidence or (_evidence("e1", T0, T1), _evidence("e2", T1, T2))
+    records = tuple(
+        _canonical_value_capture(record) for record in (evidence or (_evidence("e1", T0, T1), _evidence("e2", T1, T2)))
+    )
+    supply_record = _canonical_value_capture(supply or _supply())
+    rule_record = _canonical_value_capture(rule or _rule())
     _save_snapshots(
         path,
-        *(record_snapshot(record) for record in (*records, supply or _supply(), rule or _rule())),
+        *(record_snapshot(record) for record in (*records, supply_record, rule_record)),
     )
     requested_methodology = methodology or _methodology()
     method_authority = CanonicalValuationMethodologyAuthority(
@@ -291,7 +299,6 @@ def _service(
     registry_authority.persist(
         registry_id=REGISTRY_ID,
         registry_version="1",
-        shapes=shapes or (_shape(),),
         effective_start=T0,
         effective_end=datetime(2027, 1, 1, tzinfo=UTC),
         recorded_at=RECORDED,
@@ -376,6 +383,7 @@ def test_current_canonical_methodology_remains_not_opted_in(tmp_path: Path) -> N
     )
     assert record.accepts_assembled_evidence is False
     assert record.accepted_evidence_shape_ids == ()
+    assert record.accepted_native_evidence_families == ("fundamental-evidence",)
 
 
 def test_registry_generic_sql_history_hash_and_strict_known(tmp_path: Path) -> None:
@@ -385,7 +393,6 @@ def test_registry_generic_sql_history_hash_and_strict_known(tmp_path: Path) -> N
     first = authority.persist(
         registry_id=REGISTRY_ID,
         registry_version="1",
-        shapes=(_shape(),),
         effective_start=T0,
         effective_end=T3,
         recorded_at=T1,
@@ -396,7 +403,6 @@ def test_registry_generic_sql_history_hash_and_strict_known(tmp_path: Path) -> N
         authority.persist(
             registry_id=REGISTRY_ID,
             registry_version="1",
-            shapes=(_shape(),),
             effective_start=T0,
             effective_end=T3,
             recorded_at=T1,
@@ -417,18 +423,16 @@ def test_registry_generic_sql_history_hash_and_strict_known(tmp_path: Path) -> N
         authority.persist(
             registry_id=REGISTRY_ID,
             registry_version="1",
-            shapes=(_shape("different"),),
             effective_start=T0,
             effective_end=T3,
-            recorded_at=T1,
-            known_at=T1,
+            recorded_at=T2,
+            known_at=T2,
             authorizing_adr_reference="ADR-0025",
         )
     with pytest.raises(EvidenceShapeRegistryError, match="newly accepted ADR"):
         authority.persist(
             registry_id=REGISTRY_ID,
             registry_version="1",
-            shapes=(_shape(),),
             effective_start=T0,
             effective_end=T3,
             recorded_at=T2,
@@ -456,15 +460,9 @@ def test_future_effective_candidate_has_zero_replay_influence(tmp_path: Path) ->
 
 def test_conflict_chronology_and_complete_provenance(tmp_path: Path) -> None:
     native = replace(_evidence("native", T0, T2), source_methodology="reported-annual")
-    annual = replace(
-        _shape("annual-revenue", "annual"),
-        source_methodology="reported-annual",
-        composition_operation="none",
-    )
     service, _ = _service(
         tmp_path,
         evidence=(_evidence("e1", T0, T1), _evidence("e2", T1, T2), native),
-        shapes=(_shape(), annual),
     )
     with pytest.raises(CanonicalEvidenceAssemblyError, match="native"):
         _assemble(service, "e1", "e2")
@@ -515,7 +513,7 @@ def test_supersession_is_append_only_projected_state(tmp_path: Path) -> None:
     )
     _save_snapshots(
         service.repository.path,
-        *(record_snapshot(record) for record in corrected_records),
+        *(record_snapshot(_canonical_value_capture(record)) for record in corrected_records),
     )
     second = _assemble(
         service,
@@ -573,7 +571,7 @@ def test_corrected_supply_and_pathway_remain_in_same_assembly_lineage(tmp_path: 
     )
     _save_snapshots(
         service.repository.path,
-        *(record_snapshot(record) for record in (*evidence, supply, rule)),
+        *(record_snapshot(_canonical_value_capture(record)) for record in (*evidence, supply, rule)),
     )
     second = _assemble(
         service,
@@ -607,11 +605,6 @@ def test_governed_cadence_comparison(tmp_path: Path, selected: str, alternative:
     registry = authority.persist(
         registry_id=REGISTRY_ID,
         registry_version="1",
-        shapes=(
-            (selected_shape, alternative_shape)
-            if selected_shape.shape_id != alternative_shape.shape_id
-            else (selected_shape,)
-        ),
         effective_start=T0,
         effective_end=T3,
         recorded_at=T1,
@@ -622,17 +615,36 @@ def test_governed_cadence_comparison(tmp_path: Path, selected: str, alternative:
     assert (comparison <= 0) is allowed
 
 
-@pytest.mark.parametrize("cadence", ["event_driven", "irregular", "epoch_based"])
-def test_non_calendar_cadence_fails_closed_without_methodology_override(tmp_path: Path, cadence: str) -> None:
-    shape = _shape("irregular", cadence, compatible=())
-    service, _ = _service(tmp_path, shapes=(shape,))
-    with pytest.raises(CanonicalEvidenceAssemblyError, match="override"):
+@pytest.mark.parametrize(
+    ("source_methodology", "message"),
+    [
+        ("reported-event", "classification"),
+        ("reported-irregular", "override"),
+        ("reported-epoch", "classification"),
+    ],
+)
+def test_non_calendar_cadence_fails_closed_without_methodology_override(
+    tmp_path: Path, source_methodology: str, message: str
+) -> None:
+    evidence = tuple(
+        replace(record, source_methodology=source_methodology)
+        for record in (_evidence("e1", T0, T1), _evidence("e2", T1, T2))
+    )
+    service, _ = _service(tmp_path, evidence=evidence)
+    with pytest.raises(CanonicalEvidenceAssemblyError, match=message):
         _assemble(service, "e1", "e2")
 
 
 def test_explicit_strict_known_methodology_override_permits_irregular(tmp_path: Path) -> None:
-    shape = _shape("irregular", "irregular", compatible=())
-    service, _ = _service(tmp_path, shapes=(shape,), methodology=_methodology(override="irregular"))
+    evidence = tuple(
+        replace(record, source_methodology="reported-irregular")
+        for record in (_evidence("e1", T0, T1), _evidence("e2", T1, T2))
+    )
+    service, _ = _service(
+        tmp_path,
+        evidence=evidence,
+        methodology=_methodology(override="irregular"),
+    )
     assert _assemble(service, "e1", "e2").cadence == "irregular"
 
 
@@ -654,16 +666,9 @@ def test_service_prefers_governed_finer_cadence_and_honors_canonical_override(
         for index in range(1, 5)
     )
     evidence = (_evidence("e1", T0, T1), _evidence("e2", T1, T2), *quarterly)
-    quarterly_shape = replace(
-        _shape("quarterly-revenue", "quarterly"),
-        source_methodology="reported-quarterly",
-        compatible_cadences=("semiannual",),
-    )
-    semiannual_shape = replace(_shape(), compatible_cadences=("quarterly",))
     service, _ = _service(
         tmp_path / "default",
         evidence=evidence,
-        shapes=(semiannual_shape, quarterly_shape),
     )
     with pytest.raises(CanonicalEvidenceAssemblyError, match="finest"):
         _assemble(service, "e1", "e2")
@@ -671,7 +676,6 @@ def test_service_prefers_governed_finer_cadence_and_honors_canonical_override(
     service, _ = _service(
         tmp_path / "override",
         evidence=evidence,
-        shapes=(semiannual_shape, quarterly_shape),
         methodology=_methodology(override="semiannual"),
     )
     assert _assemble(service, "e1", "e2").cadence == "semiannual"
@@ -757,7 +761,7 @@ def test_strict_known_replay_verifies_transitive_provenance(tmp_path: Path) -> N
     record = _assemble(service, "e1", "e2")
     original = service.value_capture_repository.evidence("e1")
     assert original is not None
-    divergent = replace(original, content_hash="b" * 64)
+    divergent = replace(original, amount="999")
     engine = create_sqlite_engine(service.repository.path)
     session = SessionFactory(engine).create()
     try:
@@ -796,8 +800,7 @@ def test_gap_and_overlap_fail_independently(
 ) -> None:
     service, _ = _service(
         tmp_path,
-        evidence=records,
-        shapes=(_shape("irregular", "irregular", compatible=()),),
+        evidence=tuple(replace(record, source_methodology="reported-irregular") for record in records),
         methodology=_methodology(override="irregular"),
     )
     with pytest.raises(CanonicalEvidenceAssemblyError, match=message):
@@ -829,9 +832,12 @@ def test_identity_representation_unit_and_accounting_meaning_fail_closed(tmp_pat
     with pytest.raises(CanonicalEvidenceAssemblyError, match="classification|unit"):
         _assemble(service, "e1", "e2")
 
-    cumulative = replace(_shape(), accounting_meaning="cumulative")
-    service, _ = _service(tmp_path / "meaning", shapes=(cumulative,))
-    with pytest.raises(CanonicalEvidenceAssemblyError, match="summation"):
+    event_evidence = tuple(
+        replace(record, source_methodology="reported-event")
+        for record in (_evidence("e1", T0, T1), _evidence("e2", T1, T2))
+    )
+    service, _ = _service(tmp_path / "meaning", evidence=event_evidence)
+    with pytest.raises(CanonicalEvidenceAssemblyError, match="classification"):
         _assemble(service, "e1", "e2")
 
 
@@ -843,8 +849,11 @@ def test_pathway_applicability_must_cover_full_window(tmp_path: Path) -> None:
 
 
 def test_registry_unknown_inactive_future_effective_and_hash_invalid_fail_closed(tmp_path: Path) -> None:
-    inactive = replace(_shape(), active=False)
-    service, _ = _service(tmp_path / "inactive", shapes=(inactive,))
+    inactive_evidence = tuple(
+        replace(record, source_methodology="reported-event")
+        for record in (_evidence("e1", T0, T1), _evidence("e2", T1, T2))
+    )
+    service, _ = _service(tmp_path / "inactive", evidence=inactive_evidence)
     with pytest.raises(CanonicalEvidenceAssemblyError, match="classification"):
         _assemble(service, "e1", "e2")
 
@@ -854,7 +863,6 @@ def test_registry_unknown_inactive_future_effective_and_hash_invalid_fail_closed
     authority.persist(
         registry_id=REGISTRY_ID,
         registry_version="1",
-        shapes=(_shape(),),
         effective_start=T2,
         effective_end=T3,
         recorded_at=RECORDED,
@@ -900,7 +908,10 @@ def test_future_known_methodology_override_is_excluded(tmp_path: Path) -> None:
     )
     service, _ = _service(
         tmp_path,
-        shapes=(_shape("irregular", "irregular", compatible=()),),
+        evidence=tuple(
+            replace(record, source_methodology="reported-irregular")
+            for record in (_evidence("e1", T0, T1), _evidence("e2", T1, T2))
+        ),
         methodology=future,
     )
     with pytest.raises(CanonicalEvidenceAssemblyError, match="methodology"):
@@ -956,7 +967,10 @@ def test_second_assembled_root_requires_explicit_correction(tmp_path: Path) -> N
             correction_reason="corrected",
         ),
     )
-    _save_snapshots(service.repository.path, *(record_snapshot(record) for record in corrected))
+    _save_snapshots(
+        service.repository.path,
+        *(record_snapshot(_canonical_value_capture(record)) for record in corrected),
+    )
     with pytest.raises(EvidenceAssemblyPersistenceError, match="correction required"):
         _assemble(service, "e1-c", "e2-c", recorded_at=later)
 

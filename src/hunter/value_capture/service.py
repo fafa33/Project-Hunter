@@ -479,6 +479,16 @@ def _content_hash(record: Any, *, logical_id: str) -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
+def canonical_value_capture_content_hash(record: Record) -> str:
+    """Return the canonical payload hash for a materialized value-capture record."""
+    return _content_hash(record, logical_id=record.logical_id)
+
+
+def verify_value_capture_content_hash(record: Record) -> bool:
+    """Verify canonical value-capture payload integrity from the materialized record."""
+    return record.content_hash == canonical_value_capture_content_hash(record)
+
+
 def _json_safe(value: Any) -> Any:
     if isinstance(value, datetime):
         return value.isoformat()
