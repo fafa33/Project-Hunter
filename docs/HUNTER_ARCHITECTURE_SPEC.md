@@ -58,9 +58,9 @@ Portfolio
 Decision Support
 ```
 
-This flow mirrors the ownership and dependency direction defined by `docs/CANONICAL_ARCHITECTURE_MAP.md`. Information moves only in the forward direction.
+This diagram expresses logical ownership and dependency direction, not the set of services that currently execute in production. Unavailable target layers preserve their intended architectural position without implying runtime execution. The executable production path is defined separately in `docs/CANONICAL_RUNTIME_ARCHITECTURE.md`.
 
-Each layer consumes validated outputs from earlier layers and produces higher-value analytical outputs for subsequent layers.
+Information moves only in the forward direction. Each implemented layer consumes validated outputs from earlier implemented layers and produces higher-value analytical outputs for authorized downstream consumers.
 
 ---
 
@@ -211,7 +211,7 @@ Outputs:
 
 - structured, non-scalar fair-value assessment.
 
-Classification: Architecture accepted (ADR 0021, ADR 0022, ADR 0024). Implementation is in progress under the governing issue and is not yet independently validated as operationally complete. Per ADR 0024, this output does not become a Market Validation composition input until a separate accepted ADR authorizes that composition.
+Classification: Production implementation complete and independently audited under ADR 0021, ADR 0022, and ADR 0024. The canonical valuation service, persistence boundary, strict-known replay, correction lineage, and accepted production entry point are implemented and the independent final audit is approved. A successful run against real qualifying evidence remains unavailable because no qualifying disclosure satisfying ADR 0022 has yet been identified; that evidence-availability blocker does not make the software implementation incomplete. Per ADR 0024, this output does not become a Market Validation composition input until a separate accepted ADR authorizes that composition.
 
 ---
 
@@ -295,18 +295,21 @@ Classification: Experimental/research only (ADR 0016, ADR 0017, ADR 0018). Not a
 
 Purpose:
 
-Estimate and evaluate future outcomes.
+Estimate and evaluate future outcomes as a logical target capability.
 
 Responsibilities include:
 
-- immutable prediction-contract evaluation;
-- correctness, accuracy, and calibration assessment.
+- generating explicitly contracted prediction intelligence under a future authorized production boundary;
+- auditing already-made, fully contracted predictions through the distinct canonical prediction-evaluation authority;
+- correctness, accuracy, calibration, strict-known replay, and correction lineage for the evaluation portion.
 
 Outputs:
 
-- prediction evaluation records, accuracy and calibration snapshots.
+- prediction intelligence;
+- prediction evaluation records;
+- accuracy and calibration snapshots.
 
-Classification: Partial. A canonical prediction-evaluation authority is accepted (ADR 0019) for auditing already-made, fully-contracted predictions, but the authorizing service is not yet implemented; production correctness and accuracy evaluation remain unavailable (ADR 0016).
+Classification: Prediction generation remains an unavailable logical target; no accepted production authority currently consumes Opportunity outputs to generate canonical predictions. Separately, ADR 0019 establishes the implemented production `PredictionEvaluationService` as the sole audit/evaluation authority for already-made, fully contracted predictions, with a dedicated canonical store and an explicitly versioned read-only Dashboard projection. The audit authority covers only the evaluation portion of this logical layer: it does not generate predictions and cannot become Market Validation, Opportunity, Timing, ranking, or recommendation authority.
 
 ---
 
@@ -352,7 +355,6 @@ Outputs:
 # 18. Cross-Cutting Architectural Capabilities
 
 The following capabilities span every architectural layer:
-
 - Deterministic execution.
 - Evidence traceability.
 - Explainability.

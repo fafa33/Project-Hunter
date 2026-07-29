@@ -14,35 +14,55 @@ Implementation details, release-specific classifications, engineering policies, 
 
 Project Hunter executes as a deterministic evidence-driven processing pipeline.
 
-Each runtime stage consumes validated outputs from previous stages and produces structured outputs for subsequent stages.
+Each implemented runtime stage consumes validated outputs from previous implemented stages and produces structured outputs for subsequent implemented stages.
 
-No runtime stage bypasses earlier stages.
+No implemented runtime stage bypasses earlier implemented stages.
+
+Unavailable targets are documented separately from the executable production path and do not run merely because their dependency position is defined.
 
 ---
 
-# Canonical Runtime Flow
+# Executable Production Runtime Flow
+
+The accepted executable production-authority path is:
 
 ```text
-External Market Sources
+CLI
         ↓
 Acquisition
         ↓
 Validation
         ↓
-Persistence
+Repositories
         ↓
-Discovery
+EngineValidationSource
         ↓
-Identity Resolution
+EvidenceBackedProjectExecutor
         ↓
-Evidence Processing
+Weight Engine
         ↓
-Screening
+Production Timing
         ↓
-Prioritization
+Canonical Committee Fields
         ↓
-Deep Analysis
+Explainability
         ↓
+Reports
+```
+
+This flow reproduces the accepted production boundary defined by ADR 0007 and ADR 0016. Operational automation, schedulers, replay, backtesting, and other orchestration mechanisms may invoke the already-approved runtime, but they are not independent production entry points and acquire no analytical authority by invocation alone. Any broader production entry point requires a separately accepted ADR.
+
+Discovery, identity resolution, screening, prioritization, broader investment-intelligence composition, decision support, and unavailable valuation-family targets are not promoted into this executable path merely because they exist as logical, operational, experimental, or target architecture.
+
+Every production stage executes deterministically using only the authorized evidence available at that point in time.
+
+---
+
+# Analytical Dependency Topology
+
+The following topology preserves the ownership and dependency direction defined by `docs/CANONICAL_ARCHITECTURE_MAP.md` without implying that every node currently executes in production:
+
+```text
 Investment Intelligence
         ↓
 Canonical Valuation
@@ -58,19 +78,15 @@ Opportunity Intelligence
 Prediction Intelligence
         ↓
 Portfolio Intelligence
-        ↓
-Decision Support
-        ↓
-Reports
 ```
 
-This flow mirrors the ownership and dependency direction defined by `docs/CANONICAL_ARCHITECTURE_MAP.md`. Each stage below carries an explicit classification (production, experimental, in progress, or unavailable target); the classification source is the accepted ADR(s) named for that stage, not this diagram.
-
-Every stage executes deterministically using only the evidence available at that point in time.
+Only the valuation-family and adjacent analytical stages below carry explicit release classifications here. Those classifications come from the accepted ADRs and canonical authority documents named for each stage, not from this diagram. An unavailable target represents an authorized or named dependency position only; it is not an executable runtime stage.
 
 ---
 
-# Runtime Stages
+# Runtime and Architectural Components
+
+The sections below describe production runtime components together with logical, operational, experimental, and target components. Inclusion in this section does not by itself establish production execution or production analytical authority; the executable production boundary above and the governing ADRs remain authoritative.
 
 ## Acquisition
 
@@ -232,7 +248,7 @@ Outputs:
 
 - structured, non-scalar fair-value assessment.
 
-**Classification:** Architecture accepted (ADR 0021, ADR 0022, ADR 0024). Implementation is in progress under the governing issue and is not yet independently validated as operationally complete. Per ADR 0024, this output does not become a Market Validation composition input until a separate accepted ADR authorizes that composition.
+**Classification:** Production implementation complete and independently audited under ADR 0021, ADR 0022, and ADR 0024. The canonical valuation service, persistence boundary, strict-known replay, correction lineage, and accepted production entry point are implemented and the independent final audit is approved. A successful run against real qualifying evidence remains unavailable because no qualifying disclosure satisfying ADR 0022 has yet been identified; that evidence-availability blocker does not make the software implementation incomplete. Per ADR 0024, this output does not become a Market Validation composition input until a separate accepted ADR authorizes that composition.
 
 ---
 
@@ -306,18 +322,20 @@ Outputs:
 
 ## Prediction Intelligence
 
-Estimates and evaluates future outcomes.
+Represents the logical target capability for estimating and evaluating future outcomes.
 
-Responsibilities include:
+Target responsibilities include:
 
-- immutable prediction-contract evaluation;
-- correctness, accuracy, and calibration assessment.
+- generating explicitly contracted prediction intelligence under a future authorized production boundary;
+- evaluating prediction correctness, accuracy, and calibration through a distinct audit authority.
 
-Outputs:
+Target outputs include:
 
-- prediction evaluation records, accuracy and calibration snapshots.
+- prediction intelligence;
+- prediction evaluation records;
+- accuracy and calibration snapshots.
 
-**Classification:** Partial. A canonical prediction-evaluation authority is accepted (ADR 0019) for auditing already-made, fully-contracted predictions, but the authorizing service is not yet implemented; production correctness and accuracy evaluation remain unavailable (ADR 0016).
+**Classification:** Prediction generation remains an unavailable logical target; no accepted production authority currently generates predictions or consumes Opportunity outputs to produce them. Separately, ADR 0019 establishes the implemented production `PredictionEvaluationService` as the sole audit/evaluation authority for already-made, fully contracted predictions, with a dedicated canonical store and an explicitly versioned read-only Dashboard projection. The evaluation authority does not generate predictions and does not become Market Validation, Opportunity, Timing, ranking, or recommendation authority.
 
 ---
 
