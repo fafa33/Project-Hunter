@@ -19,6 +19,7 @@ REGISTRY_SNAPSHOT_TYPE = "evidence-shape-registry"
 REGISTRY_SCHEMA_VERSION = "evidence-shape-registry-v1"
 REGISTRY_AUTHORITY_ID = "canonical-evidence-shape-registry-authority-v1"
 REGISTRY_AUTHORIZING_ADR = "ADR-0025"
+REGISTRY_AUTHORIZING_ADR_HASH = "d952fd4ef03378a73264b54e1ae048a697ba41126f262c2895b0764505be5d2b"
 CANONICAL_REGISTRY_ID = "canonical-valuation-evidence-shapes"
 CANONICAL_REGISTRY_VERSION = "1"
 _CADENCE_RANK: dict[Cadence, int] = {
@@ -200,6 +201,11 @@ class EvidenceShapeRegistryAuthority:
             raise EvidenceShapeRegistryError("application_root must be absolute")
         self.repository = repository
         self._application_root = application_root.resolve()
+        adr_path = self._application_root / "docs" / "ADR" / "0025-canonical-valuation-evidence-assembly-authority.md"
+        if not adr_path.is_file():
+            raise EvidenceShapeRegistryError("accepted Registry-authorizing ADR is unavailable")
+        if hashlib.sha256(adr_path.read_bytes()).hexdigest() != REGISTRY_AUTHORIZING_ADR_HASH:
+            raise EvidenceShapeRegistryError("Registry-authorizing ADR content is not the accepted version")
 
     def persist(
         self,
@@ -220,6 +226,10 @@ class EvidenceShapeRegistryAuthority:
             raise EvidenceShapeRegistryError("registry identity or version is not governed by an accepted ADR")
         if authorizing_adr_reference != REGISTRY_AUTHORIZING_ADR:
             raise EvidenceShapeRegistryError("registry amendment lacks accepted-ADR authorization")
+        if supersedes_record_id is not None:
+            raise EvidenceShapeRegistryError(
+                "ADR-0025 authorizes only the initial taxonomy; amendments require a newly accepted ADR"
+            )
         pending = EvidenceShapeRegistrySnapshot(
             record_id="pending",
             registry_id=registry_id,

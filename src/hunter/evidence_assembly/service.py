@@ -35,6 +35,15 @@ class CanonicalEvidenceAssemblyError(ValueError):
     pass
 
 
+def _replay_lossless_exact_sum(records: tuple[FundamentalEvidenceRecord, ...]) -> Decimal:
+    return sum((Decimal(record.amount or "") for record in records), Decimal(0))
+
+
+_ASSEMBLY_RULE_REPLAYERS = {
+    "lossless-exact-coverage-v1": _replay_lossless_exact_sum,
+}
+
+
 class CanonicalEvidenceAssemblyService:
     """ADR 0025 construction, validation, conflict, and persistence-eligibility owner."""
 
@@ -102,6 +111,8 @@ class CanonicalEvidenceAssemblyService:
         resolved = tuple(sorted(resolved, key=lambda item: (item[0].accounting_period_start, item[0].record_id)))
         resolved = self._deduplicate_identical(resolved)
         self._validate_scope(resolved)
+        if any(supply.supply_basis_type != methodology.supply_basis_selection_rule for _, _, supply, _ in resolved):
+            raise CanonicalEvidenceAssemblyError("canonical methodology supply-basis selection mismatch")
         if any(dependency.known_at > recorded_at for _, _, supply, rule in resolved for dependency in (supply, rule)):
             raise CanonicalEvidenceAssemblyError("assembly recorded_at precedes pathway or supply-basis knowledge")
         self._validate_coverage(resolved, start=start, end=end)
@@ -140,15 +151,15 @@ class CanonicalEvidenceAssemblyService:
         known_at = max(recorded_at, *(r.known_at for r in records))
         if known_at > replay_cutoff:
             raise CanonicalEvidenceAssemblyError("assembled evidence is not known by replay cutoff")
-        amount = sum((Decimal(record.amount or "") for record in records), Decimal(0))
+        amount = _ASSEMBLY_RULE_REPLAYERS[ASSEMBLY_RULE_VERSION](records)
         identity = records[0].identity
         logical_digest = _hash(
             {
                 "identity": asdict(identity),
                 "start": start.isoformat(),
                 "end": end.isoformat(),
-                "pathway": rules[0].record_id,
-                "supply": supplies[0].record_id,
+                "pathway": rules[0].logical_id,
+                "supply": supplies[0].logical_id,
                 "methodology": methodology.logical_id,
             }
         )
@@ -157,6 +168,16 @@ class CanonicalEvidenceAssemblyService:
             "rule": ASSEMBLY_RULE_VERSION,
             "registry_record_id": registry.record_id,
             "methodology_record_id": methodology.record_id,
+            "supply_basis": {
+                "record_id": supplies[0].record_id,
+                "version": supplies[0].semantic_version,
+                "content_hash": supplies[0].content_hash,
+            },
+            "value_capture_pathway": {
+                "record_id": rules[0].record_id,
+                "version": rules[0].semantic_version,
+                "content_hash": rules[0].content_hash,
+            },
             "constituents": [
                 {
                     "record_id": record.record_id,
@@ -303,9 +324,19 @@ class CanonicalEvidenceAssemblyService:
             )
         )
         assembly_basis = {
-            "rule": ASSEMBLY_RULE_VERSION,
+            "rule": record.assembly_rule_version,
             "registry_record_id": registry.record_id,
             "methodology_record_id": methodology.record_id,
+            "supply_basis": {
+                "record_id": supply.record_id,
+                "version": supply.semantic_version,
+                "content_hash": supply.content_hash,
+            },
+            "value_capture_pathway": {
+                "record_id": rule.record_id,
+                "version": rule.semantic_version,
+                "content_hash": rule.content_hash,
+            },
             "constituents": [
                 {
                     "record_id": constituent.record_id,
@@ -317,13 +348,12 @@ class CanonicalEvidenceAssemblyService:
             ],
         }
         if (
-            record.assembly_rule_version != ASSEMBLY_RULE_VERSION
+            record.assembly_rule_version not in _ASSEMBLY_RULE_REPLAYERS
             or record.deterministic_constituent_order != DETERMINISTIC_ORDER
             or record.constituent_record_ids != expected_order
             or record.assembly_content_hash != _hash(assembly_basis)
             or record.record_id != f"assembled-evidence:{record.assembly_content_hash}"
-            or Decimal(record.amount)
-            != sum((Decimal(constituent.amount or "") for constituent in constituents), Decimal(0))
+            or Decimal(record.amount) != _ASSEMBLY_RULE_REPLAYERS[record.assembly_rule_version](tuple(constituents))
             or record.known_at != max(record.recorded_at, *(item.known_at for item in constituents))
         ):
             raise CanonicalEvidenceAssemblyError("assembled replay reconstruction diverges")
@@ -391,10 +421,6 @@ class CanonicalEvidenceAssemblyService:
             raise CanonicalEvidenceAssemblyError("registry evidence classification mismatch")
         if record.unit != shape.unit:
             raise CanonicalEvidenceAssemblyError("registry unit or currency classification mismatch")
-        if shape.supply_basis_record_id != supply.record_id:
-            raise CanonicalEvidenceAssemblyError("registry supply-basis classification mismatch")
-        if shape.pathway_policy_id != rule.mechanism_policy_id:
-            raise CanonicalEvidenceAssemblyError("registry pathway classification mismatch")
         if record.attribution_rule_id != rule.mechanism_policy_id:
             raise CanonicalEvidenceAssemblyError("canonical pathway classification mismatch")
         _validate_cadence_window(shape, record)
@@ -560,21 +586,29 @@ class CanonicalEvidenceAssemblyService:
             and record.conflict_state in {"none", "resolved"}
             and not any(_economically_identical(record, item[0]) for item in resolved)
         )
-        compatible_omitted = tuple(
+        native = tuple(
             record
             for record in omitted
+            if record.accounting_period_start == start and record.accounting_period_end == end
             if self._candidate_is_compatible(
                 record,
                 registry=registry,
                 methodology=methodology,
-                supply=resolved[0][2],
                 rule=resolved[0][3],
+                native=True,
             )
         )
-        native = tuple(
+        compatible_omitted = tuple(
             record
-            for record in compatible_omitted
-            if record.accounting_period_start == start and record.accounting_period_end == end
+            for record in omitted
+            if record not in native
+            and self._candidate_is_compatible(
+                record,
+                registry=registry,
+                methodology=methodology,
+                rule=resolved[0][3],
+                native=False,
+            )
         )
         if native:
             self._persist_conflict(
@@ -660,21 +694,25 @@ class CanonicalEvidenceAssemblyService:
         *,
         registry: EvidenceShapeRegistrySnapshot,
         methodology: ValuationMethodologySnapshot,
-        supply: SupplyBasisSnapshot,
         rule: ValueCaptureRuleSnapshot,
+        native: bool,
     ) -> bool:
         try:
             shape = self._shape_for_record(registry, record)
             _validate_cadence_window(shape, record)
         except CanonicalEvidenceAssemblyError:
             return False
+        family = f"{record.evidence_type}:{record.source_methodology}"
+        methodology_compatible = (
+            family in methodology.accepted_native_evidence_families
+            if native
+            else shape.shape_id in methodology.accepted_evidence_shape_ids
+        )
         return (
-            shape.shape_id in methodology.accepted_evidence_shape_ids
+            methodology_compatible
             and shape.currency.casefold() == methodology.currency.casefold()
             and shape.accounting_meaning == "period_specific"
-            and shape.composition_operation == "exact_sum"
-            and shape.supply_basis_record_id == supply.record_id
-            and shape.pathway_policy_id == rule.mechanism_policy_id
+            and (native or shape.composition_operation == "exact_sum")
             and record.attribution_rule_id == rule.mechanism_policy_id
         )
 

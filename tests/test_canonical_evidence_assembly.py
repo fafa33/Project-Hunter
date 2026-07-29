@@ -189,8 +189,6 @@ def _shape(
         active=True,
         currency="USD",
         unit="USD",
-        supply_basis_record_id="supply-record",
-        pathway_policy_id="policy",
         compatible_cadences=compatible,  # type: ignore[arg-type]
     )
 
@@ -216,7 +214,7 @@ def _methodology(*, override: str | None = None) -> ValuationMethodologySnapshot
         discount_rate_policy_version="1",
         sensitivity_policy_id="sensitivity",
         sensitivity_policy_version="1",
-        supply_basis_selection_rule="circulating",
+        supply_basis_selection_rule="circulating_supply",
         normalization_policy_id=None,
         correlation_group=REQUIRED_CORRELATION_GROUP,
         authorizing_adr_reference=AUTHORIZING_ADR_REFERENCE,
@@ -230,6 +228,7 @@ def _methodology(*, override: str | None = None) -> ValuationMethodologySnapshot
             "annual-revenue",
             "irregular",
         ),
+        accepted_native_evidence_families=("audited_financial_disclosure:reported-annual",),
         accepted_assembly_rule_versions=(ASSEMBLY_RULE_VERSION,),
         assembled_evidence_granularity_override=override,
     )
@@ -280,6 +279,7 @@ def _service(
         sensitivity_policy_version=requested_methodology.sensitivity_policy_version,
         supply_basis_selection_rule=requested_methodology.supply_basis_selection_rule,
         accepted_evidence_shape_ids=requested_methodology.accepted_evidence_shape_ids,
+        accepted_native_evidence_families=requested_methodology.accepted_native_evidence_families,
         accepted_assembly_rule_versions=requested_methodology.accepted_assembly_rule_versions,
         assembled_evidence_granularity_override=requested_methodology.assembled_evidence_granularity_override,
         effective_at=requested_methodology.effective_at,
@@ -287,7 +287,7 @@ def _service(
         known_at=requested_methodology.known_at,
     )
     registry_repository = EvidenceShapeRegistryRepository(path)
-    registry_authority = EvidenceShapeRegistryAuthority(registry_repository, application_root=tmp_path)
+    registry_authority = EvidenceShapeRegistryAuthority(registry_repository, application_root=Path.cwd())
     registry_authority.persist(
         registry_id=REGISTRY_ID,
         registry_version="1",
@@ -309,20 +309,30 @@ def _service(
     )
 
 
-def _constituents(*ids: str) -> tuple[AssemblyConstituent, ...]:
+def _constituents(
+    *ids: str,
+    supply_basis_record_id: str = "supply-record",
+    pathway_rule_record_id: str = "rule-record",
+) -> tuple[AssemblyConstituent, ...]:
     return tuple(
         AssemblyConstituent(
             evidence_record_id=record_id,
-            supply_basis_record_id="supply-record",
-            pathway_rule_record_id="rule-record",
+            supply_basis_record_id=supply_basis_record_id,
+            pathway_rule_record_id=pathway_rule_record_id,
         )
         for record_id in ids
     )
 
 
 def _assemble(service: CanonicalEvidenceAssemblyService, *ids: str, **kwargs: object):
+    supply_basis_record_id = str(kwargs.pop("supply_basis_record_id", "supply-record"))
+    pathway_rule_record_id = str(kwargs.pop("pathway_rule_record_id", "rule-record"))
     return service.assemble(
-        constituents=_constituents(*ids),
+        constituents=_constituents(
+            *ids,
+            supply_basis_record_id=supply_basis_record_id,
+            pathway_rule_record_id=pathway_rule_record_id,
+        ),
         registry_id=REGISTRY_ID,
         registry_version="1",
         accounting_window_start=kwargs.pop("start", T0),  # type: ignore[arg-type]
@@ -359,7 +369,7 @@ def test_current_canonical_methodology_remains_not_opted_in(tmp_path: Path) -> N
         discount_rate_policy_version="1",
         sensitivity_policy_id="sensitivity",
         sensitivity_policy_version="1",
-        supply_basis_selection_rule="circulating",
+        supply_basis_selection_rule="circulating_supply",
         effective_at=T0,
         recorded_at=RECORDED,
         known_at=RECORDED,
@@ -371,7 +381,7 @@ def test_current_canonical_methodology_remains_not_opted_in(tmp_path: Path) -> N
 def test_registry_generic_sql_history_hash_and_strict_known(tmp_path: Path) -> None:
     path = tmp_path / "data_ops.sqlite"
     repository = EvidenceShapeRegistryRepository(path)
-    authority = EvidenceShapeRegistryAuthority(repository, application_root=tmp_path)
+    authority = EvidenceShapeRegistryAuthority(repository, application_root=Path.cwd())
     first = authority.persist(
         registry_id=REGISTRY_ID,
         registry_version="1",
@@ -414,6 +424,19 @@ def test_registry_generic_sql_history_hash_and_strict_known(tmp_path: Path) -> N
             known_at=T1,
             authorizing_adr_reference="ADR-0025",
         )
+    with pytest.raises(EvidenceShapeRegistryError, match="newly accepted ADR"):
+        authority.persist(
+            registry_id=REGISTRY_ID,
+            registry_version="1",
+            shapes=(_shape(),),
+            effective_start=T0,
+            effective_end=T3,
+            recorded_at=T2,
+            known_at=T2,
+            authorizing_adr_reference="ADR-0025",
+            supersedes_record_id=first.record_id,
+            correction_reason="taxonomy amendment",
+        )
 
 
 def test_future_effective_candidate_has_zero_replay_influence(tmp_path: Path) -> None:
@@ -433,7 +456,11 @@ def test_future_effective_candidate_has_zero_replay_influence(tmp_path: Path) ->
 
 def test_conflict_chronology_and_complete_provenance(tmp_path: Path) -> None:
     native = replace(_evidence("native", T0, T2), source_methodology="reported-annual")
-    annual = replace(_shape("annual-revenue", "annual"), source_methodology="reported-annual")
+    annual = replace(
+        _shape("annual-revenue", "annual"),
+        source_methodology="reported-annual",
+        composition_operation="none",
+    )
     service, _ = _service(
         tmp_path,
         evidence=(_evidence("e1", T0, T1), _evidence("e2", T1, T2), native),
@@ -506,6 +533,63 @@ def test_supersession_is_append_only_projected_state(tmp_path: Path) -> None:
     assert not hasattr(first, "supersession_state")
 
 
+def test_corrected_supply_and_pathway_remain_in_same_assembly_lineage(tmp_path: Path) -> None:
+    service, _ = _service(tmp_path)
+    first = _assemble(service, "e1", "e2")
+    later = RECORDED + timedelta(days=1)
+    evidence = (
+        replace(
+            _evidence("e1-c", T0, T1, "11"),
+            recorded_at=later,
+            known_at=later,
+            supersedes_record_id="e1",
+            correction_reason="corrected",
+        ),
+        replace(
+            _evidence("e2-c", T1, T2, "12"),
+            recorded_at=later,
+            known_at=later,
+            supersedes_record_id="e2",
+            correction_reason="corrected",
+        ),
+    )
+    supply = replace(
+        _supply(),
+        record_id="supply-c",
+        recorded_at=later,
+        known_at=later,
+        content_hash="b" * 64,
+        supersedes_record_id="supply-record",
+        correction_reason="corrected",
+    )
+    rule = replace(
+        _rule(),
+        record_id="rule-c",
+        recorded_at=later,
+        known_at=later,
+        content_hash="c" * 64,
+        supersedes_record_id="rule-record",
+        correction_reason="corrected",
+    )
+    _save_snapshots(
+        service.repository.path,
+        *(record_snapshot(record) for record in (*evidence, supply, rule)),
+    )
+    second = _assemble(
+        service,
+        "e1-c",
+        "e2-c",
+        recorded_at=later,
+        supply_basis_record_id="supply-c",
+        pathway_rule_record_id="rule-c",
+        supersedes_record_id=first.record_id,
+        correction_reason="corrected dependencies",
+    )
+    assert second.logical_id == first.logical_id
+    assert second.record_id != first.record_id
+    assert service.repository.projected_history(first.logical_id)[-1].record == second
+
+
 @pytest.mark.parametrize(
     ("selected", "alternative", "allowed"),
     [
@@ -519,7 +603,7 @@ def test_governed_cadence_comparison(tmp_path: Path, selected: str, alternative:
     selected_shape = _shape(f"{selected}-revenue", selected)
     alternative_shape = _shape(f"{alternative}-revenue", alternative)
     path = tmp_path / "data_ops.sqlite"
-    authority = EvidenceShapeRegistryAuthority(EvidenceShapeRegistryRepository(path), application_root=tmp_path)
+    authority = EvidenceShapeRegistryAuthority(EvidenceShapeRegistryRepository(path), application_root=Path.cwd())
     registry = authority.persist(
         registry_id=REGISTRY_ID,
         registry_version="1",
@@ -550,6 +634,47 @@ def test_explicit_strict_known_methodology_override_permits_irregular(tmp_path: 
     shape = _shape("irregular", "irregular", compatible=())
     service, _ = _service(tmp_path, shapes=(shape,), methodology=_methodology(override="irregular"))
     assert _assemble(service, "e1", "e2").cadence == "irregular"
+
+
+def test_service_prefers_governed_finer_cadence_and_honors_canonical_override(
+    tmp_path: Path,
+) -> None:
+    quarter_boundaries = (
+        T0,
+        datetime(2025, 4, 1, tzinfo=UTC),
+        datetime(2025, 7, 1, tzinfo=UTC),
+        datetime(2025, 10, 1, tzinfo=UTC),
+        T2,
+    )
+    quarterly = tuple(
+        replace(
+            _evidence(f"q{index}", quarter_boundaries[index - 1], quarter_boundaries[index]),
+            source_methodology="reported-quarterly",
+        )
+        for index in range(1, 5)
+    )
+    evidence = (_evidence("e1", T0, T1), _evidence("e2", T1, T2), *quarterly)
+    quarterly_shape = replace(
+        _shape("quarterly-revenue", "quarterly"),
+        source_methodology="reported-quarterly",
+        compatible_cadences=("semiannual",),
+    )
+    semiannual_shape = replace(_shape(), compatible_cadences=("quarterly",))
+    service, _ = _service(
+        tmp_path / "default",
+        evidence=evidence,
+        shapes=(semiannual_shape, quarterly_shape),
+    )
+    with pytest.raises(CanonicalEvidenceAssemblyError, match="finest"):
+        _assemble(service, "e1", "e2")
+
+    service, _ = _service(
+        tmp_path / "override",
+        evidence=evidence,
+        shapes=(semiannual_shape, quarterly_shape),
+        methodology=_methodology(override="semiannual"),
+    )
+    assert _assemble(service, "e1", "e2").cadence == "semiannual"
 
 
 def test_insert_identical_and_divergent_duplicate_rejection(tmp_path: Path) -> None:
@@ -725,7 +850,7 @@ def test_registry_unknown_inactive_future_effective_and_hash_invalid_fail_closed
 
     path = tmp_path / "future" / "data_ops.sqlite"
     path.parent.mkdir(parents=True)
-    authority = EvidenceShapeRegistryAuthority(EvidenceShapeRegistryRepository(path), application_root=tmp_path)
+    authority = EvidenceShapeRegistryAuthority(EvidenceShapeRegistryRepository(path), application_root=Path.cwd())
     authority.persist(
         registry_id=REGISTRY_ID,
         registry_version="1",

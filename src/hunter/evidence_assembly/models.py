@@ -35,8 +35,6 @@ class EvidenceShape:
     active: bool
     currency: str
     unit: str
-    supply_basis_record_id: str
-    pathway_policy_id: str
     compatible_shape_ids: tuple[str, ...] = ()
     compatible_cadences: tuple[Cadence, ...] = ()
 
@@ -49,8 +47,6 @@ class EvidenceShape:
             "cadence",
             "currency",
             "unit",
-            "supply_basis_record_id",
-            "pathway_policy_id",
         )
         if self.accounting_meaning not in {"period_specific", "cumulative", "event"}:
             raise ValueError("unknown accounting meaning")
