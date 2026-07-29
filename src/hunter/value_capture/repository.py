@@ -114,23 +114,27 @@ class SupplyAndValueCaptureRepository:
         known_by: datetime,
     ) -> tuple[FundamentalEvidenceRecord, ...]:
         """Mechanical deterministic query for the assembly authority's candidate universe."""
-        records = (
+        records = tuple(
             record
             for record in (_record_from_snapshot(item) for item in self._snapshots(_EVIDENCE_TYPE))
             if isinstance(record, FundamentalEvidenceRecord)
         )
+        eligible = tuple(
+            record
+            for record in records
+            if record.effective_at <= known_by and record.recorded_at <= known_by and record.known_at <= known_by
+        )
+        superseded_ids = {record.supersedes_record_id for record in eligible if record.supersedes_record_id is not None}
         return tuple(
             sorted(
                 (
                     record
-                    for record in records
-                    if record.identity.entity_id == entity_id
+                    for record in eligible
+                    if record.record_id not in superseded_ids
+                    and record.identity.entity_id == entity_id
                     and record.identity.economic_claim_id == economic_claim_id
                     and record.accounting_period_start < accounting_window_end
                     and accounting_window_start < record.accounting_period_end
-                    and record.effective_at <= known_by
-                    and record.recorded_at <= known_by
-                    and record.known_at <= known_by
                 ),
                 key=lambda record: (
                     record.accounting_period_start,

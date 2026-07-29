@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Literal
 
-VALUATION_METHODOLOGY_SCHEMA_VERSION = "valuation-methodology-v1"
+VALUATION_METHODOLOGY_SCHEMA_VERSION = "valuation-methodology-v2"
 
 QualityState = Literal["accepted", "stale", "partial", "ambiguous", "unavailable", "unsupported"]
 ConflictState = Literal["none", "open", "contested", "resolved"]

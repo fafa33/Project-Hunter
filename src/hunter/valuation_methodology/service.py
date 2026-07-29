@@ -119,7 +119,64 @@ class CanonicalValuationMethodologyAuthority:
             correction_reason=correction_reason,
         )
         record = _normalize(record)
+        return self._persist_record(record)
 
+    def persist_evidence_assembly_methodology(
+        self,
+        *,
+        entity_class_criteria_id: str,
+        entity_class_criteria_version: str,
+        currency: str,
+        discount_rate_policy_id: str,
+        discount_rate_policy_version: str,
+        sensitivity_policy_id: str,
+        sensitivity_policy_version: str,
+        supply_basis_selection_rule: str,
+        accepted_evidence_shape_ids: tuple[str, ...],
+        accepted_assembly_rule_versions: tuple[str, ...],
+        assembled_evidence_granularity_override: str | None,
+        effective_at: datetime,
+        recorded_at: datetime,
+        known_at: datetime,
+        supersedes_record_id: str | None = None,
+        correction_reason: str = "",
+    ) -> ValuationMethodologySnapshot:
+        """Persist the ADR-0025-governed opt-in contract through the sole methodology authority."""
+        record = ValuationMethodologySnapshot(
+            record_id="pending",
+            logical_id="pending",
+            schema_version=VALUATION_METHODOLOGY_SCHEMA_VERSION,
+            semantic_version="2.0.0",
+            effective_at=effective_at,
+            recorded_at=recorded_at,
+            known_at=known_at,
+            content_hash="pending",
+            quality_state="accepted",
+            conflict_state="none",
+            entity_class_criteria_id=entity_class_criteria_id,
+            entity_class_criteria_version=entity_class_criteria_version,
+            permitted_model_identifier=PERMITTED_MODEL_IDENTIFIER,
+            horizon_days=REQUIRED_HORIZON_DAYS,
+            currency=currency,
+            discount_rate_policy_id=discount_rate_policy_id,
+            discount_rate_policy_version=discount_rate_policy_version,
+            sensitivity_policy_id=sensitivity_policy_id,
+            sensitivity_policy_version=sensitivity_policy_version,
+            supply_basis_selection_rule=supply_basis_selection_rule,
+            normalization_policy_id=None,
+            correlation_group=REQUIRED_CORRELATION_GROUP,
+            authorizing_adr_reference=AUTHORIZING_ADR_REFERENCE,
+            authorized_by=CANONICAL_AUTHORITY_ID,
+            accepts_assembled_evidence=True,
+            accepted_evidence_shape_ids=accepted_evidence_shape_ids,
+            accepted_assembly_rule_versions=accepted_assembly_rule_versions,
+            assembled_evidence_granularity_override=assembled_evidence_granularity_override,
+            supersedes_record_id=supersedes_record_id,
+            correction_reason=correction_reason,
+        )
+        return self._persist_record(_normalize(record))
+
+    def _persist_record(self, record: ValuationMethodologySnapshot) -> ValuationMethodologySnapshot:
         engine = create_sqlite_engine(self.repository.path)
         session = SessionFactory(engine).create()
         try:

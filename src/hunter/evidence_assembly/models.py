@@ -19,6 +19,7 @@ Cadence = Literal["daily", "monthly", "quarterly", "event_driven", "irregular", 
 class EvidenceShape:
     shape_id: str
     evidence_type: str
+    source_methodology: str
     accounting_meaning: AccountingMeaning
     cadence: Cadence
     composition_operation: Literal["exact_sum", "none"]
@@ -29,7 +30,7 @@ class EvidenceShape:
     compatible_cadences: tuple[Cadence, ...] = ()
 
     def __post_init__(self) -> None:
-        _required(self, "shape_id", "evidence_type", "cadence", "currency", "unit")
+        _required(self, "shape_id", "evidence_type", "source_methodology", "cadence", "currency", "unit")
         if self.accounting_meaning not in {"period_specific", "cumulative", "event"}:
             raise ValueError("unknown accounting meaning")
         if self.composition_operation not in {"exact_sum", "none"}:
@@ -41,7 +42,6 @@ class EvidenceShape:
 @dataclass(frozen=True)
 class AssemblyConstituent:
     evidence_record_id: str
-    shape_id: str
     supply_basis_record_id: str
     pathway_rule_record_id: str
 
@@ -49,7 +49,6 @@ class AssemblyConstituent:
         _required(
             self,
             "evidence_record_id",
-            "shape_id",
             "supply_basis_record_id",
             "pathway_rule_record_id",
         )
@@ -185,6 +184,7 @@ class AssembledFundamentalEvidenceRecord:
     confidence_state: str
     conflict_state: Literal["none", "resolved"]
     completeness_state: Literal["exact_complete"]
+    continuity_proof_state: Literal["same-canonical-identity-pathway-and-supply-basis"]
     non_overlap_proof_state: Literal["gap_free_non_overlapping"]
     supersedes_record_id: str | None = None
     correction_reason: str = ""
@@ -214,6 +214,7 @@ class AssembledFundamentalEvidenceRecord:
             "assembly_content_hash",
             "aggregation_lineage",
             "confidence_state",
+            "continuity_proof_state",
             "content_hash",
         )
         _normalize_times(

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
@@ -42,7 +44,7 @@ class AssembledEvidenceRepository:
         return (EVIDENCE_ASSEMBLY_MIGRATION_ID,)
 
     def _insert_authorized(self, record: AssembledFundamentalEvidenceRecord) -> AssembledFundamentalEvidenceRecord:
-        self._save(_snapshot(record, ASSEMBLY_SNAPSHOT_TYPE, record.logical_id))
+        self._save(_snapshot(record, ASSEMBLY_SNAPSHOT_TYPE, record.logical_id), assembly=record)
         return record
 
     def _insert_conflict_authorized(self, record: AssemblyConflictRecord) -> AssemblyConflictRecord:
@@ -140,11 +142,37 @@ class AssembledEvidenceRepository:
             session.close()
             engine.dispose()
 
-    def _save(self, record: SnapshotRecord) -> None:
+    def _save(self, record: SnapshotRecord, *, assembly: AssembledFundamentalEvidenceRecord | None = None) -> None:
         engine = create_sqlite_engine(self.path)
         session = SessionFactory(engine).create()
         try:
-            RepositoryFactory(session).snapshots().save(record)
+            session.connection().exec_driver_sql("BEGIN IMMEDIATE")
+            snapshots = RepositoryFactory(session).snapshots()
+            if assembly is not None and assembly.supersedes_record_id is not None:
+                rows = snapshots.query(QuerySpec(record_kind="snapshot"))
+                predecessor = next(
+                    (
+                        item
+                        for item in rows
+                        if item.snapshot_type == ASSEMBLY_SNAPSHOT_TYPE and item.id == assembly.supersedes_record_id
+                    ),
+                    None,
+                )
+                if predecessor is None:
+                    raise EvidenceAssemblyPersistenceError("correction predecessor does not exist")
+                competitor = next(
+                    (
+                        item
+                        for item in rows
+                        if item.snapshot_type == ASSEMBLY_SNAPSHOT_TYPE
+                        and item.payload.get("supersedes_record_id") == assembly.supersedes_record_id
+                        and item.id != assembly.record_id
+                    ),
+                    None,
+                )
+                if competitor is not None:
+                    raise EvidenceAssemblyPersistenceError("branching correction lineage")
+            snapshots.save(record)
             session.commit()
         except PersistenceIdentityConflictError as exc:
             session.rollback()
@@ -181,7 +209,10 @@ def _assembly(payload: dict[str, Any]) -> AssembledFundamentalEvidenceRecord:
         "constituent_shape_ids",
     ):
         result[name] = tuple(result[name])
-    return AssembledFundamentalEvidenceRecord(**result)
+    record = AssembledFundamentalEvidenceRecord(**result)
+    if _content_hash(record) != record.content_hash:
+        raise EvidenceAssemblyPersistenceError("assembled evidence canonical content hash mismatch")
+    return record
 
 
 def _conflict(payload: dict[str, Any]) -> AssemblyConflictRecord:
@@ -208,7 +239,10 @@ def _conflict(payload: dict[str, Any]) -> AssemblyConflictRecord:
         "shape_classifications",
     ):
         result[name] = tuple(result[name])
-    return AssemblyConflictRecord(**result)
+    record = AssemblyConflictRecord(**result)
+    if _content_hash(record) != record.content_hash:
+        raise EvidenceAssemblyPersistenceError("assembly conflict canonical content hash mismatch")
+    return record
 
 
 def _decode_times(payload: dict[str, Any], *names: str) -> None:
@@ -224,6 +258,15 @@ def _json_safe(value: Any) -> Any:
     if isinstance(value, (list, tuple)):
         return [_json_safe(item) for item in value]
     return value
+
+
+def _content_hash(record: Any) -> str:
+    payload = asdict(record)
+    payload["content_hash"] = ""
+    if isinstance(record, AssemblyConflictRecord):
+        payload["record_id"] = ""
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode()
+    return hashlib.sha256(raw).hexdigest()
 
 
 def _aware(value: datetime) -> datetime:

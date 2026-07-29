@@ -11,7 +11,7 @@ from hunter.persistence.sql import RepositoryFactory, SessionFactory, create_sch
 from hunter.valuation_methodology.models import ValuationMethodologySnapshot
 
 DEFAULT_VALUATION_METHODOLOGY_DB = Path("data/data_ops.sqlite")
-VALUATION_METHODOLOGY_MIGRATION_ID = "generic-sql-valuation-methodology-snapshot-v1"
+VALUATION_METHODOLOGY_MIGRATION_ID = "generic-sql-valuation-methodology-snapshot-v2"
 
 _METHODOLOGY_TYPE = "valuation-methodology-snapshot"
 

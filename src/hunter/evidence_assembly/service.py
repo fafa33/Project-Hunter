@@ -83,6 +83,8 @@ class CanonicalEvidenceAssemblyService:
         if methodology is None:
             raise CanonicalEvidenceAssemblyError("no strict-known canonical methodology snapshot")
         self._validate_methodology(methodology)
+        if (end - start).days != methodology.horizon_days:
+            raise CanonicalEvidenceAssemblyError("accounting window does not match canonical methodology horizon")
         registry = self.registry_authority.strict_known_registry(
             registry_id=registry_id,
             registry_version=registry_version,
@@ -91,13 +93,18 @@ class CanonicalEvidenceAssemblyService:
         )
         if registry is None:
             raise CanonicalEvidenceAssemblyError("no exact strict-known Evidence Shape Registry snapshot")
+        if methodology.known_at > recorded_at or registry.known_at > recorded_at:
+            raise CanonicalEvidenceAssemblyError("assembly recorded_at precedes canonical reference knowledge")
 
         resolved = tuple(
             self._resolve_constituent(item, registry=registry, replay_cutoff=replay_cutoff) for item in constituents
         )
         resolved = tuple(sorted(resolved, key=lambda item: (item[0].accounting_period_start, item[0].record_id)))
+        resolved = self._deduplicate_identical(resolved)
         self._validate_scope(resolved)
         self._validate_coverage(resolved, start=start, end=end)
+        if any(rule.applicability_start > start or rule.applicability_end < end for _, _, _, rule in resolved):
+            raise CanonicalEvidenceAssemblyError("value-capture pathway does not cover assembled interval")
         self._validate_methodology_shapes(methodology, tuple(shape for _, shape, _, _ in resolved))
         selected_cadence = self._selected_cadence(registry, tuple(shape for _, shape, _, _ in resolved), methodology)
         request_id = _hash(
@@ -126,7 +133,9 @@ class CanonicalEvidenceAssemblyService:
         shapes = tuple(item[1] for item in resolved)
         supplies = tuple(item[2] for item in resolved)
         rules = tuple(item[3] for item in resolved)
-        known_at = max(recorded_at, methodology.known_at, registry.known_at, *(r.known_at for r in records))
+        if any(record.known_at > recorded_at for record in records):
+            raise CanonicalEvidenceAssemblyError("assembly recorded_at precedes constituent knowledge")
+        known_at = max(recorded_at, *(r.known_at for r in records))
         if known_at > replay_cutoff:
             raise CanonicalEvidenceAssemblyError("assembled evidence is not known by replay cutoff")
         amount = sum((Decimal(record.amount or "") for record in records), Decimal(0))
@@ -201,6 +210,7 @@ class CanonicalEvidenceAssemblyService:
             confidence_state=str(min(Decimal(record.evidence_confidence) for record in records)),
             conflict_state="none",
             completeness_state="exact_complete",
+            continuity_proof_state="same-canonical-identity-pathway-and-supply-basis",
             non_overlap_proof_state="gap_free_non_overlapping",
             supersedes_record_id=supersedes_record_id,
             correction_reason=correction_reason,
@@ -218,7 +228,46 @@ class CanonicalEvidenceAssemblyService:
         )
         superseded = {record.supersedes_record_id for record in eligible if record.supersedes_record_id}
         tips = [record for record in eligible if record.record_id not in superseded]
-        return tips[0] if tips else None
+        if not tips:
+            return None
+        record = tips[0]
+        methodology = self.methodology_authority.get(record.methodology_record_id)
+        registry = self.registry_authority.repository.get(record.registry_record_id)
+        if (
+            methodology is None
+            or methodology.logical_id != record.methodology_logical_id
+            or methodology.semantic_version != record.methodology_version
+            or methodology.content_hash != record.methodology_content_hash
+            or methodology.effective_at > effective_as_of
+            or methodology.recorded_at > known_by
+            or methodology.known_at > known_by
+            or registry is None
+            or registry.registry_id != record.registry_id
+            or registry.registry_version != record.registry_version
+            or registry.content_hash != record.registry_content_hash
+            or registry.effective_start > effective_as_of
+            or not effective_as_of < registry.effective_end
+            or registry.recorded_at > known_by
+            or registry.known_at > known_by
+        ):
+            raise CanonicalEvidenceAssemblyError("assembled replay provenance is unavailable or divergent")
+        for record_id, version, content_hash in zip(
+            record.constituent_record_ids,
+            record.constituent_versions,
+            record.constituent_content_hashes,
+            strict=True,
+        ):
+            constituent = self.value_capture_repository.evidence(record_id)
+            if (
+                constituent is None
+                or constituent.semantic_version != version
+                or constituent.content_hash != content_hash
+                or constituent.effective_at > effective_as_of
+                or constituent.recorded_at > known_by
+                or constituent.known_at > known_by
+            ):
+                raise CanonicalEvidenceAssemblyError("assembled replay constituent provenance is unavailable")
+        return record
 
     def _validate_methodology(self, methodology: ValuationMethodologySnapshot) -> None:
         if not methodology.accepts_assembled_evidence:
@@ -231,6 +280,8 @@ class CanonicalEvidenceAssemblyService:
     ) -> None:
         if any(shape.shape_id not in methodology.accepted_evidence_shape_ids for shape in shapes):
             raise CanonicalEvidenceAssemblyError("canonical methodology rejects evidence shape")
+        if any(shape.currency.casefold() != methodology.currency.casefold() for shape in shapes):
+            raise CanonicalEvidenceAssemblyError("canonical methodology currency is incompatible with evidence")
 
     def _resolve_constituent(
         self,
@@ -253,14 +304,14 @@ class CanonicalEvidenceAssemblyService:
                 raise CanonicalEvidenceAssemblyError("constituent dependency is not strict-known")
             if dependency.quality_state != "accepted" or dependency.conflict_state not in {"none", "resolved"}:
                 raise CanonicalEvidenceAssemblyError("constituent dependency is unresolved or non-authoritative")
-        shape = registry.shape(constituent.shape_id)
+        shape = self._shape_for_record(registry, record)
         if shape.composition_operation != "exact_sum" or shape.accounting_meaning != "period_specific":
             raise CanonicalEvidenceAssemblyError("shape is not governed for lossless exact summation")
         if record.identity != supply.identity or record.identity != rule.identity:
             raise CanonicalEvidenceAssemblyError("canonical dependency identity mismatch")
         if record.evidence_type != shape.evidence_type:
             raise CanonicalEvidenceAssemblyError("registry evidence classification mismatch")
-        if record.unit != shape.unit or shape.currency != shape.unit:
+        if record.unit != shape.unit:
             raise CanonicalEvidenceAssemblyError("registry unit or currency classification mismatch")
         if record.attribution_rule_id != rule.mechanism_policy_id:
             raise CanonicalEvidenceAssemblyError("canonical pathway classification mismatch")
@@ -274,7 +325,7 @@ class CanonicalEvidenceAssemblyService:
             tuple[FundamentalEvidenceRecord, EvidenceShape, SupplyBasisSnapshot, ValueCaptureRuleSnapshot], ...
         ],
     ) -> None:
-        first_record, _, first_supply, first_rule = resolved[0]
+        first_record, first_shape, first_supply, first_rule = resolved[0]
         for record, shape, supply, rule in resolved[1:]:
             if record.identity != first_record.identity:
                 raise CanonicalEvidenceAssemblyError("constituent identity or representation mismatch")
@@ -286,6 +337,36 @@ class CanonicalEvidenceAssemblyService:
                 raise CanonicalEvidenceAssemblyError("constituent unit mismatch")
             if shape.accounting_meaning != resolved[0][1].accounting_meaning:
                 raise CanonicalEvidenceAssemblyError("accounting meaning mismatch")
+            if shape.shape_id != first_shape.shape_id and (
+                shape.shape_id not in first_shape.compatible_shape_ids
+                or first_shape.shape_id not in shape.compatible_shape_ids
+            ):
+                raise CanonicalEvidenceAssemblyError("registry shape continuity relation is absent")
+
+    def _deduplicate_identical(
+        self,
+        resolved: tuple[
+            tuple[FundamentalEvidenceRecord, EvidenceShape, SupplyBasisSnapshot, ValueCaptureRuleSnapshot], ...
+        ],
+    ) -> tuple[tuple[FundamentalEvidenceRecord, EvidenceShape, SupplyBasisSnapshot, ValueCaptureRuleSnapshot], ...]:
+        result: list[tuple[FundamentalEvidenceRecord, EvidenceShape, SupplyBasisSnapshot, ValueCaptureRuleSnapshot]] = (
+            []
+        )
+        by_window: dict[
+            tuple[datetime, datetime],
+            tuple[FundamentalEvidenceRecord, EvidenceShape, SupplyBasisSnapshot, ValueCaptureRuleSnapshot],
+        ] = {}
+        for item in resolved:
+            record = item[0]
+            window = (record.accounting_period_start, record.accounting_period_end)
+            prior = by_window.get(window)
+            if prior is None:
+                by_window[window] = item
+                result.append(item)
+                continue
+            if not _economically_identical(record, prior[0]) or item[1:] != prior[1:]:
+                raise CanonicalEvidenceAssemblyError("divergent duplicate accounting interval")
+        return tuple(result)
 
     def _validate_coverage(
         self,
@@ -358,6 +439,32 @@ class CanonicalEvidenceAssemblyService:
         )
         if not selected_ids <= {record.record_id for record in universe}:
             raise CanonicalEvidenceAssemblyError("selected record is absent from strict-known universe")
+        unresolved = tuple(
+            record
+            for record in universe
+            if record.record_id not in selected_ids
+            and record.effective_at <= replay_cutoff
+            and record.recorded_at <= replay_cutoff
+            and record.known_at <= replay_cutoff
+            and record.conflict_state in {"open", "contested"}
+        )
+        if unresolved:
+            self._persist_conflict(
+                candidates=tuple(
+                    sorted((*tuple(item[0] for item in resolved), *unresolved), key=lambda record: record.record_id)
+                ),
+                resolved=resolved,
+                registry=registry,
+                methodology=methodology,
+                start=start,
+                end=end,
+                recorded_at=recorded_at,
+                replay_cutoff=replay_cutoff,
+                request_id=request_id,
+                category="unresolved-source-conflict",
+                reason="strict-known candidate universe contains unresolved authoritative evidence",
+            )
+            raise CanonicalEvidenceAssemblyError("unresolved candidate evidence conflict")
         omitted = tuple(
             record
             for record in universe
@@ -367,6 +474,7 @@ class CanonicalEvidenceAssemblyService:
             and record.known_at <= replay_cutoff
             and record.quality_state == "accepted"
             and record.conflict_state in {"none", "resolved"}
+            and not any(_economically_identical(record, item[0]) for item in resolved)
         )
         native = tuple(
             record
@@ -407,6 +515,23 @@ class CanonicalEvidenceAssemblyService:
                     raise CanonicalEvidenceAssemblyError("selected series violates canonical granularity override")
             elif comparison < 0:
                 raise CanonicalEvidenceAssemblyError("selected series is not the governed finest cadence")
+            elif comparison == 0:
+                self._persist_conflict(
+                    candidates=tuple(
+                        sorted((*tuple(item[0] for item in resolved), *path), key=lambda record: record.record_id)
+                    ),
+                    resolved=resolved,
+                    registry=registry,
+                    methodology=methodology,
+                    start=start,
+                    end=end,
+                    recorded_at=recorded_at,
+                    replay_cutoff=replay_cutoff,
+                    request_id=request_id,
+                    category="equal-cadence-alternative",
+                    reason="divergent complete equal-cadence evidence series is ambiguous",
+                )
+                raise CanonicalEvidenceAssemblyError("divergent equal-cadence complete series")
         competitors = tuple(
             record
             for record in omitted
@@ -440,7 +565,10 @@ class CanonicalEvidenceAssemblyService:
         matches = [
             shape
             for shape in registry.shapes
-            if shape.active and shape.evidence_type == record.evidence_type and shape.unit == record.unit
+            if shape.active
+            and shape.evidence_type == record.evidence_type
+            and shape.source_methodology == record.source_methodology
+            and shape.unit == record.unit
         ]
         if len(matches) != 1:
             raise CanonicalEvidenceAssemblyError("candidate shape classification is unknown or ambiguous")
@@ -561,6 +689,25 @@ def _coverage_paths(
 def _hash(value: object) -> str:
     raw = json.dumps(value, sort_keys=True, separators=(",", ":"), default=str).encode()
     return hashlib.sha256(raw).hexdigest()
+
+
+def _economically_identical(left: FundamentalEvidenceRecord, right: FundamentalEvidenceRecord) -> bool:
+    left_payload = asdict(left)
+    right_payload = asdict(right)
+    for payload in (left_payload, right_payload):
+        for field in (
+            "record_id",
+            "logical_id",
+            "source_id",
+            "source_reference",
+            "source_record_id",
+            "source_record_version",
+            "acquisition_id",
+            "content_hash",
+            "raw_content_hash",
+        ):
+            payload.pop(field)
+    return left_payload == right_payload
 
 
 def _aware(value: datetime) -> datetime:

@@ -17,6 +17,7 @@ DEFAULT_REGISTRY_DB = Path("data/data_ops.sqlite")
 REGISTRY_MIGRATION_ID = "generic-sql-evidence-shape-registry-v1"
 REGISTRY_SNAPSHOT_TYPE = "evidence-shape-registry"
 REGISTRY_SCHEMA_VERSION = "evidence-shape-registry-v1"
+REGISTRY_AUTHORITY_ID = "canonical-evidence-shape-registry-authority-v1"
 _CADENCE_RANK: dict[Cadence, int] = {"daily": 1, "monthly": 2, "quarterly": 3}
 
 
@@ -38,12 +39,20 @@ class EvidenceShapeRegistrySnapshot:
     active: bool
     quality_state: str
     conflict_state: str
+    authorized_by: str
     content_hash: str
     supersedes_record_id: str | None = None
     correction_reason: str = ""
 
     def __post_init__(self) -> None:
-        for name in ("record_id", "registry_id", "registry_version", "schema_version", "content_hash"):
+        for name in (
+            "record_id",
+            "registry_id",
+            "registry_version",
+            "schema_version",
+            "authorized_by",
+            "content_hash",
+        ):
             if not str(getattr(self, name)).strip():
                 raise EvidenceShapeRegistryError(f"{name} is required")
         for name in ("effective_start", "effective_end", "recorded_at", "known_at"):
@@ -63,6 +72,8 @@ class EvidenceShapeRegistrySnapshot:
         object.__setattr__(self, "shapes", ordered)
         if self.quality_state != "accepted" or self.conflict_state not in {"none", "resolved"}:
             raise EvidenceShapeRegistryError("registry snapshot is not authoritative")
+        if self.authorized_by != REGISTRY_AUTHORITY_ID:
+            raise EvidenceShapeRegistryError("registry snapshot lacks canonical authority attestation")
         if bool(self.supersedes_record_id) != bool(self.correction_reason.strip()):
             raise EvidenceShapeRegistryError("registry correction predecessor and reason must be paired")
 
@@ -108,7 +119,10 @@ class EvidenceShapeRegistryRepository:
             item = RepositoryFactory(session).snapshots().load(record_id)
             if item is None or item.snapshot_type != REGISTRY_SNAPSHOT_TYPE:
                 return None
-            return _from_payload(item.payload)
+            result = _from_payload(item.payload)
+            if _content_hash(result) != result.content_hash:
+                raise EvidenceShapeRegistryError("registry canonical content hash mismatch")
+            return result
         finally:
             session.close()
             engine.dispose()
@@ -157,8 +171,8 @@ class EvidenceShapeRegistryRepository:
                     continue
                 try:
                     result.append(_from_payload(row.payload))
-                except (KeyError, TypeError, ValueError):
-                    continue
+                except (KeyError, TypeError, ValueError) as exc:
+                    raise EvidenceShapeRegistryError(f"malformed canonical registry snapshot: {row.id}") from exc
             return tuple(result)
         finally:
             session.close()
@@ -198,17 +212,19 @@ class EvidenceShapeRegistryAuthority:
             active=active,
             quality_state="accepted",
             conflict_state="none",
+            authorized_by=REGISTRY_AUTHORITY_ID,
             content_hash="pending",
             supersedes_record_id=supersedes_record_id,
             correction_reason=correction_reason,
         )
         digest = _content_hash(pending)
         record = replace(pending, record_id=f"evidence-shape-registry:{digest}", content_hash=digest)
-        self._authorize_lineage(record)
         engine = create_sqlite_engine(self.repository.path)
         session = SessionFactory(engine).create()
         try:
+            session.connection().exec_driver_sql("BEGIN IMMEDIATE")
             snapshots = RepositoryFactory(session).snapshots()
+            self._authorize_lineage(record, snapshots=snapshots)
             snapshots.save(_snapshot(record))
             session.commit()
         except PersistenceIdentityConflictError as exc:
@@ -222,8 +238,12 @@ class EvidenceShapeRegistryAuthority:
     def strict_known_registry(self, **kwargs: Any) -> EvidenceShapeRegistrySnapshot | None:
         return self.repository.strict_known(**kwargs)
 
-    def _authorize_lineage(self, record: EvidenceShapeRegistrySnapshot) -> None:
-        history = self.repository.history(record.registry_id)
+    def _authorize_lineage(self, record: EvidenceShapeRegistrySnapshot, *, snapshots: Any) -> None:
+        history = tuple(
+            _from_payload(item.payload)
+            for item in snapshots.query(QuerySpec(record_kind="snapshot"))
+            if item.snapshot_type == REGISTRY_SNAPSHOT_TYPE and item.target_id == record.registry_id
+        )
         if record.supersedes_record_id is None:
             if any(
                 item.registry_version == record.registry_version and item.record_id != record.record_id
@@ -231,7 +251,10 @@ class EvidenceShapeRegistryAuthority:
             ):
                 raise EvidenceShapeRegistryError("registry version already has a root; correction required")
             return
-        predecessor = self.repository.get(record.supersedes_record_id)
+        predecessor = next(
+            (item for item in history if item.record_id == record.supersedes_record_id),
+            None,
+        )
         if predecessor is None or predecessor.registry_id != record.registry_id:
             raise EvidenceShapeRegistryError("registry correction predecessor is invalid")
         if predecessor.recorded_at >= record.recorded_at or predecessor.known_at >= record.known_at:
