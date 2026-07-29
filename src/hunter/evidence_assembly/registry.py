@@ -156,12 +156,17 @@ class EvidenceShapeRegistrySnapshot:
         return match
 
     def cadence_rank(self, shape: EvidenceShape) -> int:
+        registered = self.shape(shape.shape_id)
+        if registered != shape:
+            raise EvidenceShapeRegistryError("cadence comparison requires an exact active Registry member")
         rank = _CADENCE_RANK.get(shape.cadence)
         if rank is None:
             raise EvidenceShapeRegistryError(f"cadence is not intrinsically comparable: {shape.cadence}")
         return rank
 
     def compare_cadence(self, left: EvidenceShape, right: EvidenceShape) -> int:
+        self.cadence_rank(left)
+        self.cadence_rank(right)
         if left.cadence == right.cadence:
             return 0
         if right.cadence not in left.compatible_cadences or left.cadence not in right.compatible_cadences:

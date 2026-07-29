@@ -598,8 +598,6 @@ def test_corrected_supply_and_pathway_remain_in_same_assembly_lineage(tmp_path: 
     ],
 )
 def test_governed_cadence_comparison(tmp_path: Path, selected: str, alternative: str, allowed: bool) -> None:
-    selected_shape = _shape(f"{selected}-revenue", selected)
-    alternative_shape = _shape(f"{alternative}-revenue", alternative)
     path = tmp_path / "data_ops.sqlite"
     authority = EvidenceShapeRegistryAuthority(EvidenceShapeRegistryRepository(path), application_root=Path.cwd())
     registry = authority.persist(
@@ -611,8 +609,12 @@ def test_governed_cadence_comparison(tmp_path: Path, selected: str, alternative:
         known_at=T1,
         authorizing_adr_reference="ADR-0025",
     )
+    selected_shape = registry.shape(f"{selected}-revenue")
+    alternative_shape = registry.shape(f"{alternative}-revenue")
     comparison = registry.compare_cadence(selected_shape, alternative_shape)
     assert (comparison <= 0) is allowed
+    with pytest.raises(EvidenceShapeRegistryError, match="exact active"):
+        registry.compare_cadence(_shape(f"{selected}-revenue", selected), alternative_shape)
 
 
 @pytest.mark.parametrize(
@@ -733,12 +735,15 @@ def test_divergent_equal_cadence_complete_series_is_conflict(tmp_path: Path) -> 
 
 
 def test_identical_duplicate_interval_is_deduplicated_deterministically(tmp_path: Path) -> None:
+    reacquired_at = RECORDED + timedelta(hours=1)
     duplicate = replace(
         _evidence("duplicate", T0, T1),
         source_id="source-e1",
         source_reference="ref-e1",
         source_record_id="source-record-e1",
-        acquisition_id="acquisition-e1",
+        recorded_at=reacquired_at,
+        known_at=reacquired_at,
+        acquisition_id="reacquisition-e1",
     )
     service, _ = _service(
         tmp_path,
@@ -750,10 +755,78 @@ def test_identical_duplicate_interval_is_deduplicated_deterministically(tmp_path
         registry_version="1",
         accounting_window_start=T0,
         accounting_window_end=T2,
-        recorded_at=RECORDED,
+        recorded_at=reacquired_at,
         replay_cutoff=CUTOFF,
     )
     assert record.constituent_record_ids == ("duplicate", "e2")
+
+
+def test_replay_accepts_dependencies_effective_after_window_end_but_before_cutoff(tmp_path: Path) -> None:
+    later_effective = T2 + timedelta(days=10)
+    evidence = (
+        replace(_evidence("e1", T0, T1), effective_at=later_effective),
+        replace(_evidence("e2", T1, T2), effective_at=later_effective),
+    )
+    service, _ = _service(
+        tmp_path,
+        evidence=evidence,
+        supply=replace(_supply(), effective_at=later_effective),
+        rule=replace(_rule(), effective_at=later_effective),
+    )
+    record = _assemble(service, "e1", "e2")
+    assert service.strict_known(logical_id=record.logical_id, effective_as_of=T2, known_by=CUTOFF) == record
+
+
+def test_incompatible_exact_supply_record_boundary_fails_independently(tmp_path: Path) -> None:
+    service, _ = _service(tmp_path)
+    alternative = _canonical_value_capture(
+        replace(
+            _supply(),
+            record_id="supply-alternative",
+            logical_id="supply-alternative-logical",
+            source_record_id="supply-alternative-source",
+        )
+    )
+    _save_snapshots(service.repository.path, record_snapshot(alternative))
+    with pytest.raises(CanonicalEvidenceAssemblyError, match="supply-basis boundary"):
+        service.assemble(
+            constituents=(
+                _constituents("e1")[0],
+                _constituents("e2", supply_basis_record_id=alternative.record_id)[0],
+            ),
+            registry_id=REGISTRY_ID,
+            registry_version="1",
+            accounting_window_start=T0,
+            accounting_window_end=T2,
+            recorded_at=RECORDED,
+            replay_cutoff=CUTOFF,
+        )
+
+
+def test_incompatible_exact_pathway_record_boundary_fails_independently(tmp_path: Path) -> None:
+    service, _ = _service(tmp_path)
+    alternative = _canonical_value_capture(
+        replace(
+            _rule(),
+            record_id="rule-alternative",
+            logical_id="rule-alternative-logical",
+            source_record_id="rule-alternative-source",
+        )
+    )
+    _save_snapshots(service.repository.path, record_snapshot(alternative))
+    with pytest.raises(CanonicalEvidenceAssemblyError, match="pathway boundary"):
+        service.assemble(
+            constituents=(
+                _constituents("e1")[0],
+                _constituents("e2", pathway_rule_record_id=alternative.record_id)[0],
+            ),
+            registry_id=REGISTRY_ID,
+            registry_version="1",
+            accounting_window_start=T0,
+            accounting_window_end=T2,
+            recorded_at=RECORDED,
+            replay_cutoff=CUTOFF,
+        )
 
 
 def test_strict_known_replay_verifies_transitive_provenance(tmp_path: Path) -> None:
@@ -808,15 +881,14 @@ def test_gap_and_overlap_fail_independently(
 
 
 def test_identity_representation_unit_and_accounting_meaning_fail_closed(tmp_path: Path) -> None:
-    different_identity = replace(
-        _identity(),
-        representation_id="other-representation",
-    )
     service, _ = _service(
-        tmp_path / "identity",
+        tmp_path / "representation",
         evidence=(
             _evidence("e1", T0, T1),
-            replace(_evidence("e2", T1, T2), identity=different_identity),
+            replace(
+                _evidence("e2", T1, T2),
+                identity=replace(_identity(), representation_id="other-representation"),
+            ),
         ),
     )
     with pytest.raises(CanonicalEvidenceAssemblyError, match="identity"):
@@ -830,6 +902,21 @@ def test_identity_representation_unit_and_accounting_meaning_fail_closed(tmp_pat
         ),
     )
     with pytest.raises(CanonicalEvidenceAssemblyError, match="classification|unit"):
+        _assemble(service, "e1", "e2")
+
+
+def test_canonical_claim_identity_fails_independently_from_representation(tmp_path: Path) -> None:
+    service, _ = _service(
+        tmp_path,
+        evidence=(
+            _evidence("e1", T0, T1),
+            replace(
+                _evidence("e2", T1, T2),
+                identity=replace(_identity(), economic_claim_id="other-claim"),
+            ),
+        ),
+    )
+    with pytest.raises(CanonicalEvidenceAssemblyError, match="identity"):
         _assemble(service, "e1", "e2")
 
     event_evidence = tuple(

@@ -300,7 +300,6 @@ class CanonicalEvidenceAssemblyService:
                 or not verify_value_capture_content_hash(constituent)
                 or constituent.semantic_version != version
                 or constituent.content_hash != content_hash
-                or constituent.effective_at > record.effective_at
                 or constituent.recorded_at > known_by
                 or constituent.known_at > known_by
             ):
@@ -314,14 +313,12 @@ class CanonicalEvidenceAssemblyService:
             or not verify_value_capture_content_hash(supply)
             or supply.semantic_version != record.supply_basis_version
             or supply.content_hash != record.supply_basis_content_hash
-            or supply.effective_at > record.effective_at
             or supply.recorded_at > known_by
             or supply.known_at > known_by
             or rule is None
             or not verify_value_capture_content_hash(rule)
             or rule.semantic_version != record.value_capture_pathway_version
             or rule.content_hash != record.value_capture_pathway_content_hash
-            or rule.effective_at > record.effective_at
             or rule.recorded_at > known_by
             or rule.known_at > known_by
         ):
@@ -889,12 +886,22 @@ def _hash(value: object) -> str:
 
 
 def _economically_identical(left: FundamentalEvidenceRecord, right: FundamentalEvidenceRecord) -> bool:
-    left_payload = asdict(left)
-    right_payload = asdict(right)
-    for payload in (left_payload, right_payload):
-        for field in ("record_id", "logical_id", "content_hash"):
-            payload.pop(field)
-    return left_payload == right_payload
+    economic_fields = (
+        "identity",
+        "evidence_type",
+        "amount",
+        "unit",
+        "accounting_period_start",
+        "accounting_period_end",
+        "attribution_rule_id",
+        "source_methodology",
+        "source_id",
+        "source_reference",
+        "source_record_id",
+        "source_record_version",
+        "raw_content_hash",
+    )
+    return all(getattr(left, field) == getattr(right, field) for field in economic_fields)
 
 
 def _aware(value: datetime) -> datetime:
