@@ -222,14 +222,13 @@ Evidence Assembly Authority
         ↓
 Assembled Fundamental Evidence
         ↓
-Methodology Contract Evaluation
-        ↓
 CanonicalValuationService
+   (methodology-contract input-eligibility evaluation, then valuation arithmetic)
         ↓
 FairValueEstimate
 ```
 
-The Evidence Shape Registry is versioned reference data consulted by the Evidence Assembly Authority; it is not a stage in this pipeline and makes no valuation decisions. Classification: architecture accepted under ADR 0025 only. The Canonical Evidence Assembly Authority, its `AssembledFundamentalEvidenceRecord` family, and the Evidence Shape Registry are not implemented. The first canonical methodology (`discounted-value-capture-flow-v1`, ADR 0022) does not declare acceptance of assembled evidence, so this precondition has no effect until a future methodology-snapshot version explicitly opts in under ADR 0025's methodology-contract requirement.
+Methodology-contract input-eligibility evaluation is owned exclusively by `CanonicalValuationService` (ADR 0022); it is not a separate stage or authority. The Evidence Shape Registry is versioned reference data consulted by the Evidence Assembly Authority; it is not a stage in this pipeline and makes no valuation decisions. Classification: architecture accepted under ADR 0025 only. The Canonical Evidence Assembly Authority, its `AssembledFundamentalEvidenceRecord` family, and the Evidence Shape Registry are not implemented. The first canonical methodology (`discounted-value-capture-flow-v1`, ADR 0022) does not declare acceptance of assembled evidence, so this precondition has no effect until a future methodology-snapshot version explicitly opts in under ADR 0025's methodology-contract requirement.
 
 ---
 

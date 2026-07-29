@@ -27,14 +27,13 @@ Evidence Assembly Authority
         ↓
 Assembled Fundamental Evidence
         ↓
-Methodology Contract Evaluation
-        ↓
 CanonicalValuationService
+   (methodology-contract input-eligibility evaluation, then valuation arithmetic)
         ↓
 FairValueEstimate
 ```
 
-The Evidence Shape Registry (see below) is versioned reference data consulted by the Evidence Assembly Authority. It is not a node in this pipeline and makes no valuation decisions.
+Methodology-contract input-eligibility evaluation — whether a specific native or assembled record is permitted as an input under the methodology contract in force — is owned exclusively by `CanonicalValuationService`, immediately followed by that same service's valuation arithmetic; it is not a separate pipeline stage or a separate authority (see "Methodology contract," below). The Evidence Shape Registry (see below) is versioned reference data consulted by the Evidence Assembly Authority. It is not a node in this pipeline and makes no valuation decisions.
 
 This ADR authorizes the semantic contract, authority boundaries, invariants, record family, and replay semantics for this authority. It does not authorize implementation, activate any Market Validation input, change `CanonicalValuationService`'s existing arithmetic, discount-rate policy, horizon, or confidence formulas, or make Assembled Fundamental Evidence available for the first canonical methodology (`discounted-value-capture-flow-v1`) — see "Exact amendment to ADR 0022" below for the precise, narrow conditional availability this ADR creates.
 
@@ -55,6 +54,7 @@ This ADR authorizes the semantic contract, authority boundaries, invariants, rec
 | Correction and supersession of assembled records | Market validation |
 | — | Opportunity scoring |
 | — | Recommendations |
+| — | Methodology-contract input-eligibility evaluation (owned exclusively by `CanonicalValuationService`, ADR 0022) |
 
 Repositories that persist `AssembledFundamentalEvidenceRecord`s remain mechanical persistence/query authorities under ADR 0009: they store and retrieve service-authorized records deterministically and make no assembly, eligibility, conflict, or correction decisions.
 
@@ -240,13 +240,12 @@ Every valuation methodology (the accepted `discounted-value-capture-flow-v1` met
 - missingness behavior;
 - strict-known cutoff behavior.
 
-The methodology contract is read-only input to both the Canonical Evidence Assembly Authority and `CanonicalValuationService`. The Canonical Evidence Assembly Authority must not invent undeclared compatibility: if a methodology contract does not explicitly declare acceptance of assembled evidence, or does not declare a requirement the assembly authority can verify against, assembly is inapplicable for that methodology regardless of whether a lossless composition would otherwise satisfy the assembly authority's own invariants. `CanonicalValuationService` must independently, and separately, reject any input — native or assembled — that does not satisfy the methodology contract in force; that independent check is a final defensive validation, not a second source of assembled evidence and not a competing authority (see "Exact amendment to ADR 0022" below).
+The methodology contract is read-only input to both the Canonical Evidence Assembly Authority and `CanonicalValuationService`. The Canonical Evidence Assembly Authority must not invent undeclared compatibility: if a methodology contract does not explicitly declare acceptance of assembled evidence, or does not declare a requirement the assembly authority can verify against, assembly is inapplicable for that methodology regardless of whether a lossless composition would otherwise satisfy the assembly authority's own invariants. `CanonicalValuationService` is the sole and exclusive owner of methodology-contract input-eligibility evaluation: it alone decides, once, whether a specific native or assembled record is permitted as an input to a specific fair-value estimate under the methodology contract in force. This is not a second, corroborating, or "final defensive" check of a prior evaluation — no other step in this chain evaluates methodology-contract input eligibility at all (see "Exact amendment to ADR 0022" below).
 
-This three-way separation avoids duplicated semantic ownership:
+This two-way separation avoids duplicated semantic ownership:
 
-- the Canonical Evidence Assembly Authority owns whether a valid `AssembledFundamentalEvidenceRecord` can be constructed at all, from the constituent evidence that exists;
-- methodology contract evaluation owns whether a given assembled (or native) record, once it exists, is permitted as an input to a specific methodology;
-- `CanonicalValuationService` retains the final defensive boundary that independently re-checks methodology-contract satisfaction immediately before valuation arithmetic runs, exactly as it already independently re-checks every other input today.
+- the Canonical Evidence Assembly Authority owns whether a valid `AssembledFundamentalEvidenceRecord` can be constructed at all, from the constituent evidence that exists; it makes no determination about which, if any, valuation methodology may consume that record, and it holds no valuation-methodology authority of any kind;
+- `CanonicalValuationService` owns both methodology-contract input-eligibility evaluation and valuation arithmetic. These two responsibilities belong to the same single, already-accepted service because `CanonicalValuationService` already owns the active `ValuationMethodologySnapshot` and final valuation-input acceptance (ADR 0022); assigning input-eligibility evaluation to a separate, new authority would create a second, unnecessary owner for one decision, and `CanonicalValuationService` holds no evidence-construction authority of any kind — it never assembles, composes, or corrects an `AssembledFundamentalEvidenceRecord`.
 
 No step in this chain may re-derive, re-compose, weaken, or override a decision another step already owns.
 
@@ -334,7 +333,7 @@ This ADR amends only ADR 0022's "Valuation inputs," "Prohibited methodologies," 
 
 It is amended to add a sixth, strictly conditional entry, and its closing sentence is amended as shown:
 
-> 6. *(Added by ADR 0025.)* An `AssembledFundamentalEvidenceRecord` (ADR 0025) may inform a fair-value estimate in place of, or alongside, item 2 above, **only** when the `ValuationMethodologySnapshot` in force explicitly declares acceptance of assembled evidence and states the exact requirements under which it accepts it (ADR 0025 §"Methodology contract"). The `discounted-value-capture-flow-v1` methodology this ADR authorizes does not declare such acceptance and therefore does not accept assembled evidence; a future `ValuationMethodologySnapshot` version may, without requiring a new methodology ADR, provided it satisfies ADR 0025's methodology-contract requirements in full.
+> 6. *(Added by ADR 0025.)* An `AssembledFundamentalEvidenceRecord` (ADR 0025) may **substitute for** item 2 above, for the same attributable-flow input scope, **only** when the `ValuationMethodologySnapshot` in force explicitly declares acceptance of assembled evidence and states the exact requirements under which it accepts it (ADR 0025 §"Methodology contract"). This substitution is exclusive, not additive: for a single attributable-flow input scope, a fair-value estimate must consume either the native `FundamentalEvidenceRecord` under item 2 or a compatible `AssembledFundamentalEvidenceRecord` under this item 6 — never both. No constituent native `FundamentalEvidenceRecord` may be separately consumed under item 2 once its assembled derivative (a record for which it is a constituent, per ADR 0025) is the record selected under this item 6. Where both a qualifying native record and a qualifying assembled derivative exist for the same interval, ADR 0025's native-precedes-assembled selection rule (§"Conflicts and multiple disclosures") governs and the assembled derivative is not selected. No summation, averaging, blending, stacking, or other combination of a native and an assembled record is authorized under any circumstance. The `discounted-value-capture-flow-v1` methodology this ADR authorizes does not declare such acceptance and therefore continues to consume only native evidence under item 2; a future `ValuationMethodologySnapshot` version may declare acceptance, without requiring a new methodology ADR, provided it satisfies ADR 0025's methodology-contract requirements in full.
 >
 > No other record family, provider, repository, configuration file, Dashboard projection, report, or caller-supplied value may inform a fair-value estimate. *(As amended by ADR 0025: this list is exhaustive subject to item 6 above; item 6 does not expand it beyond the exact conditional terms ADR 0025 defines, and does not by itself make assembled evidence available for any methodology snapshot that does not explicitly declare acceptance.)*
 
@@ -342,14 +341,15 @@ It is amended to add a sixth, strictly conditional entry, and its closing senten
 
 > *(As amended by ADR 0025: a complete, gap-free, non-overlapping `AssembledFundamentalEvidenceRecord` that jointly and losslessly covers the exact accounting period this methodology's horizon requires — per ADR 0025's lossless-only rule and assembly preconditions — is not annualization, interpolation, extrapolation, or any other prohibited transformation under this section. The prohibition on "an arbitrary-period amount... treated as a fixed 365-day flow without an authorized annualization policy" continues to apply, unchanged, to any single record whose own accounting period does not match the required horizon; it does not apply to a complete composed set whose union exactly matches the required horizon with no gap and no overlap.)*
 
-**Assembled evidence acceptance and final defensive validation.** The following new subsection is added to ADR 0022, immediately after "Missingness":
+**Assembled evidence acceptance and methodology-contract input eligibility.** The following new subsection is added to ADR 0022, immediately after "Missingness":
 
-> ### Assembled evidence acceptance and final defensive validation *(added by ADR 0025)*
+> ### Assembled evidence acceptance and methodology-contract input eligibility *(added by ADR 0025)*
 >
-> Where a `ValuationMethodologySnapshot` declares acceptance of Assembled Fundamental Evidence (ADR 0025), `CanonicalValuationService` treats a compatible, strict-known `AssembledFundamentalEvidenceRecord` exactly as it treats a native `FundamentalEvidenceRecord` for the purpose of Valuation Inputs item 2, with two additions that this ADR requires and that do not duplicate the Canonical Evidence Assembly Authority's own decision:
+> Where a `ValuationMethodologySnapshot` declares acceptance of Assembled Fundamental Evidence (ADR 0025), a compatible, strict-known `AssembledFundamentalEvidenceRecord` becomes eligible to substitute, exclusively, for the native `FundamentalEvidenceRecord` otherwise required by Valuation Inputs item 2, subject to item 6's exclusivity rule above. `CanonicalValuationService` is the sole and exclusive owner of the decision whether a specific record — native or assembled — is accepted as that input for a specific fair-value estimate:
 >
-> 1. `CanonicalValuationService` independently re-validates, at estimate-construction time, that the consumed record's declared entity, representation, value-capture pathway, currency, unit, and accounting window satisfy this ADR's Scope and Valuation Inputs requirements. This is the same fail-closed independent-validation pattern `CanonicalValuationService` already applies to every other input (identity match, strict-known cutoff, unit match, and so on); it is a final defensive check performed immediately before valuation arithmetic, never a second assembly authority, and it never re-derives, re-composes, expands, or overrides a Canonical Evidence Assembly Authority decision.
-> 2. A rejection at this boundary makes the fair-value estimate explicitly unavailable, under the same Missingness rule that already governs every other input; it never triggers ad hoc re-assembly, substitution, partial acceptance, or a fallback to a different evidence family.
+> 1. `CanonicalValuationService` is the only authority anywhere in this chain that evaluates methodology-contract input eligibility. This is not a second, corroborating, or "final defensive" check of a prior evaluation performed elsewhere — no other service or authority evaluates whether any record is permitted as a methodology input. The Canonical Evidence Assembly Authority (ADR 0025) never performs, anticipates, or duplicates this evaluation; its own authority ends once it has produced (or declined to produce) a valid `AssembledFundamentalEvidenceRecord` under its own lossless-composition invariants, and it makes no determination about which, if any, valuation methodology may consume that record.
+> 2. At estimate-construction time, `CanonicalValuationService` validates that the consumed record's declared entity, representation, value-capture pathway, currency, unit, and accounting window satisfy this ADR's Scope and Valuation Inputs requirements, exactly as it already independently validates every other input (identity match, strict-known cutoff, unit match, and so on).
+> 3. A rejection at this boundary makes the fair-value estimate explicitly unavailable, under the same Missingness rule that already governs every other input; it never triggers ad hoc re-assembly, substitution, partial acceptance, or a fallback to a different evidence family.
 
 **Persistence requirements.** The "Additional minimum fields beyond ADR 0021's baseline" cell for `FairValueEstimateRecord` in ADR 0022's Persistence requirements table is amended by appending the following clause:
 
