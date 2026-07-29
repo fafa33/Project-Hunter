@@ -18,6 +18,17 @@ from hunter.evidence_assembly import (
     EvidenceShapeRegistryError,
     EvidenceShapeRegistryRepository,
 )
+from hunter.evidence_assembly.registry import (
+    REGISTRY_AUTHORITY_ID,
+    REGISTRY_SCHEMA_VERSION,
+    EvidenceShapeRegistrySnapshot,
+)
+from hunter.evidence_assembly.registry import (
+    _content_hash as registry_content_hash,
+)
+from hunter.evidence_assembly.registry import (
+    _snapshot as registry_snapshot,
+)
 from hunter.persistence.records import SnapshotRecord
 from hunter.persistence.serialization import record_to_json
 from hunter.persistence.sql import RepositoryFactory, SessionFactory, create_schema, create_sqlite_engine
@@ -253,6 +264,74 @@ def _canonical_value_capture(record):
     return replace(record, content_hash=canonical_value_capture_content_hash(record))
 
 
+def _test_registry_record(
+    *,
+    effective_start: datetime = T0,
+    effective_end: datetime = datetime(2027, 1, 1, tzinfo=UTC),
+    recorded_at: datetime = RECORDED,
+    known_at: datetime = RECORDED,
+) -> EvidenceShapeRegistrySnapshot:
+    calendar = ("daily", "monthly", "quarterly", "semiannual", "annual")
+    shapes = tuple(
+        EvidenceShape(
+            shape_id=f"{cadence}-revenue",
+            evidence_type="audited_financial_disclosure",
+            source_methodology=f"reported-{cadence}" if cadence != "semiannual" else "reported",
+            accounting_meaning="period_specific",
+            cadence=cadence,  # type: ignore[arg-type]
+            composition_operation="none" if cadence == "annual" else "exact_sum",
+            active=True,
+            currency="USD",
+            unit="USD",
+            compatible_cadences=tuple(item for item in calendar if item != cadence),  # type: ignore[misc]
+        )
+        for cadence in calendar
+    ) + (
+        replace(_shape("irregular", "irregular", compatible=()), source_methodology="reported-irregular"),
+        EvidenceShape(
+            shape_id="event-driven",
+            evidence_type="audited_financial_disclosure",
+            source_methodology="reported-event",
+            accounting_meaning="event",
+            cadence="event_driven",
+            composition_operation="none",
+            active=False,
+            currency="USD",
+            unit="USD",
+        ),
+        EvidenceShape(
+            shape_id="epoch-based",
+            evidence_type="onchain_observation",
+            source_methodology="reported-epoch",
+            accounting_meaning="cumulative",
+            cadence="epoch_based",
+            composition_operation="none",
+            active=False,
+            currency="USD",
+            unit="USD",
+        ),
+    )
+    pending = EvidenceShapeRegistrySnapshot(
+        record_id="pending",
+        registry_id=REGISTRY_ID,
+        registry_version="1",
+        schema_version=REGISTRY_SCHEMA_VERSION,
+        shapes=shapes,
+        effective_start=effective_start,
+        effective_end=effective_end,
+        recorded_at=recorded_at,
+        known_at=known_at,
+        active=True,
+        quality_state="accepted",
+        conflict_state="none",
+        authorized_by=REGISTRY_AUTHORITY_ID,
+        authorizing_adr_reference="ADR-0025",
+        content_hash="pending",
+    )
+    digest = registry_content_hash(pending)
+    return replace(pending, record_id=f"test-registry:{digest}", content_hash=digest)
+
+
 def _service(
     tmp_path: Path,
     *,
@@ -296,15 +375,7 @@ def _service(
     )
     registry_repository = EvidenceShapeRegistryRepository(path)
     registry_authority = EvidenceShapeRegistryAuthority(registry_repository, application_root=Path.cwd())
-    registry_authority.persist(
-        registry_id=REGISTRY_ID,
-        registry_version="1",
-        effective_start=T0,
-        effective_end=datetime(2027, 1, 1, tzinfo=UTC),
-        recorded_at=RECORDED,
-        known_at=RECORDED,
-        authorizing_adr_reference="ADR-0025",
-    )
+    _save_snapshots(path, registry_snapshot(_test_registry_record()))
     return (
         CanonicalEvidenceAssemblyService(
             repository=AssembledEvidenceRepository(path),
@@ -390,16 +461,7 @@ def test_registry_generic_sql_history_hash_and_strict_known(tmp_path: Path) -> N
     path = tmp_path / "data_ops.sqlite"
     repository = EvidenceShapeRegistryRepository(path)
     authority = EvidenceShapeRegistryAuthority(repository, application_root=Path.cwd())
-    first = authority.persist(
-        registry_id=REGISTRY_ID,
-        registry_version="1",
-        effective_start=T0,
-        effective_end=T3,
-        recorded_at=T1,
-        known_at=T1,
-        authorizing_adr_reference="ADR-0025",
-    )
-    assert (
+    with pytest.raises(EvidenceShapeRegistryError, match="authorizes no concrete entries"):
         authority.persist(
             registry_id=REGISTRY_ID,
             registry_version="1",
@@ -409,8 +471,8 @@ def test_registry_generic_sql_history_hash_and_strict_known(tmp_path: Path) -> N
             known_at=T1,
             authorizing_adr_reference="ADR-0025",
         )
-        == first
-    )
+    first = _test_registry_record(effective_end=T3, recorded_at=T1, known_at=T1)
+    _save_snapshots(path, registry_snapshot(first), registry_snapshot(first))
     assert (
         repository.strict_known(registry_id=REGISTRY_ID, registry_version="1", effective_as_of=T2, known_by=T0) is None
     )
@@ -419,16 +481,6 @@ def test_registry_generic_sql_history_hash_and_strict_known(tmp_path: Path) -> N
     )
     assert repository.migration_ids() == ("generic-sql-evidence-shape-registry-v1",)
     assert len(repository.history(REGISTRY_ID)) == 1
-    with pytest.raises(EvidenceShapeRegistryError):
-        authority.persist(
-            registry_id=REGISTRY_ID,
-            registry_version="1",
-            effective_start=T0,
-            effective_end=T3,
-            recorded_at=T2,
-            known_at=T2,
-            authorizing_adr_reference="ADR-0025",
-        )
     with pytest.raises(EvidenceShapeRegistryError, match="newly accepted ADR"):
         authority.persist(
             registry_id=REGISTRY_ID,
@@ -599,16 +651,8 @@ def test_corrected_supply_and_pathway_remain_in_same_assembly_lineage(tmp_path: 
 )
 def test_governed_cadence_comparison(tmp_path: Path, selected: str, alternative: str, allowed: bool) -> None:
     path = tmp_path / "data_ops.sqlite"
-    authority = EvidenceShapeRegistryAuthority(EvidenceShapeRegistryRepository(path), application_root=Path.cwd())
-    registry = authority.persist(
-        registry_id=REGISTRY_ID,
-        registry_version="1",
-        effective_start=T0,
-        effective_end=T3,
-        recorded_at=T1,
-        known_at=T1,
-        authorizing_adr_reference="ADR-0025",
-    )
+    registry = _test_registry_record(effective_end=T3, recorded_at=T1, known_at=T1)
+    _save_snapshots(path, registry_snapshot(registry))
     selected_shape = registry.shape(f"{selected}-revenue")
     alternative_shape = registry.shape(f"{alternative}-revenue")
     comparison = registry.compare_cadence(selected_shape, alternative_shape)
@@ -947,15 +991,8 @@ def test_registry_unknown_inactive_future_effective_and_hash_invalid_fail_closed
     path = tmp_path / "future" / "data_ops.sqlite"
     path.parent.mkdir(parents=True)
     authority = EvidenceShapeRegistryAuthority(EvidenceShapeRegistryRepository(path), application_root=Path.cwd())
-    authority.persist(
-        registry_id=REGISTRY_ID,
-        registry_version="1",
-        effective_start=T2,
-        effective_end=T3,
-        recorded_at=RECORDED,
-        known_at=RECORDED,
-        authorizing_adr_reference="ADR-0025",
-    )
+    future_registry = _test_registry_record(effective_start=T2, effective_end=T3)
+    _save_snapshots(path, registry_snapshot(future_registry))
     assert (
         authority.strict_known_registry(
             registry_id=REGISTRY_ID,

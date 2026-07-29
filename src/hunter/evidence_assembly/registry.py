@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -11,7 +11,6 @@ from hunter.evidence_assembly.models import Cadence, EvidenceShape
 from hunter.persistence.models import QuerySpec
 from hunter.persistence.records import SnapshotRecord
 from hunter.persistence.sql import RepositoryFactory, SessionFactory, create_schema, create_sqlite_engine
-from hunter.persistence.sql.exceptions import PersistenceIdentityConflictError
 
 DEFAULT_REGISTRY_DB = Path("data/data_ops.sqlite")
 REGISTRY_MIGRATION_ID = "generic-sql-evidence-shape-registry-v1"
@@ -35,55 +34,6 @@ _CALENDAR_CADENCES: tuple[Cadence, ...] = (
     "quarterly",
     "semiannual",
     "annual",
-)
-CANONICAL_INITIAL_SHAPES: tuple[EvidenceShape, ...] = tuple(
-    EvidenceShape(
-        shape_id=f"{cadence}-revenue",
-        evidence_type="audited_financial_disclosure",
-        source_methodology=f"reported-{cadence}" if cadence != "semiannual" else "reported",
-        accounting_meaning="period_specific",
-        cadence=cadence,
-        composition_operation="none" if cadence == "annual" else "exact_sum",
-        active=True,
-        currency="USD",
-        unit="USD",
-        compatible_cadences=tuple(item for item in _CALENDAR_CADENCES if item != cadence),
-    )
-    for cadence in _CALENDAR_CADENCES
-) + (
-    EvidenceShape(
-        shape_id="irregular",
-        evidence_type="audited_financial_disclosure",
-        source_methodology="reported-irregular",
-        accounting_meaning="period_specific",
-        cadence="irregular",
-        composition_operation="exact_sum",
-        active=True,
-        currency="USD",
-        unit="USD",
-    ),
-    EvidenceShape(
-        shape_id="event-driven",
-        evidence_type="audited_financial_disclosure",
-        source_methodology="reported-event",
-        accounting_meaning="event",
-        cadence="event_driven",
-        composition_operation="none",
-        active=False,
-        currency="USD",
-        unit="USD",
-    ),
-    EvidenceShape(
-        shape_id="epoch-based",
-        evidence_type="onchain_observation",
-        source_methodology="reported-epoch",
-        accounting_meaning="cumulative",
-        cadence="epoch_based",
-        composition_operation="none",
-        active=False,
-        currency="USD",
-        unit="USD",
-    ),
 )
 
 
@@ -282,50 +232,22 @@ class EvidenceShapeRegistryAuthority:
         supersedes_record_id: str | None = None,
         correction_reason: str = "",
     ) -> EvidenceShapeRegistrySnapshot:
-        if registry_id != CANONICAL_REGISTRY_ID or registry_version != CANONICAL_REGISTRY_VERSION:
-            raise EvidenceShapeRegistryError("registry identity or version is not governed by an accepted ADR")
-        if authorizing_adr_reference != REGISTRY_AUTHORIZING_ADR:
-            raise EvidenceShapeRegistryError("registry amendment lacks accepted-ADR authorization")
-        if supersedes_record_id is not None:
-            raise EvidenceShapeRegistryError(
-                "ADR-0025 authorizes only the initial taxonomy; amendments require a newly accepted ADR"
-            )
-        pending = EvidenceShapeRegistrySnapshot(
-            record_id="pending",
-            registry_id=registry_id,
-            registry_version=registry_version,
-            schema_version=REGISTRY_SCHEMA_VERSION,
-            shapes=CANONICAL_INITIAL_SHAPES,
-            effective_start=effective_start,
-            effective_end=effective_end,
-            recorded_at=recorded_at,
-            known_at=known_at,
-            active=active,
-            quality_state="accepted",
-            conflict_state="none",
-            authorized_by=REGISTRY_AUTHORITY_ID,
-            authorizing_adr_reference=authorizing_adr_reference,
-            content_hash="pending",
-            supersedes_record_id=supersedes_record_id,
-            correction_reason=correction_reason,
+        del (
+            registry_id,
+            registry_version,
+            effective_start,
+            effective_end,
+            recorded_at,
+            known_at,
+            authorizing_adr_reference,
+            active,
+            supersedes_record_id,
+            correction_reason,
         )
-        digest = _content_hash(pending)
-        record = replace(pending, record_id=f"evidence-shape-registry:{digest}", content_hash=digest)
-        engine = create_sqlite_engine(self.repository.path)
-        session = SessionFactory(engine).create()
-        try:
-            session.connection().exec_driver_sql("BEGIN IMMEDIATE")
-            snapshots = RepositoryFactory(session).snapshots()
-            self._authorize_lineage(record, snapshots=snapshots)
-            snapshots.save(_snapshot(record))
-            session.commit()
-        except PersistenceIdentityConflictError as exc:
-            session.rollback()
-            raise EvidenceShapeRegistryError(str(exc)) from exc
-        finally:
-            session.close()
-            engine.dispose()
-        return record
+        raise EvidenceShapeRegistryError(
+            "ADR-0025 defines Registry governance but authorizes no concrete entries; "
+            "population requires a newly accepted ADR"
+        )
 
     def strict_known_registry(self, **kwargs: Any) -> EvidenceShapeRegistrySnapshot | None:
         return self.repository.strict_known(**kwargs)

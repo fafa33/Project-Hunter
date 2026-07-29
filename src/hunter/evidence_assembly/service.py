@@ -300,6 +300,7 @@ class CanonicalEvidenceAssemblyService:
                 or not verify_value_capture_content_hash(constituent)
                 or constituent.semantic_version != version
                 or constituent.content_hash != content_hash
+                or constituent.effective_at > known_by
                 or constituent.recorded_at > known_by
                 or constituent.known_at > known_by
             ):
@@ -313,12 +314,14 @@ class CanonicalEvidenceAssemblyService:
             or not verify_value_capture_content_hash(supply)
             or supply.semantic_version != record.supply_basis_version
             or supply.content_hash != record.supply_basis_content_hash
+            or supply.effective_at > known_by
             or supply.recorded_at > known_by
             or supply.known_at > known_by
             or rule is None
             or not verify_value_capture_content_hash(rule)
             or rule.semantic_version != record.value_capture_pathway_version
             or rule.content_hash != record.value_capture_pathway_content_hash
+            or rule.effective_at > known_by
             or rule.recorded_at > known_by
             or rule.known_at > known_by
         ):
