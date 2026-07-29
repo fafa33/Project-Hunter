@@ -128,6 +128,7 @@ class SupplyAndValueCaptureRepository:
                     and record.identity.economic_claim_id == economic_claim_id
                     and record.accounting_period_start < accounting_window_end
                     and accounting_window_start < record.accounting_period_end
+                    and record.effective_at <= known_by
                     and record.recorded_at <= known_by
                     and record.known_at <= known_by
                 ),

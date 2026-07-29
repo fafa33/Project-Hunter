@@ -1,52 +1,25 @@
 from __future__ import annotations
 
-import json
-import sqlite3
 from dataclasses import asdict
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from hunter.evidence_assembly.models import AssembledFundamentalEvidenceRecord, AssemblyConflictRecord
+from hunter.evidence_assembly.models import (
+    AssembledFundamentalEvidenceRecord,
+    AssemblyConflictRecord,
+    AssemblyLineageProjection,
+)
+from hunter.persistence.models import QuerySpec
+from hunter.persistence.records import SnapshotRecord
+from hunter.persistence.sql import RepositoryFactory, SessionFactory, create_schema, create_sqlite_engine
+from hunter.persistence.sql.exceptions import PersistenceIdentityConflictError
 from hunter.value_capture.models import EconomicClaimIdentity
 
-EVIDENCE_ASSEMBLY_MIGRATION_ID = "canonical-evidence-assembly-v1"
-
-_MIGRATION = """
-CREATE TABLE IF NOT EXISTS evidence_assembly_schema_migrations (
-    migration_id TEXT PRIMARY KEY,
-    applied_at TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS assembled_fundamental_evidence_records (
-    record_id TEXT PRIMARY KEY,
-    logical_id TEXT NOT NULL,
-    semantic_version TEXT NOT NULL,
-    effective_at TEXT NOT NULL,
-    recorded_at TEXT NOT NULL,
-    known_at TEXT NOT NULL,
-    conflict_state TEXT NOT NULL,
-    supersedes_record_id TEXT,
-    content_hash TEXT NOT NULL,
-    payload_json TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS ix_assembled_evidence_logical_history
-ON assembled_fundamental_evidence_records(logical_id, recorded_at, known_at, record_id);
-CREATE INDEX IF NOT EXISTS ix_assembled_evidence_strict_known
-ON assembled_fundamental_evidence_records(logical_id, effective_at, known_at, recorded_at, record_id);
-CREATE UNIQUE INDEX IF NOT EXISTS ux_assembled_evidence_successor
-ON assembled_fundamental_evidence_records(supersedes_record_id)
-WHERE supersedes_record_id IS NOT NULL;
-CREATE TABLE IF NOT EXISTS evidence_assembly_conflicts (
-    record_id TEXT PRIMARY KEY,
-    entity_id TEXT NOT NULL,
-    economic_claim_id TEXT NOT NULL,
-    recorded_at TEXT NOT NULL,
-    known_at TEXT NOT NULL,
-    payload_json TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS ix_evidence_assembly_conflicts
-ON evidence_assembly_conflicts(entity_id, economic_claim_id, known_at, record_id);
-"""
+DEFAULT_EVIDENCE_ASSEMBLY_DB = Path("data/data_ops.sqlite")
+EVIDENCE_ASSEMBLY_MIGRATION_ID = "generic-sql-canonical-evidence-assembly-v1"
+ASSEMBLY_SNAPSHOT_TYPE = "assembled-fundamental-evidence"
+CONFLICT_SNAPSHOT_TYPE = "evidence-assembly-conflict"
 
 
 class EvidenceAssemblyPersistenceError(ValueError):
@@ -54,185 +27,150 @@ class EvidenceAssemblyPersistenceError(ValueError):
 
 
 class AssembledEvidenceRepository:
-    """Mechanical append-only persistence and strict-known query boundary."""
+    """Mechanical append-only reads in Hunter's generic analytical SQL envelope."""
 
-    def __init__(self, path: str | Path) -> None:
+    def __init__(self, path: str | Path = DEFAULT_EVIDENCE_ASSEMBLY_DB) -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self._connect() as connection:
-            connection.executescript(_MIGRATION)
-            connection.execute(
-                "INSERT OR IGNORE INTO evidence_assembly_schema_migrations(migration_id, applied_at) VALUES (?, ?)",
-                (EVIDENCE_ASSEMBLY_MIGRATION_ID, datetime.now().astimezone().isoformat()),
-            )
+        engine = create_sqlite_engine(self.path)
+        try:
+            create_schema(engine)
+        finally:
+            engine.dispose()
 
     def migration_ids(self) -> tuple[str, ...]:
-        with self._connect() as connection:
-            rows = connection.execute(
-                "SELECT migration_id FROM evidence_assembly_schema_migrations ORDER BY migration_id"
-            ).fetchall()
-        return tuple(str(row[0]) for row in rows)
+        return (EVIDENCE_ASSEMBLY_MIGRATION_ID,)
 
     def _insert_authorized(self, record: AssembledFundamentalEvidenceRecord) -> AssembledFundamentalEvidenceRecord:
-        """Persist a record already authorized by CanonicalEvidenceAssemblyService."""
-        payload = _canonical_payload(record)
-        with self._connect() as connection:
-            connection.execute("BEGIN IMMEDIATE")
-            existing = connection.execute(
-                "SELECT payload_json FROM assembled_fundamental_evidence_records WHERE record_id = ?",
-                (record.record_id,),
-            ).fetchone()
-            if existing is not None:
-                if str(existing[0]) == payload:
-                    return record
-                raise EvidenceAssemblyPersistenceError("divergent duplicate record identity")
-            try:
-                connection.execute(
-                    """
-                    INSERT INTO assembled_fundamental_evidence_records(
-                        record_id, logical_id, semantic_version, effective_at, recorded_at, known_at,
-                        conflict_state, supersedes_record_id, content_hash, payload_json
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        record.record_id,
-                        record.logical_id,
-                        record.semantic_version,
-                        record.effective_at.isoformat(),
-                        record.recorded_at.isoformat(),
-                        record.known_at.isoformat(),
-                        record.conflict_state,
-                        record.supersedes_record_id,
-                        record.content_hash,
-                        payload,
-                    ),
-                )
-            except sqlite3.IntegrityError as exc:
-                raise EvidenceAssemblyPersistenceError("append-only identity or lineage conflict") from exc
+        self._save(_snapshot(record, ASSEMBLY_SNAPSHOT_TYPE, record.logical_id))
+        return record
+
+    def _insert_conflict_authorized(self, record: AssemblyConflictRecord) -> AssemblyConflictRecord:
+        self._save(_snapshot(record, CONFLICT_SNAPSHOT_TYPE, record.logical_id))
         return record
 
     def get(self, record_id: str) -> AssembledFundamentalEvidenceRecord | None:
-        with self._connect() as connection:
-            row = connection.execute(
-                "SELECT payload_json FROM assembled_fundamental_evidence_records WHERE record_id = ?",
-                (record_id,),
-            ).fetchone()
-        return _from_payload(str(row[0])) if row is not None else None
+        item = self._load(record_id, ASSEMBLY_SNAPSHOT_TYPE)
+        return _assembly(item.payload) if item else None
 
     def history(self, logical_id: str) -> tuple[AssembledFundamentalEvidenceRecord, ...]:
-        with self._connect() as connection:
-            rows = connection.execute(
-                """
-                SELECT payload_json FROM assembled_fundamental_evidence_records
-                WHERE logical_id = ? ORDER BY recorded_at, known_at, record_id
-                """,
-                (logical_id,),
-            ).fetchall()
-        return tuple(_from_payload(str(row[0])) for row in rows)
+        records = [record for record in self._assemblies() if record.logical_id == logical_id]
+        records.sort(key=lambda record: (record.effective_at, record.recorded_at, record.known_at, record.record_id))
+        return tuple(records)
 
-    def successor(self, predecessor_id: str) -> AssembledFundamentalEvidenceRecord | None:
-        with self._connect() as connection:
-            row = connection.execute(
-                "SELECT payload_json FROM assembled_fundamental_evidence_records WHERE supersedes_record_id = ?",
-                (predecessor_id,),
-            ).fetchone()
-        return _from_payload(str(row[0])) if row is not None else None
-
-    def is_superseded(self, record_id: str) -> bool:
-        return self.successor(record_id) is not None
-
-    def assemblies_for_constituent(self, record_id: str) -> tuple[AssembledFundamentalEvidenceRecord, ...]:
-        """Return provenance-complete assemblies containing an exact constituent ID."""
-        with self._connect() as connection:
-            rows = connection.execute(
-                """
-                SELECT payload_json FROM assembled_fundamental_evidence_records
-                ORDER BY effective_at, recorded_at, known_at, record_id
-                """
-            ).fetchall()
-        records = (_from_payload(str(row[0])) for row in rows)
-        return tuple(record for record in records if record_id in record.constituent_record_ids)
-
-    def _insert_conflict_authorized(self, record: AssemblyConflictRecord) -> AssemblyConflictRecord:
-        payload = _canonical_conflict_payload(record)
-        with self._connect() as connection:
-            existing = connection.execute(
-                "SELECT payload_json FROM evidence_assembly_conflicts WHERE record_id = ?", (record.record_id,)
-            ).fetchone()
-            if existing is not None:
-                if str(existing[0]) == payload:
-                    return record
-                raise EvidenceAssemblyPersistenceError("divergent duplicate conflict identity")
-            connection.execute(
-                """
-                INSERT INTO evidence_assembly_conflicts(
-                    record_id, entity_id, economic_claim_id, recorded_at, known_at, payload_json
-                ) VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    record.record_id,
-                    record.entity_id,
-                    record.economic_claim_id,
-                    record.recorded_at.isoformat(),
-                    record.known_at.isoformat(),
-                    payload,
-                ),
+    def projected_history(self, logical_id: str) -> tuple[AssemblyLineageProjection, ...]:
+        records = self.history(logical_id)
+        superseded = {record.supersedes_record_id for record in records if record.supersedes_record_id}
+        return tuple(
+            AssemblyLineageProjection(
+                record=record,
+                supersession_state="superseded" if record.record_id in superseded else "active",
             )
-        return record
+            for record in records
+        )
 
-    def unresolved_assembly_conflicts(self) -> tuple[AssemblyConflictRecord, ...]:
-        with self._connect() as connection:
-            rows = connection.execute(
-                "SELECT payload_json FROM evidence_assembly_conflicts ORDER BY known_at, record_id"
-            ).fetchall()
-        return tuple(_conflict_from_payload(str(row[0])) for row in rows)
+    def successor(
+        self, predecessor_id: str, *, known_by: datetime | None = None
+    ) -> AssembledFundamentalEvidenceRecord | None:
+        records = [record for record in self._assemblies() if record.supersedes_record_id == predecessor_id]
+        if known_by is not None:
+            cutoff = _aware(known_by)
+            records = [
+                record
+                for record in records
+                if record.effective_at <= cutoff and record.recorded_at <= cutoff and record.known_at <= cutoff
+            ]
+        if len(records) > 1:
+            raise EvidenceAssemblyPersistenceError("branching correction lineage")
+        return records[0] if records else None
 
     def strict_known_candidates(
         self, *, logical_id: str, effective_as_of: datetime, known_by: datetime
     ) -> tuple[AssembledFundamentalEvidenceRecord, ...]:
-        with self._connect() as connection:
-            rows = connection.execute(
-                """
-                SELECT payload_json FROM assembled_fundamental_evidence_records
-                WHERE logical_id = ?
-                  AND effective_at <= ?
-                  AND recorded_at <= ?
-                  AND known_at <= ?
-                ORDER BY effective_at DESC, known_at DESC, recorded_at DESC, record_id DESC
-                """,
-                (logical_id, effective_as_of.isoformat(), known_by.isoformat(), known_by.isoformat()),
-            ).fetchall()
-        return tuple(_from_payload(str(row[0])) for row in rows)
+        effective_as_of, known_by = _aware(effective_as_of), _aware(known_by)
+        records = [
+            record
+            for record in self._assemblies()
+            if record.logical_id == logical_id
+            and record.effective_at <= effective_as_of
+            and record.recorded_at <= known_by
+            and record.known_at <= known_by
+        ]
+        records.sort(
+            key=lambda record: (record.effective_at, record.known_at, record.recorded_at, record.record_id),
+            reverse=True,
+        )
+        return tuple(records)
 
-    def _connect(self) -> sqlite3.Connection:
-        return sqlite3.connect(self.path)
+    def unresolved_assembly_conflicts(self, *, known_by: datetime | None = None) -> tuple[AssemblyConflictRecord, ...]:
+        records = list(self._conflicts())
+        if known_by is not None:
+            cutoff = _aware(known_by)
+            records = [
+                record
+                for record in records
+                if record.effective_at <= cutoff and record.recorded_at <= cutoff and record.known_at <= cutoff
+            ]
+        records.sort(key=lambda record: (record.known_at, record.record_id))
+        return tuple(records)
+
+    def _assemblies(self) -> tuple[AssembledFundamentalEvidenceRecord, ...]:
+        return tuple(_assembly(item.payload) for item in self._snapshots(ASSEMBLY_SNAPSHOT_TYPE))
+
+    def _conflicts(self) -> tuple[AssemblyConflictRecord, ...]:
+        return tuple(_conflict(item.payload) for item in self._snapshots(CONFLICT_SNAPSHOT_TYPE))
+
+    def _load(self, record_id: str, snapshot_type: str) -> SnapshotRecord | None:
+        engine = create_sqlite_engine(self.path)
+        session = SessionFactory(engine).create()
+        try:
+            item = RepositoryFactory(session).snapshots().load(record_id)
+            return item if item is not None and item.snapshot_type == snapshot_type else None
+        finally:
+            session.close()
+            engine.dispose()
+
+    def _snapshots(self, snapshot_type: str) -> tuple[SnapshotRecord, ...]:
+        engine = create_sqlite_engine(self.path)
+        session = SessionFactory(engine).create()
+        try:
+            items = RepositoryFactory(session).snapshots().query(QuerySpec(record_kind="snapshot"))
+            return tuple(item for item in items if item.snapshot_type == snapshot_type)
+        finally:
+            session.close()
+            engine.dispose()
+
+    def _save(self, record: SnapshotRecord) -> None:
+        engine = create_sqlite_engine(self.path)
+        session = SessionFactory(engine).create()
+        try:
+            RepositoryFactory(session).snapshots().save(record)
+            session.commit()
+        except PersistenceIdentityConflictError as exc:
+            session.rollback()
+            raise EvidenceAssemblyPersistenceError(str(exc)) from exc
+        finally:
+            session.close()
+            engine.dispose()
 
 
-def _canonical_payload(record: AssembledFundamentalEvidenceRecord) -> str:
-    payload = asdict(record)
-    payload["identity"] = asdict(record.identity)
-    for name in (
-        "accounting_window_start",
-        "accounting_window_end",
-        "effective_at",
-        "recorded_at",
-        "known_at",
-    ):
-        payload[name] = getattr(record, name).isoformat()
-    return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+def _snapshot(record: Any, snapshot_type: str, target_id: str) -> SnapshotRecord:
+    return SnapshotRecord(
+        id=record.record_id,
+        created_at=record.recorded_at,
+        effective_at=record.effective_at,
+        snapshot_type=snapshot_type,
+        target_id=target_id,
+        record_ids=(record.record_id,),
+        payload=_json_safe(asdict(record)),
+        metadata={"known_at": record.known_at.isoformat(), "content_hash": record.content_hash},
+    )
 
 
-def _from_payload(payload_json: str) -> AssembledFundamentalEvidenceRecord:
-    payload: dict[str, Any] = json.loads(payload_json)
-    payload["identity"] = EconomicClaimIdentity(**payload["identity"])
-    for name in (
-        "accounting_window_start",
-        "accounting_window_end",
-        "effective_at",
-        "recorded_at",
-        "known_at",
-    ):
-        payload[name] = datetime.fromisoformat(payload[name])
+def _assembly(payload: dict[str, Any]) -> AssembledFundamentalEvidenceRecord:
+    result = dict(payload)
+    result["identity"] = EconomicClaimIdentity(**result["identity"])
+    _decode_times(result, "accounting_window_start", "accounting_window_end", "effective_at", "recorded_at", "known_at")
     for name in (
         "constituent_record_ids",
         "constituent_logical_ids",
@@ -242,20 +180,53 @@ def _from_payload(payload_json: str) -> AssembledFundamentalEvidenceRecord:
         "constituent_source_references",
         "constituent_shape_ids",
     ):
-        payload[name] = tuple(payload[name])
-    return AssembledFundamentalEvidenceRecord(**payload)
+        result[name] = tuple(result[name])
+    return AssembledFundamentalEvidenceRecord(**result)
 
 
-def _canonical_conflict_payload(record: AssemblyConflictRecord) -> str:
-    payload = asdict(record)
-    for name in ("accounting_window_start", "accounting_window_end", "recorded_at", "known_at"):
-        payload[name] = getattr(record, name).isoformat()
-    return json.dumps(payload, sort_keys=True, separators=(",", ":"))
+def _conflict(payload: dict[str, Any]) -> AssemblyConflictRecord:
+    result = dict(payload)
+    _decode_times(
+        result,
+        "accounting_window_start",
+        "accounting_window_end",
+        "replay_cutoff",
+        "effective_at",
+        "recorded_at",
+        "known_at",
+    )
+    for name in (
+        "candidate_record_ids",
+        "candidate_logical_ids",
+        "candidate_versions",
+        "candidate_content_hashes",
+        "candidate_source_ids",
+        "candidate_effective_at",
+        "candidate_recorded_at",
+        "candidate_known_at",
+        "pathway_classifications",
+        "shape_classifications",
+    ):
+        result[name] = tuple(result[name])
+    return AssemblyConflictRecord(**result)
 
 
-def _conflict_from_payload(payload_json: str) -> AssemblyConflictRecord:
-    payload: dict[str, Any] = json.loads(payload_json)
-    for name in ("accounting_window_start", "accounting_window_end", "recorded_at", "known_at"):
-        payload[name] = datetime.fromisoformat(payload[name])
-    payload["candidate_record_ids"] = tuple(payload["candidate_record_ids"])
-    return AssemblyConflictRecord(**payload)
+def _decode_times(payload: dict[str, Any], *names: str) -> None:
+    for name in names:
+        payload[name] = datetime.fromisoformat(str(payload[name]))
+
+
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, datetime):
+        return value.astimezone(UTC).isoformat()
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    return value
+
+
+def _aware(value: datetime) -> datetime:
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError("datetime must be timezone-aware")
+    return value.astimezone(UTC)

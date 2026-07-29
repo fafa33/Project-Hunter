@@ -5,167 +5,139 @@ from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Literal
 
-from hunter.value_capture.models import EconomicClaimIdentity, FundamentalEvidenceRecord
+from hunter.value_capture.models import EconomicClaimIdentity
 
 ASSEMBLED_EVIDENCE_SCHEMA_VERSION = "assembled-fundamental-evidence-v1"
 ASSEMBLY_RULE_VERSION = "lossless-exact-coverage-v1"
 DETERMINISTIC_ORDER = "accounting_period_start-then-record_id"
 
 AccountingMeaning = Literal["period_specific", "cumulative", "event"]
-EvidenceMarker = Literal["assembled"]
-AssemblyQualityState = Literal["accepted", "unavailable"]
-AssemblyConflictState = Literal["none", "open", "resolved"]
+Cadence = Literal["daily", "monthly", "quarterly", "event_driven", "irregular", "epoch_based"]
 
 
 @dataclass(frozen=True)
 class EvidenceShape:
     shape_id: str
-    registry_version: str
     evidence_type: str
     accounting_meaning: AccountingMeaning
-    cadence: str
+    cadence: Cadence
     composition_operation: Literal["exact_sum", "none"]
     active: bool
+    currency: str
+    unit: str
+    compatible_shape_ids: tuple[str, ...] = ()
+    compatible_cadences: tuple[Cadence, ...] = ()
 
     def __post_init__(self) -> None:
-        _required(self, "shape_id", "registry_version", "evidence_type", "cadence")
+        _required(self, "shape_id", "evidence_type", "cadence", "currency", "unit")
         if self.accounting_meaning not in {"period_specific", "cumulative", "event"}:
             raise ValueError("unknown accounting meaning")
         if self.composition_operation not in {"exact_sum", "none"}:
             raise ValueError("unknown composition operation")
+        object.__setattr__(self, "compatible_shape_ids", tuple(sorted(self.compatible_shape_ids)))
+        object.__setattr__(self, "compatible_cadences", tuple(sorted(self.compatible_cadences)))
 
 
 @dataclass(frozen=True)
 class AssemblyConstituent:
-    record: FundamentalEvidenceRecord
-    shape_id: str
-    currency: str
-    raw_unit: str
-    accounting_meaning: AccountingMeaning
-    supply_basis_id: str
-    pathway_id: str
-    representation_continuity_proof_id: str = ""
-    pathway_continuity_proof_id: str = ""
-    supply_basis_continuity_proof_id: str = ""
-
-    def __post_init__(self) -> None:
-        _required(
-            self,
-            "shape_id",
-            "currency",
-            "raw_unit",
-            "supply_basis_id",
-            "pathway_id",
-        )
-        if self.record.unit is None or self.record.amount is None:
-            raise ValueError("constituent must carry an amount and unit")
-
-
-@dataclass(frozen=True)
-class AuthoritativeEvidenceSemantics:
     evidence_record_id: str
-    evidence_record_version: str
     shape_id: str
-    currency: str
-    raw_unit: str
-    accounting_meaning: AccountingMeaning
-    supply_basis_id: str
-    pathway_id: str
-    effective_at: datetime
-    recorded_at: datetime
-    known_at: datetime
-    quality_state: Literal["accepted"]
-    conflict_state: Literal["none", "resolved"]
-    content_hash: str
+    supply_basis_record_id: str
+    pathway_rule_record_id: str
 
     def __post_init__(self) -> None:
         _required(
             self,
             "evidence_record_id",
-            "evidence_record_version",
             "shape_id",
-            "currency",
-            "raw_unit",
-            "supply_basis_id",
-            "pathway_id",
-            "content_hash",
+            "supply_basis_record_id",
+            "pathway_rule_record_id",
         )
-        object.__setattr__(self, "effective_at", _utc(self.effective_at))
-        object.__setattr__(self, "recorded_at", _utc(self.recorded_at))
-        object.__setattr__(self, "known_at", _utc(self.known_at))
-
-
-@dataclass(frozen=True)
-class MethodologyEvidenceInputContract:
-    contract_id: str
-    contract_version: str
-    accepts_assembled_evidence: bool
-    accepted_shape_ids: tuple[str, ...]
-    accepted_assembly_rule_versions: tuple[str, ...]
-    accounting_window_start: datetime
-    accounting_window_end: datetime
-    exact_gap_free_non_overlapping_coverage_required: bool
-    allow_representation_boundary_crossing: bool
-    allow_pathway_boundary_crossing: bool
-    allow_supply_basis_boundary_crossing: bool
-    provenance_content_hash_required: bool
-    conflict_policy: Literal["reject"]
-    minimum_quality_state: Literal["accepted"]
-    entity_id: str
-    representation_id: str
-    currency: str
-    unit: str
-    missingness_behavior: Literal["unavailable"]
-    strict_known_required: bool
-    effective_at: datetime
-    recorded_at: datetime
-    known_at: datetime
-    quality_state: Literal["accepted"]
-    conflict_state: Literal["none", "resolved"]
-    content_hash: str
-
-    def __post_init__(self) -> None:
-        _required(
-            self,
-            "contract_id",
-            "contract_version",
-            "entity_id",
-            "representation_id",
-            "currency",
-            "unit",
-            "content_hash",
-        )
-        object.__setattr__(self, "accounting_window_start", _utc(self.accounting_window_start))
-        object.__setattr__(self, "accounting_window_end", _utc(self.accounting_window_end))
-        object.__setattr__(self, "effective_at", _utc(self.effective_at))
-        object.__setattr__(self, "recorded_at", _utc(self.recorded_at))
-        object.__setattr__(self, "known_at", _utc(self.known_at))
-        if self.accounting_window_start >= self.accounting_window_end:
-            raise ValueError("methodology contract accounting window must have positive duration")
 
 
 @dataclass(frozen=True)
 class AssemblyConflictRecord:
     record_id: str
+    logical_id: str
     entity_id: str
     economic_claim_id: str
     accounting_window_start: datetime
     accounting_window_end: datetime
     candidate_record_ids: tuple[str, ...]
+    candidate_logical_ids: tuple[str, ...]
+    candidate_versions: tuple[str, ...]
+    candidate_content_hashes: tuple[str, ...]
+    candidate_source_ids: tuple[str, ...]
+    candidate_effective_at: tuple[str, ...]
+    candidate_recorded_at: tuple[str, ...]
+    candidate_known_at: tuple[str, ...]
+    registry_record_id: str
+    registry_id: str
+    registry_version: str
+    registry_content_hash: str
+    methodology_record_id: str
+    methodology_logical_id: str
+    methodology_version: str
+    methodology_content_hash: str
+    pathway_classifications: tuple[str, ...]
+    shape_classifications: tuple[str, ...]
+    assembly_request_id: str
+    replay_cutoff: datetime
+    conflict_category: str
     reason: str
+    effective_at: datetime
     recorded_at: datetime
     known_at: datetime
     conflict_state: Literal["open"] = "open"
     content_hash: str = ""
 
     def __post_init__(self) -> None:
-        _required(self, "record_id", "entity_id", "economic_claim_id", "reason", "content_hash")
-        if not self.candidate_record_ids:
-            raise ValueError("conflict candidates must not be empty")
-        object.__setattr__(self, "accounting_window_start", _utc(self.accounting_window_start))
-        object.__setattr__(self, "accounting_window_end", _utc(self.accounting_window_end))
-        object.__setattr__(self, "recorded_at", _utc(self.recorded_at))
-        object.__setattr__(self, "known_at", _utc(self.known_at))
+        _required(
+            self,
+            "record_id",
+            "logical_id",
+            "entity_id",
+            "economic_claim_id",
+            "registry_record_id",
+            "registry_id",
+            "registry_version",
+            "registry_content_hash",
+            "methodology_record_id",
+            "methodology_logical_id",
+            "methodology_version",
+            "methodology_content_hash",
+            "assembly_request_id",
+            "conflict_category",
+            "reason",
+            "content_hash",
+        )
+        size = len(self.candidate_record_ids)
+        if size == 0 or any(
+            len(values) != size
+            for values in (
+                self.candidate_logical_ids,
+                self.candidate_versions,
+                self.candidate_content_hashes,
+                self.candidate_source_ids,
+                self.candidate_effective_at,
+                self.candidate_recorded_at,
+                self.candidate_known_at,
+                self.pathway_classifications,
+                self.shape_classifications,
+            )
+        ):
+            raise ValueError("conflict provenance must be complete and positionally aligned")
+        _normalize_times(
+            self,
+            "accounting_window_start",
+            "accounting_window_end",
+            "replay_cutoff",
+            "effective_at",
+            "recorded_at",
+            "known_at",
+        )
+        if self.known_at > self.replay_cutoff:
+            raise ValueError("conflict must be known by replay cutoff")
 
 
 @dataclass(frozen=True)
@@ -175,18 +147,21 @@ class AssembledFundamentalEvidenceRecord:
     schema_version: str
     semantic_version: str
     assembly_rule_version: str
-    evidence_shape_registry_version: str
-    methodology_contract_id: str
-    methodology_contract_version: str
+    registry_record_id: str
+    registry_id: str
+    registry_version: str
+    registry_content_hash: str
+    methodology_record_id: str
+    methodology_logical_id: str
+    methodology_version: str
+    methodology_content_hash: str
     identity: EconomicClaimIdentity
-    representation_continuity_proof_id: str
-    value_capture_pathway_id: str
-    pathway_continuity_proof_id: str
-    supply_basis_id: str
-    supply_basis_continuity_proof_id: str
+    value_capture_pathway_record_id: str
+    supply_basis_record_id: str
     currency: str
     unit: str
     accounting_meaning: AccountingMeaning
+    cadence: Cadence
     accounting_window_start: datetime
     accounting_window_end: datetime
     accounting_period_days: int
@@ -202,19 +177,17 @@ class AssembledFundamentalEvidenceRecord:
     source_count: int
     assembly_content_hash: str
     aggregation_lineage: str
-    evidence_marker: EvidenceMarker
+    evidence_marker: Literal["assembled"]
     effective_at: datetime
     recorded_at: datetime
     known_at: datetime
-    quality_state: AssemblyQualityState
+    quality_state: Literal["accepted"]
     confidence_state: str
-    conflict_state: AssemblyConflictState
+    conflict_state: Literal["none", "resolved"]
     completeness_state: Literal["exact_complete"]
-    continuity_proof_state: str
     non_overlap_proof_state: Literal["gap_free_non_overlapping"]
     supersedes_record_id: str | None = None
     correction_reason: str = ""
-    supersession_state: Literal["active", "superseded"] = "active"
     content_hash: str = ""
 
     def __post_init__(self) -> None:
@@ -225,42 +198,44 @@ class AssembledFundamentalEvidenceRecord:
             "schema_version",
             "semantic_version",
             "assembly_rule_version",
-            "evidence_shape_registry_version",
-            "methodology_contract_id",
-            "methodology_contract_version",
-            "value_capture_pathway_id",
-            "supply_basis_id",
+            "registry_record_id",
+            "registry_id",
+            "registry_version",
+            "registry_content_hash",
+            "methodology_record_id",
+            "methodology_logical_id",
+            "methodology_version",
+            "methodology_content_hash",
+            "value_capture_pathway_record_id",
+            "supply_basis_record_id",
             "currency",
             "unit",
             "amount",
-            "deterministic_constituent_order",
             "assembly_content_hash",
             "aggregation_lineage",
             "confidence_state",
-            "continuity_proof_state",
             "content_hash",
         )
-        start = _utc(self.accounting_window_start)
-        end = _utc(self.accounting_window_end)
-        effective = _utc(self.effective_at)
-        recorded = _utc(self.recorded_at)
-        known = _utc(self.known_at)
-        if start >= end:
+        _normalize_times(
+            self,
+            "accounting_window_start",
+            "accounting_window_end",
+            "effective_at",
+            "recorded_at",
+            "known_at",
+        )
+        if self.accounting_window_start >= self.accounting_window_end:
             raise ValueError("accounting window must have positive duration")
-        if effective != end:
-            raise ValueError("effective_at must equal accounting_window_end")
-        if known < recorded:
+        if self.effective_at != self.accounting_window_end:
+            raise ValueError("effective_at must equal accounting window end")
+        if self.known_at < self.recorded_at:
             raise ValueError("known_at must not precede recorded_at")
-        if self.accounting_period_days != (end - start).days:
-            raise ValueError("accounting_period_days does not match accounting window")
-        if self.evidence_marker != "assembled":
-            raise ValueError("assembled evidence marker is mandatory")
-        if self.completeness_state != "exact_complete":
-            raise ValueError("partial assembly is prohibited")
+        if self.accounting_period_days != (self.accounting_window_end - self.accounting_window_start).days:
+            raise ValueError("accounting period does not match window")
+        if self.evidence_marker != "assembled" or self.completeness_state != "exact_complete":
+            raise ValueError("partial or unmarked assembly is prohibited")
         if self.non_overlap_proof_state != "gap_free_non_overlapping":
-            raise ValueError("non-overlap proof is mandatory")
-        if self.quality_state != "accepted" or self.conflict_state not in {"none", "resolved"}:
-            raise ValueError("only authoritative conflict-free assembled records may be persisted")
+            raise ValueError("gap-free non-overlap proof is mandatory")
         lengths = {
             len(self.constituent_record_ids),
             len(self.constituent_logical_ids),
@@ -272,24 +247,23 @@ class AssembledFundamentalEvidenceRecord:
             self.source_count,
         }
         if len(lengths) != 1 or self.source_count < 2:
-            raise ValueError("constituent provenance fields must have equal lengths and contain at least two records")
+            raise ValueError("constituent provenance must contain at least two aligned records")
         if len(set(self.constituent_record_ids)) != self.source_count:
             raise ValueError("constituent record IDs must be unique")
-        if self.supersedes_record_id is None and self.correction_reason:
-            raise ValueError("initial assembly cannot carry a correction reason")
-        if self.supersedes_record_id is not None and not self.correction_reason.strip():
-            raise ValueError("correction reason is required")
+        if bool(self.supersedes_record_id) != bool(self.correction_reason.strip()):
+            raise ValueError("correction predecessor and reason must be provided together")
         try:
-            value = Decimal(self.amount)
+            amount = Decimal(self.amount)
         except InvalidOperation as exc:
             raise ValueError("amount must be decimal") from exc
-        if not value.is_finite():
+        if not amount.is_finite():
             raise ValueError("amount must be finite")
-        object.__setattr__(self, "accounting_window_start", start)
-        object.__setattr__(self, "accounting_window_end", end)
-        object.__setattr__(self, "effective_at", effective)
-        object.__setattr__(self, "recorded_at", recorded)
-        object.__setattr__(self, "known_at", known)
+
+
+@dataclass(frozen=True)
+class AssemblyLineageProjection:
+    record: AssembledFundamentalEvidenceRecord
+    supersession_state: Literal["active", "superseded"]
 
 
 def _required(instance: object, *names: str) -> None:
@@ -299,7 +273,9 @@ def _required(instance: object, *names: str) -> None:
             raise ValueError(f"{name} is required")
 
 
-def _utc(value: datetime) -> datetime:
-    if value.tzinfo is None or value.utcoffset() is None:
-        raise ValueError("timestamps must be timezone-aware")
-    return value.astimezone(UTC)
+def _normalize_times(instance: object, *names: str) -> None:
+    for name in names:
+        value = getattr(instance, name)
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError(f"{name} must be timezone-aware")
+        object.__setattr__(instance, name, value.astimezone(UTC))

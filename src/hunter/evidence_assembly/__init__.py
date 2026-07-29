@@ -4,11 +4,15 @@ from hunter.evidence_assembly.models import (
     AssembledFundamentalEvidenceRecord,
     AssemblyConflictRecord,
     AssemblyConstituent,
-    AuthoritativeEvidenceSemantics,
+    AssemblyLineageProjection,
     EvidenceShape,
-    MethodologyEvidenceInputContract,
 )
-from hunter.evidence_assembly.registry import EvidenceShapeRegistry, EvidenceShapeRegistryError
+from hunter.evidence_assembly.registry import (
+    EvidenceShapeRegistryAuthority,
+    EvidenceShapeRegistryError,
+    EvidenceShapeRegistryRepository,
+    EvidenceShapeRegistrySnapshot,
+)
 from hunter.evidence_assembly.repository import (
     EVIDENCE_ASSEMBLY_MIGRATION_ID,
     AssembledEvidenceRepository,
@@ -27,12 +31,13 @@ __all__ = [
     "AssembledFundamentalEvidenceRecord",
     "AssemblyConflictRecord",
     "AssemblyConstituent",
-    "AuthoritativeEvidenceSemantics",
+    "AssemblyLineageProjection",
     "CanonicalEvidenceAssemblyError",
     "CanonicalEvidenceAssemblyService",
     "EvidenceAssemblyPersistenceError",
     "EvidenceShape",
-    "EvidenceShapeRegistry",
+    "EvidenceShapeRegistryAuthority",
     "EvidenceShapeRegistryError",
-    "MethodologyEvidenceInputContract",
+    "EvidenceShapeRegistryRepository",
+    "EvidenceShapeRegistrySnapshot",
 ]

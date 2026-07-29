@@ -111,6 +111,10 @@ class CanonicalValuationMethodologyAuthority:
             correlation_group=REQUIRED_CORRELATION_GROUP,
             authorizing_adr_reference=AUTHORIZING_ADR_REFERENCE,
             authorized_by=CANONICAL_AUTHORITY_ID,
+            accepts_assembled_evidence=False,
+            accepted_evidence_shape_ids=(),
+            accepted_assembly_rule_versions=(),
+            assembled_evidence_granularity_override=None,
             supersedes_record_id=supersedes_record_id,
             correction_reason=correction_reason,
         )

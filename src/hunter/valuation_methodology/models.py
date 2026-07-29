@@ -67,6 +67,10 @@ class ValuationMethodologySnapshot:
     correlation_group: str
     authorizing_adr_reference: str
     authorized_by: str
+    accepts_assembled_evidence: bool = False
+    accepted_evidence_shape_ids: tuple[str, ...] = ()
+    accepted_assembly_rule_versions: tuple[str, ...] = ()
+    assembled_evidence_granularity_override: str | None = None
     supersedes_record_id: str | None = None
     correction_reason: str = ""
 
@@ -116,6 +120,17 @@ class ValuationMethodologySnapshot:
         if self.authorizing_adr_reference != AUTHORIZING_ADR_REFERENCE:
             raise ValueError(f"authorizing_adr_reference must be {AUTHORIZING_ADR_REFERENCE!r} for Milestone 2")
         _normalize_chronology(self)
+        if self.accepts_assembled_evidence:
+            if not self.accepted_evidence_shape_ids or not self.accepted_assembly_rule_versions:
+                raise ValueError("assembled evidence opt-in requires governed shape and assembly-rule versions")
+        elif (
+            self.accepted_evidence_shape_ids
+            or self.accepted_assembly_rule_versions
+            or self.assembled_evidence_granularity_override is not None
+        ):
+            raise ValueError("assembled evidence instructions require explicit opt-in")
+        object.__setattr__(self, "accepted_evidence_shape_ids", tuple(self.accepted_evidence_shape_ids))
+        object.__setattr__(self, "accepted_assembly_rule_versions", tuple(self.accepted_assembly_rule_versions))
         _validate_correction(self)
 
 
