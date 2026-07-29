@@ -1270,3 +1270,60 @@ def test_divergent_duplicate_acquisition_id_is_rejected(tmp_path) -> None:
 
     assert repository.count("fundamental_evidence_records") == 1
     assert repository.count("value_capture_acquisition_receipts") == 1
+
+
+def test_overlapping_evidence_excludes_known_successor_predecessor(tmp_path) -> None:
+    """Real SQLite-backed repository: overlapping_evidence() -- the assembly
+    authority's candidate-universe query -- must exclude a superseded predecessor
+    once its successor is itself strict-known at the requested cutoff, mirroring
+    _strict_known()'s established supersession-selection convention."""
+    service, repository, provider = setup(tmp_path)
+    original = service.ingest_evidence(provider, evidence_result(provider))
+    corrected = service.ingest_evidence(
+        provider,
+        evidence_result(
+            provider,
+            acquired_at=NOW + timedelta(days=2),
+            acquisition_id="evidence-correction-overlapping",
+            supersedes_record_id=original.record_id,
+            correction_reason="Corrected the disclosed claim.",
+            extracted_claim="Corrected attributable protocol fees.",
+        ),
+    )
+
+    after_correction_known = repository.overlapping_evidence(
+        entity_id=original.identity.entity_id,
+        economic_claim_id=original.identity.economic_claim_id,
+        accounting_window_start=original.accounting_period_start,
+        accounting_window_end=original.accounting_period_end,
+        known_by=NOW + timedelta(days=3),
+    )
+    assert [record.record_id for record in after_correction_known] == [corrected.record_id]
+
+
+def test_overlapping_evidence_preserves_predecessor_before_successor_was_known(tmp_path) -> None:
+    """A predecessor must remain visible at any cutoff strictly before its
+    successor became known -- the correction must never be retroactively hidden
+    from a replay cutoff that predates it."""
+    service, repository, provider = setup(tmp_path)
+    original = service.ingest_evidence(provider, evidence_result(provider))
+    service.ingest_evidence(
+        provider,
+        evidence_result(
+            provider,
+            acquired_at=NOW + timedelta(days=2),
+            acquisition_id="evidence-correction-overlapping-early-cutoff",
+            supersedes_record_id=original.record_id,
+            correction_reason="Corrected the disclosed claim.",
+            extracted_claim="Corrected attributable protocol fees.",
+        ),
+    )
+
+    before_correction_known = repository.overlapping_evidence(
+        entity_id=original.identity.entity_id,
+        economic_claim_id=original.identity.economic_claim_id,
+        accounting_window_start=original.accounting_period_start,
+        accounting_window_end=original.accounting_period_end,
+        known_by=NOW + timedelta(days=1),
+    )
+    assert [record.record_id for record in before_correction_known] == [original.record_id]

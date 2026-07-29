@@ -249,6 +249,8 @@ class AssembledFundamentalEvidenceRecord:
             raise ValueError("accounting window must have positive duration")
         if effective != end:
             raise ValueError("effective_at must equal accounting_window_end")
+        if recorded < effective:
+            raise ValueError("recorded_at must not precede effective_at (accounting_window_end)")
         if known < recorded:
             raise ValueError("known_at must not precede recorded_at")
         if self.accounting_period_days != (end - start).days:

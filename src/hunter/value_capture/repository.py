@@ -113,24 +113,34 @@ class SupplyAndValueCaptureRepository:
         accounting_window_end: datetime,
         known_by: datetime,
     ) -> tuple[FundamentalEvidenceRecord, ...]:
-        """Mechanical deterministic query for the assembly authority's candidate universe."""
+        """Mechanical deterministic query for the assembly authority's candidate universe.
+
+        Mirrors _strict_known()'s supersession-selection convention: a predecessor is
+        excluded only when its successor is itself part of this same known_by-filtered
+        pool. A predecessor therefore remains visible at any cutoff before its successor
+        became known, preserving strict-known replay determinism rather than globally
+        hiding corrected lineage.
+        """
         records = (
             record
             for record in (_record_from_snapshot(item) for item in self._snapshots(_EVIDENCE_TYPE))
             if isinstance(record, FundamentalEvidenceRecord)
         )
+        eligible = [
+            record
+            for record in records
+            if record.identity.entity_id == entity_id
+            and record.identity.economic_claim_id == economic_claim_id
+            and record.accounting_period_start < accounting_window_end
+            and accounting_window_start < record.accounting_period_end
+            and record.recorded_at <= known_by
+            and record.known_at <= known_by
+        ]
+        superseded = {item.supersedes_record_id for item in eligible if item.supersedes_record_id is not None}
+        current = [record for record in eligible if record.record_id not in superseded]
         return tuple(
             sorted(
-                (
-                    record
-                    for record in records
-                    if record.identity.entity_id == entity_id
-                    and record.identity.economic_claim_id == economic_claim_id
-                    and record.accounting_period_start < accounting_window_end
-                    and accounting_window_start < record.accounting_period_end
-                    and record.recorded_at <= known_by
-                    and record.known_at <= known_by
-                ),
+                current,
                 key=lambda record: (
                     record.accounting_period_start,
                     record.accounting_period_end,

@@ -147,7 +147,7 @@ Canonical Valuation
 Fair-Value Estimate
 ```
 
-Methodology-contract input-eligibility evaluation is owned exclusively by Canonical Valuation (`CanonicalValuationService`, ADR 0022); it is not a separate pipeline stage or authority. The Evidence Shape Registry is versioned reference data consulted by the Evidence Assembly Authority, not a pipeline stage; it makes no valuation decisions. This precondition is accepted architecture under ADR 0025 only. The Canonical Evidence Assembly Authority and its Assembled Fundamental Evidence record family are not implemented, and the first accepted canonical valuation methodology (ADR 0022) does not declare acceptance of assembled evidence.
+Methodology-contract input-eligibility evaluation is owned exclusively by Canonical Valuation (`CanonicalValuationService`, ADR 0022); it is not a separate pipeline stage or authority. The Evidence Shape Registry is versioned reference data consulted by the Evidence Assembly Authority, not a pipeline stage; it makes no valuation decisions. This precondition is accepted architecture under ADR 0025 only. The Canonical Evidence Assembly Authority and its Assembled Fundamental Evidence record family are implemented in `src/hunter/evidence_assembly/`, but remain non-activated: no CLI, scheduler, or production entry point wires them into the executable runtime, and the first accepted canonical valuation methodology (ADR 0022) does not declare acceptance of assembled evidence — so this precondition has no production effect. This implementation is not independently production-audited; it must not be described as production-active until that audit and an accepted methodology opt-in both exist.
 
 ---
 
