@@ -295,20 +295,21 @@ Classification: Experimental/research only (ADR 0016, ADR 0017, ADR 0018). Not a
 
 Purpose:
 
-Audit already-made, fully contracted predictions under the canonical prediction-evaluation authority.
+Estimate and evaluate future outcomes as a logical target capability.
 
 Responsibilities include:
 
-- immutable prediction publication and lifecycle evaluation;
-- correctness, accuracy, and calibration assessment;
-- strict-known replay and correction lineage.
+- generating explicitly contracted prediction intelligence under a future authorized production boundary;
+- auditing already-made, fully contracted predictions through the distinct canonical prediction-evaluation authority;
+- correctness, accuracy, calibration, strict-known replay, and correction lineage for the evaluation portion.
 
 Outputs:
 
+- prediction intelligence;
 - prediction evaluation records;
 - accuracy and calibration snapshots.
 
-Classification: Production audit/evaluation authority (ADR 0019). `PredictionEvaluationService` is implemented as the sole authorization boundary with a dedicated canonical store and an explicitly versioned read-only Dashboard projection. This layer does not generate predictions and cannot become Market Validation, Opportunity, Timing, ranking, or recommendation authority.
+Classification: Prediction generation remains an unavailable logical target; no accepted production authority currently consumes Opportunity outputs to generate canonical predictions. Separately, ADR 0019 establishes the implemented production `PredictionEvaluationService` as the sole audit/evaluation authority for already-made, fully contracted predictions, with a dedicated canonical store and an explicitly versioned read-only Dashboard projection. The audit authority covers only the evaluation portion of this logical layer: it does not generate predictions and cannot become Market Validation, Opportunity, Timing, ranking, or recommendation authority.
 
 ---
 
