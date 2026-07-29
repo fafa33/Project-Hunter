@@ -58,9 +58,9 @@ Portfolio
 Decision Support
 ```
 
-This flow mirrors the ownership and dependency direction defined by `docs/CANONICAL_ARCHITECTURE_MAP.md`. Information moves only in the forward direction.
+This diagram expresses logical ownership and dependency direction, not the set of services that currently execute in production. Unavailable target layers preserve their intended architectural position without implying runtime execution. The executable production path is defined separately in `docs/CANONICAL_RUNTIME_ARCHITECTURE.md`.
 
-Each layer consumes validated outputs from earlier layers and produces higher-value analytical outputs for subsequent layers.
+Information moves only in the forward direction. Each implemented layer consumes validated outputs from earlier implemented layers and produces higher-value analytical outputs for authorized downstream consumers.
 
 ---
 
@@ -295,18 +295,20 @@ Classification: Experimental/research only (ADR 0016, ADR 0017, ADR 0018). Not a
 
 Purpose:
 
-Estimate and evaluate future outcomes.
+Audit already-made, fully contracted predictions under the canonical prediction-evaluation authority.
 
 Responsibilities include:
 
-- immutable prediction-contract evaluation;
-- correctness, accuracy, and calibration assessment.
+- immutable prediction publication and lifecycle evaluation;
+- correctness, accuracy, and calibration assessment;
+- strict-known replay and correction lineage.
 
 Outputs:
 
-- prediction evaluation records, accuracy and calibration snapshots.
+- prediction evaluation records;
+- accuracy and calibration snapshots.
 
-Classification: Partial. A canonical prediction-evaluation authority is accepted (ADR 0019) for auditing already-made, fully-contracted predictions, but the authorizing service is not yet implemented; production correctness and accuracy evaluation remain unavailable (ADR 0016).
+Classification: Production audit/evaluation authority (ADR 0019). `PredictionEvaluationService` is implemented as the sole authorization boundary with a dedicated canonical store and an explicitly versioned read-only Dashboard projection. This layer does not generate predictions and cannot become Market Validation, Opportunity, Timing, ranking, or recommendation authority.
 
 ---
 
@@ -352,7 +354,6 @@ Outputs:
 # 18. Cross-Cutting Architectural Capabilities
 
 The following capabilities span every architectural layer:
-
 - Deterministic execution.
 - Evidence traceability.
 - Explainability.
