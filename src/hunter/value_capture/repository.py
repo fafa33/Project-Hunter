@@ -109,6 +109,8 @@ class SupplyAndValueCaptureRepository:
         *,
         entity_id: str,
         economic_claim_id: str,
+        representation_id: str,
+        attribution_rule_id: str,
         accounting_window_start: datetime,
         accounting_window_end: datetime,
         known_by: datetime,
@@ -133,6 +135,8 @@ class SupplyAndValueCaptureRepository:
                     if record.record_id not in superseded_ids
                     and record.identity.entity_id == entity_id
                     and record.identity.economic_claim_id == economic_claim_id
+                    and record.identity.representation_id == representation_id
+                    and record.attribution_rule_id == attribution_rule_id
                     and record.accounting_period_start < accounting_window_end
                     and accounting_window_start < record.accounting_period_end
                 ),

@@ -277,7 +277,7 @@ def _service(
         known_at=requested_methodology.known_at,
     )
     registry_repository = EvidenceShapeRegistryRepository(path)
-    registry_authority = EvidenceShapeRegistryAuthority(registry_repository)
+    registry_authority = EvidenceShapeRegistryAuthority(registry_repository, application_root=tmp_path)
     registry_authority.persist(
         registry_id="canonical-shapes",
         registry_version="1",
@@ -360,7 +360,7 @@ def test_current_canonical_methodology_remains_not_opted_in(tmp_path: Path) -> N
 def test_registry_generic_sql_history_hash_and_strict_known(tmp_path: Path) -> None:
     path = tmp_path / "data_ops.sqlite"
     repository = EvidenceShapeRegistryRepository(path)
-    authority = EvidenceShapeRegistryAuthority(repository)
+    authority = EvidenceShapeRegistryAuthority(repository, application_root=tmp_path)
     first = authority.persist(
         registry_id="canonical-shapes",
         registry_version="1",
@@ -505,7 +505,7 @@ def test_governed_cadence_comparison(tmp_path: Path, selected: str, alternative:
     selected_shape = _shape(f"{selected}-revenue", selected)
     alternative_shape = _shape(f"{alternative}-revenue", alternative)
     path = tmp_path / "data_ops.sqlite"
-    authority = EvidenceShapeRegistryAuthority(EvidenceShapeRegistryRepository(path))
+    authority = EvidenceShapeRegistryAuthority(EvidenceShapeRegistryRepository(path), application_root=tmp_path)
     registry = authority.persist(
         registry_id="cadence",
         registry_version="1",
@@ -705,7 +705,7 @@ def test_registry_unknown_inactive_future_effective_and_hash_invalid_fail_closed
 
     path = tmp_path / "future" / "data_ops.sqlite"
     path.parent.mkdir(parents=True)
-    authority = EvidenceShapeRegistryAuthority(EvidenceShapeRegistryRepository(path))
+    authority = EvidenceShapeRegistryAuthority(EvidenceShapeRegistryRepository(path), application_root=tmp_path)
     authority.persist(
         registry_id="future",
         registry_version="1",
@@ -758,6 +758,111 @@ def test_future_known_methodology_override_is_excluded(tmp_path: Path) -> None:
         methodology=future,
     )
     with pytest.raises(CanonicalEvidenceAssemblyError, match="methodology"):
+        _assemble(service, "e1", "e2")
+
+
+def test_distinct_source_equal_value_series_is_not_deduplicated(tmp_path: Path) -> None:
+    service, _ = _service(
+        tmp_path,
+        evidence=(
+            _evidence("e1", T0, T1),
+            _evidence("e2", T1, T2),
+            _evidence("other-1", T0, T1),
+            _evidence("other-2", T1, T2),
+        ),
+    )
+    with pytest.raises(CanonicalEvidenceAssemblyError, match="equal-cadence"):
+        _assemble(service, "e1", "e2")
+
+
+def test_override_cannot_resolve_equal_cadence_source_conflict(tmp_path: Path) -> None:
+    service, _ = _service(
+        tmp_path,
+        methodology=_methodology(override="monthly"),
+        evidence=(
+            _evidence("e1", T0, T1),
+            _evidence("e2", T1, T2),
+            _evidence("other-1", T0, T1, "999"),
+            _evidence("other-2", T1, T2, "888"),
+        ),
+    )
+    with pytest.raises(CanonicalEvidenceAssemblyError, match="equal-cadence"):
+        _assemble(service, "e1", "e2")
+
+
+def test_second_assembled_root_requires_explicit_correction(tmp_path: Path) -> None:
+    service, _ = _service(tmp_path)
+    _assemble(service, "e1", "e2")
+    later = RECORDED + timedelta(days=1)
+    corrected = (
+        replace(
+            _evidence("e1-c", T0, T1, "11"),
+            recorded_at=later,
+            known_at=later,
+            supersedes_record_id="e1",
+            correction_reason="corrected",
+        ),
+        replace(
+            _evidence("e2-c", T1, T2, "12"),
+            recorded_at=later,
+            known_at=later,
+            supersedes_record_id="e2",
+            correction_reason="corrected",
+        ),
+    )
+    _save_snapshots(service.repository.path, *(record_snapshot(record) for record in corrected))
+    with pytest.raises(EvidenceAssemblyPersistenceError, match="correction required"):
+        _assemble(service, "e1-c", "e2-c", recorded_at=later)
+
+
+def test_other_representation_does_not_enter_candidate_universe(tmp_path: Path) -> None:
+    other = replace(
+        _evidence("other-representation", T0, T2),
+        identity=replace(_identity(), representation_id="other"),
+    )
+    service, _ = _service(
+        tmp_path,
+        evidence=(_evidence("e1", T0, T1), _evidence("e2", T1, T2), other),
+    )
+    assert _assemble(service, "e1", "e2")
+    assert service.repository.unresolved_assembly_conflicts() == ()
+
+
+def test_horizon_rejects_subday_overrun(tmp_path: Path) -> None:
+    service, _ = _service(tmp_path)
+    with pytest.raises(CanonicalEvidenceAssemblyError, match="horizon"):
+        service.assemble(
+            constituents=_constituents("e1", "e2"),
+            registry_id="canonical-shapes",
+            registry_version="1",
+            accounting_window_start=T0,
+            accounting_window_end=T2 + timedelta(hours=1),
+            recorded_at=RECORDED,
+            replay_cutoff=CUTOFF,
+        )
+
+
+def test_historical_registry_replay_uses_assembly_boundary(tmp_path: Path) -> None:
+    service, _ = _service(tmp_path)
+    record = _assemble(service, "e1", "e2")
+    assert (
+        service.strict_known(
+            logical_id=record.logical_id,
+            effective_as_of=datetime(2028, 1, 1, tzinfo=UTC),
+            known_by=datetime(2028, 1, 1, tzinfo=UTC),
+        )
+        == record
+    )
+
+
+def test_supply_and_rule_must_be_known_by_assembly_recording(tmp_path: Path) -> None:
+    later = RECORDED + timedelta(days=1)
+    service, _ = _service(
+        tmp_path,
+        supply=replace(_supply(), recorded_at=later, known_at=later),
+        rule=replace(_rule(), recorded_at=later, known_at=later),
+    )
+    with pytest.raises(CanonicalEvidenceAssemblyError, match="pathway or supply"):
         _assemble(service, "e1", "e2")
 
 

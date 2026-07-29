@@ -148,30 +148,47 @@ class AssembledEvidenceRepository:
         try:
             session.connection().exec_driver_sql("BEGIN IMMEDIATE")
             snapshots = RepositoryFactory(session).snapshots()
-            if assembly is not None and assembly.supersedes_record_id is not None:
+            if assembly is not None:
                 rows = snapshots.query(QuerySpec(record_kind="snapshot"))
-                predecessor = next(
-                    (
-                        item
-                        for item in rows
-                        if item.snapshot_type == ASSEMBLY_SNAPSHOT_TYPE and item.id == assembly.supersedes_record_id
-                    ),
-                    None,
-                )
-                if predecessor is None:
-                    raise EvidenceAssemblyPersistenceError("correction predecessor does not exist")
-                competitor = next(
-                    (
-                        item
-                        for item in rows
-                        if item.snapshot_type == ASSEMBLY_SNAPSHOT_TYPE
-                        and item.payload.get("supersedes_record_id") == assembly.supersedes_record_id
-                        and item.id != assembly.record_id
-                    ),
-                    None,
-                )
-                if competitor is not None:
-                    raise EvidenceAssemblyPersistenceError("branching correction lineage")
+                if assembly.supersedes_record_id is None:
+                    existing_root = next(
+                        (
+                            item
+                            for item in rows
+                            if item.snapshot_type == ASSEMBLY_SNAPSHOT_TYPE
+                            and item.target_id == assembly.logical_id
+                            and item.payload.get("supersedes_record_id") is None
+                            and item.id != assembly.record_id
+                        ),
+                        None,
+                    )
+                    if existing_root is not None:
+                        raise EvidenceAssemblyPersistenceError(
+                            "assembled logical history already has a root; correction required"
+                        )
+                else:
+                    predecessor = next(
+                        (
+                            item
+                            for item in rows
+                            if item.snapshot_type == ASSEMBLY_SNAPSHOT_TYPE and item.id == assembly.supersedes_record_id
+                        ),
+                        None,
+                    )
+                    if predecessor is None:
+                        raise EvidenceAssemblyPersistenceError("correction predecessor does not exist")
+                    competitor = next(
+                        (
+                            item
+                            for item in rows
+                            if item.snapshot_type == ASSEMBLY_SNAPSHOT_TYPE
+                            and item.payload.get("supersedes_record_id") == assembly.supersedes_record_id
+                            and item.id != assembly.record_id
+                        ),
+                        None,
+                    )
+                    if competitor is not None:
+                        raise EvidenceAssemblyPersistenceError("branching correction lineage")
             snapshots.save(record)
             session.commit()
         except PersistenceIdentityConflictError as exc:

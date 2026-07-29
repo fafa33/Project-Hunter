@@ -156,7 +156,11 @@ class AssembledFundamentalEvidenceRecord:
     methodology_content_hash: str
     identity: EconomicClaimIdentity
     value_capture_pathway_record_id: str
+    value_capture_pathway_version: str
+    value_capture_pathway_content_hash: str
     supply_basis_record_id: str
+    supply_basis_version: str
+    supply_basis_content_hash: str
     currency: str
     unit: str
     accounting_meaning: AccountingMeaning
@@ -207,7 +211,11 @@ class AssembledFundamentalEvidenceRecord:
             "methodology_version",
             "methodology_content_hash",
             "value_capture_pathway_record_id",
+            "value_capture_pathway_version",
+            "value_capture_pathway_content_hash",
             "supply_basis_record_id",
+            "supply_basis_version",
+            "supply_basis_content_hash",
             "currency",
             "unit",
             "amount",

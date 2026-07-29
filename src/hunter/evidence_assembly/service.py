@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import asdict, replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from hunter.evidence_assembly.models import (
@@ -83,7 +83,7 @@ class CanonicalEvidenceAssemblyService:
         if methodology is None:
             raise CanonicalEvidenceAssemblyError("no strict-known canonical methodology snapshot")
         self._validate_methodology(methodology)
-        if (end - start).days != methodology.horizon_days:
+        if end - start != timedelta(days=methodology.horizon_days):
             raise CanonicalEvidenceAssemblyError("accounting window does not match canonical methodology horizon")
         registry = self.registry_authority.strict_known_registry(
             registry_id=registry_id,
@@ -102,6 +102,8 @@ class CanonicalEvidenceAssemblyService:
         resolved = tuple(sorted(resolved, key=lambda item: (item[0].accounting_period_start, item[0].record_id)))
         resolved = self._deduplicate_identical(resolved)
         self._validate_scope(resolved)
+        if any(dependency.known_at > recorded_at for _, _, supply, rule in resolved for dependency in (supply, rule)):
+            raise CanonicalEvidenceAssemblyError("assembly recorded_at precedes pathway or supply-basis knowledge")
         self._validate_coverage(resolved, start=start, end=end)
         if any(rule.applicability_start > start or rule.applicability_end < end for _, _, _, rule in resolved):
             raise CanonicalEvidenceAssemblyError("value-capture pathway does not cover assembled interval")
@@ -183,6 +185,10 @@ class CanonicalEvidenceAssemblyService:
             identity=identity,
             value_capture_pathway_record_id=rules[0].record_id,
             supply_basis_record_id=supplies[0].record_id,
+            supply_basis_version=supplies[0].semantic_version,
+            supply_basis_content_hash=supplies[0].content_hash,
+            value_capture_pathway_version=rules[0].semantic_version,
+            value_capture_pathway_content_hash=rules[0].content_hash,
             currency=methodology.currency,
             unit=records[0].unit or "",
             accounting_meaning=shapes[0].accounting_meaning,
@@ -238,15 +244,15 @@ class CanonicalEvidenceAssemblyService:
             or methodology.logical_id != record.methodology_logical_id
             or methodology.semantic_version != record.methodology_version
             or methodology.content_hash != record.methodology_content_hash
-            or methodology.effective_at > effective_as_of
+            or methodology.effective_at > record.effective_at
             or methodology.recorded_at > known_by
             or methodology.known_at > known_by
             or registry is None
             or registry.registry_id != record.registry_id
             or registry.registry_version != record.registry_version
             or registry.content_hash != record.registry_content_hash
-            or registry.effective_start > effective_as_of
-            or not effective_as_of < registry.effective_end
+            or registry.effective_start > record.effective_at
+            or not record.effective_at < registry.effective_end
             or registry.recorded_at > known_by
             or registry.known_at > known_by
         ):
@@ -262,11 +268,28 @@ class CanonicalEvidenceAssemblyService:
                 constituent is None
                 or constituent.semantic_version != version
                 or constituent.content_hash != content_hash
-                or constituent.effective_at > effective_as_of
+                or constituent.effective_at > record.effective_at
                 or constituent.recorded_at > known_by
                 or constituent.known_at > known_by
             ):
                 raise CanonicalEvidenceAssemblyError("assembled replay constituent provenance is unavailable")
+        supply = self.value_capture_repository.supply(record.supply_basis_record_id)
+        rule = self.value_capture_repository.rule(record.value_capture_pathway_record_id)
+        if (
+            supply is None
+            or supply.semantic_version != record.supply_basis_version
+            or supply.content_hash != record.supply_basis_content_hash
+            or supply.effective_at > record.effective_at
+            or supply.recorded_at > known_by
+            or supply.known_at > known_by
+            or rule is None
+            or rule.semantic_version != record.value_capture_pathway_version
+            or rule.content_hash != record.value_capture_pathway_content_hash
+            or rule.effective_at > record.effective_at
+            or rule.recorded_at > known_by
+            or rule.known_at > known_by
+        ):
+            raise CanonicalEvidenceAssemblyError("assembled replay pathway or supply provenance is unavailable")
         return record
 
     def _validate_methodology(self, methodology: ValuationMethodologySnapshot) -> None:
@@ -274,6 +297,24 @@ class CanonicalEvidenceAssemblyService:
             raise CanonicalEvidenceAssemblyError("canonical methodology is not opted into assembled evidence")
         if ASSEMBLY_RULE_VERSION not in methodology.accepted_assembly_rule_versions:
             raise CanonicalEvidenceAssemblyError("canonical methodology rejects assembly rule")
+        if not (
+            methodology.assembly_requires_exact_coverage
+            and methodology.assembly_requires_provenance_hashes
+            and methodology.assembly_strict_known_required
+            and methodology.assembly_requires_entity_identity
+            and methodology.assembly_requires_representation_identity
+            and methodology.assembly_requires_unit_compatibility
+            and methodology.assembly_requires_pathway_compatibility
+            and methodology.assembly_requires_supply_basis_compatibility
+        ):
+            raise CanonicalEvidenceAssemblyError("canonical methodology omits mandatory assembly requirements")
+        if (
+            methodology.assembly_allows_boundary_crossing
+            or methodology.assembly_conflict_policy != "reject"
+            or methodology.assembly_minimum_quality_state != "accepted"
+            or methodology.assembly_missingness_behavior != "unavailable"
+        ):
+            raise CanonicalEvidenceAssemblyError("canonical methodology assembly policy is not fail closed")
 
     def _validate_methodology_shapes(
         self, methodology: ValuationMethodologySnapshot, shapes: tuple[EvidenceShape, ...]
@@ -433,6 +474,8 @@ class CanonicalEvidenceAssemblyService:
         universe = self.value_capture_repository.overlapping_evidence(
             entity_id=identity.entity_id,
             economic_claim_id=identity.economic_claim_id,
+            representation_id=identity.representation_id,
+            attribution_rule_id=resolved[0][3].mechanism_policy_id,
             accounting_window_start=start,
             accounting_window_end=end,
             known_by=replay_cutoff,
@@ -508,14 +551,7 @@ class CanonicalEvidenceAssemblyService:
             except EvidenceShapeRegistryError as exc:
                 raise CanonicalEvidenceAssemblyError(str(exc)) from exc
             override = methodology.assembled_evidence_granularity_override
-            if override is not None:
-                if override not in {selected_cadence, alternative.cadence}:
-                    raise CanonicalEvidenceAssemblyError("canonical granularity override is incompatible")
-                if override == alternative.cadence and alternative.cadence != selected_cadence:
-                    raise CanonicalEvidenceAssemblyError("selected series violates canonical granularity override")
-            elif comparison < 0:
-                raise CanonicalEvidenceAssemblyError("selected series is not the governed finest cadence")
-            elif comparison == 0:
+            if comparison == 0:
                 self._persist_conflict(
                     candidates=tuple(
                         sorted((*tuple(item[0] for item in resolved), *path), key=lambda record: record.record_id)
@@ -532,6 +568,13 @@ class CanonicalEvidenceAssemblyService:
                     reason="divergent complete equal-cadence evidence series is ambiguous",
                 )
                 raise CanonicalEvidenceAssemblyError("divergent equal-cadence complete series")
+            if override is not None:
+                if override not in {selected_cadence, alternative.cadence}:
+                    raise CanonicalEvidenceAssemblyError("canonical granularity override is incompatible")
+                if override == alternative.cadence and alternative.cadence != selected_cadence:
+                    raise CanonicalEvidenceAssemblyError("selected series violates canonical granularity override")
+            elif comparison < 0:
+                raise CanonicalEvidenceAssemblyError("selected series is not the governed finest cadence")
         competitors = tuple(
             record
             for record in omitted
@@ -600,7 +643,7 @@ class CanonicalEvidenceAssemblyService:
         if known_at > replay_cutoff:
             return
         shape_by_id = {record.record_id: shape.shape_id for record, shape, _, _ in resolved}
-        rule_by_id = {record.record_id: rule.rule_type for record, _, _, rule in resolved}
+        rule_by_id = {record.record_id: rule.mechanism_policy_id for record, _, _, rule in resolved}
         for candidate in candidates:
             shape_by_id.setdefault(candidate.record_id, self._shape_for_record(registry, candidate).shape_id)
             rule_by_id.setdefault(candidate.record_id, candidate.attribution_rule_id)
@@ -695,17 +738,7 @@ def _economically_identical(left: FundamentalEvidenceRecord, right: FundamentalE
     left_payload = asdict(left)
     right_payload = asdict(right)
     for payload in (left_payload, right_payload):
-        for field in (
-            "record_id",
-            "logical_id",
-            "source_id",
-            "source_reference",
-            "source_record_id",
-            "source_record_version",
-            "acquisition_id",
-            "content_hash",
-            "raw_content_hash",
-        ):
+        for field in ("record_id", "logical_id", "content_hash"):
             payload.pop(field)
     return left_payload == right_payload
 

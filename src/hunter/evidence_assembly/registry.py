@@ -18,6 +18,7 @@ REGISTRY_MIGRATION_ID = "generic-sql-evidence-shape-registry-v1"
 REGISTRY_SNAPSHOT_TYPE = "evidence-shape-registry"
 REGISTRY_SCHEMA_VERSION = "evidence-shape-registry-v1"
 REGISTRY_AUTHORITY_ID = "canonical-evidence-shape-registry-authority-v1"
+REGISTRY_AUTHORIZING_ADR = "ADR-0025"
 _CADENCE_RANK: dict[Cadence, int] = {"daily": 1, "monthly": 2, "quarterly": 3}
 
 
@@ -40,6 +41,7 @@ class EvidenceShapeRegistrySnapshot:
     quality_state: str
     conflict_state: str
     authorized_by: str
+    authorizing_adr_reference: str
     content_hash: str
     supersedes_record_id: str | None = None
     correction_reason: str = ""
@@ -51,6 +53,7 @@ class EvidenceShapeRegistrySnapshot:
             "registry_version",
             "schema_version",
             "authorized_by",
+            "authorizing_adr_reference",
             "content_hash",
         ):
             if not str(getattr(self, name)).strip():
@@ -74,6 +77,8 @@ class EvidenceShapeRegistrySnapshot:
             raise EvidenceShapeRegistryError("registry snapshot is not authoritative")
         if self.authorized_by != REGISTRY_AUTHORITY_ID:
             raise EvidenceShapeRegistryError("registry snapshot lacks canonical authority attestation")
+        if self.authorizing_adr_reference != REGISTRY_AUTHORIZING_ADR:
+            raise EvidenceShapeRegistryError("registry snapshot lacks accepted-ADR authorization")
         if bool(self.supersedes_record_id) != bool(self.correction_reason.strip()):
             raise EvidenceShapeRegistryError("registry correction predecessor and reason must be paired")
 
@@ -182,8 +187,11 @@ class EvidenceShapeRegistryRepository:
 class EvidenceShapeRegistryAuthority:
     """Canonical reference-data write and strict-known resolution boundary."""
 
-    def __init__(self, repository: EvidenceShapeRegistryRepository) -> None:
+    def __init__(self, repository: EvidenceShapeRegistryRepository, *, application_root: Path) -> None:
+        if not application_root.is_absolute():
+            raise EvidenceShapeRegistryError("application_root must be absolute")
         self.repository = repository
+        self._application_root = application_root.resolve()
 
     def persist(
         self,
@@ -213,6 +221,7 @@ class EvidenceShapeRegistryAuthority:
             quality_state="accepted",
             conflict_state="none",
             authorized_by=REGISTRY_AUTHORITY_ID,
+            authorizing_adr_reference=REGISTRY_AUTHORIZING_ADR,
             content_hash="pending",
             supersedes_record_id=supersedes_record_id,
             correction_reason=correction_reason,

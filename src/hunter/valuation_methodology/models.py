@@ -71,6 +71,18 @@ class ValuationMethodologySnapshot:
     accepted_evidence_shape_ids: tuple[str, ...] = ()
     accepted_assembly_rule_versions: tuple[str, ...] = ()
     assembled_evidence_granularity_override: str | None = None
+    assembly_requires_exact_coverage: bool = True
+    assembly_allows_boundary_crossing: bool = False
+    assembly_requires_provenance_hashes: bool = True
+    assembly_conflict_policy: Literal["reject"] = "reject"
+    assembly_minimum_quality_state: Literal["accepted"] = "accepted"
+    assembly_missingness_behavior: Literal["unavailable"] = "unavailable"
+    assembly_strict_known_required: bool = True
+    assembly_requires_entity_identity: bool = True
+    assembly_requires_representation_identity: bool = True
+    assembly_requires_unit_compatibility: bool = True
+    assembly_requires_pathway_compatibility: bool = True
+    assembly_requires_supply_basis_compatibility: bool = True
     supersedes_record_id: str | None = None
     correction_reason: str = ""
 
@@ -123,6 +135,27 @@ class ValuationMethodologySnapshot:
         if self.accepts_assembled_evidence:
             if not self.accepted_evidence_shape_ids or not self.accepted_assembly_rule_versions:
                 raise ValueError("assembled evidence opt-in requires governed shape and assembly-rule versions")
+            if not (
+                self.assembly_requires_exact_coverage
+                and self.assembly_requires_provenance_hashes
+                and self.assembly_strict_known_required
+                and self.assembly_requires_entity_identity
+                and self.assembly_requires_representation_identity
+                and self.assembly_requires_unit_compatibility
+                and self.assembly_requires_pathway_compatibility
+                and self.assembly_requires_supply_basis_compatibility
+            ):
+                raise ValueError(
+                    "assembled evidence opt-in requires exact coverage, provenance, and strict-known replay"
+                )
+            if self.assembly_allows_boundary_crossing:
+                raise ValueError("assembled evidence boundary crossing is not currently governed")
+            if (
+                self.assembly_conflict_policy != "reject"
+                or self.assembly_minimum_quality_state != "accepted"
+                or self.assembly_missingness_behavior != "unavailable"
+            ):
+                raise ValueError("assembled evidence opt-in must preserve fail-closed policy")
         elif (
             self.accepted_evidence_shape_ids
             or self.accepted_assembly_rule_versions
