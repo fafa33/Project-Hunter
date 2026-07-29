@@ -96,8 +96,11 @@ class CanonicalEvidenceAssemblyService:
             raise CanonicalEvidenceAssemblyError(
                 "assembly requires multiple granular records; a qualifying native interval takes precedence"
             )
-        if methodology_contract_id == "discounted-value-capture-flow-v1":
-            raise CanonicalEvidenceAssemblyError("current methodology is explicitly not opted into assembled evidence")
+        # Composability is determined exclusively from the fetched, strict-known
+        # MethodologyEvidenceInputContract below (see _validate_methodology_contract's
+        # `accepts_assembled_evidence` check) -- never from methodology_contract_id
+        # identity alone. Evidence Assembly must not anticipate or duplicate the
+        # methodology-owned eligibility decision (ADR 0025 "Methodology contract").
         methodology_contract = self.methodology_contract_authority.strict_known_contract(
             contract_id=methodology_contract_id,
             contract_version=methodology_contract_version,
@@ -168,6 +171,17 @@ class CanonicalEvidenceAssemblyService:
             raise CanonicalEvidenceAssemblyError("assembly time is after requested replay cutoff")
 
         latest_known = max(item.record.known_at for item in deduplicated)
+        if recorded_at < accounting_window_end:
+            raise CanonicalEvidenceAssemblyError(
+                "assembly recorded_at must not precede accounting_window_end (effective_at); "
+                "a record cannot be durably recorded before its own interval is observed"
+            )
+        if recorded_at < latest_known:
+            raise CanonicalEvidenceAssemblyError(
+                "assembly recorded_at must not precede the latest constituent known_at; "
+                "a record cannot be durably recorded before the facts required to construct it "
+                "were themselves knowable"
+            )
         known_at = max(latest_known, recorded_at)
         amount = sum((Decimal(item.record.amount or "") for item in deduplicated), start=Decimal(0))
         weakest_confidence = min(Decimal(item.record.evidence_confidence) for item in deduplicated)
@@ -360,6 +374,21 @@ class CanonicalEvidenceAssemblyService:
     def _authorize_correction(self, record: AssembledFundamentalEvidenceRecord) -> None:
         predecessor_id = record.supersedes_record_id
         if predecessor_id is None:
+            # A second, independent root record for the same logical_id would bypass
+            # the correction mechanism entirely. Mirrors
+            # hunter.valuation.service._authorize_correction's identical rule. Excludes
+            # the record's own record_id so that idempotent re-submission of the exact
+            # same deterministic content (handled by repository._insert_authorized's
+            # insert-or-identical semantics) is never treated as a second root.
+            existing_root = next(
+                (item for item in self.repository.history(record.logical_id) if item.record_id != record.record_id),
+                None,
+            )
+            if existing_root is not None:
+                raise CanonicalEvidenceAssemblyError(
+                    "a root record already exists for this logical_id; use a correction "
+                    "(supersedes_record_id) instead of a second independent root record"
+                )
             return
         predecessor = self.repository.get(predecessor_id)
         if predecessor is None:
@@ -484,9 +513,20 @@ class CanonicalEvidenceAssemblyService:
             and record.known_at <= replay_cutoff
             and not any(_native_duplicate_equivalent(record, item.record) for item in constituents)
         )
-        native_full_interval = tuple(
+        # Scope compatibility is evaluated first: an omitted record that shares only
+        # entity_id/economic_claim_id but belongs to an incompatible representation,
+        # pathway, supply basis, currency, unit, or evidence shape is not a qualifying
+        # competing disclosure for this assembly and must never block it or persist a
+        # false conflict, in either the native-precedence check below or the general
+        # competing/overlapping check that follows it.
+        compatible_omitted = tuple(
             record
             for record in omitted
+            if self._omitted_record_is_scope_compatible(record, selected=constituents[0], replay_cutoff=replay_cutoff)
+        )
+        native_full_interval = tuple(
+            record
+            for record in compatible_omitted
             if record.accounting_period_start == accounting_window_start
             and record.accounting_period_end == accounting_window_end
         )
@@ -500,11 +540,6 @@ class CanonicalEvidenceAssemblyService:
                 recorded_at=recorded_at,
             )
             raise CanonicalEvidenceAssemblyError("qualifying native evidence takes precedence over assembly")
-        compatible_omitted = tuple(
-            record
-            for record in omitted
-            if self._omitted_record_is_scope_compatible(record, selected=constituents[0], replay_cutoff=replay_cutoff)
-        )
         alternative_paths = _complete_coverage_paths(
             compatible_omitted,
             accounting_window_start=accounting_window_start,
@@ -517,17 +552,11 @@ class CanonicalEvidenceAssemblyService:
                     "selected constituent series violates governed finer-granularity preference"
                 )
             path_record_ids = {record.record_id for path in alternative_paths for record in path}
-            if len(constituents) > finest_alternative and path_record_ids == {record.record_id for record in omitted}:
+            if len(constituents) > finest_alternative and path_record_ids == {
+                record.record_id for record in compatible_omitted
+            }:
                 return
-        for record in universe:
-            if record.record_id in selected_ids:
-                continue
-            if any(_native_duplicate_equivalent(record, item.record) for item in constituents):
-                continue
-            if record.quality_state != "accepted" or record.conflict_state not in {"none", "resolved"}:
-                continue
-            if record.recorded_at > replay_cutoff or record.known_at > replay_cutoff:
-                continue
+        for record in compatible_omitted:
             if any(
                 record.accounting_period_start < item.record.accounting_period_end
                 and item.record.accounting_period_start < record.accounting_period_end

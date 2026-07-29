@@ -286,7 +286,7 @@ def test_valid_assembly_temporal_provenance_and_deterministic_order(service: Can
     record = _assemble(
         service,
         (second, first),
-        recorded_at=DAY + timedelta(days=6),
+        recorded_at=DAY + timedelta(days=7),
         replay_cutoff=DAY + timedelta(days=8),
     )
 
@@ -296,7 +296,7 @@ def test_valid_assembly_temporal_provenance_and_deterministic_order(service: Can
     assert record.constituent_versions == ("1.0.0", "1.0.0")
     assert record.constituent_source_references == ("https://example.test/1", "https://example.test/2")
     assert record.effective_at == DAY + timedelta(days=4)
-    assert record.recorded_at == DAY + timedelta(days=6)
+    assert record.recorded_at == DAY + timedelta(days=7)
     assert record.known_at == DAY + timedelta(days=7)
     assert record.methodology_contract_id == "future-contract"
 
@@ -600,15 +600,261 @@ def test_native_precedence_and_omitted_overlap_fail_closed(
         methodology_contract_version="1.0.0",
         evidence_shape_registry_version="registry-v1",
     )
-    _seed_authorities(service, selected)
-    native_query.records = tuple(item.record for item in selected) + (_evidence("native", 0, 4),)
+    native = _evidence("native", 0, 4)
+    # Scope-compatible (same pathway/currency/unit/shape as `selected`) so it
+    # correctly qualifies as a competing native disclosure for precedence purposes.
+    _seed_authorities(service, selected + (_constituent(native),))
+    native_query.records = tuple(item.record for item in selected) + (native,)
     with pytest.raises(CanonicalEvidenceAssemblyError, match="native evidence takes precedence"):
         service.assemble(**base)
     assert service.repository.unresolved_assembly_conflicts()[0].conflict_state == "open"
-    native_query.records = tuple(item.record for item in selected) + (_evidence("other", 1, 3, raw_hash="a" * 64),)
+    other = _evidence("other", 1, 3, raw_hash="a" * 64)
+    _seed_authorities(service, selected + (_constituent(other),))
+    native_query.records = tuple(item.record for item in selected) + (other,)
     with pytest.raises(CanonicalEvidenceAssemblyError, match="omitted competing"):
         service.assemble(**base)
     assert len(service.repository.unresolved_assembly_conflicts()) == 2
+
+
+def test_cross_scope_native_record_does_not_trigger_false_precedence(
+    service: CanonicalEvidenceAssemblyService, native_query: _NativeEvidenceQuery
+) -> None:
+    """A full-window record sharing only entity_id/economic_claim_id but belonging
+    to an incompatible pathway/currency must never trigger native precedence or a
+    false conflict -- it is not a 'qualifying' native disclosure for this scope."""
+    selected = (
+        _constituent(_evidence("1", 0, 2)),
+        _constituent(_evidence("2", 2, 4)),
+    )
+    _seed_authorities(service, selected)
+    unrelated_full_window = _evidence("unrelated", 0, 4, pathway="pathway:staking", unit="EUR", raw_hash="c" * 64)
+    native_query.records = tuple(item.record for item in selected) + (unrelated_full_window,)
+
+    record = service.assemble(
+        constituents=selected,
+        accounting_window_start=DAY,
+        accounting_window_end=DAY + timedelta(days=4),
+        recorded_at=DAY + timedelta(days=6),
+        replay_cutoff=CUTOFF,
+        methodology_contract_id="future-contract",
+        methodology_contract_version="1.0.0",
+        evidence_shape_registry_version="registry-v1",
+    )
+    assert record.source_count == 2
+    assert service.repository.unresolved_assembly_conflicts() == ()
+
+
+def test_cross_scope_native_record_does_not_trigger_false_overlap_conflict(
+    service: CanonicalEvidenceAssemblyService, native_query: _NativeEvidenceQuery
+) -> None:
+    """A partial-window record sharing only entity_id/economic_claim_id but
+    belonging to an incompatible pathway must never trigger the omitted-competing/
+    overlapping conflict path either."""
+    selected = (
+        _constituent(_evidence("1", 0, 2)),
+        _constituent(_evidence("2", 2, 4)),
+    )
+    _seed_authorities(service, selected)
+    unrelated_overlapping = _evidence("unrelated-partial", 1, 3, pathway="pathway:staking", raw_hash="d" * 64)
+    native_query.records = tuple(item.record for item in selected) + (unrelated_overlapping,)
+
+    record = service.assemble(
+        constituents=selected,
+        accounting_window_start=DAY,
+        accounting_window_end=DAY + timedelta(days=4),
+        recorded_at=DAY + timedelta(days=6),
+        replay_cutoff=CUTOFF,
+        methodology_contract_id="future-contract",
+        methodology_contract_version="1.0.0",
+        evidence_shape_registry_version="registry-v1",
+    )
+    assert record.source_count == 2
+    assert service.repository.unresolved_assembly_conflicts() == ()
+
+
+def test_second_independent_root_for_existing_logical_id_is_rejected(
+    service: CanonicalEvidenceAssemblyService, native_query: _NativeEvidenceQuery
+) -> None:
+    """Proves: (1) first root succeeds; (2) a second independent root for the same
+    logical_id fails; (3) a valid explicit correction still succeeds; (4) strict_known
+    never has to silently choose between parallel roots because none can exist."""
+    selected_a = (
+        _constituent(_evidence("1a", 0, 2, known_day=5)),
+        _constituent(_evidence("2a", 2, 4, known_day=5)),
+    )
+    root1 = _assemble(service, selected_a, recorded_at=DAY + timedelta(days=6))
+    assert service.repository.history(root1.logical_id) == (root1,)
+
+    selected_b = (
+        _constituent(_evidence("1b", 0, 2, known_day=7, amount="20")),
+        _constituent(_evidence("2b", 2, 4, known_day=7, amount="30")),
+    )
+    _seed_authorities(service, selected_b)
+    with pytest.raises(CanonicalEvidenceAssemblyError, match="root record already exists"):
+        service.assemble(
+            constituents=selected_b,
+            accounting_window_start=DAY,
+            accounting_window_end=DAY + timedelta(days=4),
+            recorded_at=DAY + timedelta(days=8),
+            replay_cutoff=CUTOFF,
+            methodology_contract_id="future-contract",
+            methodology_contract_version="1.0.0",
+            evidence_shape_registry_version="registry-v1",
+            # supersedes_record_id intentionally omitted
+        )
+    assert service.repository.history(root1.logical_id) == (root1,)
+
+    correction = service.assemble(
+        constituents=selected_b,
+        accounting_window_start=DAY,
+        accounting_window_end=DAY + timedelta(days=4),
+        recorded_at=DAY + timedelta(days=8),
+        replay_cutoff=CUTOFF,
+        methodology_contract_id="future-contract",
+        methodology_contract_version="1.0.0",
+        evidence_shape_registry_version="registry-v1",
+        supersedes_record_id=root1.record_id,
+        correction_reason="corrected constituent amounts",
+    )
+    assert correction.logical_id == root1.logical_id
+    assert correction.supersedes_record_id == root1.record_id
+
+    tip = service.strict_known(logical_id=root1.logical_id, effective_as_of=CUTOFF, known_by=CUTOFF)
+    assert tip is not None
+    assert tip.record_id == correction.record_id
+    candidates = service.repository.strict_known_candidates(
+        logical_id=root1.logical_id, effective_as_of=CUTOFF, known_by=CUTOFF
+    )
+    tips = [
+        record for record in candidates if not any(item.supersedes_record_id == record.record_id for item in candidates)
+    ]
+    assert len(tips) == 1, "exactly one lineage tip must exist -- no silent choice among parallel roots is possible"
+
+
+def test_recorded_at_equal_to_window_end_and_latest_known_is_accepted(
+    service: CanonicalEvidenceAssemblyService, native_query: _NativeEvidenceQuery
+) -> None:
+    """Boundary case: recorded_at exactly equal to both accounting_window_end and
+    the latest constituent known_at must be accepted (not treated as a violation)."""
+    selected = (
+        _constituent(_evidence("1", 0, 2, known_day=4)),
+        _constituent(_evidence("2", 2, 4, known_day=4)),
+    )
+    _seed_authorities(service, selected)
+    record = service.assemble(
+        constituents=selected,
+        accounting_window_start=DAY,
+        accounting_window_end=DAY + timedelta(days=4),
+        recorded_at=DAY + timedelta(days=4),
+        replay_cutoff=CUTOFF,
+        methodology_contract_id="future-contract",
+        methodology_contract_version="1.0.0",
+        evidence_shape_registry_version="registry-v1",
+    )
+    assert record.effective_at == DAY + timedelta(days=4)
+    assert record.recorded_at == DAY + timedelta(days=4)
+    assert record.known_at == DAY + timedelta(days=4)
+
+
+def test_recorded_at_before_accounting_window_end_is_rejected(
+    service: CanonicalEvidenceAssemblyService, native_query: _NativeEvidenceQuery
+) -> None:
+    selected = (
+        _constituent(_evidence("1", 0, 2, known_day=4)),
+        _constituent(_evidence("2", 2, 4, known_day=4)),
+    )
+    _seed_authorities(service, selected)
+    with pytest.raises(CanonicalEvidenceAssemblyError, match="must not precede accounting_window_end"):
+        service.assemble(
+            constituents=selected,
+            accounting_window_start=DAY,
+            accounting_window_end=DAY + timedelta(days=4),
+            recorded_at=DAY + timedelta(days=1),
+            replay_cutoff=CUTOFF,
+            methodology_contract_id="future-contract",
+            methodology_contract_version="1.0.0",
+            evidence_shape_registry_version="registry-v1",
+        )
+
+
+def test_recorded_at_before_latest_constituent_known_at_is_rejected(
+    service: CanonicalEvidenceAssemblyService, native_query: _NativeEvidenceQuery
+) -> None:
+    selected = (
+        _constituent(_evidence("1", 0, 2, known_day=7)),
+        _constituent(_evidence("2", 2, 4, known_day=7)),
+    )
+    _seed_authorities(service, selected)
+    with pytest.raises(CanonicalEvidenceAssemblyError, match="must not precede the latest constituent known_at"):
+        service.assemble(
+            constituents=selected,
+            accounting_window_start=DAY,
+            accounting_window_end=DAY + timedelta(days=4),
+            recorded_at=DAY + timedelta(days=4),  # equals window end but precedes known_day=7
+            replay_cutoff=CUTOFF,
+            methodology_contract_id="future-contract",
+            methodology_contract_version="1.0.0",
+            evidence_shape_registry_version="registry-v1",
+        )
+
+
+def test_rejection_is_contract_driven_not_id_driven(
+    service: CanonicalEvidenceAssemblyService, native_query: _NativeEvidenceQuery
+) -> None:
+    """A contract that declares accepts_assembled_evidence=False must be rejected
+    with the contract-driven message regardless of its contract_id -- proving the
+    decision is sourced from the fetched contract's own fields, not a literal ID."""
+    selected = (
+        _constituent(_evidence("1", 0, 2)),
+        _constituent(_evidence("2", 2, 4)),
+    )
+    _seed_authorities(service, selected)
+    service.methodology_contract_authority.contract = _contract(  # type: ignore[attr-defined]
+        contract_id="some-arbitrary-methodology-id",
+        contract_version="1.0.0",
+        accepts_assembled_evidence=False,
+    )
+    with pytest.raises(CanonicalEvidenceAssemblyError, match="not opted into assembled evidence"):
+        service.assemble(
+            constituents=selected,
+            accounting_window_start=DAY,
+            accounting_window_end=DAY + timedelta(days=4),
+            recorded_at=DAY + timedelta(days=6),
+            replay_cutoff=CUTOFF,
+            methodology_contract_id="some-arbitrary-methodology-id",
+            methodology_contract_version="1.0.0",
+            evidence_shape_registry_version="registry-v1",
+        )
+
+
+def test_future_version_of_current_methodology_id_is_accepted_when_contract_permits(
+    service: CanonicalEvidenceAssemblyService, native_query: _NativeEvidenceQuery
+) -> None:
+    """A future, ADR-0022-authorized version of discounted-value-capture-flow-v1
+    that explicitly declares acceptance must be honored -- Evidence Assembly must
+    not hardcode a rejection keyed on that methodology's identity."""
+    selected = (
+        _constituent(_evidence("1", 0, 2)),
+        _constituent(_evidence("2", 2, 4)),
+    )
+    _seed_authorities(service, selected)
+    service.methodology_contract_authority.contract = _contract(  # type: ignore[attr-defined]
+        contract_id="discounted-value-capture-flow-v1",
+        contract_version="2.0.0",
+        accepts_assembled_evidence=True,
+    )
+    record = service.assemble(
+        constituents=selected,
+        accounting_window_start=DAY,
+        accounting_window_end=DAY + timedelta(days=4),
+        recorded_at=DAY + timedelta(days=6),
+        replay_cutoff=CUTOFF,
+        methodology_contract_id="discounted-value-capture-flow-v1",
+        methodology_contract_version="2.0.0",
+        evidence_shape_registry_version="registry-v1",
+    )
+    assert record.methodology_contract_id == "discounted-value-capture-flow-v1"
+    assert record.methodology_contract_version == "2.0.0"
 
 
 def test_finer_granularity_is_deterministically_preferred(
@@ -629,7 +875,11 @@ def test_finer_granularity_is_deterministically_preferred(
         evidence_shape_registry_version="registry-v1",
     )
     assert record.constituent_record_ids == ("evidence:1", "evidence:2", "evidence:3", "evidence:4")
-    native_query.records = native_query.records + (_evidence("f", 1, 3),)
+    overlapping = _evidence("f", 1, 3)
+    # Scope-compatible with `fine` so it correctly qualifies as a competing
+    # overlapping disclosure rather than being excluded as unrelated.
+    _seed_authorities(service, fine + tuple(_constituent(record) for record in coarse) + (_constituent(overlapping),))
+    native_query.records = tuple(item.record for item in fine) + coarse + (overlapping,)
     with pytest.raises(CanonicalEvidenceAssemblyError, match="omitted competing"):
         service.assemble(
             constituents=fine,
