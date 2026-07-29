@@ -130,6 +130,27 @@ Each architectural concept must have one canonical owner. Accepted architecture 
 
 ---
 
+# Evidence Assembly Precondition (Canonical Valuation)
+
+ADR 0025 establishes a service-owned Canonical Evidence Assembly Authority immediately upstream of Canonical Valuation's methodology consumption, applicable only where a valuation methodology snapshot explicitly declares acceptance of assembled evidence:
+
+```text
+Native Fundamental Valuation Evidence
+        ↓
+Evidence Assembly Authority
+        ↓
+Assembled Fundamental Evidence
+        ↓
+Canonical Valuation
+   (methodology-contract input-eligibility evaluation, then valuation arithmetic)
+        ↓
+Fair-Value Estimate
+```
+
+Methodology-contract input-eligibility evaluation is owned exclusively by Canonical Valuation (`CanonicalValuationService`, ADR 0022); it is not a separate pipeline stage or authority. The Evidence Shape Registry is versioned reference data consulted by the Evidence Assembly Authority, not a pipeline stage; it makes no valuation decisions. This precondition is accepted architecture under ADR 0025 only. The Canonical Evidence Assembly Authority and its Assembled Fundamental Evidence record family are not implemented, and the first accepted canonical valuation methodology (ADR 0022) does not declare acceptance of assembled evidence.
+
+---
+
 # Dependency Direction
 
 Information flows only in the following direction:

@@ -213,6 +213,23 @@ Outputs:
 
 Classification: Production implementation complete and independently audited under ADR 0021, ADR 0022, and ADR 0024. The canonical valuation service, persistence boundary, strict-known replay, correction lineage, and accepted production entry point are implemented and the independent final audit is approved. A successful run against real qualifying evidence remains unavailable because no qualifying disclosure satisfying ADR 0022 has yet been identified; that evidence-availability blocker does not make the software implementation incomplete. Per ADR 0024, this output does not become a Market Validation composition input until a separate accepted ADR authorizes that composition.
 
+**Evidence assembly precondition (ADR 0025).** Where a `ValuationMethodologySnapshot` explicitly declares acceptance, native Fundamental Valuation Evidence may be preceded by a service-owned Canonical Evidence Assembly Authority that losslessly composes multiple already-authoritative Layer 2 constituent records into a distinct Assembled Fundamental Evidence record before methodology consumption:
+
+```text
+Native Fundamental Valuation Evidence
+        ↓
+Evidence Assembly Authority
+        ↓
+Assembled Fundamental Evidence
+        ↓
+CanonicalValuationService
+   (methodology-contract input-eligibility evaluation, then valuation arithmetic)
+        ↓
+FairValueEstimate
+```
+
+Methodology-contract input-eligibility evaluation is owned exclusively by `CanonicalValuationService` (ADR 0022); it is not a separate stage or authority. The Evidence Shape Registry is versioned reference data consulted by the Evidence Assembly Authority; it is not a stage in this pipeline and makes no valuation decisions. Classification: architecture accepted under ADR 0025 only. The Canonical Evidence Assembly Authority, its `AssembledFundamentalEvidenceRecord` family, and the Evidence Shape Registry are not implemented. The first canonical methodology (`discounted-value-capture-flow-v1`, ADR 0022) does not declare acceptance of assembled evidence, so this precondition has no effect until a future methodology-snapshot version explicitly opts in under ADR 0025's methodology-contract requirement.
+
 ---
 
 # 11. Comparative Valuation Layer

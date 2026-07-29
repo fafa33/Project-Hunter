@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted. Scope criterion 3 (supply coherence) amended by ADR 0023 (Supply Basis Provider-Data Coherence Tolerance) — see that ADR for the exact change; unaffected sections of this ADR are unchanged.
+Accepted. Scope criterion 3 (supply coherence) amended by ADR 0023 (Supply Basis Provider-Data Coherence Tolerance) — see that ADR for the exact change. Valuation inputs, Prohibited methodologies, and Persistence requirements amended by ADR 0025 (Canonical Valuation Evidence Assembly Authority) to admit Assembled Fundamental Evidence as a strictly conditional, methodology-declared, exclusive substitute for native evidence, and a new "Assembled evidence acceptance and methodology-contract input eligibility" subsection is added, naming `CanonicalValuationService` as the sole owner of methodology-contract input-eligibility evaluation — see that ADR for the exact change. Unaffected sections of this ADR, including the discounted value-capture-flow model, the 365-day horizon, the entity-class Scope criteria, the discount-rate and sensitivity policies, and the audit gates, are unchanged.
 
 ## Context
 
@@ -53,8 +53,9 @@ Exactly four record families may inform a fair-value estimate, each consumed by 
 3. `hunter.value_capture.ValueCaptureRuleSnapshot` — the sole source of the entitlement pathway, dilution treatment, and claim seniority applied to that flow.
 4. `hunter.value_capture.SupplyBasisSnapshot` — the sole source of the per-unit denominator.
 5. `ValuationMethodologySnapshot` (new, authorized by this ADR, defined below) — the sole source of model family, horizon, discount/risk assumptions, and normalization policy.
+6. *(Added by ADR 0025.)* An `AssembledFundamentalEvidenceRecord` (ADR 0025) may **substitute for** item 2 above, for the same attributable-flow input scope, **only** when the `ValuationMethodologySnapshot` in force explicitly declares acceptance of assembled evidence and states the exact requirements under which it accepts it (ADR 0025 §"Methodology contract"). This substitution is exclusive, not additive: for a single attributable-flow input scope, a fair-value estimate must consume either the native `FundamentalEvidenceRecord` under item 2 or a compatible `AssembledFundamentalEvidenceRecord` under this item 6 — never both. No constituent native `FundamentalEvidenceRecord` may be separately consumed under item 2 once its assembled derivative (a record for which it is a constituent, per ADR 0025) is the record selected under this item 6. Where both a qualifying native record and a qualifying assembled derivative exist for the same interval, ADR 0025's native-precedes-assembled selection rule (§"Conflicts and multiple disclosures") governs and the assembled derivative is not selected. No summation, averaging, blending, stacking, or other combination of a native and an assembled record is authorized under any circumstance. The `discounted-value-capture-flow-v1` methodology this ADR authorizes does not declare such acceptance and therefore continues to consume only native evidence under item 2; a future `ValuationMethodologySnapshot` version may declare acceptance, without requiring a new methodology ADR, provided it satisfies ADR 0025's methodology-contract requirements in full.
 
-No other record family, provider, repository, configuration file, Dashboard projection, report, or caller-supplied value may inform a fair-value estimate. This list is exhaustive, not illustrative.
+No other record family, provider, repository, configuration file, Dashboard projection, report, or caller-supplied value may inform a fair-value estimate. This list is exhaustive, not illustrative. *(As amended by ADR 0025: this list is exhaustive subject to item 6 above; item 6 does not expand it beyond the exact conditional terms ADR 0025 defines, and does not by itself make assembled evidence available for any methodology snapshot that does not explicitly declare acceptance.)*
 
 ### Permitted methodology
 
@@ -76,6 +77,8 @@ The following are explicitly prohibited for the first supported entity class, re
 - Any model requiring an input not enumerated in the Valuation Inputs section above.
 - Governance-token voting-power monetization without a documented, evidenced entitlement equivalent to one of the permitted `ValueCaptureRuleType` values.
 
+*(As amended by ADR 0025: a complete, gap-free, non-overlapping `AssembledFundamentalEvidenceRecord` that jointly and losslessly covers the exact accounting period this methodology's horizon requires — per ADR 0025's lossless-only rule and assembly preconditions — is not annualization, interpolation, extrapolation, or any other prohibited transformation under this section. The prohibition above on "an arbitrary-period amount... treated as a fixed 365-day flow without an authorized annualization policy" continues to apply, unchanged, to any single record whose own accounting period does not match the required horizon; it does not apply to a complete composed set whose union exactly matches the required horizon with no gap and no overlap.)*
+
 ### Replay semantics
 
 This ADR reaffirms ADR 0020's strict-known replay policy without modification and extends it with one methodology-specific rule: a `FairValueEstimateRecord` is replay-eligible only when its own `effective_at`/`recorded_at`/`known_at` satisfy the requested cutoff **and** every one of its four input records (per Valuation Inputs) independently satisfies the same cutoff at the time of estimate construction, not at replay time. A later-published `ObservedMarketFactRecord`, `FundamentalEvidenceRecord`, `ValueCaptureRuleSnapshot`, or `SupplyBasisSnapshot` correction that would have changed the estimate does not retroactively alter it — it can only produce a new, successor `FairValueEstimateRecord` referencing the corrected inputs.
@@ -91,7 +94,7 @@ Minimum fields, extending ADR 0021's own record-family table:
 | Record family | Additional minimum fields beyond ADR 0021's baseline |
 | --- | --- |
 | `ValuationMethodologySnapshot` | entity-class criteria (the four conditions above, machine-checkable); permitted model identifier (fixed to `discounted-value-capture-flow-v1` for this ADR); horizon (365 days, fixed); currency; discount-rate policy ID/version; sensitivity policy; supply-basis selection rule; normalization-policy ID (unassigned until Milestone 4 in the accompanying implementation issue); correlation group (`valuation-mispricing`, per ADR 0021) |
-| `FairValueEstimateRecord` | exact IDs/versions of all four input records; discount-rate value actually applied; horizon actually applied; model-dispersion decomposition; confidence decomposition (see Confidence Rules) |
+| `FairValueEstimateRecord` | exact IDs/versions of all four input records; discount-rate value actually applied; horizon actually applied; model-dispersion decomposition; confidence decomposition (see Confidence Rules); *(as amended by ADR 0025)* — only when Assembled Fundamental Evidence is consumed under a methodology snapshot that accepts it — the exact `AssembledFundamentalEvidenceRecord` ID, version, assembly-rule version, Evidence Shape Registry version, and methodology-contract ID/version it was assembled and evaluated under |
 | `ValuationAssessmentRecord` | normalization status (`unavailable` until Milestone 4 is independently audited); correlation-group weight-cap reference |
 
 ### Provenance
@@ -113,6 +116,14 @@ The `p10`/`p50`/`p90` triple is mandatory on every estimate and must be internal
 ### Missingness
 
 Absence of any one of the four required input records, or a record that is stale, disputed, unregistered, incompatible, or has an unresolved `open`/`contested` conflict state, makes the entire fair-value estimate explicitly unavailable — never a partial or degraded-confidence estimate substituting for a missing input. This mirrors the existing `_require_evidence`/`_require_observed_market_facts` fail-closed pattern already implemented and independently audited in `hunter.value_capture.service`.
+
+### Assembled evidence acceptance and methodology-contract input eligibility *(added by ADR 0025)*
+
+Where a `ValuationMethodologySnapshot` declares acceptance of Assembled Fundamental Evidence (ADR 0025), a compatible, strict-known `AssembledFundamentalEvidenceRecord` becomes eligible to substitute, exclusively, for the native `FundamentalEvidenceRecord` otherwise required by Valuation Inputs item 2, subject to item 6's exclusivity rule above. `CanonicalValuationService` is the sole and exclusive owner of the decision whether a specific record — native or assembled — is accepted as that input for a specific fair-value estimate:
+
+1. `CanonicalValuationService` is the only authority anywhere in this chain that evaluates methodology-contract input eligibility. This is not a second, corroborating, or "final defensive" check of a prior evaluation performed elsewhere — no other service or authority evaluates whether any record is permitted as a methodology input. The Canonical Evidence Assembly Authority (ADR 0025) never performs, anticipates, or duplicates this evaluation; its own authority ends once it has produced (or declined to produce) a valid `AssembledFundamentalEvidenceRecord` under its own lossless-composition invariants, and it makes no determination about which, if any, valuation methodology may consume that record.
+2. At estimate-construction time, `CanonicalValuationService` validates that the consumed record's declared entity, representation, value-capture pathway, currency, unit, and accounting window satisfy this ADR's Scope and Valuation Inputs requirements, exactly as it already independently validates every other input (identity match, strict-known cutoff, unit match, and so on).
+3. A rejection at this boundary makes the fair-value estimate explicitly unavailable, under the Missingness rule above; it never triggers ad hoc re-assembly, substitution, partial acceptance, or a fallback to a different evidence family.
 
 ### Comparability rules
 
