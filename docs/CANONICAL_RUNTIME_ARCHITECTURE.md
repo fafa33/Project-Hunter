@@ -14,13 +14,15 @@ Implementation details, release-specific classifications, engineering policies, 
 
 Project Hunter executes as a deterministic evidence-driven processing pipeline.
 
-Each runtime stage consumes validated outputs from previous stages and produces structured outputs for subsequent stages.
+Each implemented runtime stage consumes validated outputs from previous implemented stages and produces structured outputs for subsequent implemented stages.
 
-No runtime stage bypasses earlier stages.
+No implemented runtime stage bypasses earlier implemented stages.
+
+Unavailable targets are documented separately from the executable production path and do not run merely because their dependency position is defined.
 
 ---
 
-# Canonical Runtime Flow
+# Executable Production Runtime Flow
 
 ```text
 External Market Sources
@@ -45,6 +47,22 @@ Deep Analysis
         ↓
 Investment Intelligence
         ↓
+Decision Support
+        ↓
+Reports
+```
+
+This flow describes the executable production path at the current repository state. Every implemented stage executes deterministically using only the evidence available at that point in time.
+
+---
+
+# Analytical Dependency Topology
+
+The following topology preserves the ownership and dependency direction defined by `docs/CANONICAL_ARCHITECTURE_MAP.md` without implying that every node currently executes in production:
+
+```text
+Investment Intelligence
+        ↓
 Canonical Valuation
         ↓
 Comparative Valuation
@@ -58,15 +76,9 @@ Opportunity Intelligence
 Prediction Intelligence
         ↓
 Portfolio Intelligence
-        ↓
-Decision Support
-        ↓
-Reports
 ```
 
-This flow mirrors the ownership and dependency direction defined by `docs/CANONICAL_ARCHITECTURE_MAP.md`. Each stage below carries an explicit classification (production, experimental, in progress, or unavailable target); the classification source is the accepted ADR(s) named for that stage, not this diagram.
-
-Every stage executes deterministically using only the evidence available at that point in time.
+Only the valuation-family and adjacent analytical stages below carry explicit release classifications here. Those classifications come from the accepted ADRs and canonical authority documents named for each stage, not from this diagram. An unavailable target represents an authorized or named dependency position only; it is not an executable runtime stage.
 
 ---
 
@@ -306,18 +318,20 @@ Outputs:
 
 ## Prediction Intelligence
 
-Estimates and evaluates future outcomes.
+Evaluates already-made, fully contracted predictions under the canonical prediction-evaluation authority.
 
 Responsibilities include:
 
-- immutable prediction-contract evaluation;
-- correctness, accuracy, and calibration assessment.
+- immutable prediction publication and lifecycle evaluation;
+- correctness, accuracy, and calibration assessment;
+- strict-known replay and correction lineage.
 
 Outputs:
 
-- prediction evaluation records, accuracy and calibration snapshots.
+- prediction evaluation records;
+- accuracy and calibration snapshots.
 
-**Classification:** Partial. A canonical prediction-evaluation authority is accepted (ADR 0019) for auditing already-made, fully-contracted predictions, but the authorizing service is not yet implemented; production correctness and accuracy evaluation remain unavailable (ADR 0016).
+**Classification:** Production audit/evaluation authority (ADR 0019). `PredictionEvaluationService` is implemented as the sole authorization boundary with a dedicated canonical store and an explicitly versioned read-only Dashboard projection. This authority audits already-made predictions; it is not a prediction-generation service and does not become Market Validation, Opportunity, Timing, ranking, or recommendation authority.
 
 ---
 
