@@ -24,35 +24,35 @@ Unavailable targets are documented separately from the executable production pat
 
 # Executable Production Runtime Flow
 
+The accepted executable production-authority path is:
+
 ```text
-External Market Sources
+CLI / authorized runtime entry point
         ↓
 Acquisition
         ↓
 Validation
         ↓
-Persistence
+Repositories
         ↓
-Discovery
+EngineValidationSource
         ↓
-Identity Resolution
+EvidenceBackedProjectExecutor
         ↓
-Evidence Processing
+Weight Engine
         ↓
-Screening
+Production Timing
         ↓
-Prioritization
+Canonical Committee Fields
         ↓
-Deep Analysis
-        ↓
-Investment Intelligence
-        ↓
-Decision Support
+Explainability
         ↓
 Reports
 ```
 
-This flow describes the executable production path at the current repository state. Every implemented stage executes deterministically using only the evidence available at that point in time.
+This flow reproduces the accepted production boundary defined by ADR 0007 and ADR 0016. Discovery, identity resolution, screening, prioritization, broader investment-intelligence composition, decision support, and unavailable valuation-family targets are not promoted into this executable path merely because they exist as logical, operational, experimental, or target architecture.
+
+Every production stage executes deterministically using only the authorized evidence available at that point in time.
 
 ---
 
@@ -82,7 +82,9 @@ Only the valuation-family and adjacent analytical stages below carry explicit re
 
 ---
 
-# Runtime Stages
+# Runtime and Architectural Components
+
+The sections below describe production runtime components together with logical, operational, experimental, and target components. Inclusion in this section does not by itself establish production execution or production analytical authority; the executable production boundary above and the governing ADRs remain authoritative.
 
 ## Acquisition
 
@@ -318,20 +320,20 @@ Outputs:
 
 ## Prediction Intelligence
 
-Evaluates already-made, fully contracted predictions under the canonical prediction-evaluation authority.
+Represents the logical target capability for estimating and evaluating future outcomes.
 
-Responsibilities include:
+Target responsibilities include:
 
-- immutable prediction publication and lifecycle evaluation;
-- correctness, accuracy, and calibration assessment;
-- strict-known replay and correction lineage.
+- generating explicitly contracted prediction intelligence under a future authorized production boundary;
+- evaluating prediction correctness, accuracy, and calibration through a distinct audit authority.
 
-Outputs:
+Target outputs include:
 
+- prediction intelligence;
 - prediction evaluation records;
 - accuracy and calibration snapshots.
 
-**Classification:** Production audit/evaluation authority (ADR 0019). `PredictionEvaluationService` is implemented as the sole authorization boundary with a dedicated canonical store and an explicitly versioned read-only Dashboard projection. This authority audits already-made predictions; it is not a prediction-generation service and does not become Market Validation, Opportunity, Timing, ranking, or recommendation authority.
+**Classification:** Prediction generation remains an unavailable logical target; no accepted production authority currently generates predictions or consumes Opportunity outputs to produce them. Separately, ADR 0019 establishes the implemented production `PredictionEvaluationService` as the sole audit/evaluation authority for already-made, fully contracted predictions, with a dedicated canonical store and an explicitly versioned read-only Dashboard projection. The evaluation authority does not generate predictions and does not become Market Validation, Opportunity, Timing, ranking, or recommendation authority.
 
 ---
 
