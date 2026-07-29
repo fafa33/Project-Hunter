@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted.
+Accepted. Evidence and record-family boundaries, Layer 2 only, amended by ADR 0025 (Canonical Valuation Evidence Assembly Authority) to recognize Assembled Fundamental Evidence as a distinct derived subtype of Layer 2 evidence — see that ADR for the exact change; unaffected sections of this ADR, including the four-service authority matrix, source-provider eligibility, anti-double-counting policy, implementation order, and acceptance criteria, are unchanged.
 
 ## Context
 
@@ -45,7 +45,7 @@ The raw formula specified for mispricing and the raw payoff formula specified fo
 Hunter separates five layers. A record may be consumed by the next layer only through exact IDs and versions; layers cannot be collapsed by relabeling.
 
 1. **Observed market facts:** provider-observed price, quote currency, circulating/total/max supply, market capitalization, volume, venue or aggregation scope, provider listing ID, observation/effective time, retrieval/recorded time, explicit known time, raw payload hash, units, quality flags, conflicts, and canonical entity/representation linkage.
-2. **Fundamental valuation evidence:** attributable protocol cash flow, fees/revenue only with an explicit value-capture path, economic entitlement, token/network utility with measurable value transfer, dilution/emission/claim seniority, treasury or liabilities where attributable, supply basis, accounting window, source methodology, and uncertainty. Descriptive observations remain non-valuation until the valuation service validates this contract.
+2. **Fundamental valuation evidence:** attributable protocol cash flow, fees/revenue only with an explicit value-capture path, economic entitlement, token/network utility with measurable value transfer, dilution/emission/claim seniority, treasury or liabilities where attributable, supply basis, accounting window, source methodology, and uncertainty. Descriptive observations remain non-valuation until the valuation service validates this contract. *(As amended by ADR 0025: this layer includes a distinct derived subtype, Assembled Fundamental Evidence, produced exclusively by the Canonical Evidence Assembly Authority through lossless composition of multiple already-authoritative Layer 2 constituent records under ADR 0025's invariants. Assembled Fundamental Evidence is never a native disclosure and is never relabeled as one, and a native disclosure is never relabeled as assembled evidence; the two remain visibly and queryably distinct at all times through an explicit native-versus-assembled marker. Complete source and composition lineage is mandatory on every Assembled Fundamental Evidence record. Lossless composition of already-authoritative Layer 2 evidence does not convert that evidence into a Layer 3 fair-value estimate or any other Layer 3+ conclusion; it remains Layer 2 evidence, subject to the same missingness, conflict, and strict-known rules as native Layer 2 evidence. This amendment does not imply that assembly is generally possible: most real disclosure histories will remain incomplete, overlapping, or otherwise non-composable, and must remain explicitly unavailable exactly as before. See ADR 0025 for the complete record family, authority boundaries, invariants, and replay semantics.)*
 3. **Fair-value estimates:** immutable input snapshot, allowed valuation method, assumptions, sensitivity analysis, discount/risk policy, value-capture rule, supply basis, `p10/p50/p90`, horizon, units, model dispersion, confidence, methodology/configuration fingerprints, and complete provenance.
 4. **Comparative analysis:** immutable peer-policy version, peer-universe snapshot, inclusion/exclusion reasons, comparable denominator, target and peer measurements, adjustment/outlier policy, minimum cohort rule, residual calculation, correlation group, confidence, and lineage.
 5. **Scenario evidence:** immutable scenario definitions, dependency graph/version where used, baseline, horizon, probability source and uncertainty, terminal payoff model, positive/negative payoff, correlation/dependency matrix, tail and missing-scenario policy, and complete provenance.
@@ -70,6 +70,8 @@ Every family uses an immutable bitemporal envelope with record ID, logical ID, s
 | `AsymmetryAssessmentRecord` | exact scenario/payoff versions; expected positive and negative payoff; raw ratio; denominator/cap treatment; normalized value/status; tail coverage; confidence decomposition; correlation group |
 
 This ADR selects logical record families, not a database product, schema migration, file path, or store activation. A later implementation plan may use the generic analytical envelope only through domain-specific semantic allow-listing and the four service-owned authorization boundaries.
+
+*A distinct `AssembledFundamentalEvidenceRecord` family, produced only by the Canonical Evidence Assembly Authority, is defined in full by ADR 0025 and remains visibly and queryably distinguishable from every record family in this table.*
 
 ## Source-provider eligibility
 
