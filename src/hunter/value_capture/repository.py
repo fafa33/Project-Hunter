@@ -107,9 +107,7 @@ class SupplyAndValueCaptureRepository:
     def overlapping_evidence(
         self,
         *,
-        entity_id: str,
-        economic_claim_id: str,
-        representation_id: str,
+        identity: EconomicClaimIdentity,
         attribution_rule_id: str,
         accounting_window_start: datetime,
         accounting_window_end: datetime,
@@ -133,9 +131,7 @@ class SupplyAndValueCaptureRepository:
                     record
                     for record in eligible
                     if record.record_id not in superseded_ids
-                    and record.identity.entity_id == entity_id
-                    and record.identity.economic_claim_id == economic_claim_id
-                    and record.identity.representation_id == representation_id
+                    and record.identity == identity
                     and record.attribution_rule_id == attribution_rule_id
                     and record.accounting_period_start < accounting_window_end
                     and accounting_window_start < record.accounting_period_end

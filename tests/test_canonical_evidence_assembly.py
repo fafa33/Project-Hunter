@@ -43,12 +43,13 @@ from hunter.value_capture.models import (
 from hunter.value_capture.repository import SupplyAndValueCaptureRepository, record_snapshot
 
 T0 = datetime(2025, 1, 1, tzinfo=UTC)
-T1 = datetime(2025, 7, 2, tzinfo=UTC)
+T1 = datetime(2025, 7, 1, tzinfo=UTC)
 T2 = datetime(2026, 1, 1, tzinfo=UTC)
 T3 = datetime(2026, 4, 1, tzinfo=UTC)
 RECORDED = datetime(2026, 2, 1, tzinfo=UTC)
 CUTOFF = datetime(2026, 3, 1, tzinfo=UTC)
 HASH = "a" * 64
+REGISTRY_ID = "canonical-valuation-evidence-shapes"
 
 
 def _identity() -> EconomicClaimIdentity:
@@ -173,8 +174,8 @@ def _rule() -> ValueCaptureRuleSnapshot:
 
 
 def _shape(
-    shape_id: str = "monthly-revenue",
-    cadence: str = "monthly",
+    shape_id: str = "semiannual-revenue",
+    cadence: str = "semiannual",
     *,
     compatible: tuple[str, ...] = ("daily", "monthly", "quarterly"),
 ) -> EvidenceShape:
@@ -188,6 +189,8 @@ def _shape(
         active=True,
         currency="USD",
         unit="USD",
+        supply_basis_record_id="supply-record",
+        pathway_policy_id="policy",
         compatible_cadences=compatible,  # type: ignore[arg-type]
     )
 
@@ -219,7 +222,14 @@ def _methodology(*, override: str | None = None) -> ValuationMethodologySnapshot
         authorizing_adr_reference=AUTHORIZING_ADR_REFERENCE,
         authorized_by=CANONICAL_AUTHORITY_ID,
         accepts_assembled_evidence=True,
-        accepted_evidence_shape_ids=("daily-revenue", "monthly-revenue", "quarterly-revenue", "irregular"),
+        accepted_evidence_shape_ids=(
+            "daily-revenue",
+            "monthly-revenue",
+            "quarterly-revenue",
+            "semiannual-revenue",
+            "annual-revenue",
+            "irregular",
+        ),
         accepted_assembly_rule_versions=(ASSEMBLY_RULE_VERSION,),
         assembled_evidence_granularity_override=override,
     )
@@ -279,13 +289,14 @@ def _service(
     registry_repository = EvidenceShapeRegistryRepository(path)
     registry_authority = EvidenceShapeRegistryAuthority(registry_repository, application_root=tmp_path)
     registry_authority.persist(
-        registry_id="canonical-shapes",
+        registry_id=REGISTRY_ID,
         registry_version="1",
         shapes=shapes or (_shape(),),
         effective_start=T0,
         effective_end=datetime(2027, 1, 1, tzinfo=UTC),
         recorded_at=RECORDED,
         known_at=RECORDED,
+        authorizing_adr_reference="ADR-0025",
     )
     return (
         CanonicalEvidenceAssemblyService(
@@ -312,7 +323,7 @@ def _constituents(*ids: str) -> tuple[AssemblyConstituent, ...]:
 def _assemble(service: CanonicalEvidenceAssemblyService, *ids: str, **kwargs: object):
     return service.assemble(
         constituents=_constituents(*ids),
-        registry_id="canonical-shapes",
+        registry_id=REGISTRY_ID,
         registry_version="1",
         accounting_window_start=kwargs.pop("start", T0),  # type: ignore[arg-type]
         accounting_window_end=kwargs.pop("end", T2),  # type: ignore[arg-type]
@@ -329,7 +340,7 @@ def test_production_component_assembly_and_provenance(tmp_path: Path) -> None:
     assert record.constituent_record_ids == ("e1", "e2")
     assert record.methodology_record_id
     assert record.methodology_logical_id
-    assert record.registry_id == "canonical-shapes"
+    assert record.registry_id == REGISTRY_ID
     assert record.effective_at == T2
     assert record.known_at == RECORDED
     assert service.strict_known(logical_id=record.logical_id, effective_as_of=T2, known_by=CUTOFF) == record
@@ -362,45 +373,46 @@ def test_registry_generic_sql_history_hash_and_strict_known(tmp_path: Path) -> N
     repository = EvidenceShapeRegistryRepository(path)
     authority = EvidenceShapeRegistryAuthority(repository, application_root=tmp_path)
     first = authority.persist(
-        registry_id="canonical-shapes",
+        registry_id=REGISTRY_ID,
         registry_version="1",
         shapes=(_shape(),),
         effective_start=T0,
         effective_end=T3,
         recorded_at=T1,
         known_at=T1,
+        authorizing_adr_reference="ADR-0025",
     )
     assert (
         authority.persist(
-            registry_id="canonical-shapes",
+            registry_id=REGISTRY_ID,
             registry_version="1",
             shapes=(_shape(),),
             effective_start=T0,
             effective_end=T3,
             recorded_at=T1,
             known_at=T1,
+            authorizing_adr_reference="ADR-0025",
         )
         == first
     )
     assert (
-        repository.strict_known(registry_id="canonical-shapes", registry_version="1", effective_as_of=T2, known_by=T0)
-        is None
+        repository.strict_known(registry_id=REGISTRY_ID, registry_version="1", effective_as_of=T2, known_by=T0) is None
     )
     assert (
-        repository.strict_known(registry_id="canonical-shapes", registry_version="1", effective_as_of=T2, known_by=T2)
-        == first
+        repository.strict_known(registry_id=REGISTRY_ID, registry_version="1", effective_as_of=T2, known_by=T2) == first
     )
     assert repository.migration_ids() == ("generic-sql-evidence-shape-registry-v1",)
-    assert len(repository.history("canonical-shapes")) == 1
+    assert len(repository.history(REGISTRY_ID)) == 1
     with pytest.raises(EvidenceShapeRegistryError):
         authority.persist(
-            registry_id="canonical-shapes",
+            registry_id=REGISTRY_ID,
             registry_version="1",
             shapes=(_shape("different"),),
             effective_start=T0,
             effective_end=T3,
             recorded_at=T1,
             known_at=T1,
+            authorizing_adr_reference="ADR-0025",
         )
 
 
@@ -420,10 +432,12 @@ def test_future_effective_candidate_has_zero_replay_influence(tmp_path: Path) ->
 
 
 def test_conflict_chronology_and_complete_provenance(tmp_path: Path) -> None:
-    native = _evidence("native", T0, T2)
+    native = replace(_evidence("native", T0, T2), source_methodology="reported-annual")
+    annual = replace(_shape("annual-revenue", "annual"), source_methodology="reported-annual")
     service, _ = _service(
         tmp_path,
         evidence=(_evidence("e1", T0, T1), _evidence("e2", T1, T2), native),
+        shapes=(_shape(), annual),
     )
     with pytest.raises(CanonicalEvidenceAssemblyError, match="native"):
         _assemble(service, "e1", "e2")
@@ -507,7 +521,7 @@ def test_governed_cadence_comparison(tmp_path: Path, selected: str, alternative:
     path = tmp_path / "data_ops.sqlite"
     authority = EvidenceShapeRegistryAuthority(EvidenceShapeRegistryRepository(path), application_root=tmp_path)
     registry = authority.persist(
-        registry_id="cadence",
+        registry_id=REGISTRY_ID,
         registry_version="1",
         shapes=(
             (selected_shape, alternative_shape)
@@ -518,6 +532,7 @@ def test_governed_cadence_comparison(tmp_path: Path, selected: str, alternative:
         effective_end=T3,
         recorded_at=T1,
         known_at=T1,
+        authorizing_adr_reference="ADR-0025",
     )
     comparison = registry.compare_cadence(selected_shape, alternative_shape)
     assert (comparison <= 0) is allowed
@@ -550,7 +565,7 @@ def test_methodology_horizon_and_currency_are_enforced(tmp_path: Path) -> None:
     with pytest.raises(CanonicalEvidenceAssemblyError, match="horizon"):
         service.assemble(
             constituents=_constituents("e1", "e2"),
-            registry_id="canonical-shapes",
+            registry_id=REGISTRY_ID,
             registry_version="1",
             accounting_window_start=T0,
             accounting_window_end=T2 - timedelta(days=1),
@@ -602,7 +617,7 @@ def test_identical_duplicate_interval_is_deduplicated_deterministically(tmp_path
     )
     record = service.assemble(
         constituents=_constituents("duplicate", "e1", "e2"),
-        registry_id="canonical-shapes",
+        registry_id=REGISTRY_ID,
         registry_version="1",
         accounting_window_start=T0,
         accounting_window_end=T2,
@@ -654,7 +669,12 @@ def test_strict_known_replay_verifies_transitive_provenance(tmp_path: Path) -> N
 def test_gap_and_overlap_fail_independently(
     tmp_path: Path, records: tuple[FundamentalEvidenceRecord, ...], message: str
 ) -> None:
-    service, _ = _service(tmp_path, evidence=records)
+    service, _ = _service(
+        tmp_path,
+        evidence=records,
+        shapes=(_shape("irregular", "irregular", compatible=()),),
+        methodology=_methodology(override="irregular"),
+    )
     with pytest.raises(CanonicalEvidenceAssemblyError, match=message):
         _assemble(service, "e1", "e2")
 
@@ -707,17 +727,18 @@ def test_registry_unknown_inactive_future_effective_and_hash_invalid_fail_closed
     path.parent.mkdir(parents=True)
     authority = EvidenceShapeRegistryAuthority(EvidenceShapeRegistryRepository(path), application_root=tmp_path)
     authority.persist(
-        registry_id="future",
+        registry_id=REGISTRY_ID,
         registry_version="1",
         shapes=(_shape(),),
         effective_start=T2,
         effective_end=T3,
         recorded_at=RECORDED,
         known_at=RECORDED,
+        authorizing_adr_reference="ADR-0025",
     )
     assert (
         authority.strict_known_registry(
-            registry_id="future",
+            registry_id=REGISTRY_ID,
             registry_version="1",
             effective_as_of=T1,
             known_by=CUTOFF,
@@ -725,7 +746,7 @@ def test_registry_unknown_inactive_future_effective_and_hash_invalid_fail_closed
         is None
     )
 
-    snapshot = authority.repository.history("future")[0]
+    snapshot = authority.repository.history(REGISTRY_ID)[0]
     engine = create_sqlite_engine(path)
     session = SessionFactory(engine).create()
     try:
@@ -833,7 +854,7 @@ def test_horizon_rejects_subday_overrun(tmp_path: Path) -> None:
     with pytest.raises(CanonicalEvidenceAssemblyError, match="horizon"):
         service.assemble(
             constituents=_constituents("e1", "e2"),
-            registry_id="canonical-shapes",
+            registry_id=REGISTRY_ID,
             registry_version="1",
             accounting_window_start=T0,
             accounting_window_end=T2 + timedelta(hours=1),

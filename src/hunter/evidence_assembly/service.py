@@ -257,10 +257,13 @@ class CanonicalEvidenceAssemblyService:
             or registry.known_at > known_by
         ):
             raise CanonicalEvidenceAssemblyError("assembled replay provenance is unavailable or divergent")
-        for record_id, version, content_hash in zip(
+        constituents: list[FundamentalEvidenceRecord] = []
+        shapes: list[EvidenceShape] = []
+        for record_id, version, content_hash, shape_id in zip(
             record.constituent_record_ids,
             record.constituent_versions,
             record.constituent_content_hashes,
+            record.constituent_shape_ids,
             strict=True,
         ):
             constituent = self.value_capture_repository.evidence(record_id)
@@ -273,6 +276,8 @@ class CanonicalEvidenceAssemblyService:
                 or constituent.known_at > known_by
             ):
                 raise CanonicalEvidenceAssemblyError("assembled replay constituent provenance is unavailable")
+            constituents.append(constituent)
+            shapes.append(registry.shape(shape_id))
         supply = self.value_capture_repository.supply(record.supply_basis_record_id)
         rule = self.value_capture_repository.rule(record.value_capture_pathway_record_id)
         if (
@@ -290,6 +295,38 @@ class CanonicalEvidenceAssemblyService:
             or rule.known_at > known_by
         ):
             raise CanonicalEvidenceAssemblyError("assembled replay pathway or supply provenance is unavailable")
+        expected_order = tuple(
+            item.record_id
+            for item in sorted(
+                constituents,
+                key=lambda item: (item.accounting_period_start, item.record_id),
+            )
+        )
+        assembly_basis = {
+            "rule": ASSEMBLY_RULE_VERSION,
+            "registry_record_id": registry.record_id,
+            "methodology_record_id": methodology.record_id,
+            "constituents": [
+                {
+                    "record_id": constituent.record_id,
+                    "version": constituent.semantic_version,
+                    "content_hash": constituent.content_hash,
+                    "shape_id": shape.shape_id,
+                }
+                for constituent, shape in zip(constituents, shapes, strict=True)
+            ],
+        }
+        if (
+            record.assembly_rule_version != ASSEMBLY_RULE_VERSION
+            or record.deterministic_constituent_order != DETERMINISTIC_ORDER
+            or record.constituent_record_ids != expected_order
+            or record.assembly_content_hash != _hash(assembly_basis)
+            or record.record_id != f"assembled-evidence:{record.assembly_content_hash}"
+            or Decimal(record.amount)
+            != sum((Decimal(constituent.amount or "") for constituent in constituents), Decimal(0))
+            or record.known_at != max(record.recorded_at, *(item.known_at for item in constituents))
+        ):
+            raise CanonicalEvidenceAssemblyError("assembled replay reconstruction diverges")
         return record
 
     def _validate_methodology(self, methodology: ValuationMethodologySnapshot) -> None:
@@ -354,8 +391,13 @@ class CanonicalEvidenceAssemblyService:
             raise CanonicalEvidenceAssemblyError("registry evidence classification mismatch")
         if record.unit != shape.unit:
             raise CanonicalEvidenceAssemblyError("registry unit or currency classification mismatch")
+        if shape.supply_basis_record_id != supply.record_id:
+            raise CanonicalEvidenceAssemblyError("registry supply-basis classification mismatch")
+        if shape.pathway_policy_id != rule.mechanism_policy_id:
+            raise CanonicalEvidenceAssemblyError("registry pathway classification mismatch")
         if record.attribution_rule_id != rule.mechanism_policy_id:
             raise CanonicalEvidenceAssemblyError("canonical pathway classification mismatch")
+        _validate_cadence_window(shape, record)
         if not record.content_hash or not supply.content_hash or not rule.content_hash:
             raise CanonicalEvidenceAssemblyError("canonical dependency content hash is missing")
         return record, shape, supply, rule
@@ -472,9 +514,7 @@ class CanonicalEvidenceAssemblyService:
         selected_ids = {item[0].record_id for item in resolved}
         identity = resolved[0][0].identity
         universe = self.value_capture_repository.overlapping_evidence(
-            entity_id=identity.entity_id,
-            economic_claim_id=identity.economic_claim_id,
-            representation_id=identity.representation_id,
+            identity=identity,
             attribution_rule_id=resolved[0][3].mechanism_policy_id,
             accounting_window_start=start,
             accounting_window_end=end,
@@ -489,6 +529,7 @@ class CanonicalEvidenceAssemblyService:
             and record.effective_at <= replay_cutoff
             and record.recorded_at <= replay_cutoff
             and record.known_at <= replay_cutoff
+            and record.quality_state == "accepted"
             and record.conflict_state in {"open", "contested"}
         )
         if unresolved:
@@ -519,9 +560,20 @@ class CanonicalEvidenceAssemblyService:
             and record.conflict_state in {"none", "resolved"}
             and not any(_economically_identical(record, item[0]) for item in resolved)
         )
-        native = tuple(
+        compatible_omitted = tuple(
             record
             for record in omitted
+            if self._candidate_is_compatible(
+                record,
+                registry=registry,
+                methodology=methodology,
+                supply=resolved[0][2],
+                rule=resolved[0][3],
+            )
+        )
+        native = tuple(
+            record
+            for record in compatible_omitted
             if record.accounting_period_start == start and record.accounting_period_end == end
         )
         if native:
@@ -539,7 +591,7 @@ class CanonicalEvidenceAssemblyService:
                 reason="qualifying native evidence takes precedence over assembly",
             )
             raise CanonicalEvidenceAssemblyError("qualifying native evidence takes precedence")
-        paths = _coverage_paths(omitted, start=start, end=end)
+        paths = _coverage_paths(compatible_omitted, start=start, end=end)
         selected_shape = resolved[0][1]
         for path in paths:
             alternative_shapes = tuple(self._shape_for_record(registry, record) for record in path)
@@ -577,7 +629,7 @@ class CanonicalEvidenceAssemblyService:
                 raise CanonicalEvidenceAssemblyError("selected series is not the governed finest cadence")
         competitors = tuple(
             record
-            for record in omitted
+            for record in compatible_omitted
             if any(
                 record.accounting_period_start < selected.accounting_period_end
                 and selected.accounting_period_start < record.accounting_period_end
@@ -601,6 +653,30 @@ class CanonicalEvidenceAssemblyService:
                 reason="omitted competing evidence prevents exact unambiguous assembly",
             )
             raise CanonicalEvidenceAssemblyError("omitted competing evidence creates conflict")
+
+    def _candidate_is_compatible(
+        self,
+        record: FundamentalEvidenceRecord,
+        *,
+        registry: EvidenceShapeRegistrySnapshot,
+        methodology: ValuationMethodologySnapshot,
+        supply: SupplyBasisSnapshot,
+        rule: ValueCaptureRuleSnapshot,
+    ) -> bool:
+        try:
+            shape = self._shape_for_record(registry, record)
+            _validate_cadence_window(shape, record)
+        except CanonicalEvidenceAssemblyError:
+            return False
+        return (
+            shape.shape_id in methodology.accepted_evidence_shape_ids
+            and shape.currency.casefold() == methodology.currency.casefold()
+            and shape.accounting_meaning == "period_specific"
+            and shape.composition_operation == "exact_sum"
+            and shape.supply_basis_record_id == supply.record_id
+            and shape.pathway_policy_id == rule.mechanism_policy_id
+            and record.attribution_rule_id == rule.mechanism_policy_id
+        )
 
     def _shape_for_record(
         self, registry: EvidenceShapeRegistrySnapshot, record: FundamentalEvidenceRecord
@@ -727,6 +803,28 @@ def _coverage_paths(
 
     visit(start, ())
     return tuple(sorted(paths, key=lambda path: tuple(record.record_id for record in path)))
+
+
+def _validate_cadence_window(shape: EvidenceShape, record: FundamentalEvidenceRecord) -> None:
+    if shape.cadence == "daily":
+        if record.accounting_period_end - record.accounting_period_start != timedelta(days=1):
+            raise CanonicalEvidenceAssemblyError("daily shape does not match accounting window")
+        return
+    required_months = {"monthly": 1, "quarterly": 3, "semiannual": 6, "annual": 12}.get(shape.cadence)
+    if required_months is None:
+        return
+    start = record.accounting_period_start
+    end = record.accounting_period_end
+    months = (end.year - start.year) * 12 + end.month - start.month
+    if (
+        months != required_months
+        or end.day != start.day
+        or end.hour != start.hour
+        or end.minute != start.minute
+        or end.second != start.second
+        or end.microsecond != start.microsecond
+    ):
+        raise CanonicalEvidenceAssemblyError(f"{shape.cadence} shape does not match accounting window")
 
 
 def _hash(value: object) -> str:

@@ -12,7 +12,16 @@ ASSEMBLY_RULE_VERSION = "lossless-exact-coverage-v1"
 DETERMINISTIC_ORDER = "accounting_period_start-then-record_id"
 
 AccountingMeaning = Literal["period_specific", "cumulative", "event"]
-Cadence = Literal["daily", "monthly", "quarterly", "event_driven", "irregular", "epoch_based"]
+Cadence = Literal[
+    "daily",
+    "monthly",
+    "quarterly",
+    "semiannual",
+    "annual",
+    "event_driven",
+    "irregular",
+    "epoch_based",
+]
 
 
 @dataclass(frozen=True)
@@ -26,11 +35,23 @@ class EvidenceShape:
     active: bool
     currency: str
     unit: str
+    supply_basis_record_id: str
+    pathway_policy_id: str
     compatible_shape_ids: tuple[str, ...] = ()
     compatible_cadences: tuple[Cadence, ...] = ()
 
     def __post_init__(self) -> None:
-        _required(self, "shape_id", "evidence_type", "source_methodology", "cadence", "currency", "unit")
+        _required(
+            self,
+            "shape_id",
+            "evidence_type",
+            "source_methodology",
+            "cadence",
+            "currency",
+            "unit",
+            "supply_basis_record_id",
+            "pathway_policy_id",
+        )
         if self.accounting_meaning not in {"period_specific", "cumulative", "event"}:
             raise ValueError("unknown accounting meaning")
         if self.composition_operation not in {"exact_sum", "none"}:

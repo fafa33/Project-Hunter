@@ -19,7 +19,15 @@ REGISTRY_SNAPSHOT_TYPE = "evidence-shape-registry"
 REGISTRY_SCHEMA_VERSION = "evidence-shape-registry-v1"
 REGISTRY_AUTHORITY_ID = "canonical-evidence-shape-registry-authority-v1"
 REGISTRY_AUTHORIZING_ADR = "ADR-0025"
-_CADENCE_RANK: dict[Cadence, int] = {"daily": 1, "monthly": 2, "quarterly": 3}
+CANONICAL_REGISTRY_ID = "canonical-valuation-evidence-shapes"
+CANONICAL_REGISTRY_VERSION = "1"
+_CADENCE_RANK: dict[Cadence, int] = {
+    "daily": 1,
+    "monthly": 2,
+    "quarterly": 3,
+    "semiannual": 4,
+    "annual": 5,
+}
 
 
 class EvidenceShapeRegistryError(ValueError):
@@ -203,10 +211,15 @@ class EvidenceShapeRegistryAuthority:
         effective_end: datetime,
         recorded_at: datetime,
         known_at: datetime,
+        authorizing_adr_reference: str,
         active: bool = True,
         supersedes_record_id: str | None = None,
         correction_reason: str = "",
     ) -> EvidenceShapeRegistrySnapshot:
+        if registry_id != CANONICAL_REGISTRY_ID or registry_version != CANONICAL_REGISTRY_VERSION:
+            raise EvidenceShapeRegistryError("registry identity or version is not governed by an accepted ADR")
+        if authorizing_adr_reference != REGISTRY_AUTHORIZING_ADR:
+            raise EvidenceShapeRegistryError("registry amendment lacks accepted-ADR authorization")
         pending = EvidenceShapeRegistrySnapshot(
             record_id="pending",
             registry_id=registry_id,
@@ -221,7 +234,7 @@ class EvidenceShapeRegistryAuthority:
             quality_state="accepted",
             conflict_state="none",
             authorized_by=REGISTRY_AUTHORITY_ID,
-            authorizing_adr_reference=REGISTRY_AUTHORIZING_ADR,
+            authorizing_adr_reference=authorizing_adr_reference,
             content_hash="pending",
             supersedes_record_id=supersedes_record_id,
             correction_reason=correction_reason,
