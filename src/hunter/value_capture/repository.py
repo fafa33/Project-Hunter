@@ -104,6 +104,41 @@ class SupplyAndValueCaptureRepository:
             if isinstance(record, FundamentalEvidenceRecord)
         )
 
+    def overlapping_evidence(
+        self,
+        *,
+        entity_id: str,
+        economic_claim_id: str,
+        accounting_window_start: datetime,
+        accounting_window_end: datetime,
+        known_by: datetime,
+    ) -> tuple[FundamentalEvidenceRecord, ...]:
+        """Mechanical deterministic query for the assembly authority's candidate universe."""
+        records = (
+            record
+            for record in (_record_from_snapshot(item) for item in self._snapshots(_EVIDENCE_TYPE))
+            if isinstance(record, FundamentalEvidenceRecord)
+        )
+        return tuple(
+            sorted(
+                (
+                    record
+                    for record in records
+                    if record.identity.entity_id == entity_id
+                    and record.identity.economic_claim_id == economic_claim_id
+                    and record.accounting_period_start < accounting_window_end
+                    and accounting_window_start < record.accounting_period_end
+                    and record.recorded_at <= known_by
+                    and record.known_at <= known_by
+                ),
+                key=lambda record: (
+                    record.accounting_period_start,
+                    record.accounting_period_end,
+                    record.record_id,
+                ),
+            )
+        )
+
     def unresolved_supply_conflicts(self) -> tuple[SupplyBasisSnapshot, ...]:
         return tuple(
             record for record in self._unresolved_conflicts(_SUPPLY_TYPE) if isinstance(record, SupplyBasisSnapshot)
