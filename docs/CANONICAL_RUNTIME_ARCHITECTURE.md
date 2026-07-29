@@ -27,7 +27,7 @@ Unavailable targets are documented separately from the executable production pat
 The accepted executable production-authority path is:
 
 ```text
-CLI / authorized runtime entry point
+CLI
         ↓
 Acquisition
         ↓
@@ -50,7 +50,9 @@ Explainability
 Reports
 ```
 
-This flow reproduces the accepted production boundary defined by ADR 0007 and ADR 0016. Discovery, identity resolution, screening, prioritization, broader investment-intelligence composition, decision support, and unavailable valuation-family targets are not promoted into this executable path merely because they exist as logical, operational, experimental, or target architecture.
+This flow reproduces the accepted production boundary defined by ADR 0007 and ADR 0016. Operational automation, schedulers, replay, backtesting, and other orchestration mechanisms may invoke the already-approved runtime, but they are not independent production entry points and acquire no analytical authority by invocation alone. Any broader production entry point requires a separately accepted ADR.
+
+Discovery, identity resolution, screening, prioritization, broader investment-intelligence composition, decision support, and unavailable valuation-family targets are not promoted into this executable path merely because they exist as logical, operational, experimental, or target architecture.
 
 Every production stage executes deterministically using only the authorized evidence available at that point in time.
 
