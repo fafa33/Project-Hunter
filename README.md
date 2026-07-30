@@ -69,15 +69,18 @@ The following remain experimental or research infrastructure unless a later acce
 
 Experimental outputs must remain clearly classified and cannot substitute for canonical production outputs.
 
-## Accepted target or currently unavailable capabilities
+## Canonical valuation (implemented, not a Market Validation input)
 
-- Canonical Valuation.
+Canonical Valuation Milestones 1–4 are implemented under Issue #107, ADR 0022, and ADR 0024, and the resulting records are strict-known-replayable. The separate independent post-merge audit and Issue #107 closure remain pending. Canonical Valuation produces a structured, non-scalar, confidence-bearing fair-value assessment (`p10`/`p50`/`p90`) with separate confidence decomposition and explicit provenance. Per ADR 0024, `valuation` is **not** a directionally favorable `[0,1]` scalar, normalized value, or weighted Market Validation composition input — no scalar normalization is produced for or required of `valuation`. It does not become a Market Validation input until a separate accepted ADR authorizes a non-scalar Market Validation input representation and its composition model (Milestone 5 of Issue #107 is architecturally blocked pending that ADR).
+
+## Currently unavailable capabilities
+
 - Comparative Valuation.
 - Mispricing.
 - Asymmetry.
 - Portfolio Intelligence.
 
-ADR 0021 defines future valuation-family evidence and authority contracts, but all four Market Validation valuation-family scalar inputs remain explicitly unavailable until the required records, methodologies, calibration, normalization, and service-owned persistence paths are implemented and accepted.
+ADR 0021 defines the evidence-authority contracts for the valuation family. Per ADR 0024, `valuation`'s non-scalar structured output is implemented; the remaining three Market Validation valuation-family inputs (`comparative_valuation`, `mispricing`, `asymmetry`) remain explicitly unavailable pending their own separate accepted ADRs, methodology implementations, and independent audits.
 
 ## Operational and presentation components
 
