@@ -381,33 +381,32 @@ Completion of an ADPR alone is not completion when audit or readiness review rem
 
 For permanent repository changes, the agent MUST follow `docs/DEVELOPMENT_GOVERNANCE.md`.
 
-The typical sequence is:
+The lifecycle is:
 
 ```text
 Planning
     ↓
 Implementation
     ↓
-Local verification
+Local Verification
     ↓
 Draft Pull Request
     ↓
-CI verification
+CI Verification
     ↓
-Independent contribution review
+Architecture Review
     ↓
-Correction of blocking findings
+Review Report
     ↓
-Verification of corrections
+Final Validation
     ↓
-Final validation
+Ready for Review
     ↓
-Ready-for-review declaration
-    ↓
-Human-controlled merge boundary
+Merge
 ```
 
 The agent MUST NOT equate green CI with approval or merge readiness.
+The agent MUST NOT merge unless that action is explicitly authorized and permitted by role independence and repository governance.
 
 ## Documentation-Only Lifecycle
 
