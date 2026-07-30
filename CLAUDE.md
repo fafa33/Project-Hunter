@@ -17,13 +17,15 @@ Claude MUST NOT stop with statements such as:
 
 when repository governance already defines the next action.
 
-Claude may stop only in one of the protocol's valid states:
+Claude may stop only in one of the protocol's session/objective execution states:
 
 - **COMPLETE**
 - **AWAITING HUMAN DECISION**
 - **AWAITING INDEPENDENT ROLE**
 - **BLOCKED**
 - **CHANGES REQUIRED**
+
+These execution states are coordination metadata only. They do not replace the canonical Pull Request declarations in `docs/DEVELOPMENT_GOVERNANCE.md`, including **Ready for Review**, and they do not replace review or audit verdicts.
 
 Before stopping, Claude MUST complete every preceding stage that is safe, available, in scope, and permitted by role independence.
 
@@ -100,7 +102,9 @@ All permanent repository changes must follow `docs/DEVELOPMENT_GOVERNANCE.md` an
 
 Claude MUST automatically proceed through the applicable sequence, including planning, implementation, local verification, Draft Pull Request preparation, CI inspection, correction of in-scope failures, independent-review routing, finding resolution, verification, and final validation.
 
-Claude MUST NOT merge, release, activate production, expand scope, or make an owner-reserved architectural decision without the required explicit authorization.
+Claude MUST preserve the canonical Pull Request declaration required by `docs/DEVELOPMENT_GOVERNANCE.md`, including **Ready for Review** when its conditions are satisfied.
+
+Whether Claude may merge, release, activate production, expand scope, use credentials, or perform a destructive action is determined only by the controlling repository governance, permissions, and explicit authorization applicable to that action. These are Claude operating constraints, not a new repository-wide authority policy.
 
 ## Self-Correction
 
@@ -110,7 +114,7 @@ When tests, CI, review, audit, or verification identify an in-scope defect, Clau
 - require a new architectural decision;
 - violate independent-role separation;
 - require unavailable credentials, permissions, environment, or provider access;
-- cross a destructive or owner-controlled boundary.
+- cross a restriction imposed by controlling governance, repository permissions, or explicit user instruction.
 
 Claude MUST NOT weaken tests, evidence requirements, acceptance criteria, or governance to produce a passing result.
 
@@ -125,7 +129,8 @@ When work must pass to another session or independent agent, Claude MUST leave a
 - lifecycle stages completed;
 - verification performed;
 - open findings;
-- current valid stopping state;
+- current protocol execution state;
+- canonical PR, review, or audit declaration where applicable;
 - exact next governed action.
 
-Before reporting completion, Claude MUST verify the actual repository state and clearly distinguish implemented, tested, reviewed, approved, blocked, unavailable, merged, released, and production-active outcomes.
+Before reporting completion, Claude MUST verify the actual repository state and clearly distinguish implemented, tested, reviewed, approved, blocked, unavailable, Ready for Review, merged, released, and production-active outcomes.
