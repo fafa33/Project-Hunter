@@ -1327,3 +1327,385 @@ def test_overlapping_evidence_preserves_predecessor_before_successor_was_known(t
         known_by=NOW + timedelta(days=1),
     )
     assert [record.record_id for record in before_correction_known] == [original.record_id]
+
+
+# -------------------------------------------------------------------------------------
+# Regression tests: out-of-order correction rejection (Issue #126)
+#
+# Proves that insert_record's enforcement — non-advancing recorded_at, non-advancing
+# known_at, and logical_id preservation — is actually exercised and rejected for
+# FundamentalEvidenceRecord, SupplyBasisSnapshot, and ValueCaptureRuleSnapshot.
+# -------------------------------------------------------------------------------------
+
+
+def _inject_snapshot_with_payload_override(
+    repository: SupplyAndValueCaptureRepository,
+    original_id: str,
+    new_id: str,
+    **payload_overrides: object,
+) -> None:
+    """Load an existing snapshot, copy it under a new id, and override named payload fields.
+
+    Used to construct synthetic predecessors whose recorded_at/known_at/logical_id differ
+    from values the service would normally produce, enabling tests of the exact branches
+    inside insert_record that the service API cannot reach through ordinary ingestion.
+    """
+    engine = create_sqlite_engine(repository.path)
+    session = SessionFactory(engine).create()
+    try:
+        snapshots = RepositoryFactory(session).snapshots()
+        original = snapshots.load(original_id)
+        assert original is not None
+        payload = {**original.payload, "record_id": new_id, **payload_overrides}
+        metadata = dict(original.metadata)
+        if "known_at" in payload_overrides:
+            metadata["known_at"] = payload_overrides["known_at"]
+        snapshots.save(replace(original, id=new_id, record_ids=(new_id,), payload=payload, metadata=metadata))
+        session.commit()
+    finally:
+        session.close()
+        engine.dispose()
+
+
+# --- FundamentalEvidenceRecord -------------------------------------------------------
+
+
+def test_evidence_correction_non_advancing_recorded_at_is_rejected(tmp_path) -> None:
+    """A correction whose recorded_at does not strictly follow the predecessor's is rejected."""
+    service, _, provider = setup(tmp_path)
+    original = service.ingest_evidence(provider, evidence_result(provider))
+    with pytest.raises(ValueCaptureIntegrityError, match="recorded_at must follow predecessor"):
+        service.ingest_evidence(
+            provider,
+            evidence_result(
+                provider,
+                # Same acquired_at as predecessor → recorded_at == predecessor.recorded_at → rejected.
+                acquisition_id="ev-non-adv-rec",
+                supersedes_record_id=original.record_id,
+                correction_reason="Attempted non-advancing recorded_at correction",
+            ),
+        )
+
+
+def test_evidence_correction_non_advancing_known_at_is_rejected(tmp_path) -> None:
+    """A correction whose known_at does not strictly follow the predecessor's is rejected.
+
+    Because the service always sets recorded_at == known_at == acquired_at, testing
+    this branch in isolation requires a synthetic predecessor whose known_at lies further
+    in the future than its recorded_at. The correction's acquired_at is chosen to advance
+    past the predecessor's recorded_at (clearing the first check) while remaining below
+    the predecessor's known_at (triggering the second check).
+    """
+    service, repository, provider = setup(tmp_path)
+    original = service.ingest_evidence(provider, evidence_result(provider))
+    future_known = (NOW + timedelta(days=10)).astimezone(UTC).isoformat()
+    _inject_snapshot_with_payload_override(
+        repository,
+        original.record_id,
+        "synth-ev-future-known",
+        known_at=future_known,
+        acquisition_id="synth-ev-future-known-acq",
+    )
+    with pytest.raises(ValueCaptureIntegrityError, match="known_at must follow predecessor"):
+        service.ingest_evidence(
+            provider,
+            evidence_result(
+                provider,
+                acquired_at=NOW + timedelta(days=5),
+                acquisition_id="ev-non-adv-known",
+                supersedes_record_id="synth-ev-future-known",
+                correction_reason="Attempted non-advancing known_at correction",
+            ),
+        )
+
+
+def test_evidence_correction_logical_id_mismatch_is_rejected(tmp_path) -> None:
+    """A correction that would change the logical_id relative to its predecessor is rejected."""
+    service, repository, provider = setup(tmp_path)
+    original = service.ingest_evidence(provider, evidence_result(provider))
+    _inject_snapshot_with_payload_override(
+        repository,
+        original.record_id,
+        "synth-ev-wrong-logid",
+        logical_id="deliberately-wrong-logical-id",
+        acquisition_id="synth-ev-wrong-logid-acq",
+    )
+    with pytest.raises(ValueCaptureIntegrityError, match="correction must preserve logical_id"):
+        service.ingest_evidence(
+            provider,
+            evidence_result(
+                provider,
+                acquired_at=NOW + timedelta(days=1),
+                acquisition_id="ev-logid-mismatch",
+                supersedes_record_id="synth-ev-wrong-logid",
+                correction_reason="Attempted logical_id-changing correction",
+            ),
+        )
+
+
+def test_evidence_valid_advancing_correction_is_accepted(tmp_path) -> None:
+    """A correction with strictly advancing recorded_at and known_at is accepted."""
+    service, _, provider = setup(tmp_path)
+    original = service.ingest_evidence(provider, evidence_result(provider))
+    corrected = service.ingest_evidence(
+        provider,
+        evidence_result(
+            provider,
+            acquired_at=NOW + timedelta(days=1),
+            acquisition_id="ev-valid-correction",
+            supersedes_record_id=original.record_id,
+            correction_reason="Corrected disclosed claim",
+            extracted_claim="Corrected attributable protocol fees.",
+        ),
+    )
+    assert corrected.logical_id == original.logical_id
+    assert corrected.supersedes_record_id == original.record_id
+    assert corrected.recorded_at > original.recorded_at
+    assert corrected.known_at > original.known_at
+
+
+# --- SupplyBasisSnapshot -------------------------------------------------------------
+
+
+def test_supply_correction_non_advancing_recorded_at_is_rejected(tmp_path) -> None:
+    """A supply correction whose recorded_at does not strictly follow the predecessor's is rejected."""
+    service, _, provider = setup(tmp_path)
+    evidence = service.ingest_evidence(provider, evidence_result(provider))
+    fact = seed_observed_market_fact(tmp_path)
+    original = service.ingest_supply(
+        provider,
+        supply_result(
+            provider,
+            evidence.record_id,
+            observed_market_fact_ids=[fact.record_id],
+            observed_market_fact_versions=[fact.semantic_version],
+        ),
+    )
+    with pytest.raises(ValueCaptureIntegrityError, match="recorded_at must follow predecessor"):
+        service.ingest_supply(
+            provider,
+            supply_result(
+                provider,
+                evidence.record_id,
+                # Same acquired_at as predecessor → recorded_at == predecessor.recorded_at → rejected.
+                acquisition_id="sup-non-adv-rec",
+                observed_market_fact_ids=[fact.record_id],
+                observed_market_fact_versions=[fact.semantic_version],
+                supersedes_record_id=original.record_id,
+                correction_reason="Attempted non-advancing recorded_at correction",
+            ),
+        )
+
+
+def test_supply_correction_non_advancing_known_at_is_rejected(tmp_path) -> None:
+    """A supply correction whose known_at does not strictly follow the predecessor's is rejected."""
+    service, repository, provider = setup(tmp_path)
+    evidence = service.ingest_evidence(provider, evidence_result(provider))
+    fact = seed_observed_market_fact(tmp_path)
+    original = service.ingest_supply(
+        provider,
+        supply_result(
+            provider,
+            evidence.record_id,
+            observed_market_fact_ids=[fact.record_id],
+            observed_market_fact_versions=[fact.semantic_version],
+        ),
+    )
+    future_known = (NOW + timedelta(days=10)).astimezone(UTC).isoformat()
+    _inject_snapshot_with_payload_override(
+        repository,
+        original.record_id,
+        "synth-sup-future-known",
+        known_at=future_known,
+        acquisition_id="synth-sup-future-known-acq",
+    )
+    with pytest.raises(ValueCaptureIntegrityError, match="known_at must follow predecessor"):
+        service.ingest_supply(
+            provider,
+            supply_result(
+                provider,
+                evidence.record_id,
+                acquired_at=NOW + timedelta(days=5),
+                acquisition_id="sup-non-adv-known",
+                observed_market_fact_ids=[fact.record_id],
+                observed_market_fact_versions=[fact.semantic_version],
+                supersedes_record_id="synth-sup-future-known",
+                correction_reason="Attempted non-advancing known_at correction",
+            ),
+        )
+
+
+def test_supply_correction_logical_id_mismatch_is_rejected(tmp_path) -> None:
+    """A supply correction that would change the logical_id relative to its predecessor is rejected."""
+    service, repository, provider = setup(tmp_path)
+    evidence = service.ingest_evidence(provider, evidence_result(provider))
+    fact = seed_observed_market_fact(tmp_path)
+    original = service.ingest_supply(
+        provider,
+        supply_result(
+            provider,
+            evidence.record_id,
+            observed_market_fact_ids=[fact.record_id],
+            observed_market_fact_versions=[fact.semantic_version],
+        ),
+    )
+    _inject_snapshot_with_payload_override(
+        repository,
+        original.record_id,
+        "synth-sup-wrong-logid",
+        logical_id="deliberately-wrong-logical-id",
+        acquisition_id="synth-sup-wrong-logid-acq",
+    )
+    with pytest.raises(ValueCaptureIntegrityError, match="correction must preserve logical_id"):
+        service.ingest_supply(
+            provider,
+            supply_result(
+                provider,
+                evidence.record_id,
+                acquired_at=NOW + timedelta(days=1),
+                acquisition_id="sup-logid-mismatch",
+                observed_market_fact_ids=[fact.record_id],
+                observed_market_fact_versions=[fact.semantic_version],
+                supersedes_record_id="synth-sup-wrong-logid",
+                correction_reason="Attempted logical_id-changing correction",
+            ),
+        )
+
+
+def test_supply_valid_advancing_correction_is_accepted(tmp_path) -> None:
+    """A supply correction with strictly advancing recorded_at and known_at is accepted."""
+    service, _, provider = setup(tmp_path)
+    evidence = service.ingest_evidence(provider, evidence_result(provider))
+    fact = seed_observed_market_fact(tmp_path)
+    original = service.ingest_supply(
+        provider,
+        supply_result(
+            provider,
+            evidence.record_id,
+            observed_market_fact_ids=[fact.record_id],
+            observed_market_fact_versions=[fact.semantic_version],
+        ),
+    )
+    corrected = service.ingest_supply(
+        provider,
+        supply_result(
+            provider,
+            evidence.record_id,
+            acquired_at=NOW + timedelta(days=1),
+            acquisition_id="sup-valid-correction",
+            observed_market_fact_ids=[fact.record_id],
+            observed_market_fact_versions=[fact.semantic_version],
+            supersedes_record_id=original.record_id,
+            correction_reason="Corrected official supply figure",
+            quantity="87000000",
+            quantity_components=[
+                ["circulating_supply", "87000000"],
+                ["total_supply", "100000000"],
+                ["fully_diluted_supply", "115000000"],
+                ["locked_supply", "10000000"],
+                ["treasury_held_supply", "2000000"],
+            ],
+        ),
+    )
+    assert corrected.logical_id == original.logical_id
+    assert corrected.supersedes_record_id == original.record_id
+    assert corrected.recorded_at > original.recorded_at
+    assert corrected.known_at > original.known_at
+
+
+# --- ValueCaptureRuleSnapshot --------------------------------------------------------
+
+
+def test_rule_correction_non_advancing_recorded_at_is_rejected(tmp_path) -> None:
+    """A rule correction whose recorded_at does not strictly follow the predecessor's is rejected."""
+    service, _, provider = setup(tmp_path)
+    evidence = service.ingest_evidence(provider, evidence_result(provider))
+    original = service.ingest_rule(provider, rule_result(provider, evidence.record_id))
+    with pytest.raises(ValueCaptureIntegrityError, match="recorded_at must follow predecessor"):
+        service.ingest_rule(
+            provider,
+            rule_result(
+                provider,
+                evidence.record_id,
+                # Same acquired_at as predecessor → recorded_at == predecessor.recorded_at → rejected.
+                acquisition_id="rule-non-adv-rec",
+                supersedes_record_id=original.record_id,
+                correction_reason="Attempted non-advancing recorded_at correction",
+            ),
+        )
+
+
+def test_rule_correction_non_advancing_known_at_is_rejected(tmp_path) -> None:
+    """A rule correction whose known_at does not strictly follow the predecessor's is rejected."""
+    service, repository, provider = setup(tmp_path)
+    evidence = service.ingest_evidence(provider, evidence_result(provider))
+    original = service.ingest_rule(provider, rule_result(provider, evidence.record_id))
+    future_known = (NOW + timedelta(days=10)).astimezone(UTC).isoformat()
+    _inject_snapshot_with_payload_override(
+        repository,
+        original.record_id,
+        "synth-rule-future-known",
+        known_at=future_known,
+        acquisition_id="synth-rule-future-known-acq",
+    )
+    with pytest.raises(ValueCaptureIntegrityError, match="known_at must follow predecessor"):
+        service.ingest_rule(
+            provider,
+            rule_result(
+                provider,
+                evidence.record_id,
+                acquired_at=NOW + timedelta(days=5),
+                acquisition_id="rule-non-adv-known",
+                supersedes_record_id="synth-rule-future-known",
+                correction_reason="Attempted non-advancing known_at correction",
+            ),
+        )
+
+
+def test_rule_correction_logical_id_mismatch_is_rejected(tmp_path) -> None:
+    """A rule correction that would change the logical_id relative to its predecessor is rejected."""
+    service, repository, provider = setup(tmp_path)
+    evidence = service.ingest_evidence(provider, evidence_result(provider))
+    original = service.ingest_rule(provider, rule_result(provider, evidence.record_id))
+    _inject_snapshot_with_payload_override(
+        repository,
+        original.record_id,
+        "synth-rule-wrong-logid",
+        logical_id="deliberately-wrong-logical-id",
+        acquisition_id="synth-rule-wrong-logid-acq",
+    )
+    with pytest.raises(ValueCaptureIntegrityError, match="correction must preserve logical_id"):
+        service.ingest_rule(
+            provider,
+            rule_result(
+                provider,
+                evidence.record_id,
+                acquired_at=NOW + timedelta(days=1),
+                acquisition_id="rule-logid-mismatch",
+                supersedes_record_id="synth-rule-wrong-logid",
+                correction_reason="Attempted logical_id-changing correction",
+            ),
+        )
+
+
+def test_rule_valid_advancing_correction_is_accepted(tmp_path) -> None:
+    """A rule correction with strictly advancing recorded_at and known_at is accepted."""
+    service, _, provider = setup(tmp_path)
+    evidence = service.ingest_evidence(provider, evidence_result(provider))
+    original = service.ingest_rule(provider, rule_result(provider, evidence.record_id))
+    corrected = service.ingest_rule(
+        provider,
+        rule_result(
+            provider,
+            evidence.record_id,
+            acquired_at=NOW + timedelta(days=1),
+            acquisition_id="rule-valid-correction",
+            supersedes_record_id=original.record_id,
+            correction_reason="Corrected value capture pathway",
+            source_economic_flow="Corrected protocol fee scope",
+        ),
+    )
+    assert corrected.logical_id == original.logical_id
+    assert corrected.supersedes_record_id == original.record_id
+    assert corrected.recorded_at > original.recorded_at
+    assert corrected.known_at > original.known_at
