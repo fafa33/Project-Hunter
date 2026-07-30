@@ -2,7 +2,7 @@
 
 ## Status
 
-Canonical process protocol for AI-agent execution inside Project Hunter governance.
+Mandatory operational standard subordinate to `docs/DEVELOPMENT_GOVERNANCE.md`.
 
 ## Purpose
 
@@ -20,7 +20,7 @@ This document governs:
 - stopping and escalation;
 - progress and completion reporting.
 
-It does not define constitutional authority, architecture, implementation contracts, review verdict standards, merge authority, runtime behavior, or Sprint scope.
+It derives authority from `docs/DEVELOPMENT_GOVERNANCE.md` and does not create an independent governance authority. It does not define constitutional authority, architecture, implementation contracts, lifecycle stages, review or audit verdicts, merge authority, release authority, production authority, runtime behavior, or Sprint scope.
 
 ---
 
@@ -61,7 +61,7 @@ It applies to:
 - repository maintenance;
 - Pull Request preparation;
 - merge-readiness preparation;
-- release preparation when separately authorized.
+- release preparation when separately authorized by the controlling authority.
 
 This protocol does not authorize work outside the user-approved objective, repository permissions, or canonical governance.
 
@@ -166,7 +166,7 @@ The resolved objective MUST identify, where applicable:
 - expected artifact or integration surface;
 - applicable lifecycle;
 - required evidence;
-- user-controlled actions;
+- user-reserved actions;
 - independent-role boundaries.
 
 The agent MUST proceed without clarification when the objective can be resolved from:
@@ -179,7 +179,7 @@ The agent MUST proceed without clarification when the objective can be resolved 
 
 The agent MUST NOT ask the user to repeat information already available.
 
-The agent MUST pause only when unresolved ambiguity is material and proceeding would require invention, unauthorized scope expansion, or an owner decision.
+The agent MUST pause only when unresolved ambiguity is material and proceeding would require invention, unauthorized scope expansion, or a decision reserved by the controlling authority or the user.
 
 ---
 
@@ -194,7 +194,7 @@ The agent MUST:
 - avoid unrelated cleanup;
 - record discovered out-of-scope defects rather than silently fixing them;
 - return to planning if a required correction materially expands scope;
-- obtain owner approval before adding a new architectural decision or materially different outcome.
+- obtain the required authorization before adding a new architectural decision or materially different outcome.
 
 A mechanically necessary change remains in scope when it is directly required to complete an already-authorized acceptance criterion and does not create new architecture.
 
@@ -301,7 +301,7 @@ Once an objective is authorized and the applicable lifecycle is known, the activ
 - mechanically implied by the current stage;
 - within authorized scope;
 - supported by available repository access;
-- not reserved for independent review or human approval.
+- not reserved for independent review or an authorization boundary defined elsewhere.
 
 The agent MUST NOT stop merely because it completed:
 
@@ -405,8 +405,11 @@ Ready for Review
 Merge
 ```
 
+This diagram is intentionally identical to the canonical lifecycle in `docs/DEVELOPMENT_GOVERNANCE.md`. This protocol governs AI continuation behavior within that lifecycle only. It does not rename, reorder, replace, or extend its stages.
+
 The agent MUST NOT equate green CI with approval or merge readiness.
-The agent MUST NOT merge unless that action is explicitly authorized and permitted by role independence and repository governance.
+
+Whether an agent may execute Merge or any later action is determined only by the controlling repository governance, permissions, and explicit authorization applicable to that action.
 
 ## Documentation-Only Lifecycle
 
@@ -453,9 +456,9 @@ When self-verification, CI, review, audit, or final validation identifies an in-
 - the correction expands authorized scope;
 - the correction requires a new architectural decision;
 - accepted authorities conflict;
-- required credentials, environment, provider access, or owner-only action are unavailable;
+- required credentials, environment, provider access, or permission are unavailable;
 - independent-role separation would be violated;
-- the correction is destructive or irreversible and requires explicit authorization.
+- the correction is destructive or irreversible and the controlling authority requires separate authorization.
 
 The agent MUST preserve the required audit trail of findings, changes, and verification.
 
@@ -495,7 +498,7 @@ The agent MUST distinguish between:
 - tool limitations;
 - unavailable independent roles.
 
-The agent MUST attempt every safe, available execution path appropriate to the objective before declaring **BLOCKED**.
+The agent MUST attempt every safe, available execution path appropriate to the objective before declaring **BLOCKED** as an execution state.
 
 The agent MUST NOT claim that a tool, repository, branch, file, test, or environment is unavailable without observing the failure.
 
@@ -586,7 +589,7 @@ A future agent MUST be able to determine from repository evidence:
 - what findings exist;
 - which checks passed or failed;
 - what lifecycle stage is next;
-- what actions require human or independent-role authority.
+- what actions remain outside the current role or permission boundary.
 
 ---
 
@@ -626,9 +629,9 @@ Lifecycle stages completed:
 Verification completed:
 Open findings:
 Required independent role:
-Current stopping state:
+Current execution state:
 Exact next governed action:
-Actions requiring owner approval:
+Actions outside current role or permission:
 ```
 
 A handoff MUST NOT contain only narrative history.
@@ -666,15 +669,13 @@ When parallel findings conflict, the conflict MUST be resolved through evidence 
 The agent MUST stop and request a user decision only when at least one of the following is true:
 
 1. Multiple materially viable options remain and accepted governance does not select among them.
-2. The choice would create, amend, supersede, or deprecate architecture and owner approval is required.
+2. Continuing would create, amend, supersede, or deprecate architecture and the controlling authority requires a decision outside the current role.
 3. Continuing would expand authorized scope.
 4. A governance conflict, authority ambiguity, or contradictory accepted record cannot be resolved by precedence.
-5. The requested action is destructive, irreversible, security-sensitive, financial, or explicitly owner-controlled.
-6. Merge, release, production activation, credential use, or another action requires explicit human authorization.
-7. Required information is absent from both repository and instruction, and proceeding would require invention.
-8. The next required role must be independent and no valid independent path is available.
-9. A repository permission boundary prevents the required next action.
-10. The user explicitly reserved a decision or action.
+5. The controlling repository policy, tool permission, or explicit user reservation requires a decision before the next action.
+6. Required information is absent from both repository and instruction, and proceeding would require invention.
+7. The next required role must be independent and no valid independent path is available.
+8. A repository permission boundary prevents the required next action.
 
 The agent MUST NOT invent a human-decision boundary merely to end a task.
 
@@ -689,24 +690,7 @@ A valid escalation MUST state:
 - recommendation when governance permits one;
 - exact action that will resume after the decision.
 
----
-
-# Owner-Controlled Actions
-
-Unless repository policy or the user's instruction explicitly authorizes otherwise, the following remain owner-controlled:
-
-- selecting among unresolved architectural options;
-- accepting or superseding an ADR;
-- materially expanding Issue or Sprint scope;
-- merging a Pull Request;
-- creating a production release;
-- activating production behavior;
-- destructive repository operations;
-- secret or credential changes;
-- irreversible data migrations;
-- external financial or contractual actions.
-
-An agent MAY prepare these actions but MUST NOT execute them without required authorization.
+This section does not define which repository actions require human approval. That authority remains with the controlling governance, repository permissions, and explicit user instructions applicable to the action.
 
 ---
 
@@ -730,7 +714,9 @@ After a progress update, the default behavior is to continue.
 
 # Execution State Model
 
-Each objective MUST be in exactly one active state:
+Execution states in this protocol are session/objective coordination metadata only. They are not Pull Request readiness declarations, independent review outcomes, architecture-audit verdicts, or merge-readiness statuses.
+
+Each objective MUST be in exactly one active execution state:
 
 - **IN PROGRESS**
 - **COMPLETE**
@@ -747,7 +733,9 @@ The agent MUST continue.
 
 ## COMPLETE
 
-All required stages within authorized scope are complete, required evidence is recorded, no blocking finding remains, and the next action is outside scope or owner-controlled.
+All required stages within authorized scope are complete, required evidence is recorded, no blocking finding remains, and the next action is outside the current objective, role, or permission boundary.
+
+`COMPLETE` does not mean that a Pull Request is merged, approved, released, or production-active. Where applicable, the Pull Request must separately carry the exact canonical declaration required by `docs/DEVELOPMENT_GOVERNANCE.md`, such as **Ready for Review**.
 
 ## AWAITING HUMAN DECISION
 
@@ -761,11 +749,26 @@ The next required step must be performed independently and no valid independent 
 
 Completion depends on a genuinely unavailable environment, credential, provider, permission, external condition, or required artifact.
 
+This execution-state label does not itself constitute the canonical PR declaration `Blocked` or any review or audit verdict.
+
 ## CHANGES REQUIRED
 
 A blocking finding remains unresolved and cannot be corrected without crossing another valid stopping boundary.
 
+This execution-state label does not itself constitute an independent-review verdict, architecture-audit verdict, or canonical PR declaration.
+
 “Finished this part,” “waiting for instructions,” and “ready for next prompt” are not valid states.
+
+## Namespace Separation
+
+Protocol execution states MUST NOT substitute for:
+
+- Pull Request readiness declarations under `docs/DEVELOPMENT_GOVERNANCE.md`;
+- independent contribution-review outcomes under `docs/AI_REVIEW_PROTOCOL.md`;
+- architecture-audit verdicts under `docs/ARCHITECTURE_AUDIT_PROTOCOL.md`;
+- merge-readiness evidence or status under `docs/MERGE_READINESS_GATE.md`.
+
+Review and audit reports MUST use the exact vocabulary required by their controlling documents.
 
 ---
 
@@ -774,8 +777,8 @@ A blocking finding remains unresolved and cannot be corrected without crossing a
 ```text
 IN PROGRESS
     ├── required stage completed and more work remains ──> IN PROGRESS
-    ├── owner decision required ────────────────────────> AWAITING HUMAN DECISION
-    ├── independent role unavailable ───────────────────> AWAITING INDEPENDENT ROLE
+    ├── decision boundary reached ────────────────────────> AWAITING HUMAN DECISION
+    ├── independent role unavailable ────────────────────> AWAITING INDEPENDENT ROLE
     ├── external execution dependency unavailable ──────> BLOCKED
     ├── unresolved blocker outside current authority ───> CHANGES REQUIRED
     └── all governed work complete ─────────────────────> COMPLETE
@@ -789,27 +792,27 @@ After a decision, dependency, or independent role becomes available, execution M
 
 ## Architecture Preparation
 
-Architecture preparation is COMPLETE only when all required preparation, self-assessment, audit, correction, re-audit, and readiness steps within scope are complete.
+Architecture preparation is `COMPLETE` only when all required preparation, self-assessment, audit, correction, re-audit, and readiness steps within scope are complete.
 
-An ADPR may be complete while ADR adoption remains owner-controlled.
+An ADPR execution objective may be complete while ADR adoption remains a separate action governed elsewhere.
 
 ## Implementation
 
-Implementation work is COMPLETE only when planning, implementation, verification, Pull Request evidence, required review, finding resolution, and final validation within scope are complete.
+Implementation work is `COMPLETE` only when planning, implementation, verification, Pull Request evidence, required review, finding resolution, and final validation within scope are complete.
 
-A contribution may be COMPLETE for the agent while merge remains owner-controlled.
+A contribution may be `COMPLETE` for the agent while the Pull Request is separately recorded as **Ready for Review** and Merge remains a distinct repository action.
 
 ## Review
 
-Review work is COMPLETE only when the actual contribution was inspected, findings were recorded, required verification was performed, and a valid review outcome was issued.
+Review work is `COMPLETE` only when the actual contribution was inspected, findings were recorded, required verification was performed, and the exact valid review outcome required by `docs/AI_REVIEW_PROTOCOL.md` was issued.
 
 ## Verification
 
-Verification is COMPLETE only against the exact target commit or Pull Request head.
+Verification is `COMPLETE` only against the exact target commit or Pull Request head.
 
 ## Documentation
 
-Documentation work is COMPLETE only after required consistency checks and independent review, not merely after text creation.
+Documentation work is `COMPLETE` only after required consistency checks and independent review, not merely after text creation.
 
 ---
 
@@ -827,13 +830,13 @@ At a valid stopping state, the agent MUST provide a concise completion report co
 - review or audit verdict;
 - unresolved findings;
 - current execution state;
-- exact next owner or independent-role action.
+- exact next role, permission, or repository action.
 
 The report MUST separate:
 
 - completed work;
 - pending governed work;
-- owner-controlled actions;
+- actions outside the current role or permission;
 - external blockers.
 
 The report MUST NOT overstate architecture acceptance, production activation, review approval, CI success, release status, or merge status.
@@ -857,7 +860,7 @@ An agent MUST NOT:
 - fabricate repository, test, CI, review, or audit evidence;
 - conceal environment or tool limitations;
 - weaken tests or requirements to obtain a passing state;
-- merge, release, or activate production without required authorization;
+- execute an action when the controlling governance, permission model, or explicit user instruction does not authorize it;
 - stop solely because a tool call, context window, subagent, or session completed one portion of the objective;
 - use “waiting for instructions” where a governed next action exists.
 
@@ -874,8 +877,8 @@ Tool-specific instructions MAY define how an agent invokes its environment, but 
 - document authority;
 - lifecycle stages;
 - independent review;
-- stopping states;
-- owner-controlled actions;
+- review or audit verdicts;
+- execution-state namespace;
 - evidence standards;
 - merge-readiness semantics.
 
@@ -908,9 +911,10 @@ The active agent MUST, without requiring prompt chaining:
 11. correct valid blocking findings;
 12. verify corrections;
 13. perform final validation;
-14. declare the correct stopping state.
+14. record the canonical Pull Request declaration required by Development Governance;
+15. declare the correct protocol execution state.
 
-The agent MUST stop before merge unless merge was separately and explicitly authorized.
+Whether the agent may execute Merge is determined only by the controlling governance, repository permissions, and explicit authorization applicable to that action.
 
 ---
 
@@ -933,8 +937,8 @@ The active process MUST:
 7. route an independent architecture audit;
 8. correct valid findings;
 9. perform re-audit where required;
-10. determine ADR readiness;
-11. stop only at COMPLETE, AWAITING HUMAN DECISION, AWAITING INDEPENDENT ROLE, BLOCKED, or CHANGES REQUIRED.
+10. determine ADR readiness using the exact verdict vocabulary required by `docs/ARCHITECTURE_AUDIT_PROTOCOL.md`;
+11. declare the protocol execution state separately.
 
 The process MUST NOT stop simply because the ADPR text was written.
 
@@ -956,7 +960,7 @@ It MUST NOT ask the user to reconstruct the history unless material information 
 
 # Compliance Checklist
 
-Before declaring any valid stopping state, the active agent MUST confirm:
+Before declaring any valid execution state, the active agent MUST confirm:
 
 - [ ] repository identity and exact state were verified;
 - [ ] objective and scope were resolved;
@@ -968,8 +972,9 @@ Before declaring any valid stopping state, the active agent MUST confirm:
 - [ ] repository state was protected;
 - [ ] required checks and evidence were recorded;
 - [ ] unresolved findings were classified honestly;
-- [ ] owner-controlled actions were not crossed;
-- [ ] the declared execution state is valid;
+- [ ] actions outside the current role or permission were not crossed;
+- [ ] the declared protocol execution state is valid;
+- [ ] canonical PR, review, and audit declarations remain separate and use their controlling vocabulary;
 - [ ] the completion or handoff report identifies the exact next action.
 
 ---
@@ -978,16 +983,17 @@ Before declaring any valid stopping state, the active agent MUST confirm:
 
 This protocol operationalizes AI-agent behavior inside the lifecycle owned by `docs/DEVELOPMENT_GOVERNANCE.md`.
 
-It does not replace or supersede:
+It is a subordinate operational standard. It does not replace or supersede:
 
 - constitutional hierarchy;
 - accepted ADRs;
+- development lifecycle stages;
 - architecture preparation requirements;
 - architecture audit materiality or verdict rules;
 - independent contribution review;
 - merge-readiness requirements;
 - implementation obligations;
-- human approval policy.
+- repository permissions or action-specific authorization rules.
 
 When this protocol conflicts with a higher-authority document, the higher-authority document controls.
 
@@ -1008,22 +1014,22 @@ When this protocol conflicts with a higher-authority document, the higher-author
 | AI_REVIEW_PROTOCOL | Independent implementation and contribution review |
 | MERGE_READINESS_GATE | Merge-readiness evidence guide |
 | HUNTER_IMPLEMENTATION_CONTRACT | Implementation obligations |
-| This document | AI startup, continuation, role routing, context handoff, escalation, stopping, and completion behavior |
+| This document | Subordinate AI startup, continuation, role routing, context handoff, escalation, execution-state, and completion behavior |
 
 ---
 
 # Ownership Boundary
 
-This document owns:
+This document owns only the operational behavior needed to execute already-governed work:
 
-- repository-governed AI operating behavior;
-- startup and objective-resolution protocol;
+- repository-governed AI startup behavior;
+- objective-resolution protocol;
 - autonomous continuation through mandatory in-scope stages;
 - prompt-chaining prohibition;
 - role routing and handoff behavior;
 - context continuity and session resume;
-- AI stopping-state classification;
-- escalation criteria;
+- session/objective execution-state classification;
+- escalation format;
 - completion-report requirements.
 
 This document does not own:
@@ -1031,15 +1037,16 @@ This document does not own:
 - constitutional authority;
 - architecture;
 - development lifecycle stages;
+- Pull Request readiness declarations;
 - architecture-audit verdicts;
-- independent review findings;
+- independent review outcomes;
 - implementation requirements;
-- merge approval;
-- release approval;
-- production activation;
+- merge approval or execution authority;
+- release approval or execution authority;
+- production activation authority;
 - Sprint scope.
 
-Those responsibilities remain with their canonical owner documents.
+Those responsibilities remain with their canonical owner documents, repository permissions, and explicit action-specific authorization.
 
 ---
 
@@ -1050,10 +1057,10 @@ Changes to this protocol follow `docs/DEVELOPMENT_GOVERNANCE.md`.
 No amendment may weaken:
 
 - required role independence;
-- human approval boundaries;
 - repository-state protection;
 - architectural authority;
 - evidence integrity;
 - lifecycle completeness;
 - durable context continuity;
-- truthful stopping-state classification.
+- truthful execution-state classification;
+- separation between protocol execution states and canonical repository declarations or verdicts.
