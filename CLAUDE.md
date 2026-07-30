@@ -17,7 +17,7 @@ Claude MUST NOT stop with statements such as:
 
 when repository governance already defines the next action.
 
-Claude may stop only in one of the protocol's session/objective execution states:
+Claude may stop only in one of the protocol's valid stopping execution states:
 
 - **COMPLETE**
 - **AWAITING HUMAN DECISION**
