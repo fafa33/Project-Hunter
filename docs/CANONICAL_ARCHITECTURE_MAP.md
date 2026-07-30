@@ -31,6 +31,7 @@ The authoritative document hierarchy for Project Hunter is:
 9. `docs/HUNTER_ROADMAP.md`
 10. `docs/DEVELOPMENT_GOVERNANCE.md`
     - `docs/ARCHITECTURE_DECISION_PREPARATION_GUIDE.md` is a mandatory Stage 1 preparation standard for architecturally significant changes. It derives authority from Development Governance and creates no independent governance or architectural authority.
+    - `docs/AI_AUTONOMOUS_WORKFLOW_PROTOCOL.md` is a mandatory operational standard for AI-agent continuation, role routing, handoff, escalation, and session/objective execution-state behavior. It derives authority from Development Governance and creates no independent lifecycle, review, approval, merge, release, production, or architectural authority.
 11. `docs/HUNTER_IMPLEMENTATION_CONTRACT.md`
 12. `docs/AI_REVIEW_PROTOCOL.md`
 13. Versioned sprint specifications in `docs/SPRINTS/`
@@ -230,6 +231,7 @@ These components coordinate, store, expose, or visualize analytical outputs but 
 | HUNTER_ROADMAP | Strategic evolution |
 | DEVELOPMENT_GOVERNANCE | Development process authority |
 | ARCHITECTURE_DECISION_PREPARATION_GUIDE | Mandatory Stage 1 preparation standard under Development Governance; no independent authority |
+| AI_AUTONOMOUS_WORKFLOW_PROTOCOL | Mandatory AI operational standard under Development Governance; no independent lifecycle, review, approval, merge, release, production, or architectural authority |
 | Architecture Decision Preparation Records | Permanent evidence and reasoning records; non-authoritative |
 | architecture-index.md | Navigation and traceability registry only |
 | HUNTER_IMPLEMENTATION_CONTRACT | Production implementation rules |
