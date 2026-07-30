@@ -1356,7 +1356,7 @@ def _inject_snapshot_with_payload_override(
         snapshots = RepositoryFactory(session).snapshots()
         original = snapshots.load(original_id)
         assert original is not None
-        payload = {**original.payload, "record_id": new_id, **payload_overrides}
+        payload = {**original.payload, **payload_overrides, "record_id": new_id}
         metadata = dict(original.metadata)
         if "known_at" in payload_overrides:
             metadata["known_at"] = payload_overrides["known_at"]
