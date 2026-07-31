@@ -2,11 +2,11 @@
 
 ## Status
 
-Proposed.
+Accepted.
 
 Governing preparation record: [ADPR-0003 — Canonical Comparative Valuation](../architecture-records/ADPR-0003-canonical-comparative-valuation.md).
 
-This ADR is documentation-only. It authorizes no implementation or production activation while Proposed.
+This ADR was accepted after independent architecture review. Implementation of the Comparative Valuation foundation is now authorized under a separately governed implementation Issue and the prerequisites listed below.
 
 ## Context
 
@@ -354,9 +354,7 @@ The correlation-group identity required by ADR 0021 must be preserved on the ass
 
 ## Implementation Prerequisites
 
-No implementation is authorized until this ADR is accepted after independent architecture review.
-
-After acceptance, implementation still requires:
+Implementation is authorized after acceptance of this ADR. Implementation still requires:
 
 1. a separately governed implementation Issue and reviewable plan;
 2. one real strict-known target and at least three eligible peers in ADR 0022's first supported entity class;
