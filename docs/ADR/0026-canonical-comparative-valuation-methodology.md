@@ -80,17 +80,21 @@ No other component may write a canonical Comparative Valuation conclusion or a c
 
 ## Peer Universe Authority
 
-The canonical candidate source is a versioned point-in-time candidate universe assembled from authoritative persisted Discovery and registered-candidate evidence known at the requested cutoff. Candidate membership is input evidence, not peer eligibility.
+The canonical candidate source is one immutable, versioned point-in-time candidate universe known at the requested cutoff. Candidate membership is input evidence, not peer eligibility. The `CanonicalComparativeValuationService` owns only the analytical eligibility decisions applied to that universe; it does not create a Registry-plus-Discovery union or otherwise combine candidate sources.
+
+The candidate-universe snapshot must preserve the exact source record IDs/versions, source provenance, cutoff, deterministic query/pagination/order policy, and canonical entity and representation identities. Duplicate candidate observations are resolved only by canonical economic-entity identity followed by representation compatibility under the selected hierarchical eligibility policy. No source-union or source-precedence rule is authorized by this ADR.
 
 Each `PeerUniversePolicyRecord` must be immutable, versioned, effective before target evaluation, and must predeclare:
 
 - supported entity class;
-- candidate-source types and deterministic union/deduplication rules;
+- candidate-universe snapshot selection and provenance requirements;
 - taxonomy and taxonomy version;
 - mandatory eligibility and exclusion rules;
 - metric numerator and denominator policy;
 - observation window and freshness limits;
 - minimum cohort;
+- equal peer weighting and the unweighted reference statistic;
+- minimum decision and observation coverage required for availability;
 - deterministic ordering and tie-breaking;
 - outlier treatment;
 - confidence policy;
@@ -161,7 +165,16 @@ At least three eligible economic-entity peers are required. With fewer than thre
 
 Eligible peer observations are ordered deterministically by canonical economic-entity ID, representation ID, and source-record identity. All eligible observations are retained. No observation is trimmed, winsorized, silently excluded, or down-weighted after eligibility.
 
-The peer reference is the median of the eligible peer `comparative_multiple` values. For an even cohort, the median is the arithmetic mean of the two central ordered values.
+Every eligible economic entity contributes exactly one compatible peer observation with equal weight. The peer reference is the unweighted median of all eligible peer `comparative_multiple` values. For an even cohort, the median is the arithmetic mean of the two central ordered values. No alternative weighting policy is authorized for this methodology.
+
+The minimum coverage gate is 100 percent coverage of the bounded point-in-time candidate universe and eligible cohort:
+
+- every candidate in the universe snapshot has one persisted, deterministic eligibility decision;
+- every candidate decision is resolved as included or excluded; an indeterminate decision fails the coverage gate;
+- the target and every included eligible peer have one compatible, non-conflicted metric observation; and
+- every included eligible peer observation participates in the unweighted median.
+
+Any failure of this complete decision or observation coverage gate makes the assessment unavailable. Confidence cannot convert incomplete coverage into availability.
 
 The raw signed residual is:
 
@@ -307,7 +320,7 @@ The service must preserve explicit states including:
 
 `LIMITED_PEER_SET` is descriptive metadata only. Below three eligible peers the canonical assessment and residual are unavailable.
 
-`AVAILABLE` requires all mandatory gates, at least three eligible peers, compatible target and peer observations, complete provenance, no unresolved required conflict, strict-known replayability, and a historically calibrated normalization accepted through independent review. Raw reproducible observations and a raw residual may be persisted before calibration, but they do not make the Market Validation input available.
+`AVAILABLE` requires all mandatory gates, at least three eligible peers, complete candidate-decision and eligible-cohort observation coverage under the peer policy, compatible target and peer observations, complete provenance, no unresolved required conflict, strict-known replayability, and a historically calibrated normalization accepted through independent review. Raw reproducible observations and a raw residual may be persisted before calibration, but they do not make the Market Validation input available.
 
 Missing, incompatible, stale, conflicted, insufficient, or uncalibrated data never becomes zero, neutral, average, prior-filled, lower-confidence availability, or a supportive value.
 
@@ -337,7 +350,7 @@ Permitted downstream use is limited to:
 
 This ADR does not define the Mispricing formula or owner beyond reaffirming ADR 0021. It grants no authority to Asymmetry, Opportunity Assessment, ranking, recommendation, Dashboard calculation, general scoring, or portfolio logic.
 
-The correlation-group identity required by ADR 0021 must be preserved on the assessment. Any contribution cap, weighting, residual-independence claim, or Market Validation composition remains unavailable until a separate accepted ADR defines it.
+The correlation-group identity required by ADR 0021 must be preserved on the assessment. Any downstream contribution cap, downstream contribution weighting, residual-independence claim, or Market Validation composition remains unavailable until a separate accepted ADR defines it.
 
 ## Implementation Prerequisites
 

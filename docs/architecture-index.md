@@ -59,7 +59,7 @@ Records in `PROPOSED`, `IN_RESEARCH`, or `READY_FOR_REVIEW` state are listed her
 | Epic or Issue | ADPRs | ADRs | Implementation PRs | Status |
 |---|---|---|---|---|
 | Issue #133 | [ADPR-0001](architecture-records/ADPR-0001-architecture-decision-preparation-framework.md) | not applicable | PR #132; remediation PR not yet created | Open remediation |
-| Issue #135 / Issue #156 | [ADPR-0003](architecture-records/ADPR-0003-canonical-comparative-valuation.md) | [ADR 0026](ADR/0026-canonical-comparative-valuation-methodology.md) (Proposed) | PR #157 (architecture preparation only); ADR PR not yet created | ADR architecture review pending |
+| Issue #135 / Issue #156 | [ADPR-0003](architecture-records/ADPR-0003-canonical-comparative-valuation.md) | [ADR 0026](ADR/0026-canonical-comparative-valuation-methodology.md) (Proposed) | PR #157 (architecture preparation only); PR #158 (Draft ADR) | ADR corrections after independent architecture review |
 
 ## Component Mapping
 
