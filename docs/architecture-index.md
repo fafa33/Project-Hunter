@@ -25,7 +25,7 @@ Use only the lifecycle states defined by `docs/ARCHITECTURE_DECISION_PREPARATION
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | [ADPR-0001](architecture-records/ADPR-0001-architecture-decision-preparation-framework.md) | Architecture Decision Preparation Framework | IMPLEMENTED | not applicable | #133 | not applicable | #132 | not yet recorded | not yet assigned | not applicable | not applicable |
 | [ADPR-0002](architecture-records/ADPR-0002-disclosure-architecture-classification.md) | Disclosure Architecture Classification | IN_RESEARCH | not yet created | not yet created | none produced | not yet created | not yet recorded | not yet assigned | not applicable | not applicable |
-| [ADPR-0003](architecture-records/ADPR-0003-canonical-comparative-valuation.md) | Canonical Comparative Valuation | READY_FOR_REVIEW | #135 | #156 | not yet created | not yet created | not yet recorded | not yet assigned | not applicable | not applicable |
+| [ADPR-0003](architecture-records/ADPR-0003-canonical-comparative-valuation.md) | Canonical Comparative Valuation | APPROVED | #135 | #156 | [ADR 0026](ADR/0026-canonical-comparative-valuation-methodology.md) (Proposed) | not yet created | PR #157 merge `12de4d3` (preparation only) | not yet assigned | not applicable | not applicable |
 
 ## Active Preparation Records
 
@@ -34,13 +34,13 @@ Records in `PROPOSED`, `IN_RESEARCH`, or `READY_FOR_REVIEW` state are listed her
 | ADPR | Title | Status | Blocking questions | Owner |
 |---|---|---|---|---|
 | [ADPR-0002](architecture-records/ADPR-0002-disclosure-architecture-classification.md) | Disclosure Architecture Classification | IN_RESEARCH | Which option across the four decision axes should be selected (see record's Open Questions); no ADR can be created until a future session selects | not yet assigned |
-| [ADPR-0003](architecture-records/ADPR-0003-canonical-comparative-valuation.md) | Canonical Comparative Valuation | READY_FOR_REVIEW | Independent architecture-audit verdict on PR #157; real cohort and calibration evidence remain later production-activation gates | Issue #156 |
 
 ## Approved and Implemented Records
 
 | ADPR | ADR | Status | Implementation | Validation |
 |---|---|---|---|---|
 | [ADPR-0001](architecture-records/ADPR-0001-architecture-decision-preparation-framework.md) | not applicable | IMPLEMENTED | PR #132 | Post-merge coherence remediation tracked by Issue #133 |
+| [ADPR-0003](architecture-records/ADPR-0003-canonical-comparative-valuation.md) | [ADR 0026](ADR/0026-canonical-comparative-valuation-methodology.md) (Proposed) | APPROVED | PR #157 preparation merged; implementation not authorized | Independent audit on PR #157 returned `READY_FOR_ADR`; ADR review pending |
 
 ## Superseded and Archived Records
 
@@ -52,13 +52,14 @@ Records in `PROPOSED`, `IN_RESEARCH`, or `READY_FOR_REVIEW` state are listed her
 | ADR | Governing ADPR | Decision scope | Current status |
 |---|---|---|---|
 | not applicable | [ADPR-0001](architecture-records/ADPR-0001-architecture-decision-preparation-framework.md) | Governance Stage 1 preparation framework; no architectural decision created | not applicable |
+| [ADR 0026](ADR/0026-canonical-comparative-valuation-methodology.md) | [ADPR-0003](architecture-records/ADPR-0003-canonical-comparative-valuation.md) | First methodology and authority contract for Canonical Comparative Valuation | Proposed; independent architecture review pending |
 
 ## Epic and Issue Mapping
 
 | Epic or Issue | ADPRs | ADRs | Implementation PRs | Status |
 |---|---|---|---|---|
 | Issue #133 | [ADPR-0001](architecture-records/ADPR-0001-architecture-decision-preparation-framework.md) | not applicable | PR #132; remediation PR not yet created | Open remediation |
-| Issue #135 / Issue #156 | [ADPR-0003](architecture-records/ADPR-0003-canonical-comparative-valuation.md) | not yet created | PR #157 (architecture preparation only) | Independent review pending |
+| Issue #135 / Issue #156 | [ADPR-0003](architecture-records/ADPR-0003-canonical-comparative-valuation.md) | [ADR 0026](ADR/0026-canonical-comparative-valuation-methodology.md) (Proposed) | PR #157 (architecture preparation only); ADR PR not yet created | ADR architecture review pending |
 
 ## Component Mapping
 
@@ -67,7 +68,7 @@ Records in `PROPOSED`, `IN_RESEARCH`, or `READY_FOR_REVIEW` state are listed her
 | Discovery | | | |
 | Validation | | | |
 | Evidence | [ADPR-0002](architecture-records/ADPR-0002-disclosure-architecture-classification.md) | not applicable | Enumerates options for classifying disclosure structure prior to or independent of acquisition; no ADR produced yet |
-| Valuation | [ADPR-0002](architecture-records/ADPR-0002-disclosure-architecture-classification.md); [ADPR-0003](architecture-records/ADPR-0003-canonical-comparative-valuation.md) | ADR 0021, ADR 0022, ADR 0024, ADR 0025 (unmodified, checked for compatibility only) | ADPR-0003 prepares the methodology decision for ADR 0021's already-owned but unavailable Comparative Valuation authority; it does not authorize implementation or amend accepted ADRs |
+| Valuation | [ADPR-0002](architecture-records/ADPR-0002-disclosure-architecture-classification.md) | ADR 0021, ADR 0022, ADR 0024, ADR 0025; ADR 0026 Proposed | ADR 0026 converts approved ADPR-0003 into a proposed, documentation-only Comparative Valuation methodology; implementation and activation remain unauthorized |
 | Opportunity assessment and ranking | | | |
 | Historical validation and replay | | | |
 | Persistence and correction | | | |

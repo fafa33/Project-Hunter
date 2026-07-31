@@ -3,15 +3,15 @@
 ## Metadata
 
 - ADPR ID: `ADPR-0003`
-- Status: `READY_FOR_REVIEW`
+- Status: `APPROVED`
 - Version: 1.1
 - Author: ChatGPT, on behalf of Issue #156
-- Reviewers: not yet assigned
+- Reviewers: independent architecture audit recorded on PR #157
 - Created: 2026-07-31
-- Approved: not yet approved
+- Approved: 2026-07-31
 - Related Epic: Issue #135
 - Related Issue: Issue #156
-- Planned ADR: not yet created
+- Planned ADR: [ADR 0026 — Canonical Comparative Valuation Methodology](../ADR/0026-canonical-comparative-valuation-methodology.md) (Proposed)
 - Supersedes: not applicable
 - Superseded by: not applicable
 
@@ -880,6 +880,7 @@ Draft a narrow ADR using the preferred coherent option bundle. The ADR must auth
 |---|---|---|---|
 | 2026-07-31 | IN_RESEARCH | Initial decision-space preparation. | ChatGPT |
 | 2026-07-31 | READY_FOR_REVIEW | Reconciled accepted ADR semantics; normalized options; completed evidence, falsification, risk, quality, readiness, and traceability records. | Codex remediation for Issue #156 |
+| 2026-07-31 | APPROVED | Independent architecture audit on exact head `7177997978a49f97ef5c23db7657ea6d0ee16072` found no material issues and returned `READY_FOR_ADR`; PR #157 was merged. | Independent reviewer |
 
 ## Traceability
 
@@ -889,11 +890,11 @@ Draft a narrow ADR using the preferred coherent option bundle. The ADR must auth
 - Checklist review: completed against `docs/checklists/ARCHITECTURE_DECISION_PREPARATION_CHECKLIST.md`
 - ADPR: ADPR-0003
 - Pull Request: PR #157
-- Reviewed commit: to be recorded by the independent reviewer
-- Independent Architecture Audit: pending on the final PR head
-- Comparative Valuation ADR: not yet created
+- Reviewed commit: `7177997978a49f97ef5c23db7657ea6d0ee16072`
+- Independent Architecture Audit: `READY_FOR_ADR` on PR #157, with no material findings
+- Comparative Valuation ADR: [ADR 0026 — Canonical Comparative Valuation Methodology](../ADR/0026-canonical-comparative-valuation-methodology.md) (Proposed)
 - Implementation plan and PRs: not authorized
-- Merge commit: not yet created
+- Merge commit: `12de4d39587e896983141ef6f286cd88d6291332`
 - Release: not yet assigned
 
 ## Completion Criterion for This ADPR
