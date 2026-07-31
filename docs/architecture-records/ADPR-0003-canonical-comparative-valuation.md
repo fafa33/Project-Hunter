@@ -3,8 +3,8 @@
 ## Metadata
 
 - ADPR ID: `ADPR-0003`
-- Status: `IN_RESEARCH`
-- Version: 1.0
+- Status: `READY_FOR_REVIEW`
+- Version: 1.1
 - Author: ChatGPT, on behalf of Issue #156
 - Reviewers: not yet assigned
 - Created: 2026-07-31
@@ -17,19 +17,19 @@
 
 ## Executive Summary
 
-Canonical Comparative Valuation is the next separately owned analytical authority after Canonical Valuation. Its purpose is to determine how a target economic entity compares with a point-in-time, evidence-backed, methodologically compatible peer set without collapsing into canonical valuation, mispricing, asymmetry, Market Validation scoring, Opportunity Assessment, or generic current-project ranking.
+ADR 0021 already establishes Canonical Comparative Valuation as a separately owned analytical authority after Canonical Valuation. Its purpose is to determine how a target economic entity's observed market valuation compares with a point-in-time, evidence-backed, methodologically compatible peer set without collapsing into canonical valuation, mispricing, asymmetry, Market Validation composition, Opportunity Assessment, or generic current-project ranking.
 
-This preparation record defines the problem, validates the need for a new authority, identifies governing constraints, inventories evidence, enumerates materially distinct architectural and methodological options, compares and falsifies them, and records the conditions required before a formal ADR can be drafted.
+This preparation record does not reopen that accepted owner or semantic contract. It validates the unresolved methodology problem, identifies governing constraints, inventories evidence, enumerates the materially distinct methodology options that remain available under ADR 0021, compares and falsifies them, and records the conditions a formal methodology ADR must fix before implementation.
 
-This record does not select or implement a comparative-valuation methodology. It does not create code, activate scoring, produce favorable directionality, or authorize downstream composition.
+This record recommends a bounded methodology direction but does not implement it. It does not create code, activate a Market Validation input, define Market Validation composition, or authorize Opportunity Assessment. ADR 0021's peer-relative favorability and historically calibrated normalization contract remains binding; ADR 0024 removed scalar favorability only from `valuation`, not from `comparative_valuation`.
 
-Self-assessment: `NEEDS_REVISION`. The preparation is structurally complete enough for independent review, but several evidence-dependent decisions remain open, particularly the first supported entity class, admissible peer metrics, and minimum peer-set rules.
+Self-assessment: `READY_FOR_ADR`. The accepted owner and semantic boundary are treated as fixed constraints, the remaining option axes are normalized and falsified, and the recommendation is fail-closed where real peer evidence or calibration is unavailable. This is an author self-assessment only; independent audit controls the readiness verdict.
 
 ## Problem Statement
 
 ### Current condition
 
-Hunter now has canonical structured valuation authority and separately owned evidence foundations, but Comparative Valuation remains explicitly unavailable. No accepted authority currently owns:
+Hunter now has canonical structured valuation authority and separately owned evidence foundations. ADR 0021 already assigns immutable peer selection and `comparative_valuation` exclusively to `CanonicalComparativeValuationService`, but the input remains explicitly unavailable because no accepted methodology, qualifying point-in-time cohort, calibrated normalization, or service-owned persistence implementation exists. The unresolved problem is therefore not ownership. It is the methodology and evidence contract for:
 
 - construction of a point-in-time peer universe;
 - peer eligibility and rejection decisions;
@@ -55,22 +55,21 @@ Hunter has a separately governed Comparative Valuation authority that can:
 
 ### Decision required
 
-A future ADR must determine:
+A future ADR must preserve the owner, input/output semantics, and minimum record contracts already fixed by ADR 0021 and determine only the unresolved methodology:
 
-1. the sole owner and write authority;
-2. the peer-universe source and point-in-time eligibility contract;
-3. the minimum comparability dimensions;
-4. the permitted comparative metrics and coordinate rules;
-5. the primary aggregation/distribution methodology;
-6. outlier, sparse-peer, stale, conflict, confidence, and correction behavior;
-7. the immutable record families and persistence contract;
-8. the downstream boundary with Mispricing and all scoring/ranking systems.
+1. the peer-candidate source and point-in-time eligibility contract;
+2. the minimum comparability dimensions;
+3. the single predeclared fundamental denominator and coordinate rules required by ADR 0021;
+4. the peer-reference statistic and residual calculation;
+5. outlier, sparse-peer, stale, conflict, confidence, calibration, and correction behavior;
+6. any additional immutable supporting records needed beyond ADR 0021's fixed `PeerUniversePolicyRecord`, `PeerUniverseSnapshot`, and `ComparativeValuationAssessmentRecord`;
+7. implementation and activation gates that preserve the downstream boundary with Mispricing and Market Validation composition.
 
 ### In scope
 
 - architecture preparation for Canonical Comparative Valuation;
 - exhaustive decision-space preparation;
-- peer authority and eligibility;
+- peer-candidate sourcing and service-owned eligibility under ADR 0021's fixed authority;
 - metric and coordinate compatibility;
 - methodology options;
 - persistence, identity, replay, provenance, confidence, conflict, missingness, and correction;
@@ -99,6 +98,29 @@ The problem is real and unresolved:
 
 Therefore a new architectural decision is required before implementation.
 
+## Motivation and Existing Architecture
+
+Without a methodology ADR, Hunter must keep `comparative_valuation` unavailable. Implementing directly would force code to invent a denominator, peer cohort, residual, outlier rule, calibration target, or record boundary that ADR 0021 intentionally leaves to a later methodology decision. The resulting number could appear precise while comparing incompatible claims or leaking current peer membership into historical replay.
+
+The existing architecture already provides:
+
+- canonical economic-entity and representation identity under ADR 0005;
+- provider-observed market facts under service-owned Market Facts authority;
+- native fundamental evidence, value-capture rules, and supply snapshots under `hunter.value_capture`;
+- structured Canonical Valuation records under `hunter.valuation_authority`;
+- immutable analytical persistence envelopes and strict-known repository reads.
+
+It does not provide:
+
+- a comparative methodology snapshot;
+- a persisted point-in-time peer policy or peer-universe snapshot;
+- service-owned peer eligibility decisions;
+- coherent target/peer multiple observations;
+- a calibrated peer-relative residual transform;
+- a Comparative Valuation production service, repository, CLI, scheduler, or Market Validation adapter.
+
+The current Sky pilot is evidence that the first entity class is registered, not evidence that a comparative cohort exists. Its persisted fundamental disclosure lacks the numeric amount and 365-day accounting coverage needed by the first Canonical Valuation methodology, and no additional compatible peers are currently persisted. The only truthful current availability state is therefore unavailable.
+
 ## Governing Authority and Constraints
 
 ### Constitutional constraints
@@ -116,6 +138,18 @@ Therefore a new architectural decision is required before implementation.
 - Rejected options and reconsideration conditions remain permanent.
 - Independent architecture review is required before ADR work begins.
 
+### Technical, operational, and compatibility constraints
+
+- candidate construction and eligibility evaluation must have deterministic ordering and bounded query cost;
+- every included and excluded peer decision must be observable by record ID, reason, methodology version, effective time, recorded time, and known time;
+- no live provider call may occur during historical replay;
+- partial service or migration deployment must fail closed and must not expose an assessment as available;
+- the first implementation must be additive: existing valuation, Market Validation, and persistence contracts remain compatible;
+- rollback disables the new entry point and preserves immutable records; it never deletes accepted history;
+- secrets, personal data, and opaque analyst judgments are not eligible methodology inputs;
+- Assembled Fundamental Evidence remains outside this scope under ADR 0025;
+- performance must be bounded by a versioned maximum candidate-universe size and deterministic pagination/order policy fixed by the future ADR.
+
 ### Accepted architecture constraints
 
 - ADR 0005: economic entity and representation identity must remain explicit.
@@ -123,8 +157,9 @@ Therefore a new architectural decision is required before implementation.
 - ADR 0010: validation and persistence authorization are service-owned.
 - ADR 0016: Market Validation remains the sole canonical production composition runtime and must not be silently extended.
 - ADR 0020: strict-known replay, truthful missingness, no aliases or current fallback.
-- ADR 0021: Comparative Valuation is a distinct owner and may not be collapsed into valuation, mispricing, or asymmetry.
-- ADR 0024: Canonical Valuation remains structured and non-scalar; Comparative Valuation must not invent favorable directionality merely to satisfy downstream scalar interfaces.
+- ADR 0021: `CanonicalComparativeValuationService` is the sole owner of immutable peer selection and `comparative_valuation`; its fixed semantic output compares observed market valuation through one predeclared fundamental denominator, produces a peer-relative residual, and requires a historically calibrated monotonic transform before becoming a `[0,1]` Market Validation input.
+- ADR 0024: only `valuation` lost scalar favorability. It explicitly leaves `comparative_valuation`'s peer-relative directionality, normalization, and calibration contract unchanged.
+- ADR 0025: Assembled Fundamental Evidence is a distinct Layer 2 subtype owned by Canonical Evidence Assembly Authority and is authorized immediately upstream of Canonical Valuation only when a valuation methodology opts in. Comparative Valuation receives no implicit right to consume or recreate assembled evidence; a later amendment would be required before such evidence became eligible.
 
 ### Fixed prohibitions
 
@@ -136,38 +171,39 @@ Therefore a new architectural decision is required before implementation.
 - no averaging of incompatible or conflicted peers;
 - no fallback to generic sector labels when material comparability dimensions are missing;
 - no calculation of market-versus-fair-value gap;
-- no scoring, ranking, weighting, or Opportunity Assessment activation.
+- no Market Validation composition, generic ranking, weighting, or Opportunity Assessment activation before separately accepted downstream architecture;
+- no removal of the peer-relative sign convention or normalization obligation already fixed by ADR 0021.
 
 ## Evidence Inventory and Quality Assessment
 
-| Evidence | Authority | Relevance | Limitations |
-|---|---|---|---|
-| Project Constitution and Principles | Constitutional | Highest | Defines constraints, not methodology |
-| Development Governance | Process authority | Highest | Governs lifecycle, not analytical selection |
-| Architecture Decision Preparation Guide | Preparation authority | Highest | Defines required preparation outputs |
-| Canonical Architecture Map | Canonical architecture | Highest | Defines ownership/dependency direction, not detailed peer policy |
-| Canonical Runtime Architecture | Canonical documentation | High | May require coherence updates; does not itself authorize unavailable runtime |
-| ADR 0005 | Accepted ADR | Highest | Identity boundary only |
-| ADR 0009 / 0010 | Accepted ADRs | Highest | Authority/persistence boundaries only |
-| ADR 0016 | Accepted ADR | Highest | Downstream composition boundary only |
-| ADR 0020 | Accepted ADR | Highest | Replay/missingness contract only |
-| ADR 0021 | Accepted ADR | Highest | Separates Comparative Valuation authority; methodology not defined |
-| ADR 0024 | Accepted ADR | Highest | Protects non-scalar valuation semantics and downstream boundary |
-| Issue #135 | Repository audit/control | High | Identifies the gap and required scope; not an ADR |
-| Issue #156 | Work authorization | High | Defines this ADPR scope; not architectural authority |
-| Existing valuation/value-capture/market-facts records | Implementation evidence | High | Inputs may be reusable; do not define comparative methodology |
+| ID | Evidence | Authority/source | Finding | Quality and limitations | Supports or challenges |
+|---|---|---|---|---|---|
+| E-001 | Constitutional Rules 2, 3, 4, and 5 | `docs/PROJECT_CONSTITUTION.md` | Evidence, replay, explicit ownership, and one canonical owner are mandatory. | Highest authority; does not select a numeric method. | Supports fail-closed evidence, deterministic replay, and fixed ownership. |
+| E-002 | Canonical authority hierarchy and Valuation → Opportunity direction | `docs/CANONICAL_ARCHITECTURE_MAP.md` | Accepted ADRs are binding; Comparative Valuation is downstream of Canonical Valuation and upstream of Mispricing/Opportunity. | Highest architecture navigation; intentionally high-level. | Rejects authority duplication and downstream shortcuts. |
+| E-003 | Comparative Valuation authority matrix | ADR 0021, Decision and authority-matrix `comparative_valuation` row | Fixes sole owner, exact market-value-to-fundamental meaning, single predeclared denominator, residual sign, required record families, peer-policy fields, calibration, correlation, strict-known replay, and prohibited substitutes. | Binding and directly applicable; leaves the numeric methodology and first cohort unselected. | Fixes the baseline and removes owner/semantic alternatives from the viable set. |
+| E-004 | Valuation scalar amendment | ADR 0024, Decision and exact amendments | Removes scalar favorability only from `valuation`; explicitly preserves `comparative_valuation` normalization and favorability language. | Binding and precise. | Challenges any non-directional/no-normalization interpretation of Comparative Valuation. |
+| E-005 | Fundamental-evidence assembly boundary | ADR 0025, Decision and ownership boundary | Assembled Fundamental Evidence is distinct Layer 2 evidence owned by Canonical Evidence Assembly Authority and conditionally available to Canonical Valuation. | Binding; does not grant Comparative Valuation consumption authority. | Requires native fundamental evidence for this scope unless a later accepted amendment says otherwise. |
+| E-006 | Strict-known input authority | ADR 0020 | Prohibits aliases, future/current fallback, and unknown-known-time substitution. | Binding; methodology-independent. | Supports versioned point-in-time candidate and observation selection. |
+| E-007 | Identity boundary | ADR 0005 | Economic entity, asset claim, and representation are distinct identities. | Binding; does not define peer compatibility. | Supports hierarchical entity then representation eligibility. |
+| E-008 | Provider/service/repository/persistence authority | ADR 0009 and ADR 0010 | Providers acquire; services validate and authorize; repositories persist. | Binding; does not select data providers. | Rejects provider-selected canonical peers and repository-owned eligibility. |
+| E-009 | Existing first Canonical Valuation entity class and Sky pilot | ADR 0022; `docs/IMPLEMENTATION_REPORTS/v3.6.0-milestone-1-entity-registration.md`; `tests/test_valuation_real_evidence_v1.py` | ADR 0021 implementation order requires Comparative Valuation for the same supported entity class; Sky is the persisted pilot, but its real fundamental evidence has no numeric amount and covers 30 rather than 365 days. | Repository-observed implementation evidence; one entity is not a peer cohort and cannot validate a comparative denominator. | Fixes the initial entity-class boundary while proving production activation must remain unavailable. |
+| E-010 | Current record contracts | `src/hunter/value_capture/models.py`, `src/hunter/market_facts/`, `src/hunter/valuation_authority/` | Immutable fundamental, supply, market-fact, and valuation records exist; no Comparative Valuation service or peer-policy persistence exists. | Direct implementation evidence at this revision. | Supports reuse by exact reference and confirms new service/persistence work remains future scope. |
+| E-011 | Architecture audit and capability gap | Issue #135 | Comparative Valuation remains unavailable and separately governed. | Repository audit evidence, not architectural authority. | Supports the need for methodology preparation. |
+| E-012 | Authorized preparation scope | Issue #156 | Requires exhaustive preparation without ADR or implementation. | Work authorization, not architectural authority. | Fixes deliverables and prohibited scope. |
+
+No real, strict-known multi-entity cohort with compatible numeric fundamental denominators exists in the repository at this revision. That absence is evidence of an activation blocker; it is not replaced with a hypothetical cohort.
 
 ## Assumptions
 
-The following are assumptions, not evidence:
+| ID | Assumption | Rationale | Confidence | Falsification condition | Consequence if false |
+|---|---|---|---|---|---|
+| A-001 | The first Comparative Valuation methodology should use ADR 0021's required same supported entity class as Canonical Valuation. | ADR 0021 implementation order fixes this boundary. | High | A later accepted ADR explicitly changes the implementation-order or entity-class boundary. | A new ADPR or explicit amendment is required. |
+| A-002 | At least three eligible economic-entity peers may eventually be acquired for the first class. | Three is the smallest cohort that permits a target-independent median with two-sided dispersion; it is an activation floor, not evidence that such peers exist. | Low | Evidence acquisition finds fewer than three eligible peers at a historical cutoff. | Output remains `UNAVAILABLE_INSUFFICIENT_ELIGIBLE_PEERS`; no fallback or confidence-only substitute is allowed. |
+| A-003 | One numeric, attributable native `FundamentalEvidenceRecord` denominator can eventually be made compatible across target and peers. | ADR 0021 requires one predeclared denominator; current Sky evidence proves the record family exists but not numeric cross-peer coverage. | Low | No common numeric denominator with coherent periods and value-capture attribution can be acquired. | The methodology cannot activate; denominator scope must be revised through governance. |
+| A-004 | Median plus explicit empirical distribution is a safer first reference than mean, trimming, or model-based shrinkage. | It preserves observations and reduces single-outlier influence without inventing exclusions or priors. | Medium | Historical validation shows systematic instability or bias relative to another predeclared method. | A successor methodology version or later ADR may select another normalized option. |
+| A-005 | A future Mispricing authority may consume Comparative Valuation only by exact record reference. | Accepted dependency direction places Mispricing downstream. | Medium | A later accepted ADR selects a different dependency or prohibits consumption. | No current contract changes; the downstream link remains unavailable. |
 
-1. The first supported Comparative Valuation entity class may be the same as Canonical Valuation's first supported class.
-2. More than one valid peer will be available for the first production use case.
-3. At least one economically meaningful comparative metric can be derived without violating existing evidence authority.
-4. Comparative outputs are likely to be structured distributions rather than a single favorable scalar.
-5. A future Mispricing authority will consume Comparative Valuation outputs, but the exact interface is not yet authorized.
-
-Each assumption must be validated or removed before ADR readiness.
+Assumptions A-002 and A-003 are production-activation gates, not ADR-readiness blockers: the ADR can require fail-closed behavior when they are false without asserting that qualifying evidence already exists.
 
 ## Architectural Dimensions
 
@@ -215,16 +251,16 @@ Each assumption must be validated or removed before ADR readiness.
 
 ## Candidate Option Inventory
 
-### Axis 1 — Analytical ownership
+### Fixed baseline — Analytical ownership
 
-#### Option 1A — Dedicated `CanonicalComparativeValuationService`
+#### Required baseline 1A — Dedicated `CanonicalComparativeValuationService`
 
-A new sole write authority consumes canonical facts, valuation records, peer methodology, and peer-universe records.
+ADR 0021 already assigns sole write authority to this service. The future methodology ADR must preserve it.
 
 - Advantages: strongest owner separation; mirrors existing canonical service architecture; easy to audit.
 - Disadvantages: new package and persistence surface.
 - Failure mode: duplicate authority if peer selection is split across unrelated services.
-- Reconsideration condition: only if an existing accepted owner is explicitly amended to own this responsibility.
+- Reconsideration condition: only through an explicit amendment to ADR 0021.
 
 #### Option 1B — Extend `CanonicalValuationService`
 
@@ -239,7 +275,7 @@ A new sole write authority consumes canonical facts, valuation records, peer met
 - Disadvantages: confuses evidence analysis with scoring/composition; invites scalar shortcuts.
 - Falsification: rejected by ADR 0016/0021/0024 boundaries.
 
-**Current viability:** only 1A remains viable under accepted authority.
+**Current viability:** 1A is a fixed constraint, not an option to be selected. Options 1B and 1C are retained only as rejected alternatives and amendment boundaries.
 
 ### Axis 2 — Peer-universe source
 
@@ -312,27 +348,36 @@ Define mandatory hard gates plus versioned soft-comparability tiers.
 - Advantages: domain nuance.
 - Disadvantages: non-deterministic and not replay-safe unless converted into immutable evidence-backed decisions.
 
-### Axis 5 — Metric coordinate
+### Axis 5 — Fundamental denominator and metric coordinate
 
-#### Option 5A — Single permitted metric family for first entity class
+All viable options preserve ADR 0021's fixed observed-market-value-to-one-predeclared-fundamental-denominator meaning and peer-relative log or percentage residual.
 
-- Advantages: narrow, auditable first implementation.
-- Disadvantages: limited coverage.
+#### Option 5A — Attributable value-capture-flow denominator
 
-#### Option 5B — Multiple independent metric families with no aggregation
+- Advantages: closest to economic value transfer and existing value-capture authority.
+- Disadvantages: numeric cross-peer coverage is currently unproven; accounting periods and claim attribution may differ.
+- Failure mode: fees or revenue are mislabeled as attributable value capture.
+- Reconsideration: unavailable unless every peer has strict-known, compatible numeric evidence.
 
-- Advantages: preserves multidimensional evidence.
-- Disadvantages: downstream consumer complexity.
+#### Option 5B — Attributable protocol cash-flow denominator
 
-#### Option 5C — Versioned composite metric
+- Advantages: economically interpretable where entitlement is direct.
+- Disadvantages: likely sparse for tokenized networks and sensitive to accounting policy.
+- Failure mode: treasury or protocol cash flow is not attributable to the valued claim.
+- Reconsideration: only for an entity class with accepted claim-attribution evidence.
 
-- Advantages: concise output.
-- Disadvantages: weighting/calibration risk; may become hidden scoring.
+#### Option 5C — Revenue or fee denominator with an explicit value-capture adjustment policy
 
-#### Option 5D — Distributional comparison across compatible raw metrics
+- Advantages: potentially broader evidence coverage.
+- Disadvantages: the adjustment policy can become a second valuation model and must not manufacture attribution.
+- Failure mode: unadjusted revenue or fees enter as a canonical denominator.
+- Reconsideration: only when exact value-capture-rule references and adjustment semantics are fixed.
 
-- Advantages: avoids premature scalar collapse; preserves uncertainty and metric-specific provenance.
-- Disadvantages: more complex records and interpretation.
+#### Rejected Option 5D — Multiple denominators or a composite metric in one assessment
+
+- Advantages: broader descriptive coverage.
+- Disadvantages: violates ADR 0021's one-predeclared-denominator contract or introduces hidden weighting.
+- Reconsideration: requires an explicit ADR 0021 amendment and a new preparation scope.
 
 ### Axis 6 — Peer-set summary methodology
 
@@ -418,29 +463,79 @@ Examples: `AVAILABLE`, `LIMITED_PEER_SET`, `UNAVAILABLE_INSUFFICIENT_PEERS`, `UN
 
 ## Comparative Evaluation
 
-| Option family | Authority | Replay | Explainability | Sparse-data safety | Complexity | Current assessment |
-|---|---:|---:|---:|---:|---:|---|
-| Dedicated service | High | High | High | High | Medium | Viable |
-| Extend valuation | Low | Medium | Low | Medium | Low | Rejected by ownership |
-| Market Validation embedding | Low | Low | Low | Low | Medium | Rejected |
-| Versioned point-in-time universe | High | High | High | High | Medium | Viable |
-| Hierarchical entity/representation eligibility | High | High | High | High | Medium | Viable |
-| Exact-match comparability | High | High | High | High | Low | Viable but may be too sparse |
-| Tiered compatibility | High | High | High | Medium | High | Viable pending evidence |
-| Continuous similarity | Medium | Medium | Low | Medium | High | High risk |
-| Single first metric family | High | High | High | High | Low | Viable first scope |
-| Multiple unaggregated metrics | High | High | High | High | Medium | Viable |
-| Composite metric | Medium | High | Medium | Medium | High | High risk |
-| Median | High | High | High | Medium | Low | Viable |
-| Quantile distribution | High | High | High | Low/Medium | Medium | Viable with minimum count |
-| Bayesian sparse estimate | Medium | High | Medium | High | Very high | Not ready |
-| Separate immutable record families | High | High | High | High | High | Required for canonical use |
+The same criteria are applied to every option. `Pass` means compatible with the fixed authority and strict-known constraints; `Conditional` means viable only behind a declared evidence or calibration gate; `Fail` means non-viable without an explicit accepted-ADR amendment.
+
+| Option | Authority | Replay | Evidence integrity | Sparse/failure safety | Operational/migration impact | Reversibility | Assessment |
+|---|---|---|---|---|---|---|---|
+| 1A dedicated service | Pass; fixed by ADR 0021 | Pass | Pass | Pass | Additive service/repository migration | High; disable entry point | Required baseline |
+| 1B extend valuation | Fail; duplicate owner | Conditional | Conditional | Conditional | Lower initial cost, high coupling | Low | Rejected |
+| 1C embed in Market Validation | Fail; composition owns a different concern | Fail | Fail | Fail | Hidden runtime coupling | Low | Rejected |
+| 2A static registry only | Conditional candidate evidence only | Fail as final universe | Operator-biased | Conditional | Low cost, permanent curation burden | Medium | Rejected as sole source |
+| 2B current discovery | Fail | Fail; future leakage | Fail | Fail | Low cost, non-replayable | Low | Rejected |
+| 2C versioned point-in-time universe | Pass | Pass | Pass | Pass | New immutable snapshots and bounded queries | High | Preferred |
+| 2D registry plus point-in-time union | Pass if every source is versioned | Pass | Conditional; dedup/source bias | Pass | Higher provenance and dedup cost | High | Viable successor, not first scope |
+| 3A entity-only eligibility | Conditional | Pass | Misses representation coordinates | Conditional | Low | High | Rejected for first scope |
+| 3B representation-only eligibility | Conditional | Pass | Risks double counting | Conditional | Low | High | Rejected for first scope |
+| 3C hierarchical entity then representation | Pass | Pass | Pass | Pass | Medium decision-graph cost | High | Preferred |
+| 4A exact hard gates | Pass | Pass | Pass | Pass but often unavailable | Low | High | Preferred first scope |
+| 4B hard gates plus soft tiers | Pass if tiers are versioned/calibrated | Pass | Conditional | Conditional | High calibration/maintenance cost | Medium | Viable successor |
+| 4C continuous similarity | Conditional authority risk | Conditional | Low without calibrated features | Conditional | High model governance cost | Medium | Not first scope |
+| 4D human judgment | Fail unless converted to immutable evidence | Conditional | Low | Conditional | High operator burden | Low | Rejected as final authority |
+| 5A attributable value-capture flow | Pass | Pass | Conditional on numeric coverage | Pass/fail closed | Medium acquisition cost | High | Preferred denominator class |
+| 5B attributable protocol cash flow | Pass | Pass | Conditional on claim attribution | Pass/fail closed | Medium/high accounting cost | High | Viable for an eligible entity class |
+| 5C adjusted revenue/fees | Conditional; adjustment must not create attribution | Pass | Higher evidence risk | Pass/fail closed | High methodology burden | Medium | Successor only |
+| 5D multiple/composite denominator | Fail under one-denominator contract | Conditional | Hidden weighting risk | Conditional | High | Low | Rejected absent ADR 0021 amendment |
+| 6A mean | Pass | Pass | Outlier-sensitive | Low | Low | High | Rejected as default |
+| 6B median | Pass | Pass | Pass with minimum cohort | Conditional | Low | High | Preferred first reference |
+| 6C quantiles | Pass | Pass | Pass with larger cohort/interpolation rule | Conditional | Medium | High | Emit only when calibrated minimum is met |
+| 6D trimmed/winsorized | Conditional | Pass | Exclusion-threshold risk | Conditional | Medium | High | Successor only |
+| 6E Bayesian estimate | Conditional | Pass | Prior/calibration risk | High | Very high model/validation cost | Medium | Not first scope |
+| 7A hard unavailable below minimum | Pass | Pass | Pass | Highest | Low | High | Required activation behavior |
+| 7B degraded confidence below minimum | Conditional | Pass | Risks false availability | Low | Low | High | Rejected for first scope |
+| 7C tiered availability | Pass if `LIMITED` is non-authoritative | Pass | Pass | High | Medium downstream contract cost | High | Descriptive metadata only |
+| 8A retain all; expose distribution | Pass | Pass | Highest transparency | Conditional interpretation risk | Low | High | Preferred first scope |
+| 8B persisted rule exclusion | Conditional | Pass | Pass if rule/evidence are exact | Conditional | Medium | High | Viable successor |
+| 8C robust statistic without exclusion | Pass | Pass | Pass | Conditional | Medium | High | Median is selected instance |
+| 9A final output only | Fail | Fail | Fail | Fail | Low storage, no audit | Low | Rejected |
+| 9B separate immutable families | Pass | Pass | Pass | Pass | Highest additive schema cost | High | Required |
+| 9C monolithic snapshot | Conditional | Pass | Duplication/correction risk | Conditional | Medium | Medium | Rejected for first scope |
+
+### Preferred coherent option bundle
+
+The first methodology ADR should combine 1A, 2C, 3C, 4A, 5A, 6B with conditional 6C, 7A with descriptive 7C, 8A/8C, and 9B. This bundle:
+
+- preserves every fixed ADR 0021 contract;
+- uses one denominator and no hidden composite;
+- fails closed below three eligible peers;
+- emits a median reference and full ordered observations at three or more peers;
+- emits quantiles only after the ADR fixes and historical evidence validates a higher minimum and interpolation policy;
+- treats `LIMITED_PEER_SET` as descriptive metadata, never an available canonical scalar;
+- keeps all observations and uses the median rather than silently deleting outliers;
+- makes activation conditional on real strict-known cohort and calibration evidence.
 
 ## Falsification Results
 
 ### Leading architecture hypothesis
 
-A dedicated service using a versioned point-in-time candidate universe, hierarchical entity/representation eligibility, hard comparability gates plus possibly versioned tiers, one narrow first metric family, and separate immutable record families appears most compatible with current governance.
+The preferred coherent bundle above is the leading hypothesis. The following option-specific falsification conditions prevent a favorable narrative from substituting for evidence:
+
+| Viable option | Invalidation condition | Evidence/test required before implementation | Result at this revision |
+|---|---|---|---|
+| 2C point-in-time universe | candidate membership cannot be reconstructed without a current/latest lookup | boundary-cutoff and post-cutoff-exclusion tests over persisted candidates | Survives architecturally; implementation evidence pending |
+| 2D hybrid union | provenance or dedup cannot distinguish operator registry from discovery source | duplicate-identity and source-bias replay tests | Viable successor only |
+| 3C hierarchical eligibility | one economic entity can enter twice through representations | multi-representation adversarial test | Survives; required rejection rule identified |
+| 4A exact hard gates | no real cohort can satisfy the gates | real historical cohort study for the first class | Survives as fail-closed first scope; activation pending |
+| 4B soft tiers | tier weights cannot be historically calibrated without hindsight | strict-known calibration study | Not first scope |
+| 5A value-capture denominator | numeric attributable flow is absent or accounting windows cannot be aligned | real target/peer evidence acquisition and period-coherence tests | Current Sky record fails the numeric-coverage gate; production remains unavailable |
+| 5B protocol cash flow | cash flow cannot be bound to the valued claim | claim-attribution audit | Entity-class dependent; not selected first |
+| 5C adjusted revenue/fees | adjustment invents value capture or duplicates valuation authority | transitive provenance and prohibited-input tests | Successor only |
+| 6B median | fewer than three eligible peers exist or deterministic ordering changes the result | permutation and boundary-cardinality tests | Survives with hard minimum three |
+| 6C quantiles | sample size/interpolation cannot be calibrated | historical stability study | Deferred until an evidence-backed higher minimum exists |
+| 7A hard unavailable | downstream code treats unavailable as neutral/zero | adapter and missingness tests | Survives; downstream implementation remains separate |
+| 7C tiered metadata | `LIMITED` is consumed as authoritative availability | contract tests | Survives only as descriptive metadata |
+| 8A/8C retain all + median | genuine extremes make the reference unstable beyond declared tolerance | outlier/adversarial replay corpus | Survives first scope; distribution remains visible |
+| 8B rule exclusion | exclusion threshold cannot distinguish error from genuine structure | evidence-backed threshold study | Deferred |
+| 9B immutable families | correction lineage cannot reproduce exact prior cohort/output | append-only, branching-rejection, and byte-identical replay tests | Survives and remains required |
 
 ### Counterexamples and failure tests
 
@@ -489,9 +584,9 @@ No option survives unless peer candidacy, eligibility, methodology, observations
 
 ## Proposed Record-Family Inventory
 
-Names are provisional and do not authorize implementation:
+ADR 0021 already requires `PeerUniversePolicyRecord`, `PeerUniverseSnapshot`, and `ComparativeValuationAssessmentRecord`. The methodology ADR must preserve those identities. The names below distinguish fixed records from provisional supporting records and do not authorize implementation:
 
-1. `ComparativeValuationMethodologySnapshot`
+1. `PeerUniversePolicyRecord` (**fixed by ADR 0021; carries methodology policy**)
    - methodology identity/version;
    - supported entity class;
    - mandatory/soft comparability dimensions;
@@ -500,16 +595,18 @@ Names are provisional and do not authorize implementation:
    - aggregation/distribution policy;
    - outlier policy;
    - confidence policy;
+   - raw residual sign convention and normalization-policy/calibration identity;
+   - correlation group and combined-contribution cap policy required by ADR 0021;
    - effective and recorded timestamps.
 
-2. `PeerUniverseSnapshot`
+2. `PeerUniverseSnapshot` (**fixed by ADR 0021**)
    - target identity;
    - candidate peer identities;
    - candidate source/provenance;
    - point-in-time cutoff;
    - methodology reference.
 
-3. `PeerEligibilityDecisionRecord`
+3. `PeerEligibilityDecisionRecord` (**provisional supporting family**)
    - target and candidate identity;
    - included/excluded/indeterminate;
    - dimension-level decisions;
@@ -517,7 +614,7 @@ Names are provisional and do not authorize implementation:
    - confidence and conflict state;
    - correction lineage.
 
-4. `ComparativeMetricObservationRecord`
+4. `ComparativeMetricObservationRecord` (**provisional supporting family**)
    - peer identity;
    - metric family;
    - numerator/denominator identity;
@@ -525,16 +622,20 @@ Names are provisional and do not authorize implementation:
    - exact source records;
    - availability/conflict state.
 
-5. `ComparativeValuationAssessmentRecord`
+5. `ComparativeValuationAssessmentRecord` (**fixed by ADR 0021**)
    - target identity;
    - methodology and peer-universe references;
    - included peer decision IDs;
-   - metric-specific distributions/quantiles;
+   - the predeclared denominator, target/peer multiples, reference statistic, and raw signed residual required by ADR 0021;
+   - full ordered peer observations and any permitted quantiles;
    - dispersion;
+   - raw log or percentage residual, normalized value/status when calibrated, and correlation group;
    - confidence decomposition;
    - availability state;
    - exact provenance;
    - correction lineage.
+
+The two provisional supporting families are viable only if the future ADR demonstrates that exact inclusion/exclusion and metric-observation lineage cannot be represented without them. They may not replace or rename ADR 0021's fixed records, duplicate native evidence, or become independent analytical owners.
 
 ## Authority and Dependency Map
 
@@ -622,46 +723,59 @@ Overall confidence must not exceed the weakest mandatory component unless a futu
 
 ### Material risks
 
-1. **False peers:** broad labels may create plausible but economically invalid comparisons.
-2. **Sparse sets:** strict comparability may leave most assets unavailable.
-3. **Hidden scoring:** similarity or composite metrics may become unauthorized ranking.
-4. **Double counting:** multiple token representations may inflate peer count.
-5. **Metric leakage:** market-derived metrics may blur into Mispricing.
-6. **Operator bias:** curated peer registries may encode hindsight.
-7. **Outlier concealment:** trimming may suppress real structural differences.
-8. **Schema proliferation:** too many record families may raise operational cost.
-9. **Uncalibrated confidence:** confidence values may appear precise without empirical support.
+| Risk | Category | Likelihood | Impact | Mitigation | Residual uncertainty |
+|---|---|---:|---:|---|---|
+| Broad labels admit false peers | Evidence/correctness | High | High | Exact hard gates, dimension-level decisions, fail closed | Real cohort coverage is unknown |
+| Strict gates yield sparse sets | Availability | High | Medium | Minimum-three hard gate and explicit unavailable state | Production coverage may remain zero |
+| Similarity/composites become hidden scoring | Authority/governance | Medium | High | Exclude from first scope; require explicit later ADR | Future pressure for coverage |
+| Multiple representations double-count an entity | Identity | Medium | High | Entity-first eligibility and deterministic representation selection | Cross-chain cases remain future scope |
+| Denominator is not attributable to the valued claim | Evidence/authority | High | High | Exact native evidence and value-capture references; no assembled evidence | Numeric coverage remains unproven |
+| Current registry or discovery leaks future membership | Replay | Medium | High | Persist candidate source, effective/recorded/known time; no live replay calls | Provider historical completeness |
+| Genuine outliers are concealed | Methodology | Medium | Medium | Retain all observations; median first; persist any later exclusion | Extreme small cohorts remain unstable |
+| Extra supporting records duplicate authority | Architecture | Medium | High | Keep ADR 0021 families canonical; justify each supporting family | Schema shape remains an ADR decision |
+| Confidence appears calibrated without outcomes | Evidence | High | High | Expose components; unknown calibration stays unknown; cap by weakest mandatory component | Suitable historical outcomes may not exist |
+| Partial migration exposes false availability | Operations/migration | Low | High | Additive schema, transactional writes, entry point disabled until preflight | Deployment tooling is future implementation work |
 
-### Open questions blocking ADR readiness
+### Resolved preparation questions and remaining ADR/activation decisions
 
-1. What is the first supported Comparative Valuation entity class?
-2. Which real entities form a plausible point-in-time candidate universe for that class?
-3. Which metric family has canonical evidence authority today?
-4. What minimum peer count is defensible for median and quantile outputs?
-5. Which dimensions are hard gates versus soft tiers?
-6. Are liquidity and market-quality dimensions eligibility inputs here or reserved for Mispricing?
-7. Can any denominator transformation reuse existing canonical records without creating new analytical authority?
-8. What independent historical dataset can validate peer selection without hindsight?
-9. Should limited peer sets emit structured descriptive output or remain fully unavailable?
-10. Which confidence components can be empirically calibrated now versus remain explicit unknowns?
+| Question | Classification | Resolution or required action | Owner | Status |
+|---|---|---|---|---|
+| First entity class | Fixed constraint | Use ADR 0021's same supported entity class as Canonical Valuation; Sky is the pilot identity but not a demonstrated cohort. | Accepted ADR baseline | Resolved |
+| Sole owner | Fixed constraint | `CanonicalComparativeValuationService`. | ADR 0021 | Resolved |
+| Semantic metric | Fixed constraint | Observed market value divided by one predeclared attributable fundamental denominator, plus peer-relative log or percentage residual. | ADR 0021 | Resolved |
+| First denominator class | ADR decision | Prefer attributable value-capture flow; ADR must specify exact eligible evidence types and period/claim coherence. | Future ADR | Prepared |
+| Minimum cohort | ADR decision | Hard minimum three for median availability; quantiles require a separately evidenced higher minimum and interpolation policy. | Future ADR | Prepared |
+| Hard versus soft comparability | ADR decision | Exact hard gates for first scope; soft tiers deferred to a successor methodology. | Future ADR | Prepared |
+| Liquidity/market quality | Boundary decision | May reduce evidence confidence or availability only when it affects observation reliability; may not become peer favorability or Mispricing. | Future ADR | Prepared |
+| Denominator transformation | Authority decision | Only exact, versioned unit/currency/period transformations over native authoritative evidence; no new value attribution and no ADR 0025 assembly reuse. | Future ADR | Prepared |
+| Historical validation set | Activation gate | Acquire a real strict-known cohort and preserve unavailable state until it exists. | Implementation/evidence issue | Non-blocking for ADR drafting; blocks activation |
+| Limited peer output | ADR decision | Descriptive `LIMITED_PEER_SET` metadata is permitted, but canonical assessment remains unavailable below minimum. | Future ADR | Prepared |
+| Confidence calibration | Activation gate | Structural confidence components may be exposed; empirical calibration remains unknown until strict historical evidence exists. | Implementation/evidence issue | Non-blocking for ADR drafting; blocks calibrated availability |
 
 ## Constitution Check
 
-- Evidence remains explicit and provenance-bearing: compliant.
-- Missing and conflicted states remain explicit: compliant.
-- Determinism and strict-known replay are required: compliant.
-- No fabricated fallback is allowed: compliant.
-- No unsupported deterministic price target is introduced: compliant.
+| Constitutional rule | Application | Determination |
+|---|---|---|
+| Rule 2 — Evidence Authority | Real cohort and denominator evidence remain missing; unavailable is required until acquired. | Compliant |
+| Rule 3 — Deterministic Intelligence | Every candidate, eligibility decision, observation, methodology, correction, and output is strict-known and replayable. | Compliant |
+| Rule 4 — Architectural Integrity | ADR 0021's owner and semantic contract are fixed rather than reopened. | Compliant |
+| Rule 5 — Single Source of Truth | Comparative Valuation owns peer-relative assessment; native evidence, Valuation, Mispricing, and Market Validation retain their owners. | Compliant |
+| Rule 6 — Explainability | Inclusion/exclusion reasons, denominator, distribution, residual, confidence, and provenance are explicit. | Compliant |
+| Rule 7 — Long-Term Evolution | Versioned methods and additive immutable records preserve correction and supersession. | Compliant |
+| Rule 8 — Governance | ADR drafting and implementation remain gated by independent audit and a later accepted ADR. | Compliant |
 
 No constitutional conflict is currently identified.
 
 ## Governance Check
 
-- Preparation precedes ADR and implementation: compliant.
-- Existing ownership boundaries are preserved: compliant.
-- Comparative Valuation remains separate from valuation, Mispricing, Asymmetry, and Market Validation: compliant.
-- Options and rejected paths remain visible: compliant.
-- Independent audit remains required: compliant.
+| Authority | Requirement | Determination |
+|---|---|---|
+| Development Governance | Planning and independent architecture review precede ADR implementation. | Compliant; this PR is documentation-only. |
+| Preparation Guide | Evidence, assumptions, normalized options, falsification, risks, readiness, and traceability are required. | Compliant after version 1.1 remediation. |
+| ADR 0021 | Preserve sole owner, one-denominator comparative meaning, record baseline, residual, calibration, correlation, replay, and missingness. | Compliant; treated as fixed constraints. |
+| ADR 0024 | Do not apply `valuation`'s non-scalar amendment to `comparative_valuation`. | Compliant; comparative favorability/calibration remains binding. |
+| ADR 0025 | Do not silently consume or recreate assembled evidence. | Compliant; native evidence only in this scope. |
+| ADR 0005/0009/0010/0016/0020 | Preserve identity, service authority, runtime composition, and strict-known boundaries. | Compliant. |
 
 No known accepted-ADR conflict is introduced by this preparation record.
 
@@ -669,7 +783,7 @@ No known accepted-ADR conflict is introduced by this preparation record.
 
 Potential future implementation would introduce:
 
-- a new canonical analytical owner;
+- an implementation of the already accepted `CanonicalComparativeValuationService` owner;
 - new immutable record families;
 - new persistence and replay surfaces;
 - peer-universe and eligibility contracts;
@@ -687,15 +801,15 @@ Future implementation would require:
 - historical candidate and correction evidence;
 - empirical evidence for peer minimums, outlier policy, and confidence calibration.
 
-The current repository evidence is sufficient to prove the architectural gap, but not sufficient to select all methodology details.
+The current repository evidence is sufficient to define the methodology ADR and its fail-closed activation gates. It is not sufficient to claim production availability, calibrate quantiles or normalization, or persist an available assessment. Those limitations are carried explicitly into the proposed ADR scope.
 
 ## Recommended Implementation Sequence
 
 No implementation is authorized by this ADPR. A future accepted ADR should sequence work approximately as follows:
 
-1. first supported entity-class and metric evidence study;
-2. methodology and peer-policy ADR;
-3. immutable methodology and peer-universe records;
+1. methodology and peer-policy ADR for ADR 0021's same supported entity class;
+2. real point-in-time cohort and native-denominator evidence acquisition;
+3. immutable peer policy and peer-universe records;
 4. eligibility decision authority;
 5. comparative metric observation records;
 6. comparative assessment service and repository;
@@ -712,43 +826,76 @@ No implementation is authorized by this ADPR. A future accepted ADR should seque
 - using sector label alone as comparability;
 - averaging incompatible metrics;
 - treating one peer as a valid distribution;
-- converting Comparative Valuation directly into favorable directionality;
+- manufacturing favorable directionality or `[0,1]` normalization without ADR 0021's required strict historical calibration;
 - comparing comparative output to market price inside this authority;
 - wiring output into Market Validation or Opportunity Assessment;
 - using latest corrected data for historical replay.
+
+## Quality Assessment
+
+| Dimension | Rating | Evidence and rationale | Blocking limitation |
+|---|---|---|---|
+| Problem correctness | GOOD | Distinguishes the accepted owner from the unresolved methodology/activation problem. | None |
+| Scope completeness | GOOD | In/out scope, ADR scope, activation gates, and downstream exclusions are explicit. | None |
+| Canonical consistency | GOOD | ADR 0021/0024/0025 amendments and fixed semantics are represented directly. | None |
+| Evidence integrity | ACCEPTABLE | Repository and accepted-authority evidence is exact; real cohort evidence is truthfully absent. | Blocks activation, not ADR drafting |
+| Assumption discipline | GOOD | Assumptions have confidence, falsification, and consequences. | None |
+| Option completeness | GOOD | All material candidate-source, identity, compatibility, denominator, statistic, sparsity, outlier, and persistence options are retained. | None |
+| Comparative fairness | GOOD | One normalized criterion set is applied to every option. | None |
+| Falsifiability | GOOD | Every viable option has an invalidation condition and required evidence/test. | None |
+| Authority and ownership clarity | GOOD | ADR 0021's service owner is fixed; prohibited overlaps are explicit. | None |
+| Persistence and replay quality | GOOD | Immutable records, correction, ordering, cutoff, and no-current-fallback contracts are explicit. | None |
+| Evidence and provenance quality | ACCEPTABLE | Exact lineage requirements exist; qualifying multi-entity evidence is not yet available. | Blocks activation, not ADR drafting |
+| Operational quality | ACCEPTABLE | Bounded construction, no live replay, fail-closed migration, rollback, and observability requirements are defined. | Implementation detail remains for the ADR/plan |
+| Implementation and migration impact | ACCEPTABLE | Additive records/service, disabled entry point, rollback, and compatibility are described. | None |
+| Testability and validation | GOOD | Boundary, leakage, ordering, cardinality, lineage, and calibration gates are derivable. | None |
+| Maintainability and extensibility | GOOD | Narrow first scope, versioned successor paths, and no speculative composite are explicit. | None |
+| Risk quality | GOOD | Material risks include likelihood, impact, mitigation, and residual uncertainty. | None |
+| Traceability | GOOD | Issues, ADPR, PR, future audit/ADR, and absent artifacts are explicit and indexed. | Independent verdict pending |
 
 ## Readiness Determination
 
 ### Architecture readiness
 
-`READY_FOR_REVIEW`
-
-The problem, owner separation, major dimensions, option families, prohibited shortcuts, record inventory, replay contract, and downstream boundary are sufficiently specified for independent architecture review.
+- Outcome: `READY`
+- Rationale: the fixed authority baseline, unresolved methodology axes, preferred coherent bundle, activation gates, risks, and validation obligations are explicit.
+- Missing evidence: a real qualifying cohort and calibration evidence; both are recorded as fail-closed activation gates.
+- Unresolved conflicts: none.
 
 ### ADR readiness
 
-`NEEDS_REVISION`
+- Outcome: `READY_FOR_ADR`
+- Proposed ADR title: Canonical Comparative Valuation Methodology.
+- Proposed ADR scope: first methodology for ADR 0021's same supported entity class, one native attributable denominator, point-in-time peer policy, median reference, raw signed residual, confidence, calibration, persistence, and fail-closed activation.
+- Decisions the ADR must fix: exact eligible evidence types; hard comparability fields; minimum-three rule; deterministic ordering/ties; median/residual formula; quantile deferral; outlier retention; confidence components; methodology and record fields; strict-known tests; calibration and activation gates.
+- Matters the ADR must leave open: soft similarity tiers, composite/multiple denominators, Bayesian estimates, cross-chain entity classes, Assembled Fundamental Evidence eligibility, Mispricing, Market Validation composition, and Opportunity Assessment.
 
-ADR drafting remains blocked until the open evidence questions are resolved, particularly:
+## Final Recommendation
 
-- first supported entity class;
-- real peer-universe evidence;
-- first permitted metric family;
-- minimum peer-set rules;
-- hard versus soft comparability dimensions;
-- empirically defensible confidence and outlier policy.
+Draft a narrow ADR using the preferred coherent option bundle. The ADR must authorize architecture and fail-closed contracts, not production availability. Implementation may begin only after that ADR is accepted. The input must remain unavailable until a real strict-known cohort, numeric native denominator coverage, historical leakage validation, and the required monotonic normalization calibration all exist and pass independent review.
+
+## Decision History
+
+| Date | State | Change | Author or reviewer |
+|---|---|---|---|
+| 2026-07-31 | IN_RESEARCH | Initial decision-space preparation. | ChatGPT |
+| 2026-07-31 | READY_FOR_REVIEW | Reconciled accepted ADR semantics; normalized options; completed evidence, falsification, risk, quality, readiness, and traceability records. | Codex remediation for Issue #156 |
 
 ## Traceability
 
-```text
-Issue #135
-  -> Issue #156
-  -> ADPR-0003 (this record)
-  -> Independent Architecture Audit (not yet performed)
-  -> Comparative Valuation ADR (not yet created)
-  -> Implementation Issue/PRs (not authorized)
-```
+- Epic: Issue #135
+- Issue: Issue #156
+- Preparation working document: this record
+- Checklist review: completed against `docs/checklists/ARCHITECTURE_DECISION_PREPARATION_CHECKLIST.md`
+- ADPR: ADPR-0003
+- Pull Request: PR #157
+- Reviewed commit: to be recorded by the independent reviewer
+- Independent Architecture Audit: pending on the final PR head
+- Comparative Valuation ADR: not yet created
+- Implementation plan and PRs: not authorized
+- Merge commit: not yet created
+- Release: not yet assigned
 
 ## Completion Criterion for This ADPR
 
-This record is complete only when an independent architecture review determines that the Comparative Valuation decision space is sufficiently complete and evidence-grounded to proceed to a separate ADR without inventing authority, peer-selection, methodology, replay, correction, confidence, or downstream-composition rules during implementation.
+This record is complete only when an independent architecture audit on the exact final revision determines that the Comparative Valuation decision space is sufficiently complete and evidence-grounded to proceed to a separate ADR without inventing authority, peer-selection, methodology, replay, correction, confidence, calibration, or downstream-composition rules during implementation.
