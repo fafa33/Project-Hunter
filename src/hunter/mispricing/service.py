@@ -196,7 +196,9 @@ class CanonicalMispricingService:
                 identity=identity,
                 methodology_record_id=methodology_record_id,
                 methodology_record_version="",
+                fair_value_logical_id=fair_value_logical_id,
                 availability_state="UNAVAILABLE_UNSUPPORTED_METHODOLOGY",
+                effective_at=effective_at,
                 recorded_at=recorded_at,
                 known_at=known_at,
                 supersedes_record_id=supersedes_record_id,
@@ -210,7 +212,9 @@ class CanonicalMispricingService:
                 identity=identity,
                 methodology_record_id=methodology.record_id,
                 methodology_record_version=methodology.semantic_version,
+                fair_value_logical_id=fair_value_logical_id,
                 availability_state="UNAVAILABLE_UNSUPPORTED_METHODOLOGY",
+                effective_at=effective_at,
                 recorded_at=recorded_at,
                 known_at=known_at,
                 supersedes_record_id=supersedes_record_id,
@@ -227,7 +231,9 @@ class CanonicalMispricingService:
                 identity=identity,
                 methodology_record_id=methodology.record_id,
                 methodology_record_version=methodology.semantic_version,
+                fair_value_logical_id=fair_value_logical_id,
                 availability_state="UNAVAILABLE_NO_FAIR_VALUE",
+                effective_at=effective_at,
                 recorded_at=recorded_at,
                 known_at=known_at,
                 supersedes_record_id=supersedes_record_id,
@@ -238,7 +244,9 @@ class CanonicalMispricingService:
                 identity=identity,
                 methodology_record_id=methodology.record_id,
                 methodology_record_version=methodology.semantic_version,
+                fair_value_logical_id=fair_value.logical_id,
                 availability_state="UNAVAILABLE_IDENTITY_MISMATCH",
+                effective_at=effective_at,
                 recorded_at=recorded_at,
                 known_at=known_at,
                 supersedes_record_id=supersedes_record_id,
@@ -249,7 +257,9 @@ class CanonicalMispricingService:
                 identity=identity,
                 methodology_record_id=methodology.record_id,
                 methodology_record_version=methodology.semantic_version,
+                fair_value_logical_id=fair_value.logical_id,
                 availability_state="UNAVAILABLE_UNIT_MISMATCH",
+                effective_at=effective_at,
                 recorded_at=recorded_at,
                 known_at=known_at,
                 supersedes_record_id=supersedes_record_id,
@@ -260,7 +270,9 @@ class CanonicalMispricingService:
                 identity=identity,
                 methodology_record_id=methodology.record_id,
                 methodology_record_version=methodology.semantic_version,
+                fair_value_logical_id=fair_value.logical_id,
                 availability_state="UNAVAILABLE_SUPPLY_BASIS_MISMATCH",
+                effective_at=effective_at,
                 recorded_at=recorded_at,
                 known_at=known_at,
                 supersedes_record_id=supersedes_record_id,
@@ -271,7 +283,9 @@ class CanonicalMispricingService:
                 identity=identity,
                 methodology_record_id=methodology.record_id,
                 methodology_record_version=methodology.semantic_version,
+                fair_value_logical_id=fair_value.logical_id,
                 availability_state="UNAVAILABLE_CONFLICTED_INPUTS",
+                effective_at=effective_at,
                 recorded_at=recorded_at,
                 known_at=known_at,
                 supersedes_record_id=supersedes_record_id,
@@ -291,7 +305,9 @@ class CanonicalMispricingService:
                 identity=identity,
                 methodology_record_id=methodology.record_id,
                 methodology_record_version=methodology.semantic_version,
+                fair_value_logical_id=fair_value.logical_id,
                 availability_state="UNAVAILABLE_NO_MARKET_OBSERVATION",
+                effective_at=effective_at,
                 recorded_at=recorded_at,
                 known_at=known_at,
                 supersedes_record_id=supersedes_record_id,
@@ -305,7 +321,9 @@ class CanonicalMispricingService:
                 identity=identity,
                 methodology_record_id=methodology.record_id,
                 methodology_record_version=methodology.semantic_version,
+                fair_value_logical_id=fair_value.logical_id,
                 availability_state="UNAVAILABLE_IDENTITY_MISMATCH",
+                effective_at=effective_at,
                 recorded_at=recorded_at,
                 known_at=known_at,
                 supersedes_record_id=supersedes_record_id,
@@ -316,7 +334,9 @@ class CanonicalMispricingService:
                 identity=identity,
                 methodology_record_id=methodology.record_id,
                 methodology_record_version=methodology.semantic_version,
+                fair_value_logical_id=fair_value.logical_id,
                 availability_state="UNAVAILABLE_UNIT_MISMATCH",
+                effective_at=effective_at,
                 recorded_at=recorded_at,
                 known_at=known_at,
                 supersedes_record_id=supersedes_record_id,
@@ -327,7 +347,9 @@ class CanonicalMispricingService:
                 identity=identity,
                 methodology_record_id=methodology.record_id,
                 methodology_record_version=methodology.semantic_version,
+                fair_value_logical_id=fair_value.logical_id,
                 availability_state="UNAVAILABLE_CONFLICTED_INPUTS",
+                effective_at=effective_at,
                 recorded_at=recorded_at,
                 known_at=known_at,
                 supersedes_record_id=supersedes_record_id,
@@ -341,7 +363,9 @@ class CanonicalMispricingService:
                 identity=identity,
                 methodology_record_id=methodology.record_id,
                 methodology_record_version=methodology.semantic_version,
+                fair_value_logical_id=fair_value.logical_id,
                 availability_state="UNAVAILABLE_ZERO_OR_NEGATIVE_PRICE",
+                effective_at=effective_at,
                 recorded_at=recorded_at,
                 known_at=known_at,
                 supersedes_record_id=supersedes_record_id,
@@ -356,7 +380,9 @@ class CanonicalMispricingService:
                 identity=identity,
                 methodology_record_id=methodology.record_id,
                 methodology_record_version=methodology.semantic_version,
+                fair_value_logical_id=fair_value.logical_id,
                 availability_state="UNAVAILABLE_INCOMPATIBLE_TIMES",
+                effective_at=effective_at,
                 recorded_at=recorded_at,
                 known_at=known_at,
                 supersedes_record_id=supersedes_record_id,
@@ -416,7 +442,7 @@ class CanonicalMispricingService:
             supersedes_record_id=supersedes_record_id,
             correction_reason=correction_reason,
         )
-        record = _normalize_assessment(record)
+        record = _normalize_assessment(record, fair_value_logical_id=fair_value.logical_id)
         self._persist(_ASSESSMENT_SNAPSHOT_TYPE, assessment_snapshot, record)
         return record
 
@@ -529,7 +555,9 @@ class CanonicalMispricingService:
         identity: EconomicClaimIdentity,
         methodology_record_id: str,
         methodology_record_version: str,
+        fair_value_logical_id: str,
         availability_state: str,
+        effective_at: datetime,
         recorded_at: datetime,
         known_at: datetime,
         supersedes_record_id: str | None,
@@ -570,7 +598,7 @@ class CanonicalMispricingService:
             confidence="",
             availability_state=availability_state,
             correlation_group=REQUIRED_CORRELATION_GROUP,
-            effective_at=recorded_at,
+            effective_at=effective_at,
             recorded_at=recorded_at,
             known_at=known_at,
             content_hash="pending",
@@ -579,7 +607,7 @@ class CanonicalMispricingService:
             supersedes_record_id=supersedes_record_id,
             correction_reason=correction_reason,
         )
-        record = _normalize_assessment(record)
+        record = _normalize_assessment(record, fair_value_logical_id=fair_value_logical_id)
         self._persist(_ASSESSMENT_SNAPSHOT_TYPE, assessment_snapshot, record)
         return record
 
@@ -669,7 +697,9 @@ def _normalize_methodology(record: MispricingMethodologySnapshot) -> MispricingM
     return replace(record, logical_id=logical_id, content_hash=content_hash, record_id=record_id)
 
 
-def _normalize_assessment(record: MispricingAssessmentRecord) -> MispricingAssessmentRecord:
+def _normalize_assessment(
+    record: MispricingAssessmentRecord, *, fair_value_logical_id: str
+) -> MispricingAssessmentRecord:
     logical_id = hashlib.sha256(
         (
             "mispricing-assessment|"
@@ -677,7 +707,7 @@ def _normalize_assessment(record: MispricingAssessmentRecord) -> MispricingAsses
             + "|"
             + record.methodology_record_id
             + "|"
-            + record.fair_value_record_id
+            + fair_value_logical_id
         ).encode()
     ).hexdigest()
     content_hash = _content_hash(record, logical_id=logical_id)

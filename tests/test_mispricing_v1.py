@@ -340,7 +340,7 @@ class Fixture:
     """Seeds one canonical economic entity with the complete native evidence chain --
     observed market facts, value-capture flow evidence, supply basis, value-capture rule,
     valuation methodology, and a fair-value estimate -- then exposes the Canonical
-    Mispricing authority for the Issue #160 verification scenarios."""
+    Mispricing authority for the Issue #162 verification scenarios."""
 
     def __init__(self, tmp_path: Path, *, spot_price_effective_at: datetime = NOW) -> None:
         self.db_path = tmp_path / "mispricing.sqlite"
@@ -589,7 +589,19 @@ def test_divergent_duplicate_root_assessment_is_rejected(tmp_path: Path) -> None
 def test_correction_and_supersession_lineage(tmp_path: Path) -> None:
     fixture = Fixture(tmp_path)
     original = fixture.assess()
+    corrected_estimate, _ = fixture.valuation_service.estimate_fair_value(
+        identity=identity(),
+        evidence_type="official_disclosure",
+        rule_type="fee_distribution",
+        effective_at=NOW,
+        recorded_at=NOW + timedelta(minutes=15),
+        known_at=NOW + timedelta(minutes=15),
+        supersedes_estimate_record_id=fixture.estimate.record_id,
+        supersedes_assessment_record_id=fixture.valuation_assessment.record_id,
+        correction_reason="corrected fair value reference",
+    )
     correction = fixture.assess(
+        fair_value_logical_id=corrected_estimate.logical_id,
         recorded_at=NOW + timedelta(minutes=16),
         known_at=NOW + timedelta(minutes=16),
         supersedes_record_id=original.record_id,
@@ -598,6 +610,7 @@ def test_correction_and_supersession_lineage(tmp_path: Path) -> None:
     assert correction.supersedes_record_id == original.record_id
     assert correction.correction_reason
     assert correction.logical_id == original.logical_id
+    assert correction.fair_value_record_id == corrected_estimate.record_id
     history = fixture.service.assessment_history(original.logical_id)
     assert [item.record_id for item in history] == [original.record_id, correction.record_id]
     # The predecessor is never mutated or removed.
@@ -740,6 +753,14 @@ def test_missing_fair_value_is_explicit_missingness(tmp_path: Path) -> None:
     assert assessment.normalization_status == "unavailable"
     assert assessment.normalized_value is None
     assert assessment.raw_signed_ratio is None
+    assert assessment.effective_at == NOW
+    replay = fixture.service.strict_known_assessment(
+        effective_as_of=NOW,
+        known_by=RECORDED,
+        logical_id=assessment.logical_id,
+    )
+    assert replay is not None
+    assert replay.record_id == assessment.record_id
 
 
 def test_unavailable_confidence_cannot_be_encoded_as_zero(tmp_path: Path) -> None:

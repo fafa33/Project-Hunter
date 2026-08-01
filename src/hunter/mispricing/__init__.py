@@ -1,4 +1,4 @@
-"""Canonical Mispricing foundation (ADR 0021, Issue #160).
+"""Canonical Mispricing foundation (ADR 0021, Issue #162).
 
 This package implements the authoritative evidence, persistence, replay,
 correction, validation, and query foundations for `mispricing` as defined by
