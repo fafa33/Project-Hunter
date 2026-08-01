@@ -250,6 +250,22 @@ class CanonicalAsymmetryService:
             raise CanonicalAsymmetryAuthorityError("baseline market observation identity must match the target")
         if (baseline.quote_currency or "").strip().lower() != quote_currency.strip().lower():
             raise CanonicalAsymmetryAuthorityError("baseline market observation quote currency must match")
+        if baseline.quality_state != "accepted":
+            raise CanonicalAsymmetryAuthorityError(
+                "baseline market observation must be accepted and strict-known at the scenario set cutoff"
+            )
+        strict_selected = self.market_fact_repository.strict_known_fact(
+            entity_id=identity.entity_id,
+            representation_id=identity.representation_id,
+            fact_type=BASELINE_MARKET_OBSERVATION_FACT_TYPE,
+            effective_as_of=effective_at,
+            known_by=known_at,
+            quote_currency=quote_currency,
+        )
+        if strict_selected is None or strict_selected.record_id != baseline.record_id:
+            raise CanonicalAsymmetryAuthorityError(
+                "baseline market observation must be accepted and strict-known at the scenario set cutoff"
+            )
         record = ScenarioSetSnapshot(
             record_id="pending",
             logical_id="pending",

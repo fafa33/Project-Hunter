@@ -124,7 +124,18 @@ def market_fact_registry() -> MarketFactSourceRegistry:
     )
 
 
-def seed_spot_price_fact(db_path: Path, *, value: str = "0.01") -> ObservedMarketFactRecord:
+def seed_spot_price_fact(
+    db_path: Path,
+    *,
+    value: str = "0.01",
+    quality_state: str = "accepted",
+    conflict_state: str = "none",
+    effective_at: datetime = NOW,
+    observed_at: datetime = NOW,
+    acquired_at: datetime = NOW,
+    known_at: datetime = NOW,
+    recorded_at: datetime = NOW,
+) -> ObservedMarketFactRecord:
     repository = ObservedMarketFactRepository(db_path)
     registry = market_fact_registry()
     service = ObservedMarketFactService(repository, registry)
@@ -141,9 +152,11 @@ def seed_spot_price_fact(db_path: Path, *, value: str = "0.01") -> ObservedMarke
         value=value,
         unit="usd",
         quote_currency="usd",
-        effective_at=NOW,
-        observed_at=NOW,
+        effective_at=effective_at,
+        observed_at=observed_at,
         confidence="0.9",
+        quality_state=quality_state,  # type: ignore[arg-type]
+        conflict_state=conflict_state,  # type: ignore[arg-type]
     )
     result = MarketFactAcquisitionResult(
         source_id="official-cmp-asymmetry-market-facts",
@@ -155,12 +168,12 @@ def seed_spot_price_fact(db_path: Path, *, value: str = "0.01") -> ObservedMarke
         provider_source_record_version="2026-01-01",
         request=request,
         status="success",
-        acquired_at=NOW,
-        known_at=NOW,
+        acquired_at=acquired_at,
+        known_at=known_at,
         raw_payload_hash="sha256:" + "a" * 64,
         facts=(fact,),
     )
-    return service.ingest(request, result, recorded_at=NOW)[0]
+    return service.ingest(request, result, recorded_at=recorded_at)[0]
 
 
 def scenario_payload(**overrides: object) -> dict[str, object]:
@@ -450,6 +463,51 @@ def test_divergent_duplicate_root_scenario_set_is_rejected(tmp_path: Path) -> No
         fixture.service.persist_scenario_set(
             **scenario_payload(methodology_record_id=fixture.methodology.record_id, uncertainty="0.10"),
             baseline_market_fact_record_id=fixture.spot_price_fact.record_id,
+        )
+
+
+@pytest.mark.parametrize(
+    "baseline_overrides",
+    [
+        {
+            "effective_at": NOW + timedelta(minutes=1),
+            "observed_at": NOW + timedelta(minutes=1),
+            "acquired_at": NOW + timedelta(minutes=1),
+            "known_at": NOW + timedelta(minutes=1),
+            "recorded_at": NOW + timedelta(minutes=1),
+        },
+        {
+            "effective_at": NOW,
+            "observed_at": NOW,
+            "acquired_at": NOW + timedelta(minutes=3),
+            "known_at": NOW + timedelta(minutes=3),
+            "recorded_at": NOW + timedelta(minutes=3),
+        },
+        {"quality_state": "stale"},
+        {"conflict_state": "open"},
+    ],
+)
+def test_scenario_set_rejects_non_authoritative_baseline_market_fact(
+    tmp_path: Path,
+    baseline_overrides: dict[str, object],
+) -> None:
+    fixture = Fixture(tmp_path)
+    baseline = seed_spot_price_fact(
+        fixture.db_path,
+        value="0.02",
+        **baseline_overrides,
+    )
+
+    with pytest.raises(
+        CanonicalAsymmetryAuthorityError,
+        match="baseline market observation must be accepted and strict-known at the scenario set cutoff",
+    ):
+        fixture.service.persist_scenario_set(
+            **scenario_payload(
+                methodology_record_id=fixture.methodology.record_id,
+                scenario_set_id="cmp-asymmetry-scenario-set-invalid-baseline",
+            ),
+            baseline_market_fact_record_id=baseline.record_id,
         )
 
 
