@@ -283,3 +283,45 @@ Truth always overrides confidence.
 Evidence always overrides opinion.
 
 Learning never ends.
+
+---
+
+# Rule 21 — GitHub Identity Guard
+
+Before creating a branch, making a commit, pushing, or opening a pull request, resolve and verify the target GitHub Issue using GitHub itself.
+
+The agent must verify all of the following:
+
+- the Issue exists;
+- the Issue is open;
+- the Issue title matches the authorized implementation objective;
+- the Issue belongs to the same repository;
+- the Issue number has not been guessed, reused, or inferred from sequence alone.
+
+The verified Issue title and number must be used consistently for:
+
+- branch naming;
+- commit messages;
+- pull-request title;
+- pull-request body;
+- `Closes #...` or `Fixes #...` references.
+
+Before any push or pull-request creation, the agent must re-run the Issue verification and confirm that branch, commit, and PR metadata still match the verified Issue.
+
+If no matching Issue exists, or if the Issue title or objective differs from the implementation:
+
+STOP.
+
+Do not create a branch.
+
+Do not commit.
+
+Do not push.
+
+Do not open a pull request.
+
+Ask for human resolution or create the correct Issue first when explicitly authorized.
+
+Never reuse an unrelated Issue number.
+
+Violation of this rule is a governance failure.
