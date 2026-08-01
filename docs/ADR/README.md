@@ -130,7 +130,7 @@ Conflicts must be resolved before implementation proceeds.
 | [0023](0023-supply-basis-coherence-tolerance.md) | Supply Basis Provider-Data Coherence Tolerance | Accepted | Amends ADR 0022 Scope criterion 3: entity-agnostic relative tolerance for provider precision/timing noise in supply coherence |
 | [0024](0024-valuation-scalar-semantics-boundary.md) | Valuation Scalar Semantics Boundary | Accepted | Amends ADR 0020/0021/0022 `valuation`-specific language to keep valuation structured and non-directional; reserves market-relative scoring for mispricing |
 | [0025](0025-canonical-valuation-evidence-assembly-authority.md) | Canonical Valuation Evidence Assembly Authority | Accepted | Service-owned lossless composition of native Fundamental Valuation Evidence into a distinct Assembled Fundamental Evidence record family; amends ADR 0021 (Layer 2 boundaries) and ADR 0022 (methodology-conditional inputs, persistence, prohibited-methodology clarification); relies on ADR 0020 strict-known replay without amending it |
-| [0026](0026-canonical-comparative-valuation-methodology.md) | Canonical Comparative Valuation Methodology | Proposed | First-entity-class peer authority, eligibility, compatible-metric, immutable-record, replay, confidence, missingness, and fail-closed activation contract |
+| [0026](0026-canonical-comparative-valuation-methodology.md) | Canonical Comparative Valuation Methodology | Accepted | First-entity-class peer authority, eligibility, compatible-metric, immutable-record, replay, confidence, missingness, and fail-closed activation contract |
 
 ## Creating a New ADR
 
