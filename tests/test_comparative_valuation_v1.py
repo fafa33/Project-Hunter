@@ -921,7 +921,15 @@ def test_unavailable_assessment_persists_explicit_missingness(tmp_path) -> None:
         known_at=RECORDED,
     )
     assert assessment.availability_state == "UNAVAILABLE_INSUFFICIENT_ELIGIBLE_PEERS"
-    assert assessment.confidence == "0"
+    # Fix 4: explicit missingness -- unavailable assessments never encode confidence as 0
+    # (ADR 0020 "Confidence is unavailable, not zero").
+    assert assessment.confidence == ""
+    assert assessment.confidence_universe_coverage == ""
+    assert assessment.confidence_eligibility_evidence == ""
+    assert assessment.confidence_metric_evidence == ""
+    assert assessment.confidence_coordinate_compatibility == ""
+    assert assessment.confidence_peer_set_cardinality == ""
+    assert assessment.confidence_methodology_calibration == ""
     assert assessment.normalization_status == "unavailable"
     assert assessment.normalized_value is None
 
@@ -960,6 +968,203 @@ def test_unresolved_conflict_queries_are_available(tmp_path) -> None:
     assert fixture.service.unresolved_decision_conflicts() == ()
     assert fixture.service.unresolved_observation_conflicts() == ()
     assert fixture.service.unresolved_assessment_conflicts() == ()
+
+
+# ------------------------------------------------------------- review fixes: ADR 0009 replay boundary
+
+
+def test_repository_has_no_replay_selection_methods(tmp_path) -> None:
+    # Fix 1 (ADR 0009): the repository is a mechanical persistence adapter. Strict-known
+    # replay selection is owned by the service, never by the repository.
+    fixture = Fixture(tmp_path)
+    for name in (
+        "strict_known_policy",
+        "strict_known_universe",
+        "strict_known_decision",
+        "strict_known_observation",
+        "strict_known_assessment",
+    ):
+        assert not hasattr(fixture.repository, name)
+    # The service exposes all five strict-known replay read paths.
+    assert hasattr(fixture.service, "strict_known_policy")
+    assert hasattr(fixture.service, "strict_known_universe")
+    assert hasattr(fixture.service, "strict_known_decision")
+    assert hasattr(fixture.service, "strict_known_observation")
+    assert hasattr(fixture.service, "strict_known_assessment")
+
+
+def test_service_strict_known_decision_and_observation_replay(tmp_path) -> None:
+    # Fix 2: strict-known read paths for PeerEligibilityDecisionRecord and
+    # ComparativeMetricObservationRecord use the same replay semantics as the rest of the
+    # valuation family: cutoff-safe, known-safe, accepted, non-conflicted, and never a
+    # superseded lineage predecessor.
+    fixture = Fixture(tmp_path)
+    policy = fixture.persist_policy()
+    universe = fixture.persist_universe(policy=policy)
+    decision = fixture.persist_decision(universe=universe, entity="peer-a")
+    observation = fixture.persist_observation(universe=universe, entity="peer-a")
+    earlier = NOW - timedelta(days=1)
+    assert (
+        fixture.service.strict_known_decision(effective_as_of=earlier, known_by=earlier, logical_id=decision.logical_id)
+        is None
+    )
+    assert (
+        fixture.service.strict_known_observation(
+            effective_as_of=earlier, known_by=earlier, logical_id=observation.logical_id
+        )
+        is None
+    )
+    replay_decision = fixture.service.strict_known_decision(
+        effective_as_of=RECORDED, known_by=RECORDED, logical_id=decision.logical_id
+    )
+    replay_observation = fixture.service.strict_known_observation(
+        effective_as_of=RECORDED, known_by=RECORDED, logical_id=observation.logical_id
+    )
+    assert replay_decision is not None and replay_decision.record_id == decision.record_id
+    assert replay_observation is not None and replay_observation.record_id == observation.record_id
+
+
+def test_strict_known_decision_replaces_superseded_predecessor(tmp_path) -> None:
+    # Fix 2 + Fix 3: a correction supersedes its root; strict-known replay at a cutoff
+    # after the correction returns the current record, never the superseded predecessor.
+    fixture = Fixture(tmp_path)
+    policy = fixture.persist_policy()
+    universe = fixture.persist_universe(policy=policy)
+    decision = fixture.persist_decision(universe=universe, entity="peer-a")
+    correction = fixture.service.persist_eligibility_decision(
+        target_identity=identity("target"),
+        candidate_identity=identity("peer-a"),
+        policy_record_id=universe.policy_record_id,
+        universe_snapshot_id=universe.record_id,
+        effective_at=NOW,
+        recorded_at=RECORDED + timedelta(minutes=10),
+        known_at=RECORDED + timedelta(minutes=10),
+        supersedes_record_id=decision.record_id,
+        correction_reason="corrected eligibility evidence reference",
+    )
+    replay = fixture.service.strict_known_decision(
+        effective_as_of=RECORDED,
+        known_by=RECORDED + timedelta(minutes=10),
+        logical_id=decision.logical_id,
+    )
+    assert replay is not None
+    assert replay.record_id == correction.record_id
+    assert replay.record_id != decision.record_id
+
+
+# ------------------------------------------------------------- review fixes: assess() replay eligibility
+
+
+def test_assess_uses_only_replay_eligible_non_superseded_records(tmp_path) -> None:
+    # Fix 3 + Fix 6: assess() selects only replay-eligible records. A superseded decision
+    # must not count toward coverage or the eligible-peer cohort; the correction replaces
+    # it so the cohort remains exactly one decision per universe candidate.
+    fixture = Fixture(tmp_path)
+    policy = fixture.persist_policy()
+    universe = fixture.persist_universe(policy=policy)
+    decisions, _ = fixture.build_complete(universe=universe)
+    original_a = next(item for item in decisions if item.candidate_identity.entity_id == identity("peer-a").entity_id)
+    correction = fixture.service.persist_eligibility_decision(
+        target_identity=identity("target"),
+        candidate_identity=identity("peer-a"),
+        policy_record_id=universe.policy_record_id,
+        universe_snapshot_id=universe.record_id,
+        effective_at=NOW,
+        recorded_at=RECORDED + timedelta(minutes=10),
+        known_at=RECORDED + timedelta(minutes=10),
+        supersedes_record_id=original_a.record_id,
+        correction_reason="corrected eligibility evidence reference",
+    )
+    assessment = fixture.service.assess(
+        identity=identity("target"),
+        policy_record_id=universe.policy_record_id,
+        universe_snapshot_id=universe.record_id,
+        evidence_type="official_disclosure",
+        rule_type="fee_distribution",
+        effective_at=NOW,
+        recorded_at=RECORDED + timedelta(minutes=10),
+        known_at=RECORDED + timedelta(minutes=10),
+    )
+    assert assessment.availability_state == "UNAVAILABLE_UNCALIBRATED_NORMALIZATION"
+    assert correction.record_id in assessment.included_decision_record_ids
+    assert original_a.record_id not in assessment.included_decision_record_ids
+    assert len(assessment.included_decision_record_ids) == 3
+
+
+def test_assess_observation_coverage_uses_only_current_observation(tmp_path) -> None:
+    # Fix 6: observation coverage enforces peer uniqueness on the replay-eligible set --
+    # a superseded observation is excluded so exactly one current observation per peer
+    # enters the distribution.
+    fixture = Fixture(tmp_path)
+    policy = fixture.persist_policy()
+    universe = fixture.persist_universe(policy=policy)
+    _, observations = fixture.build_complete(universe=universe)
+    original_b = next(item for item in observations if item.identity.entity_id == identity("peer-b").entity_id)
+    correction = fixture.service.persist_metric_observation(
+        identity=identity("peer-b"),
+        policy_record_id=universe.policy_record_id,
+        universe_snapshot_id=universe.record_id,
+        evidence_type="official_disclosure",
+        rule_type="fee_distribution",
+        effective_at=NOW,
+        recorded_at=RECORDED + timedelta(minutes=10),
+        known_at=RECORDED + timedelta(minutes=10),
+        supersedes_record_id=original_b.record_id,
+        correction_reason="corrected metric observation",
+    )
+    assessment = fixture.service.assess(
+        identity=identity("target"),
+        policy_record_id=universe.policy_record_id,
+        universe_snapshot_id=universe.record_id,
+        evidence_type="official_disclosure",
+        rule_type="fee_distribution",
+        effective_at=NOW,
+        recorded_at=RECORDED + timedelta(minutes=10),
+        known_at=RECORDED + timedelta(minutes=10),
+    )
+    assert assessment.availability_state == "UNAVAILABLE_UNCALIBRATED_NORMALIZATION"
+    assert correction.record_id in assessment.peer_observation_record_ids
+    assert original_b.record_id not in assessment.peer_observation_record_ids
+    assert len(assessment.peer_observation_record_ids) == 3
+
+
+# ------------------------------------------------------------- review fixes: raw/normalization separation
+
+
+def test_raw_observation_is_available_while_normalization_is_unavailable(tmp_path) -> None:
+    # Fix 5: a valid raw observation remains AVAILABLE even when the normalized output is
+    # unavailable. availability_state and normalization_status are separate dimensions.
+    fixture = Fixture(tmp_path)
+    policy = fixture.persist_policy()
+    universe = fixture.persist_universe(policy=policy)
+    observation = fixture.persist_observation(universe=universe, entity="peer-a")
+    assert observation.availability_state == "AVAILABLE"
+    assert observation.normalization_status == "unavailable"
+    loaded = fixture.service.get_metric_observation(observation.record_id)
+    assert loaded is not None
+    assert loaded.availability_state == "AVAILABLE"
+    assert loaded.normalization_status == "unavailable"
+    assert loaded.comparative_multiple
+
+
+# ------------------------------------------------------------- review fixes: deterministic membership
+
+
+def test_policy_multi_value_required_types_use_membership(tmp_path) -> None:
+    # Fix 7: a policy may declare multiple required mechanism/evidence types; eligibility
+    # uses deterministic set membership, not a "_single_or_first" shortcut that would
+    # raise on a multi-value policy.
+    fixture = Fixture(tmp_path)
+    policy = fixture.persist_policy(
+        required_value_capture_mechanism_types=("fee_distribution", "staking_rewards"),
+        required_native_evidence_types=("official_disclosure", "audited_report"),
+    )
+    universe = fixture.persist_universe(policy=policy)
+    decision = fixture.persist_decision(universe=universe, entity="peer-a")
+    assert decision.decision == "included"
+    coordinates = {item.coordinate: item.passed for item in decision.dimension_decisions}
+    assert coordinates["value_capture_mechanism_type"] is True
+    assert coordinates["native_evidence_type"] is True
 
 
 # ------------------------------------------------------------- prohibited composition

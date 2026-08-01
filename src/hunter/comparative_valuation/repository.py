@@ -159,50 +159,6 @@ class ComparativeValuationRepository:
             )
         )
 
-    # -- strict-known replay reads -------------------------------------------------
-
-    def strict_known_policy(
-        self,
-        *,
-        effective_as_of: datetime,
-        known_by: datetime,
-        logical_id: str,
-    ) -> PeerUniversePolicyRecord | None:
-        records = [
-            record
-            for record in self._records_skipping_malformed(_POLICY_TYPE, _policy_from_payload)
-            if record.logical_id == logical_id
-        ]
-        return _strict_known(records, effective_as_of=effective_as_of, known_by=known_by)
-
-    def strict_known_universe(
-        self,
-        *,
-        effective_as_of: datetime,
-        known_by: datetime,
-        logical_id: str,
-    ) -> PeerUniverseSnapshot | None:
-        records = [
-            record
-            for record in self._records_skipping_malformed(_UNIVERSE_TYPE, _universe_from_payload)
-            if record.logical_id == logical_id
-        ]
-        return _strict_known(records, effective_as_of=effective_as_of, known_by=known_by)
-
-    def strict_known_assessment(
-        self,
-        *,
-        effective_as_of: datetime,
-        known_by: datetime,
-        logical_id: str,
-    ) -> ComparativeValuationAssessmentRecord | None:
-        records = [
-            record
-            for record in self._records_skipping_malformed(_ASSESSMENT_TYPE, _assessment_from_payload)
-            if record.logical_id == logical_id
-        ]
-        return _strict_known(records, effective_as_of=effective_as_of, known_by=known_by)
-
     # -- unresolved-conflict queries -------------------------------------------------
 
     def unresolved_policy_conflicts(self) -> tuple[PeerUniversePolicyRecord, ...]:
@@ -280,25 +236,6 @@ class ComparativeValuationRepository:
         finally:
             session.close()
             engine.dispose()
-
-
-def _strict_known(records: list[Any], *, effective_as_of: datetime, known_by: datetime) -> Any | None:
-    eligible = [
-        item
-        for item in records
-        if item.effective_at <= effective_as_of
-        and item.recorded_at <= known_by
-        and item.known_at <= known_by
-        and item.quality_state == "accepted"
-        and item.conflict_state in {"none", "resolved"}
-    ]
-    superseded = {item.supersedes_record_id for item in eligible if item.supersedes_record_id is not None}
-    current = [item for item in eligible if item.record_id not in superseded]
-    current.sort(
-        key=lambda item: (item.effective_at, item.recorded_at, item.known_at, item.record_id),
-        reverse=True,
-    )
-    return current[0] if current else None
 
 
 # -- snapshot mapping -------------------------------------------------------------

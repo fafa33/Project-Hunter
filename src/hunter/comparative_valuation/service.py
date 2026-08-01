@@ -478,7 +478,12 @@ class CanonicalComparativeValuationService:
             currency=policy.required_quote_currency,
             horizon_days=policy.accounting_horizon_days,
             supply_basis="fully_diluted_supply",
-            availability_state="UNAVAILABLE_UNCALIBRATED_NORMALIZATION",
+            # Fix 5: raw-observation availability is separate from normalization
+            # availability. A valid raw observation is AVAILABLE even though the
+            # normalized output is unavailable; the model enforces
+            # normalization_status == "unavailable".
+            availability_state="AVAILABLE",
+            normalization_status=NORMALIZATION_UNAVAILABLE,
             conflict_state="none",
             calculation_fingerprint=fingerprint,
             effective_at=effective_at,
@@ -533,11 +538,18 @@ class CanonicalComparativeValuationService:
                 correction_reason=correction_reason,
             )
 
-        decisions = self.repository.decisions_for_universe(universe.record_id)
-        decision_by_candidate = {item.candidate_identity.representation_id: item for item in decisions}
-        if len(decision_by_candidate) != len(universe.candidates):
-            # Complete decision coverage: every candidate in the universe snapshot has
-            # exactly one persisted, deterministic eligibility decision.
+        decisions = _replay_eligible(
+            self.repository.decisions_for_universe(universe.record_id),
+            effective_as_of=effective_at,
+            known_by=known_at,
+        )
+        candidate_representations = {candidate.identity.representation_id for candidate in universe.candidates}
+        decision_representations = {item.candidate_identity.representation_id for item in decisions}
+        if decision_representations != candidate_representations or len(decisions) != len(decision_representations):
+            # Complete, unique decision coverage: every candidate in the universe snapshot
+            # has exactly one current, replay-eligible eligibility decision, and no
+            # decision exists for a foreign or duplicated candidate (ADR 0026 coverage;
+            # peer uniqueness enforced by set equality, never count-only).
             return self._persist_unavailable_assessment(
                 identity=identity,
                 policy=policy,
@@ -561,11 +573,7 @@ class CanonicalComparativeValuationService:
                 supersedes_record_id=supersedes_record_id,
                 correction_reason=correction_reason,
             )
-        included = [
-            item
-            for item in decisions
-            if item.decision == "included" and item.candidate_identity.representation_id in decision_by_candidate
-        ]
+        included = [item for item in decisions if item.decision == "included"]
         eligible_peers = tuple(sorted(included, key=lambda item: _decision_sort_key(item)))
         if len(eligible_peers) < MINIMUM_ELIGIBLE_PEERS:
             return self._persist_unavailable_assessment(
@@ -579,9 +587,13 @@ class CanonicalComparativeValuationService:
                 correction_reason=correction_reason,
             )
 
-        observations = self.repository.observations_for_universe(universe.record_id)
-        target_observation = _observation_for(observations, identity)
-        if target_observation is None:
+        observations = _replay_eligible(
+            self.repository.observations_for_universe(universe.record_id),
+            effective_as_of=effective_at,
+            known_by=known_at,
+        )
+        target_observations = [item for item in observations if item.identity == identity]
+        if len(target_observations) != 1:
             return self._persist_unavailable_assessment(
                 identity=identity,
                 policy=policy,
@@ -592,20 +604,25 @@ class CanonicalComparativeValuationService:
                 supersedes_record_id=supersedes_record_id,
                 correction_reason=correction_reason,
             )
+        target_observation = target_observations[0]
+        eligible_peer_representations = {item.candidate_identity.representation_id for item in eligible_peers}
         peer_observations = tuple(
             sorted(
                 (
                     observation
                     for observation in observations
-                    if observation.identity.representation_id
-                    in {item.candidate_identity.representation_id for item in eligible_peers}
+                    if observation.identity.representation_id in eligible_peer_representations
                 ),
                 key=lambda item: _observation_sort_key(item),
             )
         )
-        if len(peer_observations) != len(eligible_peers):
-            # Complete observation coverage: every included eligible peer has exactly one
-            # compatible, non-conflicted metric observation.
+        peer_observation_representations = {item.identity.representation_id for item in peer_observations}
+        if peer_observation_representations != eligible_peer_representations or len(peer_observations) != len(
+            peer_observation_representations
+        ):
+            # Complete, unique observation coverage: every included eligible peer has
+            # exactly one current, replay-eligible, compatible metric observation
+            # (ADR 0026 coverage; peer uniqueness enforced by set equality).
             return self._persist_unavailable_assessment(
                 identity=identity,
                 policy=policy,
@@ -721,25 +738,56 @@ class CanonicalComparativeValuationService:
     def assessment_history(self, logical_id: str) -> tuple[ComparativeValuationAssessmentRecord, ...]:
         return self.repository.assessment_history(logical_id)
 
+    # Strict-known replay is owned by the service (ADR 0009: the repository performs no
+    # replay selection -- it only stores and mechanically retrieves). Each method reads
+    # the full mechanical history for the logical identity and applies the deterministic
+    # replay eligibility: cutoff-safe (effective_at <= effective_as_of), known-safe
+    # (recorded_at/known_at <= known_by), accepted quality, non-conflicted, and never a
+    # superseded lineage predecessor.
+
     def strict_known_policy(
         self, *, effective_as_of: datetime, known_by: datetime, logical_id: str
     ) -> PeerUniversePolicyRecord | None:
-        return self.repository.strict_known_policy(
-            effective_as_of=effective_as_of, known_by=known_by, logical_id=logical_id
+        return _strict_known(
+            self.repository.policy_history(logical_id),
+            effective_as_of=effective_as_of,
+            known_by=known_by,
         )
 
     def strict_known_universe(
         self, *, effective_as_of: datetime, known_by: datetime, logical_id: str
     ) -> PeerUniverseSnapshot | None:
-        return self.repository.strict_known_universe(
-            effective_as_of=effective_as_of, known_by=known_by, logical_id=logical_id
+        return _strict_known(
+            self.repository.universe_history(logical_id),
+            effective_as_of=effective_as_of,
+            known_by=known_by,
+        )
+
+    def strict_known_decision(
+        self, *, effective_as_of: datetime, known_by: datetime, logical_id: str
+    ) -> PeerEligibilityDecisionRecord | None:
+        return _strict_known(
+            self.repository.decision_history(logical_id),
+            effective_as_of=effective_as_of,
+            known_by=known_by,
+        )
+
+    def strict_known_observation(
+        self, *, effective_as_of: datetime, known_by: datetime, logical_id: str
+    ) -> ComparativeMetricObservationRecord | None:
+        return _strict_known(
+            self.repository.observation_history(logical_id),
+            effective_as_of=effective_as_of,
+            known_by=known_by,
         )
 
     def strict_known_assessment(
         self, *, effective_as_of: datetime, known_by: datetime, logical_id: str
     ) -> ComparativeValuationAssessmentRecord | None:
-        return self.repository.strict_known_assessment(
-            effective_as_of=effective_as_of, known_by=known_by, logical_id=logical_id
+        return _strict_known(
+            self.repository.assessment_history(logical_id),
+            effective_as_of=effective_as_of,
+            known_by=known_by,
         )
 
     def unresolved_policy_conflicts(self) -> tuple[PeerUniversePolicyRecord, ...]:
@@ -809,22 +857,41 @@ class CanonicalComparativeValuationService:
                 )
             )
 
+        def coordinate_member(name: str, candidate_value: str, required_values: tuple[str, ...]) -> None:
+            # Fix 7: deterministic authority-compliant selection -- the candidate matches
+            # when its declared value is a member of the policy's required set. Set
+            # membership is order-independent, so no "_single_or_first" shortcut is
+            # needed and multi-value policies are handled deterministically.
+            passed = candidate_value in required_values
+            dimensions.append(
+                DimensionDecision(
+                    coordinate=name,
+                    passed=passed,
+                    reason=(
+                        f"candidate {candidate_value!r} is a member of required set {required_values!r}"
+                        if passed
+                        else f"candidate {candidate_value!r} is not a member of required set {required_values!r}"
+                    ),
+                    evidence_reference=(policy.authorizing_adr_reference),
+                )
+            )
+
         coordinate("lifecycle_state", candidate.lifecycle_state, policy.required_lifecycle_state)
         coordinate("sector_classification", candidate.sector_classification, policy.required_sector_classification)
-        coordinate(
+        coordinate_member(
             "value_capture_mechanism_type",
             candidate.value_capture_mechanism_type,
-            _single_or_first(policy.required_value_capture_mechanism_types),
+            policy.required_value_capture_mechanism_types,
         )
         coordinate(
             "revenue_accounting_meaning",
             candidate.revenue_accounting_meaning,
             policy.required_revenue_accounting_meaning,
         )
-        coordinate(
+        coordinate_member(
             "native_evidence_type",
             candidate.native_evidence_type,
-            _single_or_first(policy.required_native_evidence_types),
+            policy.required_native_evidence_types,
         )
         coordinate("quote_currency", candidate.quote_currency, policy.required_quote_currency)
         coordinate("supply_basis", candidate.supply_basis, policy.required_supply_basis)
@@ -1146,8 +1213,18 @@ class CanonicalComparativeValuationService:
     ) -> ComparativeValuationAssessmentRecord:
         if availability_state not in AVAILABILITY_STATES:
             raise CanonicalComparativeValuationAuthorityError(f"unsupported availability state: {availability_state}")
-        decisions = self.repository.decisions_for_universe(universe.record_id)
-        observations = self.repository.observations_for_universe(universe.record_id)
+        # Coverage strings reflect only replay-eligible records at the assessment cutoff
+        # (Fix 3: assess() selects only replay-eligible, non-superseded records).
+        decisions = _replay_eligible(
+            self.repository.decisions_for_universe(universe.record_id),
+            effective_as_of=universe.cutoff,
+            known_by=known_at,
+        )
+        observations = _replay_eligible(
+            self.repository.observations_for_universe(universe.record_id),
+            effective_as_of=universe.cutoff,
+            known_by=known_at,
+        )
         record = ComparativeValuationAssessmentRecord(
             record_id="pending",
             logical_id="pending",
@@ -1170,13 +1247,16 @@ class CanonicalComparativeValuationService:
             normalized_value=None,
             cohort_decision_coverage=_coverage_string(len(decisions), len(universe.candidates)),
             cohort_observation_coverage=_coverage_string(len(observations), len(universe.candidates) + 1),
-            confidence_universe_coverage="0",
-            confidence_eligibility_evidence="0",
-            confidence_metric_evidence="0",
-            confidence_coordinate_compatibility="0",
-            confidence_peer_set_cardinality="0",
-            confidence_methodology_calibration="0",
-            confidence="0",
+            # Fix 4: explicit missingness -- an unavailable assessment must never encode
+            # unavailable as a zero confidence (ADR 0020 "Confidence is unavailable, not
+            # zero"). All confidence fields are blank and the model enforces this.
+            confidence_universe_coverage="",
+            confidence_eligibility_evidence="",
+            confidence_metric_evidence="",
+            confidence_coordinate_compatibility="",
+            confidence_peer_set_cardinality="",
+            confidence_methodology_calibration="",
+            confidence="",
             availability_state=availability_state,
             correlation_group=REQUIRED_CORRELATION_GROUP,
             effective_at=universe.cutoff,
@@ -1440,14 +1520,43 @@ def _candidate_in_universe(universe: PeerUniverseSnapshot, identity: EconomicCla
     )
 
 
-def _single_or_first(values: tuple[str, ...]) -> str:
-    if not values:
-        raise CanonicalComparativeValuationAuthorityError("policy requires at least one value")
-    if len(values) > 1:
-        raise CanonicalComparativeValuationAuthorityError(
-            "the first methodology requires exactly one required value per coordinate"
-        )
-    return values[0]
+def _replay_eligible(
+    records: Any,
+    *,
+    effective_as_of: datetime,
+    known_by: datetime,
+) -> tuple[Any, ...]:
+    """Service-owned replay eligibility (ADR 0009: the repository performs no replay
+    selection). Returns the cutoff-safe (effective_at <= effective_as_of),
+    known-safe (recorded_at/known_at <= known_by), accepted, non-conflicted,
+    non-superseded records, deterministically ordered."""
+    eligible = [
+        item
+        for item in records
+        if item.effective_at <= effective_as_of
+        and item.recorded_at <= known_by
+        and item.known_at <= known_by
+        and item.quality_state == "accepted"
+        and item.conflict_state in {"none", "resolved"}
+    ]
+    superseded = {item.supersedes_record_id for item in eligible if item.supersedes_record_id is not None}
+    current = [item for item in eligible if item.record_id not in superseded]
+    current.sort(
+        key=lambda item: (item.effective_at, item.recorded_at, item.known_at, item.record_id),
+    )
+    return tuple(current)
+
+
+def _strict_known(
+    records: Any,
+    *,
+    effective_as_of: datetime,
+    known_by: datetime,
+) -> Any | None:
+    """Service-owned strict-known selection: the latest replay-eligible record for a
+    logical identity, or None when no record is replay-eligible at the cutoff."""
+    current = _replay_eligible(records, effective_as_of=effective_as_of, known_by=known_by)
+    return current[-1] if current else None
 
 
 def _decision_reason(decision: str, dimensions: tuple[DimensionDecision, ...], missingness: str) -> str:

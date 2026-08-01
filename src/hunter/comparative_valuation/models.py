@@ -396,6 +396,7 @@ class ComparativeMetricObservationRecord:
     horizon_days: int
     supply_basis: str
     availability_state: AvailabilityState
+    normalization_status: NormalizationStatus
     conflict_state: ConflictState
     calculation_fingerprint: str
     effective_at: datetime
@@ -446,10 +447,10 @@ class ComparativeMetricObservationRecord:
             raise ValueError("denominator_value must be a strictly positive decimal")
         if not _positive_decimal_ok(self.comparative_multiple):
             raise ValueError("comparative_multiple must be a strictly positive decimal")
-        if self.availability_state == "AVAILABLE":
+        if self.normalization_status != NORMALIZATION_UNAVAILABLE:
             raise ValueError(
-                "a metric observation cannot be AVAILABLE without a calibrated normalization; "
-                "the foundation produces raw observations only"
+                "normalization_status must remain 'unavailable' until a predeclared, versioned, "
+                "historically calibrated monotonic transform exists (ADR 0026)"
             )
         _normalize_chronology(self)
         _validate_correction(self)
@@ -515,13 +516,6 @@ class ComparativeValuationAssessmentRecord:
             "residual_sign_convention",
             "cohort_decision_coverage",
             "cohort_observation_coverage",
-            "confidence_universe_coverage",
-            "confidence_eligibility_evidence",
-            "confidence_metric_evidence",
-            "confidence_coordinate_compatibility",
-            "confidence_peer_set_cardinality",
-            "confidence_methodology_calibration",
-            "confidence",
             "content_hash",
         )
         _member("availability_state", self.availability_state, AVAILABILITY_STATES)
@@ -541,7 +535,7 @@ class ComparativeValuationAssessmentRecord:
             raise ValueError("no calibrated normalization exists in this foundation")
         if self.correlation_group != REQUIRED_CORRELATION_GROUP:
             raise ValueError(f"correlation_group must be {REQUIRED_CORRELATION_GROUP!r} per ADR 0021")
-        for name in (
+        _confidence_fields = (
             "confidence_universe_coverage",
             "confidence_eligibility_evidence",
             "confidence_metric_evidence",
@@ -549,21 +543,25 @@ class ComparativeValuationAssessmentRecord:
             "confidence_peer_set_cardinality",
             "confidence_methodology_calibration",
             "confidence",
-        ):
-            _bounded_decimal(name, getattr(self, name))
-        components = [
-            Decimal(getattr(self, name))
-            for name in (
-                "confidence_universe_coverage",
-                "confidence_eligibility_evidence",
-                "confidence_metric_evidence",
-                "confidence_coordinate_compatibility",
-                "confidence_peer_set_cardinality",
-                "confidence_methodology_calibration",
-            )
-        ]
-        if Decimal(self.confidence) > min(components):
-            raise ValueError("overall confidence cannot exceed the weakest mandatory component")
+        )
+        has_raw_values = self.availability_state in ("AVAILABLE", "UNAVAILABLE_UNCALIBRATED_NORMALIZATION")
+        if has_raw_values:
+            # Confidence is only meaningful when the assessment persists raw values; it is
+            # then required, bounded, and capped by its weakest mandatory component.
+            for name in _confidence_fields:
+                _bounded_decimal(name, getattr(self, name))
+            components = [Decimal(getattr(self, name)) for name in _confidence_fields[:-1]]
+            if Decimal(self.confidence) > min(components):
+                raise ValueError("overall confidence cannot exceed the weakest mandatory component")
+        else:
+            # Explicit missingness (ADR 0020 "Confidence is unavailable, not zero"): an
+            # unavailable assessment must never encode unavailable as a zero confidence.
+            for name in _confidence_fields:
+                if getattr(self, name).strip():
+                    raise ValueError(
+                        f"{name} must be blank for an unavailable assessment "
+                        "(explicit missingness; never encode unavailable as zero confidence)"
+                    )
         if self.availability_state in ("AVAILABLE", "UNAVAILABLE_UNCALIBRATED_NORMALIZATION"):
             if (
                 not self.target_observation_record_id.strip()
