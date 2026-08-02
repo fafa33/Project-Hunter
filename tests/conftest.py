@@ -26,7 +26,9 @@ def _repository_status(root: Path) -> str:
 def pytest_sessionstart(session: pytest.Session) -> None:
     global _INITIAL_STATUS
     initial_status = _repository_status(Path(str(session.config.rootpath)))
-    _INITIAL_STATUS = initial_status if initial_status or (Path(str(session.config.rootpath)) / ".git").exists() else None
+    _INITIAL_STATUS = (
+        initial_status if initial_status or (Path(str(session.config.rootpath)) / ".git").exists() else None
+    )
 
 
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:

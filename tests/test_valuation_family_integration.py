@@ -140,15 +140,10 @@ def test_complete_valuation_family_lineage_replay_and_isolation(tmp_path) -> Non
         source = inspect.getsource(module)
         tree = ast.parse(source)
         imported_modules = {
-            alias.name.lower()
-            for node in ast.walk(tree)
-            if isinstance(node, ast.Import)
-            for alias in node.names
+            alias.name.lower() for node in ast.walk(tree) if isinstance(node, ast.Import) for alias in node.names
         }
         imported_modules.update(
-            (node.module or "").lower()
-            for node in ast.walk(tree)
-            if isinstance(node, ast.ImportFrom)
+            (node.module or "").lower() for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)
         )
         assert all("market_validation" not in imported for imported in imported_modules)
         for prohibited in ("opportunity", "ranking", "portfolio"):
