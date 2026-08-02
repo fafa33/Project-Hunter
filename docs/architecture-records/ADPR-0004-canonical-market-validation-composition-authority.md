@@ -304,7 +304,7 @@ Cap options are: no cap; per-input caps only; group caps only; or both per-input
 | `valuation` | Structured, confidence-bearing reference only; no scalar and zero weighted contribution. | Not applicable. | Missing/incompatible valuation is recorded explicitly; no zero or neutral substitution. |
 | `comparative_valuation` | N3 monotonic calibration of ADR 0026 raw log residual; positive-cheaper direction preserved. | Raw residual `0` maps to the calibration policy's declared neutral anchor. | Outside supported entity/corpus/range or absent calibration: unavailable. |
 | `mispricing` | N3 monotonic calibration of raw signed ratio; positive-undervaluation direction preserved. | Raw ratio `0` maps to declared neutral anchor. | Unsupported range, weak prerequisite, or absent calibration: unavailable. |
-| `asymmetry` | N3 monotonic calibration of `log(raw_asymmetry_ratio)` only when ratio is finite and positive; ordering remains equivalent to the raw ratio. | Raw ratio `1` / log ratio `0` maps to declared neutral anchor. | Zero/undefined downside, non-positive/unsupported ratio, incomplete scenarios, or absent calibration: unavailable. |
+| `asymmetry` | N3 monotonic calibration of `log1p(raw_asymmetry_ratio)` over the supported finite raw domain `[0, +inf)`; ordering remains equivalent to the raw ratio and a legitimate raw ratio of `0` is represented exactly as transformed value `0`. | Raw ratio `1` / transformed value `log(2)` maps to the declared neutral anchor. Raw ratio `0` is valid worst-case evidence, not missingness. | Undefined denominator (including zero downside), non-finite/unsupported ratio, incomplete scenarios, or absent calibration: unavailable. A valid raw ratio of `0` may never be classified unavailable solely because of transform-domain limits. |
 
 Calibration may never extrapolate silently. A policy must declare supported entity class, methodology versions, raw domain, winsorization prohibition or exact treatment, neutral anchor, outcome definition, horizon, temporal folds, minimum sample/coverage, monotonic direction, fit algorithm/version, validation metrics, drift threshold, effective/recorded/known times, and corpus record IDs/versions. Training and evaluation records must be selected as they were knowable at each historical cutoff. Future outcomes may label past predictions only after their predeclared horizon; they may not alter the historical feature snapshot.
 
@@ -313,7 +313,7 @@ Calibration may never extrapolate silently. A policy must declare supported enti
 1. `valuation` and `mispricing` remain in `valuation-mispricing`; only `mispricing` can contribute a scalar in Phase 1.
 2. Comparative joins `valuation-mispricing` whenever its complete evidence-reference set intersects valuation or mispricing market/fundamental lineage, or whenever distinctness cannot be proven.
 3. Comparative may receive a separate contribution group only through a versioned residual-independence policy that identifies the shared explanatory inputs, performs predeclared strict-known residualization, and passes temporal out-of-sample independence and stability thresholds.
-4. Asymmetry remains in `asymmetry-scenario`. Any fair-value, market-price, comparative, or mispricing reference in scenario evidence creates a cross-group overlap declaration. The duplicated component is assigned to one primary group and excluded from the other contribution.
+4. Asymmetry remains in `asymmetry-scenario` only when its complete direct and transitive evidence-reference set is disjoint from the complete evidence-reference sets of Valuation, Comparative Valuation, and Mispricing. If any exact evidence record intersects, the whole Asymmetry scalar is ineligible for composition; recording an overlap declaration or assigning the record to a primary group is not sufficient because the upstream payoff ratio is aggregate and adapters may not recalculate it. Eligibility can be restored only by a separately authorized upstream Canonical Asymmetry assessment that is already residualized under an accepted, exact-version residual-independence policy. Market Validation adapters and the composer may neither residualize nor subtract the overlap. Under the Phase 1 no-partial-composition rule, an ineligible Asymmetry scalar makes the complete composition explicitly unavailable; it is never replaced with zero or a neutral value.
 5. Every exact evidence record has one primary contribution assignment per composition policy. References may support confidence or explainability but cannot add weight twice.
 6. Each scalar has a predeclared per-input cap and each group a combined cap. The sum of member contributions cannot exceed the group cap. Numeric weights and caps remain undecided until E-012 exists; absence of an accepted exact-version cap policy makes composition unavailable.
 7. Runtime-estimated correlations, implicit residual claims, and configuration-only independence declarations are prohibited.
@@ -331,14 +331,18 @@ Canonical analytical services
        - evidence intersections
        - contribution groups
        - residual-independence policy
+       - sole valuation-family weighting authority
        - per-input and group caps
        - immutable composition snapshot
-  -> existing Canonical Market Validation runtime
+  -> one immutable post-cap valuation-family contribution
+  -> existing Canonical Market Validation runtime (pass-through only for that contribution)
 
 No path to Opportunity, ranking, Timing, portfolio, or recommendation authority.
 ```
 
-Repositories retrieve raw deterministic history and persist service-authorized records only. The runtime invokes one accepted composition version but cannot choose policies. Scheduler/automation may eventually invoke an already approved runtime but cannot activate it or select cutoffs, calibrations, caps, or canary cohorts.
+Repositories retrieve raw deterministic history and persist service-authorized records only. The composition service is the single owner of all normalization, confidence/freshness/coverage scaling, per-input weighting, correlation-group weighting, and input/group caps for the valuation family. It emits one final post-cap valuation-family contribution. After activation, the existing `WeightEngine` may continue to own weighting for non-valuation inputs, but it must treat that valuation-family contribution as immutable pass-through input: it may add it to the wider Market Validation result but may not normalize, weight, scale, cap, or decompose it. The four legacy `valuation`, `comparative_valuation`, `mispricing`, and `asymmetry` weight entries must not be active or applied on that path. The runtime must not call `WeightEngine.apply()` or `WeightEngine.score()` over those family records, and it must not reconstruct a contribution from their normalized scalars. If the runtime cannot prove this exact handoff, composition remains unavailable. This contract allocates authority only; it does not authorize or specify a runtime redesign.
+
+The runtime invokes one accepted composition version but cannot choose policies. Scheduler/automation may eventually invoke an already approved runtime but cannot activate it or select cutoffs, calibrations, caps, or canary cohorts.
 
 ## Immutable Composition Record Requirements
 
@@ -353,6 +357,7 @@ A future `MarketValidationCompositionSnapshot` (provisional name) must contain a
 - exact normalization and calibration IDs/versions, corpus fingerprint, supported range, raw and normalized values;
 - complete ordered direct and transitive evidence-reference sets;
 - primary contribution assignments, overlap intersections, correlation groups, independence-policy references, per-input caps, group caps, pre-cap and post-cap contributions;
+- the sole weighting-owner identifier, the final immutable post-cap valuation-family contribution, and proof that no legacy family weight or second scaling stage was applied;
 - structured non-scalar valuation reference;
 - explicit missing/unavailable reasons;
 - deterministic ordering and composition hash;
@@ -387,9 +392,10 @@ All are mandatory:
 7. deterministic permutation and correction replay tests;
 8. immutable atomic persistence and repository-purity tests;
 9. fail-closed unsupported-version and missingness tests;
-10. isolated shadow execution showing no production writes or consumer changes;
-11. rollback rehearsal; and
-12. independent pre-activation review.
+10. WeightEngine-boundary tests proving the final post-cap family contribution is passed through exactly once, all four legacy family weights are inactive on that path, and no cap or scaling is discarded or reapplied;
+11. isolated shadow execution showing no production writes or consumer changes;
+12. rollback rehearsal; and
+13. independent pre-activation review.
 
 ### Canary
 
