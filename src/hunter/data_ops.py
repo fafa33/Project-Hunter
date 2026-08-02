@@ -133,7 +133,9 @@ def install_data_ops_jobs(path: Path = Path("configs/automation.yaml")) -> tuple
 def run_data_ops_now(path: Path = Path("configs/automation.yaml")) -> tuple[Any, ...]:
     config = load_automation_config(path)
     jobs = tuple(job for job in config.jobs if job.job_id in DATA_OPS_JOB_IDS)
-    engine = create_sqlite_engine(_data_ops_database(path))
+    database = _data_ops_database(path)
+    database.parent.mkdir(parents=True, exist_ok=True)
+    engine = create_sqlite_engine(database)
     create_schema(engine)
     session = SessionFactory(engine).create()
     try:
@@ -198,6 +200,7 @@ def _persist_job_definitions(path: Path) -> None:
 
 
 def _automation_run_records(path: Path = Path("data/data_ops.sqlite")) -> tuple[Any, ...]:
+    path.parent.mkdir(parents=True, exist_ok=True)
     engine = create_sqlite_engine(path)
     create_schema(engine)
     session = SessionFactory(engine).create()

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import inspect
 from datetime import timedelta
 
@@ -134,7 +135,21 @@ def test_complete_valuation_family_lineage_replay_and_isolation(tmp_path) -> Non
         CanonicalMispricingService,
         CanonicalAsymmetryService,
     ):
-        source = inspect.getsource(service_type).lower()
-        assert "market_validation" not in source
+        module = inspect.getmodule(service_type)
+        assert module is not None
+        source = inspect.getsource(module)
+        tree = ast.parse(source)
+        imported_modules = {
+            alias.name.lower()
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Import)
+            for alias in node.names
+        }
+        imported_modules.update(
+            (node.module or "").lower()
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom)
+        )
+        assert all("market_validation" not in imported for imported in imported_modules)
         for prohibited in ("opportunity", "ranking", "portfolio"):
             assert not hasattr(service_type, prohibited)

@@ -10,22 +10,28 @@ _INITIAL_STATUS: str | None = None
 
 
 def _repository_status(root: Path) -> str:
-    completed = subprocess.run(
-        ["git", "status", "--porcelain", "--untracked-files=all"],
-        cwd=root,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    try:
+        completed = subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=all"],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        return ""
     return completed.stdout
 
 
 def pytest_sessionstart(session: pytest.Session) -> None:
     global _INITIAL_STATUS
-    _INITIAL_STATUS = _repository_status(Path(str(session.config.rootpath)))
+    initial_status = _repository_status(Path(str(session.config.rootpath)))
+    _INITIAL_STATUS = initial_status if initial_status or (Path(str(session.config.rootpath)) / ".git").exists() else None
 
 
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
+    if _INITIAL_STATUS is None:
+        return
     final_status = _repository_status(Path(str(session.config.rootpath)))
     if final_status != _INITIAL_STATUS:
         session.config.issue166_cleanliness_failure = (  # type: ignore[attr-defined]
