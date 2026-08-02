@@ -30,7 +30,7 @@ Conflicts must be resolved according to the canonical hierarchy before implement
 
 # Current Authority Classification
 
-Implementation existence does not by itself establish production analytical authority. Current classifications are governed by accepted ADRs, especially ADR 0007 and ADR 0016–0021.
+Implementation existence does not by itself establish production analytical authority. Current classifications are governed by accepted ADRs, especially ADR 0007 and ADR 0016–0026.
 
 ## Canonical production analytical authority
 
@@ -69,18 +69,21 @@ The following remain experimental or research infrastructure unless a later acce
 
 Experimental outputs must remain clearly classified and cannot substitute for canonical production outputs.
 
-## Canonical valuation (implemented, not a Market Validation input)
+## Canonical valuation-family foundations
 
-Canonical Valuation Milestones 1–4 are implemented under Issue #107, ADR 0022, and ADR 0024, and the resulting records are strict-known-replayable. The separate independent post-merge audit and Issue #107 closure remain pending. Canonical Valuation produces a structured, non-scalar, confidence-bearing fair-value assessment (`p10`/`p50`/`p90`) with separate confidence decomposition and explicit provenance. Per ADR 0024, `valuation` is **not** a directionally favorable `[0,1]` scalar, normalized value, or weighted Market Validation composition input — no scalar normalization is produced for or required of `valuation`. It does not become a Market Validation input until a separate accepted ADR authorizes a non-scalar Market Validation input representation and its composition model (Milestone 5 of Issue #107 is architecturally blocked pending that ADR).
+The canonical Valuation, Comparative Valuation, Mispricing, and Asymmetry foundations are implemented as separate service-owned analytical authorities under ADR 0021 and the accepted methodology boundaries that apply to each domain.
+
+- Canonical Valuation Milestones 1–4 are implemented under Issue #107, ADR 0022, and ADR 0024. Issue #107 is closed. Valuation records are structured, confidence-bearing, non-scalar, and strict-known-replayable.
+- Canonical Comparative Valuation is implemented through PR #161 under ADR 0026.
+- Canonical Mispricing is implemented through PR #163 under ADR 0021.
+- Canonical Asymmetry is implemented through PR #165 under ADR 0021.
+
+These implementations do not by themselves activate the four domains as normalized Market Validation inputs. Valuation remains non-scalar under ADR 0024. Comparative Valuation, Mispricing, and Asymmetry remain fail-closed where calibrated normalization or other separately governed activation requirements are absent. No weighted Market Validation composition, recommendation, ranking, portfolio authority, or Opportunity authority is created by package existence.
 
 ## Currently unavailable capabilities
 
-- Comparative Valuation.
-- Mispricing.
-- Asymmetry.
+- Normalized or otherwise newly composed Market Validation use of the valuation-family foundations unless separately authorized by an Accepted ADR and implemented under repository governance.
 - Portfolio Intelligence.
-
-ADR 0021 defines the evidence-authority contracts for the valuation family. Per ADR 0024, `valuation`'s non-scalar structured output is implemented; the remaining three Market Validation valuation-family inputs (`comparative_valuation`, `mispricing`, `asymmetry`) remain explicitly unavailable pending their own separate accepted ADRs, methodology implementations, and independent audits.
 
 ## Operational and presentation components
 
