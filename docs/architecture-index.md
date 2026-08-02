@@ -25,7 +25,7 @@ Use only the lifecycle states defined by `docs/ARCHITECTURE_DECISION_PREPARATION
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | [ADPR-0001](architecture-records/ADPR-0001-architecture-decision-preparation-framework.md) | Architecture Decision Preparation Framework | IMPLEMENTED | not applicable | #133 | not applicable | #132 | not yet recorded | not yet assigned | not applicable | not applicable |
 | [ADPR-0002](architecture-records/ADPR-0002-disclosure-architecture-classification.md) | Disclosure Architecture Classification | IN_RESEARCH | not yet created | not yet created | none produced | not yet created | not yet recorded | not yet assigned | not applicable | not applicable |
-| [ADPR-0003](architecture-records/ADPR-0003-canonical-comparative-valuation.md) | Canonical Comparative Valuation | IMPLEMENTED | #135 | #156 / #159 | [ADR 0026](ADR/0026-canonical-comparative-valuation-methodology.md) (Accepted) | PR #161 | `5df7ff4` | not yet assigned | not applicable | not applicable |
+| [ADPR-0003](architecture-records/ADPR-0003-canonical-comparative-valuation.md) | Canonical Comparative Valuation | APPROVED | #135 | #156 / #159 | [ADR 0026](ADR/0026-canonical-comparative-valuation-methodology.md) (Accepted) | PR #161 | `5df7ff4` | not yet assigned | not applicable | not applicable |
 
 ## Active Preparation Records
 
@@ -40,7 +40,7 @@ Records in `PROPOSED`, `IN_RESEARCH`, or `READY_FOR_REVIEW` state are listed her
 | ADPR | ADR | Status | Implementation | Validation |
 |---|---|---|---|---|
 | [ADPR-0001](architecture-records/ADPR-0001-architecture-decision-preparation-framework.md) | not applicable | IMPLEMENTED | PR #132 | Post-merge coherence remediation tracked by Issue #133 |
-| [ADPR-0003](architecture-records/ADPR-0003-canonical-comparative-valuation.md) | [ADR 0026](ADR/0026-canonical-comparative-valuation-methodology.md) (Accepted) | IMPLEMENTED | Preparation PR #157; ADR PR #158; acceptance PR #160; implementation PR #161 | PR #161 merged at `5df7ff4`; post-merge chain stabilization tracked by Issue #166 |
+| [ADPR-0003](architecture-records/ADPR-0003-canonical-comparative-valuation.md) | [ADR 0026](ADR/0026-canonical-comparative-valuation-methodology.md) (Accepted) | APPROVED | Preparation PR #157; ADR PR #158; acceptance PR #160; implementation PR #161 | ADR 0026 and Comparative Valuation were implemented separately through PR #161; the approved preparation record remains immutable; post-merge chain stabilization is tracked by Issue #166 |
 
 ## Superseded and Archived Records
 
@@ -59,10 +59,10 @@ Records in `PROPOSED`, `IN_RESEARCH`, or `READY_FOR_REVIEW` state are listed her
 | Epic or Issue | ADPRs | ADRs | Implementation PRs | Status |
 |---|---|---|---|---|
 | Issue #133 | [ADPR-0001](architecture-records/ADPR-0001-architecture-decision-preparation-framework.md) | not applicable | PR #132; remediation PR not yet created | Open remediation |
-| Issue #135 / Issue #156 / Issue #159 | [ADPR-0003](architecture-records/ADPR-0003-canonical-comparative-valuation.md) | [ADR 0026](ADR/0026-canonical-comparative-valuation-methodology.md) (Accepted) | PR #157 (preparation), PR #158 (ADR), PR #160 (acceptance status), PR #161 (implementation) | Comparative Valuation foundation implemented |
-| Issue #162 | not applicable | ADR 0021 | PR #163 | Canonical Mispricing foundation implemented; merge `57c6fca` |
+| Issue #135 / Issue #156 / Issue #159 | [ADPR-0003](architecture-records/ADPR-0003-canonical-comparative-valuation.md) | [ADR 0026](ADR/0026-canonical-comparative-valuation-methodology.md) (Accepted) | PR #157 (preparation), PR #158 (ADR), PR #160 (acceptance status), PR #161 (implementation) | ADPR remains APPROVED; Comparative Valuation foundation implemented separately |
+| Issue #162 | not applicable | ADR 0021 | PR #163 | Canonical Mispricing foundation implemented; merge `a9f46f1` |
 | Issue #164 | not applicable | ADR 0021 | PR #165 | Canonical Asymmetry foundation implemented; merge `99c95f0` |
-| Issue #166 | not applicable | ADR 0021 / ADR 0026 | pending Draft PR | Post-merge valuation-family stabilization audit and documentation coherence |
+| Issue #166 | not applicable | ADR 0021 / ADR 0026 | PR #167 merged; technical audit still pending | Post-merge valuation-family stabilization audit and documentation coherence |
 
 ## Component Mapping
 
