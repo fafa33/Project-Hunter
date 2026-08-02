@@ -62,6 +62,7 @@ from hunter.valuation_methodology.repository import ValuationMethodologyReposito
 from hunter.valuation_methodology.service import CanonicalValuationMethodologyAuthority
 from hunter.value_capture.models import EconomicClaimIdentity
 from hunter.value_capture.repository import SupplyAndValueCaptureRepository
+from hunter.value_capture.service import SupplyAndValueCaptureService
 
 REAL_TRACKED_DATABASE = Path(__file__).resolve().parents[1] / "data" / "data_ops.sqlite"
 
@@ -102,7 +103,8 @@ def test_real_persisted_sky_evidence_chain_is_strict_known_readable_and_cross_va
     db_path = _copy_of_real_database(tmp_path)
     repository = SupplyAndValueCaptureRepository(db_path)
 
-    evidence = repository.strict_known_evidence(
+    evidence = SupplyAndValueCaptureService.select_strict_known_evidence(
+        repository,
         entity_id=SKY_IDENTITY.entity_id,
         economic_claim_id=SKY_IDENTITY.economic_claim_id,
         representation_id=SKY_IDENTITY.representation_id,
@@ -110,7 +112,8 @@ def test_real_persisted_sky_evidence_chain_is_strict_known_readable_and_cross_va
         known_by=REAL_EVIDENCE_PROBE_AT,
         evidence_type="official_disclosure",
     )
-    rule = repository.strict_known_rule(
+    rule = SupplyAndValueCaptureService.select_strict_known_rule(
+        repository,
         entity_id=SKY_IDENTITY.entity_id,
         economic_claim_id=SKY_IDENTITY.economic_claim_id,
         representation_id=SKY_IDENTITY.representation_id,
@@ -118,7 +121,8 @@ def test_real_persisted_sky_evidence_chain_is_strict_known_readable_and_cross_va
         known_by=REAL_EVIDENCE_PROBE_AT,
         rule_type="buyback_and_burn",
     )
-    supply = repository.strict_known_supply(
+    supply = SupplyAndValueCaptureService.select_strict_known_supply(
+        repository,
         entity_id=SKY_IDENTITY.entity_id,
         economic_claim_id=SKY_IDENTITY.economic_claim_id,
         representation_id=SKY_IDENTITY.representation_id,
@@ -143,7 +147,8 @@ def test_real_persisted_sky_evidence_replay_is_deterministic_across_repeated_rea
     repository = SupplyAndValueCaptureRepository(db_path)
 
     def read() -> tuple[str, str, str]:
-        evidence = repository.strict_known_evidence(
+        evidence = SupplyAndValueCaptureService.select_strict_known_evidence(
+            repository,
             entity_id=SKY_IDENTITY.entity_id,
             economic_claim_id=SKY_IDENTITY.economic_claim_id,
             representation_id=SKY_IDENTITY.representation_id,
@@ -151,7 +156,8 @@ def test_real_persisted_sky_evidence_replay_is_deterministic_across_repeated_rea
             known_by=REAL_EVIDENCE_PROBE_AT,
             evidence_type="official_disclosure",
         )
-        rule = repository.strict_known_rule(
+        rule = SupplyAndValueCaptureService.select_strict_known_rule(
+            repository,
             entity_id=SKY_IDENTITY.entity_id,
             economic_claim_id=SKY_IDENTITY.economic_claim_id,
             representation_id=SKY_IDENTITY.representation_id,
@@ -159,7 +165,8 @@ def test_real_persisted_sky_evidence_replay_is_deterministic_across_repeated_rea
             known_by=REAL_EVIDENCE_PROBE_AT,
             rule_type="buyback_and_burn",
         )
-        supply = repository.strict_known_supply(
+        supply = SupplyAndValueCaptureService.select_strict_known_supply(
+            repository,
             entity_id=SKY_IDENTITY.entity_id,
             economic_claim_id=SKY_IDENTITY.economic_claim_id,
             representation_id=SKY_IDENTITY.representation_id,

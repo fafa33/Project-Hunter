@@ -1100,9 +1100,9 @@ def test_divergent_evidence_submissions_are_flagged_and_queryable_as_unresolved_
     )
 
     assert second.conflict_state == "open"
-    assert [item.record_id for item in repository.unresolved_evidence_conflicts()] == [second.record_id]
-    assert repository.unresolved_supply_conflicts() == ()
-    assert repository.unresolved_rule_conflicts() == ()
+    assert [item.record_id for item in service.unresolved_evidence_conflicts()] == [second.record_id]
+    assert service.unresolved_supply_conflicts() == ()
+    assert service.unresolved_rule_conflicts() == ()
 
 
 def test_matching_duplicate_evidence_is_not_flagged_as_conflict(tmp_path) -> None:
@@ -1118,7 +1118,7 @@ def test_matching_duplicate_evidence_is_not_flagged_as_conflict(tmp_path) -> Non
     )
 
     assert second.conflict_state == "none"
-    assert repository.unresolved_evidence_conflicts() == ()
+    assert service.unresolved_evidence_conflicts() == ()
 
 
 def test_correction_diverging_from_its_own_predecessor_is_not_flagged_as_conflict(tmp_path) -> None:
@@ -1138,7 +1138,7 @@ def test_correction_diverging_from_its_own_predecessor_is_not_flagged_as_conflic
     )
 
     assert corrected.conflict_state == "none"
-    assert repository.unresolved_evidence_conflicts() == ()
+    assert service.unresolved_evidence_conflicts() == ()
 
 
 def test_divergent_supply_snapshots_are_flagged_and_queryable_as_unresolved_conflicts(tmp_path) -> None:
@@ -1176,7 +1176,7 @@ def test_divergent_supply_snapshots_are_flagged_and_queryable_as_unresolved_conf
     )
 
     assert second.conflict_state == "open"
-    assert [item.record_id for item in repository.unresolved_supply_conflicts()] == [second.record_id]
+    assert [item.record_id for item in service.unresolved_supply_conflicts()] == [second.record_id]
 
 
 def test_strict_known_evidence_selects_correction_by_cutoff(tmp_path) -> None:
@@ -1291,7 +1291,7 @@ def test_overlapping_evidence_excludes_known_successor_predecessor(tmp_path) -> 
         ),
     )
 
-    after_correction_known = repository.overlapping_evidence(
+    after_correction_known = service.overlapping_evidence(
         entity_id=original.identity.entity_id,
         economic_claim_id=original.identity.economic_claim_id,
         accounting_window_start=original.accounting_period_start,
@@ -1319,7 +1319,7 @@ def test_overlapping_evidence_preserves_predecessor_before_successor_was_known(t
         ),
     )
 
-    before_correction_known = repository.overlapping_evidence(
+    before_correction_known = service.overlapping_evidence(
         entity_id=original.identity.entity_id,
         economic_claim_id=original.identity.economic_claim_id,
         accounting_window_start=original.accounting_period_start,

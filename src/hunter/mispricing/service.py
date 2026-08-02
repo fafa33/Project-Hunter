@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from hunter.market_facts.repository import ObservedMarketFactRepository
+from hunter.market_facts.service import ObservedMarketFactService
 from hunter.mispricing.models import (
     AUTHORIZING_ADR_REFERENCE,
     AVAILABILITY_STATES,
@@ -294,7 +295,8 @@ class CanonicalMispricingService:
                 correction_reason=correction_reason,
             )
 
-        market_fact = self.market_fact_repository.strict_known_fact(
+        market_fact = ObservedMarketFactService.select_strict_known_fact(
+            self.market_fact_repository,
             entity_id=identity.entity_id,
             representation_id=identity.representation_id,
             fact_type=methodology.market_observation_fact_type,

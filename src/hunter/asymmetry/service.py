@@ -47,6 +47,7 @@ from hunter.asymmetry.repository import (
     scenario_set_snapshot,
 )
 from hunter.market_facts.repository import ObservedMarketFactRepository
+from hunter.market_facts.service import ObservedMarketFactService
 from hunter.persistence.models import QuerySpec
 from hunter.persistence.sql import RepositoryFactory, SessionFactory, create_sqlite_engine
 from hunter.persistence.sql.exceptions import PersistenceIdentityConflictError
@@ -254,7 +255,8 @@ class CanonicalAsymmetryService:
             raise CanonicalAsymmetryAuthorityError(
                 "baseline market observation must be accepted and strict-known at the scenario set cutoff"
             )
-        strict_selected = self.market_fact_repository.strict_known_fact(
+        strict_selected = ObservedMarketFactService.select_strict_known_fact(
+            self.market_fact_repository,
             entity_id=identity.entity_id,
             representation_id=identity.representation_id,
             fact_type=BASELINE_MARKET_OBSERVATION_FACT_TYPE,
@@ -543,7 +545,8 @@ class CanonicalAsymmetryService:
                 supersedes_record_id=supersedes_record_id,
                 correction_reason=correction_reason,
             )
-        strict_selected = self.market_fact_repository.strict_known_fact(
+        strict_selected = ObservedMarketFactService.select_strict_known_fact(
+            self.market_fact_repository,
             entity_id=identity.entity_id,
             representation_id=identity.representation_id,
             fact_type=BASELINE_MARKET_OBSERVATION_FACT_TYPE,
@@ -1105,6 +1108,12 @@ def _normalize_methodology(record: AsymmetryMethodologySnapshot) -> AsymmetryMet
 
 
 def _normalize_scenario_set(record: ScenarioSetSnapshot) -> ScenarioSetSnapshot:
+    evidence_pairs = tuple(sorted(zip(record.evidence_record_ids, record.source_versions, strict=True)))
+    record = replace(
+        record,
+        evidence_record_ids=tuple(item[0] for item in evidence_pairs),
+        source_versions=tuple(item[1] for item in evidence_pairs),
+    )
     logical_id = hashlib.sha256(
         (
             "asymmetry-scenario-set|"
@@ -1128,6 +1137,7 @@ def _normalize_probability(record: ScenarioProbabilityRecord) -> ScenarioProbabi
 
 
 def _normalize_payoff(record: ScenarioPayoffEstimateRecord) -> ScenarioPayoffEstimateRecord:
+    record = replace(record, evidence_record_ids=tuple(sorted(record.evidence_record_ids)))
     logical_id = _payoff_logical_id(record.scenario_set_record_id, record.scenario_id)
     content_hash = _content_hash(record, logical_id=logical_id)
     record_id = hashlib.sha256(f"{logical_id}:{content_hash}".encode()).hexdigest()

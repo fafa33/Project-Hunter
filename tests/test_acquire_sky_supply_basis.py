@@ -317,7 +317,8 @@ def test_run_end_to_end_persists_and_links_supply_snapshot(tmp_path: Path, monke
 
     # Deterministic cross-link check: entity/representation, evidence linkage,
     # observed-market-fact linkage, and valid/recorded/known time ordering.
-    evidence = repository.strict_known_evidence(
+    evidence = SupplyAndValueCaptureService.select_strict_known_evidence(
+        repository,
         entity_id="entity:sky",
         economic_claim_id="economic-claim:sky-smart-burn-engine",
         representation_id="representation:sky-ethereum",

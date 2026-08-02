@@ -129,9 +129,9 @@ def _value_capture_identity() -> EconomicClaimIdentity:
 def existing_supply_snapshot(
     repository: SupplyAndValueCaptureRepository, *, now: datetime
 ) -> SupplyBasisSnapshot | None:
-    """Canonical idempotency check: use the repository's own strict-known lookup,
-    never a hand-rolled reimplementation of its logical-ID hash."""
-    return repository.strict_known_supply(
+    """Canonical idempotency check through the value-capture authority."""
+    return SupplyAndValueCaptureService.select_strict_known_supply(
+        repository,
         entity_id=_ENTITY_ID,
         economic_claim_id=_ECONOMIC_CLAIM_ID,
         representation_id=_REPRESENTATION_ID,
@@ -142,7 +142,8 @@ def existing_supply_snapshot(
 
 
 def required_evidence_record_id(repository: SupplyAndValueCaptureRepository, *, now: datetime) -> str:
-    evidence = repository.strict_known_evidence(
+    evidence = SupplyAndValueCaptureService.select_strict_known_evidence(
+        repository,
         entity_id=_ENTITY_ID,
         economic_claim_id=_ECONOMIC_CLAIM_ID,
         representation_id=_REPRESENTATION_ID,
@@ -159,7 +160,8 @@ def required_evidence_record_id(repository: SupplyAndValueCaptureRepository, *, 
 
 
 def require_rule_precondition(repository: SupplyAndValueCaptureRepository, *, now: datetime) -> None:
-    rule = repository.strict_known_rule(
+    rule = SupplyAndValueCaptureService.select_strict_known_rule(
+        repository,
         entity_id=_ENTITY_ID,
         economic_claim_id=_ECONOMIC_CLAIM_ID,
         representation_id=_REPRESENTATION_ID,

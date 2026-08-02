@@ -30,6 +30,7 @@ from hunter.valuation.repository import (
 from hunter.valuation_methodology.service import CanonicalValuationMethodologyAuthority
 from hunter.value_capture.models import EconomicClaimIdentity
 from hunter.value_capture.repository import SupplyAndValueCaptureRepository
+from hunter.value_capture.service import SupplyAndValueCaptureService
 
 _APPLICATION_ROOT_ENV = "HUNTER_APPLICATION_ROOT"
 
@@ -136,7 +137,8 @@ class CanonicalValuationService:
                 "future-known ValuationMethodologySnapshot cannot support this estimate"
             )
 
-        supply = self.value_capture_repository.strict_known_supply(
+        supply = SupplyAndValueCaptureService.select_strict_known_supply(
+            self.value_capture_repository,
             entity_id=identity.entity_id,
             economic_claim_id=identity.economic_claim_id,
             representation_id=identity.representation_id,
@@ -158,7 +160,8 @@ class CanonicalValuationService:
                     "(ADR 0022 Scope condition 3)"
                 )
 
-        evidence = self.value_capture_repository.strict_known_evidence(
+        evidence = SupplyAndValueCaptureService.select_strict_known_evidence(
+            self.value_capture_repository,
             entity_id=identity.entity_id,
             economic_claim_id=identity.economic_claim_id,
             representation_id=identity.representation_id,
@@ -175,7 +178,8 @@ class CanonicalValuationService:
         if evidence.identity != identity:
             raise CanonicalValuationAuthorityError("evidence identity does not match requested target identity")
 
-        rule = self.value_capture_repository.strict_known_rule(
+        rule = SupplyAndValueCaptureService.select_strict_known_rule(
+            self.value_capture_repository,
             entity_id=identity.entity_id,
             economic_claim_id=identity.economic_claim_id,
             representation_id=identity.representation_id,

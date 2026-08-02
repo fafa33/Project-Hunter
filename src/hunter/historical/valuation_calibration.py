@@ -10,6 +10,7 @@ from hunter.historical.cutoff import timestamp_valid_at
 from hunter.valuation.models import FairValueEstimateRecord, ValuationAssessmentRecord
 from hunter.valuation.service import CanonicalValuationService
 from hunter.value_capture.models import EconomicClaimIdentity
+from hunter.value_capture.service import SupplyAndValueCaptureService
 
 # The single fixed supply-basis lookup key CanonicalValuationService.estimate_fair_value
 # queries by (ADR 0022 Milestone 3, hunter.valuation.service). The harness re-derives the
@@ -182,7 +183,8 @@ class ValuationCalibrationHarness:
                 f"{case.case_id}: no strict-known ValuationMethodologySnapshot could be reconstructed "
                 "at this cutoff, but the replayed estimate declares one"
             )
-        evidence = self.service.value_capture_repository.strict_known_evidence(
+        evidence = SupplyAndValueCaptureService.select_strict_known_evidence(
+            self.service.value_capture_repository,
             entity_id=case.identity.entity_id,
             economic_claim_id=case.identity.economic_claim_id,
             representation_id=case.identity.representation_id,
@@ -195,7 +197,8 @@ class ValuationCalibrationHarness:
                 f"{case.case_id}: no strict-known FundamentalEvidenceRecord could be reconstructed "
                 "at this cutoff, but the replayed estimate declares one"
             )
-        rule = self.service.value_capture_repository.strict_known_rule(
+        rule = SupplyAndValueCaptureService.select_strict_known_rule(
+            self.service.value_capture_repository,
             entity_id=case.identity.entity_id,
             economic_claim_id=case.identity.economic_claim_id,
             representation_id=case.identity.representation_id,
@@ -208,7 +211,8 @@ class ValuationCalibrationHarness:
                 f"{case.case_id}: no strict-known ValueCaptureRuleSnapshot could be reconstructed "
                 "at this cutoff, but the replayed estimate declares one"
             )
-        supply = self.service.value_capture_repository.strict_known_supply(
+        supply = SupplyAndValueCaptureService.select_strict_known_supply(
+            self.service.value_capture_repository,
             entity_id=case.identity.entity_id,
             economic_claim_id=case.identity.economic_claim_id,
             representation_id=case.identity.representation_id,

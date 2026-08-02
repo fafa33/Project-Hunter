@@ -4,7 +4,7 @@ import hashlib
 import json
 from collections.abc import Callable
 from dataclasses import asdict, replace
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, cast
 
 from hunter.market_facts.repository import ObservedMarketFactRepository
@@ -170,22 +170,61 @@ class SupplyAndValueCaptureService:
         return self.repository.rule_history(logical_id)
 
     def strict_known_evidence(self, **kwargs: Any) -> FundamentalEvidenceRecord | None:
-        return self.repository.strict_known_evidence(**kwargs)
+        return self.select_strict_known_evidence(self.repository, **kwargs)
 
     def strict_known_supply(self, **kwargs: Any) -> SupplyBasisSnapshot | None:
-        return self.repository.strict_known_supply(**kwargs)
+        return self.select_strict_known_supply(self.repository, **kwargs)
 
     def strict_known_rule(self, **kwargs: Any) -> ValueCaptureRuleSnapshot | None:
-        return self.repository.strict_known_rule(**kwargs)
+        return self.select_strict_known_rule(self.repository, **kwargs)
 
     def unresolved_evidence_conflicts(self) -> tuple[FundamentalEvidenceRecord, ...]:
-        return self.repository.unresolved_evidence_conflicts()
+        return _unresolved_conflicts(self.repository.evidence_records())
 
     def unresolved_supply_conflicts(self) -> tuple[SupplyBasisSnapshot, ...]:
-        return self.repository.unresolved_supply_conflicts()
+        return _unresolved_conflicts(self.repository.supply_records())
 
     def unresolved_rule_conflicts(self) -> tuple[ValueCaptureRuleSnapshot, ...]:
-        return self.repository.unresolved_rule_conflicts()
+        return _unresolved_conflicts(self.repository.rule_records())
+
+    def overlapping_evidence(
+        self,
+        *,
+        entity_id: str,
+        economic_claim_id: str,
+        accounting_window_start: datetime,
+        accounting_window_end: datetime,
+        known_by: datetime,
+    ) -> tuple[FundamentalEvidenceRecord, ...]:
+        return select_overlapping_evidence(
+            self.repository.evidence_records(),
+            entity_id=entity_id,
+            economic_claim_id=economic_claim_id,
+            accounting_window_start=accounting_window_start,
+            accounting_window_end=accounting_window_end,
+            known_by=known_by,
+        )
+
+    @staticmethod
+    def select_strict_known_evidence(
+        repository: SupplyAndValueCaptureRepository, **kwargs: Any
+    ) -> FundamentalEvidenceRecord | None:
+        record = _strict_known(repository.evidence_records(), category_name="evidence_type", **kwargs)
+        return record if isinstance(record, FundamentalEvidenceRecord) else None
+
+    @staticmethod
+    def select_strict_known_supply(
+        repository: SupplyAndValueCaptureRepository, **kwargs: Any
+    ) -> SupplyBasisSnapshot | None:
+        record = _strict_known(repository.supply_records(), category_name="supply_basis_type", **kwargs)
+        return record if isinstance(record, SupplyBasisSnapshot) else None
+
+    @staticmethod
+    def select_strict_known_rule(
+        repository: SupplyAndValueCaptureRepository, **kwargs: Any
+    ) -> ValueCaptureRuleSnapshot | None:
+        record = _strict_known(repository.rule_records(), category_name="rule_type", **kwargs)
+        return record if isinstance(record, ValueCaptureRuleSnapshot) else None
 
     def _record_from_result(self, result: ValueCaptureAcquisitionResult, *, expected_kind: str) -> Record:
         payload = result.payload
@@ -461,6 +500,87 @@ _CONFLICT_POLICY_EXCLUDED_FIELDS = frozenset(
         "acquisition_id",
     }
 )
+
+
+def _strict_known(
+    records: tuple[Record, ...],
+    *,
+    category_name: str,
+    entity_id: str,
+    economic_claim_id: str,
+    representation_id: str,
+    effective_as_of: datetime,
+    known_by: datetime,
+    **category: str,
+) -> Record | None:
+    effective_as_of = _aware(effective_as_of)
+    known_by = _aware(known_by)
+    category_value = category[category_name]
+    eligible = [
+        item
+        for item in records
+        if item.identity.entity_id == entity_id
+        and item.identity.economic_claim_id == economic_claim_id
+        and item.identity.representation_id == representation_id
+        and getattr(item, category_name) == category_value
+        and item.effective_at <= effective_as_of
+        and (
+            not isinstance(item, ValueCaptureRuleSnapshot)
+            or item.applicability_start <= effective_as_of <= item.applicability_end
+        )
+        and item.recorded_at <= known_by
+        and item.known_at <= known_by
+        and item.quality_state == "accepted"
+        and item.conflict_state in {"none", "resolved"}
+    ]
+    superseded = {item.supersedes_record_id for item in eligible if item.supersedes_record_id is not None}
+    current = [item for item in eligible if item.record_id not in superseded]
+    current.sort(key=lambda item: (item.effective_at, item.recorded_at, item.known_at, item.record_id), reverse=True)
+    return current[0] if current else None
+
+
+def _unresolved_conflicts(records: tuple[Any, ...]) -> tuple[Any, ...]:
+    superseded = {item.supersedes_record_id for item in records if item.supersedes_record_id is not None}
+    unresolved = [
+        item for item in records if item.record_id not in superseded and item.conflict_state in {"open", "contested"}
+    ]
+    return tuple(sorted(unresolved, key=lambda item: (item.logical_id, item.effective_at, item.record_id)))
+
+
+def select_overlapping_evidence(
+    records: tuple[FundamentalEvidenceRecord, ...],
+    *,
+    entity_id: str,
+    economic_claim_id: str,
+    accounting_window_start: datetime,
+    accounting_window_end: datetime,
+    known_by: datetime,
+) -> tuple[FundamentalEvidenceRecord, ...]:
+    known_by = _aware(known_by)
+    eligible = [
+        record
+        for record in records
+        if record.identity.entity_id == entity_id
+        and record.identity.economic_claim_id == economic_claim_id
+        and record.accounting_period_start < accounting_window_end
+        and accounting_window_start < record.accounting_period_end
+        and record.recorded_at <= known_by
+        and record.known_at <= known_by
+    ]
+    superseded = {item.supersedes_record_id for item in eligible if item.supersedes_record_id is not None}
+    current = [record for record in eligible if record.record_id not in superseded]
+    return tuple(
+        sorted(
+            current,
+            key=lambda record: (record.accounting_period_start, record.accounting_period_end, record.record_id),
+        )
+    )
+
+
+def _aware(value: datetime) -> datetime:
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError("datetime must be timezone-aware")
+    return value.astimezone(UTC)
 
 
 def _value_fingerprint(record: Any) -> str:
