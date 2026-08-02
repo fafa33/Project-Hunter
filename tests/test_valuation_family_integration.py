@@ -21,6 +21,26 @@ from hunter.mispricing.service import CanonicalMispricingService
 from hunter.valuation.service import CanonicalValuationService
 
 
+def _import_targets(tree: ast.AST) -> set[str]:
+    targets = {alias.name.lower() for node in ast.walk(tree) if isinstance(node, ast.Import) for alias in node.names}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ImportFrom):
+            continue
+        module = (node.module or "").lower()
+        targets.add(module)
+        targets.update(".".join(part for part in (module, alias.name.lower()) if part) for alias in node.names)
+    return targets
+
+
+def test_import_target_detection_covers_direct_and_from_imports() -> None:
+    targets = _import_targets(
+        ast.parse("import hunter.market_validation.service\nfrom hunter import market_validation\n")
+    )
+
+    assert "hunter.market_validation.service" in targets
+    assert "hunter.market_validation" in targets
+
+
 def test_complete_valuation_family_lineage_replay_and_isolation(tmp_path) -> None:
     mispricing = MispricingFixture(tmp_path / "valuation-mispricing")
     original_mispricing = mispricing.assess()
@@ -138,13 +158,7 @@ def test_complete_valuation_family_lineage_replay_and_isolation(tmp_path) -> Non
         module = inspect.getmodule(service_type)
         assert module is not None
         source = inspect.getsource(module)
-        tree = ast.parse(source)
-        imported_modules = {
-            alias.name.lower() for node in ast.walk(tree) if isinstance(node, ast.Import) for alias in node.names
-        }
-        imported_modules.update(
-            (node.module or "").lower() for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)
-        )
-        assert all("market_validation" not in imported for imported in imported_modules)
+        imported_modules = _import_targets(ast.parse(source))
+        assert all("market_validation" not in imported.split(".") for imported in imported_modules)
         for prohibited in ("opportunity", "ranking", "portfolio"):
             assert not hasattr(service_type, prohibited)

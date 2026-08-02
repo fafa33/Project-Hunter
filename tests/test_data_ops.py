@@ -5,7 +5,38 @@ from pathlib import Path
 import yaml
 
 from hunter.automation import load_automation_config
-from hunter.data_ops import DATA_OPS_JOB_IDS, install_data_ops_jobs
+from hunter.data_ops import DATA_OPS_JOB_IDS, data_ops_status, install_data_ops_jobs, run_data_ops_now
+
+
+def _empty_config(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "enabled": False,
+                "timezone": "UTC",
+                "polling_interval_seconds": 60,
+                "jobs": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_data_ops_run_creates_sqlite_parent_directory(tmp_path: Path) -> None:
+    config_path = tmp_path / "run" / "configs" / "automation.yaml"
+    _empty_config(config_path)
+
+    assert run_data_ops_now(config_path) == ()
+    assert (config_path.parent / "data" / "data_ops.sqlite").is_file()
+
+
+def test_data_ops_status_creates_sqlite_parent_directory(tmp_path: Path) -> None:
+    config_path = tmp_path / "status" / "configs" / "automation.yaml"
+    _empty_config(config_path)
+
+    assert data_ops_status(config_path)["runs"] == 0
+    assert (config_path.parent / "data" / "data_ops.sqlite").is_file()
 
 
 def test_data_ops_install_is_idempotent_and_preserves_existing_jobs(tmp_path: Path) -> None:

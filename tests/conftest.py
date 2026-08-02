@@ -9,8 +9,17 @@ import pytest
 _INITIAL_STATUS: str | None = None
 
 
-def _repository_status(root: Path) -> str:
+def _repository_status(root: Path) -> str | None:
     try:
+        worktree = subprocess.run(
+            ["git", "rev-parse", "--is-inside-work-tree"],
+            cwd=root,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if worktree.returncode != 0 or worktree.stdout.strip() != "true":
+            return None
         completed = subprocess.run(
             ["git", "status", "--porcelain", "--untracked-files=all"],
             cwd=root,
@@ -19,27 +28,24 @@ def _repository_status(root: Path) -> str:
             text=True,
         )
     except (FileNotFoundError, subprocess.CalledProcessError):
-        return ""
+        return None
     return completed.stdout
 
 
 def pytest_sessionstart(session: pytest.Session) -> None:
     global _INITIAL_STATUS
-    initial_status = _repository_status(Path(str(session.config.rootpath)))
-    _INITIAL_STATUS = (
-        initial_status if initial_status or (Path(str(session.config.rootpath)) / ".git").exists() else None
-    )
+    _INITIAL_STATUS = _repository_status(Path(str(session.config.rootpath)))
 
 
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     if _INITIAL_STATUS is None:
         return
     final_status = _repository_status(Path(str(session.config.rootpath)))
-    if final_status != _INITIAL_STATUS:
+    if final_status is None or final_status != _INITIAL_STATUS:
         session.config.issue166_cleanliness_failure = (  # type: ignore[attr-defined]
             "full test session changed repository state\n"
             f"before:\n{_INITIAL_STATUS or '(clean)'}\n"
-            f"after:\n{final_status or '(clean)'}"
+            f"after:\n{final_status if final_status is not None else '(repository unavailable)'}"
         )
         session.exitstatus = pytest.ExitCode.TESTS_FAILED
 
