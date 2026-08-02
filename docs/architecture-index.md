@@ -26,7 +26,7 @@ Use only the lifecycle states defined by `docs/ARCHITECTURE_DECISION_PREPARATION
 | [ADPR-0001](architecture-records/ADPR-0001-architecture-decision-preparation-framework.md) | Architecture Decision Preparation Framework | IMPLEMENTED | not applicable | #133 | not applicable | #132 | not yet recorded | not yet assigned | not applicable | not applicable |
 | [ADPR-0002](architecture-records/ADPR-0002-disclosure-architecture-classification.md) | Disclosure Architecture Classification | IN_RESEARCH | not yet created | not yet created | none produced | not yet created | not yet recorded | not yet assigned | not applicable | not applicable |
 | [ADPR-0003](architecture-records/ADPR-0003-canonical-comparative-valuation.md) | Canonical Comparative Valuation | APPROVED | #135 | #156 / #159 | [ADR 0026](ADR/0026-canonical-comparative-valuation-methodology.md) (Accepted) | PR #161 | `5df7ff4` | not yet assigned | not applicable | not applicable |
-| [ADPR-0004](architecture-records/ADPR-0004-canonical-market-validation-composition-authority.md) | Canonical Market Validation Composition Authority (Phase 1) | READY_FOR_REVIEW | not yet created | #173 | not yet created | not authorized | not yet recorded | not yet assigned | not applicable | not applicable |
+| [ADPR-0004](architecture-records/ADPR-0004-canonical-market-validation-composition-authority.md) | Canonical Market Validation Composition Authority (Phase 1) | READY_FOR_REVIEW | not yet created | #173 | not yet created | not yet created | not yet recorded | not yet assigned | not applicable | not applicable |
 
 ## Active Preparation Records
 
@@ -65,7 +65,7 @@ Records in `PROPOSED`, `IN_RESEARCH`, or `READY_FOR_REVIEW` state are listed her
 | Issue #162 | not applicable | ADR 0021 | PR #163 | Canonical Mispricing foundation implemented; merge `a9f46f1` |
 | Issue #164 | not applicable | ADR 0021 | PR #165 | Canonical Asymmetry foundation implemented; merge `99c95f0` |
 | Issue #166 | not applicable | ADR 0021 / ADR 0026 | PR #167 merged; technical audit still pending | Post-merge valuation-family stabilization audit and documentation coherence |
-| Issue #173 | [ADPR-0004](architecture-records/ADPR-0004-canonical-market-validation-composition-authority.md) | not yet created | not authorized | Architecture preparation awaiting independent review; no implementation or activation authorized |
+| Issue #173 | [ADPR-0004](architecture-records/ADPR-0004-canonical-market-validation-composition-authority.md) | not yet created | not yet created | Architecture preparation awaiting independent review; no implementation or activation authorized |
 
 ## Component Mapping
 
