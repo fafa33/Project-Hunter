@@ -577,7 +577,7 @@ The ADR may authorize this architecture but must not claim production availabili
 - ADPR: ADPR-0004
 - ADR: not yet created; prohibited until independent approval
 - Implementation plan: not authorized
-- PR: to be completed after Draft PR creation
+- Preparation PR: [Draft PR #174](https://github.com/fafa33/Project-Hunter/pull/174)
 - Merge commit: not yet recorded
 - Release: not yet assigned
 
