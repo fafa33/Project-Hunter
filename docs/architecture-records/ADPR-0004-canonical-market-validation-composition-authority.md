@@ -4,7 +4,7 @@
 
 - ADPR ID: `ADPR-0004`
 - Status: `READY_FOR_REVIEW`
-- Version: 1.0
+- Version: 1.1
 - Author: Codex, on behalf of Issue #173
 - Reviewers: independent architecture review required
 - Created: 2026-08-02
@@ -573,6 +573,7 @@ The ADR may authorize this architecture but must not claim production availabili
 | Date | State | Change | Author or reviewer |
 |---|---|---|---|
 | 2026-08-02 | READY_FOR_REVIEW | Initial complete preparation for Issue #173. | Codex |
+| 2026-08-03 | READY_FOR_REVIEW | Incorporated approved review corrections for zero-boundary normalization, enforceable overlapping-evidence exclusion, and the single weighting-owner boundary; preserved all existing constitutional and activation constraints. | Codex; corrections merged through PR #175 |
 
 ## Traceability
 
@@ -583,8 +584,10 @@ The ADR may authorize this architecture but must not claim production availabili
 - ADPR: ADPR-0004
 - ADR: not yet created; prohibited until independent approval
 - Implementation plan: not authorized
-- Preparation PR: [Draft PR #174](https://github.com/fafa33/Project-Hunter/pull/174)
-- Merge commit: not yet recorded
+- Initial preparation PR: [PR #174](https://github.com/fafa33/Project-Hunter/pull/174), merged as `3209f1f`
+- Approved review-correction PR: [PR #175](https://github.com/fafa33/Project-Hunter/pull/175), merged as `35e68e8`
+- Independent architecture review: pending
+- Merge commits: `3209f1f`, `35e68e8`
 - Release: not yet assigned
 
 ## Immutability and Supersession
