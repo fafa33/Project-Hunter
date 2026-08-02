@@ -202,12 +202,13 @@ def test_phase_six_automation_install_is_idempotent_and_scheduler_valid(tmp_path
 
 def test_phase_six_cli_automation_status_uses_existing_scheduler_jobs(tmp_path, capsys) -> None:
     config = tmp_path / "automation.yaml"
+    db = tmp_path / "sufficiency.sqlite"
 
-    assert main(["sufficiency", "--automation-config", str(config), "automation", "install"]) == 0
+    assert main(["sufficiency", "--db", str(db), "--automation-config", str(config), "automation", "install"]) == 0
     capsys.readouterr()
-    assert main(["sufficiency", "--automation-config", str(config), "automation", "install"]) == 0
+    assert main(["sufficiency", "--db", str(db), "--automation-config", str(config), "automation", "install"]) == 0
     capsys.readouterr()
-    assert main(["sufficiency", "--automation-config", str(config), "automation", "status"]) == 0
+    assert main(["sufficiency", "--db", str(db), "--automation-config", str(config), "automation", "status"]) == 0
     status = json.loads(capsys.readouterr().out)
 
     assert status["installed_jobs"] == 6

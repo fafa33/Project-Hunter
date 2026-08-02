@@ -34,10 +34,10 @@ def main(argv: list[str]) -> int:
     does for `hunter.value_capture`/`hunter.market_facts`. No caller-supplied value can
     select "latest"/"current" state: every lookup this module triggers is bounded by the
     exact `effective_at`/`recorded_at`/`known_at` coordinates the manifest declares,
-    resolved deterministically by the underlying services'/repositories' own
-    strict-known logic. The `status` operation adds no new authority: it calls exactly
+    resolved deterministically by the underlying services' strict-known logic. The
+    `status` operation adds no new authority: it calls exactly
     the same `strict_known_methodology`/`strict_known_fair_value_estimate`/
-    `strict_known_valuation_assessment` repository read methods already exercised by
+    `strict_known_valuation_assessment` service read methods already exercised by
     the existing test suite, making them independently invocable by an operator or
     auditor without ad hoc scripting, mirroring the read-only projection role ADR 0016
     assigns to Dashboard API.
@@ -141,19 +141,20 @@ def _status(manifest: dict[str, Any], application_root: Path) -> dict[str, Any]:
     effective_as_of = _datetime(manifest["effective_as_of"])
     known_by = _datetime(manifest["known_by"])
     if target == "methodology":
-        record: Any = ValuationMethodologyRepository(persistence_path).strict_known_methodology(
-            effective_as_of=effective_as_of, known_by=known_by
-        )
+        methodology_repository = ValuationMethodologyRepository(persistence_path)
+        record: Any = CanonicalValuationMethodologyAuthority(
+            repository=methodology_repository, application_root=application_root
+        ).strict_known_methodology(effective_as_of=effective_as_of, known_by=known_by)
     else:
         logical_id = str(manifest["logical_id"])
         valuation_repository = CanonicalValuationRepository(persistence_path)
         if target == "fair_value_estimate":
-            record = valuation_repository.strict_known_fair_value_estimate(
-                effective_as_of=effective_as_of, known_by=known_by, logical_id=logical_id
+            record = CanonicalValuationService.select_strict_known_fair_value_estimate(
+                valuation_repository, effective_as_of=effective_as_of, known_by=known_by, logical_id=logical_id
             )
         else:
-            record = valuation_repository.strict_known_valuation_assessment(
-                effective_as_of=effective_as_of, known_by=known_by, logical_id=logical_id
+            record = CanonicalValuationService.select_strict_known_valuation_assessment(
+                valuation_repository, effective_as_of=effective_as_of, known_by=known_by, logical_id=logical_id
             )
     if record is None:
         return {

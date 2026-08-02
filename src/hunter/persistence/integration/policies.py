@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+import os
+from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 
@@ -31,10 +32,20 @@ class HistorySettings:
     enabled: bool = True
 
 
+def _operational_corpus_root() -> Path:
+    application_root = os.environ.get("HUNTER_APPLICATION_ROOT")
+    if application_root:
+        return Path(application_root) / "data" / "operational_corpus"
+    test_runtime_root = os.environ.get("HUNTER_TEST_RUNTIME_ROOT")
+    if test_runtime_root:
+        return Path(test_runtime_root) / "operational_corpus"
+    return Path("data/operational_corpus")
+
+
 @dataclass(frozen=True)
 class OperationalCorpusSettings:
     enabled: bool = True
-    root: Path = Path("data/operational_corpus")
+    root: Path = field(default_factory=_operational_corpus_root)
     filename: str = "executions.jsonl"
     prediction_filename: str = "predictions.jsonl"
     prediction_closure_filename: str = "prediction_closures.jsonl"
@@ -54,6 +65,6 @@ class PipelinePersistenceSettings:
     artifacts: ArtifactPersistenceSettings = ArtifactPersistenceSettings()
     snapshots: SnapshotSettings = SnapshotSettings()
     history: HistorySettings = HistorySettings()
-    operational_corpus: OperationalCorpusSettings = OperationalCorpusSettings()
+    operational_corpus: OperationalCorpusSettings = field(default_factory=OperationalCorpusSettings)
     strict_identity_validation: bool = True
     enforce_engine_manifest: bool = True

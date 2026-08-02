@@ -1,0 +1,48 @@
+from __future__ import annotations
+
+import subprocess
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+_INITIAL_STATUS: str | None = None
+
+
+def _repository_status(root: Path) -> str:
+    completed = subprocess.run(
+        ["git", "status", "--porcelain", "--untracked-files=all"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return completed.stdout
+
+
+def pytest_sessionstart(session: pytest.Session) -> None:
+    global _INITIAL_STATUS
+    _INITIAL_STATUS = _repository_status(Path(str(session.config.rootpath)))
+
+
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
+    final_status = _repository_status(Path(str(session.config.rootpath)))
+    if final_status != _INITIAL_STATUS:
+        session.config.issue166_cleanliness_failure = (  # type: ignore[attr-defined]
+            "full test session changed repository state\n"
+            f"before:\n{_INITIAL_STATUS or '(clean)'}\n"
+            f"after:\n{final_status or '(clean)'}"
+        )
+        session.exitstatus = pytest.ExitCode.TESTS_FAILED
+
+
+def pytest_terminal_summary(terminalreporter: Any) -> None:
+    failure = getattr(terminalreporter.config, "issue166_cleanliness_failure", None)
+    if failure:
+        terminalreporter.write_sep("=", "repository cleanliness failure")
+        terminalreporter.write_line(failure)
+
+
+@pytest.fixture(autouse=True)
+def _isolated_runtime_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HUNTER_TEST_RUNTIME_ROOT", str(tmp_path))

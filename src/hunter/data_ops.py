@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import os
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -132,7 +133,7 @@ def install_data_ops_jobs(path: Path = Path("configs/automation.yaml")) -> tuple
 def run_data_ops_now(path: Path = Path("configs/automation.yaml")) -> tuple[Any, ...]:
     config = load_automation_config(path)
     jobs = tuple(job for job in config.jobs if job.job_id in DATA_OPS_JOB_IDS)
-    engine = create_sqlite_engine("data/data_ops.sqlite")
+    engine = create_sqlite_engine(_data_ops_database(path))
     create_schema(engine)
     session = SessionFactory(engine).create()
     try:
@@ -153,7 +154,7 @@ def run_data_ops_now(path: Path = Path("configs/automation.yaml")) -> tuple[Any,
 def data_ops_status(path: Path = Path("configs/automation.yaml")) -> dict[str, Any]:
     config = load_automation_config(path)
     jobs = tuple(job for job in config.jobs if job.job_id in DATA_OPS_JOB_IDS)
-    records = _automation_run_records()
+    records = _automation_run_records(_data_ops_database(path))
     latest_by_job: dict[str, Any] = {}
     for record in records:
         if record.job_id in DATA_OPS_JOB_IDS:
@@ -176,7 +177,9 @@ def data_ops_failures() -> tuple[DataOpsRunDetail, ...]:
 
 def _persist_job_definitions(path: Path) -> None:
     config = load_automation_config(path)
-    engine = create_sqlite_engine("data/data_ops.sqlite")
+    database = _data_ops_database(path)
+    database.parent.mkdir(parents=True, exist_ok=True)
+    engine = create_sqlite_engine(database)
     create_schema(engine)
     session = SessionFactory(engine).create()
     try:
@@ -194,8 +197,8 @@ def _persist_job_definitions(path: Path) -> None:
         session.close()
 
 
-def _automation_run_records() -> tuple[Any, ...]:
-    engine = create_sqlite_engine("data/data_ops.sqlite")
+def _automation_run_records(path: Path = Path("data/data_ops.sqlite")) -> tuple[Any, ...]:
+    engine = create_sqlite_engine(path)
     create_schema(engine)
     session = SessionFactory(engine).create()
     try:
@@ -206,6 +209,15 @@ def _automation_run_records() -> tuple[Any, ...]:
         )
     finally:
         session.close()
+
+
+def _data_ops_database(config_path: Path) -> Path:
+    configured_root = os.environ.get("HUNTER_APPLICATION_ROOT", "").strip()
+    if configured_root:
+        return Path(configured_root).expanduser().resolve() / "data" / "data_ops.sqlite"
+    if config_path.is_absolute():
+        return config_path.parent / "data" / "data_ops.sqlite"
+    return Path("data/data_ops.sqlite")
 
 
 def _data_ops_jobs() -> tuple[dict[str, Any], ...]:

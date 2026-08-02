@@ -77,38 +77,6 @@ class CanonicalValuationRepository:
             if record.logical_id == logical_id
         )
 
-    def strict_known_fair_value_estimate(
-        self,
-        *,
-        effective_as_of: datetime,
-        known_by: datetime,
-        logical_id: str,
-    ) -> FairValueEstimateRecord | None:
-        effective_as_of = _aware(effective_as_of)
-        known_by = _aware(known_by)
-        records = [
-            record
-            for record in self._records_skipping_malformed(_ESTIMATE_TYPE, _estimate_from_payload)
-            if record.logical_id == logical_id
-        ]
-        return _strict_known(records, effective_as_of=effective_as_of, known_by=known_by)
-
-    def strict_known_valuation_assessment(
-        self,
-        *,
-        effective_as_of: datetime,
-        known_by: datetime,
-        logical_id: str,
-    ) -> ValuationAssessmentRecord | None:
-        effective_as_of = _aware(effective_as_of)
-        known_by = _aware(known_by)
-        records = [
-            record
-            for record in self._records_skipping_malformed(_ASSESSMENT_TYPE, _assessment_from_payload)
-            if record.logical_id == logical_id
-        ]
-        return _strict_known(records, effective_as_of=effective_as_of, known_by=known_by)
-
     def _records_skipping_malformed(self, snapshot_type: str, from_payload: Any) -> tuple[Any, ...]:
         # Fault-isolated by construction (F4's lesson, already applied in
         # hunter.valuation_methodology): a malformed/legacy row is excluded rather than
@@ -142,25 +110,6 @@ class CanonicalValuationRepository:
         finally:
             session.close()
             engine.dispose()
-
-
-def _strict_known(records: list[Any], *, effective_as_of: datetime, known_by: datetime) -> Any | None:
-    eligible = [
-        item
-        for item in records
-        if item.effective_at <= effective_as_of
-        and item.recorded_at <= known_by
-        and item.known_at <= known_by
-        and item.quality_state == "accepted"
-        and item.conflict_state in {"none", "resolved"}
-    ]
-    superseded = {item.supersedes_record_id for item in eligible if item.supersedes_record_id is not None}
-    current = [item for item in eligible if item.record_id not in superseded]
-    current.sort(
-        key=lambda item: (item.effective_at, item.recorded_at, item.known_at, item.record_id),
-        reverse=True,
-    )
-    return current[0] if current else None
 
 
 def estimate_snapshot(record: FairValueEstimateRecord) -> SnapshotRecord:

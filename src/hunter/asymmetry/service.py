@@ -872,19 +872,19 @@ class CanonicalAsymmetryService:
         )
 
     def unresolved_methodology_conflicts(self) -> tuple[AsymmetryMethodologySnapshot, ...]:
-        return self.repository.unresolved_methodology_conflicts()
+        return _unresolved_conflicts(self.repository.methodology_records())
 
     def unresolved_scenario_set_conflicts(self) -> tuple[ScenarioSetSnapshot, ...]:
-        return self.repository.unresolved_scenario_set_conflicts()
+        return _unresolved_conflicts(self.repository.scenario_set_records())
 
     def unresolved_probability_conflicts(self) -> tuple[ScenarioProbabilityRecord, ...]:
-        return self.repository.unresolved_probability_conflicts()
+        return _unresolved_conflicts(self.repository.probability_records())
 
     def unresolved_payoff_conflicts(self) -> tuple[ScenarioPayoffEstimateRecord, ...]:
-        return self.repository.unresolved_payoff_conflicts()
+        return _unresolved_conflicts(self.repository.payoff_records())
 
     def unresolved_assessment_conflicts(self) -> tuple[AsymmetryAssessmentRecord, ...]:
-        return self.repository.unresolved_assessment_conflicts()
+        return _unresolved_conflicts(self.repository.assessment_records())
 
     # ------------------------------------------------------------- internals
 
@@ -1233,6 +1233,14 @@ def _strict_known(
     logical identity, or None when no record is replay-eligible at the cutoff."""
     current = _replay_eligible(records, effective_as_of=effective_as_of, known_by=known_by)
     return current[-1] if current else None
+
+
+def _unresolved_conflicts(records: tuple[Any, ...]) -> tuple[Any, ...]:
+    superseded = {item.supersedes_record_id for item in records if item.supersedes_record_id is not None}
+    unresolved = [
+        item for item in records if item.record_id not in superseded and item.conflict_state in {"open", "contested"}
+    ]
+    return tuple(sorted(unresolved, key=lambda item: (item.logical_id, item.effective_at, item.record_id)))
 
 
 def _identity_matches(set_identity: EconomicClaimIdentity, target: EconomicClaimIdentity) -> bool:

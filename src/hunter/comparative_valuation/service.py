@@ -230,7 +230,8 @@ class CanonicalComparativeValuationService:
             raise CanonicalComparativeValuationAuthorityError(
                 "candidate set exceeds the predeclared maximum candidate universe size"
             )
-        fingerprint = _construction_fingerprint(identity, policy.record_id, cutoff, candidates)
+        ordered_candidates = tuple(sorted(candidates, key=_candidate_sort_key))
+        fingerprint = _construction_fingerprint(identity, policy.record_id, cutoff, ordered_candidates)
         record = PeerUniverseSnapshot(
             record_id="pending",
             logical_id="pending",
@@ -240,7 +241,7 @@ class CanonicalComparativeValuationService:
             policy_record_id=policy.record_id,
             policy_record_version=policy.semantic_version,
             cutoff=cutoff,
-            candidates=tuple(candidates),
+            candidates=ordered_candidates,
             deterministic_construction_fingerprint=fingerprint,
             effective_at=cutoff,
             recorded_at=recorded_at,
@@ -791,19 +792,19 @@ class CanonicalComparativeValuationService:
         )
 
     def unresolved_policy_conflicts(self) -> tuple[PeerUniversePolicyRecord, ...]:
-        return self.repository.unresolved_policy_conflicts()
+        return _unresolved_conflicts(self.repository.policy_records())
 
     def unresolved_universe_conflicts(self) -> tuple[PeerUniverseSnapshot, ...]:
-        return self.repository.unresolved_universe_conflicts()
+        return _unresolved_conflicts(self.repository.universe_records())
 
     def unresolved_decision_conflicts(self) -> tuple[PeerEligibilityDecisionRecord, ...]:
-        return self.repository.unresolved_decision_conflicts()
+        return _unresolved_conflicts(self.repository.decision_records())
 
     def unresolved_observation_conflicts(self) -> tuple[ComparativeMetricObservationRecord, ...]:
-        return self.repository.unresolved_observation_conflicts()
+        return _unresolved_conflicts(self.repository.observation_records())
 
     def unresolved_assessment_conflicts(self) -> tuple[ComparativeValuationAssessmentRecord, ...]:
-        return self.repository.unresolved_assessment_conflicts()
+        return _unresolved_conflicts(self.repository.assessment_records())
 
     # ------------------------------------------------------------- internals
 
@@ -1557,6 +1558,14 @@ def _strict_known(
     logical identity, or None when no record is replay-eligible at the cutoff."""
     current = _replay_eligible(records, effective_as_of=effective_as_of, known_by=known_by)
     return current[-1] if current else None
+
+
+def _unresolved_conflicts(records: tuple[Any, ...]) -> tuple[Any, ...]:
+    superseded = {item.supersedes_record_id for item in records if item.supersedes_record_id is not None}
+    unresolved = [
+        item for item in records if item.record_id not in superseded and item.conflict_state in {"open", "contested"}
+    ]
+    return tuple(sorted(unresolved, key=lambda item: (item.logical_id, item.effective_at, item.record_id)))
 
 
 def _decision_reason(decision: str, dimensions: tuple[DimensionDecision, ...], missingness: str) -> str:

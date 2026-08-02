@@ -4,7 +4,7 @@ import hashlib
 import json
 import os
 from dataclasses import asdict, replace
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -151,10 +151,10 @@ class CanonicalValuationMethodologyAuthority:
         effective_as_of: datetime,
         known_by: datetime,
     ) -> ValuationMethodologySnapshot | None:
-        return self.repository.strict_known_methodology(effective_as_of=effective_as_of, known_by=known_by)
+        return _strict_known(self.repository.records(), effective_as_of=effective_as_of, known_by=known_by)
 
     def unresolved_conflicts(self) -> tuple[ValuationMethodologySnapshot, ...]:
-        return self.repository.unresolved_conflicts()
+        return _unresolved_conflicts(self.repository.records())
 
 
 def _authorize_correction(snapshots: Any, record: ValuationMethodologySnapshot) -> None:
@@ -209,6 +209,42 @@ def _authorize_correction(snapshots: Any, record: ValuationMethodologySnapshot) 
     )
     if competing_successor is not None:
         raise ValuationMethodologyIntegrityError("branching correction lineage is prohibited")
+
+
+def _strict_known(
+    records: tuple[ValuationMethodologySnapshot, ...], *, effective_as_of: datetime, known_by: datetime
+) -> ValuationMethodologySnapshot | None:
+    effective_as_of = _aware(effective_as_of)
+    known_by = _aware(known_by)
+    eligible = [
+        item
+        for item in records
+        if item.effective_at <= effective_as_of
+        and item.recorded_at <= known_by
+        and item.known_at <= known_by
+        and item.quality_state == "accepted"
+        and item.conflict_state in {"none", "resolved"}
+    ]
+    superseded = {item.supersedes_record_id for item in eligible if item.supersedes_record_id is not None}
+    current = [item for item in eligible if item.record_id not in superseded]
+    current.sort(key=lambda item: (item.effective_at, item.recorded_at, item.known_at, item.record_id), reverse=True)
+    return current[0] if current else None
+
+
+def _unresolved_conflicts(
+    records: tuple[ValuationMethodologySnapshot, ...],
+) -> tuple[ValuationMethodologySnapshot, ...]:
+    superseded = {item.supersedes_record_id for item in records if item.supersedes_record_id is not None}
+    unresolved = [
+        item for item in records if item.record_id not in superseded and item.conflict_state in {"open", "contested"}
+    ]
+    return tuple(sorted(unresolved, key=lambda item: (item.logical_id, item.effective_at, item.record_id)))
+
+
+def _aware(value: datetime) -> datetime:
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError("datetime must be timezone-aware")
+    return value.astimezone(UTC)
 
 
 def _normalize(record: ValuationMethodologySnapshot) -> ValuationMethodologySnapshot:

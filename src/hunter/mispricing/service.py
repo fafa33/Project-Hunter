@@ -40,6 +40,7 @@ from hunter.persistence.models import QuerySpec
 from hunter.persistence.sql import RepositoryFactory, SessionFactory, create_sqlite_engine
 from hunter.persistence.sql.exceptions import PersistenceIdentityConflictError
 from hunter.valuation.repository import CanonicalValuationRepository
+from hunter.valuation.service import CanonicalValuationService
 from hunter.value_capture.models import EconomicClaimIdentity
 
 _APPLICATION_ROOT_ENV = "HUNTER_APPLICATION_ROOT"
@@ -221,7 +222,8 @@ class CanonicalMispricingService:
                 correction_reason=correction_reason,
             )
 
-        fair_value = self.valuation_repository.strict_known_fair_value_estimate(
+        fair_value = CanonicalValuationService.select_strict_known_fair_value_estimate(
+            self.valuation_repository,
             effective_as_of=effective_at,
             known_by=known_at,
             logical_id=fair_value_logical_id,
@@ -486,10 +488,10 @@ class CanonicalMispricingService:
         )
 
     def unresolved_methodology_conflicts(self) -> tuple[MispricingMethodologySnapshot, ...]:
-        return self.repository.unresolved_methodology_conflicts()
+        return _unresolved_conflicts(self.repository.methodology_records())
 
     def unresolved_assessment_conflicts(self) -> tuple[MispricingAssessmentRecord, ...]:
-        return self.repository.unresolved_assessment_conflicts()
+        return _unresolved_conflicts(self.repository.assessment_records())
 
     # ------------------------------------------------------------- internals
 
@@ -790,6 +792,14 @@ def _strict_known(
     logical identity, or None when no record is replay-eligible at the cutoff."""
     current = _replay_eligible(records, effective_as_of=effective_as_of, known_by=known_by)
     return current[-1] if current else None
+
+
+def _unresolved_conflicts(records: tuple[Any, ...]) -> tuple[Any, ...]:
+    superseded = {item.supersedes_record_id for item in records if item.supersedes_record_id is not None}
+    unresolved = [
+        item for item in records if item.record_id not in superseded and item.conflict_state in {"open", "contested"}
+    ]
+    return tuple(sorted(unresolved, key=lambda item: (item.logical_id, item.effective_at, item.record_id)))
 
 
 def _identity_matches(estimate_identity: EconomicClaimIdentity, target: EconomicClaimIdentity) -> bool:

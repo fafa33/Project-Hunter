@@ -38,9 +38,10 @@ from test_valuation_v1 import (
 
 from hunter import __main__ as hunter_main
 from hunter.valuation.repository import CanonicalValuationIntegrityError, CanonicalValuationRepository
-from hunter.valuation.service import CanonicalValuationAuthorityError
+from hunter.valuation.service import CanonicalValuationAuthorityError, CanonicalValuationService
 from hunter.valuation_authority import command as valuation_authority_command
 from hunter.valuation_methodology.repository import ValuationMethodologyIntegrityError, ValuationMethodologyRepository
+from hunter.valuation_methodology.service import CanonicalValuationMethodologyAuthority
 from hunter.value_capture.providers import RegisteredValueCaptureProvider, ValueCaptureVerificationKeyRegistry
 from hunter.value_capture.registry import ValueCaptureSourceRegistry
 from hunter.value_capture.repository import SupplyAndValueCaptureRepository
@@ -273,14 +274,14 @@ def test_strict_known_resolution_selects_correct_version_not_latest(
     original_record = repository.get_fair_value_estimate(original["fair_value_estimate_record_id"])
     assert original_record is not None
 
-    before_correction = repository.strict_known_fair_value_estimate(
-        effective_as_of=NOW, known_by=NOW + timedelta(minutes=20), logical_id=original_record.logical_id
+    before_correction = CanonicalValuationService.select_strict_known_fair_value_estimate(
+        repository, effective_as_of=NOW, known_by=NOW + timedelta(minutes=20), logical_id=original_record.logical_id
     )
     assert before_correction is not None
     assert before_correction.record_id == original["fair_value_estimate_record_id"]
 
-    at_or_after_correction = repository.strict_known_fair_value_estimate(
-        effective_as_of=NOW, known_by=NOW + timedelta(minutes=30), logical_id=original_record.logical_id
+    at_or_after_correction = CanonicalValuationService.select_strict_known_fair_value_estimate(
+        repository, effective_as_of=NOW, known_by=NOW + timedelta(minutes=30), logical_id=original_record.logical_id
     )
     assert at_or_after_correction is not None
     assert at_or_after_correction.record_id == correction["fair_value_estimate_record_id"]
@@ -493,7 +494,9 @@ def test_status_reports_persisted_methodology_matching_the_repository_read(
     assert output["record"]["logical_id"] == written["logical_id"]
 
     repository = ValuationMethodologyRepository(_db_path(tmp_path))
-    direct = repository.strict_known_methodology(effective_as_of=NOW, known_by=NOW + timedelta(days=1))
+    direct = CanonicalValuationMethodologyAuthority(
+        repository=repository, application_root=tmp_path
+    ).strict_known_methodology(effective_as_of=NOW, known_by=NOW + timedelta(days=1))
     assert direct is not None
     assert output["record"]["content_hash"] == direct.content_hash
 

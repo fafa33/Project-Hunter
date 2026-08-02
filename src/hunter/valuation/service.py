@@ -4,7 +4,7 @@ import hashlib
 import json
 import os
 from dataclasses import asdict, replace
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -382,15 +382,41 @@ class CanonicalValuationService:
     def strict_known_fair_value_estimate(
         self, *, effective_as_of: datetime, known_by: datetime, logical_id: str
     ) -> FairValueEstimateRecord | None:
-        return self.repository.strict_known_fair_value_estimate(
-            effective_as_of=effective_as_of, known_by=known_by, logical_id=logical_id
+        return self.select_strict_known_fair_value_estimate(
+            self.repository, effective_as_of=effective_as_of, known_by=known_by, logical_id=logical_id
         )
 
     def strict_known_valuation_assessment(
         self, *, effective_as_of: datetime, known_by: datetime, logical_id: str
     ) -> ValuationAssessmentRecord | None:
-        return self.repository.strict_known_valuation_assessment(
-            effective_as_of=effective_as_of, known_by=known_by, logical_id=logical_id
+        return self.select_strict_known_valuation_assessment(
+            self.repository, effective_as_of=effective_as_of, known_by=known_by, logical_id=logical_id
+        )
+
+    @staticmethod
+    def select_strict_known_fair_value_estimate(
+        repository: CanonicalValuationRepository,
+        *,
+        effective_as_of: datetime,
+        known_by: datetime,
+        logical_id: str,
+    ) -> FairValueEstimateRecord | None:
+        return _strict_known(
+            repository.fair_value_history(logical_id), effective_as_of=effective_as_of, known_by=known_by
+        )
+
+    @staticmethod
+    def select_strict_known_valuation_assessment(
+        repository: CanonicalValuationRepository,
+        *,
+        effective_as_of: datetime,
+        known_by: datetime,
+        logical_id: str,
+    ) -> ValuationAssessmentRecord | None:
+        return _strict_known(
+            repository.valuation_assessment_history(logical_id),
+            effective_as_of=effective_as_of,
+            known_by=known_by,
         )
 
     def _persist(self, estimate: FairValueEstimateRecord, assessment: ValuationAssessmentRecord) -> None:
@@ -485,6 +511,33 @@ def _authorize_correction(
     )
     if competing_successor is not None:
         raise CanonicalValuationIntegrityError("branching correction lineage is prohibited")
+
+
+def _strict_known(records: tuple[Any, ...], *, effective_as_of: datetime, known_by: datetime) -> Any | None:
+    effective_as_of = _aware(effective_as_of)
+    known_by = _aware(known_by)
+    eligible = [
+        item
+        for item in records
+        if item.effective_at <= effective_as_of
+        and item.recorded_at <= known_by
+        and item.known_at <= known_by
+        and item.quality_state == "accepted"
+        and item.conflict_state in {"none", "resolved"}
+    ]
+    superseded = {item.supersedes_record_id for item in eligible if item.supersedes_record_id is not None}
+    current = [item for item in eligible if item.record_id not in superseded]
+    current.sort(
+        key=lambda item: (item.effective_at, item.recorded_at, item.known_at, item.record_id),
+        reverse=True,
+    )
+    return current[0] if current else None
+
+
+def _aware(value: datetime) -> datetime:
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError("datetime must be timezone-aware")
+    return value.astimezone(UTC)
 
 
 def _normalize_estimate(record: FairValueEstimateRecord) -> FairValueEstimateRecord:

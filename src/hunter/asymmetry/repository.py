@@ -140,31 +140,26 @@ class AsymmetryRepository:
             if isinstance(record, AsymmetryAssessmentRecord)
         )
 
-    # -- unresolved-conflict queries -------------------------------------------------
+    def methodology_records(self) -> tuple[AsymmetryMethodologySnapshot, ...]:
+        return self._typed_records(_METHODOLOGY_TYPE, _methodology_from_payload, AsymmetryMethodologySnapshot)
 
-    def unresolved_methodology_conflicts(self) -> tuple[AsymmetryMethodologySnapshot, ...]:
-        return self._unresolved_conflicts(_METHODOLOGY_TYPE, _methodology_from_payload)
+    def scenario_set_records(self) -> tuple[ScenarioSetSnapshot, ...]:
+        return self._typed_records(_SCENARIO_SET_TYPE, _scenario_set_from_payload, ScenarioSetSnapshot)
 
-    def unresolved_scenario_set_conflicts(self) -> tuple[ScenarioSetSnapshot, ...]:
-        return self._unresolved_conflicts(_SCENARIO_SET_TYPE, _scenario_set_from_payload)
+    def probability_records(self) -> tuple[ScenarioProbabilityRecord, ...]:
+        return self._typed_records(_PROBABILITY_TYPE, _probability_from_payload, ScenarioProbabilityRecord)
 
-    def unresolved_probability_conflicts(self) -> tuple[ScenarioProbabilityRecord, ...]:
-        return self._unresolved_conflicts(_PROBABILITY_TYPE, _probability_from_payload)
+    def payoff_records(self) -> tuple[ScenarioPayoffEstimateRecord, ...]:
+        return self._typed_records(_PAYOFF_TYPE, _payoff_from_payload, ScenarioPayoffEstimateRecord)
 
-    def unresolved_payoff_conflicts(self) -> tuple[ScenarioPayoffEstimateRecord, ...]:
-        return self._unresolved_conflicts(_PAYOFF_TYPE, _payoff_from_payload)
-
-    def unresolved_assessment_conflicts(self) -> tuple[AsymmetryAssessmentRecord, ...]:
-        return self._unresolved_conflicts(_ASSESSMENT_TYPE, _assessment_from_payload)
+    def assessment_records(self) -> tuple[AsymmetryAssessmentRecord, ...]:
+        return self._typed_records(_ASSESSMENT_TYPE, _assessment_from_payload, AsymmetryAssessmentRecord)
 
     # -- internals ---------------------------------------------------------------
 
-    def _unresolved_conflicts(self, snapshot_type: str, from_payload: Any) -> tuple[Any, ...]:
+    def _typed_records(self, snapshot_type: str, from_payload: Any, record_type: type[Any]) -> tuple[Any, ...]:
         records = self._records_skipping_malformed(snapshot_type, from_payload)
-        superseded_ids = {item.supersedes_record_id for item in records if item.supersedes_record_id is not None}
-        current = (item for item in records if item.record_id not in superseded_ids)
-        unresolved = [item for item in current if item.conflict_state in {"open", "contested"}]
-        return tuple(sorted(unresolved, key=_ORDER_KEY))
+        return tuple(sorted((item for item in records if isinstance(item, record_type)), key=_ORDER_KEY))
 
     def _logical_history(self, snapshot_type: str, from_payload: Any, logical_id: str) -> tuple[Any, ...]:
         if not logical_id.strip():
