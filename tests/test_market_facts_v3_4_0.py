@@ -397,7 +397,7 @@ def test_correction_recorded_at_not_advancing_predecessor_is_rejected(tmp_path: 
     assert original.recorded_at == T2
 
     stalled = _correction_result(120, acquired_at=T1, effective_at=T0)
-    with pytest.raises(MarketFactIntegrityError, match="recorded_at must follow predecessor"):
+    with pytest.raises(MarketFactAuthorityError, match="recorded_at must follow predecessor"):
         svc.correct(
             original.record_id,
             request(),
@@ -413,7 +413,7 @@ def test_correction_known_at_not_advancing_predecessor_is_rejected(tmp_path: Pat
     assert original.known_at == T1
 
     stalled = _correction_result(130, acquired_at=T1, effective_at=T0)
-    with pytest.raises(MarketFactIntegrityError, match="known_at must follow predecessor"):
+    with pytest.raises(MarketFactAuthorityError, match="known_at must follow predecessor"):
         svc.correct(
             original.record_id,
             request(),
@@ -438,7 +438,7 @@ def test_branching_market_fact_corrections_are_rejected_and_replay_is_strict_kno
     assert corrected.quality_state == "accepted"
 
     second_known = T2 + timedelta(minutes=20)
-    with pytest.raises(MarketFactIntegrityError, match="branching"):
+    with pytest.raises(MarketFactAuthorityError, match="branching"):
         svc.correct(
             original.record_id,
             request(),
@@ -511,14 +511,14 @@ def test_concurrent_market_fact_corrections_cannot_branch_lineage(tmp_path: Path
                 recorded_at=known_at + timedelta(minutes=1),
                 reason="Concurrent correction",
             )[0]
-        except MarketFactIntegrityError as exc:
+        except (MarketFactIntegrityError, MarketFactAuthorityError) as exc:
             return exc
 
     with ThreadPoolExecutor(max_workers=2) as executor:
         outcomes = tuple(executor.map(attempt, ((svc, 120, first_known), (second_service, 140, second_known))))
 
     assert sum(not isinstance(item, Exception) for item in outcomes) == 1
-    assert sum(isinstance(item, MarketFactIntegrityError) for item in outcomes) == 1
+    assert sum(isinstance(item, MarketFactAuthorityError) for item in outcomes) == 1
 
 
 def test_models_reject_naive_time_and_identity_scope_mismatch() -> None:
@@ -629,7 +629,7 @@ def test_divergent_observations_open_conflict_and_disable_strict_known_selection
 
     assert first.conflict_state == "none"
     assert second.conflict_state == "open"
-    assert second in repo.unresolved_conflicts()
+    assert second in svc.unresolved_conflicts()
     assert (
         svc.strict_known_fact(
             entity_id=first.identity.entity_id,
@@ -691,7 +691,7 @@ def test_versioned_resolution_is_immutable_and_cutoff_safe(tmp_path: Path) -> No
     assert resolution == repeated
     assert resolution.policy_fingerprint.startswith("conflict-policy:sha256:")
     assert repo.conflict_resolutions(first.logical_id) == (resolution,)
-    assert second not in repo.unresolved_conflicts()
+    assert second not in svc.unresolved_conflicts()
     assert (
         svc.strict_known_fact(
             effective_as_of=resolution_effective - timedelta(seconds=1),

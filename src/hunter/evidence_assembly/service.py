@@ -312,14 +312,29 @@ class CanonicalEvidenceAssemblyService:
     def strict_known(
         self, *, logical_id: str, effective_as_of: datetime, known_by: datetime
     ) -> AssembledFundamentalEvidenceRecord | None:
-        eligible = self.repository.strict_known_candidates(
-            logical_id=logical_id, effective_as_of=effective_as_of, known_by=known_by
+        eligible = tuple(
+            record
+            for record in self.repository.history(logical_id)
+            if record.effective_at <= effective_as_of
+            and record.recorded_at <= known_by
+            and record.known_at <= known_by
+            and record.quality_state == "accepted"
         )
         tips = [
             record for record in eligible if not any(item.supersedes_record_id == record.record_id for item in eligible)
         ]
         accepted = [record for record in tips if record.conflict_state in {"none", "resolved"}]
+        accepted.sort(
+            key=lambda record: (record.effective_at, record.known_at, record.recorded_at, record.record_id),
+            reverse=True,
+        )
         return accepted[0] if accepted else None
+
+    def is_superseded(self, record_id: str) -> bool:
+        return self.repository.successor(record_id) is not None
+
+    def unresolved_assembly_conflicts(self) -> tuple[AssemblyConflictRecord, ...]:
+        return tuple(record for record in self.repository.conflict_records() if record.conflict_state == "open")
 
     def _validate_methodology_contract(
         self,

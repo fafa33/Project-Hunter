@@ -159,34 +159,29 @@ class ComparativeValuationRepository:
             )
         )
 
-    # -- unresolved-conflict queries -------------------------------------------------
+    def policy_records(self) -> tuple[PeerUniversePolicyRecord, ...]:
+        return self._typed_records(_POLICY_TYPE, _policy_from_payload, PeerUniversePolicyRecord)
 
-    def unresolved_policy_conflicts(self) -> tuple[PeerUniversePolicyRecord, ...]:
-        return self._unresolved_conflicts(_POLICY_TYPE, _policy_from_payload)
+    def universe_records(self) -> tuple[PeerUniverseSnapshot, ...]:
+        return self._typed_records(_UNIVERSE_TYPE, _universe_from_payload, PeerUniverseSnapshot)
 
-    def unresolved_universe_conflicts(self) -> tuple[PeerUniverseSnapshot, ...]:
-        return self._unresolved_conflicts(_UNIVERSE_TYPE, _universe_from_payload)
+    def decision_records(self) -> tuple[PeerEligibilityDecisionRecord, ...]:
+        return self._typed_records(_DECISION_TYPE, _decision_from_payload, PeerEligibilityDecisionRecord)
 
-    def unresolved_decision_conflicts(self) -> tuple[PeerEligibilityDecisionRecord, ...]:
-        return self._unresolved_conflicts(_DECISION_TYPE, _decision_from_payload)
+    def observation_records(self) -> tuple[ComparativeMetricObservationRecord, ...]:
+        return self._typed_records(_OBSERVATION_TYPE, _observation_from_payload, ComparativeMetricObservationRecord)
 
-    def unresolved_observation_conflicts(self) -> tuple[ComparativeMetricObservationRecord, ...]:
-        return self._unresolved_conflicts(_OBSERVATION_TYPE, _observation_from_payload)
-
-    def unresolved_assessment_conflicts(self) -> tuple[ComparativeValuationAssessmentRecord, ...]:
-        return self._unresolved_conflicts(_ASSESSMENT_TYPE, _assessment_from_payload)
+    def assessment_records(self) -> tuple[ComparativeValuationAssessmentRecord, ...]:
+        return self._typed_records(_ASSESSMENT_TYPE, _assessment_from_payload, ComparativeValuationAssessmentRecord)
 
     # -- internals ---------------------------------------------------------------
 
-    def _unresolved_conflicts(self, snapshot_type: str, from_payload: Any) -> tuple[Any, ...]:
+    def _typed_records(self, snapshot_type: str, from_payload: Any, record_type: type[Any]) -> tuple[Any, ...]:
         records = self._records_skipping_malformed(snapshot_type, from_payload)
-        superseded_ids = {item.supersedes_record_id for item in records if item.supersedes_record_id is not None}
-        current = (item for item in records if item.record_id not in superseded_ids)
-        unresolved = [item for item in current if item.conflict_state in {"open", "contested"}]
         return tuple(
             sorted(
-                unresolved,
-                key=lambda item: (item.logical_id, item.effective_at, item.record_id),
+                (item for item in records if isinstance(item, record_type)),
+                key=lambda item: (item.logical_id, item.effective_at, item.recorded_at, item.known_at, item.record_id),
             )
         )
 

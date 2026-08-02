@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -627,7 +628,9 @@ def enabled_adapter(
     policy: PersistencePolicy = PersistencePolicy.ATOMIC,
     corpus_root: Path | None = None,
 ) -> PipelinePersistenceAdapter:
-    corpus = OperationalCorpusSettings(root=corpus_root or Path("data/operational_corpus"))
+    if corpus_root is None:
+        corpus_root = Path(os.environ["HUNTER_TEST_RUNTIME_ROOT"]) / "operational_corpus"
+    corpus = OperationalCorpusSettings(root=corpus_root)
     return PipelinePersistenceAdapter(
         lambda: UnitOfWork(session_factory),
         PipelinePersistenceSettings(enabled=True, policy=policy, operational_corpus=corpus),

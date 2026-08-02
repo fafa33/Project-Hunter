@@ -63,38 +63,14 @@ class ValuationMethodologyRepository:
         )
         return tuple(records)
 
-    def unresolved_conflicts(self) -> tuple[ValuationMethodologySnapshot, ...]:
-        records = self._records_skipping_malformed()
-        superseded_ids = {item.supersedes_record_id for item in records if item.supersedes_record_id is not None}
-        current = (item for item in records if item.record_id not in superseded_ids)
-        unresolved = [item for item in current if item.conflict_state in {"open", "contested"}]
-        return tuple(sorted(unresolved, key=lambda item: (item.logical_id, item.effective_at, item.record_id)))
-
-    def strict_known_methodology(
-        self,
-        *,
-        effective_as_of: datetime,
-        known_by: datetime,
-    ) -> ValuationMethodologySnapshot | None:
-        effective_as_of = _aware(effective_as_of)
-        known_by = _aware(known_by)
-        records = self._records_skipping_malformed()
-        eligible = [
-            item
-            for item in records
-            if item.effective_at <= effective_as_of
-            and item.recorded_at <= known_by
-            and item.known_at <= known_by
-            and item.quality_state == "accepted"
-            and item.conflict_state in {"none", "resolved"}
-        ]
-        superseded = {item.supersedes_record_id for item in eligible if item.supersedes_record_id is not None}
-        current = [item for item in eligible if item.record_id not in superseded]
-        current.sort(
-            key=lambda item: (item.effective_at, item.recorded_at, item.known_at, item.record_id),
-            reverse=True,
+    def records(self) -> tuple[ValuationMethodologySnapshot, ...]:
+        """Return every decodable record in deterministic storage order."""
+        return tuple(
+            sorted(
+                self._records_skipping_malformed(),
+                key=lambda item: (item.logical_id, item.effective_at, item.recorded_at, item.known_at, item.record_id),
+            )
         )
-        return current[0] if current else None
 
     def _records_skipping_malformed(self) -> tuple[ValuationMethodologySnapshot, ...]:
         # Fault-isolated by construction: a malformed/legacy row is excluded rather than

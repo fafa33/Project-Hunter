@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 
+from hunter import cli as cli_module
 from hunter.acquisition.models import EvidenceValidation, NormalizedEvidence
 from hunter.acquisition.repositories import FileAcquisitionRepository
 from hunter.cli import main
@@ -148,7 +150,11 @@ def test_historical_rss_provider_uses_only_persisted_timestamped_narrative(tmp_p
     assert rows[0].event_timestamp == NOW
 
 
-def test_historical_build_cli_is_idempotent_and_does_not_crash_on_rerun() -> None:
+def test_historical_build_cli_is_idempotent_and_does_not_crash_on_rerun(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository = HistoricalValidationRepository(tmp_path / "historical-validation")
+    monkeypatch.setattr(cli_module, "HistoricalValidationRepository", lambda: repository)
     assert main(["historical", "build"]) == 0
     assert main(["historical", "build"]) == 0
     assert main(["historical", "replay"]) == 0

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -21,6 +22,10 @@ from hunter.market_facts.repository import MarketFactWritePlan, ObservedMarketFa
 
 class MarketFactAuthorityError(ValueError):
     """Raised when a result violates source, identity, time, or semantic authority."""
+
+
+_CORRECTION_LOCKS: dict[str, threading.Lock] = {}
+_CORRECTION_LOCKS_GUARD = threading.Lock()
 
 
 class ObservedMarketFactService:
@@ -103,7 +108,9 @@ class ObservedMarketFactService:
         if len(replacements) != 1:
             raise MarketFactAuthorityError("correction must contain exactly one fact matching predecessor lineage")
         records = tuple(replacements)
-        self.repository.apply(MarketFactWritePlan(records=records, authority=self.repository._authority))
+        with _correction_lock(str(self.repository.path.resolve())):
+            self._authorize_successor(records[0])
+            self.repository.apply(MarketFactWritePlan(records=records, authority=self.repository._authority))
         return records
 
     def strict_known_fact(
@@ -116,7 +123,8 @@ class ObservedMarketFactService:
         known_by: datetime,
         quote_currency: str | None = None,
     ) -> ObservedMarketFactRecord | None:
-        return self.repository.strict_known_fact(
+        return self.select_strict_known_fact(
+            self.repository,
             entity_id=entity_id,
             representation_id=representation_id,
             fact_type=fact_type,
@@ -124,6 +132,16 @@ class ObservedMarketFactService:
             known_by=known_by,
             quote_currency=quote_currency,
         )
+
+    @staticmethod
+    def select_strict_known_fact(
+        repository: ObservedMarketFactRepository,
+        **kwargs: object,
+    ) -> ObservedMarketFactRecord | None:
+        return _strict_known_fact(repository, **kwargs)
+
+    def unresolved_conflicts(self) -> tuple[ObservedMarketFactRecord, ...]:
+        return _unresolved_conflicts(self.repository)
 
     def resolve_conflict(
         self,
@@ -221,6 +239,25 @@ class ObservedMarketFactService:
             )
         )
         return resolution
+
+    def _authorize_successor(self, record: ObservedMarketFactRecord) -> None:
+        predecessor_id = record.supersedes_record_id
+        if predecessor_id is None:
+            return
+        predecessor = self.repository.record(predecessor_id)
+        if predecessor is None:
+            raise MarketFactAuthorityError("superseded market fact record does not exist")
+        if predecessor.logical_id != record.logical_id:
+            raise MarketFactAuthorityError("correction must preserve logical_id")
+        if predecessor.recorded_at >= record.recorded_at:
+            raise MarketFactAuthorityError("correction recorded_at must follow predecessor")
+        if predecessor.known_at >= record.known_at:
+            raise MarketFactAuthorityError("correction known_at must follow predecessor")
+        if any(
+            item.supersedes_record_id == predecessor_id and item.record_id != record.record_id
+            for item in self.repository.records()
+        ):
+            raise MarketFactAuthorityError("branching correction lineage is prohibited")
 
     def _validate_result(
         self,
@@ -452,6 +489,95 @@ def _logical_id(request: MarketFactRequest, fact_type: str, quote_currency: str 
             "semantic_version": ObservedMarketFactService.semantic_version,
         },
     )
+
+
+def _correction_lock(repository_path: str) -> threading.Lock:
+    with _CORRECTION_LOCKS_GUARD:
+        return _CORRECTION_LOCKS.setdefault(repository_path, threading.Lock())
+
+
+def _strict_known_fact(
+    repository: ObservedMarketFactRepository,
+    *,
+    entity_id: object,
+    representation_id: object,
+    fact_type: object,
+    effective_as_of: object,
+    known_by: object,
+    quote_currency: object = None,
+) -> ObservedMarketFactRecord | None:
+    if not isinstance(entity_id, str) or not isinstance(representation_id, str) or not isinstance(fact_type, str):
+        raise MarketFactAuthorityError("market fact replay identity must be textual")
+    if not isinstance(effective_as_of, datetime) or not isinstance(known_by, datetime):
+        raise MarketFactAuthorityError("market fact replay cutoffs must be datetimes")
+    effective_cutoff = _utc("effective_as_of", effective_as_of)
+    knowledge_cutoff = _utc("known_by", known_by)
+    quoted = quote_currency.lower() if isinstance(quote_currency, str) else None
+    eligible = [
+        item
+        for item in repository.records()
+        if item.identity.entity_id == entity_id
+        and item.identity.representation_id == representation_id
+        and item.fact_type == fact_type
+        and item.effective_at <= effective_cutoff
+        and item.recorded_at <= knowledge_cutoff
+        and item.known_at <= knowledge_cutoff
+        and item.quality_state == "accepted"
+        and item.quote_currency == quoted
+    ]
+    superseded = {item.supersedes_record_id for item in eligible if item.supersedes_record_id is not None}
+    groups: dict[tuple[str, datetime], list[ObservedMarketFactRecord]] = {}
+    for item in eligible:
+        if item.record_id not in superseded:
+            groups.setdefault((item.logical_id, item.effective_at), []).append(item)
+    selected: list[ObservedMarketFactRecord] = []
+    for (logical_id, candidate_effective_at), group in groups.items():
+        values = {(item.value, item.unit, item.quote_currency, item.venue_scope) for item in group}
+        conflicted = len(values) > 1 or any(item.conflict_state in {"open", "contested", "resolved"} for item in group)
+        if not conflicted:
+            selected.extend(group)
+            continue
+        expected_ids = tuple(sorted(item.record_id for item in group))
+        resolutions = [
+            item
+            for item in repository.conflict_resolutions(logical_id)
+            if item.candidate_effective_at == candidate_effective_at
+            and item.candidate_record_ids == expected_ids
+            and item.effective_at <= effective_cutoff
+            and item.recorded_at <= knowledge_cutoff
+            and item.known_at <= knowledge_cutoff
+        ]
+        resolutions.sort(
+            key=lambda item: (item.effective_at, item.recorded_at, item.known_at, item.resolution_id), reverse=True
+        )
+        if not resolutions:
+            return None
+        winner = next((item for item in group if item.record_id == resolutions[0].selected_record_id), None)
+        if winner is None:
+            return None
+        selected.append(winner)
+    selected.sort(key=lambda item: (item.effective_at, item.recorded_at, item.known_at, item.record_id), reverse=True)
+    return selected[0] if selected else None
+
+
+def _unresolved_conflicts(repository: ObservedMarketFactRepository) -> tuple[ObservedMarketFactRecord, ...]:
+    records = repository.records()
+    superseded = {item.supersedes_record_id for item in records if item.supersedes_record_id is not None}
+    groups: dict[tuple[str, datetime], list[ObservedMarketFactRecord]] = {}
+    for item in records:
+        if item.quality_state == "accepted" and item.record_id not in superseded:
+            groups.setdefault((item.logical_id, item.effective_at), []).append(item)
+    unresolved: list[ObservedMarketFactRecord] = []
+    for (logical_id, effective_at), group in groups.items():
+        open_records = [item for item in group if item.conflict_state in {"open", "contested"}]
+        candidate_ids = tuple(sorted(item.record_id for item in group))
+        resolved = any(
+            item.candidate_effective_at == effective_at and item.candidate_record_ids == candidate_ids
+            for item in repository.conflict_resolutions(logical_id)
+        )
+        if open_records and not resolved:
+            unresolved.extend(open_records)
+    return tuple(sorted(unresolved, key=lambda item: (item.logical_id, item.effective_at, item.record_id)))
 
 
 def _hash(namespace: str, payload: object) -> str:

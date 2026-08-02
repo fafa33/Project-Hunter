@@ -97,151 +97,23 @@ class SupplyAndValueCaptureRepository:
             if isinstance(record, ValueCaptureRuleSnapshot)
         )
 
-    def unresolved_evidence_conflicts(self) -> tuple[FundamentalEvidenceRecord, ...]:
-        return tuple(
-            record
-            for record in self._unresolved_conflicts(_EVIDENCE_TYPE)
-            if isinstance(record, FundamentalEvidenceRecord)
-        )
+    def evidence_records(self) -> tuple[FundamentalEvidenceRecord, ...]:
+        return self._typed_records(_EVIDENCE_TYPE, FundamentalEvidenceRecord)
 
-    def overlapping_evidence(
-        self,
-        *,
-        entity_id: str,
-        economic_claim_id: str,
-        accounting_window_start: datetime,
-        accounting_window_end: datetime,
-        known_by: datetime,
-    ) -> tuple[FundamentalEvidenceRecord, ...]:
-        """Mechanical deterministic query for the assembly authority's candidate universe.
+    def supply_records(self) -> tuple[SupplyBasisSnapshot, ...]:
+        return self._typed_records(_SUPPLY_TYPE, SupplyBasisSnapshot)
 
-        Mirrors _strict_known()'s supersession-selection convention: a predecessor is
-        excluded only when its successor is itself part of this same known_by-filtered
-        pool. A predecessor therefore remains visible at any cutoff before its successor
-        became known, preserving strict-known replay determinism rather than globally
-        hiding corrected lineage.
-        """
-        records = (
-            record
-            for record in (_record_from_snapshot(item) for item in self._snapshots(_EVIDENCE_TYPE))
-            if isinstance(record, FundamentalEvidenceRecord)
-        )
-        eligible = [
-            record
-            for record in records
-            if record.identity.entity_id == entity_id
-            and record.identity.economic_claim_id == economic_claim_id
-            and record.accounting_period_start < accounting_window_end
-            and accounting_window_start < record.accounting_period_end
-            and record.recorded_at <= known_by
-            and record.known_at <= known_by
-        ]
-        superseded = {item.supersedes_record_id for item in eligible if item.supersedes_record_id is not None}
-        current = [record for record in eligible if record.record_id not in superseded]
+    def rule_records(self) -> tuple[ValueCaptureRuleSnapshot, ...]:
+        return self._typed_records(_RULE_TYPE, ValueCaptureRuleSnapshot)
+
+    def _typed_records(self, snapshot_type: str, record_type: type[Any]) -> tuple[Any, ...]:
+        records = (_record_from_snapshot(item) for item in self._snapshots(snapshot_type))
         return tuple(
             sorted(
-                current,
-                key=lambda record: (
-                    record.accounting_period_start,
-                    record.accounting_period_end,
-                    record.record_id,
-                ),
+                (record for record in records if isinstance(record, record_type)),
+                key=lambda item: (item.logical_id, item.effective_at, item.recorded_at, item.known_at, item.record_id),
             )
         )
-
-    def unresolved_supply_conflicts(self) -> tuple[SupplyBasisSnapshot, ...]:
-        return tuple(
-            record for record in self._unresolved_conflicts(_SUPPLY_TYPE) if isinstance(record, SupplyBasisSnapshot)
-        )
-
-    def unresolved_rule_conflicts(self) -> tuple[ValueCaptureRuleSnapshot, ...]:
-        return tuple(
-            record for record in self._unresolved_conflicts(_RULE_TYPE) if isinstance(record, ValueCaptureRuleSnapshot)
-        )
-
-    def _unresolved_conflicts(self, snapshot_type: str) -> tuple[Record, ...]:
-        # A record superseded by a correction is excluded even if it was once
-        # flagged open/contested: only the current lineage tip is queryable.
-        records = tuple(_record_from_snapshot(item) for item in self._snapshots(snapshot_type))
-        superseded_ids = {item.supersedes_record_id for item in records if item.supersedes_record_id is not None}
-        current = (item for item in records if item.record_id not in superseded_ids)
-        unresolved = [item for item in current if item.conflict_state in {"open", "contested"}]
-        return tuple(
-            sorted(
-                unresolved,
-                key=lambda item: (item.logical_id, item.effective_at, item.record_id),
-            )
-        )
-
-    def strict_known_evidence(self, **kwargs: Any) -> FundamentalEvidenceRecord | None:
-        record = self._strict_known(
-            snapshot_type=_EVIDENCE_TYPE,
-            category_name="evidence_type",
-            **kwargs,
-        )
-        return record if isinstance(record, FundamentalEvidenceRecord) else None
-
-    def strict_known_supply(self, **kwargs: Any) -> SupplyBasisSnapshot | None:
-        record = self._strict_known(
-            snapshot_type=_SUPPLY_TYPE,
-            category_name="supply_basis_type",
-            **kwargs,
-        )
-        return record if isinstance(record, SupplyBasisSnapshot) else None
-
-    def strict_known_rule(self, **kwargs: Any) -> ValueCaptureRuleSnapshot | None:
-        record = self._strict_known(
-            snapshot_type=_RULE_TYPE,
-            category_name="rule_type",
-            **kwargs,
-        )
-        return record if isinstance(record, ValueCaptureRuleSnapshot) else None
-
-    def _strict_known(
-        self,
-        *,
-        snapshot_type: str,
-        category_name: str,
-        entity_id: str,
-        economic_claim_id: str,
-        representation_id: str,
-        effective_as_of: datetime,
-        known_by: datetime,
-        **category: str,
-    ) -> Record | None:
-        effective_as_of = _aware(effective_as_of)
-        known_by = _aware(known_by)
-        category_value = category[category_name]
-        records = tuple(_record_from_snapshot(item) for item in self._snapshots(snapshot_type))
-        eligible = [
-            item
-            for item in records
-            if item.identity.entity_id == entity_id
-            and item.identity.economic_claim_id == economic_claim_id
-            and item.identity.representation_id == representation_id
-            and getattr(item, category_name) == category_value
-            and item.effective_at <= effective_as_of
-            and (
-                not isinstance(item, ValueCaptureRuleSnapshot)
-                or item.applicability_start <= effective_as_of <= item.applicability_end
-            )
-            and item.recorded_at <= known_by
-            and item.known_at <= known_by
-            and item.quality_state == "accepted"
-            and item.conflict_state in {"none", "resolved"}
-        ]
-        superseded = {item.supersedes_record_id for item in eligible if item.supersedes_record_id is not None}
-        current = [item for item in eligible if item.record_id not in superseded]
-        current.sort(
-            key=lambda item: (
-                item.effective_at,
-                item.recorded_at,
-                item.known_at,
-                item.record_id,
-            ),
-            reverse=True,
-        )
-        return current[0] if current else None
 
     def _logical_history(self, *, snapshot_type: str, logical_id: str) -> tuple[Record, ...]:
         if not logical_id.strip():
@@ -443,9 +315,3 @@ def _record_from_snapshot(snapshot: SnapshotRecord) -> Record:
     if snapshot.snapshot_type == _RULE_TYPE:
         return _rule_from_payload(snapshot.payload)
     raise ValueError("unsupported fundamental-value-evidence snapshot")
-
-
-def _aware(value: datetime) -> datetime:
-    if value.tzinfo is None or value.utcoffset() is None:
-        raise ValueError("datetime must be timezone-aware")
-    return value.astimezone(UTC)

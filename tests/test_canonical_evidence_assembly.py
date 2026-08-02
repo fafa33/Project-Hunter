@@ -505,7 +505,7 @@ def test_logical_history_strict_known_replay_and_correction_lineage(
     assert successor.logical_id == original.logical_id
     history = repository.history(original.logical_id)
     assert history[0] == original
-    assert repository.is_superseded(original.record_id)
+    assert service.is_superseded(original.record_id)
     assert history[1] == successor
     assert (
         service.strict_known(
@@ -573,9 +573,9 @@ def test_correction_requires_later_clocks(
 
 
 def test_unresolved_conflict_query_is_deterministic_and_empty_for_persistable_records(
-    repository: AssembledEvidenceRepository,
+    service: CanonicalEvidenceAssemblyService,
 ) -> None:
-    assert repository.unresolved_assembly_conflicts() == ()
+    assert service.unresolved_assembly_conflicts() == ()
 
 
 def test_single_native_record_cannot_be_relabelled(service: CanonicalEvidenceAssemblyService) -> None:
@@ -607,13 +607,13 @@ def test_native_precedence_and_omitted_overlap_fail_closed(
     native_query.records = tuple(item.record for item in selected) + (native,)
     with pytest.raises(CanonicalEvidenceAssemblyError, match="native evidence takes precedence"):
         service.assemble(**base)
-    assert service.repository.unresolved_assembly_conflicts()[0].conflict_state == "open"
+    assert service.unresolved_assembly_conflicts()[0].conflict_state == "open"
     other = _evidence("other", 1, 3, raw_hash="a" * 64)
     _seed_authorities(service, selected + (_constituent(other),))
     native_query.records = tuple(item.record for item in selected) + (other,)
     with pytest.raises(CanonicalEvidenceAssemblyError, match="omitted competing"):
         service.assemble(**base)
-    assert len(service.repository.unresolved_assembly_conflicts()) == 2
+    assert len(service.unresolved_assembly_conflicts()) == 2
 
 
 def test_cross_scope_native_record_does_not_trigger_false_precedence(
@@ -641,7 +641,7 @@ def test_cross_scope_native_record_does_not_trigger_false_precedence(
         evidence_shape_registry_version="registry-v1",
     )
     assert record.source_count == 2
-    assert service.repository.unresolved_assembly_conflicts() == ()
+    assert service.unresolved_assembly_conflicts() == ()
 
 
 def test_cross_scope_native_record_does_not_trigger_false_overlap_conflict(
@@ -669,7 +669,7 @@ def test_cross_scope_native_record_does_not_trigger_false_overlap_conflict(
         evidence_shape_registry_version="registry-v1",
     )
     assert record.source_count == 2
-    assert service.repository.unresolved_assembly_conflicts() == ()
+    assert service.unresolved_assembly_conflicts() == ()
 
 
 def test_second_independent_root_for_existing_logical_id_is_rejected(
@@ -722,8 +722,10 @@ def test_second_independent_root_for_existing_logical_id_is_rejected(
     tip = service.strict_known(logical_id=root1.logical_id, effective_as_of=CUTOFF, known_by=CUTOFF)
     assert tip is not None
     assert tip.record_id == correction.record_id
-    candidates = service.repository.strict_known_candidates(
-        logical_id=root1.logical_id, effective_as_of=CUTOFF, known_by=CUTOFF
+    candidates = tuple(
+        record
+        for record in service.repository.history(root1.logical_id)
+        if record.effective_at <= CUTOFF and record.recorded_at <= CUTOFF and record.known_at <= CUTOFF
     )
     tips = [
         record for record in candidates if not any(item.supersedes_record_id == record.record_id for item in candidates)

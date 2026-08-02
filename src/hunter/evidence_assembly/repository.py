@@ -54,7 +54,7 @@ class EvidenceAssemblyPersistenceError(ValueError):
 
 
 class AssembledEvidenceRepository:
-    """Mechanical append-only persistence and strict-known query boundary."""
+    """Mechanical append-only persistence and deterministic raw-history boundary."""
 
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
@@ -138,9 +138,6 @@ class AssembledEvidenceRepository:
             ).fetchone()
         return _from_payload(str(row[0])) if row is not None else None
 
-    def is_superseded(self, record_id: str) -> bool:
-        return self.successor(record_id) is not None
-
     def assemblies_for_constituent(self, record_id: str) -> tuple[AssembledFundamentalEvidenceRecord, ...]:
         """Return provenance-complete assemblies containing an exact constituent ID."""
         with self._connect() as connection:
@@ -180,29 +177,12 @@ class AssembledEvidenceRepository:
             )
         return record
 
-    def unresolved_assembly_conflicts(self) -> tuple[AssemblyConflictRecord, ...]:
+    def conflict_records(self) -> tuple[AssemblyConflictRecord, ...]:
         with self._connect() as connection:
             rows = connection.execute(
                 "SELECT payload_json FROM evidence_assembly_conflicts ORDER BY known_at, record_id"
             ).fetchall()
         return tuple(_conflict_from_payload(str(row[0])) for row in rows)
-
-    def strict_known_candidates(
-        self, *, logical_id: str, effective_as_of: datetime, known_by: datetime
-    ) -> tuple[AssembledFundamentalEvidenceRecord, ...]:
-        with self._connect() as connection:
-            rows = connection.execute(
-                """
-                SELECT payload_json FROM assembled_fundamental_evidence_records
-                WHERE logical_id = ?
-                  AND effective_at <= ?
-                  AND recorded_at <= ?
-                  AND known_at <= ?
-                ORDER BY effective_at DESC, known_at DESC, recorded_at DESC, record_id DESC
-                """,
-                (logical_id, effective_as_of.isoformat(), known_by.isoformat(), known_by.isoformat()),
-            ).fetchall()
-        return tuple(_from_payload(str(row[0])) for row in rows)
 
     def _connect(self) -> sqlite3.Connection:
         return sqlite3.connect(self.path)

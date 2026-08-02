@@ -61,13 +61,14 @@ def test_phase_eight_competitive_automation_install_is_idempotent_and_scheduler_
 
 def test_phase_eight_cli_automation_status_uses_existing_scheduler_jobs(tmp_path, capsys) -> None:
     config = tmp_path / "automation.yaml"
+    db = tmp_path / "competitive.sqlite"
 
-    assert main(["competitive", "--automation-config", str(config), "automation", "install"]) == 0
+    assert main(["competitive", "--db", str(db), "--automation-config", str(config), "automation", "install"]) == 0
     install_output = capsys.readouterr().out
     assert "created=5" in install_output
-    assert main(["competitive", "--automation-config", str(config), "automation", "install"]) == 0
+    assert main(["competitive", "--db", str(db), "--automation-config", str(config), "automation", "install"]) == 0
     assert "created=0" in capsys.readouterr().out
-    assert main(["competitive", "--automation-config", str(config), "automation", "status"]) == 0
+    assert main(["competitive", "--db", str(db), "--automation-config", str(config), "automation", "status"]) == 0
     status_output = capsys.readouterr().out
     assert "pipeline_owner=competitive_intelligence_pipeline" in status_output
     assert "scheduler_role=operational_only" in status_output
