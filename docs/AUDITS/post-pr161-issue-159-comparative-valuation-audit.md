@@ -2,14 +2,14 @@
 
 ## Verdict
 
-**APPROVED** — the merged implementation is consistent with ADR 0026 and the boundaries it fixes. No blocking finding was substantiated. Four non-blocking findings are recorded below, one of which requires a documentation correction (not a code change).
+**APPROVED** — the merged implementation is consistent with ADR 0026 and the boundaries it fixes. No blocking finding was substantiated. Four non-blocking findings are recorded below; none require further action beyond what this report itself records.
 
 ## Audited repository state
 
 - `main` HEAD at time of audit: `04d12fc` (merge of PR #168).
 - PR #161 scope, independently confirmed via `git diff --stat`: five new, purely additive files — `src/hunter/comparative_valuation/{__init__,models,repository,service}.py` and `tests/test_comparative_valuation_v1.py`. No existing file was modified. No later PR (#163 Mispricing, #165 Asymmetry, #167/#168 doc coherence) has touched `src/hunter/comparative_valuation/` since; `git log main -- src/hunter/comparative_valuation/` shows only the two PR #161 commits (`678e01c`, `e73e261`). The package at current `main` is therefore byte-identical to the merged PR #161 head.
 - Merged PR head: `e73e261` ("Address PR #161 review: service-owned replay, explicit missingness, peer uniqueness"), merged via `5df7ff4`.
-- Governing documents applied: `docs/AI_REVIEW_PROTOCOL.md` (this is an implementation/contribution review, not an ADPR-readiness audit — `docs/ARCHITECTURE_AUDIT_PROTOCOL.md` explicitly excludes implementation review from its own scope and defers to `docs/AI_REVIEW_PROTOCOL.md`), `docs/DEVELOPMENT_GOVERNANCE.md` Stage 5, and ADR 0026 as the controlling architectural authority.
+- Governing documents applied: `docs/AI_REVIEW_PROTOCOL.md` (this is an implementation/contribution review, not an ADPR-readiness audit — `docs/ARCHITECTURE_AUDIT_PROTOCOL.md` explicitly excludes implementation review from its own scope and defers to `docs/AI_REVIEW_PROTOCOL.md`), `docs/DEVELOPMENT_GOVERNANCE.md` Stage 5 (Architecture Review) and Stage 6 (Review Report — this document is that report), and ADR 0026 as the controlling architectural authority.
 
 ## Independence
 
