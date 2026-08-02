@@ -586,7 +586,7 @@ The ADR may authorize this architecture but must not claim production availabili
 - Implementation plan: not authorized
 - Initial preparation PR: [PR #174](https://github.com/fafa33/Project-Hunter/pull/174), merged as `3209f1f`
 - Approved review-correction PR: [PR #175](https://github.com/fafa33/Project-Hunter/pull/175), merged as `35e68e8`
-- Independent architecture review: pending
+- Independent architecture review: pending in [Draft PR #176](https://github.com/fafa33/Project-Hunter/pull/176)
 - Merge commits: `3209f1f`, `35e68e8`
 - Release: not yet assigned
 
