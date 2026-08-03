@@ -26,7 +26,7 @@ Use only the lifecycle states defined by `docs/ARCHITECTURE_DECISION_PREPARATION
 | [ADPR-0001](architecture-records/ADPR-0001-architecture-decision-preparation-framework.md) | Architecture Decision Preparation Framework | IMPLEMENTED | not applicable | #133 | not applicable | #132 | not yet recorded | not yet assigned | not applicable | not applicable |
 | [ADPR-0002](architecture-records/ADPR-0002-disclosure-architecture-classification.md) | Disclosure Architecture Classification | IN_RESEARCH | not yet created | not yet created | none produced | not yet created | not yet recorded | not yet assigned | not applicable | not applicable |
 | [ADPR-0003](architecture-records/ADPR-0003-canonical-comparative-valuation.md) | Canonical Comparative Valuation | APPROVED | #135 | #156 / #159 | [ADR 0026](ADR/0026-canonical-comparative-valuation-methodology.md) (Accepted) | PR #161 | `5df7ff4` | not yet assigned | not applicable | not applicable |
-| [ADPR-0004](architecture-records/ADPR-0004-canonical-market-validation-composition-authority.md) | Canonical Market Validation Composition Authority (Phase 1) | READY_FOR_REVIEW | not yet created | #173 | not yet created | not yet created | `3209f1f` | not yet assigned | not applicable | not applicable |
+| [ADPR-0004](architecture-records/ADPR-0004-canonical-market-validation-composition-authority.md) | Canonical Market Validation Composition Authority (Phase 1) | APPROVED | not yet created | #173 | [ADR 0027](ADR/0027-canonical-market-validation-composition-authority.md) (Proposed) | not yet created | `5626a7b` | not yet assigned | not applicable | not applicable |
 
 ## Active Preparation Records
 
@@ -35,7 +35,6 @@ Records in `PROPOSED`, `IN_RESEARCH`, or `READY_FOR_REVIEW` state are listed her
 | ADPR | Title | Status | Blocking questions | Owner |
 |---|---|---|---|---|
 | [ADPR-0002](architecture-records/ADPR-0002-disclosure-architecture-classification.md) | Disclosure Architecture Classification | IN_RESEARCH | Which option across the four decision axes should be selected (see record's Open Questions); no ADR can be created until a future session selects | not yet assigned |
-| [ADPR-0004](architecture-records/ADPR-0004-canonical-market-validation-composition-authority.md) | Canonical Market Validation Composition Authority (Phase 1) | READY_FOR_REVIEW | Independent architecture review; empirical calibration, cap, residual-independence, and canary evidence block activation but not ADR readiness | not yet assigned |
 
 ## Approved and Implemented Records
 
@@ -66,8 +65,8 @@ Records in `PROPOSED`, `IN_RESEARCH`, or `READY_FOR_REVIEW` state are listed her
 | Issue #162 | not applicable | ADR 0021 | PR #163 | Canonical Mispricing foundation implemented; merge `a9f46f1` |
 | Issue #164 | not applicable | ADR 0021 | PR #165 | Canonical Asymmetry foundation implemented; merge `99c95f0` |
 | Issue #166 | not applicable | ADR 0021 / ADR 0026 | PR #167 merged; technical audit still pending | Post-merge valuation-family stabilization audit and documentation coherence |
-| Issue #173 | [ADPR-0004](architecture-records/ADPR-0004-canonical-market-validation-composition-authority.md) | [ADR 0027](ADR/0027-canonical-market-validation-composition-authority.md) (Proposed) | Preparation PR #174; approved correction PR #175; implementation not yet created | Active architecture preparation; independent audit recorded on PR #177 (not yet merged); no implementation or activation authorized |
-| Issue #178 | [ADPR-0004](architecture-records/ADPR-0004-canonical-market-validation-composition-authority.md) | [ADR 0027](ADR/0027-canonical-market-validation-composition-authority.md) (Proposed) | ADR draft PR not yet merged; implementation not yet created | ADR drafted from approved ADPR-0004 per Issue #178; awaiting independent review, acceptance, and merge before any implementation may begin |
+| Issue #173 | [ADPR-0004](architecture-records/ADPR-0004-canonical-market-validation-composition-authority.md) | [ADR 0027](ADR/0027-canonical-market-validation-composition-authority.md) (Proposed) | Preparation PR #174; approved correction PR #175; independent review PR #177 (merged); implementation not yet created | ADPR-0004 `APPROVED` through independent architecture audit (PR #177); ADR 0027 drafted under Issue #178; no implementation or activation authorized until ADR 0027 is independently reviewed and accepted |
+| Issue #178 | [ADPR-0004](architecture-records/ADPR-0004-canonical-market-validation-composition-authority.md) | [ADR 0027](ADR/0027-canonical-market-validation-composition-authority.md) (Proposed) | ADR draft PR #179; implementation not yet created | ADR drafted from approved ADPR-0004 per Issue #178; awaiting independent review, acceptance, and merge before any implementation may begin |
 
 ## Component Mapping
 
