@@ -45,7 +45,7 @@ def main(argv: list[str]) -> int:
     only by direct construction in `tests/test_mispricing_authority_v1.py`.
     """
     if len(argv) != 2 or argv[0] != "run":
-        print("usage: hunter.mispricing.command run MANIFEST.json")
+        print("usage: hunter mispricing-authority run MANIFEST.json")
         return 1
     manifest_path = Path(argv[1]).resolve()
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))

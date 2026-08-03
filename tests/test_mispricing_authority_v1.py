@@ -490,7 +490,7 @@ def test_missing_application_root_is_rejected(tmp_path: Path, monkeypatch: pytes
 def test_wrong_argv_shape_prints_usage_and_returns_nonzero(capsys: pytest.CaptureFixture[str]) -> None:
     exit_code = mispricing_authority_command.main(["run"])
     assert exit_code == 1
-    assert "usage: hunter.mispricing.command run MANIFEST.json" in capsys.readouterr().out
+    assert "usage: hunter mispricing-authority run MANIFEST.json" in capsys.readouterr().out
 
 
 def test_malformed_manifest_top_level_is_rejected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
