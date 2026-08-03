@@ -325,3 +325,15 @@ Ask for human resolution or create the correct Issue first when explicitly autho
 Never reuse an unrelated Issue number.
 
 Violation of this rule is a governance failure.
+
+---
+
+# Rule 22 — Mandatory Independent Review Gate
+
+Agents must follow the pull-request lifecycle defined by `docs/DEVELOPMENT_GOVERNANCE.md` and the independent-review protocol defined by `docs/AI_REVIEW_PROTOCOL.md`.
+
+Those documents are the exclusive canonical owners of lifecycle stages, review roles, review outcomes, approval criteria, and merge readiness.
+
+This rule adds no independent lifecycle, reviewer, verdict, approval, or merge semantics.
+
+Violation of the canonical governance documents is a governance failure.

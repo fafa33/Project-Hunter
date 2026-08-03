@@ -143,6 +143,43 @@ It does not redefine architecture or implementation contracts.
 
 ---
 
+# Mandatory Hostile Review Gate
+
+Every agent-authored Pull Request must receive an independent hostile review before it may leave Draft status or be merged.
+
+Draft Pull Request creation is not gated. It remains governed by `docs/DEVELOPMENT_GOVERNANCE.md` and may occur after Local Verification.
+
+The hostile reviewer must be independent from the implementation author and must review the exact pair of:
+
+- the proposed source-branch head commit;
+- the target-branch commit against which the change is evaluated.
+
+The hostile reviewer must attempt to reject the change by checking the complete diff and all applicable repository facts, architecture, governance, evidence, tests, traceability, and quality gates.
+
+The hostile reviewer is review-only. The reviewer must not implement fixes, create replacement branches or pull requests, commit, push, or approve its own implementation.
+
+The review report must record:
+
+- reviewer identity;
+- reviewed source commit SHA;
+- reviewed target commit SHA;
+- commands and checks used;
+- environment limitations;
+- blocking findings and non-blocking recommendations;
+- final review outcome.
+
+The canonical passing outcome is:
+
+> No blocking findings were identified.
+
+Any blocking finding produces a changes-required outcome. An unavailable environment, provider, credential, or external condition produces a blocked outcome rather than approval.
+
+The passing outcome is valid only for the exact reviewed source-head and target-commit pair. Any subsequent change to the source branch, or any advance of the target branch beyond the reviewed commit, invalidates the review and requires a new hostile review before the Pull Request may leave Draft status or be merged.
+
+This gate does not replace any additional independent post-PR review required by repository policy.
+
+---
+
 # Blocking Findings
 
 A blocking finding is an issue that makes the contribution unsafe to merge.
