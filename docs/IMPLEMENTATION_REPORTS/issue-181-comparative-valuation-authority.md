@@ -94,7 +94,7 @@ Market Validation adapter, weighting, composition, or activation is introduced; 
   updated to record that a CLI entry point now exists, while explicitly preserving
   the still-true statement that no scheduler, Dashboard field, or Market Validation
   adapter exists)
-- `tests/test_comparative_valuation_authority_v1.py` (new — 15 tests)
+- `tests/test_comparative_valuation_authority_v1.py` (new — 16 tests)
 - `docs/IMPLEMENTATION_REPORTS/issue-181-comparative-valuation-authority.md` (this
   report)
 
@@ -103,7 +103,7 @@ No file under `docs/ADR/`, `docs/architecture-records/`, `docs/CANONICAL_RUNTIME
 
 ## Test coverage
 
-`tests/test_comparative_valuation_authority_v1.py` (15 tests), reusing the identity/
+`tests/test_comparative_valuation_authority_v1.py` (16 tests), reusing the identity/
 candidate/policy-payload builders and native-evidence seeding primitives from
 `tests/test_comparative_valuation_v1.py` so the two suites cannot drift apart on
 what a valid payload looks like:
@@ -120,6 +120,9 @@ what a valid payload looks like:
 - `status` reports unavailable before any record exists, reports a persisted
   `peer_policy` matching a direct repository read (content-hash cross-checked), and
   reports a persisted `assessment` (residual cross-checked).
+- `status` reports a persisted `peer_universe` (unavailable-before-creation and
+  available-after cases), `eligibility_decision`, and `metric_observation` -- all
+  five `_STATUS_TARGETS` are exercised, matching Issue #181's acceptance criterion.
 - Unknown `status` target is rejected.
 - `status`, run repeatedly, never itself writes a record (row count before/after is
   compared across three repeated queries).

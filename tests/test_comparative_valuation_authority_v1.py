@@ -532,6 +532,105 @@ def test_status_reports_persisted_assessment(
     assert output["record"]["raw_log_residual"] == written["raw_log_residual"]
 
 
+def test_status_reports_persisted_peer_universe_eligibility_decision_and_metric_observation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Covers the three status targets not exercised by the dedicated peer_policy and
+    assessment status tests above, so all five record families in `_STATUS_TARGETS`
+    are proven available (and, for peer_universe, unavailable-before-creation) through
+    the CLI, matching Issue #181's acceptance criterion."""
+    unavailable = _run(
+        monkeypatch,
+        tmp_path,
+        _status_manifest(
+            tmp_path,
+            filename="status-universe-before.json",
+            target="peer_universe",
+            known_by=NOW + timedelta(days=1),
+            logical_id="does-not-exist-yet",
+        ),
+        capsys,
+    )
+    assert unavailable["available"] is False
+
+    _seed_native_evidence(tmp_path)
+    policy = _run(monkeypatch, tmp_path, _peer_policy_manifest(tmp_path), capsys)
+    universe = _run(
+        monkeypatch, tmp_path, _peer_universe_manifest(tmp_path, policy_record_id=policy["record_id"]), capsys
+    )
+    decision = _run(
+        monkeypatch,
+        tmp_path,
+        _eligibility_decision_manifest(
+            tmp_path, entity="peer-a", policy_record_id=policy["record_id"], universe_snapshot_id=universe["record_id"]
+        ),
+        capsys,
+    )
+    observation = _run(
+        monkeypatch,
+        tmp_path,
+        _metric_observation_manifest(
+            tmp_path, entity="target", policy_record_id=policy["record_id"], universe_snapshot_id=universe["record_id"]
+        ),
+        capsys,
+    )
+
+    repository = ComparativeValuationRepository(_db_path(tmp_path))
+    universe_record = repository.get_peer_universe(universe["record_id"])
+    decision_record = repository.get_eligibility_decision(decision["record_id"])
+    observation_record = repository.get_metric_observation(observation["record_id"])
+    assert universe_record is not None
+    assert decision_record is not None
+    assert observation_record is not None
+
+    universe_status = _run(
+        monkeypatch,
+        tmp_path,
+        _status_manifest(
+            tmp_path,
+            filename="status-universe-after.json",
+            target="peer_universe",
+            known_by=NOW + timedelta(days=1),
+            logical_id=universe_record.logical_id,
+        ),
+        capsys,
+    )
+    assert universe_status["available"] is True
+    assert universe_status["record"]["record_id"] == universe["record_id"]
+
+    decision_status = _run(
+        monkeypatch,
+        tmp_path,
+        _status_manifest(
+            tmp_path,
+            filename="status-decision.json",
+            target="eligibility_decision",
+            known_by=NOW + timedelta(days=1),
+            logical_id=decision_record.logical_id,
+        ),
+        capsys,
+    )
+    assert decision_status["available"] is True
+    assert decision_status["record"]["record_id"] == decision["record_id"]
+    assert decision_status["record"]["decision"] == "included"
+
+    observation_status = _run(
+        monkeypatch,
+        tmp_path,
+        _status_manifest(
+            tmp_path,
+            filename="status-observation.json",
+            target="metric_observation",
+            known_by=NOW + timedelta(days=1),
+            logical_id=observation_record.logical_id,
+        ),
+        capsys,
+    )
+    assert observation_status["available"] is True
+    assert observation_status["record"]["record_id"] == observation["record_id"]
+    assert observation_status["record"]["comparative_multiple"] == observation["comparative_multiple"]
+
+
 def test_status_rejects_unknown_target(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
