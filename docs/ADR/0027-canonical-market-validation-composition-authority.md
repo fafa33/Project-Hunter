@@ -88,7 +88,7 @@ The existing `WeightEngine` (`src/hunter/weights/engine.py`) retains its existin
 3. If a future implementation cannot prove this exact handoff — that the four legacy weight entries are inactive on this path, that `WeightEngine.apply()`/`WeightEngine.score()` are not invoked over these four family records, and that no contribution is reconstructed from their normalized scalars after `CanonicalMarketValidationCompositionService` has already produced its post-cap value — the valuation-family composition remains unavailable. Ambiguity about this boundary is never resolved in `WeightEngine`'s favor by default; the composition fails closed.
 4. `WeightEngine`'s existing authority over `risk`, `developer`, `protocol`, `future_demand`, `probability`, `pattern_matching`, `technology_necessity`, `capital_rotation`, `necessity_gap`, `validation_health`, `committee`, `whale_intelligence`, `macro_intelligence`, `opportunity_timing`, `narrative`, `news`, and `social` is unchanged by this ADR.
 
-This boundary allocates authority only; it does not itself specify or authorize a `WeightEngine` or `MarketValidationRunner` code change. A future implementation Issue must define the exact mechanism (e.g., a distinct pass-through field, a runtime-conditional weight override, or removal of the four legacy entries) and prove it under the activation gates below.
+This boundary allocates authority only; it does not itself specify or authorize a `WeightEngine` or `EvidenceBackedProjectExecutor` code change. A future implementation Issue must define the exact mechanism (e.g., a distinct pass-through field, a runtime-conditional weight override, or removal of the four legacy entries) and prove it under the activation gates below.
 
 ## Family Normalization Contracts
 
