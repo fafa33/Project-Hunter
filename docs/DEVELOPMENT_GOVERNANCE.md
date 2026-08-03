@@ -203,6 +203,7 @@ A Draft Pull Request may be opened only after implementation and Local Verificat
 A Pull Request may leave Draft status only after:
 
 - required CI Verification has completed successfully;
+- the mandatory independent hostile review defined by `docs/AI_REVIEW_PROTOCOL.md` has completed for the exact current source-head and target-commit pair;
 - Architecture Review has completed;
 - Review Report has been recorded;
 - Final Validation has completed.
@@ -210,6 +211,8 @@ A Pull Request may leave Draft status only after:
 A Pull Request marked **Ready for Review** must not contain unresolved blocking findings.
 
 Opening a Draft Pull Request does not approve implementation, satisfy Architecture Review, establish merge readiness, or authorize merge.
+
+Any change to the source branch, or any advance of the target branch beyond the commit covered by the hostile review, invalidates Draft-to-Ready readiness until the required review is repeated for the new exact pair.
 
 ---
 
