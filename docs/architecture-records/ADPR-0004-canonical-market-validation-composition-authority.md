@@ -3,12 +3,12 @@
 ## Metadata
 
 - ADPR ID: `ADPR-0004`
-- Status: `READY_FOR_REVIEW`
+- Status: `APPROVED`
 - Version: 1.1
 - Author: Codex, on behalf of Issue #173
-- Reviewers: independent architecture review required
+- Reviewers: independent architecture audit recorded on PR #177
 - Created: 2026-08-02
-- Approved: not yet approved
+- Approved: 2026-08-03
 - Related Epic: not yet created
 - Related Issue: [Issue #173](https://github.com/fafa33/Project-Hunter/issues/173)
 - Planned or produced ADR: not yet created
@@ -574,6 +574,7 @@ The ADR may authorize this architecture but must not claim production availabili
 |---|---|---|---|
 | 2026-08-02 | READY_FOR_REVIEW | Initial complete preparation for Issue #173. | Codex |
 | 2026-08-03 | READY_FOR_REVIEW | Incorporated approved review corrections for zero-boundary normalization, enforceable overlapping-evidence exclusion, and the single weighting-owner boundary; preserved all existing constitutional and activation constraints. | Codex; corrections merged through PR #175 |
+| 2026-08-03 | APPROVED | Independent architecture audit against `docs/ARCHITECTURE_AUDIT_PROTOCOL.md`: `READY_FOR_ADR_WITH_MINOR_FINDINGS`, two non-blocking Class A/B findings recorded (stale Traceability cross-reference to PR #176; the Asymmetry exclusion rule's relationship to ADR 0021's literal "remove or cap" instruction should be made explicit in the future ADR draft). No Class C or D finding identified. No ADR is created by this review; implementation remains unauthorized until a future ADR is drafted and independently accepted. | Independent review recorded on PR #177 |
 
 ## Traceability
 
@@ -586,10 +587,13 @@ The ADR may authorize this architecture but must not claim production availabili
 - Implementation plan: not authorized
 - Initial preparation PR: [PR #174](https://github.com/fafa33/Project-Hunter/pull/174), merged as `3209f1f`
 - Approved review-correction PR: [PR #175](https://github.com/fafa33/Project-Hunter/pull/175), merged as `35e68e8`
-- Independent architecture review: pending in [Draft PR #176](https://github.com/fafa33/Project-Hunter/pull/176)
-- Merge commits: `3209f1f`, `35e68e8`
+- Presentation for independent review (no review verdict recorded): [PR #176](https://github.com/fafa33/Project-Hunter/pull/176), merged as `6da3d05`
+- Independent architecture review: `READY_FOR_ADR_WITH_MINOR_FINDINGS`, recorded on [PR #177](https://github.com/fafa33/Project-Hunter/pull/177)
+- Merge commits: `3209f1f`, `35e68e8`, `6da3d05`
 - Release: not yet assigned
 
 ## Immutability and Supersession
 
-After `APPROVED`, this record is historical evidence. Substantive corrections require a new ADPR that explicitly supersedes it. Link completion and typographical corrections must remain auditable. Until approval, independent review may require revisions on the preparation branch.
+This record is now `APPROVED` and is historical evidence. Substantive corrections require a new ADPR that explicitly supersedes it. Link completion and typographical corrections must remain auditable.
+
+Approval of this preparation record authorizes drafting a future ADR for its own independent review and acceptance; it does not itself accept an ADR, and it does not authorize implementation, runtime activation, or any other action this record's own "Out of scope" section excludes. No implementation may proceed until that future ADR exists and is independently accepted.
