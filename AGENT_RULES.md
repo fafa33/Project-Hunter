@@ -325,3 +325,45 @@ Ask for human resolution or create the correct Issue first when explicitly autho
 Never reuse an unrelated Issue number.
 
 Violation of this rule is a governance failure.
+
+---
+
+# Rule 22 — Mandatory Pre-PR Hostile Review Gate
+
+No agent-authored branch may open or update a pull request until a separate reviewer has completed a hostile review of the exact proposed branch head.
+
+The implementation author and hostile reviewer must be different agents or clearly separated sessions with different roles.
+
+The hostile reviewer must attempt to reject the proposed change and must verify, at minimum:
+
+- every factual repository claim against the latest target branch and actual code;
+- every Issue, PR, status, merge SHA, file path, symbol, and traceability reference;
+- governing ADR, ADPR, template, constitution, and governance compliance;
+- document structure and required top-level sections;
+- internal consistency across decisions, evidence, assumptions, falsification, status, and traceability;
+- absence of stale metadata, stale links, guessed identifiers, and inaccurate runtime descriptions;
+- architecture ownership, authority, replay, evidence, missingness, and prohibited-scope boundaries;
+- the complete final diff rather than selected files or the author's summary;
+- required quality gates and repository cleanliness.
+
+The hostile reviewer must return exactly one of:
+
+- `READY_FOR_PR — ZERO_MATERIAL_FINDINGS`
+- `CHANGES_REQUIRED`
+- `BLOCKED`
+
+A pull request may be opened or updated for review only after the exact branch head receives:
+
+`READY_FOR_PR — ZERO_MATERIAL_FINDINGS`
+
+Any code or documentation change after that verdict invalidates the verdict. The hostile review must be repeated on the new exact head before PR creation or review request.
+
+The author must fix all objectively valid findings before the gate can pass. Findings must not be hidden, dismissed, or deferred merely to open the PR.
+
+The hostile reviewer must not implement fixes, create branches, commit, push, open pull requests, or approve the author's work. Its role is review only.
+
+The author must record the reviewer identity, reviewed commit SHA, verdict, commands run, and any environment limitations in the pull-request body.
+
+This gate does not replace independent post-PR review. Copilot or another independent reviewer remains the final external review layer.
+
+Violation of this rule is a governance failure.
