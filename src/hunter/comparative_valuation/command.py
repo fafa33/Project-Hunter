@@ -47,6 +47,14 @@ def main(argv: list[str]) -> int:
     "current" state: every status lookup this module triggers is bounded by the exact
     `effective_as_of`/`known_by` coordinates the manifest declares, resolved
     deterministically by the underlying service's strict-known logic.
+
+    Not dispatched from `hunter.__main__`; not reachable through the `hunter` CLI.
+    ADR 0026 Implementation Prerequisite 9 requires a "disabled-entry-point plan" and
+    Prerequisite 10 requires independent implementation review and post-merge audit
+    "before any production activation" -- neither has occurred yet. This module is
+    exercised only by direct construction in
+    `tests/test_comparative_valuation_authority_v1.py`, mirroring the identical
+    precedent already established for `hunter.evidence_assembly`.
     """
     if len(argv) != 2 or argv[0] != "run":
         print("usage: hunter comparative-valuation-authority run MANIFEST.json")

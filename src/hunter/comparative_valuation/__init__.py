@@ -4,13 +4,23 @@ This package implements the authoritative evidence, persistence, replay,
 correction, validation, and query foundations for `comparative_valuation` as
 defined by ADR 0026 and ADPR-0003's Option 2C (versioned point-in-time candidate
 universe plus service-owned eligibility decisions). It is a *foundation*: it does
-not wire any scheduler, Dashboard field, or Market Validation adapter, and it
+not wire any CLI, scheduler, Dashboard field, or Market Validation adapter, and it
 never produces a `[0,1]` normalized Market Validation input (no calibrated
-normalization exists). A standalone operator-facing production entry point
-(`hunter comparative-valuation-authority`, `hunter.comparative_valuation.command`,
-Issue #181) exposes this foundation's existing write and read-only status
+normalization exists).
+
+`hunter.comparative_valuation.command` (Issue #181) implements a manifest-driven
+orchestration module exposing this foundation's existing write and read-only status
 operations without adding any new authority, validation, or Market Validation
-wiring.
+wiring. It is deliberately NOT dispatched from `hunter.__main__` and is not reachable
+through the `hunter` CLI: ADR 0026 Implementation Prerequisite 9 requires a
+"disabled-entry-point plan" and Prerequisite 10 requires independent implementation
+review and post-merge audit "before any production activation", neither of which has
+occurred. The module is exercised directly by
+`tests/test_comparative_valuation_authority_v1.py` so it is ready to be wired in
+once that authorization exists, mirroring the identical precedent already
+established for `hunter.evidence_assembly` (see
+`docs/CANONICAL_RUNTIME_ARCHITECTURE.md`'s Evidence Assembly Authority
+classification).
 
 The five immutable record families are:
     - PeerUniversePolicyRecord

@@ -21,6 +21,7 @@ policy/candidate/identity payload looks like.
 from __future__ import annotations
 
 import json
+from dataclasses import asdict
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -382,65 +383,169 @@ def test_divergent_peer_policy_duplicate_via_cli_is_rejected(
         comparative_valuation_authority_command.main(["run", str(second_manifest)])
 
 
-# E. Strict-known replay through the production entry point ---------------------------
+# E. CLI-construction / direct-construction field equivalence --------------------------
 
 
-def test_strict_known_replay_through_cli_reproduces_direct_construction(
+def test_cli_construction_is_field_equivalent_to_direct_service_construction(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    _seed_native_evidence(tmp_path)
-    policy = _run(monkeypatch, tmp_path, _peer_policy_manifest(tmp_path), capsys)
-    universe = _run(
-        monkeypatch, tmp_path, _peer_universe_manifest(tmp_path, policy_record_id=policy["record_id"]), capsys
+    """Independently constructs the complete record chain twice, from the same
+    semantic inputs, into two completely separate databases:
+
+    - Path A: entirely through the CLI (`comparative_valuation_authority_command.main`).
+    - Path B: entirely through direct `CanonicalComparativeValuationService`
+      construction, never touching the CLI/command module.
+
+    A prior version of this test only re-read what the CLI itself had written and
+    confirmed a direct-service *read* call returned the same record -- that proves
+    persistence/replay compatibility, but it cannot detect a CLI argument-mapping bug
+    (a dropped field, a field mapped to the wrong keyword, a type-coercion difference)
+    because both sides of the comparison originate from the one CLI write.
+
+    This test instead performs Path B as a fully independent *construction*, then
+    asserts complete dataclass-field equality (via `asdict`) between the two paths for
+    every one of the five record families -- covering canonical identity
+    (`record_id`/`logical_id`), the deterministic `content_hash`, methodology/policy
+    version fields, provenance, and every other ADR 0026 field. If CLI argument
+    mapping ever diverges from direct construction, the computed `content_hash` (and
+    therefore `record_id`) changes and this test fails.
+    """
+    cli_root = tmp_path / "cli-path"
+    direct_root = tmp_path / "direct-path"
+    cli_root.mkdir()
+    direct_root.mkdir()
+
+    # Path A: construct the complete chain entirely through the CLI.
+    _seed_native_evidence(cli_root)
+    policy_a = _run(monkeypatch, cli_root, _peer_policy_manifest(cli_root), capsys)
+    universe_a = _run(
+        monkeypatch, cli_root, _peer_universe_manifest(cli_root, policy_record_id=policy_a["record_id"]), capsys
     )
+    decisions_a: dict[str, dict] = {}
     for entity in ("peer-a", "peer-b", "peer-c"):
-        _run(
+        decisions_a[entity] = _run(
             monkeypatch,
-            tmp_path,
+            cli_root,
             _eligibility_decision_manifest(
-                tmp_path,
+                cli_root,
                 filename=f"decision-{entity}.json",
                 entity=entity,
-                policy_record_id=policy["record_id"],
-                universe_snapshot_id=universe["record_id"],
+                policy_record_id=policy_a["record_id"],
+                universe_snapshot_id=universe_a["record_id"],
             ),
             capsys,
         )
+    observations_a: dict[str, dict] = {}
     for entity in ("target", "peer-a", "peer-b", "peer-c"):
-        _run(
+        observations_a[entity] = _run(
             monkeypatch,
-            tmp_path,
+            cli_root,
             _metric_observation_manifest(
-                tmp_path,
+                cli_root,
                 filename=f"observation-{entity}.json",
                 entity=entity,
-                policy_record_id=policy["record_id"],
-                universe_snapshot_id=universe["record_id"],
+                policy_record_id=policy_a["record_id"],
+                universe_snapshot_id=universe_a["record_id"],
             ),
             capsys,
         )
-    via_cli = _run(
+    assessment_a = _run(
         monkeypatch,
-        tmp_path,
-        _assess_manifest(tmp_path, policy_record_id=policy["record_id"], universe_snapshot_id=universe["record_id"]),
+        cli_root,
+        _assess_manifest(
+            cli_root, policy_record_id=policy_a["record_id"], universe_snapshot_id=universe_a["record_id"]
+        ),
         capsys,
     )
 
-    direct_repository = ComparativeValuationRepository(_db_path(tmp_path))
+    # Path B: construct the identical logical chain directly through the service, in a
+    # completely separate database, never touching the CLI/command module.
+    _seed_native_evidence(direct_root)
     direct_service = CanonicalComparativeValuationService(
-        repository=direct_repository,
-        value_capture_repository=SupplyAndValueCaptureRepository(_db_path(tmp_path)),
-        market_fact_repository=ObservedMarketFactRepository(_db_path(tmp_path)),
-        application_root=tmp_path,
+        repository=ComparativeValuationRepository(_db_path(direct_root)),
+        value_capture_repository=SupplyAndValueCaptureRepository(_db_path(direct_root)),
+        market_fact_repository=ObservedMarketFactRepository(_db_path(direct_root)),
+        application_root=direct_root,
     )
-    assessment_record = direct_repository.get_assessment(via_cli["record_id"])
-    assert assessment_record is not None
-    replayed = direct_service.strict_known_assessment(
-        effective_as_of=NOW, known_by=RECORDED, logical_id=assessment_record.logical_id
+    policy_b = direct_service.persist_peer_policy(**policy_payload())
+    universe_b = direct_service.persist_peer_universe(
+        identity=identity("target"),
+        policy_record_id=policy_b.record_id,
+        cutoff=NOW,
+        candidates=tuple(candidate(entity) for entity in ("peer-a", "peer-b", "peer-c")),
+        recorded_at=RECORDED,
+        known_at=RECORDED,
     )
-    assert replayed is not None
-    assert replayed.record_id == via_cli["record_id"]
-    assert replayed.raw_log_residual == via_cli["raw_log_residual"]
+    decisions_b = {
+        entity: direct_service.persist_eligibility_decision(
+            target_identity=identity("target"),
+            candidate_identity=identity(entity),
+            policy_record_id=universe_b.policy_record_id,
+            universe_snapshot_id=universe_b.record_id,
+            effective_at=NOW,
+            recorded_at=RECORDED,
+            known_at=RECORDED,
+        )
+        for entity in ("peer-a", "peer-b", "peer-c")
+    }
+    observations_b = {
+        entity: direct_service.persist_metric_observation(
+            identity=identity(entity),
+            policy_record_id=universe_b.policy_record_id,
+            universe_snapshot_id=universe_b.record_id,
+            evidence_type="official_disclosure",
+            rule_type="fee_distribution",
+            effective_at=NOW,
+            recorded_at=RECORDED,
+            known_at=RECORDED,
+        )
+        for entity in ("target", "peer-a", "peer-b", "peer-c")
+    }
+    assessment_b = direct_service.assess(
+        identity=identity("target"),
+        policy_record_id=universe_b.policy_record_id,
+        universe_snapshot_id=universe_b.record_id,
+        evidence_type="official_disclosure",
+        rule_type="fee_distribution",
+        effective_at=NOW,
+        recorded_at=RECORDED,
+        known_at=RECORDED,
+    )
+
+    # Full structural equality, field by field, for every record family: canonical
+    # identity, deterministic content_hash, methodology/policy version fields,
+    # provenance, and every replay-relevant field ADR 0026 requires.
+    repository_a = ComparativeValuationRepository(_db_path(cli_root))
+
+    policy_a_record = repository_a.get_peer_policy(policy_a["record_id"])
+    assert policy_a_record is not None
+    assert policy_a_record.record_id == policy_b.record_id
+    assert policy_a_record.logical_id == policy_b.logical_id
+    assert policy_a_record.content_hash == policy_b.content_hash
+    assert asdict(policy_a_record) == asdict(policy_b)
+
+    universe_a_record = repository_a.get_peer_universe(universe_a["record_id"])
+    assert universe_a_record is not None
+    assert universe_a_record.record_id == universe_b.record_id
+    assert asdict(universe_a_record) == asdict(universe_b)
+
+    for entity in ("peer-a", "peer-b", "peer-c"):
+        decision_a_record = repository_a.get_eligibility_decision(decisions_a[entity]["record_id"])
+        assert decision_a_record is not None
+        assert decision_a_record.record_id == decisions_b[entity].record_id
+        assert asdict(decision_a_record) == asdict(decisions_b[entity])
+
+    for entity in ("target", "peer-a", "peer-b", "peer-c"):
+        observation_a_record = repository_a.get_metric_observation(observations_a[entity]["record_id"])
+        assert observation_a_record is not None
+        assert observation_a_record.record_id == observations_b[entity].record_id
+        assert asdict(observation_a_record) == asdict(observations_b[entity])
+
+    assessment_a_record = repository_a.get_assessment(assessment_a["record_id"])
+    assert assessment_a_record is not None
+    assert assessment_a_record.record_id == assessment_b.record_id
+    assert assessment_a_record.raw_log_residual == assessment_b.raw_log_residual
+    assert asdict(assessment_a_record) == asdict(assessment_b)
 
 
 # F. Read-only status query ------------------------------------------------------------
@@ -696,15 +801,26 @@ def test_repository_bypass_remains_impossible() -> None:
         assert not hasattr(ComparativeValuationRepository, name)
 
 
-# Dispatch smoke test ---------------------------------------------------------------------
+# I. Entry point is implemented but deliberately not activated -------------------------
 
 
-def test_dispatch_from_hunter_main_reaches_comparative_valuation_authority_command(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+def test_hunter_main_does_not_dispatch_comparative_valuation_authority(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Regression guard for the hostile-review BLOCKER finding on PR #182: ADR 0026
+    Implementation Prerequisite 9 ("disabled-entry-point plans") and Prerequisite 10
+    (independent implementation review and post-merge audit "before any production
+    activation") are not yet satisfied, so `hunter.comparative_valuation.command` must
+    remain implemented and directly testable (as every other test in this file proves)
+    but unreachable through `hunter.__main__` / the `hunter` CLI -- mirroring the
+    identical precedent already established for `hunter.evidence_assembly`. If a
+    future change wires this verb back into `hunter.__main__` without that
+    authorization, this test fails."""
     monkeypatch.setenv("HUNTER_APPLICATION_ROOT", str(tmp_path))
     manifest_path = _peer_policy_manifest(tmp_path)
-    exit_code = hunter_main.main(["comparative-valuation-authority", "run", str(manifest_path)])
-    assert exit_code == 0
-    output = json.loads(capsys.readouterr().out)
-    assert output["operation"] == "peer_policy"
+    with pytest.raises(SystemExit) as excinfo:
+        hunter_main.main(["comparative-valuation-authority", "run", str(manifest_path)])
+    # falls through to hunter.cli's argparse dispatcher, which rejects the unknown verb
+    assert excinfo.value.code == 2
+    # and, independently, no repository write occurred as a side effect of the attempt
+    assert not _db_path(tmp_path).exists()
