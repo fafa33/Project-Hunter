@@ -328,23 +328,20 @@ Violation of this rule is a governance failure.
 
 ---
 
-# Rule 22 — Mandatory Pre-PR Hostile Review Gate
+# Rule 22 — Mandatory Hostile Review Gate Before Ready for Review
 
-No agent-authored branch may open or update a pull request until a separate reviewer has completed a hostile review of the exact proposed branch head.
+This rule is an operational entry point only. It does not own, define, or redefine pull-request lifecycle stages, reviewer responsibilities, review outcomes, or approval criteria.
+
+- `docs/DEVELOPMENT_GOVERNANCE.md` remains the canonical owner of the pull-request lifecycle, including Draft Pull Request creation, the transition to Ready for Review, and merge readiness.
+- `docs/AI_REVIEW_PROTOCOL.md` remains the canonical owner of independent review, reviewer responsibilities, review outcomes, and approval criteria.
+
+Draft Pull Request creation follows `docs/DEVELOPMENT_GOVERNANCE.md` Stage 4 unchanged: a Draft Pull Request may be opened immediately after Local Verification is complete. This rule does not gate Draft Pull Request creation.
+
+No agent-authored pull request may move from Draft to Ready for Review, and none may be merged, until a separate reviewer has completed a hostile review of the exact proposed branch head under `docs/AI_REVIEW_PROTOCOL.md`.
 
 The implementation author and hostile reviewer must be different agents or clearly separated sessions with different roles.
 
-The hostile reviewer must attempt to reject the proposed change and must verify, at minimum:
-
-- every factual repository claim against the latest target branch and actual code;
-- every Issue, PR, status, merge SHA, file path, symbol, and traceability reference;
-- governing ADR, ADPR, template, constitution, and governance compliance;
-- document structure and required top-level sections;
-- internal consistency across decisions, evidence, assumptions, falsification, status, and traceability;
-- absence of stale metadata, stale links, guessed identifiers, and inaccurate runtime descriptions;
-- architecture ownership, authority, replay, evidence, missingness, and prohibited-scope boundaries;
-- the complete final diff rather than selected files or the author's summary;
-- required quality gates and repository cleanliness.
+The hostile reviewer must attempt to reject the proposed change, evaluating it against the reviewer responsibilities `docs/AI_REVIEW_PROTOCOL.md` already defines.
 
 The hostile reviewer must return exactly one of:
 
@@ -352,13 +349,13 @@ The hostile reviewer must return exactly one of:
 - `CHANGES_REQUIRED`
 - `BLOCKED`
 
-A pull request may be opened or updated for review only after the exact branch head receives:
+The Draft-to-Ready-for-Review transition, and merge, are permitted only after the exact branch head receives:
 
 `READY_FOR_PR — ZERO_MATERIAL_FINDINGS`
 
-Any code or documentation change after that verdict invalidates the verdict. The hostile review must be repeated on the new exact head before PR creation or review request.
+Any code or documentation change after that verdict invalidates the verdict. The hostile review must be repeated on the new exact head before the transition to Ready for Review or merge.
 
-The author must fix all objectively valid findings before the gate can pass. Findings must not be hidden, dismissed, or deferred merely to open the PR.
+The author must fix all objectively valid findings before the gate can pass. Findings must not be hidden, dismissed, or deferred merely to pass the gate.
 
 The hostile reviewer must not implement fixes, create branches, commit, push, open pull requests, or approve the author's work. Its role is review only.
 
