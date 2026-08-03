@@ -4,9 +4,13 @@ This package implements the authoritative evidence, persistence, replay,
 correction, validation, and query foundations for `comparative_valuation` as
 defined by ADR 0026 and ADPR-0003's Option 2C (versioned point-in-time candidate
 universe plus service-owned eligibility decisions). It is a *foundation*: it does
-not wire any CLI, scheduler, Dashboard field, Market Validation adapter, or
-production entry point, and it never produces a `[0,1]` normalized Market
-Validation input (no calibrated normalization exists).
+not wire any scheduler, Dashboard field, or Market Validation adapter, and it
+never produces a `[0,1]` normalized Market Validation input (no calibrated
+normalization exists). A standalone operator-facing production entry point
+(`hunter comparative-valuation-authority`, `hunter.comparative_valuation.command`,
+Issue #181) exposes this foundation's existing write and read-only status
+operations without adding any new authority, validation, or Market Validation
+wiring.
 
 The five immutable record families are:
     - PeerUniversePolicyRecord

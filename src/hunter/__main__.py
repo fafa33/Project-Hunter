@@ -4,6 +4,7 @@ import sys
 
 from hunter.cli import main as cli_main
 from hunter.committee.command import main as committee_authority_main
+from hunter.comparative_valuation.command import main as comparative_valuation_authority_main
 from hunter.valuation_authority.command import main as valuation_authority_main
 from hunter.valuation_evidence.command import main as valuation_evidence_main
 
@@ -16,6 +17,8 @@ def main(argv: list[str] | None = None) -> int:
         return valuation_evidence_main(arguments[1:])
     if arguments and arguments[0] == "valuation-authority":
         return valuation_authority_main(arguments[1:])
+    if arguments and arguments[0] == "comparative-valuation-authority":
+        return comparative_valuation_authority_main(arguments[1:])
     return cli_main(arguments)
 
 
