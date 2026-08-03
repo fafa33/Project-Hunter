@@ -328,39 +328,12 @@ Violation of this rule is a governance failure.
 
 ---
 
-# Rule 22 — Mandatory Hostile Review Gate Before Ready for Review
+# Rule 22 — Mandatory Independent Review Gate
 
-This rule is an operational entry point only. It does not own, define, or redefine pull-request lifecycle stages, reviewer responsibilities, review outcomes, or approval criteria.
+Agents must follow the pull-request lifecycle defined by `docs/DEVELOPMENT_GOVERNANCE.md` and the independent-review protocol defined by `docs/AI_REVIEW_PROTOCOL.md`.
 
-- `docs/DEVELOPMENT_GOVERNANCE.md` remains the canonical owner of the pull-request lifecycle, including Draft Pull Request creation, the transition to Ready for Review, and merge readiness.
-- `docs/AI_REVIEW_PROTOCOL.md` remains the canonical owner of independent review, reviewer responsibilities, review outcomes, and approval criteria.
+Those documents are the exclusive canonical owners of lifecycle stages, review roles, review outcomes, approval criteria, and merge readiness.
 
-Draft Pull Request creation follows `docs/DEVELOPMENT_GOVERNANCE.md` Stage 4 unchanged: a Draft Pull Request may be opened immediately after Local Verification is complete. This rule does not gate Draft Pull Request creation.
+This rule adds no independent lifecycle, reviewer, verdict, approval, or merge semantics.
 
-No agent-authored pull request may move from Draft to Ready for Review, and none may be merged, until a separate reviewer has completed a hostile review of the exact proposed branch head under `docs/AI_REVIEW_PROTOCOL.md`.
-
-The implementation author and hostile reviewer must be different agents or clearly separated sessions with different roles.
-
-The hostile reviewer must attempt to reject the proposed change, evaluating it against the reviewer responsibilities that `docs/AI_REVIEW_PROTOCOL.md` already defines.
-
-The hostile reviewer must return exactly one of the following local gate signals. These are this rule's own pass/fail record for the Draft-to-Ready-for-Review transition, not a new governance-verdict category alongside `docs/DEVELOPMENT_GOVERNANCE.md`'s implementer-declared states or `docs/AI_REVIEW_PROTOCOL.md`'s approval outcome:
-
-- `READY_FOR_PR — ZERO_MATERIAL_FINDINGS` — equivalent to no blocking findings under `docs/AI_REVIEW_PROTOCOL.md`;
-- `CHANGES_REQUIRED` — one or more blocking findings remain under `docs/AI_REVIEW_PROTOCOL.md`;
-- `BLOCKED` — review cannot be completed because of an unavailable environment, provider, credential, or external condition.
-
-The Draft-to-Ready-for-Review transition, and merge, are permitted only after the exact branch head receives:
-
-`READY_FOR_PR — ZERO_MATERIAL_FINDINGS`
-
-The verdict is bound to the exact pair of the reviewed source branch head and the exact target-branch commit it was reviewed against. Any code or documentation change to the source branch, or any advance of the target branch past the commit reviewed, invalidates the verdict. The hostile review must be repeated against the new exact source head and the new exact target commit before the transition to Ready for Review or merge.
-
-The author must fix all objectively valid findings before the gate can pass. Findings must not be hidden, dismissed, or deferred merely to pass the gate.
-
-The hostile reviewer must not implement fixes, create branches, commit, push, open pull requests, or approve the author's work. Its role is review only.
-
-The author must record the reviewer identity, reviewed source commit SHA, reviewed target commit SHA, verdict, commands run, and any environment limitations in the pull-request body.
-
-This gate does not replace independent post-PR review. Copilot or another independent reviewer remains the final external review layer.
-
-Violation of this rule is a governance failure.
+Violation of the canonical governance documents is a governance failure.
