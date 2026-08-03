@@ -131,6 +131,7 @@ Conflicts must be resolved before implementation proceeds.
 | [0024](0024-valuation-scalar-semantics-boundary.md) | Valuation Scalar Semantics Boundary | Accepted | Amends ADR 0020/0021/0022 `valuation`-specific language to keep valuation structured and non-directional; reserves market-relative scoring for mispricing |
 | [0025](0025-canonical-valuation-evidence-assembly-authority.md) | Canonical Valuation Evidence Assembly Authority | Accepted | Service-owned lossless composition of native Fundamental Valuation Evidence into a distinct Assembled Fundamental Evidence record family; amends ADR 0021 (Layer 2 boundaries) and ADR 0022 (methodology-conditional inputs, persistence, prohibited-methodology clarification); relies on ADR 0020 strict-known replay without amending it |
 | [0026](0026-canonical-comparative-valuation-methodology.md) | Canonical Comparative Valuation Methodology | Accepted | First-entity-class peer authority, eligibility, compatible-metric, immutable-record, replay, confidence, missingness, and fail-closed activation contract |
+| [0027](0027-canonical-market-validation-composition-authority.md) | Canonical Market Validation Composition Authority | Proposed | Composition ownership, exact-version adapters, family normalization contracts, `WeightEngine` boundary, correlation groups and caps, residual independence, immutable composition snapshots, replay, fail-closed behavior, activation, canary, rollback, and downstream boundaries for the valuation family |
 
 ## Creating a New ADR
 
