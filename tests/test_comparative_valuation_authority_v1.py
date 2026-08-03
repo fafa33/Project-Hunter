@@ -1,15 +1,18 @@
 """Production execution path for the existing canonical Comparative Valuation
 authority (`CanonicalComparativeValuationService`, ADR 0026), exercised through the
-new `hunter comparative-valuation-authority run MANIFEST.json` CLI
-(`hunter.comparative_valuation.command`), added by Issue #181.
+new manifest-driven orchestration module `hunter.comparative_valuation.command`
+(`main(["run", MANIFEST_PATH])`), added by Issue #181. This module is deliberately
+not dispatched from `hunter.__main__` and is not reachable through the `hunter` CLI
+(see `test_hunter_main_does_not_dispatch_comparative_valuation_authority` below); it
+is exercised only by direct construction, exactly as every test in this file does.
 
-This suite proves the new entry point is a pure orchestration layer -- it
+This suite proves the new orchestration module is a pure orchestration layer -- it
 reimplements no validation, formula, replay, or persistence logic of its own. Every
 guarantee already independently audited on the underlying service (strict-known
 selection, truthful missingness, coverage gates, append-only correction with
 branching-lineage rejection, repository-bypass rejection) is proven here to hold
-identically when driven through the CLI, not just through direct construction as in
-`test_comparative_valuation_v1.py`.
+identically when driven through `hunter.comparative_valuation.command`, not just
+through direct service construction as in `test_comparative_valuation_v1.py`.
 
 Fixture helpers (identity/candidate/policy_payload builders and native-evidence
 seeding primitives) are imported from `test_comparative_valuation_v1` rather than
@@ -64,14 +67,14 @@ def _seed_native_evidence(
 ) -> None:
     """Seeds the complete native evidence chain (fully-diluted observed market value,
     value-capture flow evidence, fully-diluted supply, value-capture rule) at the exact
-    canonical path `hunter comparative-valuation-authority` resolves
+    canonical path `hunter.comparative_valuation.command` resolves
     (`<application_root>/data/data_ops.sqlite`), using only the existing,
     already-audited `value_capture`/`market_facts` services -- the identical ingestion
-    `Fixture` in test_comparative_valuation_v1.py performs, but pointed at the CLI's
-    canonical persistence path rather than an arbitrary fixture path. Evidence
-    ingestion is out of scope for this CLI; only peer_policy/peer_universe/
-    eligibility_decision/metric_observation/assess are driven through the new entry
-    point in these tests."""
+    `Fixture` in test_comparative_valuation_v1.py performs, but pointed at the
+    orchestration module's canonical persistence path rather than an arbitrary
+    fixture path. Evidence ingestion is out of scope for this module; only
+    peer_policy/peer_universe/eligibility_decision/metric_observation/assess are
+    driven through it in these tests."""
     db_path = _db_path(tmp_path)
     verification_keys = ValueCaptureVerificationKeyRegistry({SIGNING_KEY_ID: SIGNING_KEY})
     vc_repository = SupplyAndValueCaptureRepository(db_path)
@@ -383,7 +386,7 @@ def test_divergent_peer_policy_duplicate_via_cli_is_rejected(
         comparative_valuation_authority_command.main(["run", str(second_manifest)])
 
 
-# E. CLI-construction / direct-construction field equivalence --------------------------
+# E. Orchestration-module-construction / direct-construction field equivalence --------
 
 
 def test_cli_construction_is_field_equivalent_to_direct_service_construction(
@@ -392,30 +395,34 @@ def test_cli_construction_is_field_equivalent_to_direct_service_construction(
     """Independently constructs the complete record chain twice, from the same
     semantic inputs, into two completely separate databases:
 
-    - Path A: entirely through the CLI (`comparative_valuation_authority_command.main`).
+    - Path A: entirely through the orchestration module
+      (`comparative_valuation_authority_command.main`) -- not through the `hunter`
+      CLI, which does not dispatch to it (see
+      `test_hunter_main_does_not_dispatch_comparative_valuation_authority` below).
     - Path B: entirely through direct `CanonicalComparativeValuationService`
-      construction, never touching the CLI/command module.
+      construction, never touching the orchestration module.
 
-    A prior version of this test only re-read what the CLI itself had written and
-    confirmed a direct-service *read* call returned the same record -- that proves
-    persistence/replay compatibility, but it cannot detect a CLI argument-mapping bug
-    (a dropped field, a field mapped to the wrong keyword, a type-coercion difference)
-    because both sides of the comparison originate from the one CLI write.
+    A prior version of this test only re-read what the orchestration module had
+    itself written and confirmed a direct-service *read* call returned the same
+    record -- that proves persistence/replay compatibility, but it cannot detect an
+    argument-mapping bug in the module (a dropped field, a field mapped to the wrong
+    keyword, a type-coercion difference) because both sides of the comparison
+    originate from the one write.
 
     This test instead performs Path B as a fully independent *construction*, then
     asserts complete dataclass-field equality (via `asdict`) between the two paths for
     every one of the five record families -- covering canonical identity
     (`record_id`/`logical_id`), the deterministic `content_hash`, methodology/policy
-    version fields, provenance, and every other ADR 0026 field. If CLI argument
-    mapping ever diverges from direct construction, the computed `content_hash` (and
-    therefore `record_id`) changes and this test fails.
+    version fields, provenance, and every other ADR 0026 field. If the orchestration
+    module's argument mapping ever diverges from direct construction, the computed
+    `content_hash` (and therefore `record_id`) changes and this test fails.
     """
     cli_root = tmp_path / "cli-path"
     direct_root = tmp_path / "direct-path"
     cli_root.mkdir()
     direct_root.mkdir()
 
-    # Path A: construct the complete chain entirely through the CLI.
+    # Path A: construct the complete chain entirely through the orchestration module.
     _seed_native_evidence(cli_root)
     policy_a = _run(monkeypatch, cli_root, _peer_policy_manifest(cli_root), capsys)
     universe_a = _run(
@@ -459,7 +466,7 @@ def test_cli_construction_is_field_equivalent_to_direct_service_construction(
     )
 
     # Path B: construct the identical logical chain directly through the service, in a
-    # completely separate database, never touching the CLI/command module.
+    # completely separate database, never touching the orchestration module.
     _seed_native_evidence(direct_root)
     direct_service = CanonicalComparativeValuationService(
         repository=ComparativeValuationRepository(_db_path(direct_root)),
@@ -643,7 +650,7 @@ def test_status_reports_persisted_peer_universe_eligibility_decision_and_metric_
     """Covers the three status targets not exercised by the dedicated peer_policy and
     assessment status tests above, so all five record families in `_STATUS_TARGETS`
     are proven available (and, for peer_universe, unavailable-before-creation) through
-    the CLI, matching Issue #181's acceptance criterion."""
+    the orchestration module, matching Issue #181's acceptance criterion."""
     unavailable = _run(
         monkeypatch,
         tmp_path,
@@ -796,7 +803,8 @@ def test_wrong_argv_shape_prints_usage_and_returns_nonzero(capsys: pytest.Captur
 
 def test_repository_bypass_remains_impossible() -> None:
     """Mirrors test_valuation_authority_v1.py's equivalent assertion: the repository
-    this CLI drives exposes no public write/apply method of its own."""
+    this orchestration module drives exposes no public write/apply method of its
+    own."""
     for name in ("save", "apply", "write", "persist", "assess", "replay"):
         assert not hasattr(ComparativeValuationRepository, name)
 
