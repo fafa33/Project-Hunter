@@ -55,6 +55,7 @@ Records in `PROPOSED`, `IN_RESEARCH`, or `READY_FOR_REVIEW` state are listed her
 |---|---|---|---|
 | not applicable | [ADPR-0001](architecture-records/ADPR-0001-architecture-decision-preparation-framework.md) | Governance Stage 1 preparation framework; no architectural decision created | not applicable |
 | [ADR 0026](ADR/0026-canonical-comparative-valuation-methodology.md) | [ADPR-0003](architecture-records/ADPR-0003-canonical-comparative-valuation.md) | First methodology and authority contract for Canonical Comparative Valuation | Accepted and implemented through PR #161 |
+| [ADR 0027](ADR/0027-canonical-market-validation-composition-authority.md) | [ADPR-0004](architecture-records/ADPR-0004-canonical-market-validation-composition-authority.md) | Composition ownership, exact-version adapters, family normalization, `WeightEngine` boundary, correlation/caps, residual independence, replay, and activation gates for the valuation family | Proposed; drafted under Issue #178; pending independent review and acceptance; no implementation or activation authorized |
 
 ## Epic and Issue Mapping
 
@@ -65,14 +66,15 @@ Records in `PROPOSED`, `IN_RESEARCH`, or `READY_FOR_REVIEW` state are listed her
 | Issue #162 | not applicable | ADR 0021 | PR #163 | Canonical Mispricing foundation implemented; merge `a9f46f1` |
 | Issue #164 | not applicable | ADR 0021 | PR #165 | Canonical Asymmetry foundation implemented; merge `99c95f0` |
 | Issue #166 | not applicable | ADR 0021 / ADR 0026 | PR #167 merged; technical audit still pending | Post-merge valuation-family stabilization audit and documentation coherence |
-| Issue #173 | [ADPR-0004](architecture-records/ADPR-0004-canonical-market-validation-composition-authority.md) | not yet created | Preparation PR #174; approved correction PR #175; implementation not yet created | Active architecture preparation awaiting independent review; no ADR, implementation, or activation authorized |
+| Issue #173 | [ADPR-0004](architecture-records/ADPR-0004-canonical-market-validation-composition-authority.md) | [ADR 0027](ADR/0027-canonical-market-validation-composition-authority.md) (Proposed) | Preparation PR #174; approved correction PR #175; implementation not yet created | Active architecture preparation; independent audit recorded on PR #177 (not yet merged); no implementation or activation authorized |
+| Issue #178 | [ADPR-0004](architecture-records/ADPR-0004-canonical-market-validation-composition-authority.md) | [ADR 0027](ADR/0027-canonical-market-validation-composition-authority.md) (Proposed) | ADR draft PR not yet merged; implementation not yet created | ADR drafted from approved ADPR-0004 per Issue #178; awaiting independent review, acceptance, and merge before any implementation may begin |
 
 ## Component Mapping
 
 | Component or architectural area | Active ADPRs | Accepted ADRs | Notes |
 |---|---|---|---|
 | Discovery | | | |
-| Validation | [ADPR-0004](architecture-records/ADPR-0004-canonical-market-validation-composition-authority.md) | ADR 0016, ADR 0020, ADR 0021, ADR 0024, ADR 0026 | Prepares the normalization, correlation, anti-double-counting, replay, persistence, activation, rollback, canary, and ownership decision space for Canonical Market Validation; no runtime activation authorized |
+| Validation | [ADPR-0004](architecture-records/ADPR-0004-canonical-market-validation-composition-authority.md) | ADR 0016, ADR 0020, ADR 0021, ADR 0024, ADR 0026, [ADR 0027](ADR/0027-canonical-market-validation-composition-authority.md) (Proposed) | Binding normalization, correlation, anti-double-counting, `WeightEngine` boundary, replay, persistence, activation, rollback, canary, and ownership decisions for Canonical Market Validation composition are drafted in ADR 0027, pending independent review and acceptance; no runtime activation authorized |
 | Evidence | [ADPR-0002](architecture-records/ADPR-0002-disclosure-architecture-classification.md) | not applicable | Enumerates options for classifying disclosure structure prior to or independent of acquisition; no ADR produced yet |
 | Valuation | [ADPR-0002](architecture-records/ADPR-0002-disclosure-architecture-classification.md) | ADR 0021, ADR 0022, ADR 0024, ADR 0025, ADR 0026 | Valuation, Comparative Valuation, Mispricing, and Asymmetry foundations are implemented as separate authorities. Runtime normalization and downstream Market Validation composition remain separately governed and non-activated unless expressly authorized. |
 | Opportunity assessment and ranking | | | |
