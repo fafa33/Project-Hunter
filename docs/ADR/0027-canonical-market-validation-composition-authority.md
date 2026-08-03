@@ -12,7 +12,7 @@ This ADR is drafted for independent architecture review. It does not authorize i
 
 ADR 0021 assigns `CanonicalValuationService`, `CanonicalComparativeValuationService`, `CanonicalMispricingService`, and `CanonicalAsymmetryService` sole ownership of the `valuation`, `comparative_valuation`, `mispricing`, and `asymmetry` assessments. ADR 0024 removes directional scalar semantics from `valuation`. ADR 0025 gives Assembled Fundamental Evidence a distinct owner with no implicit downstream composition right. ADR 0026 defines the first Comparative Valuation methodology and explicitly defers downstream composition, caps, residual independence, and weighting to a separate accepted ADR. ADR 0020 requires every Market Validation input to satisfy an exact semantic contract under strict-known replay and prohibits similarly named substitutes. ADR 0016 makes Canonical Market Validation the sole production analytical composition runtime and prohibits a parallel or competing composition authority.
 
-No accepted ADR currently authorizes Canonical Market Validation to accept, normalize, correlate, cap, persist, replay, activate, canary, or roll back a contribution from any of the four valuation-family services. `docs/architecture-index.md` and the four services' own governing ADRs confirm all four scalar inputs remain explicitly unavailable for this reason, not because of an implementation defect.
+No accepted ADR currently authorizes Canonical Market Validation to accept, normalize, correlate, cap, persist, replay, activate, canary, or roll back a contribution from any of the four valuation-family services. `docs/architecture-index.md` and the four services' own governing ADRs confirm all four valuation-family inputs — the structured, zero-weight `valuation` reference and the three weighted scalar inputs `comparative_valuation`, `mispricing`, and `asymmetry` — remain explicitly unavailable for this reason, not because of an implementation defect.
 
 Independent inspection of the current runtime confirms this gap is not merely theoretical. `src/hunter/market_validation/runner.py` already carries `EngineValidationSource` records named `valuation`, `comparative_valuation`, `mispricing`, and `asymmetry`; its `_known_invalid_deferred_alias` function currently and unconditionally rejects every one of them, which is the correct fail-closed behavior ADR 0020, ADR 0021, ADR 0024, and ADR 0026 require today. `configs/weights.yaml` already carries four active legacy weight entries for the same four names (`valuation: 0.065`, `comparative_valuation: 0.055`, `mispricing: 0.055`, `asymmetry: 0.055`), and `WeightEngine.apply()`/`WeightEngine.score()` are already invoked, inside `EvidenceBackedProjectExecutor` (`src/hunter/market_validation/runner.py`), over the full source set that includes whatever is registered under those four engine names. If a future composition authority ever inserted a genuine, non-placeholder contribution under one of these names without an explicit boundary decision, `WeightEngine` would silently re-weight or re-scale a value a separate authority already weighted and capped — the exact double-counting and duplicated-weighting failure mode this ADR must close before any of the four fields may become eligible to compose.
 
@@ -22,7 +22,7 @@ No real, leakage-safe calibration corpus, numeric cap-sensitivity study, or cana
 
 ## Decision
 
-Hunter adopts ADPR-0004's Option 1: a service-owned Canonical Market Validation composition authority. `CanonicalMarketValidationCompositionService` becomes the sole owner of correlation-group assignment, per-input and group contribution caps, residual-independence evaluation, the valuation-family weighting decision, and the immutable `MarketValidationCompositionSnapshot`. Market Validation-owned exact-version adapters, one per family, become the sole owners of eligibility verification and canonical normalization for `valuation`, `comparative_valuation`, `mispricing`, and `asymmetry`. The four upstream valuation-family services keep their existing, unchanged raw-assessment authority under ADR 0021.
+Hunter adopts ADPR-0004's Option 1: a service-owned Canonical Market Validation composition authority. `CanonicalMarketValidationCompositionService` becomes the sole owner of correlation-group assignment, per-input and group contribution caps, residual-independence evaluation, the valuation-family weighting decision, and the immutable `MarketValidationCompositionSnapshot`. Market Validation-owned exact-version adapters, one per family, become the sole owners of eligibility verification for all four families (`valuation`, `comparative_valuation`, `mispricing`, `asymmetry`); the `comparative_valuation`, `mispricing`, and `asymmetry` adapters additionally own canonical normalization and normalized-scalar production, while the `valuation` adapter owns only structured-reference preservation and an explicit availability state, never a scalar. The four upstream valuation-family services keep their existing, unchanged raw-assessment authority under ADR 0021.
 
 `comparative_valuation`, `mispricing`, and `asymmetry` each require a predeclared, versioned, monotonic (N3) calibration before contributing a normalized scalar; `valuation` contributes a structured, non-scalar, zero-weight reference only, per ADR 0024. `comparative_valuation` and `mispricing` share the `valuation-mispricing` correlation group by conservative default; `asymmetry` occupies its own group only when its complete evidence-reference set is disjoint from the other three, and becomes entirely ineligible for composition — never partially capped — when it is not. The existing `WeightEngine` must not re-weight, re-scale, or re-derive the composition service's already-capped valuation-family contribution, and the four legacy per-family weight entries in `configs/weights.yaml` must not remain active on this path; unproven compliance with this boundary makes the composition unavailable.
 
@@ -41,8 +41,8 @@ Its purpose is composition authority only. It does not define or calculate Oppor
 This decision governs:
 
 - Canonical Market Validation composition ownership for the four valuation-family assessments;
-- exact-version input-adapter ownership, eligibility, and canonical normalization for each family;
-- the family normalization contract for `valuation`, `comparative_valuation`, `mispricing`, and `asymmetry`, including Asymmetry's zero-boundary transform;
+- exact-version input-adapter ownership and eligibility for each family, and canonical normalization for the three weighted scalar families (`comparative_valuation`, `mispricing`, `asymmetry`);
+- the structured, non-scalar composition treatment for `valuation` and the family normalization contract for `comparative_valuation`, `mispricing`, and `asymmetry`, including Asymmetry's zero-boundary transform;
 - correlation-group assignment, evidence-lineage disjointness, anti-double-counting, and per-input and combined-group contribution caps;
 - residual-independence policy and the narrow path by which a residualized upstream assessment may become separately eligible;
 - weighting ownership and the exact, provable handoff boundary with the existing `WeightEngine`;
@@ -59,10 +59,9 @@ This decision is additive. It does not amend or supersede ADRs 0002, 0004, 0005,
 Three distinct authorities exist on the composition path, and none may perform another's decision:
 
 1. **The four canonical valuation-family services** (`CanonicalValuationService`, `CanonicalComparativeValuationService`, `CanonicalMispricingService`, `CanonicalAsymmetryService`) remain, unchanged, the sole owners of their respective raw assessments under ADR 0021, ADR 0024, and ADR 0026. This ADR grants them no new authority and removes none of their existing authority.
-2. **Market Validation-owned exact-version adapters**, one per family, are the sole owners of:
-   - verifying that a specific upstream assessment record is an exact-version-compatible, strict-known, non-conflicted input for composition;
-   - selecting and applying the declared normalization/calibration policy for that family; and
-   - producing either a normalized scalar value or an explicit unavailable state for that family.
+2. **Market Validation-owned exact-version adapters**, one per family, are the sole owners of eligibility for their family: verifying that a specific upstream assessment record is an exact-version-compatible, strict-known, non-conflicted input for composition, and returning an explicit unavailable state when it is not. Beyond eligibility, the four adapters' authority is not uniform:
+   - the `comparative_valuation`, `mispricing`, and `asymmetry` adapters additionally own selecting and applying the declared normalization/calibration policy for their family and producing either a normalized scalar value or an explicit unavailable state;
+   - the `valuation` adapter owns only preserving the structured, non-scalar reference (identity, `p10`/`p50`/`p90`, confidence decomposition, methodology identity) and an explicit availability state; it never performs canonical normalization and never produces a scalar or weighted contribution, consistent with ADR 0024.
 
    Adapters never recalculate, reinterpret, or override any raw upstream value. An adapter that cannot prove exact-version eligibility must return unavailable; it may not approximate compatibility by name, shape, or partial match.
 3. **`CanonicalMarketValidationCompositionService`** is the sole owner of:
@@ -79,7 +78,7 @@ Canonical Market Validation (`EvidenceBackedProjectExecutor` and the Market Vali
 
 ## Weighting Ownership and the WeightEngine Boundary
 
-`CanonicalMarketValidationCompositionService` is the sole weighting-owner for the four valuation-family inputs. It alone applies per-input caps, group caps, and the residual-independence policy, and it alone produces one final, immutable, post-cap valuation-family contribution.
+`CanonicalMarketValidationCompositionService` is the sole weighting-owner for the three weighted scalar valuation-family inputs (`comparative_valuation`, `mispricing`, `asymmetry`). It alone applies per-input caps, group caps, and the residual-independence policy, and it alone produces one final, immutable, post-cap valuation-family contribution. `valuation` is never weighted and is not one of these three inputs; the composition service's only responsibility toward it is including its structured reference, and the explicit availability state the `valuation` adapter produced, in the same immutable snapshot.
 
 The existing `WeightEngine` (`src/hunter/weights/engine.py`) retains its existing authority to weight every other Market Validation input and to combine that final valuation-family contribution into the wider `hunter_score`/`final_score` result as one already-weighted, already-capped, immutable pass-through input. Specifically, and without exception:
 
@@ -103,7 +102,7 @@ Every scalar normalization is versioned, monotonic, and requires a real, histori
 
 Every calibration policy must declare, at minimum: supported entity class; the exact upstream methodology/service version it calibrates against; the raw domain and any winsorization prohibition; the neutral anchor; the outcome definition and horizon used for calibration, selected under strict-known cutoffs so no calibration record can be trained on information not yet knowable at its own effective time; temporal folds; minimum sample size and coverage; the monotonic direction; the fit algorithm and its version; validation metrics; a drift threshold; effective, recorded, and known times; and the exact corpus record IDs and versions used to fit and validate it. A calibration policy may never extrapolate silently: a raw value outside the declared supported domain is unavailable, never clamped, rounded, or forced into range.
 
-No normalization in this table is authorized for production use by this ADR alone. Each requires its own accepted calibration record, produced and independently reviewed under the activation gates below, before an adapter may emit anything other than an unavailable state for that family.
+No normalization in this table is authorized for production use by this ADR alone. Each of `comparative_valuation`, `mispricing`, and `asymmetry` requires its own accepted calibration record, produced and independently reviewed under the activation gates below, before its adapter may emit anything other than an unavailable state. `valuation` has no calibration record and none is required: its adapter always emits either the structured reference and an explicit availability state, or an explicit unavailable state, regardless of calibration activation.
 
 ## Correlation Groups, Contribution Caps, and Anti-Double-Counting
 
@@ -138,12 +137,12 @@ This record is the only canonical output of `CanonicalMarketValidationCompositio
 - effective, recorded, known, and replay-cutoff times;
 - for every consumed upstream assessment: its exact logical ID, record ID, semantic version, content hash, and quality/conflict/availability state;
 - exact adapter contract IDs and versions used for each family;
-- exact normalization and calibration policy IDs/versions, corpus fingerprint, supported range, and both the raw and normalized value for each family;
+- for each of the three weighted scalar families (`comparative_valuation`, `mispricing`, `asymmetry`): exact normalization and calibration policy IDs/versions, corpus fingerprint, supported range, and both the raw and normalized value;
 - the complete ordered set of direct and transitive evidence references considered for intersection/disjointness analysis;
-- primary contribution assignment, evidence-overlap intersections, correlation-group assignment, residual-independence policy reference (if any), per-input cap, group cap, and both the pre-cap and post-cap contribution for each family;
+- for each of the three weighted scalar families: primary contribution assignment, evidence-overlap intersections, correlation-group assignment, residual-independence policy reference (if any), per-input cap, group cap, and both the pre-cap and post-cap contribution;
 - the sole weighting-owner identifier (`CanonicalMarketValidationCompositionService`), the final immutable post-cap valuation-family contribution, and explicit proof references (e.g., the specific test or preflight check IDs) that no legacy `WeightEngine` weight or second scaling stage was applied to that contribution;
-- the structured, non-scalar `valuation` reference (identity, `p10`/`p50`/`p90`, confidence decomposition, methodology identity — never a synthesized scalar);
-- explicit missing/unavailable reasons for every family that did not contribute, including which specific rule above (coverage gate, calibration absence, correlation-group ineligibility, cap-policy absence, WeightEngine-boundary proof failure, etc.) produced that state;
+- for `valuation`: its exact record and version identity, the structured, non-scalar reference (`p10`/`p50`/`p90`, confidence decomposition, methodology identity), and an explicit availability/missingness state — never a normalization or calibration policy reference, never a cap, and never a contribution field of any kind, because `valuation` is never scored;
+- explicit scalar non-contribution reasons for each of the three weighted scalar families that did not contribute, including which specific rule above (coverage gate, calibration absence, correlation-group ineligibility, cap-policy absence, WeightEngine-boundary proof failure, etc.) produced that state — distinct from `valuation`'s own availability state, which is never a non-contribution reason because `valuation` never contributes a scalar to begin with;
 - deterministic ordering of every list-valued field and a composition content hash; and
 - correction predecessor ID, correction reason, and authorizing-service identity where applicable.
 
@@ -199,11 +198,11 @@ Where the applicable Market Validation evidence gate requires a valuation-family
 
 ## Conflict Handling
 
-An unresolved conflict in any mandatory upstream assessment, evidence reference, calibration policy, correlation-group policy, cap policy, or residual-independence policy blocks the affected family's contribution. The composition service:
+An unresolved conflict in any mandatory upstream assessment, evidence reference, calibration policy, correlation-group policy, cap policy, or residual-independence policy blocks the affected family from contributing (for `comparative_valuation`, `mispricing`, or `asymmetry`) or makes `valuation`'s own reference explicitly unavailable (`valuation` has no contribution to block). The composition service:
 
 - persists the conflict and the affected unavailable state;
 - never averages, majority-votes, silently excludes, or selects the most-recently-recorded conflicting record;
-- recalculates group-cap applicability after any family becomes unavailable due to conflict; and
+- recalculates group-cap applicability after any of the three weighted scalar families becomes unavailable due to conflict; and
 - preserves the original conflicted record and any later resolution through append-only lineage, exactly as the four upstream services already do for their own conflicts.
 
 ## Downstream Boundaries
@@ -239,7 +238,7 @@ Canary execution may follow only after every activation gate above has independe
 
 ### Rollback
 
-Rollback disables the composition entry point and restores the prior authoritative runtime configuration (i.e., the current, already-accepted behavior in which all four fields are unconditionally unavailable). Rollback preserves every immutable shadow, canary, composition-snapshot, and run record for audit; it never deletes, rewrites, or relabels accepted history. Rollback never falls back to a legacy alias, a previous calibration treated as still current, a partial composition across fewer than all required families, or an Opportunity-layer substitute. If no prior valid composition snapshot exists for a target, the valuation-family contribution simply returns to its current unavailable state.
+Rollback disables the composition entry point and restores the prior authoritative runtime configuration (i.e., the current, already-accepted behavior in which all four fields are unconditionally unavailable). Rollback preserves every immutable shadow, canary, composition-snapshot, and run record for audit; it never deletes, rewrites, or relabels accepted history. Rollback never falls back to a legacy alias, a previous calibration treated as still current, a partial composition across fewer than all three required weighted scalar families (`comparative_valuation`, `mispricing`, `asymmetry`), or an Opportunity-layer substitute. `valuation` remains a structured, zero-weight reference and is never one of these three required families; its presence or absence never affects, and is never part of, partial-scoring completeness. If no prior valid composition snapshot exists for a target, the valuation-family contribution simply returns to its current unavailable state.
 
 ### Migration and preflight
 
@@ -250,7 +249,7 @@ Any implementation of this ADR must be additive and must fail closed by default:
 Implementation is authorized after this ADR is independently reviewed and accepted. Implementation still requires, in addition to the activation gates above:
 
 1. a separately governed implementation Issue and reviewable plan, distinct from the Issue that authorized drafting this ADR;
-2. exact-version Market Validation input adapters for `valuation`, `comparative_valuation`, `mispricing`, and `asymmetry`, implementing eligibility and normalization exactly as this ADR fixes, and nothing beyond it;
+2. exact-version Market Validation input adapters for `valuation`, `comparative_valuation`, `mispricing`, and `asymmetry`, implementing eligibility for all four families and canonical normalization for only `comparative_valuation`, `mispricing`, and `asymmetry`, exactly as this ADR fixes, and nothing beyond it;
 3. `CanonicalMarketValidationCompositionService`, implementing evidence intersection, correlation-group assignment, per-input and group caps, residual-independence evaluation, and `MarketValidationCompositionSnapshot` production;
 4. the exact, provable `WeightEngine` boundary change (or configuration change) required by "Weighting Ownership and the WeightEngine Boundary" above, and the tests proving it holds;
 5. append-only correction, branching-rejection, conflict, missingness, permutation-replay, evidence-overlap, and byte-identical-replay tests for the new record family;
@@ -329,7 +328,7 @@ Rejected because one semantic output may have only one production owner at one e
 
 ### Uncalibrated fixed transform, unconstrained learned model, or current-percentile normalization
 
-Rejected for the same reasons ADR 0021 and ADR 0026 already reject them for `comparative_valuation`: an uncalibrated transform is not historically validated; an unconstrained model risks direction reversal and leakage; a current-percentile mapping is not replay-stable. Only a predeclared, versioned, monotonic, historically calibrated (N3/C3) transform is authorized for any family in this ADR.
+Rejected for the same reasons ADR 0021 and ADR 0026 already reject them for `comparative_valuation`: an uncalibrated transform is not historically validated; an unconstrained model risks direction reversal and leakage; a current-percentile mapping is not replay-stable. Only a predeclared, versioned, monotonic, historically calibrated (N3/C3) transform is authorized for any of the three weighted scalar families in this ADR; `valuation` requires no transform because it is never converted into a scalar.
 
 ### Permit partial capping of the Asymmetry overlap instead of full exclusion
 
