@@ -341,13 +341,13 @@ No agent-authored pull request may move from Draft to Ready for Review, and none
 
 The implementation author and hostile reviewer must be different agents or clearly separated sessions with different roles.
 
-The hostile reviewer must attempt to reject the proposed change, evaluating it against the reviewer responsibilities `docs/AI_REVIEW_PROTOCOL.md` already defines.
+The hostile reviewer must attempt to reject the proposed change, evaluating it against the reviewer responsibilities that `docs/AI_REVIEW_PROTOCOL.md` already defines.
 
-The hostile reviewer must return exactly one of:
+The hostile reviewer must return exactly one of the following local gate signals. These are this rule's own pass/fail record for the Draft-to-Ready-for-Review transition, not a new governance-verdict category alongside `docs/DEVELOPMENT_GOVERNANCE.md`'s implementer-declared states or `docs/AI_REVIEW_PROTOCOL.md`'s approval outcome:
 
-- `READY_FOR_PR — ZERO_MATERIAL_FINDINGS`
-- `CHANGES_REQUIRED`
-- `BLOCKED`
+- `READY_FOR_PR — ZERO_MATERIAL_FINDINGS` — equivalent to no blocking findings under `docs/AI_REVIEW_PROTOCOL.md`;
+- `CHANGES_REQUIRED` — one or more blocking findings remain under `docs/AI_REVIEW_PROTOCOL.md`;
+- `BLOCKED` — review cannot be completed because of an unavailable environment, provider, credential, or external condition.
 
 The Draft-to-Ready-for-Review transition, and merge, are permitted only after the exact branch head receives:
 
