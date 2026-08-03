@@ -353,13 +353,13 @@ The Draft-to-Ready-for-Review transition, and merge, are permitted only after th
 
 `READY_FOR_PR — ZERO_MATERIAL_FINDINGS`
 
-Any code or documentation change after that verdict invalidates the verdict. The hostile review must be repeated on the new exact head before the transition to Ready for Review or merge.
+The verdict is bound to the exact pair of the reviewed source branch head and the exact target-branch commit it was reviewed against. Any code or documentation change to the source branch, or any advance of the target branch past the commit reviewed, invalidates the verdict. The hostile review must be repeated against the new exact source head and the new exact target commit before the transition to Ready for Review or merge.
 
 The author must fix all objectively valid findings before the gate can pass. Findings must not be hidden, dismissed, or deferred merely to pass the gate.
 
 The hostile reviewer must not implement fixes, create branches, commit, push, open pull requests, or approve the author's work. Its role is review only.
 
-The author must record the reviewer identity, reviewed commit SHA, verdict, commands run, and any environment limitations in the pull-request body.
+The author must record the reviewer identity, reviewed source commit SHA, reviewed target commit SHA, verdict, commands run, and any environment limitations in the pull-request body.
 
 This gate does not replace independent post-PR review. Copilot or another independent reviewer remains the final external review layer.
 
