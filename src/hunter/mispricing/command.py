@@ -137,6 +137,12 @@ def _status(manifest: dict[str, Any], application_root: Path) -> dict[str, Any]:
     target = manifest.get("target")
     if target not in _STATUS_TARGETS:
         raise ValueError(f"mispricing-authority status manifest requires target: {' or '.join(_STATUS_TARGETS)}")
+    # Validate the manifest's shape before deciding whether the canonical database
+    # needs to be consulted at all, so a malformed manifest against a pristine
+    # application root still raises instead of being masked as "unavailable".
+    effective_as_of = _datetime(manifest["effective_as_of"])
+    known_by = _datetime(manifest["known_by"])
+    logical_id = _required_text(manifest["logical_id"], "logical_id")
     persistence_path = _canonical_path(application_root, _CANONICAL_PERSISTENCE_DATABASE)
     if not persistence_path.exists():
         # No canonical database has ever been created under this application root, so no
@@ -150,9 +156,6 @@ def _status(manifest: dict[str, Any], application_root: Path) -> dict[str, Any]:
             "available": False,
         }
     service, persistence_path = _service(application_root)
-    effective_as_of = _datetime(manifest["effective_as_of"])
-    known_by = _datetime(manifest["known_by"])
-    logical_id = _required_text(manifest["logical_id"], "logical_id")
     if target == "methodology":
         record: Any = service.strict_known_methodology(
             effective_as_of=effective_as_of, known_by=known_by, logical_id=logical_id
