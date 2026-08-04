@@ -17,6 +17,9 @@
 - Self-assessment: `READY_FOR_ADR`
 - Blocked implementation issue: [#190](https://github.com/fafa33/Project-Hunter/issues/190)
 - Draft PR: [#192](https://github.com/fafa33/Project-Hunter/pull/192)
+- Branch: `claude/evidence-assembly-authority-preparation-issue-191`
+- Revision under review: PR branch HEAD (Revision 5)
+- Validation status: documentation-only diff; no `src/` or `tests/` changes; internal Markdown links validated
 
 This record authorizes no implementation. Issue #190 remains blocked.
 
@@ -233,6 +236,8 @@ None material. Concrete policy content and production activation are intentional
 - Blocked issue: #190.
 - ADPR: ADPR-0005 revision 5.
 - ADR: ADR 0028 revision 5, Proposed.
-- Draft PR: #192.
+- Draft PR: #192 (branch `claude/evidence-assembly-authority-preparation-issue-191`, remains Draft).
+- Revision: 5.
+- Validation: documentation-only correction; no `src/` or `tests/` changes; internal Markdown links validated.
 - Implementation: not authorized.
 - Release: not assigned.

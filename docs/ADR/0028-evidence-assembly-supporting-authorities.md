@@ -149,11 +149,13 @@ CanonicalEvidenceAssemblyService
 - it does not inspect `FundamentalEvidenceRecord` fields to derive classification dimensions;
 - it does not own a classification ruleset;
 - it does not accept caller-supplied semantic dimensions;
-- it copies and validates the upstream authority's exact semantic inputs into `AuthoritativeEvidenceSemantics`, preserving the upstream record ID/version/hash as mandatory provenance.
+- it copies and validates the upstream authority's exact semantic inputs into `AuthoritativeEvidenceSemantics`, preserving the upstream record ID/version/hash as mandatory provenance;
+- it carries, copied exactly from the upstream authority, the representation-continuity state, the representation-continuity evidence/proof/reference, `semantic_dimensions`, and every future governed semantic dimension produced by that authority;
+- it validates every applicable semantic field against the exact upstream `AuthoritativeEvidenceSemantics` record for the requested native record/version and cutoff, with that record's exact `EvidenceSemanticInputRecord` source and hash also verified. No semantic dimension is caller-owned, and Evidence Assembly never reconstructs, reinterprets, replaces, weakens, or overrides upstream semantics.
 
-`AuthoritativeEvidenceSemantics` gains the full ADR 0021 envelope, correction lineage, and exact `evidence_semantic_input_record_id`, version, and content hash. Its deterministic content identity includes that upstream provenance.
+`AuthoritativeEvidenceSemantics` gains the full ADR 0021 envelope, correction lineage, and exact `evidence_semantic_input_record_id`, version, and content hash. Its deterministic content identity includes the complete copied semantic payload and upstream provenance.
 
-`strict_known_semantics(...)` returns unavailable unless the referenced upstream semantic-input record is independently strict-known at the same cutoff. Evidence Semantics may reject an upstream record for incompatibility with its own contract, but may never replace, weaken, recalculate, or override any upstream semantic dimension.
+`strict_known_semantics(...)` returns unavailable unless the referenced upstream semantic-input record is independently strict-known at the same cutoff. Evidence Semantics may reject an upstream record for incompatibility with its own contract, but may never replace, weaken, recalculate, or override any upstream semantic dimension. Validation is field-complete: every applicable present and future governed semantic field is checked against the exact upstream `AuthoritativeEvidenceSemantics` record and its exact `EvidenceSemanticInputRecord` source, including representation continuity state/proof/reference and `semantic_dimensions`; no caller-supplied semantic value can satisfy the check.
 
 ## Methodology Contract Authority
 
