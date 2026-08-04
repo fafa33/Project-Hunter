@@ -110,9 +110,9 @@ def _persist_methodology(manifest: dict[str, Any], application_root: Path) -> di
         effective_at=_datetime(payload["effective_at"]),
         recorded_at=_datetime(payload["recorded_at"]),
         known_at=_datetime(payload["known_at"]),
-        formula_version=str(payload.get("formula_version", "asymmetry-raw-ratio-v1")),
+        formula_version=_text_or_default(payload.get("formula_version"), "asymmetry-raw-ratio-v1", "formula_version"),
         supersedes_record_id=_optional_text(payload.get("supersedes_record_id")),
-        correction_reason=str(payload.get("correction_reason", "")),
+        correction_reason=_text_or_default(payload.get("correction_reason"), "", "correction_reason"),
     )
     return {
         "operation": "methodology",
@@ -147,7 +147,7 @@ def _persist_scenario_set(manifest: dict[str, Any], application_root: Path) -> d
         recorded_at=_datetime(manifest["recorded_at"]),
         known_at=_datetime(manifest["known_at"]),
         supersedes_record_id=_optional_text(manifest.get("supersedes_record_id")),
-        correction_reason=str(manifest.get("correction_reason", "")),
+        correction_reason=_text_or_default(manifest.get("correction_reason"), "", "correction_reason"),
     )
     return {
         "operation": "scenario_set",
@@ -173,7 +173,7 @@ def _persist_scenario_probability(manifest: dict[str, Any], application_root: Pa
         recorded_at=_datetime(manifest["recorded_at"]),
         known_at=_datetime(manifest["known_at"]),
         supersedes_record_id=_optional_text(manifest.get("supersedes_record_id")),
-        correction_reason=str(manifest.get("correction_reason", "")),
+        correction_reason=_text_or_default(manifest.get("correction_reason"), "", "correction_reason"),
     )
     return {
         "operation": "scenario_probability",
@@ -200,7 +200,7 @@ def _persist_scenario_payoff(manifest: dict[str, Any], application_root: Path) -
         recorded_at=_datetime(manifest["recorded_at"]),
         known_at=_datetime(manifest["known_at"]),
         supersedes_record_id=_optional_text(manifest.get("supersedes_record_id")),
-        correction_reason=str(manifest.get("correction_reason", "")),
+        correction_reason=_text_or_default(manifest.get("correction_reason"), "", "correction_reason"),
     )
     return {
         "operation": "scenario_payoff",
@@ -224,7 +224,7 @@ def _assess(manifest: dict[str, Any], application_root: Path) -> dict[str, Any]:
         recorded_at=_datetime(manifest["recorded_at"]),
         known_at=_datetime(manifest["known_at"]),
         supersedes_record_id=_optional_text(manifest.get("supersedes_record_id")),
-        correction_reason=str(manifest.get("correction_reason", "")),
+        correction_reason=_text_or_default(manifest.get("correction_reason"), "", "correction_reason"),
     )
     return {
         "operation": "assess",
@@ -334,8 +334,8 @@ def _identity(payload: Any) -> EconomicClaimIdentity:
         asset_id=_required_text(payload["asset_id"], "identity.asset_id"),
         representation_id=_required_text(payload["representation_id"], "identity.representation_id"),
         token_id=_required_text(payload["token_id"], "identity.token_id"),
-        chain=str(payload.get("chain", "")),
-        contract_address=str(payload.get("contract_address", "")),
+        chain=_text_or_default(payload.get("chain"), "", "identity.chain"),
+        contract_address=_text_or_default(payload.get("contract_address"), "", "identity.contract_address"),
     )
 
 
@@ -349,6 +349,20 @@ def _optional_text(value: Any) -> str | None:
 def _required_text(value: Any, field: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"asymmetry-authority manifest field {field!r} must be a non-blank string")
+    return value
+
+
+def _text_or_default(value: Any, default: str, field: str) -> str:
+    """Like `_optional_text`, but for fields with a non-`None` default (an omitted
+    or explicit `null` manifest value both fall back to `default`) rather than a
+    genuinely optional field. Rejects any present, non-string, non-null value
+    instead of silently stringifying it -- the same defect class `_required_text`
+    closes for genuinely required fields, applied here to fields the orchestration
+    module itself defaults rather than the caller supplying."""
+    if value is None:
+        return default
+    if not isinstance(value, str):
+        raise ValueError(f"asymmetry-authority manifest field {field!r} must be a string")
     return value
 
 

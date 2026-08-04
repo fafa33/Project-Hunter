@@ -113,11 +113,12 @@ needed by the simpler Mispricing/Comparative-Valuation manifests.
 
 Files created/modified, exactly as scoped by Issue #187:
 
-- **`src/hunter/asymmetry/command.py`** (new, 352 lines): `main()` plus
+- **`src/hunter/asymmetry/command.py`** (new): `main()` plus
   `_persist_methodology`, `_persist_scenario_set`, `_persist_scenario_probability`,
   `_persist_scenario_payoff`, `_assess`, `_status`, and shared helpers
   (`_service`, `_string_tuple`, `_pair_tuple`, `_json_safe`, `_identity`,
-  `_optional_text`, `_application_root`, `_canonical_path`, `_datetime`).
+  `_optional_text`, `_text_or_default`, `_required_text`, `_application_root`,
+  `_canonical_path`, `_datetime`).
 - **`src/hunter/asymmetry/__init__.py`**: docstring updated only (two sentences
   in the opening paragraph adjusted; one new paragraph added describing the
   orchestration module's existence and undispatched posture). No import, export,
@@ -139,8 +140,9 @@ Files intentionally untouched (confirmed via `git diff --stat`, zero changes):
 
 ## Testing (Phase 4)
 
-**`tests/test_asymmetry_authority_v1.py`** (new, 23 tests, all passing), mirroring
-`tests/test_mispricing_authority_v1.py`'s structure and strength:
+**`tests/test_asymmetry_authority_v1.py`** (new, all passing; see the "Follow-up"
+section below for the exact, current test count as of the most recent commit),
+mirroring `tests/test_mispricing_authority_v1.py`'s structure and strength:
 
 - **A. Write-operation happy paths** — `methodology`, `scenario_set`, and
   `scenario_probability`/`scenario_payoff` each persist correctly through the
@@ -284,6 +286,79 @@ branch's current tip):
   import-stub baseline noise.
 - `pytest tests/test_asymmetry_authority_v1.py -q` — **27 passed**.
 - `pytest -q` (full suite) — **1500 passed** in 479.40s (0:07:59).
+
+## Follow-up: Copilot review remediation (commit `d63ba81`)
+
+A Copilot review comment on the sibling `hunter.mispricing.command` fix (PR #189) correctly
+identified that the "don't create the database on a pristine root" change had moved
+`_status`'s early return *before* `effective_as_of`/`known_by`/`logical_id` were
+parsed/validated, so a malformed status manifest against a pristine application root now
+silently returned `available: false` instead of raising -- masking bad input. The
+identical defect existed here (this module copied the same `_status` structure). Fixed by
+reordering `_status` to validate the manifest's required fields first, and only then check
+whether the canonical database exists -- preserving the "no side-effect database creation"
+property while restoring "malformed manifest always raises" for every application root
+state. One regression test was added
+(`test_status_still_validates_manifest_against_a_pristine_root`), bringing the file to 28
+tests.
+
+## Follow-up: second Copilot review remediation (this commit)
+
+A further Copilot review of this PR identified two more instances of the same defect
+class as the first hostile-review finding, plus two documentation-clarity issues, all
+now fixed:
+
+1. **`formula_version`/`correction_reason` still coerced via bare `str(...)`** (four
+   call sites: `_persist_methodology`, `_persist_scenario_set`,
+   `_persist_scenario_probability`, `_persist_scenario_payoff`, `_assess`). Both are
+   fields the orchestration module itself defaults when absent (`formula_version`
+   defaults to the sole ADR 0021-supported value; `correction_reason` defaults to
+   blank), so an explicit JSON `null` should fall back to that default -- not become
+   the literal string `"None"`, which for `formula_version` would persist an
+   ADR-0021-unsupported value (rejected only later, at assess/lookup time, per
+   `service.py`'s `formula_version != SUPPORTED_FORMULA_VERSION` check) and for
+   `correction_reason` would trip the `supersedes_record_id`/`correction_reason`
+   pairing invariant when no correction was actually intended. Added
+   `_text_or_default(value, default, field)`: `None` falls back to `default`; any
+   other non-string value is rejected (the same posture `_required_text` already
+   takes for genuinely required fields); a present string is used as-is. Used at all
+   five `correction_reason` call sites and the one `formula_version` call site.
+2. **`identity.chain`/`identity.contract_address` coerced via bare `str(...)`**:
+   `EconomicClaimIdentity` treats these as an optional, paired field (both set or
+   both blank). Because `str(None) == "None"` is non-blank, a manifest supplying
+   *both* fields as JSON `null` previously satisfied the paired-presence invariant
+   (both non-blank) and would have silently persisted the meaningless pair
+   `("None", "None")` instead of the intended blank pair. Now uses
+   `_text_or_default(..., "", "identity.chain")` /
+   `_text_or_default(..., "", "identity.contract_address")`.
+3. **Misleading test-file docstring**: the opening sentence read "Production
+   execution path for the existing canonical Asymmetry authority ...", which could
+   be misread as claiming CLI/production reachability -- directly contradicting the
+   file's own very next sentence (and the module's core undispatched property).
+   Reworded to remove the ambiguous phrase entirely.
+4. **Brittle exact-count claims in this report**: this report previously hard-coded
+   "352 lines" for `command.py` and "23 tests" for the test file, both of which drift
+   on every subsequent edit (as this very follow-up history demonstrates). Removed
+   the line-count claim; the test-file count is now stated only in dated "Follow-up"
+   sections like this one, each pinned to the commit it was verified against.
+
+Three new regression tests were added: `test_null_formula_version_falls_back_to_default_not_stringified`,
+`test_null_correction_reason_falls_back_to_blank_not_stringified`,
+`test_null_identity_chain_and_contract_address_default_to_empty_not_stringified`, plus
+`test_non_string_correction_reason_is_rejected` proving a present-but-non-string value
+(e.g. a JSON number) is still rejected rather than silently stringified -- bringing the
+file to **32 tests**.
+
+Confined entirely to `src/hunter/asymmetry/command.py`'s orchestration layer and the test
+file's own docstring: no service, model, repository, or `hunter.__main__` change.
+
+- `ruff check .` — **All checks passed!**
+- `black --check src/hunter/asymmetry/command.py tests/test_asymmetry_authority_v1.py` —
+  clean.
+- `mypy` — no new errors; only the same pre-existing, repository-wide `pytest`
+  import-stub baseline noise.
+- `pytest tests/test_asymmetry_authority_v1.py -q` — **32 passed**.
+- `pytest -q` (full suite) — **1505 passed** in 472.05s (0:07:52).
 
 ## Architecture impact
 

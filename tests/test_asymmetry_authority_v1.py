@@ -1,8 +1,8 @@
-"""Production execution path for the existing canonical Asymmetry authority
-(`CanonicalAsymmetryService`, ADR 0021), exercised through the new manifest-driven
-orchestration module `hunter.asymmetry.command` (`main(["run", MANIFEST_PATH])`),
-added by Issue #187. This module is deliberately not dispatched from
-`hunter.__main__` and is not reachable through the `hunter` CLI (see
+"""Exercises the existing canonical Asymmetry authority (`CanonicalAsymmetryService`,
+ADR 0021) through the new manifest-driven orchestration module
+`hunter.asymmetry.command` (`main(["run", MANIFEST_PATH])`), added by Issue #187.
+This module is deliberately not dispatched from `hunter.__main__` and is not
+reachable through the `hunter` CLI (see
 `test_hunter_main_does_not_dispatch_asymmetry_authority` below); it is exercised
 only by direct construction, exactly as every test in this file does.
 
@@ -864,3 +864,76 @@ def test_hunter_main_does_not_dispatch_asymmetry_authority(tmp_path: Path, monke
     assert excinfo.value.code == 2
     # and, independently, no repository write occurred as a side effect of the attempt
     assert not _db_path(tmp_path).exists()
+
+
+# J. Null defaulting for fields the orchestration module itself defaults ---------------
+
+
+def test_null_formula_version_falls_back_to_default_not_stringified(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Regression guard: `formula_version` has an orchestration-module-supplied
+    default (the only ADR 0021-supported value). An explicit JSON `null` must fall
+    back to that default, not be stringified to the literal `"None"` -- which the
+    service would reject only later, at assess/lookup time, as an unsupported
+    formula version, after an invalid record had already been persisted."""
+    manifest = _methodology_manifest(tmp_path, formula_version=None)
+    output = _run(monkeypatch, tmp_path, manifest, capsys)
+    repository = AsymmetryRepository(_db_path(tmp_path))
+    record = repository.get_asymmetry_methodology(output["record_id"])
+    assert record is not None
+    assert record.formula_version == "asymmetry-raw-ratio-v1"
+
+
+def test_null_correction_reason_falls_back_to_blank_not_stringified(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Regression guard: `correction_reason` defaults to blank when no correction is
+    being made. An explicit JSON `null` must fall back to `""`, not be stringified
+    to the literal `"None"` -- which is non-blank and would trip the
+    `supersedes_record_id`/`correction_reason` pairing invariant when no
+    `supersedes_record_id` is supplied."""
+    manifest = _methodology_manifest(tmp_path, correction_reason=None)
+    output = _run(monkeypatch, tmp_path, manifest, capsys)
+    repository = AsymmetryRepository(_db_path(tmp_path))
+    record = repository.get_asymmetry_methodology(output["record_id"])
+    assert record is not None
+    assert record.correction_reason == ""
+
+
+def test_null_identity_chain_and_contract_address_default_to_empty_not_stringified(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Regression guard: `EconomicClaimIdentity` treats `chain`/`contract_address`
+    as optional, paired fields (both set or both blank). Before this fix, an
+    explicit JSON `null` for both fields was stringified to the literal `"None"`
+    for each -- which is non-blank for both, so it satisfied the paired-presence
+    invariant and would have silently persisted meaningless `"None"`/`"None"`
+    values instead of the intended blank pair."""
+    seeded = _SeededBaseline(tmp_path)
+    methodology = _run(monkeypatch, tmp_path, _methodology_manifest(tmp_path), capsys)
+    manifest_path = _scenario_set_manifest(
+        tmp_path,
+        methodology_record_id=methodology["record_id"],
+        baseline_market_fact_record_id=seeded.spot_price_fact.record_id,
+    )
+    raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+    raw["identity"]["chain"] = None
+    raw["identity"]["contract_address"] = None
+    manifest_path.write_text(json.dumps(raw), encoding="utf-8")
+    output = _run(monkeypatch, tmp_path, manifest_path, capsys)
+    repository = AsymmetryRepository(_db_path(tmp_path))
+    record = repository.get_scenario_set(output["record_id"])
+    assert record is not None
+    assert record.identity.chain == ""
+    assert record.identity.contract_address == ""
+
+
+def test_non_string_correction_reason_is_rejected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`_text_or_default` must reject a present, non-string, non-null value (e.g. a
+    JSON number) rather than silently stringifying it, the same way `_required_text`
+    does for genuinely required fields."""
+    manifest = _methodology_manifest(tmp_path, correction_reason=12345)
+    monkeypatch.setenv("HUNTER_APPLICATION_ROOT", str(tmp_path))
+    with pytest.raises(ValueError, match="correction_reason.*must be a string"):
+        asymmetry_authority_command.main(["run", str(manifest)])
