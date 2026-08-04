@@ -29,6 +29,8 @@
 
 Every one of revision 1's four open questions, revision 2's four contradictions, and revision 3's three defects is resolved below, not carried forward. No production code is authorized by this record. This revision also introduces, for the first time, an explicit inventory of every place the design requires an additive signature or call-site change to already-accepted `src/` code (ADR 0028 §"Exact, bounded additions") — a discipline the first three revisions did not consistently apply, which is part of why round 3's Finding 1 and Finding 2 were reproducible against revision 3's text. Self-assessment: `READY_FOR_ADR`, unconditionally.
 
+**Scope of every "future implementation" reference in this record.** This ADPR and ADR 0028 both use phrases such as "future implementation," "implementation issue," "implementation cost," and "separately authorized implementation" repeatedly. The architecture is fully specified. Future implementation is limited to implementing the architecture exactly as defined here. No architectural decision remains deferred. None of these references defers ownership, replay, identity, persistence, governance, activation, methodology, registry, semantics, validation, correction, or strict-known behavior — every dimension in "Architectural Dimensions," below, is marked fully resolved, and ADR 0028 §"Scope of every 'future implementation' reference in this ADR" states the identical guarantee for the resulting ADR, dimension by dimension. The sole exception, in kind (not in architectural completeness), is the future *content* of governed reference data — `EvidenceSemanticsClassificationRuleset`'s first version's real classification rules, and the first real target-specific `MethodologyEvidenceInputContract`/`accepts_assembled_evidence` correction (Risk R-005; "Out of scope," below). That is deferred data publication through an already-accepted governance mechanism, not a deferred architectural decision — the same mechanism, applied to the same kind of content, ADR 0025 (Accepted) already used for Evidence Shape Registry's own first-version content without that being treated as blocking its acceptance.
+
 ## Problem Statement
 
 ### Current condition
@@ -293,8 +295,8 @@ One narrow, explicitly-scoped item remains for future, separately-governed work 
 ## Architecture Readiness
 
 - Outcome: `READY`
-- Rationale: ownership, record-family shape, persistence, versioning, correction, provenance, strict-known replay, conflict, and amendment governance are fully resolved for all three authorities, with named single owners and unambiguous strict-known selection algorithms. No material decision remains open.
-- Missing evidence: none material. `EvidenceSemanticsClassificationRuleset`'s first version's actual content (Risk R-005) is future, separately-governed work, not missing *architectural* evidence.
+- Rationale: ownership, record-family shape, persistence, versioning, correction, provenance, strict-known replay, conflict, and amendment governance are fully resolved for all three authorities, with named single owners and unambiguous strict-known selection algorithms. No material decision remains open. The architecture is fully specified; future implementation is limited to implementing the architecture exactly as defined in ADR 0028; no architectural decision remains deferred.
+- Missing evidence: none material. `EvidenceSemanticsClassificationRuleset`'s first version's actual content (Risk R-005) is future, separately-governed *data*, not missing *architectural* evidence — see "Scope of every 'future implementation' reference in this record," above.
 - Unresolved conflicts: none.
 
 ## ADR Readiness
