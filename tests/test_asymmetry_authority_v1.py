@@ -608,6 +608,33 @@ def test_status_does_not_create_database_when_none_exists(
     assert not _db_path(tmp_path).exists()
 
 
+def test_status_still_validates_manifest_against_a_pristine_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression guard for a review finding on the fix above (raised against the
+    sibling `hunter.mispricing.command`, PR #189, and applied identically here):
+    skipping repository construction when no database exists yet must not also
+    skip validating the manifest's own required fields. A malformed status
+    manifest (here, a non-ISO-8601 `known_by`) against a pristine application root
+    must still raise, not be masked as `available: False`, and must still not
+    create the database."""
+    manifest = _write(
+        tmp_path,
+        "malformed-status.json",
+        {
+            "operation": "status",
+            "target": "methodology",
+            "effective_as_of": NOW.isoformat(),
+            "known_by": "not-a-timestamp",
+            "logical_id": "does-not-exist-yet",
+        },
+    )
+    monkeypatch.setenv("HUNTER_APPLICATION_ROOT", str(tmp_path))
+    with pytest.raises(ValueError):
+        asymmetry_authority_command.main(["run", str(manifest)])
+    assert not _db_path(tmp_path).exists()
+
+
 def test_status_reports_persisted_methodology_matching_the_repository_read(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
