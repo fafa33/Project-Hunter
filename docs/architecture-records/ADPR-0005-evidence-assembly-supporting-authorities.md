@@ -2,12 +2,20 @@
 
 ## Metadata
 
+- ADPR ID: `ADPR-0005`
 - Status: `READY_FOR_REVIEW`
+- Version: 5
+- Author: Project Hunter Architecture Team
+- Reviewers:
+- Created: 2026-07-01
+- Approved:
+- Related Epic:
+- Related Issue: [#191](https://github.com/fafa33/Project-Hunter/issues/191)
+- Planned or produced ADR: [ADR 0028](../ADR/0028-evidence-assembly-supporting-authorities.md)
+- Supersedes:
+- Superseded by:
 - Self-assessment: `READY_FOR_ADR`
-- Revision: 5
-- Issue: [#191](https://github.com/fafa33/Project-Hunter/issues/191)
 - Blocked implementation issue: [#190](https://github.com/fafa33/Project-Hunter/issues/190)
-- Proposed ADR: [ADR 0028](../ADR/0028-evidence-assembly-supporting-authorities.md)
 - Draft PR: [#192](https://github.com/fafa33/Project-Hunter/pull/192)
 
 This record authorizes no implementation. Issue #190 remains blocked.

@@ -106,4 +106,4 @@ Proposed issue text is filed separately (see governance proof below for the issu
 
 ## Explicit confirmation
 
-No production code was written or modified. No test code was written or modified. No Pull Request was opened. `src/`, `tests/`, and `src/hunter/__main__.py` remain byte-identical to `origin/main` at `f3b96302713a9d843449d47ceae78ff17665fb2b`. Only this report (new file) and Issue #190 (comment and status) were changed by this session.
+No production code was written or modified. No test code was written or modified. `src/`, `tests/`, and `src/hunter/__main__.py` remain byte-identical to `origin/main` at `f3b96302713a9d843449d47ceae78ff17665fb2b`. This report is introduced via PR #192 alongside other architecture-documentation changes (ADPR-0005, ADR 0028, and registry updates) for Issue #191. Only documentation files were changed; no `src/` or `tests/` changes are included.
