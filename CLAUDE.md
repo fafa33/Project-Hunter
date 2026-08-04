@@ -87,6 +87,157 @@ For architecturally significant work:
 - do not begin implementation while a material architectural decision remains unresolved;
 - continue automatically through every preparation stage allowed by scope and role independence.
 
+## Architecture Readiness Gate
+
+Before planning or writing any production code, Claude MUST verify from repository evidence that:
+
+1. the requested work is architecturally authorized;
+2. every required production dependency already exists;
+3. no unresolved implementation-critical ADR decision remains;
+4. implementation will not require inventing new authorities, registries, methodologies, semantics, ownership boundaries, persistence rules, or replay rules;
+5. all required ownership boundaries already exist and are singular.
+
+If any answer is **NO** or **UNCERTAIN**, Claude MUST stop implementation work and perform an architecture investigation instead.
+
+Claude MUST NOT write production code, reduce scope, invent temporary implementations, fabricate missing authorities, or open an implementation PR while architecture readiness is unproven.
+
+If repository evidence proves implementation cannot proceed, Claude MUST produce a formal **BLOCKED** report with concrete repository, ADR, ownership, and dependency evidence.
+
+## Mandatory Pre-PR Architecture Audit
+
+Before creating any commit, Draft PR, implementation report, or completion report, Claude MUST perform a complete hostile architecture audit and assume the proposed work is incorrect until repository evidence proves otherwise.
+
+### Cross-ADR consistency
+
+Claude MUST review every Accepted ADR, not only the ADR being modified, and search for:
+
+- hidden contradictions;
+- ownership conflicts;
+- replay conflicts;
+- governance conflicts;
+- activation conflicts;
+- required ADR amendments.
+
+Claude MUST never silently reinterpret accepted ADR text. If accepted ADR meaning must change, Claude MUST stop and prepare the required amendment first.
+
+### Ownership proof
+
+For every canonical concept, Claude MUST identify exactly one:
+
+- canonical owner;
+- service owner;
+- repository owner;
+- persistence owner;
+- governance owner.
+
+Claude MUST reject split ownership, shared ownership, ownership inversion, and downstream-owned canonical records.
+
+### Architecture completeness
+
+Claude MUST search for unresolved implementation-critical decisions, including:
+
+- `TBD`;
+- `future issue`;
+- `implementation will decide`;
+- unresolved alternatives.
+
+If implementation depends on any such decision, Claude MUST declare that the architecture is not implementation-ready and stop.
+
+### Runtime dependency audit
+
+For every dependency, Claude MUST prove production existence of:
+
+- service;
+- repository;
+- persistence;
+- strict-known replay;
+- composition root.
+
+Test doubles never satisfy production readiness. If a required dependency exists only in tests, Claude MUST stop and report **BLOCKED**.
+
+### Replay and record-identity audit
+
+For every new record family, Claude MUST verify and document:
+
+- immutable identity;
+- logical identity;
+- uniqueness;
+- schema version;
+- semantic version;
+- effective/recorded/known coordinates where applicable;
+- provenance;
+- correction lineage;
+- supersession;
+- replay identity;
+- replay selection;
+- strict-known reconstruction.
+
+Claude MUST not assume ADR compliance; it must demonstrate it with repository evidence.
+
+### Governance audit
+
+Claude MUST verify that the work does not invent:
+
+- authorities;
+- methodologies;
+- registries;
+- semantics;
+- eligibility;
+- compatibility;
+- classifications.
+
+Every such decision must originate from an existing governed production source or an accepted architecture decision.
+
+### Dependency direction
+
+Claude MUST verify:
+
+- no circular ownership;
+- no dependency inversion;
+- no downstream-owned canonical types;
+- no ownership leakage.
+
+### Documentation and evidence audit
+
+Before opening a PR, Claude MUST verify:
+
+- SHAs refer to the correct code-bearing commit;
+- CI claims match the referenced commit;
+- test counts are current;
+- implementation reports match the final branch state;
+- PR descriptions match the final branch state;
+- no wording becomes stale merely because a documentation-only commit is added later.
+
+### Simulated hostile review
+
+Before opening a PR, Claude MUST attempt to reject its own work.
+
+Claude MUST identify the strongest materially plausible architecture findings an independent reviewer could raise. For each finding, Claude MUST:
+
+1. attempt to reproduce it from repository evidence;
+2. fix it if valid;
+3. explain why it is unsupported if invalid, with repository evidence.
+
+Claude MUST continue until it cannot identify additional materially supported findings.
+
+### Final decision gate
+
+Claude MUST choose exactly one outcome:
+
+- **IMPLEMENTATION READY**
+- **ARCHITECTURALLY BLOCKED**
+
+`IMPLEMENTATION READY` may be declared only when repository evidence supports every implementation-critical architectural decision and no unresolved material choice remains.
+
+If `ARCHITECTURALLY BLOCKED`, Claude MUST:
+
+- stop;
+- explain the blocker;
+- avoid production code;
+- avoid scope reduction;
+- avoid inventing missing architecture;
+- avoid opening an implementation PR unless the task is architecture preparation only.
+
 ## Implementation and Review Boundaries
 
 - Implementation must not redefine architecture.
