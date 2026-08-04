@@ -85,10 +85,12 @@ def _persist_methodology(manifest: dict[str, Any], application_root: Path) -> di
     if not isinstance(payload, dict):
         raise ValueError("mispricing-authority methodology manifest requires a payload object")
     record = service.persist_mispricing_methodology(
-        methodology_id=str(payload["methodology_id"]),
-        required_quote_currency=str(payload["required_quote_currency"]),
-        entity_class_criteria_id=str(payload["entity_class_criteria_id"]),
-        entity_class_criteria_version=str(payload["entity_class_criteria_version"]),
+        methodology_id=_required_text(payload["methodology_id"], "methodology_id"),
+        required_quote_currency=_required_text(payload["required_quote_currency"], "required_quote_currency"),
+        entity_class_criteria_id=_required_text(payload["entity_class_criteria_id"], "entity_class_criteria_id"),
+        entity_class_criteria_version=_required_text(
+            payload["entity_class_criteria_version"], "entity_class_criteria_version"
+        ),
         effective_at=_datetime(payload["effective_at"]),
         recorded_at=_datetime(payload["recorded_at"]),
         known_at=_datetime(payload["known_at"]),
@@ -110,8 +112,8 @@ def _assess(manifest: dict[str, Any], application_root: Path) -> dict[str, Any]:
     service, persistence_path = _service(application_root)
     record = service.assess(
         identity=_identity(manifest.get("identity")),
-        methodology_record_id=str(manifest["methodology_record_id"]),
-        fair_value_logical_id=str(manifest["fair_value_logical_id"]),
+        methodology_record_id=_required_text(manifest["methodology_record_id"], "methodology_record_id"),
+        fair_value_logical_id=_required_text(manifest["fair_value_logical_id"], "fair_value_logical_id"),
         effective_at=_datetime(manifest["effective_at"]),
         recorded_at=_datetime(manifest["recorded_at"]),
         known_at=_datetime(manifest["known_at"]),
@@ -132,13 +134,28 @@ def _assess(manifest: dict[str, Any], application_root: Path) -> dict[str, Any]:
 
 
 def _status(manifest: dict[str, Any], application_root: Path) -> dict[str, Any]:
-    service, persistence_path = _service(application_root)
     target = manifest.get("target")
     if target not in _STATUS_TARGETS:
         raise ValueError(f"mispricing-authority status manifest requires target: {' or '.join(_STATUS_TARGETS)}")
+    # Validate the manifest's shape before deciding whether the canonical database
+    # needs to be consulted at all, so a malformed manifest against a pristine
+    # application root still raises instead of being masked as "unavailable".
     effective_as_of = _datetime(manifest["effective_as_of"])
     known_by = _datetime(manifest["known_by"])
-    logical_id = str(manifest["logical_id"])
+    logical_id = _required_text(manifest["logical_id"], "logical_id")
+    persistence_path = _canonical_path(application_root, _CANONICAL_PERSISTENCE_DATABASE)
+    if not persistence_path.exists():
+        # No canonical database has ever been created under this application root, so no
+        # strict-known record could possibly be present. Report unavailable without
+        # constructing the repositories, which would otherwise create the database file
+        # (and its schema) as a side effect of a nominally read-only query.
+        return {
+            "operation": "status",
+            "target": target,
+            "persistence_database": str(persistence_path),
+            "available": False,
+        }
+    service, persistence_path = _service(application_root)
     if target == "methodology":
         record: Any = service.strict_known_methodology(
             effective_as_of=effective_as_of, known_by=known_by, logical_id=logical_id
@@ -177,11 +194,11 @@ def _identity(payload: Any) -> EconomicClaimIdentity:
     if not isinstance(payload, dict):
         raise ValueError("mispricing-authority manifest requires an identity object")
     return EconomicClaimIdentity(
-        entity_id=str(payload["entity_id"]),
-        economic_claim_id=str(payload["economic_claim_id"]),
-        asset_id=str(payload["asset_id"]),
-        representation_id=str(payload["representation_id"]),
-        token_id=str(payload["token_id"]),
+        entity_id=_required_text(payload["entity_id"], "identity.entity_id"),
+        economic_claim_id=_required_text(payload["economic_claim_id"], "identity.economic_claim_id"),
+        asset_id=_required_text(payload["asset_id"], "identity.asset_id"),
+        representation_id=_required_text(payload["representation_id"], "identity.representation_id"),
+        token_id=_required_text(payload["token_id"], "identity.token_id"),
         chain=str(payload.get("chain", "")),
         contract_address=str(payload.get("contract_address", "")),
     )
@@ -192,6 +209,12 @@ def _optional_text(value: Any) -> str | None:
         return None
     text = str(value)
     return text if text.strip() else None
+
+
+def _required_text(value: Any, field: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"mispricing-authority manifest field {field!r} must be a non-blank string")
+    return value
 
 
 def _application_root() -> Path:
