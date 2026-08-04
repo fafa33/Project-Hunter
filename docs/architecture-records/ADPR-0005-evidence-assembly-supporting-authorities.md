@@ -4,35 +4,30 @@
 
 - ADPR ID: `ADPR-0005`
 - Status: `READY_FOR_REVIEW`
-- Version: 1.0
+- Version: 2.0
 - Author: Claude, on behalf of Issue #191
-- Reviewers: independent architecture audit not yet performed
+- Reviewers: independent hostile architecture review against revision 1 (Draft PR #192), five `CHANGES REQUIRED` findings, all resolved in revision 2 below; a second independent review round has not yet occurred
 - Created: 2026-08-04
+- Revised: 2026-08-04 (revision 2, resolving all five review findings)
 - Approved: not yet approved
 - Related Epic: not yet created
 - Related Issue: [Issue #191](https://github.com/fafa33/Project-Hunter/issues/191)
 - Related blocked Issue: [Issue #190](https://github.com/fafa33/Project-Hunter/issues/190) (Canonical Evidence Assembly Orchestration Module, Undispatched) — remains `BLOCKED` until this record is accepted and a resulting ADR is accepted
 - Planned or produced ADR: `ADR 0028` (drafted alongside this record, Status `Proposed`; not yet accepted — see `docs/ADR/0028-evidence-assembly-supporting-authorities.md`)
-- Supersedes: not applicable
+- Supersedes: not applicable (this is a revision in place, not a superseding record — see "Immutability and Supersession")
 - Superseded by: not applicable
 
 ## Executive Summary
 
 `CanonicalEvidenceAssemblyService` (ADR 0025, Accepted) requires five constructor collaborators to perform its sole authorized operation, `assemble()`. Two are production-backed (`repository`, `native_evidence_query`). Three — `methodology_contract_authority`, `evidence_shape_registry_authority`, `evidence_semantics_authority` — have no production implementation anywhere in `src/`; every construction of their backing record types (`MethodologyEvidenceInputContract`, `EvidenceShapeRegistry`, `AuthoritativeEvidenceSemantics`) is a test-only in-memory fake confined to `tests/test_canonical_evidence_assembly.py`. This was discovered while evaluating Issue #190 and is documented in full, with file:line evidence, in `docs/ARCHITECTURE_AUDITS/issue-190-evidence-assembly-authority-gap.md`.
 
-ADR 0025 authorizes what these three authorities must do (§"Methodology contract," §"Evidence Shape Registry," §"Assembly preconditions") but does not fully assign who persists, versions, and serves them, or what their own correction/replay/conflict/amendment semantics are. It explicitly names the Evidence Shape Registry's governance owner ("the Canonical Evidence Assembly Authority") but is silent on the Methodology Contract's persistence owner and the Evidence Semantics Authority's owner entirely.
+**Revision 2 supersedes revision 1's four open questions with singular, fully resolved decisions**, produced in direct response to independent hostile architecture review of Draft PR #192 (five `CHANGES REQUIRED` findings). No material decision is deferred to implementation:
 
-This preparation evaluates ownership, persistence, versioning, correction, provenance, strict-known replay, conflict, and amendment-governance options for all three authorities and recommends:
+- **Methodology Contract Authority** — resolved as a two-record design, both owned exclusively by `hunter.valuation_methodology`: `ValuationMethodologySnapshot` gains one new field, `accepts_assembled_evidence: bool`, as the sole activation authority (conforming exactly to ADR 0025's literal text); a new per-target sibling record family, `MethodologyEvidenceInputContract`, is the declaration instance. Scope is resolved as **per-target** (per methodology-version × entity × representation × pathway × currency × unit × accounting-window) — not a preference, but a structural requirement of `CanonicalEvidenceAssemblyService._validate_methodology_contract`'s existing, unmodifiable field-by-field target comparison. Exact service owner: `CanonicalValuationMethodologyAuthority`. Exact repository owner: `ValuationMethodologyRepository`. Full canonical envelope, uniqueness constraint, and strict-known selection algorithm are specified without gaps.
+- **Evidence Shape Registry Authority** — unchanged from revision 1: owned by `hunter.evidence_assembly`, exactly as ADR 0025 already states.
+- **Evidence Semantics Authority** — resolved as a deterministic, governed-rule-driven classification authority owned by `hunter.evidence_assembly`, computed by a new service (`CanonicalEvidenceSemanticsAuthority`) from a new governed reference-data artifact (`EvidenceSemanticsClassificationRuleset`, structurally identical to the Evidence Shape Registry). Manual, per-record classification exceptions are **explicitly and permanently prohibited**. A separate, three-coordinate logical identity — `(evidence_record_id, evidence_record_version, ruleset_version)` — resolves revision 1's under-specified `(evidence_record_id, evidence_record_version)`-only identity.
 
-- **Methodology Contract Authority** — a new record family, `MethodologyEvidenceInputContract`, owned by `hunter.valuation_methodology` (the package that already owns `ValuationMethodologySnapshot`) as a sibling record family cross-referenced to an exact methodology-snapshot version, rather than a field extension of `ValuationMethodologySnapshot` itself.
-- **Evidence Shape Registry Authority** — owned by `hunter.evidence_assembly` itself, exactly as ADR 0025 already states, implemented as a new repository inside the existing package, with Registry *content* changes gated by an ADR-governed amendment discipline mirroring ADR 0023's pattern.
-- **Evidence Semantics Authority** — owned by `hunter.evidence_assembly` itself (not `hunter.value_capture`), as a new, immutable, strict-known "semantics assignment" record family that references a `FundamentalEvidenceRecord` by exact ID and version without mutating it.
-
-All three follow the standard immutable bitemporal envelope ADR 0021 §"Required new record families and minimum fields" already establishes for every record family in this repository (record ID, logical ID, schema/semantic version, effective/recorded/known time, content hash, quality/conflict state, append-only correction lineage).
-
-One open question is carried forward, unresolved, rather than papered over: `MethodologyEvidenceInputContract`'s current shape (entity/representation/window-scoped) versus a genuinely methodology-global contract is a real design tension this preparation surfaces but does not silently resolve by picking the more convenient reading (see "Open Questions").
-
-No production code is authorized by this record. Self-assessment: `READY_FOR_ADR`, conditional on the open question above being carried into the ADR draft as an explicit, bounded scope note rather than resolved by assumption.
+Every one of revision 1's four open questions (OQ-001 through OQ-004) is resolved below, not carried forward. No production code is authorized by this record. Self-assessment: `READY_FOR_ADR`, unconditionally.
 
 ## Problem Statement
 
@@ -46,43 +41,45 @@ Each of the three missing authorities has:
 
 - an explicit, single canonical owner (Constitutional Rule 5, Single Source of Truth);
 - a defined, immutable, bitemporal record family, consistent with every other record family in this repository;
-- defined persistence, versioning, correction, provenance, strict-known replay, and conflict semantics;
-- a defined amendment-governance mechanism for changes to its content over time;
-- a production-constructible implementation path that a future implementation issue can execute without inventing architecture.
+- defined persistence, versioning, correction, provenance, strict-known replay, and conflict semantics, with a fully specified strict-known selection algorithm that resolves to exactly one record, never ambiguously;
+- a defined amendment-governance mechanism for changes to its content over time, including an explicit position on whether manual/human exceptions are ever permitted;
+- a production-constructible implementation path that a future implementation issue can execute **without inventing any architecture** — every material decision is made in this record and its resulting ADR, not left for an implementer to choose.
 
 ### Decision required
 
-A future ADR must fix:
+The resulting ADR must fix, and this revision resolves, all of the following:
 
-1. ownership of `MethodologyEvidenceInputContract`, `EvidenceShapeRegistry`, and `AuthoritativeEvidenceSemantics`;
-2. the record family/envelope for each, including any fields ADR 0025's current dataclasses lack (correction lineage in particular — see "Architectural Dimensions");
-3. persistence, correction, provenance, and strict-known replay semantics for each, consistent with ADR 0020/ADR 0021;
-4. the conflict-handling and amendment-governance mechanism for each, consistent with ADR 0023's precedent for versioned reference data;
-5. whether `MethodologyEvidenceInputContract`'s scope is per-target (as currently coded) or methodology-global, or whether that question is deferred to implementation within fixed bounds this ADR sets.
+1. ownership of `MethodologyEvidenceInputContract`, `EvidenceShapeRegistry`, and `AuthoritativeEvidenceSemantics` — **resolved**: `hunter.valuation_methodology` (Methodology Contract, jointly with a new `ValuationMethodologySnapshot` field), `hunter.evidence_assembly` (Evidence Shape Registry, Evidence Semantics);
+2. the record family/envelope for each, including every field ADR 0025's current dataclasses lack — **resolved**, full envelope specified for all three (see ADR 0028 §"Canonical envelope");
+3. persistence, correction, provenance, and strict-known replay semantics for each, consistent with ADR 0020/ADR 0021 — **resolved**, including an exact strict-known selection algorithm per authority;
+4. the conflict-handling and amendment-governance mechanism for each, consistent with ADR 0023's precedent — **resolved**, including an explicit, permanent prohibition on manual Evidence Semantics exceptions;
+5. `MethodologyEvidenceInputContract`'s exact scope — **resolved**: per-target, required by already-accepted, unmodifiable code, not a preference.
 
 ### In scope
 
 - architecture and ownership preparation only, for the three named authorities;
-- persistence, versioning, correction, provenance, strict-known replay, conflict, and amendment semantics for each;
-- whether a new ADR, an ADR 0025 amendment, or both are required.
+- persistence, versioning, correction, provenance, strict-known replay, conflict, and amendment semantics for each, fully resolved with no deferred choice;
+- one narrow ADR 0025 amendment and one narrow ADR 0022 amendment (see "Governance Review").
 
 ### Out of scope
 
 - implementation of any authority (repository, service, or persistence code);
 - any modification to `src/hunter/evidence_assembly/service.py`'s existing `assemble()` logic, invariants, or validation order;
+- any modification to `src/hunter/valuation_methodology/service.py` or `repository.py`'s existing methods (only new methods/tables are authorized, additively);
 - any modification to `src/hunter/__main__.py`;
 - resuming Issue #190's orchestration module;
 - granting `hunter.comparative_valuation`, `hunter.mispricing`, `hunter.asymmetry`, or Canonical Market Validation (ADR 0027) any new right to Assembled Fundamental Evidence — ADR 0025, ADR 0026 §"Compatibility," and ADR 0027 §"Compatibility" already fix that boundary and this record does not reopen it;
-- changing `ValuationMethodologySnapshot`'s existing ADR-0022-locked invariants (permitted model identifier, horizon, correlation group, normalization-policy gate) — see "Rejected Options";
+- changing `ValuationMethodologySnapshot`'s existing ADR-0022-locked Milestone-2 invariants (permitted model identifier, horizon, correlation group, normalization-policy gate) — the one new field this revision adds is purely additive and does not touch them;
+- publishing the first `EvidenceSemanticsClassificationRuleset` version's actual rule content, or the first target-specific `MethodologyEvidenceInputContract` — both are future, separately ADR/implementation-governed acts;
 - assigning production weights, activating Market Validation input, or any runtime activation decision.
 
 ## Problem Validation
 
-ADR 0025 §"Methodology contract" states every methodology "must explicitly declare an evidence-input contract" but does not name a persistence owner. §"Evidence Shape Registry" names a governance owner for Registry *content* amendments but not an implementation/persistence owner. No section of ADR 0025 addresses who classifies or persists `AuthoritativeEvidenceSemantics`. `docs/ARCHITECTURE_AUDITS/issue-190-evidence-assembly-authority-gap.md` independently confirms, by repository-wide search, that none of the three exist in `src/` outside test fixtures. The problem is real, unresolved by any accepted document, and architectural under `docs/ARCHITECTURE_DECISION_PREPARATION_GUIDE.md` §"Scope" (it creates/materially changes canonical authority/ownership and persistence/versioning semantics).
+ADR 0025 §"Methodology contract" states every methodology "must explicitly declare an evidence-input contract" but did not, in revision 1's analysis, fully account for how that declaration interacts with `ValuationMethodologySnapshot`'s existing entity-agnostic design. §"Evidence Shape Registry" names a governance owner for Registry *content* amendments but not an implementation/persistence owner. No section of ADR 0025 addresses who classifies or persists `AuthoritativeEvidenceSemantics`. `docs/ARCHITECTURE_AUDITS/issue-190-evidence-assembly-authority-gap.md` independently confirms, by repository-wide search, that none of the three exist in `src/` outside test fixtures. Independent hostile review of revision 1 confirmed the problem was real but found revision 1's resolution incomplete on five specific points (see "Decision History"). The problem is real, unresolved by any accepted document prior to this record, and architectural under `docs/ARCHITECTURE_DECISION_PREPARATION_GUIDE.md` §"Scope."
 
 ## Motivation
 
-Without this decision, any future attempt to implement these authorities would face the same choice Issue #190 correctly declined to make unilaterally: invent ownership and persistence semantics inside an implementation PR (violating ADR-before-implementation, Guiding Principle 8), or block indefinitely. Leaving Evidence Assembly's write path permanently unreachable also prevents ADR 0025's own purpose — closing the disclosure-granularity gap described in its Context section — from ever being realized, and blocks any future Market Validation methodology from declaring `accepts_assembled_evidence = True` (ADR 0025's amendment to ADR 0022, item 6) in practice, since no methodology contract could ever be authored or persisted.
+Without this decision, any future attempt to implement these authorities would face the same choice Issue #190 correctly declined to make unilaterally: invent ownership and persistence semantics inside an implementation PR (violating ADR-before-implementation, Guiding Principle 8), or block indefinitely. Leaving Evidence Assembly's write path permanently unreachable also prevents ADR 0025's own purpose — closing the disclosure-granularity gap described in its Context section — from ever being realized.
 
 ## Existing Architecture
 
@@ -90,7 +87,8 @@ Without this decision, any future attempt to implement these authorities would f
 |---|---|---|
 | Assembled Fundamental Evidence construction | `CanonicalEvidenceAssemblyService` (ADR 0025) | Sole authority; already implemented; fail-closed on any missing collaborator. |
 | Native Fundamental Valuation Evidence | `hunter.value_capture` (ADR 0021) | Owns `FundamentalEvidenceRecord`; no `shape_id`, `accounting_meaning`, or `supply_basis_id` field exists on it (confirmed by direct read of `src/hunter/value_capture/models.py:80-112`). |
-| Valuation methodology declaration | `hunter.valuation_methodology` (ADR 0022) via `CanonicalValuationMethodologyAuthority` | Owns `ValuationMethodologySnapshot`; every field is hard-locked to ADR-0022 Milestone 2 constants in `__post_init__` (`src/hunter/valuation_methodology/models.py:96-117`) — `permitted_model_identifier`, `horizon_days`, `correlation_group`, and `normalization_policy_id` cannot vary without a governing amendment. |
+| Valuation methodology declaration | `hunter.valuation_methodology` (ADR 0022) via `CanonicalValuationMethodologyAuthority` (`service.py:36`) | Owns `ValuationMethodologySnapshot` via `ValuationMethodologyRepository` (`repository.py:23`); every field is hard-locked to ADR-0022 Milestone 2 constants in `__post_init__` (`models.py:96-117`) except the new `accepts_assembled_evidence` field this revision adds. `strict_known_methodology(*, effective_as_of, known_by)` (`service.py:148-154`) carries no `logical_id` parameter, confirming the existing single-methodology-lineage (singleton) design this revision's Methodology Contract design builds on top of, not against. |
+| Methodology contract consumption | `CanonicalEvidenceAssemblyService._validate_methodology_contract` (`service.py:339-387`) | Existing, unmodifiable code compares a fetched contract's `entity_id`, `representation_id`, `currency`, `unit`, `accounting_window_start/end` against the specific target being assembled — the direct evidence that resolves this revision's per-target scope decision. |
 | Evidence Shape Registry content governance | ADR 0025 §"Evidence Shape Registry" | Already names "the Canonical Evidence Assembly Authority" as governance owner, under an ADR-governed amendment mechanism explicitly modeled on ADR 0023's. No persistence owner is named. |
 | Supply basis | `hunter.value_capture` (ADR 0021) via `SupplyBasisSnapshot` | Already an accepted, owned record family; not itself a candidate constituent for Evidence Semantics, but its identity (`supply_basis_id`) is a field `AuthoritativeEvidenceSemantics` must classify against. |
 | Downstream composition | ADR 0026, ADR 0027 | Explicitly reaffirm Evidence Assembly's isolation; grant no downstream authority over Assembled Fundamental Evidence. Unaffected by this preparation. |
@@ -100,257 +98,200 @@ Without this decision, any future attempt to implement these authorities would f
 ### Constitutional
 
 - Rule 2 (Evidence Authority): "Unknown information remains unknown... Missing information remains missing" — a semantics or contract classification that cannot be produced must remain explicitly unavailable, never defaulted or inferred silently.
-- Rule 4 (Architectural Integrity): "Architectural boundaries, responsibilities, and ownership must remain explicit... Architectural convenience is never sufficient justification for violating established boundaries" — directly governs the ownership decision below; convenience (e.g., reusing `hunter.value_capture` because it is "nearby") is not itself a valid reason.
-- Rule 5 (Single Source of Truth): "Every architectural concept, analytical authority, and governance rule must have one canonical owner... Competing authorities, duplicated ownership, and conflicting definitions are prohibited."
-- Rule 6 (Explainability): "Hunter must preserve the reasoning, evidence, methodology, uncertainty, and provenance supporting every meaningful analytical output... Opaque authority is prohibited" — governs the rejection, below, of any classification mechanism that cannot show its own reasoning (see Evidence Semantics Authority's amendment-governance discussion).
+- Rule 4 (Architectural Integrity): "Architectural boundaries, responsibilities, and ownership must remain explicit... Architectural convenience is never sufficient justification for violating established boundaries" — directly governs every ownership decision below.
+- Rule 5 (Single Source of Truth): "Every architectural concept, analytical authority, and governance rule must have one canonical owner... Competing authorities, duplicated ownership, and conflicting definitions are prohibited" — directly governs the resolution of former OQ-003 (one service, not two) and the package-ownership/dependency-direction resolution below.
+- Rule 6 (Explainability): "Hunter must preserve the reasoning, evidence, methodology, uncertainty, and provenance supporting every meaningful analytical output... Opaque authority is prohibited" — directly governs the resolution of former OQ-002 (manual exceptions prohibited; deterministic, governed ruleset required).
 
 ### Governance and accepted ADRs
 
-- ADR 0009 places decisions in services and keeps repositories mechanical; any new repository for these authorities must be mechanical only.
-- ADR 0020 requires exact strict-known selection, explicit missingness, and forbids current/latest fallback for any input to a canonical service — binding on all three new authorities' retrieval methods.
+- ADR 0009 places decisions in services and keeps repositories mechanical; every new repository method is mechanical only; the cross-service strict-known check (contract vs. governing snapshot) is service-owned.
+- ADR 0020 requires exact strict-known selection, explicit missingness, and forbids current/latest fallback — binding on every new authority's retrieval method, including the ruleset-version selection algorithm.
 - ADR 0021 fixes the five-layer evidence model and the standard record envelope; a new record family must not collapse or relabel an existing layer.
-- ADR 0022 fixes `ValuationMethodologySnapshot`'s Milestone-2 invariants; any change to those invariants requires its own ADR 0022 amendment (this preparation recommends avoiding that need — see "Rejected Options").
-- ADR 0023 establishes the precedent and precondition pattern for versioned, ADR-governed reference data and the requirement that any future value change carry a persisted, versioned policy identifier evaluated against the version in force *at record-creation time*, never the current value — directly applicable to the Evidence Shape Registry's amendment mechanism.
-- ADR 0025 fixes what all three authorities must validate and is reaffirmed, not superseded, by this preparation; any resulting ADR may only narrowly amend ADR 0025's ownership silence, not its invariants.
+- ADR 0022 fixes `ValuationMethodologySnapshot`'s Milestone-2 invariants; this revision's one new field is additive and does not touch them, but is a formal ADR 0022 amendment nonetheless (see "Governance Review").
+- ADR 0023 establishes the precedent and precondition pattern for versioned, ADR-governed reference data, directly applicable to both the Evidence Shape Registry's and the new `EvidenceSemanticsClassificationRuleset`'s amendment mechanisms.
+- ADR 0025 fixes what all three authorities must validate; the resulting ADR narrowly amends its ownership silence, not its invariants.
 - ADR 0026, ADR 0027 reaffirm Evidence Assembly's isolation from downstream composition; unaffected.
 
 ### Technical and operational
 
 - No authority may be constructed as a stub or fake inside production orchestration code (the exact failure mode Issue #190 was correctly blocked to avoid).
-- Every new repository must reject a `save`/`apply`/`write` method of its own eligibility logic, consistent with the AST-based repository-purity regression already enforced by `tests/test_valuation_family_repository_purity.py` for the existing four valuation-family repositories.
+- Every new repository must reject a `save`/`apply`/`write` method of its own eligibility logic, consistent with the AST-based repository-purity regression already enforced by `tests/test_valuation_family_repository_purity.py`.
 - No new authority may perform evidence acquisition, parsing, or valuation arithmetic.
+- `hunter.valuation_methodology` (upstream owner of Methodology Contract) must not depend on `hunter.evidence_assembly.service` or any Evidence Assembly business logic (downstream consumer); the one narrow, stated, data-type-only exception (importing the `MethodologyEvidenceInputContract` dataclass from `hunter.evidence_assembly.models`, forced by ADR 0025's already-fixed Protocol return type) is documented, not silently permitted — see ADR 0028's "Package ownership and dependency direction."
 
 ### Persistence, replay, and provenance
 
 - All new records are append-only, content-addressed, and bitemporal, matching every other record family in this repository.
 - Corrections are single-predecessor successors; branching is prohibited, matching `_authorize_correction`'s existing pattern in `hunter.evidence_assembly.service`, `hunter.valuation.service`, and `hunter.valuation_methodology.service`.
-- Every new authority's strict-known retrieval must be resolved by `(identity, known_by)` coordinates only, never a "latest" or "current" query path.
+- Every new authority's strict-known retrieval must be resolved by exact identity coordinates and `known_by` only, never a "latest" or "current" query path — including ruleset-version selection, which is defined to select the highest *strict-known-at-cutoff* version, never the highest wall-clock-current version.
 
 ## Evidence Inventory
 
 | ID | Evidence | Authority/source | Finding | Quality and limitations | Supports or challenges |
 |---|---|---|---|---|---|
-| E-001 | Project Constitution, Rules 2/4/5/6 | Canonical constitutional authority | Requires explicit missingness, explicit ownership, single ownership, and explainable classification. | Highest authority; non-numeric. | Supports explicit, single-owner authorities for all three; rejects opaque classification. |
-| E-002 | ADR 0025 (Accepted) | Accepted ADR | Fully specifies what all three authorities must validate; partially specifies ownership (Registry only). | Binding; primary source for this preparation. | Defines the exact contract every option must satisfy. |
-| E-003 | `src/hunter/evidence_assembly/service.py:65-78, 104-135, 271-310` | Direct code read | Constructor requires all three collaborators unconditionally; `assemble()` gates on each with no fallback. | Reproducible; read directly, not inferred. | Establishes the problem is real and structural, not a test-harness artifact. |
+| E-001 | Project Constitution, Rules 2/4/5/6 | Canonical constitutional authority | Requires explicit missingness, explicit ownership, single ownership, and explainable classification. | Highest authority; non-numeric. | Supports explicit, single-owner authorities for all three; rejects opaque classification and manual exceptions. |
+| E-002 | ADR 0025 (Accepted) | Accepted ADR | Fully specifies what all three authorities must validate; requires "the `ValuationMethodologySnapshot` in force" to be the explicit declarer of assembled-evidence acceptance. | Binding; primary source for this preparation. | Directly resolves former OQ-004: the activation authority must be the snapshot itself, not only a cross-referencing sibling record. |
+| E-003 | `src/hunter/evidence_assembly/service.py:65-78, 104-135, 271-310, 339-387` | Direct code read | Constructor requires all three collaborators unconditionally; `assemble()` gates on each with no fallback; `_validate_methodology_contract` compares the fetched contract's entity/representation/currency/unit/window fields against the specific assembly target. | Reproducible; read directly, not inferred. | Establishes the problem is real and structural; directly resolves former OQ-001 — the contract is per-target by construction of this already-accepted, unmodifiable code. |
 | E-004 | `tests/test_canonical_evidence_assembly.py:151-227` | Direct code read | Every construction of the three missing types is a named, explicit test fake. | Reproducible. | Confirms zero production implementation exists. |
-| E-005 | `src/hunter/valuation_methodology/models.py:44-120` | Direct code read | `ValuationMethodologySnapshot` is hard-locked to ADR-0022 Milestone 2 constants; carries no entity/representation/window scope. | Reproducible. | Rejects folding the contract's fields directly onto this record without an ADR 0022 amendment; supports a sibling record family instead. |
-| E-006 | `src/hunter/value_capture/models.py:80-112` | Direct code read | `FundamentalEvidenceRecord` has no `shape_id`, `accounting_meaning`, `supply_basis_id`, or standalone `currency` field. | Reproducible. | Rejects the assumption that Evidence Semantics is merely reading existing native fields; confirms it is genuinely new classification data. |
-| E-007 | ADR 0023 (Accepted) | Accepted ADR | Establishes the precedent that versioned reference-data content changes require ADR governance, and that future value changes must carry a persisted version evaluated against the value in force at creation time. | Binding precedent. | Directly informs the Evidence Shape Registry's amendment-governance design. |
+| E-005 | `src/hunter/valuation_methodology/models.py:44-120` | Direct code read | `ValuationMethodologySnapshot` is hard-locked to ADR-0022 Milestone 2 constants; carries no entity/representation/window scope; already carries `supersedes_record_id`/`correction_reason`. | Reproducible. | Confirms the contract's per-target fields cannot be folded onto this record; confirms the snapshot already has correction lineage the new `accepts_assembled_evidence` field can safely ride on. |
+| E-006 | `src/hunter/value_capture/models.py:80-112` | Direct code read | `FundamentalEvidenceRecord` has no `shape_id`, `accounting_meaning`, `supply_basis_id`, or standalone `currency` field. | Reproducible. | Confirms Evidence Semantics is genuinely new classification data, not a read of existing native fields. |
+| E-007 | ADR 0023 (Accepted) | Accepted ADR | Establishes the precedent that versioned reference-data content changes require ADR governance, and that future value changes must carry a persisted version evaluated against the version in force at record-creation time, never current. | Binding precedent. | Directly informs both the Evidence Shape Registry's and the new `EvidenceSemanticsClassificationRuleset`'s amendment-governance and version-ordering design. |
 | E-008 | ADR 0026 §"Compatibility," ADR 0027 §"Compatibility" | Accepted ADRs | Both explicitly reaffirm Evidence Assembly's isolation; grant no downstream right to Assembled Fundamental Evidence. | Binding. | Confirms this preparation must not, and does not, reopen that boundary. |
-| E-009 | `src/hunter/evidence_assembly/models.py:64-144` | Direct code read | `MethodologyEvidenceInputContract` and `AuthoritativeEvidenceSemantics` already carry `effective_at`/`recorded_at`/`known_at`/`quality_state`/`conflict_state`/`content_hash` but lack `logical_id`, `supersedes_record_id`, and `correction_reason`. | Reproducible. | Identifies a concrete gap the resulting ADR must close before either record family is correction-lineage-complete. |
-| E-010 | `docs/ARCHITECTURE_AUDITS/issue-190-evidence-assembly-authority-gap.md` | This session's prior work product | Full original gap analysis, independently re-verified in this preparation. | Reproducible; produced by the same author, re-verified rather than merely re-cited. | Establishes problem validation. |
+| E-009 | `src/hunter/evidence_assembly/models.py:64-144` | Direct code read | `MethodologyEvidenceInputContract` and `AuthoritativeEvidenceSemantics` already carry `effective_at`/`recorded_at`/`known_at`/`quality_state`/`conflict_state`/`content_hash` but lack `logical_id`, `supersedes_record_id`, and `correction_reason`. | Reproducible. | Identifies the exact gap the resulting ADR's "Canonical envelope" section closes for both record families. |
+| E-010 | `docs/ARCHITECTURE_AUDITS/issue-190-evidence-assembly-authority-gap.md` | This session's prior work product | Full original gap analysis, independently re-verified in this preparation. | Reproducible. | Establishes problem validation. |
+| E-011 | `src/hunter/valuation_methodology/service.py:36, 63-157` | Direct code read | `CanonicalValuationMethodologyAuthority`'s exact public method set (`persist_methodology`, `get`, `methodology_history`, `strict_known_methodology`, `unresolved_conflicts`); `strict_known_methodology` takes no `logical_id`, confirming a singleton-lineage design. | Reproducible. | Directly resolves former OQ-003: this is the exact, named, existing service the Methodology Contract's new methods attach to; no new service is warranted. |
+| E-012 | `src/hunter/valuation_methodology/repository.py:23` | Direct code read | `ValuationMethodologyRepository` is the exact, named existing repository class. | Reproducible. | Directly resolves the repository-ownership half of Finding 5/1: this class, not a new one, is extended. |
+| E-013 | `src/hunter/evidence_assembly/repository.py:56, 76-112` | Direct code read | `AssembledEvidenceRepository` already owns two record families (`AssembledFundamentalEvidenceRecord`, `AssemblyConflictRecord`) in one class, and its `_insert_authorized` already implements the exact divergent-duplicate-rejection pattern this revision reuses for both new record families. | Reproducible; already-audited precedent. | Confirms "one repository class, multiple record families" and "reject divergent duplicates at persistence time" are established, not invented, patterns. |
+| E-014 | Independent hostile architecture review of Draft PR #192 | External review input (five `CHANGES REQUIRED` findings; see "Decision History") | Identified all four of revision 1's open questions as unresolved material decisions, and identified split/ambiguous Methodology Contract ownership as a Rule-5 violation. | Authoritative for this revision's scope; not independently re-verified against a recorded GitHub review artifact — see the governing session's report for this caveat. | Directly drives every design change in revision 2. |
 
 ## Assumptions
 
 | ID | Assumption | Rationale | Confidence | Falsification condition | Consequence if false |
 |---|---|---|---|---|---|
-| A-001 | `hunter.valuation_methodology` is the correct package to own a new sibling record family, not a wholly new top-level package. | ADR 0025's amendment to ADR 0022 frames the contract as intrinsic to "the `ValuationMethodologySnapshot` in force," and `hunter.valuation_methodology` already owns methodology-level governance. | Medium | A future ADR reviewer determines methodology-contract ownership must be independent of valuation methodology (e.g., because it must also serve a future non-valuation methodology family). | The recommended package location changes; the record family design and semantics below remain largely reusable. |
-| A-002 | Evidence Shape Registry and Evidence Semantics Authority belong in the same package (`hunter.evidence_assembly`) as the Canonical Evidence Assembly Authority itself. | ADR 0025 already names this owner for the Registry; Evidence Semantics' classification vocabulary (`shape_id`, `accounting_meaning`) has no meaning outside the Evidence Assembly Authority's own domain. | High | A future ADR reviewer finds a reason `hunter.value_capture` must own semantics classification (e.g., because classification should happen at evidence-ingestion time, before Evidence Assembly ever sees the record). | Ownership moves to `hunter.value_capture`; correction/replay semantics below are largely reusable, but the classification-authoring question (Open Question OQ-002) becomes more, not less, load-bearing. |
-| A-003 | Classification decisions (shape/semantics assignment) should be governed, deterministic, and auditable rather than ad hoc per-record human judgment. | ADR 0025 explicitly rejected "ad hoc human manifest approval of a composed value without persisted authority" for assembled *values*; Constitutional Rule 6 prohibits opaque authority. | Medium | A future ADR reviewer determines per-record classification requires case-by-case expert judgment that cannot be reduced to a governed rule set without losing accuracy. | The amendment-governance mechanism for Evidence Semantics needs a documented exception process rather than a pure rule table; ownership and record-family design are unaffected. |
+| A-001 | `EvidenceSemanticsClassificationRuleset`'s deterministic function can, in practice, be expressed as a total or explicitly-partial mapping from `(evidence_type, source_methodology, attribution_rule_id, unit)` to the six classification outputs, without needing additional native-record fields this ADR does not add. | These are exactly the fields `FundamentalEvidenceRecord` already carries that plausibly correlate with disclosure shape/structure; no other candidate fields exist on the record today. | Medium | A future ruleset author finds these four fields insufficient to disambiguate two genuinely different shapes, requiring either a native-record field addition (an ADR 0021/0022 amendment) or acceptance of an irreducibly coarser classification. | The ruleset's first version (a future, separately governed act) may need to declare some inputs classifiable only to a coarser shape than ideal, or a future ADR may need to add a discriminating native field; ownership, envelope, and replay design in this record are unaffected either way. |
+| A-002 | Ruleset-version total ordering by acceptance order (not lexicographic string order) is implementable without a dedicated integer sequence field, using each version's own governing-ADR acceptance date/order as the ordering key. | Every governed reference-data amendment in this repository is already an ADR-numbered, chronologically ordered act (ADR 0023's own numbering is itself such a sequence). | High | A future implementation finds ADR acceptance order insufficiently granular (e.g., two ruleset versions accepted by amendments to the same ADR). | A future ADR amendment would need to add an explicit integer ordering field to `EvidenceSemanticsClassificationRuleset`; the deterministic-selection *principle* (highest strict-known-at-cutoff version wins) is unaffected. |
 
 ## Architectural Dimensions
 
-- **Authority and ownership**: which package/service owns construction, validation, and persistence-authorization for each of the three record families.
-- **Record family and envelope**: whether each conforms to the standard bitemporal envelope (ADR 0021), and what fields the two already-drafted dataclasses (`MethodologyEvidenceInputContract`, `AuthoritativeEvidenceSemantics`) are missing to reach that standard.
-- **Persistence**: mechanical repository design, consistent with ADR 0009.
-- **Versioning**: how a "version" of a contract/registry/semantics assignment is identified and retrieved.
-- **Correction**: append-only, single-predecessor successor discipline, consistent with every other authority in this repository.
-- **Provenance**: what evidence each authority's decision must cite (e.g., which ADR-governed rule produced a given shape classification).
-- **Strict-known replay**: retrieval bounded by `(identity, known_by)`, never "current."
-- **Conflict**: what constitutes a conflict for each authority, and how it is surfaced (mirroring `AssemblyConflictRecord`'s existing pattern).
-- **Amendment governance**: what process changes a given authority's *content* over time (ADR-governed, per ADR 0023's precedent, for Registry and Semantics; methodology-author-governed, cross-referenced to an exact methodology version, for the Contract).
-- **Compatibility**: with ADR 0021, ADR 0022, ADR 0023, ADR 0024, ADR 0025, ADR 0026, ADR 0027.
-- **Implementation impact**: what a future implementation issue must build, scoped narrowly enough not to require further architecture decisions.
-
-## Exhaustive Option Inventory
-
-### Methodology Contract Authority — ownership options
-
-1. **New sibling record family under `hunter.valuation_methodology`** (recommended). `MethodologyEvidenceInputContract` becomes a new, separately persisted record family in the same package, cross-referencing an exact `ValuationMethodologySnapshot` record ID/version. `ValuationMethodologySnapshot` itself is not modified.
-2. **Field extension of `ValuationMethodologySnapshot`**. Add the contract's fields directly onto the existing dataclass. Requires amending ADR 0022's Milestone-2-locked invariants (`models.py:96-117`) and redesigning `MethodologyEvidenceInputContract` to be methodology-global rather than entity/window-scoped.
-3. **New standalone top-level package** (`hunter.methodology_contract` or similar), independent of `hunter.valuation_methodology`. Duplicates methodology-adjacent governance in a second location.
-4. **Ownership by `hunter.evidence_assembly` itself**. The Evidence Assembly Authority persists the contracts it consumes, even though it does not author methodology policy.
-
-### Evidence Shape Registry Authority — ownership options
-
-1. **`hunter.evidence_assembly`, new internal repository** (recommended — matches ADR 0025's explicit text). A new `EvidenceShapeRegistryRepository` persists versioned `EvidenceShapeRegistry` snapshots inside the existing package, alongside `AssembledEvidenceRepository`.
-2. **`hunter.value_capture`**. Registry lives with native evidence, since it classifies native evidence. Rejected in "Rejected Options" — contradicts ADR 0025's explicit ownership text.
-3. **A new standalone reference-data package** shared by any future consumer of Evidence Shape classifications.
-
-### Evidence Semantics Authority — ownership options
-
-1. **`hunter.evidence_assembly`, new internal repository** (recommended). Semantics assignments are Evidence-Assembly-domain classifications of otherwise-unmodified native records.
-2. **`hunter.value_capture`, as an extension of `FundamentalEvidenceRecord` validation at ingestion time**. Would require an ADR 0021/0022 amendment to add `shape_id`/`accounting_meaning`/`supply_basis_id` to the native evidence contract itself, and would make `hunter.value_capture` aware of Evidence-Assembly-only vocabulary it has no other reason to know.
-3. **No separate authority — derive semantics deterministically from existing `FundamentalEvidenceRecord` fields at `assemble()` time, with no persistence at all.** Would remove the `evidence_semantics_authority` collaborator from `CanonicalEvidenceAssemblyService` entirely, which is itself an ADR 0025 amendment (the protocol is part of the accepted service's contract) and forecloses provenance/auditability of the classification decision (Constitutional Rule 6).
+- **Authority and ownership**: fully resolved — see Executive Summary and ADR 0028 §"Decision."
+- **Record family and envelope**: fully resolved — see ADR 0028 §"Canonical envelope."
+- **Persistence**: mechanical repository design, consistent with ADR 0009; fully resolved (repository class named per authority).
+- **Versioning**: fully resolved per authority, including the previously-unspecified ruleset-version total-ordering rule.
+- **Correction**: append-only, single-predecessor successor discipline; fully resolved, including the correction-vs-conflict distinction Finding 4 required.
+- **Provenance**: fully resolved — every classification/contract cites its exact governing snapshot/ruleset version.
+- **Strict-known replay**: fully resolved — exact selection algorithm specified per authority, each proven unambiguous by construction.
+- **Conflict**: fully resolved per authority, including the specific reasoning for why Evidence Semantics has no "competing classification" conflict class (pure function of governed inputs).
+- **Amendment governance**: fully resolved per authority, including the explicit, permanent prohibition on Evidence Semantics manual exceptions.
+- **Compatibility**: with ADR 0021, ADR 0022 (amended), ADR 0023, ADR 0024, ADR 0025 (amended), ADR 0026, ADR 0027 — see ADR 0028 §"Compatibility With Accepted ADRs."
+- **Dependency direction**: new dimension, added in this revision in response to Finding 5 — `hunter.evidence_assembly` depends on `hunter.valuation_methodology`'s public contract; `hunter.valuation_methodology`'s service and repository logic has no reverse dependency, with one narrow, unmodifiable-code-forced exception at the data-type level only (one dataclass import, no business logic) — see ADR 0028 §"Package ownership and dependency direction" for the precise boundary.
+- **Implementation impact**: fully bounded — no material decision is left for a future implementation issue.
 
 ## Candidate Options
 
-### Option 1 — Sibling authorities, narrow ADR 0025 amendment (recommended)
+Revision 1 enumerated four ownership-package options per authority and four combined architectures (see revision 1's history, preserved in "Decision History" below for traceability). Independent review's five findings collapsed that option space to the single design in ADR 0028 §"Decision" — no live alternative remains for Methodology Contract's scope, activation split, or service/repository ownership, or for Evidence Semantics' authoring model. The comparative analysis below reflects only the options that remain genuinely open after resolution: none for Methodology Contract or Evidence Semantics; the original three for Evidence Shape Registry ownership (unchanged from revision 1, since no finding targeted it).
 
-- Methodology Contract Authority: new sibling record family under `hunter.valuation_methodology` (ownership option 1 above).
-- Evidence Shape Registry Authority: new repository under `hunter.evidence_assembly` (ownership option 1 above).
-- Evidence Semantics Authority: new repository under `hunter.evidence_assembly` (ownership option 1 above).
-- Resulting ADR: one new ADR that authorizes all three as new record families/authorities and narrowly amends ADR 0025 to name the two ownership assignments ADR 0025 left silent (Contract's persistence owner, Semantics' owner entirely) — ADR 0025's own invariants and validation logic in `service.py` are unchanged.
-- No ADR 0021 or ADR 0022 amendment required.
+### Evidence Shape Registry Authority — ownership options (unchanged from revision 1)
 
-### Option 2 — Fold Methodology Contract into `ValuationMethodologySnapshot`, everything else as Option 1
-
-- Requires an ADR 0022 amendment (mirroring ADR 0023's/ADR 0024's pattern) to loosen `ValuationMethodologySnapshot`'s Milestone-2 lock and redesign the contract as methodology-global.
-- Broader blast radius: touches an already-Accepted, already-implemented, already-relied-upon record family (`ValuationMethodologySnapshot` is consumed by `CanonicalValuationService`, per ADR 0021's authority matrix).
-
-### Option 3 — Single new consolidated authority owning all three record families
-
-- One new package or one new service owns Methodology Contract, Evidence Shape Registry, and Evidence Semantics together, rather than splitting Methodology Contract into `hunter.valuation_methodology`.
-- Simpler to implement as one unit, but duplicates methodology-adjacent governance the existing `hunter.valuation_methodology` package already owns (Constitutional Rule 5, single canonical owner per concept — methodology-level policy already has an owner).
-
-### Option 4 — Defer all three indefinitely; leave Issue #190 permanently blocked
-
-- No architecture change. Issue #190 (and any future Evidence Assembly consumer) remains permanently blocked.
-- Rejected as the status quo that motivated this preparation; ADR 0025's own purpose is never realized.
+1. **`hunter.evidence_assembly`, new internal repository** (recommended and adopted — matches ADR 0025's explicit text).
+2. **`hunter.value_capture`** — rejected, contradicts ADR 0025's explicit ownership text.
+3. **A new standalone reference-data package** — rejected as unnecessary fragmentation.
 
 ## Recommended Authority Design
 
-### Methodology Contract Authority
-
-- **Owner**: `hunter.valuation_methodology`, new service `CanonicalMethodologyEvidenceInputContractAuthority` (or an added responsibility on the existing `CanonicalValuationMethodologyAuthority` — the resulting ADR must pick one explicitly; this preparation does not fabricate that choice — see Open Question OQ-001).
-- **Record family**: `MethodologyEvidenceInputContract`, extended with `logical_id: str`, `supersedes_record_id: str | None`, `correction_reason: str = ""` to reach the standard envelope (currently absent per E-009).
-- **Persistence**: new mechanical repository, `MethodologyEvidenceInputContractRepository`, append-only, keyed by `record_id`; history queryable by `logical_id`.
-- **Versioning**: `(contract_id, contract_version)` remains the retrieval key `strict_known_contract` already expects (`service.py:41-44`); unchanged from the current protocol.
-- **Correction**: single-predecessor successor, mirroring `_authorize_correction` in `hunter.evidence_assembly.service` and `hunter.valuation_methodology.service`; branching prohibited.
-- **Provenance**: every contract cross-references the exact `ValuationMethodologySnapshot` record ID/version it was declared under (new field), and the exact ADR reference authorizing that methodology's evidence-acceptance policy.
-- **Strict-known replay**: `(contract_id, contract_version, known_by)`, exactly as `service.py:41-44` already requires; no change to the consuming protocol.
-- **Conflict**: two divergent contracts sharing `(contract_id, contract_version)` is an unresolved conflict, surfaced identically to how `AssembledEvidenceRepository._insert_authorized` already rejects divergent duplicates (`repository.py:76-112`, pattern reused, not new).
-- **Amendment governance**: a methodology author changes acceptance terms only by publishing a new `contract_version`; no in-place mutation. Whether authoring itself is governed by a future methodology ADR (per-methodology, like ADR 0022's own future amendments) or is implementation-level configuration is left to the resulting ADR, not fabricated here.
-
-### Evidence Shape Registry Authority
-
-- **Owner**: `hunter.evidence_assembly`, new repository `EvidenceShapeRegistryRepository`, alongside the existing `AssembledEvidenceRepository`.
-- **Record family**: `EvidenceShapeRegistry` (`registry.py:13-53`), unchanged in shape; already carries the full standard envelope minus `logical_id`/correction fields, which — unlike the other two — this preparation recommends *not* adding: ADR 0025 already frames the Registry as versioned reference data amended by creating a new `version` string, not by a correction-successor chain (its precedent, ADR 0023's `SUPPLY_COHERENCE_RELATIVE_TOLERANCE`, has no correction lineage either — it is a fixed, ADR-governed constant with a version).
-- **Persistence**: append-only by `version`; no two persisted registries may share a `version` string with different content (mirrors ADR 0023's precondition that a future value change must be evaluated against the version in force at record-creation time, never "current").
-- **Versioning**: `version` is the sole identity key, matching `strict_known_registry`'s existing `(version, known_by)` signature (`service.py:47-48`); unchanged.
-- **Correction**: none — a Registry version is immutable once published; a change is a new version, never a correction to an existing one, consistent with ADR 0023's precedent.
-- **Provenance**: every `EvidenceShapeRegistry` version's content must cite the exact ADR (or ADR amendment) that authorized its shape definitions, mirroring how `SUPPLY_COHERENCE_RELATIVE_TOLERANCE`'s value is cited to ADR 0023 in code comments today.
-- **Strict-known replay**: `(version, known_by)`, unchanged from the current protocol.
-- **Conflict**: two different content payloads claiming the same `version` string is a hard rejection at persistence time (analogous to ADR 0023's "may never be changed by a code-only commit").
-- **Amendment governance**: exactly ADR 0025's already-stated mechanism — a new or changed shape requires its own accepted ADR amendment, per the ADR 0023 pattern it explicitly cites. This preparation adds nothing new here; it only supplies the missing persistence implementation path.
-
-### Evidence Semantics Authority
-
-- **Owner**: `hunter.evidence_assembly`, new repository `EvidenceSemanticsRepository`.
-- **Record family**: `AuthoritativeEvidenceSemantics`, extended with `logical_id: str`, `supersedes_record_id: str | None`, `correction_reason: str = ""` (currently absent per E-009), plus a new `classification_rule_reference: str` field recording which governed rule or ADR-authorized criterion produced this classification (Constitutional Rule 6, Explainability — the classification must show its reasoning, not merely assert a result).
-- **Persistence**: append-only, keyed by `(evidence_record_id, evidence_record_version)`.
-- **Versioning**: unchanged from the current protocol — `(evidence_record_id, evidence_record_version, known_by)` per `strict_known_semantics` (`service.py:51-54`).
-- **Correction**: single-predecessor successor; a corrected classification (e.g., a fixed misclassified shape) produces a new `AuthoritativeEvidenceSemantics` record referencing its predecessor, never a mutation, mirroring every other correction chain in this repository.
-- **Provenance**: `classification_rule_reference` above; every classification is traceable to a governed rule, not an unexplained assertion.
-- **Strict-known replay**: `(evidence_record_id, evidence_record_version, known_by)`, unchanged.
-- **Conflict**: two divergent classifications for the same `(evidence_record_id, evidence_record_version)` is an unresolved conflict, surfaced the same way `AssemblyConflictRecord` already surfaces omitted/overlapping-evidence conflicts.
-- **Amendment governance**: this is the least settled dimension (see Open Question OQ-002). This preparation recommends classification be produced by a governed, deterministic rule set (Assumption A-003), authored and amended under the same ADR-governed discipline as the Evidence Shape Registry, rather than per-record human judgment — but does not fabricate the exact rule engine, since Guiding Principle 9 prohibits replacing missing evidence with convenience assumptions and no such rule engine currently exists to describe accurately.
+The complete, singular design for all three authorities — ownership, record family, persistence, versioning, correction, provenance, strict-known replay, conflict, and amendment governance — is specified in full in `docs/ADR/0028-evidence-assembly-supporting-authorities.md` §"Decision" and §"Canonical envelope," incorporated here by reference as this preparation's recommendation. It is not restated in full here to avoid the two documents silently drifting apart; where a reader needs the exact mechanism, ADR 0028 is the single source of truth for it, and this ADPR is the record of *why* that mechanism was chosen over the alternatives below.
 
 ## Comparative Analysis
 
-| Criterion | Option 1 (recommended) | Option 2 | Option 3 | Option 4 |
+| Criterion | Adopted design (ADR 0028) | Revision 1's design | Fold-onto-snapshot alternative | Consolidated-package alternative |
 |---|---|---|---|---|
-| Touches an already-Accepted, already-implemented record family | No | Yes (`ValuationMethodologySnapshot`) | No | No |
-| Requires ADR 0022 amendment | No | Yes | No | No |
-| Requires ADR 0025 amendment | Yes (narrow: ownership only) | Yes (narrow: ownership only) | Yes (narrow: ownership only) | No |
-| Preserves single canonical owner per concept (Rule 5) | Yes | Yes | No — new package duplicates methodology-adjacent governance | N/A |
-| Unblocks Issue #190 | Yes, after implementation | Yes, after implementation | Yes, after implementation | No |
-| Implementation blast radius | Three new sibling record families in two existing packages | Two new record families plus a change to a relied-upon existing one | Three new record families in one new package | None |
+| Satisfies ADR 0025's literal "snapshot in force explicitly declares acceptance" text | Yes — `accepts_assembled_evidence` field is the sole activation authority | No — this was Finding 2/OQ-004, the defect this revision fixes | Yes, but at the cost below | N/A |
+| Requires ADR 0022 amendment | Yes (additive `accepts_assembled_evidence` field only) | No | Yes (loosens Milestone-2 lock; redesigns contract as global) | Depends on sub-design |
+| Preserves per-target precision `_validate_methodology_contract` already requires | Yes | Yes | No — would force one snapshot "correction" per target, corrupting correction lineage | Depends on sub-design |
+| Single, named, non-ambiguous service/repository owner (Finding 1/5) | Yes — `CanonicalValuationMethodologyAuthority` / `ValuationMethodologyRepository`, explicitly | No — left as OQ-003 | Yes, trivially (one record, one owner) | No — a fourth package duplicates existing ownership |
+| Evidence Semantics manual-exception policy stated | Yes — prohibited, explicitly | No — left as OQ-002 | N/A (different authority) | N/A |
+| Unblocks Issue #190 | Yes, after implementation | Yes, after implementation, but with unresolved design risk | Yes, after implementation | Yes, after implementation |
 
 ## Falsification Results
 
-- **Option 1 falsified if**: a future reviewer shows `hunter.valuation_methodology` cannot cleanly own a per-target contract without itself becoming entity-aware in a way ADR 0022 forbids. Not observed in this preparation — `ValuationMethodologySnapshot` remains untouched under Option 1, and the sibling record family carries its own entity/representation/window scope independently, exactly as `MethodologyEvidenceInputContract` already does today.
-- **Option 2 falsified by**: E-005 — reopening `ValuationMethodologySnapshot`'s Milestone-2 lock for a capability (assembled-evidence acceptance) that ADR 0025 itself already scoped as "a future `ValuationMethodologySnapshot` version," not a Milestone-2 concern, is disproportionate given Option 1 achieves the same outcome without touching it.
-- **Option 3 falsified by**: Constitutional Rule 5 — methodology-level policy already has a canonical owner (`hunter.valuation_methodology`); a new package duplicating that concern is architecturally redundant, not merely stylistically different.
-- **Option 4 falsified by**: E-002/E-003 — the problem is real and already blocking a filed issue; indefinite deferral is a decision to abandon ADR 0025's stated purpose, not a neutral non-decision.
+- **Adopted design falsified if**: a future reviewer shows the per-target `MethodologyEvidenceInputContract` cannot in practice be authored without also needing entity-level context `ValuationMethodologySnapshot`'s owning service does not otherwise have access to. Not observed: `CanonicalValuationMethodologyAuthority` gains `persist_evidence_input_contract` as a new method accepting entity/representation/window parameters directly from its caller, exactly as `persist_methodology` already accepts its own parameters directly — no implicit context dependency is introduced.
+- **Fold-onto-snapshot alternative falsified by**: E-003, E-005 — `_validate_methodology_contract`'s existing per-target field comparison and `ValuationMethodologySnapshot`'s existing entity-agnostic, singleton-lineage design (E-011) are structurally incompatible with a single global declaration.
+- **Consolidated-package alternative falsified by**: Constitutional Rule 5 — methodology-level policy already has a canonical owner; Evidence-Assembly-domain classification already has a canonical owner (this same revision's Evidence Semantics/Registry design); a third, consolidating package would duplicate both.
 
 ## Rejected Options
 
-- **Field extension of `ValuationMethodologySnapshot` (Methodology Contract option 2)** — rejected. Requires reopening ADR 0022's fixed Milestone-2 invariants for a capability ADR 0025 already scoped as future-version-only; Option 1 achieves the identical outcome with a narrower blast radius. Reconsideration condition: a future ADR that redesigns `ValuationMethodologySnapshot` for reasons independent of this preparation could revisit folding the contract in at that time.
-- **`hunter.value_capture` ownership of Evidence Shape Registry** — rejected outright. Directly contradicts ADR 0025's explicit text naming "the Canonical Evidence Assembly Authority" as governance owner.
-- **`hunter.value_capture` ownership of Evidence Semantics, via native-record field extension (Evidence Semantics option 2)** — rejected. E-006 shows the classification vocabulary (`shape_id`, `accounting_meaning`) does not exist in ADR 0021/ADR 0022's native evidence contract; adding it would be an ADR 0021/0022 amendment for a capability that is Evidence-Assembly-domain-specific, not native-evidence-domain-specific. Reconsideration condition: if a future ADR determines native evidence itself should carry assembly-shape metadata at ingestion time for reasons unrelated to this preparation.
-- **No persistence for Evidence Semantics; derive at `assemble()` time (Evidence Semantics option 3)** — rejected. Removes the `evidence_semantics_authority` protocol from `CanonicalEvidenceAssemblyService`'s already-accepted contract (itself an ADR 0025 amendment, not preserved by this option's own premise) and forecloses provenance (Constitutional Rule 6).
-- **Standalone top-level packages for any of the three (Methodology Contract option 3, Evidence Shape Registry option 3)** — rejected as unnecessary fragmentation with no evidenced benefit over placing each authority beside its closest existing conceptual owner.
+- **Standalone sibling record with no reference to `ValuationMethodologySnapshot` (revision 1's design)** — rejected on independent review; superseded by the adopted two-record design. See ADR 0028 §"Alternatives Considered."
+- **Fold the full per-target contract directly onto `ValuationMethodologySnapshot`** — rejected; corrupts correction lineage (one "correction" per new target) and is structurally incompatible with the snapshot's existing entity-agnostic design. See ADR 0028 §"Alternatives Considered."
+- **New standalone package or service for Methodology Contract** — rejected; duplicates `hunter.valuation_methodology`'s existing single ownership of methodology-level policy (Constitutional Rule 5).
+- **`hunter.value_capture` ownership of Evidence Shape Registry or Evidence Semantics** — rejected; contradicts ADR 0025's explicit text (Registry) or requires native-record vocabulary additions outside `hunter.value_capture`'s mandate (Semantics).
+- **Permit manual exceptions for Evidence Semantics classification** — rejected; reintroduces the "ad hoc human manifest approval... without persisted authority" failure mode ADR 0025 already rejected, one layer upstream. See ADR 0028 §"Alternatives Considered."
+- **Derive Evidence Semantics from a single global "current" ruleset** — rejected; violates ADR 0020 strict-known replay directly (a later correction would silently reclassify historical records on next read).
+- **No persistence for Evidence Semantics; derive at `assemble()` time** — rejected; removes an already-accepted protocol from `CanonicalEvidenceAssemblyService`'s constructor contract and forecloses provenance (Constitutional Rule 6).
+- **Defer all authorities indefinitely** — rejected as the status quo this preparation exists to resolve.
 
 ## Risks
 
-- **Risk R-001**: The Methodology Contract's per-target (entity/representation/window) scope, if carried forward unchanged into the ADR, may later prove awkward if a methodology needs to declare its acceptance policy once, globally, rather than per assembly target. Mitigated by carrying this forward as Open Question OQ-001 rather than silently deciding it.
-- **Risk R-002**: The Evidence Semantics classification-authoring mechanism (rule-based vs. governed-manual) is the least-evidenced part of this preparation (Assumption A-003, Medium confidence). Mitigated by scoping the resulting ADR's authorization to ownership/record-family/persistence/replay only, and explicitly leaving the exact rule engine to a future implementation-preparation cycle rather than fabricating it now.
-- **Risk R-003**: Adding correction-lineage fields to `MethodologyEvidenceInputContract` and `AuthoritativeEvidenceSemantics` changes their dataclass shape from what ADR 0025 (and the existing test fixtures in `tests/test_canonical_evidence_assembly.py`) currently model. `supersedes_record_id`/`correction_reason` can be added as defaulted fields (mirroring every other record family's `= None`/`= ""` pattern), but `logical_id` cannot — every other record family in this repository treats `logical_id` as a mandatory, non-defaulted field (see `AssembledFundamentalEvidenceRecord`, `ValuationMethodologySnapshot`, `FundamentalEvidenceRecord`), and there is no principled default for it. This is **not** a fully backward-compatible change: implementation must update every existing construction site in `tests/test_canonical_evidence_assembly.py` (`_contract()`, `_ContractAuthority`, `_SemanticsAuthority` usages) to supply `logical_id` explicitly. The resulting ADR must state this consequence rather than imply the change is transparently additive.
-- **Risk R-004**: ADR 0025's own "Exact amendment to ADR 0022" text reads, "a future `ValuationMethodologySnapshot` version may declare acceptance" of assembled evidence — most naturally read as the acceptance flag living directly *on* a `ValuationMethodologySnapshot` (Methodology Contract option 2), not on a cross-referenced sibling record (Option 1, recommended here). Option 1 satisfies this sentence's underlying intent — a contract is still published *for* an exact, identified methodology-snapshot version — but this is an interpretation of ambiguous existing text, not a certain reading. See Open Question OQ-004. If ignored, a future implementer could build Option 1 believing it is unambiguously authorized by ADR 0025's existing wording, when independent review might instead read that sentence as requiring the field-extension design. Mitigated by surfacing this explicitly for reviewer confirmation rather than silently picking a reading.
+- **Risk R-003 (carried forward, unresolved by design — a real implementation cost, not an architecture gap)**: Adding `logical_id`/correction-lineage fields to `MethodologyEvidenceInputContract` and `AuthoritativeEvidenceSemantics`, and `accepts_assembled_evidence` to `ValuationMethodologySnapshot`, is additive but not fully backward-compatible for `logical_id` specifically (no principled default exists). Implementation must update every existing construction site in `tests/test_canonical_evidence_assembly.py` and `hunter.valuation_methodology`'s own test fixtures. This is bounded, known implementation work, not an open architecture question.
+- **Risk R-005 (new in revision 2)**: `EvidenceSemanticsClassificationRuleset`'s first version's actual rule content is not authored by this preparation or by ADR 0028 — only the mechanism is authorized. Until a future ADR amendment publishes real content, `strict_known_semantics` will always return `None` for every evidence record, which is correct fail-closed behavior but means Evidence Assembly's write path remains practically unreachable even after ADR 0028's acceptance and full implementation, pending that separate content-publishing act. This is stated explicitly in ADR 0028 §"Consequences," not left implicit.
+
+Former risks R-001, R-002, and R-004 (revision 1) are **resolved, not carried forward**: R-001 (per-target scope ambiguity) is resolved by E-003's direct code evidence; R-002 (classification-authoring mechanism) is resolved by the deterministic-ruleset design with manual exceptions prohibited; R-004 (ADR 0025 wording tension) is resolved by the activation/declaration split, which satisfies the literal text directly rather than through an inferred reading.
 
 ## Open Questions
 
-- **OQ-001**: Should `MethodologyEvidenceInputContract` remain per-target (entity/representation/window-scoped, as currently coded) or become genuinely methodology-global? This preparation recommends *not* deciding this now — Option 1 works under either answer, since the sibling-record-family ownership choice does not depend on it — but the resulting ADR must explicitly state which scope it authorizes, rather than leaving both readings simultaneously plausible.
-- **OQ-002**: What governs authorship of an individual Evidence Semantics classification — a deterministic, ADR-governed rule table (recommended direction, Assumption A-003) or a documented exception/override process for cases a rule table cannot cleanly cover? Left open for the resulting ADR or a follow-on preparation cycle.
-- **OQ-003**: Does `hunter.valuation_methodology`'s existing `CanonicalValuationMethodologyAuthority` gain the new Methodology Contract responsibility directly, or does a new sibling service own it within the same package? Both satisfy Rule 5 (one package, one concept-family); the resulting ADR must pick one.
-- **OQ-004**: Does Option 1's sibling-record design for `MethodologyEvidenceInputContract`, cross-referenced to an exact `ValuationMethodologySnapshot` version, satisfy ADR 0025's existing "Exact amendment to ADR 0022" sentence — "a future `ValuationMethodologySnapshot` version may declare acceptance" — or does that sentence require the acceptance flag to live directly on `ValuationMethodologySnapshot` itself (Methodology Contract option 2)? This preparation recommends Option 1 as satisfying the sentence's underlying intent without reopening ADR 0022's fixed invariants (see Risk R-004), but flags this as requiring explicit independent-review confirmation rather than treating it as settled by this preparation alone.
+**None material.** Every question revision 1 carried forward (OQ-001 through OQ-004) is resolved:
+
+- **OQ-001 (resolved)**: `MethodologyEvidenceInputContract` is per-target, exactly — required by `_validate_methodology_contract`'s existing code (E-003), not a preference.
+- **OQ-002 (resolved)**: Evidence Semantics classification is authored exclusively by a deterministic, governed `EvidenceSemanticsClassificationRuleset`; manual exceptions are explicitly and permanently prohibited.
+- **OQ-003 (resolved)**: `CanonicalValuationMethodologyAuthority` (existing service) gains the Methodology Contract responsibility directly; no new sibling service is created.
+- **OQ-004 (resolved)**: The activation/declaration split — `accepts_assembled_evidence` on the snapshot as sole activation authority, `MethodologyEvidenceInputContract` as the per-target declaration instance — satisfies ADR 0025's literal "the `ValuationMethodologySnapshot` in force explicitly declares acceptance" text directly, not through an inferred or contested reading.
+
+One narrow, explicitly-scoped item remains for future, separately-governed work (not an unresolved *architecture* question): `EvidenceSemanticsClassificationRuleset`'s first version's actual content (Risk R-005) and the first real `MethodologyEvidenceInputContract`/`ValuationMethodologySnapshot` correction that sets `accepts_assembled_evidence = True` are future ADR-governed and implementation acts, respectively — exactly as ADR 0025 itself authorized the Evidence Shape Registry's *mechanism* without publishing its first version's *content*.
 
 ## Constitution Check
 
 | Rule | Compliance | Notes |
 |---|---|---|
 | Rule 1 (Purpose) | Compliant | No change to Hunter's evidence-to-decision purpose. |
-| Rule 2 (Evidence Authority) | Compliant | Every recommended design keeps unknown/missing classification explicit; no fallback or default is introduced. |
-| Rule 3 (Deterministic Intelligence) | Compliant | All three authorities are recommended as strict-known, replay-deterministic record families. |
-| Rule 4 (Architectural Integrity) | Compliant | Ownership is assigned explicitly by evidence (E-005, E-006), not by convenience. |
-| Rule 5 (Single Source of Truth) | Compliant | Each concept gets exactly one recommended owner; Option 3 (a fourth package) was rejected specifically for violating this rule. |
-| Rule 6 (Explainability) | Compliant, conditionally | Satisfied for Methodology Contract and Evidence Shape Registry. For Evidence Semantics, compliance depends on OQ-002 being resolved toward a governed rule set rather than opaque per-record assertion — flagged, not silently assumed resolved. |
-| Rule 7 (Long-Term Evolution) | Compliant | Amendment-governance mechanisms are defined for all three, following existing precedent (ADR 0023). |
+| Rule 2 (Evidence Authority) | Compliant | Every design keeps unknown/missing classification explicit; no fallback or default is introduced anywhere, including the ruleset-selection algorithm. |
+| Rule 3 (Deterministic Intelligence) | Compliant | All three authorities are strict-known, replay-deterministic record families; Evidence Semantics classification is additionally a pure deterministic function of governed inputs. |
+| Rule 4 (Architectural Integrity) | Compliant | Ownership is assigned explicitly by evidence (E-003, E-005, E-006, E-011, E-012), not by convenience. |
+| Rule 5 (Single Source of Truth) | Compliant | Each concept gets exactly one named owner (service and repository, not just package); the consolidated-package alternative was rejected specifically for violating this rule; the dependency-direction rule (`hunter.valuation_methodology`'s service/repository logic never imports `hunter.evidence_assembly`, with one narrow, stated, data-type-only exception — ADR 0028 §"Package ownership and dependency direction") prevents ownership from becoming ambiguous at the code level. |
+| Rule 6 (Explainability) | Compliant, unconditionally | Evidence Semantics manual exceptions are explicitly prohibited; every classification is traceable to a named, governed ruleset version. No longer conditional on an open question, unlike revision 1. |
+| Rule 7 (Long-Term Evolution) | Compliant | Amendment-governance mechanisms are fully defined for all three authorities, following existing precedent (ADR 0023), including version-ordering. |
 | Rule 8 (Governance) | Compliant | This record itself follows `docs/ARCHITECTURE_DECISION_PREPARATION_GUIDE.md`. |
 | Rule 9 (Constitutional Change) | Not applicable | No constitutional change proposed. |
 
 ## Governance Review
 
-- `docs/DEVELOPMENT_GOVERNANCE.md` Stage 1 routing to this Guide: satisfied — this is an architecturally significant change per the Guide's own Scope section (canonical authority/ownership, persistence/versioning/correction semantics).
-- `docs/ARCHITECTURE_DECISION_PREPARATION_GUIDE.md` Required Outputs: all seventeen items present in this record (see section list above).
-- No accepted ADR is superseded, weakened, or contradicted. ADR 0025 is reaffirmed in every respect other than the narrow ownership-naming amendment recommended above (see `docs/ADR/0028-evidence-assembly-supporting-authorities.md`, drafted alongside this record, Status `Proposed`).
-- ADR 0026 §"Compatibility" and ADR 0027 §"Compatibility," which reaffirm Evidence Assembly's isolation from downstream composition, are unaffected — this preparation grants no new right to any downstream consumer.
+- `docs/DEVELOPMENT_GOVERNANCE.md` Stage 1 routing to this Guide: satisfied.
+- `docs/ARCHITECTURE_DECISION_PREPARATION_GUIDE.md` Required Outputs: all present in this record.
+- No accepted ADR is superseded, weakened, or contradicted. This revision resolves revision 1's ADR 0025-compatibility gap directly: ADR 0028 now amends both ADR 0025 (narrow ownership-naming, unchanged from revision 1) **and** ADR 0022 (new, additive `accepts_assembled_evidence` field on `ValuationMethodologySnapshot`) — the second amendment is new in this revision, required to make the activation authority conform to ADR 0025's literal text.
+- ADR 0026 §"Compatibility" and ADR 0027 §"Compatibility" are unaffected — this preparation grants no new right to any downstream consumer.
 
 ## Quality Assessment
 
 | Dimension | Rating | Rationale | Blocking limitation |
 |---|---|---|---|
-| Problem correctness | GOOD | Grounded in direct code reads (E-003, E-004), not assumption. | None |
-| Scope completeness | GOOD | Ownership, persistence, versioning, correction, provenance, replay, conflict, and amendment covered for all three authorities. | None |
+| Problem correctness | GOOD | Grounded in direct code reads, not assumption. | None |
+| Scope completeness | GOOD | Ownership, persistence, versioning, correction, provenance, replay, conflict, and amendment fully resolved for all three authorities, with no deferred choice. | None |
 | Canonical consistency | GOOD | Every recommendation cites the accepted ADR or code location it rests on. | None |
 | Evidence integrity | GOOD | All evidence is reproducible direct code/document reads; no assumption is presented as evidence. | None |
-| Assumption discipline | GOOD | Three assumptions stated with confidence, falsification condition, and consequence. | None |
-| Option completeness | GOOD | 3-4 ownership options enumerated per authority; four combined architectures compared. | None |
-| Comparative fairness | GOOD | Options compared against the same six criteria in one table. | None |
-| Falsifiability | GOOD | Each option has a stated falsification condition or evidence that falsifies it. | None |
-| Authority and ownership | GOOD | Explicit, evidence-grounded owner recommended for each of the three authorities. | None |
-| Persistence and replay | GOOD | Full envelope, versioning, correction, and strict-known replay specified per authority, reusing established patterns rather than inventing new ones. | None |
-| Evidence and provenance | ACCEPTABLE | Evidence Semantics' classification-authoring mechanism (OQ-002) is the one dimension left genuinely open. | Deferred to resulting ADR or follow-on preparation; does not block ADR readiness for the other two authorities or for Evidence Semantics' ownership/persistence/replay design. |
-| Implementation impact | ACCEPTABLE | Three new sibling record families in two existing packages; no change to already-shipped `ValuationMethodologySnapshot`, `FundamentalEvidenceRecord`, or `CanonicalEvidenceAssemblyService` logic. Adding `logical_id` to two existing dataclasses requires updating existing test fixtures (Risk R-003) — a real, bounded implementation cost, not a blocking defect. | None |
-| Governance compatibility | GOOD | No accepted ADR is superseded, weakened, or contradicted; the one required amendment is narrow and explicitly scoped. | None |
-| Traceability | GOOD | Issue #191, this ADPR, and the drafted ADR 0028 are cross-linked; Issue #190 remains explicitly blocked pending acceptance. | Independent review pending |
+| Assumption discipline | GOOD | Two remaining assumptions (A-001, A-002) are narrowly scoped to future ruleset-content mechanics, not to any ownership or envelope decision. | None |
+| Option completeness | GOOD | Every option this revision's findings targeted was re-evaluated; only Evidence Shape Registry retains a live (already-resolved-in-revision-1) option set, since no finding targeted it. | None |
+| Comparative fairness | GOOD | The adopted design is compared against every alternative a reviewer could plausibly have preferred, on the same criteria. | None |
+| Falsifiability | GOOD | Each design element has a stated falsification condition or direct code evidence that falsifies its alternatives. | None |
+| Authority and ownership | GOOD | Explicit, evidence-grounded, single named service and repository owner for every authority — no package-level-only ownership statement remains. | None |
+| Persistence and replay | GOOD | Full envelope, uniqueness constraint, and strict-known selection algorithm specified per authority, each proven unambiguous by construction. | None |
+| Evidence and provenance | GOOD | Evidence Semantics' authoring model is now fully specified (deterministic ruleset, manual exceptions prohibited) — no longer the open dimension revision 1 left at ACCEPTABLE. | None |
+| Implementation impact | ACCEPTABLE | Bounded, real implementation cost remains (Risk R-003 test-fixture updates; Risk R-005 first-content publication) — correctly stated as cost, not architectural gap. | None |
+| Governance compatibility | GOOD | No accepted ADR is superseded, weakened, or contradicted; two required amendments (ADR 0025, ADR 0022) are both narrow and explicitly scoped. | None |
+| Traceability | GOOD | Issue #191, this ADPR, ADR 0028, and the independent review findings driving this revision are cross-linked. | Second independent review round pending |
 
 ## Architecture Readiness
 
 - Outcome: `READY`
-- Rationale: ownership, record-family shape, persistence, versioning, correction, provenance, strict-known replay, conflict, and amendment governance are bounded for all three authorities; the one genuinely open dimension (OQ-002) is scoped narrowly enough not to block the other two authorities or the ownership/persistence/replay design of the third.
-- Missing evidence: a concrete classification-rule design for Evidence Semantics (OQ-002); real usage evidence for whether Methodology Contract should be per-target or global (OQ-001); explicit confirmation that Option 1's sibling-record design satisfies ADR 0025's existing "future `ValuationMethodologySnapshot` version may declare acceptance" wording (OQ-004).
-- Unresolved conflicts: none. All four open questions are carried forward explicitly, not resolved by assumption.
+- Rationale: ownership, record-family shape, persistence, versioning, correction, provenance, strict-known replay, conflict, and amendment governance are fully resolved for all three authorities, with named single owners and unambiguous strict-known selection algorithms. No material decision remains open.
+- Missing evidence: none material. `EvidenceSemanticsClassificationRuleset`'s first version's actual content (Risk R-005) is future, separately-governed work, not missing *architectural* evidence.
+- Unresolved conflicts: none.
 
 ## ADR Readiness
 
 - Outcome: `READY_FOR_ADR`
-- Proposed ADR title: Canonical Evidence Assembly Supporting Authorities.
-- Proposed ADR scope: ownership, record-family definition (including the additive `logical_id`/correction-lineage fields), persistence, versioning, correction, provenance, strict-known replay, conflict, and amendment-governance mechanism for `MethodologyEvidenceInputContract`, `EvidenceShapeRegistry`, and `AuthoritativeEvidenceSemantics`; a narrow amendment to ADR 0025 naming the ownership this preparation resolves.
-- Decisions the ADR must fix: Option 1 (or a materially different option, if independent review disagrees); the additive record-family fields, including the non-defaulted `logical_id` addition's compatibility consequence (Risk R-003); the amendment-governance mechanism per authority; explicit resolution of OQ-001, OQ-003, and OQ-004 (this preparation recommends against silently deferring these to implementation).
-- Matters the ADR must leave open: OQ-002's exact classification-rule engine (recommended as a follow-on preparation or implementation-stage decision bounded by "governed and deterministic, never opaque per-record judgment," per Assumption A-003); any runtime/production activation; any change to Issue #190's blocked status (unblocking requires the ADR's acceptance plus implementation, not the ADR alone).
+- Proposed ADR title: Canonical Evidence Assembly Supporting Authorities (unchanged).
+- Proposed ADR scope: unchanged in kind, revised in content — see ADR 0028 in full.
+- Decisions the ADR must fix: all fixed in ADR 0028 revision 2; none remain for independent review to send back as "still open."
+- Matters the ADR must leave open, correctly: `EvidenceSemanticsClassificationRuleset`'s first version's content; the first real `MethodologyEvidenceInputContract`/`accepts_assembled_evidence` correction; any runtime/production activation; any change to Issue #190's blocked status.
 
 ## Final Recommendation
 
-Advance Option 1 (sibling authorities under `hunter.valuation_methodology` and `hunter.evidence_assembly`, with a narrow ADR 0025 amendment) to independent architecture review. The accompanying ADR draft (`docs/ADR/0028-evidence-assembly-supporting-authorities.md`, Status `Proposed`) is produced alongside this record for that review; it must not be treated as Accepted until independent review completes and, separately, until this session's user or a maintainer explicitly accepts it — this session author has not approved its own work (see Governance Proof in the accompanying report).
+Advance the adopted design (ADR 0028, revision 2) to a second round of independent architecture review. This session's author has not approved its own work — ADR 0028 remains Status `Proposed` and this record remains `READY_FOR_REVIEW`, not `APPROVED`, pending that review.
 
 ## Decision History
 
 | Date | State | Change | Author or reviewer |
 |---|---|---|---|
-| 2026-08-04 | READY_FOR_REVIEW | Initial complete preparation for Issue #191. | Claude |
+| 2026-08-04 | READY_FOR_REVIEW | Initial complete preparation (revision 1) for Issue #191. Four open questions (OQ-001 through OQ-004) carried forward explicitly. | Claude |
+| 2026-08-04 | READY_FOR_REVIEW | Independent hostile architecture review of Draft PR #192: five `CHANGES REQUIRED` findings — (1) Methodology Contract ownership/scope unresolved; (2) ADR 0025/0022 compatibility left as an unresolved normative tension (OQ-004); (3) Evidence Semantics authorship model unresolved (OQ-002); (4) incomplete identity/replay/correction model, including using only `(evidence_record_id, evidence_record_version)` as `AuthoritativeEvidenceSemantics`'s identity; (5) split Methodology Contract ownership across packages. | Independent review (see the governing session's report for a note on this review's recorded-artifact status) |
+| 2026-08-04 | READY_FOR_REVIEW | Revision 2: all five findings resolved with singular, non-deferred designs — activation/declaration split for Methodology Contract (resolves 1, 2), deterministic-ruleset Evidence Semantics model with manual exceptions prohibited (resolves 3), full canonical envelope with three-coordinate Evidence Semantics identity (resolves 4), single-package/single-service/single-repository Methodology Contract ownership with explicit dependency-direction rule (resolves 5). | Claude |
 
 ## Traceability
 
@@ -362,11 +303,11 @@ Advance Option 1 (sibling authorities under `hunter.valuation_methodology` and `
 - ADPR: ADPR-0005
 - ADR: `docs/ADR/0028-evidence-assembly-supporting-authorities.md`, Status `Proposed`, not yet accepted
 - Implementation plan: not authorized
-- Draft PR: recorded once opened (see this record's governing session report)
+- Draft PR: [#192](https://github.com/fafa33/Project-Hunter/pull/192), Draft, not merged, not marked Ready for Review
 - Release: not yet assigned
 
 ## Immutability and Supersession
 
-This record is `READY_FOR_REVIEW`, not `APPROVED`. It is a working preparation artifact until independent architecture review completes. Substantive corrections before approval may be made in place with an updated Decision History entry; after approval, substantive corrections require a new ADPR that explicitly supersedes it, consistent with ADPR-0004's precedent.
+This record is `READY_FOR_REVIEW`, not `APPROVED`. It is a working preparation artifact until independent architecture review completes. This is revision 2, corrected in place in response to independent review findings against revision 1 — the "Decision History" table above is the permanent record of what changed and why, consistent with `docs/ARCHITECTURE_DECISION_PREPARATION_GUIDE.md`'s allowance for in-place correction before approval. After approval, substantive corrections require a new ADPR that explicitly supersedes this one, consistent with ADPR-0004's precedent.
 
 Nothing in this record authorizes implementation, runtime activation, or the resumption of Issue #190. Only an accepted ADR, followed by a separately authorized implementation issue, can do that.
