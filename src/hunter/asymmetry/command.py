@@ -101,10 +101,12 @@ def _persist_methodology(manifest: dict[str, Any], application_root: Path) -> di
     if not isinstance(payload, dict):
         raise ValueError("asymmetry-authority methodology manifest requires a payload object")
     record = service.persist_asymmetry_methodology(
-        methodology_id=str(payload["methodology_id"]),
-        required_quote_currency=str(payload["required_quote_currency"]),
-        entity_class_criteria_id=str(payload["entity_class_criteria_id"]),
-        entity_class_criteria_version=str(payload["entity_class_criteria_version"]),
+        methodology_id=_required_text(payload["methodology_id"], "methodology_id"),
+        required_quote_currency=_required_text(payload["required_quote_currency"], "required_quote_currency"),
+        entity_class_criteria_id=_required_text(payload["entity_class_criteria_id"], "entity_class_criteria_id"),
+        entity_class_criteria_version=_required_text(
+            payload["entity_class_criteria_version"], "entity_class_criteria_version"
+        ),
         effective_at=_datetime(payload["effective_at"]),
         recorded_at=_datetime(payload["recorded_at"]),
         known_at=_datetime(payload["known_at"]),
@@ -126,16 +128,20 @@ def _persist_scenario_set(manifest: dict[str, Any], application_root: Path) -> d
     service, persistence_path = _service(application_root)
     record = service.persist_scenario_set(
         identity=_identity(manifest.get("identity")),
-        methodology_record_id=str(manifest["methodology_record_id"]),
-        scenario_set_id=str(manifest["scenario_set_id"]),
-        scenario_ids=_string_tuple(manifest["scenario_ids"]),
-        scenario_types=_string_tuple(manifest["scenario_types"]),
-        baseline_market_fact_record_id=str(manifest["baseline_market_fact_record_id"]),
-        quote_currency=str(manifest["quote_currency"]),
-        material_omitted_scenario_policy=str(manifest["material_omitted_scenario_policy"]),
+        methodology_record_id=_required_text(manifest["methodology_record_id"], "methodology_record_id"),
+        scenario_set_id=_required_text(manifest["scenario_set_id"], "scenario_set_id"),
+        scenario_ids=_string_tuple(manifest["scenario_ids"], "scenario_ids"),
+        scenario_types=_string_tuple(manifest["scenario_types"], "scenario_types"),
+        baseline_market_fact_record_id=_required_text(
+            manifest["baseline_market_fact_record_id"], "baseline_market_fact_record_id"
+        ),
+        quote_currency=_required_text(manifest["quote_currency"], "quote_currency"),
+        material_omitted_scenario_policy=_required_text(
+            manifest["material_omitted_scenario_policy"], "material_omitted_scenario_policy"
+        ),
         uncertainty=str(manifest["uncertainty"]),
-        evidence_record_ids=_string_tuple(manifest["evidence_record_ids"]),
-        source_versions=_string_tuple(manifest["source_versions"]),
+        evidence_record_ids=_string_tuple(manifest["evidence_record_ids"], "evidence_record_ids"),
+        source_versions=_string_tuple(manifest["source_versions"], "source_versions"),
         dependency_pairs=_pair_tuple(manifest.get("dependency_pairs", [])),
         effective_at=_datetime(manifest["effective_at"]),
         recorded_at=_datetime(manifest["recorded_at"]),
@@ -157,12 +163,12 @@ def _persist_scenario_set(manifest: dict[str, Any], application_root: Path) -> d
 def _persist_scenario_probability(manifest: dict[str, Any], application_root: Path) -> dict[str, Any]:
     service, persistence_path = _service(application_root)
     record = service.persist_scenario_probability(
-        scenario_set_record_id=str(manifest["scenario_set_record_id"]),
-        scenario_id=str(manifest["scenario_id"]),
+        scenario_set_record_id=_required_text(manifest["scenario_set_record_id"], "scenario_set_record_id"),
+        scenario_id=_required_text(manifest["scenario_id"], "scenario_id"),
         probability=str(manifest["probability"]),
         probability_uncertainty=str(manifest["probability_uncertainty"]),
-        probability_authority=str(manifest["probability_authority"]),
-        probability_method=str(manifest["probability_method"]),
+        probability_authority=_required_text(manifest["probability_authority"], "probability_authority"),
+        probability_method=_required_text(manifest["probability_method"], "probability_method"),
         effective_at=_datetime(manifest["effective_at"]),
         recorded_at=_datetime(manifest["recorded_at"]),
         known_at=_datetime(manifest["known_at"]),
@@ -183,13 +189,13 @@ def _persist_scenario_probability(manifest: dict[str, Any], application_root: Pa
 def _persist_scenario_payoff(manifest: dict[str, Any], application_root: Path) -> dict[str, Any]:
     service, persistence_path = _service(application_root)
     record = service.persist_scenario_payoff(
-        scenario_set_record_id=str(manifest["scenario_set_record_id"]),
-        scenario_id=str(manifest["scenario_id"]),
+        scenario_set_record_id=_required_text(manifest["scenario_set_record_id"], "scenario_set_record_id"),
+        scenario_id=_required_text(manifest["scenario_id"], "scenario_id"),
         terminal_payoff=str(manifest["terminal_payoff"]),
         payoff_uncertainty=str(manifest["payoff_uncertainty"]),
-        evidence_record_ids=_string_tuple(manifest["evidence_record_ids"]),
-        source_record_id=str(manifest["source_record_id"]),
-        source_record_version=str(manifest["source_record_version"]),
+        evidence_record_ids=_string_tuple(manifest["evidence_record_ids"], "evidence_record_ids"),
+        source_record_id=_required_text(manifest["source_record_id"], "source_record_id"),
+        source_record_version=_required_text(manifest["source_record_version"], "source_record_version"),
         effective_at=_datetime(manifest["effective_at"]),
         recorded_at=_datetime(manifest["recorded_at"]),
         known_at=_datetime(manifest["known_at"]),
@@ -212,8 +218,8 @@ def _assess(manifest: dict[str, Any], application_root: Path) -> dict[str, Any]:
     service, persistence_path = _service(application_root)
     record = service.assess(
         identity=_identity(manifest.get("identity")),
-        methodology_record_id=str(manifest["methodology_record_id"]),
-        scenario_set_logical_id=str(manifest["scenario_set_logical_id"]),
+        methodology_record_id=_required_text(manifest["methodology_record_id"], "methodology_record_id"),
+        scenario_set_logical_id=_required_text(manifest["scenario_set_logical_id"], "scenario_set_logical_id"),
         effective_at=_datetime(manifest["effective_at"]),
         recorded_at=_datetime(manifest["recorded_at"]),
         known_at=_datetime(manifest["known_at"]),
@@ -234,13 +240,25 @@ def _assess(manifest: dict[str, Any], application_root: Path) -> dict[str, Any]:
 
 
 def _status(manifest: dict[str, Any], application_root: Path) -> dict[str, Any]:
-    service, persistence_path = _service(application_root)
     target = manifest.get("target")
     if target not in _STATUS_TARGETS:
         raise ValueError(f"asymmetry-authority status manifest requires target: {' or '.join(_STATUS_TARGETS)}")
+    persistence_path = _canonical_path(application_root, _CANONICAL_PERSISTENCE_DATABASE)
+    if not persistence_path.exists():
+        # No canonical database has ever been created under this application root, so no
+        # strict-known record could possibly be present. Report unavailable without
+        # constructing the repositories, which would otherwise create the database file
+        # (and its schema) as a side effect of a nominally read-only query.
+        return {
+            "operation": "status",
+            "target": target,
+            "persistence_database": str(persistence_path),
+            "available": False,
+        }
+    service, persistence_path = _service(application_root)
     effective_as_of = _datetime(manifest["effective_as_of"])
     known_by = _datetime(manifest["known_by"])
-    logical_id = str(manifest["logical_id"])
+    logical_id = _required_text(manifest["logical_id"], "logical_id")
     if target == "methodology":
         record: Any = service.strict_known_methodology(
             effective_as_of=effective_as_of, known_by=known_by, logical_id=logical_id
@@ -277,10 +295,10 @@ def _status(manifest: dict[str, Any], application_root: Path) -> dict[str, Any]:
     }
 
 
-def _string_tuple(value: Any) -> tuple[str, ...]:
+def _string_tuple(value: Any, field: str) -> tuple[str, ...]:
     if not isinstance(value, list) or not value:
-        raise ValueError("asymmetry-authority manifest requires a non-empty list of strings")
-    return tuple(str(item) for item in value)
+        raise ValueError(f"asymmetry-authority manifest requires a non-empty list of strings for {field}")
+    return tuple(_required_text(item, f"{field}[]") for item in value)
 
 
 def _pair_tuple(value: Any) -> tuple[tuple[str, str], ...]:
@@ -290,7 +308,7 @@ def _pair_tuple(value: Any) -> tuple[tuple[str, str], ...]:
     for item in value:
         if not isinstance(item, list) or len(item) != 2:
             raise ValueError("asymmetry-authority manifest dependency_pairs entries must be two-element lists")
-        pairs.append((str(item[0]), str(item[1])))
+        pairs.append((_required_text(item[0], "dependency_pairs[]"), _required_text(item[1], "dependency_pairs[]")))
     return tuple(pairs)
 
 
@@ -308,11 +326,11 @@ def _identity(payload: Any) -> EconomicClaimIdentity:
     if not isinstance(payload, dict):
         raise ValueError("asymmetry-authority manifest requires an identity object")
     return EconomicClaimIdentity(
-        entity_id=str(payload["entity_id"]),
-        economic_claim_id=str(payload["economic_claim_id"]),
-        asset_id=str(payload["asset_id"]),
-        representation_id=str(payload["representation_id"]),
-        token_id=str(payload["token_id"]),
+        entity_id=_required_text(payload["entity_id"], "identity.entity_id"),
+        economic_claim_id=_required_text(payload["economic_claim_id"], "identity.economic_claim_id"),
+        asset_id=_required_text(payload["asset_id"], "identity.asset_id"),
+        representation_id=_required_text(payload["representation_id"], "identity.representation_id"),
+        token_id=_required_text(payload["token_id"], "identity.token_id"),
         chain=str(payload.get("chain", "")),
         contract_address=str(payload.get("contract_address", "")),
     )
@@ -323,6 +341,12 @@ def _optional_text(value: Any) -> str | None:
         return None
     text = str(value)
     return text if text.strip() else None
+
+
+def _required_text(value: Any, field: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"asymmetry-authority manifest field {field!r} must be a non-blank string")
+    return value
 
 
 def _application_root() -> Path:
