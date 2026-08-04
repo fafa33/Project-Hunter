@@ -256,6 +256,35 @@ and tests only; see "Files changed" above for the complete list):
 - `pytest tests/test_asymmetry_authority_v1.py -q` — **23 passed**.
 - `pytest -q` (full suite) — **1496 passed**, 0 failed, 0 errors.
 
+## Follow-up: hostile-review remediation (commit `a422f30`)
+
+An independent hostile review (`chatgpt-codex-connector`) of the sibling, already-merged
+`hunter.mispricing.command` (the pattern this module was copied from, PR #184) identified
+two P2 defects that this module inherited by construction:
+
+1. Required manifest fields (methodology/scenario/identity identifiers) were coerced via
+   bare `str(...)`, so a JSON `null` silently became the literal string `"None"` and
+   passed the service's required-text check rather than being rejected.
+2. `_status` unconditionally constructed the underlying repositories before checking
+   anything; their constructors create the database file and schema, so a status query
+   against a pristine `HUNTER_APPLICATION_ROOT` created `data/data_ops.sqlite` as a side
+   effect even while correctly reporting `available: false`.
+
+Both were reproduced against this module (not just the sibling file) before fixing, and
+both are now fixed identically to PR #189's remediation of `hunter.mispricing.command`,
+confined entirely to `src/hunter/asymmetry/command.py`'s orchestration layer -- no
+service, model, repository, or `hunter.__main__` change. Four regression tests were
+added to `tests/test_asymmetry_authority_v1.py`. Re-run at commit `a422f30` (this
+branch's current tip):
+
+- `ruff check .` — **All checks passed!**
+- `black --check src/hunter/asymmetry/command.py tests/test_asymmetry_authority_v1.py` —
+  clean.
+- `mypy` — no new errors; only the same pre-existing, repository-wide `pytest`
+  import-stub baseline noise.
+- `pytest tests/test_asymmetry_authority_v1.py -q` — **27 passed**.
+- `pytest -q` (full suite) — **1500 passed** in 479.40s (0:07:59).
+
 ## Architecture impact
 
 None. No canonical authority, ownership, persistence/correction/versioning
