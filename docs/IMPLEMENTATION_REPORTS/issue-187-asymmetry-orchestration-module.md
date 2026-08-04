@@ -140,9 +140,10 @@ Files intentionally untouched (confirmed via `git diff --stat`, zero changes):
 
 ## Testing (Phase 4)
 
-**`tests/test_asymmetry_authority_v1.py`** (new, all passing; see the "Follow-up"
-section below for the exact, current test count as of the most recent commit),
-mirroring `tests/test_mispricing_authority_v1.py`'s structure and strength:
+**`tests/test_asymmetry_authority_v1.py`**, mirroring
+`tests/test_mispricing_authority_v1.py`'s structure and strength (exact, current
+test count is stated once, in "Validation" below, rather than repeated and
+allowed to drift across this document):
 
 - **A. Write-operation happy paths** — `methodology`, `scenario_set`, and
   `scenario_probability`/`scenario_payoff` each persist correctly through the
@@ -173,19 +174,69 @@ mirroring `tests/test_mispricing_authority_v1.py`'s structure and strength:
   provenance. This is the equivalence proof the earlier read-back-only pattern
   (rejected in PR #182's hostile review) could not provide.
 - **F. Read-only status query** — parametrized "unavailable before any record
-  exists" across all five status targets; "available" cases for `methodology`,
-  `scenario_set`, and `assessment` matching the direct repository read; unknown
-  status-target rejection; and a repeated-query regression test proving `status`
-  never mutates the underlying repository row count.
+  exists" across all five status targets; "available" retrieval cases for
+  **all five** status targets (`methodology`, `scenario_set`,
+  `scenario_probability`, `scenario_payoff`, `assessment`), each independently
+  persisting its own record, retrieving it through `status`, and asserting
+  `available: True` plus matching `record_id`/content against a direct
+  repository read; unknown status-target rejection; a regression test proving a
+  status query against a pristine application root neither fabricates
+  availability nor creates the canonical database as a side effect; and a
+  repeated-query regression test proving `status` never mutates the underlying
+  repository row count.
 - **G. Malformed-input rejection** — unknown `operation`, missing
   `HUNTER_APPLICATION_ROOT`, wrong `argv` shape (asserts the exact corrected
-  `python -c '...'` usage string), malformed (non-object) top-level manifest.
+  `python -c '...'` usage string), malformed (non-object) top-level manifest, a
+  malformed status manifest against a pristine application root (must still
+  raise, not be masked as unavailable), `null`/non-string values for required
+  fields (methodology identifiers, identity fields, list entries), and
+  `null`/non-string values for orchestration-module-defaulted fields
+  (`formula_version`, `correction_reason`, `identity.chain`/
+  `identity.contract_address` — `null` falls back to the intended default
+  rather than being stringified to the literal `"None"`; any other non-string
+  value is still rejected).
 - **H. Repository-bypass-impossible** — `AsymmetryRepository` exposes no
   `save`/`apply`/`write`/`persist`/`assess`/`replay` method of its own.
 - **I. Non-dispatch regression** — `hunter_main.main(["asymmetry-authority", "run",
   ...])` raises `SystemExit` with code `2` (argparse's "invalid choice" for an
   unregistered verb), and the canonical database file is never created as a side
   effect of the attempt.
+
+### Remediation history
+
+Three independent review rounds against this branch identified real defects, all
+reproduced against this module specifically before fixing, all fixed, and all
+covered by the regression tests folded into the sections above:
+
+1. **Hostile review of the sibling, already-merged `hunter.mispricing.command`**
+   (the pattern this module was copied from, PR #184) found that required
+   manifest fields were coerced via bare `str(...)` (a JSON `null` became the
+   literal string `"None"` and passed the service's required-text check), and
+   that a `status` query against a pristine application root created the
+   canonical database as a side effect of a nominally read-only operation. Both
+   defects were present here by construction and were fixed identically to the
+   sibling module's remediation.
+2. **Review of that first fix** correctly identified that moving `_status`'s
+   database-existence check earlier had also moved it *before* the manifest's
+   own required-field validation, so a malformed status manifest against a
+   pristine root was masked as `available: false` instead of raising. Fixed by
+   validating the manifest's required fields first, and only then checking
+   whether the canonical database exists.
+3. **A further review round** found the identical `str(...)`-coercion defect at
+   four more call sites (`formula_version`, and `correction_reason` across all
+   five write operations) and in the identity parser's `chain`/`contract_address`
+   handling (where a manifest supplying *both* as `null` would satisfy
+   `EconomicClaimIdentity`'s paired-presence invariant and persist the
+   meaningless pair `("None", "None")`), plus a misleading docstring phrase and
+   brittle hard-coded counts in an earlier revision of this report. All fixed;
+   the hard-coded counts are why this report now states exact numbers only
+   once, in "Validation" below.
+4. **A subsequent hostile review** noted the acceptance matrix's `status`
+   coverage claim was not yet backed by `available: True` retrieval tests for
+   `scenario_probability` and `scenario_payoff` (only `methodology`,
+   `scenario_set`, and `assessment` had one). Two independent tests were added
+   -- see section F above -- closing the gap; no service, repository, or
+   authority logic was touched.
 
 ## Hostile self-review (Phase 6)
 
@@ -225,7 +276,11 @@ for and found none of the following:
   `_pair_tuple()`), which mirrors the identical, already-reviewed pattern in
   `hunter.mispricing.command`.
 
-No issues were found requiring correction before this report.
+No issues were found requiring correction as of this section's initial writing.
+Subsequent independent review rounds (hostile and Copilot) did find real,
+narrowly-scoped defects in the areas above; see "Remediation history" under
+Testing (Phase 4) for what was found and fixed in each round, and "Validation"
+below for the current, single source of truth on test counts and gate results.
 
 ## Governance proof
 
@@ -237,11 +292,17 @@ No issues were found requiring correction before this report.
 
 ## Validation (Phase 7)
 
-Run against the branch tip immediately prior to this report's own commit (code
-and tests only; see "Files changed" above for the complete list):
+This section is the single source of truth for validation numbers in this report.
+Every prior revision's per-round validation blocks (each pinned to a commit SHA
+that went stale the moment a later commit landed) have been consolidated here;
+the "Remediation history" subsection above records what each round found and
+fixed without pinning to a SHA. These results were produced against the last
+code-bearing commit on this branch (i.e. the most recent commit that changes
+`src/` or `tests/` -- not necessarily this documentation commit itself, which
+does not need re-verification on its own).
 
 - `ruff check .` — **All checks passed!**
-- `black --check .` — the three new/modified files in scope for this issue
+- `black --check .` — the three files in scope for this issue
   (`src/hunter/asymmetry/command.py`, `src/hunter/asymmetry/__init__.py`,
   `tests/test_asymmetry_authority_v1.py`) are clean. Six pre-existing files
   outside this issue's scope (`src/hunter/committee/repository.py`,
@@ -249,116 +310,21 @@ and tests only; see "Files changed" above for the complete list):
   `src/hunter/discovery/repository.py`, `tests/test_dashboard_api.py`,
   `tests/test_operational_status.py`) would be reformatted; none were touched by
   this change and correcting them is out of this issue's scope.
-- `mypy` — no new errors attributable to this change. The only errors touching
-  `tests/test_asymmetry_authority_v1.py` are a single `import-not-found` on
+- `mypy` — no new errors attributable to this change. The only error touching
+  `tests/test_asymmetry_authority_v1.py` is a single `import-not-found` on
   `pytest`, which is a pre-existing, repository-wide baseline condition
   reproduced identically on the already-merged `tests/test_mispricing_authority_v1.py`
-  (confirmed by direct comparison) and on 68 other test files; it is not
-  introduced by this change.
-- `pytest tests/test_asymmetry_authority_v1.py -q` — **23 passed**.
-- `pytest -q` (full suite) — **1496 passed**, 0 failed, 0 errors.
+  (confirmed by direct comparison) and on every other test file in the
+  repository; it is not introduced by this change.
+- `pytest tests/test_asymmetry_authority_v1.py -q` — **34 passed**.
+- `pytest -q` (full suite) — **1507 passed**, 0 failed, 0 errors, in 436.64s
+  (0:07:16).
 
-## Follow-up: hostile-review remediation (commit `a422f30`)
-
-An independent hostile review (`chatgpt-codex-connector`) of the sibling, already-merged
-`hunter.mispricing.command` (the pattern this module was copied from, PR #184) identified
-two P2 defects that this module inherited by construction:
-
-1. Required manifest fields (methodology/scenario/identity identifiers) were coerced via
-   bare `str(...)`, so a JSON `null` silently became the literal string `"None"` and
-   passed the service's required-text check rather than being rejected.
-2. `_status` unconditionally constructed the underlying repositories before checking
-   anything; their constructors create the database file and schema, so a status query
-   against a pristine `HUNTER_APPLICATION_ROOT` created `data/data_ops.sqlite` as a side
-   effect even while correctly reporting `available: false`.
-
-Both were reproduced against this module (not just the sibling file) before fixing, and
-both are now fixed identically to PR #189's remediation of `hunter.mispricing.command`,
-confined entirely to `src/hunter/asymmetry/command.py`'s orchestration layer -- no
-service, model, repository, or `hunter.__main__` change. Four regression tests were
-added to `tests/test_asymmetry_authority_v1.py`. Re-run at commit `a422f30` (this
-branch's current tip):
-
-- `ruff check .` — **All checks passed!**
-- `black --check src/hunter/asymmetry/command.py tests/test_asymmetry_authority_v1.py` —
-  clean.
-- `mypy` — no new errors; only the same pre-existing, repository-wide `pytest`
-  import-stub baseline noise.
-- `pytest tests/test_asymmetry_authority_v1.py -q` — **27 passed**.
-- `pytest -q` (full suite) — **1500 passed** in 479.40s (0:07:59).
-
-## Follow-up: Copilot review remediation (commit `d63ba81`)
-
-A Copilot review comment on the sibling `hunter.mispricing.command` fix (PR #189) correctly
-identified that the "don't create the database on a pristine root" change had moved
-`_status`'s early return *before* `effective_as_of`/`known_by`/`logical_id` were
-parsed/validated, so a malformed status manifest against a pristine application root now
-silently returned `available: false` instead of raising -- masking bad input. The
-identical defect existed here (this module copied the same `_status` structure). Fixed by
-reordering `_status` to validate the manifest's required fields first, and only then check
-whether the canonical database exists -- preserving the "no side-effect database creation"
-property while restoring "malformed manifest always raises" for every application root
-state. One regression test was added
-(`test_status_still_validates_manifest_against_a_pristine_root`), bringing the file to 28
-tests.
-
-## Follow-up: second Copilot review remediation (this commit)
-
-A further Copilot review of this PR identified two more instances of the same defect
-class as the first hostile-review finding, plus two documentation-clarity issues, all
-now fixed:
-
-1. **`formula_version`/`correction_reason` still coerced via bare `str(...)`** (four
-   call sites: `_persist_methodology`, `_persist_scenario_set`,
-   `_persist_scenario_probability`, `_persist_scenario_payoff`, `_assess`). Both are
-   fields the orchestration module itself defaults when absent (`formula_version`
-   defaults to the sole ADR 0021-supported value; `correction_reason` defaults to
-   blank), so an explicit JSON `null` should fall back to that default -- not become
-   the literal string `"None"`, which for `formula_version` would persist an
-   ADR-0021-unsupported value (rejected only later, at assess/lookup time, per
-   `service.py`'s `formula_version != SUPPORTED_FORMULA_VERSION` check) and for
-   `correction_reason` would trip the `supersedes_record_id`/`correction_reason`
-   pairing invariant when no correction was actually intended. Added
-   `_text_or_default(value, default, field)`: `None` falls back to `default`; any
-   other non-string value is rejected (the same posture `_required_text` already
-   takes for genuinely required fields); a present string is used as-is. Used at all
-   five `correction_reason` call sites and the one `formula_version` call site.
-2. **`identity.chain`/`identity.contract_address` coerced via bare `str(...)`**:
-   `EconomicClaimIdentity` treats these as an optional, paired field (both set or
-   both blank). Because `str(None) == "None"` is non-blank, a manifest supplying
-   *both* fields as JSON `null` previously satisfied the paired-presence invariant
-   (both non-blank) and would have silently persisted the meaningless pair
-   `("None", "None")` instead of the intended blank pair. Now uses
-   `_text_or_default(..., "", "identity.chain")` /
-   `_text_or_default(..., "", "identity.contract_address")`.
-3. **Misleading test-file docstring**: the opening sentence read "Production
-   execution path for the existing canonical Asymmetry authority ...", which could
-   be misread as claiming CLI/production reachability -- directly contradicting the
-   file's own very next sentence (and the module's core undispatched property).
-   Reworded to remove the ambiguous phrase entirely.
-4. **Brittle exact-count claims in this report**: this report previously hard-coded
-   "352 lines" for `command.py` and "23 tests" for the test file, both of which drift
-   on every subsequent edit (as this very follow-up history demonstrates). Removed
-   the line-count claim; the test-file count is now stated only in dated "Follow-up"
-   sections like this one, each pinned to the commit it was verified against.
-
-Three new regression tests were added: `test_null_formula_version_falls_back_to_default_not_stringified`,
-`test_null_correction_reason_falls_back_to_blank_not_stringified`,
-`test_null_identity_chain_and_contract_address_default_to_empty_not_stringified`, plus
-`test_non_string_correction_reason_is_rejected` proving a present-but-non-string value
-(e.g. a JSON number) is still rejected rather than silently stringified -- bringing the
-file to **32 tests**.
-
-Confined entirely to `src/hunter/asymmetry/command.py`'s orchestration layer and the test
-file's own docstring: no service, model, repository, or `hunter.__main__` change.
-
-- `ruff check .` — **All checks passed!**
-- `black --check src/hunter/asymmetry/command.py tests/test_asymmetry_authority_v1.py` —
-  clean.
-- `mypy` — no new errors; only the same pre-existing, repository-wide `pytest`
-  import-stub baseline noise.
-- `pytest tests/test_asymmetry_authority_v1.py -q` — **32 passed**.
-- `pytest -q` (full suite) — **1505 passed** in 472.05s (0:07:52).
+`git diff --stat` against `main` for this branch touches exactly four files:
+`src/hunter/asymmetry/command.py`, `src/hunter/asymmetry/__init__.py`,
+`tests/test_asymmetry_authority_v1.py`, and this report. No other file --
+including `src/hunter/__main__.py`, `src/hunter/cli.py`, and every file under
+`src/hunter/asymmetry/{models,repository,service}.py` -- was changed.
 
 ## Architecture impact
 

@@ -679,6 +679,65 @@ def test_status_reports_persisted_scenario_set(
     assert output["record"]["record_id"] == written["record_id"]
 
 
+def test_status_reports_persisted_scenario_probability(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Regression guard for the acceptance matrix's `status` claim: proves
+    `strict_known_scenario_probability` retrieval through the orchestration module
+    for a persisted record, independently of the methodology/scenario_set/
+    assessment coverage above -- `scenario_probability` and `scenario_payoff` are
+    the only two of the five status targets that previously lacked an
+    `available: True` retrieval test."""
+    _, _, probability, _ = _build_full_chain(monkeypatch, tmp_path, capsys)
+    output = _run(
+        monkeypatch,
+        tmp_path,
+        _status_manifest(
+            tmp_path,
+            target="scenario_probability",
+            known_by=NOW + timedelta(days=1),
+            logical_id=probability["logical_id"],
+        ),
+        capsys,
+    )
+    assert output["available"] is True
+    assert output["record"]["record_id"] == probability["record_id"]
+    assert output["record"]["scenario_id"] == "s-upside-strong"
+    assert output["record"]["probability"] == "0.25"
+
+    repository = AsymmetryRepository(_db_path(tmp_path))
+    direct = repository.get_scenario_probability(probability["record_id"])
+    assert direct is not None
+    assert output["record"]["content_hash"] == direct.content_hash
+
+
+def test_status_reports_persisted_scenario_payoff(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Regression guard for the acceptance matrix's `status` claim: proves
+    `strict_known_scenario_payoff` retrieval through the orchestration module for
+    a persisted record, independently of every other status-target test in this
+    file (see `test_status_reports_persisted_scenario_probability` above)."""
+    _, _, _, payoff = _build_full_chain(monkeypatch, tmp_path, capsys)
+    output = _run(
+        monkeypatch,
+        tmp_path,
+        _status_manifest(
+            tmp_path, target="scenario_payoff", known_by=NOW + timedelta(days=1), logical_id=payoff["logical_id"]
+        ),
+        capsys,
+    )
+    assert output["available"] is True
+    assert output["record"]["record_id"] == payoff["record_id"]
+    assert output["record"]["scenario_id"] == "s-upside-strong"
+    assert output["record"]["terminal_payoff"] == "0.30"
+
+    repository = AsymmetryRepository(_db_path(tmp_path))
+    direct = repository.get_scenario_payoff(payoff["record_id"])
+    assert direct is not None
+    assert output["record"]["content_hash"] == direct.content_hash
+
+
 def test_status_reports_persisted_assessment(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
