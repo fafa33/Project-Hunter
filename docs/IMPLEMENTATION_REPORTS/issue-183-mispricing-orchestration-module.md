@@ -102,6 +102,42 @@ No file under `docs/ADR/`, `docs/architecture-records/`, `configs/`, `data/`,
 `src/hunter/__main__.py`, or `src/hunter/mispricing/{models,repository,service}.py`
 is touched.
 
+## Remediation history
+
+This module went through two post-open remediation commits on the PR #184 branch
+after review feedback, each changing only the usage string printed on malformed
+`argv` and its corresponding test assertion — no other line in
+`src/hunter/mispricing/command.py` or `tests/test_mispricing_authority_v1.py` was
+touched by either commit, and no other file was touched by either commit:
+
+1. **`7284fcd`** (Copilot review finding, fixed by GitHub Copilot's coding agent):
+   changed the usage string from the Python-module form
+   (`hunter.mispricing.command run MANIFEST.json`) to the `hunter <verb>` form used
+   by sibling authority-command modules (`hunter mispricing-authority run
+   MANIFEST.json`), matching `hunter.valuation_authority.command` and
+   `hunter.comparative_valuation.command`'s convention.
+2. **`b26d91f`** (owner commit, `fix(mispricing): correct undispatched usage
+   evidence`): superseded the `7284fcd` string again, because `hunter
+   mispricing-authority` is not an actual invocable command (this module is not
+   dispatched from `hunter.__main__` — see "What this change adds" above) and
+   printing it as a usage hint would misrepresent the module's undispatched state.
+   The usage string now reads the literal, directly executable invocation:
+   `python -c 'from hunter.mispricing.command import main; raise
+   SystemExit(main(["run", "MANIFEST.json"]))'`. This is the current, final form.
+
+**`b26d91f775a51f1d7e1a4f8ba8c2af6f699b63ec` is the last code-bearing commit on this
+branch** — the commit whose `src/`/`tests/` tree every verification result below
+describes. This report itself is amended by one or more documentation-only commits
+on top of `b26d91f` (correcting this section and the two sections below it after a
+governance-evidence/traceability review finding); those amendments change no file
+under `src/` or `tests/`, so they do not invalidate or require re-running any
+result attributed to `b26d91f` here. If a future commit changes any file under
+`src/` or `tests/`, every result in this section must be re-verified against that
+new commit before being relied upon. The `521.95s` full-suite timing and other
+figures originally recorded against the pre-remediation head `6ad7921` (before
+either usage-string commit) have been superseded and removed from this report;
+they no longer describe the code currently on the branch.
+
 ## Test coverage
 
 `tests/test_mispricing_authority_v1.py` (16 tests), reusing the identity/fair-value
@@ -134,33 +170,49 @@ seeding primitives from `tests/test_mispricing_v1.py`:
 
 ## Verification Results (Phase 5)
 
+**All results below were produced against commit
+`b26d91f775a51f1d7e1a4f8ba8c2af6f699b63ec`, the last commit on this branch that
+changes any file under `src/` or `tests/`.** No result in this section was carried
+over from an earlier code-bearing commit. (This report may itself be amended by
+later documentation-only commits without invalidating these results; see
+"Remediation history" above.)
+
 - `ruff check .` — all checks passed.
 - `black --check .` — all 619 files unchanged (no reformatting needed).
 - `mypy` — success, no issues in 618 source files.
 - `pytest tests/test_mispricing_v1.py tests/test_valuation_authority_v1.py tests/test_comparative_valuation_authority_v1.py tests/test_mispricing_authority_v1.py tests/test_valuation_family_repository_purity.py tests/test_valuation_family_integration.py` — 90 passed.
-- Full `pytest` suite on this exact HEAD — **1473 passed, 0 failed** (521.95s).
+- Full `pytest` suite — **1473 passed, 0 failed** (582.42s / 0:09:42).
 - `git status --porcelain --untracked-files=all` before and after the full suite —
-  only the intentional new/modified files listed above; no incidental write to
-  `data/` or any other tracked/untracked file.
+  clean; no incidental write to `data/` or any other tracked/untracked file.
+- **GitHub Actions CI** (`Quality Gates`, `.github/workflows/ci.yml`, run #534, event
+  `pull_request`) for this exact HEAD: `status: completed`, `conclusion: success` —
+  confirmed via the Actions API directly, not inferred from local results. CI is
+  **PASS**, not pending, as of this writing.
 
 ## Hostile self-review (Phase 6)
 
-Explicitly verified:
+Explicitly re-verified against commit `b26d91f775a51f1d7e1a4f8ba8c2af6f699b63ec`
+(the last code-bearing commit on this branch — see "Verification Results" above):
 
 - **No production activation** — `hunter.mispricing.command` is never invoked
   outside test code; no manifest is executed against a real `HUNTER_APPLICATION_ROOT`
   in this implementation.
 - **No CLI exposure** — `src/hunter/__main__.py` diff against `main` is empty
-  (verified via `git diff main --stat -- src/hunter/__main__.py`, zero output).
-  `test_hunter_main_does_not_dispatch_mispricing_authority` proves the `hunter`
-  CLI rejects the verb (`SystemExit(2)`, argparse "invalid choice") and that no
-  database file is created as a side effect.
+  (re-verified against this exact HEAD via `git diff main --stat --
+  src/hunter/__main__.py`, zero output). `test_hunter_main_does_not_dispatch_mispricing_authority`
+  proves the `hunter` CLI rejects the verb (`SystemExit(2)`, argparse "invalid
+  choice") and that no database file is created as a side effect.
 - **No scheduler exposure** — no automation/scheduler file is touched.
-- **No architecture drift** — `git status --porcelain` confirms only the three files
-  listed above changed; `models.py`/`repository.py`/`service.py` are unmodified.
+- **No architecture drift** — `git diff main --stat` against this exact HEAD shows
+  exactly four changed paths: `src/hunter/mispricing/command.py`,
+  `src/hunter/mispricing/__init__.py`, `tests/test_mispricing_authority_v1.py`, and
+  this report; `models.py`/`repository.py`/`service.py` are byte-for-byte
+  unmodified.
 - **No undocumented behavior** — the module's own docstring and the package
   `__init__.py` docstring both state the undispatched status and cite the exact
-  governance-framework reasoning.
+  governance-framework reasoning; the usage-string remediation history above
+  documents every behavioral change made after the module was first opened for
+  review.
 
 One legitimate finding was identified and fixed during implementation, before this
 report was finalized: the first draft of the test file's `_methodology_manifest`
@@ -178,10 +230,14 @@ re-verified green.
 
 ## Synchronization gate (Phase 7)
 
-PR title, PR description, acceptance matrix, this implementation report, Issue #183
-text, test names, docstrings, comments, Architecture Impact, and Evidence Impact
-were all written against and verified against this exact head before the Draft PR
-was opened.
+This gate was re-run after two post-open remediation commits (`7284fcd`, `b26d91f`)
+to correct a governance-evidence/traceability finding: PR title, PR description,
+acceptance matrix, this implementation report, Issue #183 text, test names,
+docstrings, comments, Architecture Impact, and Evidence Impact were re-verified
+against exact HEAD `b26d91f775a51f1d7e1a4f8ba8c2af6f699b63ec`, and every statement
+that previously described the pre-remediation head `6ad7921` (including a
+"CI: PENDING" statement in the PR description, superseded now that GitHub Actions
+CI reports `success` for `b26d91f`) was corrected to describe this exact head.
 
 ## Remaining limitations and risks
 
