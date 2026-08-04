@@ -392,6 +392,24 @@ def test_status_reports_unavailable_before_any_methodology_exists(
     }
 
 
+def test_status_does_not_create_database_when_none_exists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Regression guard: a status query against a pristine `HUNTER_APPLICATION_ROOT`
+    must remain a pure read and must not create `data/data_ops.sqlite` as a side
+    effect, even though it correctly reports `available: False`. Before this fix,
+    `_status` unconditionally constructed the underlying repositories (via
+    `_service`) before checking anything, and those repositories create their
+    database file and schema in `__init__`."""
+    manifest = _status_manifest(
+        tmp_path, target="methodology", known_by=NOW + timedelta(days=1), logical_id="does-not-exist-yet"
+    )
+    assert not _db_path(tmp_path).exists()
+    output = _run(monkeypatch, tmp_path, manifest, capsys)
+    assert output["available"] is False
+    assert not _db_path(tmp_path).exists()
+
+
 def test_status_reports_persisted_methodology_matching_the_repository_read(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -502,6 +520,43 @@ def test_malformed_manifest_top_level_is_rejected(tmp_path: Path, monkeypatch: p
     monkeypatch.setenv("HUNTER_APPLICATION_ROOT", str(tmp_path))
     with pytest.raises(ValueError, match="manifest must be a JSON object"):
         mispricing_authority_command.main(["run", str(manifest_path)])
+
+
+def test_null_required_methodology_field_is_rejected_not_stringified(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression guard: a JSON `null` (or any non-string) value for a required
+    methodology field must be rejected by the orchestration module itself, not
+    silently coerced to the literal string `"None"` and handed to the service --
+    which would then accept and persist it, because `"None"` is a non-blank
+    string and satisfies the service's own required-text check."""
+    manifest = _methodology_manifest(tmp_path, methodology_id=None)
+    monkeypatch.setenv("HUNTER_APPLICATION_ROOT", str(tmp_path))
+    with pytest.raises(ValueError, match="methodology_id.*must be a non-blank string"):
+        mispricing_authority_command.main(["run", str(manifest)])
+
+
+def test_null_identity_field_is_rejected_not_stringified(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Same regression guard as
+    `test_null_required_methodology_field_is_rejected_not_stringified`, for the
+    identity parser `_assess` shares with every other orchestration module: a
+    JSON `null` `entity_id` must be rejected, not turned into the literal string
+    `"None"` and persisted as part of an assessment's identity."""
+    seeded = _SeededFairValue(tmp_path)
+    methodology = _run(monkeypatch, tmp_path, _methodology_manifest(tmp_path), capsys)
+    manifest = _assess_manifest(
+        tmp_path,
+        methodology_record_id=methodology["record_id"],
+        fair_value_logical_id=seeded.estimate.logical_id,
+    )
+    raw = json.loads(manifest.read_text(encoding="utf-8"))
+    raw["identity"]["entity_id"] = None
+    manifest.write_text(json.dumps(raw), encoding="utf-8")
+    monkeypatch.setenv("HUNTER_APPLICATION_ROOT", str(tmp_path))
+    with pytest.raises(ValueError, match="identity.entity_id.*must be a non-blank string"):
+        mispricing_authority_command.main(["run", str(manifest)])
 
 
 # H. Repository bypass remains impossible -----------------------------------------------
