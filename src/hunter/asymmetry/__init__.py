@@ -4,9 +4,20 @@ This package implements the authoritative evidence, persistence, replay,
 correction, validation, and query foundations for `asymmetry` as defined by
 ADR 0021 (Canonical Valuation Evidence Authority) and ADR 0020 (Canonical Market
 Validation Input Authority and Strict-Known Replay). It is a *foundation*: it does
-not wire any CLI, scheduler, Dashboard field, Market Validation adapter, or
-production entry point, and it never produces a `[0,1]` normalized Market
-Validation input (no calibrated normalization exists).
+not wire any scheduler, Dashboard field, or Market Validation adapter, and it
+never produces a `[0,1]` normalized Market Validation input (no calibrated
+normalization exists).
+
+`hunter.asymmetry.command` implements a manifest-driven orchestration module
+exposing this foundation's existing write and read-only status operations without
+adding any new authority, validation, or Market Validation wiring. It is
+deliberately NOT dispatched from `hunter.__main__` and is not reachable through the
+`hunter` CLI: dispatching it would create a new cross-component/production
+boundary under `docs/ARCHITECTURE_DECISION_PREPARATION_GUIDE.md`'s Scope section
+and would require independent Architecture Review before activation. The module
+is exercised directly by `tests/test_asymmetry_authority_v1.py`, mirroring the
+identical precedent established for `hunter.evidence_assembly`,
+`hunter.comparative_valuation.command`, and `hunter.mispricing.command`.
 
 The immutable record families are:
     - AsymmetryMethodologySnapshot
