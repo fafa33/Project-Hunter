@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed. Revision 5. Not accepted and not implementation authority.
+Proposed. Revision 6. Not accepted and not implementation authority.
 
 Governing preparation record: [ADPR-0005](../architecture-records/ADPR-0005-evidence-assembly-supporting-authorities.md). Related issues: [#190](https://github.com/fafa33/Project-Hunter/issues/190) and [#191](https://github.com/fafa33/Project-Hunter/issues/191). Draft PR: [#192](https://github.com/fafa33/Project-Hunter/pull/192).
 
@@ -82,6 +82,14 @@ Persistence is append-only. One predecessor may have at most one successor. A se
 
 The policy family has one fixed canonical logical identity, `canonical-evidence-semantic-input-policy`. Every accepted policy revision is a successor in that single lineage; competing policy lineages are prohibited.
 
+### Representation continuity proof (selected design B)
+
+The `EvidenceSemanticInputPolicySnapshot` itself is the one canonical representation-continuity proof. No separate `RepresentationContinuityProof` record family exists, and implementation may not introduce one. The sole canonical authority is `CanonicalEvidenceSemanticInputAuthority`; `EvidenceSemanticInputRepository` is mechanical persistence only.
+
+The immutable proof identity is the snapshot `record_id`, fixed `logical_id`, `schema_version`, `semantic_version`, and canonical `content_hash`. The snapshot's governed rules explicitly determine whether representation continuity is asserted; continuity is asserted only when that exact snapshot declares it. The upstream `EvidenceSemanticInputRecord` copies the exact snapshot ID, version, and `content_hash` as the proof reference, and downstream semantics copies that same reference without reinterpretation.
+
+Strict-known proof lookup uses the exact `policy_logical_id`, `effective_as_of`, and `known_by` coordinates described below; no `current` or `latest` fallback is permitted. Proof provenance includes the exact policy ID/version/hash, native input references, ordered rule definitions, authorizing ADR and configuration references, methodology fingerprint, `authorized_by`, and correction references. Corrections are append-only single successors with `supersedes_record_id` and `correction_reason`; an earlier proof is never mutated. Replay resolves the persisted exact snapshot ID/version/hash and fails closed if the snapshot is missing, its hash disagrees, or it is not eligible at the replay cutoff.
+
 `strict_known_policy(*, policy_logical_id, effective_as_of, known_by)` selects the unique non-superseded accepted tip satisfying:
 
 - `effective_at <= effective_as_of`;
@@ -103,7 +111,7 @@ This is the single authoritative source for every input Evidence Semantics may u
 - `accounting_meaning`;
 - `supply_basis_id`;
 - `pathway_id`;
-- representation-continuity state and exact continuity-proof reference when continuity is asserted;
+- representation-continuity state and the exact `EvidenceSemanticInputPolicySnapshot` record ID, version, and `content_hash` as its continuity proof when continuity is asserted;
 - currency and raw unit;
 - an immutable, versioned `semantic_dimensions` mapping for future classification dimensions;
 - deterministic rule ID and evaluation fingerprint;
@@ -150,7 +158,7 @@ CanonicalEvidenceAssemblyService
 - it does not own a classification ruleset;
 - it does not accept caller-supplied semantic dimensions;
 - it copies and validates the upstream authority's exact semantic inputs into `AuthoritativeEvidenceSemantics`, preserving the upstream record ID/version/hash as mandatory provenance;
-- it carries, copied exactly from the upstream authority, the representation-continuity state, the representation-continuity evidence/proof/reference, `semantic_dimensions`, and every future governed semantic dimension produced by that authority;
+- it carries, copied exactly from the upstream authority, the representation-continuity state and the exact `EvidenceSemanticInputPolicySnapshot` ID/version/`content_hash` that is the sole continuity proof, plus `semantic_dimensions` and every future governed semantic dimension produced by that authority;
 - it validates every applicable semantic field against the exact upstream `AuthoritativeEvidenceSemantics` record for the requested native record/version and cutoff, with that record's exact `EvidenceSemanticInputRecord` source and hash also verified. No semantic dimension is caller-owned, and Evidence Assembly never reconstructs, reinterprets, replaces, weakens, or overrides upstream semantics.
 
 `AuthoritativeEvidenceSemantics` gains the full ADR 0021 envelope, correction lineage, and exact `evidence_semantic_input_record_id`, version, and content hash. Its deterministic content identity includes the complete copied semantic payload and upstream provenance.

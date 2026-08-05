@@ -3,7 +3,9 @@
 ## Metadata
 
 - Reviewed artifact: `src/hunter/evidence_assembly/` (`service.py`, `repository.py`, `registry.py`, `models.py`)
-- Reviewed revision: `origin/main` HEAD
+- Audited repository state: `fafa33/Project-Hunter` merge commit `f3b96302713a9d843449d47ceae78ff17665fb2b` (PR #188 merge; commit timestamp `2026-08-04T13:32:18+02:00`)
+- Audit date: `2026-08-04` (audit time was not recorded)
+- Audit scope: `src/hunter/evidence_assembly/{service.py,repository.py,registry.py,models.py}` at that exact commit
 - Governing ADR: [ADR 0025](../ADR/0025-canonical-valuation-evidence-assembly-authority.md), Canonical Valuation Evidence Assembly Authority (Accepted)
 - Triggering issue: [Issue #190](https://github.com/fafa33/Project-Hunter/issues/190), Canonical Evidence Assembly Orchestration Module (Undispatched)
 - Role: Implementer, acting under `docs/AI_AUTONOMOUS_WORKFLOW_PROTOCOL.md`
@@ -106,4 +108,4 @@ Proposed issue text is filed separately (see governance proof below for the issu
 
 ## Explicit confirmation
 
-No production code was written or modified. No test code was written or modified. `src/`, `tests/`, and `src/hunter/__main__.py` remain byte-identical to `origin/main` HEAD. This report is introduced via PR #192 alongside other architecture-documentation changes (ADPR-0005, ADR 0028, and registry updates) for Issue #191. Only documentation files were changed; no `src/` or `tests/` changes are included.
+No production code was written or modified. No test code was written or modified. The audited Evidence Assembly files listed in Metadata were inspected at immutable commit `f3b96302713a9d843449d47ceae78ff17665fb2b`; this report makes no claim against a moving branch reference. This report is included in PR #192 alongside the ADPR, ADR 0028, architecture-index, and ADR README documentation for Issue #191. The PR diff contains documentation files only; no `src/` or `tests/` changes are included.

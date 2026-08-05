@@ -4,7 +4,7 @@
 
 - ADPR ID: `ADPR-0005`
 - Status: `READY_FOR_REVIEW`
-- Version: 5
+- Version: 6
 - Author: Project Hunter Architecture Team
 - Reviewers:
 - Created: 2026-07-01
@@ -18,7 +18,7 @@
 - Blocked implementation issue: [#190](https://github.com/fafa33/Project-Hunter/issues/190)
 - Draft PR: [#192](https://github.com/fafa33/Project-Hunter/pull/192)
 - Branch: `claude/evidence-assembly-authority-preparation-issue-191`
-- Revision under review: PR branch HEAD (Revision 5)
+- Revision under review: PR #192 documentation revision 6
 - Validation status: documentation-only diff; no `src/` or `tests/` changes; internal Markdown links validated
 
 This record authorizes no implementation. Issue #190 remains blocked.
@@ -98,6 +98,7 @@ None material. In particular, this revision does not assume that observation fie
 - **Owner:** `CanonicalEvidenceSemanticInputAuthority` in `hunter.evidence_semantic_inputs`.
 - **Persistence:** mechanical `EvidenceSemanticInputRepository`.
 - **Policy:** immutable, ADR-governed `EvidenceSemanticInputPolicySnapshot`.
+- **Representation continuity proof:** the policy snapshot itself is the sole canonical proof; no separate proof record family exists.
 - **Output:** immutable `EvidenceSemanticInputRecord`.
 - **Identity:** exact native record/version plus policy lineage; content-addressed records.
 - **Replay:** strict-known policy and output selection at explicit effective/known coordinates.
@@ -108,6 +109,14 @@ None material. In particular, this revision does not assume that observation fie
 - **Dependency:** value capture → semantic inputs → evidence assembly; no reverse import.
 - **Missingness:** no match or ambiguous match produces no accepted output.
 - **Activation:** none in this decision.
+
+### Selected representation continuity proof
+
+Design B is selected: `EvidenceSemanticInputPolicySnapshot` is itself the sole canonical representation-continuity proof. No separate proof family is required because the same governance-authored snapshot contains the deterministic rules that assert continuity and the full immutable ADR 0021 envelope, including its canonical content hash; creating another family would split proof ownership and add an unauthorized authority.
+
+`CanonicalEvidenceSemanticInputAuthority` is the sole canonical owner and `EvidenceSemanticInputRepository` is mechanical only. The proof identity is the snapshot `record_id`, fixed `logical_id`, `schema_version`, `semantic_version`, and `content_hash`. Strict-known lookup uses the exact policy logical ID, `effective_as_of`, and `known_by` coordinates, with no `latest` or `current` fallback. Provenance is the exact snapshot identity/hash, native input references, ordered rules, authorizing ADR and configuration, methodology fingerprint, and `authorized_by`. Correction is append-only, with one successor carrying `supersedes_record_id` and `correction_reason`; prior proof is never mutated. Replay resolves the exact persisted snapshot ID/version/hash and fails closed on missing, mismatched, or cutoff-ineligible proof.
+
+The upstream `EvidenceSemanticInputRecord` and downstream `AuthoritativeEvidenceSemantics` copy the exact policy snapshot ID/version/content hash as the continuity-proof reference. This preserves deterministic replay and provenance, keeps ownership upstream with no authority leakage, and leaves no semantic or proof decision for implementation to invent.
 
 ## Candidate options
 
@@ -145,11 +154,12 @@ Rejected. The consumer would author the values it is supposed to validate, colla
 
 ## Selected design
 
-Option D is selected exactly as specified in ADR 0028 revision 5:
+Option D is selected exactly as specified in ADR 0028 revision 6:
 
 - one new upstream package and canonical service;
 - one mechanical repository;
 - one governed policy record family;
+- the `EvidenceSemanticInputPolicySnapshot` is the sole representation-continuity proof; no separate proof record family is introduced;
 - one authoritative semantic-input output family;
 - complete ADR 0021 envelopes;
 - deterministic service-only production;
@@ -218,7 +228,7 @@ None material. Concrete policy content and production activation are intentional
 ## ADR readiness
 
 - Outcome: `READY_FOR_ADR`
-- Proposed decision: ADR 0028 revision 5.
+- Proposed decision: ADR 0028 revision 6.
 - Implementation remains unauthorized until ADR acceptance and a separate implementation issue.
 
 ## Decision history
@@ -234,10 +244,10 @@ None material. Concrete policy content and production activation are intentional
 - Epic: not created.
 - Issue: #191.
 - Blocked issue: #190.
-- ADPR: ADPR-0005 revision 5.
-- ADR: ADR 0028 revision 5, Proposed.
+- ADPR: ADPR-0005 revision 6.
+- ADR: ADR 0028 revision 6, Proposed.
 - Draft PR: #192 (branch `claude/evidence-assembly-authority-preparation-issue-191`, remains Draft).
-- Revision: 5.
+- Revision: 6.
 - Validation: documentation-only correction; no `src/` or `tests/` changes; internal Markdown links validated.
 - Implementation: not authorized.
 - Release: not assigned.
