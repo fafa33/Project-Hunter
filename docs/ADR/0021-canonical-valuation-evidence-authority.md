@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted. Evidence and record-family boundaries, Layer 2 only, amended by ADR 0025 (Canonical Valuation Evidence Assembly Authority) to recognize Assembled Fundamental Evidence as a distinct derived subtype of Layer 2 evidence — see that ADR for the exact change; unaffected sections of this ADR, including the four-service authority matrix, source-provider eligibility, anti-double-counting policy, implementation order, and acceptance criteria, are unchanged.
+Accepted. Evidence and record-family boundaries, Layer 2 only, amended by ADR 0025 and accepted ADR 0028 to recognize Assembled Fundamental Evidence and its supporting authority record families as distinct governed extensions of Layer 2 evidence — see those ADRs for the exact changes. Unaffected sections of this ADR, including the four-service authority matrix, source-provider eligibility, anti-double-counting policy, implementation order, and acceptance criteria, remain unchanged. Architecture is accepted; production implementation of the ADR 0028 supporting authorities remains incomplete and is tracked by Issues #194–#197.
 
 ## Context
 
@@ -69,7 +69,9 @@ Every family uses an immutable bitemporal envelope with record ID, logical ID, s
 | `ScenarioProbabilityRecord` / `ScenarioPayoffEstimateRecord` | scenario-set version; probability and uncertainty; probability authority/method; terminal value/payoff and unit; positive/negative classification; model/config version; evidence lineage |
 | `AsymmetryAssessmentRecord` | exact scenario/payoff versions; expected positive and negative payoff; raw ratio; denominator/cap treatment; normalized value/status; tail coverage; confidence decomposition; correlation group |
 
-This ADR selects logical record families, not a database product, schema migration, file path, or store activation. A later implementation plan may use the generic analytical envelope only through domain-specific semantic allow-listing and the four service-owned authorization boundaries.
+Accepted ADR 0028 additionally recognizes the distinct `EvidenceSemanticInputPolicySnapshot` and `EvidenceSemanticInputRecord` families produced exclusively by `CanonicalEvidenceSemanticInputAuthority` in `hunter.evidence_semantic_inputs`, the `MethodologyEvidenceInputContract` family owned by `hunter.valuation_methodology`, and the `ValuationMethodologySnapshot.accepts_assembled_evidence` declaration. These additions preserve `FundamentalEvidenceRecord` as observation-only and do not authorize production implementation or activation.
+
+This ADR selects logical record families, not a database product, schema migration, file path, or store activation. A later implementation plan may use the generic analytical envelope only through domain-specific semantic allow-listing and the four service-owned authorization boundaries. Accepted ADR 0028 additionally governs `EvidenceSemanticInputPolicySnapshot`, `EvidenceSemanticInputRecord`, `MethodologyEvidenceInputContract`, and the `accepts_assembled_evidence` declaration without authorizing their production implementation or activation.
 
 *A distinct `AssembledFundamentalEvidenceRecord` family, produced only by the Canonical Evidence Assembly Authority, is defined in full by ADR 0025 and remains visibly and queryably distinguishable from every record family in this table.*
 

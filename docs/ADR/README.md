@@ -41,7 +41,7 @@ An ADR may include additional sections such as `Reasoning`, `Implementation Stat
 - `Superseded` — explicitly replaced by a later accepted ADR.
 - `Deprecated` — historically relevant but no longer preferred for new work.
 
-Accepted architecture does not automatically imply completed implementation.
+Accepted architecture does not automatically imply completed implementation. ADR 0028 is an accepted architecture contribution only; its production implementation remains incomplete.
 
 Where implementation status matters, the ADR must state it explicitly and must not represent unimplemented capabilities as complete.
 
@@ -132,7 +132,7 @@ Conflicts must be resolved before implementation proceeds.
 | [0025](0025-canonical-valuation-evidence-assembly-authority.md) | Canonical Valuation Evidence Assembly Authority | Accepted | Service-owned lossless composition of native Fundamental Valuation Evidence into a distinct Assembled Fundamental Evidence record family; amends ADR 0021 (Layer 2 boundaries) and ADR 0022 (methodology-conditional inputs, persistence, prohibited-methodology clarification); relies on ADR 0020 strict-known replay without amending it |
 | [0026](0026-canonical-comparative-valuation-methodology.md) | Canonical Comparative Valuation Methodology | Accepted | First-entity-class peer authority, eligibility, compatible-metric, immutable-record, replay, confidence, missingness, and fail-closed activation contract |
 | [0027](0027-canonical-market-validation-composition-authority.md) | Canonical Market Validation Composition Authority | Proposed | Composition ownership, exact-version adapters, family normalization contracts, `WeightEngine` boundary, correlation groups and caps, residual independence, immutable composition snapshots, replay, fail-closed behavior, activation, canary, rollback, and downstream boundaries for the valuation family |
-| [0028](0028-evidence-assembly-supporting-authorities.md) | Canonical Evidence Assembly Supporting Authorities | Proposed (revision 8) | Establishes the proposed Methodology Contract ownership in `hunter.valuation_methodology` including its canonical contract type, repository, production authority, and public read protocol; preserves observation-only `FundamentalEvidenceRecord`; establishes one canonical upstream Evidence Semantic Input Authority in `hunter.evidence_semantic_inputs`; provides immutable policy/output records, strict-known replay, correction/provenance, Evidence-Semantics-only consumption, and exact semantic lineage into assembled evidence; proposes amendments to ADR 0021 and ADR 0025 effective only upon acceptance |
+| [0028](0028-evidence-assembly-supporting-authorities.md) | Canonical Evidence Assembly Supporting Authorities | Accepted (revision 9) | Accepted architecture for Methodology Contract ownership in `hunter.valuation_methodology`; observation-only `FundamentalEvidenceRecord`; one canonical upstream Evidence Semantic Input Authority in `hunter.evidence_semantic_inputs`; immutable policy/output records, strict-known replay, correction/provenance, Evidence-Semantics-only consumption, exact semantic lineage into assembled evidence, and accepted amendments to ADR 0021 and ADR 0025. Architecture is accepted; production implementation remains incomplete and is tracked by Issues #194, #195, #196, and #197. Issue #190 remains blocked until #197 concludes `IMPLEMENTABLE`. Acceptance commit is recorded on the acceptance branch and in the architecture index.
 
 ## Creating a New ADR
 
