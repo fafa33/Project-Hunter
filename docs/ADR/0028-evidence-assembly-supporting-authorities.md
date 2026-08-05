@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed. Revision 6. Not accepted and not implementation authority.
+Proposed. Revision 7. Not accepted and not implementation authority.
 
 Governing preparation record: [ADPR-0005](../architecture-records/ADPR-0005-evidence-assembly-supporting-authorities.md). Related issues: [#190](https://github.com/fafa33/Project-Hunter/issues/190) and [#191](https://github.com/fafa33/Project-Hunter/issues/191). Draft PR: [#192](https://github.com/fafa33/Project-Hunter/pull/192).
 
@@ -172,7 +172,18 @@ The accepted activation/declaration split is retained:
 - `ValuationMethodologySnapshot.accepts_assembled_evidence` is the sole methodology-level activation flag and defaults to `False`.
 - A per-target `MethodologyEvidenceInputContract` states the exact entity, representation, `value_capture_pathway_id`, currency, unit, accounting window, accepted shapes, assembly rules, continuity requirements, provenance minimums, conflict policy, quality minimums, missingness and strict-known behavior.
 
-The sole owner is `CanonicalValuationMethodologyAuthority` with mechanical persistence in `ValuationMethodologyRepository`.
+The sole owner is `CanonicalValuationMethodologyAuthority` in the canonical package `hunter.valuation_methodology`, with mechanical persistence in `ValuationMethodologyRepository` in that same package.
+
+The MethodologyEvidenceInputContract ownership boundary is exact:
+
+- **Canonical owner package:** `hunter.valuation_methodology`.
+- **Canonical record-definition owner:** `CanonicalValuationMethodologyAuthority` defines and authorizes the single `MethodologyEvidenceInputContract` record family; no duplicate canonical type may exist in `hunter.evidence_assembly` or any downstream package.
+- **Persistence owner:** `ValuationMethodologyRepository` in `hunter.valuation_methodology` provides mechanical append-only persistence and strict-known reads only; it owns no methodology or eligibility decisions.
+- **Production owner:** `CanonicalValuationMethodologyAuthority` is the sole production service that creates, versions, corrects, and authorizes contract records. `CanonicalValuationMethodologyAuthority` also remains the sole authority for the methodology snapshot's `accepts_assembled_evidence` activation flag; Evidence Assembly cannot activate or select a methodology.
+- **Public contract/protocol boundary:** the upstream package exposes the read-only `MethodologyContractAuthority` protocol and the canonical `MethodologyEvidenceInputContract` type. Evidence Assembly depends only on that public read protocol and exact record, never on upstream persistence details or implementation classes.
+- **Dependency direction:** `hunter.evidence_assembly` depends on the public contract boundary in `hunter.valuation_methodology`; `hunter.valuation_methodology` has no dependency on Evidence Assembly. There is no reverse import, write path, circular dependency, or second canonical definition.
+
+Evidence Assembly is a consumer only: it reads the exact strict-known contract to test its own lossless-composition preconditions, but it does not define, produce, persist, correct, activate, select, or reinterpret the contract or methodology.
 
 `strict_known_contract(*, contract_id, contract_version, effective_as_of, known_by)` requires both the exact contract and its exact governing methodology snapshot to satisfy `effective_at <= effective_as_of`, `recorded_at <= known_by`, and `known_at <= known_by`. It returns unavailable unless the governing snapshot is the exact snapshot in force at those coordinates and has `accepts_assembled_evidence == True`.
 
@@ -212,11 +223,19 @@ The amendment explicitly reaffirms that `FundamentalEvidenceRecord` remains obse
 
 ### ADR 0025
 
-The following subsection is added immediately after ADR 0025's Methodology Contract section:
+The following exact amendment is added immediately after ADR 0025's Methodology Contract section:
 
-> ### Supporting authority ownership *(added by ADR 0028)*
+> ### Supporting authority ownership *(added by ADR 0028 revision 7)*
 >
-> Methodology Contract production and persistence belong exclusively to `CanonicalValuationMethodologyAuthority` and `ValuationMethodologyRepository`. Evidence Shape Registry governance and persistence remain with `hunter.evidence_assembly`. Canonical semantic-classification inputs belong exclusively to `CanonicalEvidenceSemanticInputAuthority` and `EvidenceSemanticInputRepository` in upstream `hunter.evidence_semantic_inputs`; `FundamentalEvidenceRecord` remains observation-only. Evidence Semantics belongs to `hunter.evidence_assembly` and may consume semantic-classification dimensions only from an exact strict-known `EvidenceSemanticInputRecord`; it may not infer, replace, weaken, or override them.
+> ADR 0025's Authority boundaries table is amended by replacing **only** its conflicting `Representation continuity proof` ownership assignment with this exact rule:
+>
+> > | Representation continuity proof | Evidence Assembly is a consumer only. It consumes the exact proof reference supplied by `CanonicalEvidenceSemanticInputAuthority`; it never produces, owns, infers, reconstructs, substitutes, or authorizes Representation Continuity Proof. Representation Continuity Proof is produced only through `CanonicalEvidenceSemanticInputAuthority` as the `EvidenceSemanticInputPolicySnapshot` itself, as defined by ADR 0028. |
+>
+> This amendment preserves ADR 0025's rule that methodology selection remains outside Evidence Assembly. `CanonicalValuationMethodologyAuthority` remains the sole owner of methodology definition and the `accepts_assembled_evidence` activation authority. `CanonicalValuationService` remains the sole owner of methodology-contract input-eligibility evaluation at estimate construction. Evidence Assembly remains the downstream consumer only and gains no methodology selection or activation authority. All other ADR 0025 authority-boundary rows, lossless-composition invariants, native-evidence precedence rules, unavailable-state rules, and correction rules remain unchanged.
+>
+> Methodology Contract production and persistence belong exclusively to `CanonicalValuationMethodologyAuthority` and `ValuationMethodologyRepository` in `hunter.valuation_methodology`. The canonical `MethodologyEvidenceInputContract` record definition belongs to that package and authority; no duplicate canonical type may be defined in Evidence Assembly. The upstream package exposes the read-only `MethodologyContractAuthority` protocol and exact record type as the only public boundary consumed by Evidence Assembly. Evidence Assembly depends on that public boundary only, while the upstream owner has no dependency on Evidence Assembly, ensuring an acyclic direction with no reverse write path.
+>
+> Evidence Shape Registry governance and persistence remain with `hunter.evidence_assembly`. Canonical semantic-classification inputs belong exclusively to `CanonicalEvidenceSemanticInputAuthority` and `EvidenceSemanticInputRepository` in upstream `hunter.evidence_semantic_inputs`; `FundamentalEvidenceRecord` remains observation-only. Evidence Semantics belongs to `hunter.evidence_assembly` and may consume semantic-classification dimensions only from an exact strict-known `EvidenceSemanticInputRecord`; it may not infer, replace, weaken, or override them.
 
 ADR 0025's Assembled Fundamental Evidence Lineage table gains this exact row:
 
@@ -238,7 +257,7 @@ No ADR 0025 lossless-composition invariant, native-evidence precedence rule, met
 - **ADR 0022:** methodology permitted values and `CanonicalValuationService` eligibility ownership remain unchanged.
 - **ADR 0023:** supplies the amendment-governed reference-data precedent.
 - **ADR 0024:** scalar-semantics boundary is unchanged.
-- **ADR 0025:** amended exactly as listed above.
+- **ADR 0025:** amended exactly as listed above in revision 7; only the conflicting Representation Continuity Proof ownership assignment is replaced, and all unaffected methodology and assembly decisions are preserved.
 - **ADR 0026:** Comparative Valuation receives no right to assembled evidence.
 - **ADR 0027:** downstream Market Validation composition receives no new authority or activation.
 

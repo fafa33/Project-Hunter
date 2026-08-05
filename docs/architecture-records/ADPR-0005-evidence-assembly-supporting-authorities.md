@@ -18,8 +18,8 @@
 - Blocked implementation issue: [#190](https://github.com/fafa33/Project-Hunter/issues/190)
 - Draft PR: [#192](https://github.com/fafa33/Project-Hunter/pull/192)
 - Branch: `claude/evidence-assembly-authority-preparation-issue-191`
-- Revision under review: PR #192 documentation revision 6
-- Validation status: documentation-only diff; no `src/` or `tests/` changes; internal Markdown links validated
+- Revision under review: PR #192 documentation revision 7
+- Validation status: documentation-only diff; no `src/` or `tests/` changes; ADR 0025 ownership amendment, dependency-direction consistency, and internal Markdown links validated
 
 This record authorizes no implementation. Issue #190 remains blocked.
 
@@ -182,9 +182,9 @@ No falsification condition is presently met.
 
 ## Ownership and dependency proof
 
-`hunter.value_capture` owns observed native records only. `hunter.evidence_semantic_inputs` reads those records by exact reference and owns semantic-input policy and output. `hunter.evidence_assembly` consumes the resulting immutable record and owns downstream validation/assembly only.
+`hunter.value_capture` owns observed native records only. `hunter.evidence_semantic_inputs` reads those records by exact reference and owns semantic-input policy and output. `hunter.valuation_methodology` owns the `MethodologyEvidenceInputContract` package, canonical record definition, production authority, persistence repository, and public read protocol. `hunter.evidence_assembly` consumes only the public upstream contracts and resulting immutable records; it owns downstream validation/assembly only.
 
-There is no reverse dependency and no competing writer. The new upstream authority never imports Evidence Assembly.
+There is no reverse dependency, no competing writer, and no duplicated canonical type. The semantic-input authority never imports Evidence Assembly, and the methodology-contract authority never imports Evidence Assembly. Evidence Assembly has no write path into either upstream owner, so both dependency paths remain acyclic.
 
 ## Persistence and replay proof
 
@@ -238,16 +238,17 @@ None material. Concrete policy content and production activation are intentional
 | 2026-08-04 | READY_FOR_REVIEW | Revisions 1–4 established and iteratively corrected Methodology Contract, Registry, Evidence Semantics and assembly-lineage architecture. |
 | 2026-08-04 | READY_FOR_REVIEW | Independent review rejected the remaining assumption that limited native observation fields could authoritatively determine every semantic dimension. |
 | 2026-08-04 | READY_FOR_REVIEW | Revision 5 selects a new canonical upstream Evidence Semantic Input Authority; native evidence remains unchanged and Evidence Semantics consumes only its strict-known output. |
+| 2026-08-05 | READY_FOR_REVIEW | Revision 7 replaces ADR 0025's conflicting Representation Continuity Proof ownership assignment with upstream-only production and makes the MethodologyEvidenceInputContract package, record, persistence, production, public protocol, and dependency boundaries explicit. |
 
 ## Traceability
 
 - Epic: not created.
 - Issue: #191.
 - Blocked issue: #190.
-- ADPR: ADPR-0005 revision 6.
-- ADR: ADR 0028 revision 6, Proposed.
+- ADPR: ADPR-0005 revision 7.
+- ADR: ADR 0028 revision 7, Proposed.
 - Draft PR: #192 (branch `claude/evidence-assembly-authority-preparation-issue-191`, remains Draft).
-- Revision: 6.
-- Validation: documentation-only correction; no `src/` or `tests/` changes; internal Markdown links validated.
+- Revision: 7.
+- Validation: documentation-only correction; no `src/` or `tests/` changes; ADR 0025 ownership amendment, dependency direction, and internal Markdown links validated.
 - Implementation: not authorized.
 - Release: not assigned.
