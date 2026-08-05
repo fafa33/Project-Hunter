@@ -4,7 +4,7 @@
 
 - ADPR ID: `ADPR-0005`
 - Status: `READY_FOR_REVIEW`
-- Version: 6
+- Version: 8
 - Author: Project Hunter Architecture Team
 - Reviewers:
 - Created: 2026-07-01
@@ -18,8 +18,8 @@
 - Blocked implementation issue: [#190](https://github.com/fafa33/Project-Hunter/issues/190)
 - Draft PR: [#192](https://github.com/fafa33/Project-Hunter/pull/192)
 - Branch: `claude/evidence-assembly-authority-preparation-issue-191`
-- Revision under review: PR #192 documentation revision 7
-- Validation status: documentation-only diff; no `src/` or `tests/` changes; ADR 0025 ownership amendment, dependency-direction consistency, and internal Markdown links validated
+- Revision under review: PR #192 documentation revision 8
+- Validation status: documentation-only diff; no `src/` or `tests/` changes; conditional ADR 0025 ownership-amendment proposal, dependency-direction consistency, and internal Markdown links validated
 
 This record authorizes no implementation. Issue #190 remains blocked.
 
@@ -51,7 +51,7 @@ In scope:
 - persistence, identity, provenance, correction, conflict and replay;
 - Evidence Semantics' revised input boundary;
 - Methodology Contract and Evidence Shape Registry ownership needed by Issue #190;
-- exact ADR 0021 and ADR 0025 amendments;
+- exact proposed ADR 0021 and ADR 0025 amendments, effective only upon ADR 0028 acceptance;
 - assembly semantic lineage.
 
 Out of scope:
@@ -154,7 +154,7 @@ Rejected. The consumer would author the values it is supposed to validate, colla
 
 ## Selected design
 
-Option D is selected exactly as specified in ADR 0028 revision 7:
+Option D is selected exactly as specified in proposed ADR 0028 revision 8:
 
 - one new upstream package and canonical service;
 - one mechanical repository;
@@ -194,7 +194,7 @@ Services perform strict-known filtering and correction authorization. Repositori
 
 ## Governance and amendment strategy
 
-ADR 0028 must amend ADR 0021 to register the new record families while expressly preserving `FundamentalEvidenceRecord` unchanged. It must amend ADR 0025 to insert the new authority upstream of Evidence Semantics and require its lineage in assembled records.
+ADR 0028 proposes amendments to ADR 0021 and ADR 0025 to register the new record families while expressly preserving `FundamentalEvidenceRecord` unchanged. Those amendments become effective only when ADR 0028 is accepted; until then, accepted ADRs remain unchanged. The proposed ADR 0025 amendment inserts the new authority upstream of Evidence Semantics and requires its lineage in assembled records.
 
 First policy content requires a later accepted ADR amendment. That is governed data publication, not a deferred ownership or replay decision.
 
@@ -228,7 +228,7 @@ None material. Concrete policy content and production activation are intentional
 ## ADR readiness
 
 - Outcome: `READY_FOR_ADR`
-- Proposed decision: ADR 0028 revision 7.
+- Proposed decision: ADR 0028 revision 8.
 - Implementation remains unauthorized until ADR acceptance and a separate implementation issue.
 
 ## Decision history
@@ -238,17 +238,17 @@ None material. Concrete policy content and production activation are intentional
 | 2026-08-04 | READY_FOR_REVIEW | Revisions 1–4 established and iteratively corrected Methodology Contract, Registry, Evidence Semantics and assembly-lineage architecture. |
 | 2026-08-04 | READY_FOR_REVIEW | Independent review rejected the remaining assumption that limited native observation fields could authoritatively determine every semantic dimension. |
 | 2026-08-04 | READY_FOR_REVIEW | Revision 5 selects a new canonical upstream Evidence Semantic Input Authority; native evidence remains unchanged and Evidence Semantics consumes only its strict-known output. |
-| 2026-08-05 | READY_FOR_REVIEW | Revision 7 replaces ADR 0025's conflicting Representation Continuity Proof ownership assignment with upstream-only production and makes the MethodologyEvidenceInputContract package, record, persistence, production, public protocol, and dependency boundaries explicit. |
+| 2026-08-05 | READY_FOR_REVIEW | Revision 8 moves the complete ADR 0025 Representation Continuity Proof ownership change into an acceptance-gated proposal, while preserving upstream-only production and making the MethodologyEvidenceInputContract package, record, persistence, production, public protocol, and dependency boundaries explicit. |
 
 ## Traceability
 
 - Epic: not created.
 - Issue: #191.
 - Blocked issue: #190.
-- ADPR: ADPR-0005 revision 7.
-- ADR: ADR 0028 revision 7, Proposed.
+- ADPR: ADPR-0005 revision 8.
+- ADR: ADR 0028 revision 8, Proposed.
 - Draft PR: #192 (branch `claude/evidence-assembly-authority-preparation-issue-191`, remains Draft).
-- Revision: 7.
-- Validation: documentation-only correction; no `src/` or `tests/` changes; ADR 0025 ownership amendment, dependency direction, and internal Markdown links validated.
+- Revision: 8.
+- Validation: documentation-only correction; no `src/` or `tests/` changes; conditional ADR 0025 ownership-amendment proposal, dependency direction, and internal Markdown links validated.
 - Implementation: not authorized.
 - Release: not assigned.

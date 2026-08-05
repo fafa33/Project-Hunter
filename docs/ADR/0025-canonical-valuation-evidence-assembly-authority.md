@@ -46,7 +46,7 @@ This ADR authorizes the semantic contract, authority boundaries, invariants, rec
 | Contiguity and non-overlap validation | Native `FundamentalEvidenceRecord` validation (owned by `hunter.value_capture`, unchanged) |
 | Accounting-window coverage proof | Source trust policy already owned elsewhere (ADR 0004, ADR 0009) |
 | Entity continuity proof | Methodology definition (owned by ADR 0022 and future methodology ADRs) |
-| Representation continuity proof consumption and validation only | Evidence Assembly is a consumer only. It consumes the exact proof reference supplied by `CanonicalEvidenceSemanticInputAuthority`; it never produces, owns, infers, reconstructs, substitutes, or authorizes Representation Continuity Proof. Representation Continuity Proof is produced only through `CanonicalEvidenceSemanticInputAuthority` as the `EvidenceSemanticInputPolicySnapshot` itself, as defined by ADR 0028. |
+| Representation continuity proof | Methodology selection |
 | Currency and unit compatibility validation | Discount rates |
 | Competing-source conflict detection | Valuation horizons |
 | Assembly lineage recording | Valuation formulas |

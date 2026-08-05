@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed. Revision 7. Not accepted and not implementation authority.
+Proposed. Revision 8. Not accepted and not implementation authority.
 
 Governing preparation record: [ADPR-0005](../architecture-records/ADPR-0005-evidence-assembly-supporting-authorities.md). Related issues: [#190](https://github.com/fafa33/Project-Hunter/issues/190) and [#191](https://github.com/fafa33/Project-Hunter/issues/191). Draft PR: [#192](https://github.com/fafa33/Project-Hunter/pull/192).
 
@@ -204,44 +204,44 @@ The Registry remains governed, immutable reference data owned by `hunter.evidenc
 
 Every lineage field participates in `assembly_content_hash` and record `content_hash`. Replay uses these exact persisted references and never reruns policy selection or semantic derivation. A missing reference or hash mismatch fails closed. Corrections create a successor assembly and never mutate earlier lineage.
 
-## Exact amendments to accepted ADRs
+## Proposed amendments to accepted ADRs (effective only upon acceptance of ADR 0028)
 
-### ADR 0021
+### Proposed amendment to ADR 0021
 
-The following paragraph is appended to ADR 0021's record-family section:
+Upon acceptance of ADR 0028, ADR 0021 SHALL be amended by appending the following paragraph to its record-family section:
 
-> *(As amended by ADR 0028: `FundamentalEvidenceRecord` remains observation-only and gains no semantic-classification field. A distinct upstream `EvidenceSemanticInputPolicySnapshot` and `EvidenceSemanticInputRecord` family, produced exclusively by `CanonicalEvidenceSemanticInputAuthority` in `hunter.evidence_semantic_inputs`, supplies immutable, strict-known, provenance-complete semantic-classification inputs. These records never relabel or mutate native evidence. `ValuationMethodologySnapshot` additionally carries `accepts_assembled_evidence`, and the distinct `MethodologyEvidenceInputContract` family carries exact per-target assembly terms, as defined by ADR 0028.)*
+> *(As amended by accepted ADR 0028: `FundamentalEvidenceRecord` remains observation-only and gains no semantic-classification field. A distinct upstream `EvidenceSemanticInputPolicySnapshot` and `EvidenceSemanticInputRecord` family, produced exclusively by `CanonicalEvidenceSemanticInputAuthority` in `hunter.evidence_semantic_inputs`, supplies immutable, strict-known, provenance-complete semantic-classification inputs. These records never relabel or mutate native evidence. `ValuationMethodologySnapshot` additionally carries `accepts_assembled_evidence`, and the distinct `MethodologyEvidenceInputContract` family carries exact per-target assembly terms, as defined by ADR 0028.)*
 
-This amendment recognizes:
+This proposed amendment would recognize:
 
 - `ValuationMethodologySnapshot.accepts_assembled_evidence`;
 - `MethodologyEvidenceInputContract`;
 - `EvidenceSemanticInputPolicySnapshot`;
 - `EvidenceSemanticInputRecord`.
 
-The amendment explicitly reaffirms that `FundamentalEvidenceRecord` remains observation-only and gains none of the semantic fields owned by the new authority.
+The proposed amendment explicitly reaffirms that `FundamentalEvidenceRecord` remains observation-only and gains none of the semantic fields owned by the new authority.
 
-### ADR 0025
+### Proposed amendment to ADR 0025 (effective only upon acceptance of ADR 0028)
 
-The following exact amendment is added immediately after ADR 0025's Methodology Contract section:
+ADR 0025 is Accepted and remains unchanged in this PR. Upon acceptance of ADR 0028, ADR 0025 SHALL be amended as follows. No part of this proposal is normative before ADR 0028 is accepted.
 
-> ### Supporting authority ownership *(added by ADR 0028 revision 7)*
+> ### Supporting authority ownership *(to be added by accepted ADR 0028 revision 8)*
 >
-> ADR 0025's Authority boundaries table is amended by replacing **only** its conflicting `Representation continuity proof` ownership assignment with this exact rule:
+> Upon acceptance of ADR 0028, ADR 0025's Authority boundaries table SHALL be amended by replacing **only** its conflicting `Representation continuity proof` ownership assignment with this exact rule:
 >
 > > | Representation continuity proof | Evidence Assembly is a consumer only. It consumes the exact proof reference supplied by `CanonicalEvidenceSemanticInputAuthority`; it never produces, owns, infers, reconstructs, substitutes, or authorizes Representation Continuity Proof. Representation Continuity Proof is produced only through `CanonicalEvidenceSemanticInputAuthority` as the `EvidenceSemanticInputPolicySnapshot` itself, as defined by ADR 0028. |
 >
 > This amendment preserves ADR 0025's rule that methodology selection remains outside Evidence Assembly. `CanonicalValuationMethodologyAuthority` remains the sole owner of methodology definition and the `accepts_assembled_evidence` activation authority. `CanonicalValuationService` remains the sole owner of methodology-contract input-eligibility evaluation at estimate construction. Evidence Assembly remains the downstream consumer only and gains no methodology selection or activation authority. All other ADR 0025 authority-boundary rows, lossless-composition invariants, native-evidence precedence rules, unavailable-state rules, and correction rules remain unchanged.
 >
-> Methodology Contract production and persistence belong exclusively to `CanonicalValuationMethodologyAuthority` and `ValuationMethodologyRepository` in `hunter.valuation_methodology`. The canonical `MethodologyEvidenceInputContract` record definition belongs to that package and authority; no duplicate canonical type may be defined in Evidence Assembly. The upstream package exposes the read-only `MethodologyContractAuthority` protocol and exact record type as the only public boundary consumed by Evidence Assembly. Evidence Assembly depends on that public boundary only, while the upstream owner has no dependency on Evidence Assembly, ensuring an acyclic direction with no reverse write path.
+> Upon acceptance of ADR 0028, Methodology Contract production and persistence SHALL belong exclusively to `CanonicalValuationMethodologyAuthority` and `ValuationMethodologyRepository` in `hunter.valuation_methodology`. The canonical `MethodologyEvidenceInputContract` record definition SHALL belong to that package and authority; no duplicate canonical type may be defined in Evidence Assembly. The upstream package SHALL expose the read-only `MethodologyContractAuthority` protocol and exact record type as the only public boundary consumed by Evidence Assembly. Evidence Assembly SHALL depend on that public boundary only, while the upstream owner SHALL have no dependency on Evidence Assembly, ensuring an acyclic direction with no reverse write path.
 >
-> Evidence Shape Registry governance and persistence remain with `hunter.evidence_assembly`. Canonical semantic-classification inputs belong exclusively to `CanonicalEvidenceSemanticInputAuthority` and `EvidenceSemanticInputRepository` in upstream `hunter.evidence_semantic_inputs`; `FundamentalEvidenceRecord` remains observation-only. Evidence Semantics belongs to `hunter.evidence_assembly` and may consume semantic-classification dimensions only from an exact strict-known `EvidenceSemanticInputRecord`; it may not infer, replace, weaken, or override them.
+> Upon acceptance of ADR 0028, Evidence Shape Registry governance and persistence SHALL remain with `hunter.evidence_assembly`. Canonical semantic-classification inputs SHALL belong exclusively to `CanonicalEvidenceSemanticInputAuthority` and `EvidenceSemanticInputRepository` in upstream `hunter.evidence_semantic_inputs`; `FundamentalEvidenceRecord` SHALL remain observation-only. Evidence Semantics SHALL belong to `hunter.evidence_assembly` and may consume semantic-classification dimensions only from an exact strict-known `EvidenceSemanticInputRecord`; it may not infer, replace, weaken, or override them.
 
-ADR 0025's Assembled Fundamental Evidence Lineage table gains this exact row:
+> Upon acceptance of ADR 0028, ADR 0025's Assembled Fundamental Evidence Lineage table SHALL gain this exact row:
 
 > | constituent semantic lineage | Ordered, index-aligned exact references and content hashes for each constituent's `AuthoritativeEvidenceSemantics`, upstream `EvidenceSemanticInputRecord`, and governing `EvidenceSemanticInputPolicySnapshot`; mandatory in assembly identity and historical replay. |
 
-Accordingly, ADR 0025 is amended to state:
+Upon acceptance of ADR 0028, ADR 0025 SHALL state:
 
 - Methodology Contract ownership belongs to `hunter.valuation_methodology` as defined above.
 - Evidence Shape Registry ownership remains `hunter.evidence_assembly`.
@@ -249,15 +249,15 @@ Accordingly, ADR 0025 is amended to state:
 - Evidence Semantics belongs to `hunter.evidence_assembly` and consumes only `EvidenceSemanticInputRecord`;
 - `AssembledFundamentalEvidenceRecord` requires `constituent_semantic_lineage` as defined above.
 
-No ADR 0025 lossless-composition invariant, native-evidence precedence rule, methodology-input eligibility boundary, unavailable-state rule, or correction rule is weakened.
+Until ADR 0028 is accepted, these remain proposed amendments only. No ADR 0025 lossless-composition invariant, native-evidence precedence rule, methodology-input eligibility boundary, unavailable-state rule, or correction rule is weakened.
 
 ## Compatibility
 
-- **ADR 0021:** amended only for the new record families and activation field; observation-only native evidence is reaffirmed.
-- **ADR 0022:** methodology permitted values and `CanonicalValuationService` eligibility ownership remain unchanged.
+- **ADR 0021:** proposed for amendment only upon acceptance of ADR 0028 for the new record families and activation field; observation-only native evidence is reaffirmed and ADR 0021 remains unchanged before acceptance.
+- **ADR 0022:** proposed amendments are acceptance-gated; methodology permitted values and `CanonicalValuationService` eligibility ownership remain unchanged before acceptance.
 - **ADR 0023:** supplies the amendment-governed reference-data precedent.
 - **ADR 0024:** scalar-semantics boundary is unchanged.
-- **ADR 0025:** amended exactly as listed above in revision 7; only the conflicting Representation Continuity Proof ownership assignment is replaced, and all unaffected methodology and assembly decisions are preserved.
+- **ADR 0025:** remains Accepted and unchanged in this PR. The narrowly scoped ownership and lineage amendments above are proposed for effect only upon acceptance of ADR 0028; all unaffected methodology and assembly decisions remain preserved.
 - **ADR 0026:** Comparative Valuation receives no right to assembled evidence.
 - **ADR 0027:** downstream Market Validation composition receives no new authority or activation.
 
