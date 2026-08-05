@@ -37,3 +37,18 @@ jobs:
         #   fail-on-severity: moderate
         #   deny-licenses: GPL-1.0-or-later, LGPL-2.0-or-later
         #   retry-on-snapshot-warnings: true
+
+        
+  ai-review:
+    name: Adversarial AI Review
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: anc95/ChatGPT-Action@v1
+        with:
+          openai_api_key: ${{ secrets.GROQ_API_KEY }}
+          openai_api_base: "https://api.groq.com/openai/v1"
+          model: "llama-3.3-70b-versatile"
+          prompt: "Act as a strict adversarial auditor. Review this PR diff. If there are critical bugs, race conditions, or security flaws, explicitly list them. Be extremely critical."
+
