@@ -1,5 +1,38 @@
 # Changelog
 
+## v3.6.0 - 2026-08-05
+
+### Added
+
+- **Hunter Governance Review** mandatory merge gate
+  (`docs/HUNTER_GOVERNANCE_REVIEW.md`): a repository feature combining a
+  deterministic governance engine, an LLM hostile architecture audit, and a
+  decision engine. The gate resolves the exact source HEAD / target BASE pair,
+  re-verifies it at decision time, and publishes the required `Hunter
+  Governance Review` status check. It is fail-closed: `CHANGES_REQUIRED` and
+  `REVIEW_FAILED` publish a failing check, are never converted into approval,
+  and are never skipped silently.
+- PR-event workflow (`.github/workflows/hunter-governance-review.yml`) covering
+  `opened`, `reopened`, `synchronize`, `ready_for_review`,
+  `converted_to_draft`, `edited`, `review_requested`, and
+  `review_request_removed`, plus `workflow_dispatch`.
+- Reconciliation workflow (`.github/workflows/hunter-governance-reconcile.yml`)
+  that re-evaluates open pull requests on protected-branch pushes and on a
+  30-minute schedule, so target-branch advancement invalidates stale approvals.
+- Stdlib-only gate engine under `scripts/hunter_governance_review/` and unit
+  tests in `tests/test_hunter_governance_review.py`.
+
+### Changed
+
+- Removed the fail-open, comment-only "Adversarial AI Review" job from
+  `.github/workflows/dependency-review.yml`; the mandatory Hunter Governance
+  Review gate supersedes it.
+
+### Documentation
+
+- Added `docs/HUNTER_GOVERNANCE_REVIEW.md` and documented the merge gate in
+  `docs/CI.md`.
+
 ## v3.5.2 - 2026-07-25
 
 Issue #88 hardening release. Closes the two follow-up gaps identified in the

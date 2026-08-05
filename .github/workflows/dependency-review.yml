@@ -5,6 +5,13 @@
 #
 # Source repository: https://github.com/actions/dependency-review-action
 # Public documentation: https://docs.github.com/en/code-security/supply-chain-security/understanding-your-software-supply-chain/about-dependency-review#dependency-review-enforcement
+#
+# Note: the former "Adversarial AI Review" job in this file was removed. It was
+# a comment-only, fail-open reviewer that silently skipped when the API key or
+# API was unavailable. The mandatory hostile architecture audit is now the
+# Hunter Governance Review gate (see .github/workflows/hunter-governance-review.yml
+# and docs/HUNTER_GOVERNANCE_REVIEW.md), which is fail-closed and publishes the
+# required "Hunter Governance Review" status check.
 name: 'Dependency review'
 
 on:
@@ -40,110 +47,3 @@ jobs:
         uses: actions/dependency-review-action@v4
         with:
           comment-summary-in-pr: always
-
-  ai-review:
-    name: Adversarial AI Review
-    runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
-    permissions:
-      contents: read
-      pull-requests: write
-    steps:
-      - name: 'Checkout repository'
-        uses: actions/checkout@v4
-
-      - name: 'Generate pull request diff'
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          git fetch --no-tags --depth=1 origin "$BASE_SHA" "$HEAD_SHA"
-          git diff --no-ext-diff --unified=3 "$BASE_SHA" "$HEAD_SHA" > pr.diff
-
-      - name: 'Run adversarial review with Groq'
-        env:
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-        run: |
-          python - <<'PY'
-          import json
-          import os
-          import sys
-          import urllib.error
-          import urllib.request
-
-          api_key = os.environ.get("GROQ_API_KEY")
-          if not api_key:
-              print("::warning::GROQ_API_KEY secret is not configured; skipping the adversarial AI review.")
-              sys.exit(0)
-
-          with open("pr.diff", "r", encoding="utf-8", errors="replace") as handle:
-              diff = handle.read()
-
-          max_chars = 120000
-          if len(diff) > max_chars:
-              diff = diff[:max_chars] + "\n\n[DIFF TRUNCATED]"
-
-          prompt = (
-              "Act as a strict adversarial pull-request auditor. Review the diff below. "
-              "Focus on critical bugs, security flaws, race conditions, data loss, broken "
-              "architecture boundaries, and misleading governance claims. Do not invent "
-              "problems. Return either APPROVED or CHANGES REQUIRED, followed by concise "
-              "repository-grounded findings.\n\nPR DIFF:\n" + diff
-          )
-
-          payload = {
-              "model": "llama-3.3-70b-versatile",
-              "messages": [
-                  {"role": "system", "content": "You are a precise adversarial code reviewer."},
-                  {"role": "user", "content": prompt},
-              ],
-              "temperature": 0.1,
-          }
-
-          # Groq's API is fronted by Cloudflare bot protection that blocks the
-          # default "Python-urllib" User-Agent signature with HTTP 403 error
-          # code 1010. Sending a standard client User-Agent lets the request
-          # reach the Groq authentication layer instead of being rejected at
-          # the edge.
-          request = urllib.request.Request(
-              "https://api.groq.com/openai/v1/chat/completions",
-              data=json.dumps(payload).encode("utf-8"),
-              headers={
-                  "Authorization": f"Bearer {api_key}",
-                  "Content-Type": "application/json",
-                  "User-Agent": "Project-Hunter-CI/1.0 (adversarial-ai-review)",
-              },
-              method="POST",
-          )
-
-          try:
-              with urllib.request.urlopen(request, timeout=120) as response:
-                  body = json.load(response)
-          except urllib.error.HTTPError as exc:
-              detail = exc.read().decode("utf-8", errors="replace")
-              if exc.code == 401:
-                  print("::warning::Groq rejected the configured GROQ_API_KEY (HTTP 401). Check the GROQ_API_KEY secret value; skipping the adversarial AI review.")
-              else:
-                  print(f"::warning::Groq API request failed with HTTP {exc.code}: {detail}. Skipping the adversarial AI review.")
-              sys.exit(0)
-          except Exception as exc:  # network, timeout, or DNS failures
-              print(f"::warning::Groq API request could not be completed ({exc}). Skipping the adversarial AI review.")
-              sys.exit(0)
-
-          review = body["choices"][0]["message"]["content"].strip()
-          with open("ai-review.md", "w", encoding="utf-8") as handle:
-              handle.write("## Automated Adversarial AI Review\n\n")
-              handle.write(review)
-              handle.write("\n")
-          PY
-
-      - name: 'Post review comment'
-        if: hashFiles('ai-review.md') != ''
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          REPOSITORY: ${{ github.repository }}
-        run: |
-          gh pr comment "$PR_NUMBER" \
-            --repo "$REPOSITORY" \
-            --body-file ai-review.md
