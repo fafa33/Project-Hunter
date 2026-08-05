@@ -255,5 +255,7 @@ None material. Concrete policy content and production activation are intentional
 - Validation: documentation-only acceptance correction; no `src/` or `tests/` changes; accepted ADR 0025 ownership amendment, dependency direction, and internal Markdown links validated.
 - Architecture: Accepted.
 - Implementation: Incomplete; Issues #194, #195, #196, and #197 remain outstanding. Issue #190 remains blocked until #197 concludes `IMPLEMENTABLE`.
-- Acceptance commit: `a71af2420ee0527ba7bf845068da675c7c3d0f82` (PR #198).
+- Historical Issue #193 acceptance contribution: `a71af2420ee0527ba7bf845068da675c7c3d0f82` (PR #198).
+- Current substantive ADR-bearing commit: `1fdffad39e4beee0990d3680980ba31583813885`.
+- Independent review remains required for the new exact source/target pair.
 - Release: not assigned.
