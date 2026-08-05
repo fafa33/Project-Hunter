@@ -154,7 +154,7 @@ Rejected. The consumer would author the values it is supposed to validate, colla
 
 ## Selected design
 
-Option D is selected exactly as specified in ADR 0028 revision 6:
+Option D is selected exactly as specified in ADR 0028 revision 7:
 
 - one new upstream package and canonical service;
 - one mechanical repository;
@@ -228,7 +228,7 @@ None material. Concrete policy content and production activation are intentional
 ## ADR readiness
 
 - Outcome: `READY_FOR_ADR`
-- Proposed decision: ADR 0028 revision 6.
+- Proposed decision: ADR 0028 revision 7.
 - Implementation remains unauthorized until ADR acceptance and a separate implementation issue.
 
 ## Decision history
