@@ -227,7 +227,7 @@ ADR 0025 remains Accepted and is amended as follows. These changes are normative
 
 > ### Supporting authority ownership *(as amended by accepted ADR 0028 revision 9)*
 >
-> ADR 0025's Authority boundaries table replaces this exact existing row:
+> ADR 0025's Authority boundaries table replaced the following pre-amendment row:
 >
 > > | Representation continuity proof | Methodology selection |
 >
