@@ -10,15 +10,17 @@
 - Created: 2026-07-01
 - Approved:
 - Related Epic:
-- Related Issue: [#191](https://github.com/fafa33/Project-Hunter/issues/191)
+- Preparation Issue: [#191](https://github.com/fafa33/Project-Hunter/issues/191) (completed)
+- Acceptance Issue: [#193](https://github.com/fafa33/Project-Hunter/issues/193)
 - Planned or produced ADR: [ADR 0028](../ADR/0028-evidence-assembly-supporting-authorities.md)
 - Supersedes:
 - Superseded by:
 - Self-assessment: `READY_FOR_ADR`
 - Blocked implementation issue: [#190](https://github.com/fafa33/Project-Hunter/issues/190)
-- Draft PR: [#192](https://github.com/fafa33/Project-Hunter/pull/192)
+- Merged PR: [#192](https://github.com/fafa33/Project-Hunter/pull/192)
+- Merge commit: `89a2c2c9c2714aa2391c1fb3f26de5ab3e36eb32`
 - Branch: `claude/evidence-assembly-authority-preparation-issue-191`
-- Revision under review: PR #192 documentation revision 8
+- Merged revision: PR #192 documentation revision 8
 - Validation status: documentation-only diff; no `src/` or `tests/` changes; conditional ADR 0025 ownership-amendment proposal, dependency-direction consistency, and internal Markdown links validated
 
 This record authorizes no implementation. Issue #190 remains blocked.
@@ -243,11 +245,12 @@ None material. Concrete policy content and production activation are intentional
 ## Traceability
 
 - Epic: not created.
-- Issue: #191.
+- Preparation issue: #191 (completed).
+- Acceptance issue: #193.
 - Blocked issue: #190.
 - ADPR: ADPR-0005 revision 8.
 - ADR: ADR 0028 revision 8, Proposed.
-- Draft PR: #192 (branch `claude/evidence-assembly-authority-preparation-issue-191`, remains Draft).
+- Merged PR: #192 (branch `claude/evidence-assembly-authority-preparation-issue-191`), merge commit `89a2c2c9c2714aa2391c1fb3f26de5ab3e36eb32`.
 - Revision: 8.
 - Validation: documentation-only correction; no `src/` or `tests/` changes; conditional ADR 0025 ownership-amendment proposal, dependency direction, and internal Markdown links validated.
 - Implementation: not authorized.

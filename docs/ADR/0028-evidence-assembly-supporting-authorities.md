@@ -4,7 +4,7 @@
 
 Proposed. Revision 8. Not accepted and not implementation authority.
 
-Governing preparation record: [ADPR-0005](../architecture-records/ADPR-0005-evidence-assembly-supporting-authorities.md). Related issues: [#190](https://github.com/fafa33/Project-Hunter/issues/190) and [#191](https://github.com/fafa33/Project-Hunter/issues/191). Draft PR: [#192](https://github.com/fafa33/Project-Hunter/pull/192).
+Governing preparation record: [ADPR-0005](../architecture-records/ADPR-0005-evidence-assembly-supporting-authorities.md). Related issues: [#190](https://github.com/fafa33/Project-Hunter/issues/190), completed preparation issue [#191](https://github.com/fafa33/Project-Hunter/issues/191), and acceptance issue [#193](https://github.com/fafa33/Project-Hunter/issues/193). Merged PR: [#192](https://github.com/fafa33/Project-Hunter/pull/192), merge commit `89a2c2c9c2714aa2391c1fb3f26de5ab3e36eb32`.
 
 Issue #190 remains blocked. This ADR does not authorize production activation, CLI dispatch, implementation, or changes to `src/` or `tests/`.
 
@@ -227,9 +227,13 @@ ADR 0025 is Accepted and remains unchanged in this PR. Upon acceptance of ADR 00
 
 > ### Supporting authority ownership *(to be added by accepted ADR 0028 revision 8)*
 >
-> Upon acceptance of ADR 0028, ADR 0025's Authority boundaries table SHALL be amended by replacing **only** its conflicting `Representation continuity proof` ownership assignment with this exact rule:
+> Upon acceptance of ADR 0028, ADR 0025's Authority boundaries table SHALL replace this exact existing row:
 >
-> > | Representation Continuity Proof authority boundary | **Evidence Assembly:** consumption and validation only; it consumes the exact proof reference supplied by `CanonicalEvidenceSemanticInputAuthority` and never produces, owns, infers, reconstructs, substitutes, or authorizes Representation Continuity Proof. **CanonicalEvidenceSemanticInputAuthority:** exclusive production and exclusive ownership of Representation Continuity Proof through the `EvidenceSemanticInputPolicySnapshot`, as defined by ADR 0028. |
+> > | Representation continuity proof | Methodology selection |
+>
+> with this exact two-column replacement row:
+>
+> > | Representation continuity proof | Evidence Assembly: consumption and validation only; it consumes the exact proof reference supplied by `CanonicalEvidenceSemanticInputAuthority` and never produces, owns, infers, reconstructs, substitutes, or authorizes Representation Continuity Proof. `CanonicalEvidenceSemanticInputAuthority`: exclusive production and exclusive ownership of Representation Continuity Proof through the `EvidenceSemanticInputPolicySnapshot`, as defined by ADR 0028. |
 >
 > This amendment preserves ADR 0025's rule that methodology selection remains outside Evidence Assembly. `CanonicalValuationMethodologyAuthority` remains the sole owner of methodology definition and the `accepts_assembled_evidence` activation authority. `CanonicalValuationService` remains the sole owner of methodology-contract input-eligibility evaluation at estimate construction. Evidence Assembly remains the downstream consumer only and gains no methodology selection or activation authority. All other ADR 0025 authority-boundary rows, lossless-composition invariants, native-evidence precedence rules, unavailable-state rules, and correction rules remain unchanged.
 >
@@ -254,7 +258,7 @@ Until ADR 0028 is accepted, these remain proposed amendments only. No ADR 0025 l
 ## Compatibility
 
 - **ADR 0021:** proposed for amendment only upon acceptance of ADR 0028 for the new record families and activation field; observation-only native evidence is reaffirmed and ADR 0021 remains unchanged before acceptance.
-- **ADR 0022:** proposed amendments are acceptance-gated; methodology permitted values and `CanonicalValuationService` eligibility ownership remain unchanged before acceptance.
+- **ADR 0022:** unaffected and reaffirmed. ADR 0028 proposes no amendment to ADR 0022; its existing methodology permitted values and `CanonicalValuationService` eligibility ownership remain unchanged.
 - **ADR 0023:** supplies the amendment-governed reference-data precedent.
 - **ADR 0024:** scalar-semantics boundary is unchanged.
 - **ADR 0025:** remains Accepted and unchanged in this PR. The narrowly scoped ownership and lineage amendments above are proposed for effect only upon acceptance of ADR 0028; all unaffected methodology and assembly decisions remain preserved.
@@ -287,7 +291,8 @@ Acceptance of this ADR would authorize architecture only. It would not implement
 ## Traceability
 
 - Issue #190 remains blocked.
-- Issue #191 governs this architecture preparation.
+- Issue #191 is the completed architecture-preparation issue.
 - ADPR-0005 records the evidence and option analysis.
-- Draft PR #192 remains Draft.
+- Issue #193 governs acceptance of ADR 0028.
+- PR #192 merged this preparation revision at commit `89a2c2c9c2714aa2391c1fb3f26de5ab3e36eb32`.
 - No implementation plan or production activation is authorized.
