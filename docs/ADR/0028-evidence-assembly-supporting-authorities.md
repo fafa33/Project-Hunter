@@ -2,11 +2,11 @@
 
 ## Status
 
-Accepted. Revision 9. Binding architectural decision. This acceptance authorizes the architecture and the separately tracked implementation issues; it does not establish production implementation or activation.
+Accepted. Revision 9. Binding architectural decision. This acceptance accepts and binds the architecture only. Issues #194–#197 are separately governed implementation work items; acceptance of ADR 0028 does not authorize production implementation, activation, runtime wiring, persistence, migration, CLI, scheduler, or automation changes. Each implementation issue requires its own governed lifecycle and authority.
 
 Governing preparation record: [ADPR-0005](../architecture-records/ADPR-0005-evidence-assembly-supporting-authorities.md). Related issues: [#190](https://github.com/fafa33/Project-Hunter/issues/190), completed preparation issue [#191](https://github.com/fafa33/Project-Hunter/issues/191), and acceptance issue [#193](https://github.com/fafa33/Project-Hunter/issues/193). Merged PR: [#192](https://github.com/fafa33/Project-Hunter/pull/192), merge commit `89a2c2c9c2714aa2391c1fb3f26de5ab3e36eb32`. Historical Issue #193 acceptance contribution: PR #198, commit `a71af2420ee0527ba7bf845068da675c7c3d0f82`; current substantive ADR-bearing commit: `1fdffad39e4beee0990d3680980ba31583813885`.
 
-Issue #190 remains blocked. This ADR does not authorize production activation, CLI dispatch, implementation, or changes to `src/` or `tests/`.
+Issue #190 remains blocked. Acceptance of this ADR does not authorize production implementation, activation, runtime wiring, persistence, migration, CLI, scheduler, or automation changes, or any changes to `src/` or `tests/`. Implementation requires its own governed issue lifecycle and authority.
 
 ## Context
 
@@ -298,7 +298,7 @@ Acceptance of this ADR authorizes architecture only. It does not implement or po
 - PR #192 merged this preparation revision at commit `89a2c2c9c2714aa2391c1fb3f26de5ab3e36eb32`.
 - Historical Issue #193 acceptance contribution: PR #198, commit `a71af2420ee0527ba7bf845068da675c7c3d0f82`.
 - Current substantive ADR-bearing commit: `1fdffad39e4beee0990d3680980ba31583813885`.
-- Independent review remains required for the new exact source/target pair.
+- PR #198 (head `f712af8a62b40fbd80b6c213d2fe3f9562d0f72e` against base `0f1e6dda4d6f7acdaf6a8e91383d4e61203425c5`) received GitHub review approval (APPROVED by `fafa33`, submitted 2026-08-05T20:47:48Z); the PR review decision is APPROVED.
 - Architecture: Accepted.
 - Implementation: Incomplete.
 - Outstanding implementation sequence: #194, #195, and #196 remain outstanding; #197 must verify production constructibility and conclude `IMPLEMENTABLE` before #190 can proceed.

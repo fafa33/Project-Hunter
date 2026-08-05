@@ -257,5 +257,5 @@ None material. Concrete policy content and production activation are intentional
 - Implementation: Incomplete; Issues #194, #195, #196, and #197 remain outstanding. Issue #190 remains blocked until #197 concludes `IMPLEMENTABLE`.
 - Historical Issue #193 acceptance contribution: `a71af2420ee0527ba7bf845068da675c7c3d0f82` (PR #198).
 - Current substantive ADR-bearing commit: `1fdffad39e4beee0990d3680980ba31583813885`.
-- Independent review remains required for the new exact source/target pair.
+- PR #198 (head `f712af8a62b40fbd80b6c213d2fe3f9562d0f72e` against base `0f1e6dda4d6f7acdaf6a8e91383d4e61203425c5`) received GitHub review approval (APPROVED by `fafa33`, submitted 2026-08-05T20:47:48Z); PR review decision: APPROVED.
 - Release: not assigned.
