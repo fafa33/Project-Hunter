@@ -1,0 +1,15 @@
+name: AI PR Auditor
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: anc95/ChatGPT-Action@v1
+        with:
+          openai_api_key: ${{ secrets.OPENAI_API_KEY }}
+          model: "gpt-4o-mini"
+          prompt: "Act as a hostile security and code auditor. Find edge cases, flaws, and vulnerabilities."
