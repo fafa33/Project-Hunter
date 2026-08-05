@@ -1,26 +1,18 @@
 # Dependency Review Action
 #
-# This Action will scan dependency manifest files that change as part of a Pull Request,
-# surfacing known-vulnerable versions of the packages declared or updated in the PR.
-# Once installed, if the workflow run is marked as required, PRs introducing known-vulnerable
-# packages will be blocked from merging.
+# This Action scans dependency manifest files changed by a pull request and
+# surfaces known-vulnerable dependency additions.
 #
 # Source repository: https://github.com/actions/dependency-review-action
 # Public documentation: https://docs.github.com/en/code-security/supply-chain-security/understanding-your-software-supply-chain/about-dependency-review#dependency-review-enforcement
 name: 'Dependency review'
+
 on:
   pull_request:
-    branches: [ "main" ]
+    branches: ["main"]
 
-# If using a dependency submission action in this workflow this permission will need to be set to:
-#
-# permissions:
-#   contents: write
-#
-# https://docs.github.com/en/enterprise-cloud@latest/code-security/supply-chain-security/understanding-your-software-supply-chain/using-the-dependency-submission-api
 permissions:
   contents: read
-  # Write permissions for pull-requests are required for using the `comment-summary-in-pr` option, comment out if you aren't using this option
   pull-requests: write
 
 jobs:
@@ -29,26 +21,100 @@ jobs:
     steps:
       - name: 'Checkout repository'
         uses: actions/checkout@v4
+
       - name: 'Dependency Review'
         uses: actions/dependency-review-action@v4
-        # Commonly enabled options, see https://github.com/actions/dependency-review-action#configuration-options for all available options.
         with:
           comment-summary-in-pr: always
-        #   fail-on-severity: moderate
-        #   deny-licenses: GPL-1.0-or-later, LGPL-2.0-or-later
-        #   retry-on-snapshot-warnings: true
 
-        
   ai-review:
     name: Adversarial AI Review
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+      pull-requests: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: anc95/ChatGPT-Action@v1
-        with:
-          openai_api_key: ${{ secrets.GROQ_API_KEY }}
-          openai_api_base: "https://api.groq.com/openai/v1"
-          model: "llama-3.3-70b-versatile"
-          prompt: "Act as a strict adversarial auditor. Review this PR diff. If there are critical bugs, race conditions, or security flaws, explicitly list them. Be extremely critical."
+      - name: 'Checkout repository'
+        uses: actions/checkout@v4
 
+      - name: 'Generate pull request diff'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          git fetch --no-tags --depth=1 origin "$BASE_SHA" "$HEAD_SHA"
+          git diff --no-ext-diff --unified=3 "$BASE_SHA" "$HEAD_SHA" > pr.diff
+
+      - name: 'Run adversarial review with Groq'
+        id: review
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import urllib.error
+          import urllib.request
+
+          api_key = os.environ.get("GROQ_API_KEY")
+          if not api_key:
+              raise SystemExit("GROQ_API_KEY secret is not configured")
+
+          with open("pr.diff", "r", encoding="utf-8", errors="replace") as handle:
+              diff = handle.read()
+
+          max_chars = 120000
+          if len(diff) > max_chars:
+              diff = diff[:max_chars] + "\n\n[DIFF TRUNCATED]"
+
+          prompt = (
+              "Act as a strict adversarial pull-request auditor. Review the diff below. "
+              "Focus on critical bugs, security flaws, race conditions, data loss, broken "
+              "architecture boundaries, and misleading governance claims. Do not invent "
+              "problems. Return either APPROVED or CHANGES REQUIRED, followed by concise "
+              "repository-grounded findings.\n\nPR DIFF:\n" + diff
+          )
+
+          payload = {
+              "model": "llama-3.3-70b-versatile",
+              "messages": [
+                  {"role": "system", "content": "You are a precise adversarial code reviewer."},
+                  {"role": "user", "content": prompt},
+              ],
+              "temperature": 0.1,
+          }
+
+          request = urllib.request.Request(
+              "https://api.groq.com/openai/v1/chat/completions",
+              data=json.dumps(payload).encode("utf-8"),
+              headers={
+                  "Authorization": f"Bearer {api_key}",
+                  "Content-Type": "application/json",
+              },
+              method="POST",
+          )
+
+          try:
+              with urllib.request.urlopen(request, timeout=120) as response:
+                  body = json.load(response)
+          except urllib.error.HTTPError as exc:
+              detail = exc.read().decode("utf-8", errors="replace")
+              raise SystemExit(f"Groq API request failed: HTTP {exc.code}: {detail}") from exc
+
+          review = body["choices"][0]["message"]["content"].strip()
+          with open("ai-review.md", "w", encoding="utf-8") as handle:
+              handle.write("## Automated Adversarial AI Review\n\n")
+              handle.write(review)
+              handle.write("\n")
+          PY
+
+      - name: 'Post review comment'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          gh pr comment "$PR_NUMBER" \
+            --repo "$REPOSITORY" \
+            --body-file ai-review.md
