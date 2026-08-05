@@ -46,7 +46,7 @@ This ADR authorizes the semantic contract, authority boundaries, invariants, rec
 | Contiguity and non-overlap validation | Native `FundamentalEvidenceRecord` validation (owned by `hunter.value_capture`, unchanged) |
 | Accounting-window coverage proof | Source trust policy already owned elsewhere (ADR 0004, ADR 0009) |
 | Entity continuity proof | Methodology definition (owned by ADR 0022 and future methodology ADRs) |
-| Representation continuity proof | Methodology selection |
+| Representation continuity proof consumption and validation | Representation continuity proof production and ownership (owned exclusively by `CanonicalEvidenceSemanticInputAuthority` through the `EvidenceSemanticInputPolicySnapshot`, as defined by accepted ADR 0028) |
 | Currency and unit compatibility validation | Discount rates |
 | Competing-source conflict detection | Valuation horizons |
 | Assembly lineage recording | Valuation formulas |
@@ -57,6 +57,12 @@ This ADR authorizes the semantic contract, authority boundaries, invariants, rec
 | — | Methodology-contract input-eligibility evaluation (owned exclusively by `CanonicalValuationService`, ADR 0022) |
 
 Repositories that persist `AssembledFundamentalEvidenceRecord`s remain mechanical persistence/query authorities under ADR 0009: they store and retrieve service-authorized records deterministically and make no assembly, eligibility, conflict, or correction decisions.
+
+Under accepted ADR 0028, Evidence Assembly owns only consumption and validation of the exact representation-continuity proof reference. `CanonicalEvidenceSemanticInputAuthority` exclusively produces and owns that proof through the `EvidenceSemanticInputPolicySnapshot`; Evidence Assembly never produces, owns, infers, reconstructs, substitutes, or authorizes it. Methodology selection remains outside Evidence Assembly, and the exact proof is unavailable when its strict-known policy or rule evidence is absent, ambiguous, mismatched, conflicted, or unreconstructable.
+
+Methodology Contract production and persistence belongs exclusively to `CanonicalValuationMethodologyAuthority` and `ValuationMethodologyRepository` in `hunter.valuation_methodology`. The canonical `MethodologyEvidenceInputContract` record definition SHALL belong to that package and authority; no duplicate canonical type may be defined in Evidence Assembly. The upstream package SHALL expose the read-only `MethodologyContractAuthority` protocol and exact record type as the only public boundary consumed by Evidence Assembly. Evidence Assembly SHALL depend on that public boundary only, while the upstream owner SHALL have no dependency on Evidence Assembly, ensuring an acyclic direction with no reverse write path.
+
+Evidence Shape Registry governance and persistence remains with `hunter.evidence_assembly`. Canonical semantic-classification inputs SHALL belong exclusively to `CanonicalEvidenceSemanticInputAuthority` and `EvidenceSemanticInputRepository` in upstream `hunter.evidence_semantic_inputs`; `FundamentalEvidenceRecord` SHALL remain observation-only. Evidence Semantics SHALL belong to `hunter.evidence_assembly` and may consume semantic-classification dimensions only from an exact strict-known `EvidenceSemanticInputRecord`; it may not infer, replace, weaken, or override them.
 
 **Assembly is methodology-contract-aware, not methodology-agnostic.** `CanonicalEvidenceAssemblyService` consumes the declared methodology input contract (see "Methodology contract" below) as read-only reference data — the exact accounting interval, continuity requirements, and accepted evidence shapes a target methodology requires — solely to determine what constituent set, if any, would satisfy that methodology's stated requirements. It never defines, amends, selects, or overrides a methodology; it only checks whether its own lossless-composition invariants can be satisfied for the interval a methodology contract declares it needs. A methodology contract that does not declare acceptance of assembled evidence, or that declares incompatible requirements, makes assembly for that methodology inapplicable regardless of whether a lossless composition would otherwise be possible.
 
@@ -171,6 +177,7 @@ Every `AssembledFundamentalEvidenceRecord` carries, at minimum:
 | constituent record IDs | Exact IDs of every constituent record, in deterministic order |
 | constituent logical IDs | Exact logical IDs of every constituent |
 | constituent versions | Exact semantic versions of every constituent |
+| constituent semantic lineage | Ordered, index-aligned exact references and content hashes for each constituent's `AuthoritativeEvidenceSemantics`, upstream `EvidenceSemanticInputRecord`, and governing `EvidenceSemanticInputPolicySnapshot`; mandatory in assembly identity and historical replay. |
 | deterministic constituent order | The ordering rule and resulting order actually applied |
 | source count | Number of constituent records |
 | assembly content hash | Deterministic canonical hash of the complete constituent set, order, and assembly rule applied |
@@ -302,6 +309,10 @@ The Canonical Evidence Assembly Authority must resolve the following situations 
 | 0022 | Amended — see "Exact amendment to ADR 0022," below. All other sections, including the discounted value-capture-flow model, 365-day horizon, entity-class criteria, prohibited-methodology list (beyond the one clarifying note below), strict-known replay, append-only correction, provenance, confidence, uncertainty, and audit gates, are unchanged. |
 | 0023 | Unaffected. The supply-basis coherence tolerance governs `SupplyBasisSnapshot`, which is not a constituent record family under this ADR. |
 | 0024 | Unaffected. `valuation`'s scalar-semantics boundary is orthogonal to whether `valuation`'s underlying evidence is native or assembled; this ADR changes neither `valuation`'s structured-assessment contract nor its exclusion from directionally favorable scalar normalization. |
+
+### Accepted ADR 0028 amendments
+
+ADR 0028 is Accepted, revision 9. The earlier Issue #193 acceptance contribution was recorded at commit `a71af2420ee0527ba7bf845068da675c7c3d0f82`; the current substantive ADR-bearing commit is `1fdffad39e4beee0990d3680980ba31583813885`. Its amendments are effective: `MethodologyEvidenceInputContract` is owned and defined in `hunter.valuation_methodology` with `CanonicalValuationMethodologyAuthority` and `ValuationMethodologyRepository`; Evidence Shape Registry governance remains in `hunter.evidence_assembly`; semantic-classification inputs are owned exclusively upstream by `CanonicalEvidenceSemanticInputAuthority` in `hunter.evidence_semantic_inputs`; Evidence Semantics consumes only strict-known `EvidenceSemanticInputRecord`; and `AssembledFundamentalEvidenceRecord` carries the required `constituent_semantic_lineage`. These amendments do not authorize implementation or activation.
 
 No accepted ADR 0001–0024 is superseded, weakened, or contradicted.
 

@@ -2,11 +2,11 @@
 
 ## Status
 
-Proposed. Revision 8. Not accepted and not implementation authority.
+Accepted. Revision 9. Binding architectural decision. This acceptance accepts and binds the architecture only. Issues #194–#197 are separately governed implementation work items; acceptance of ADR 0028 does not authorize production implementation, activation, runtime wiring, persistence, migration, CLI, scheduler, or automation changes. Each implementation issue requires its own governed lifecycle and authority.
 
-Governing preparation record: [ADPR-0005](../architecture-records/ADPR-0005-evidence-assembly-supporting-authorities.md). Related issues: [#190](https://github.com/fafa33/Project-Hunter/issues/190) and [#191](https://github.com/fafa33/Project-Hunter/issues/191). Draft PR: [#192](https://github.com/fafa33/Project-Hunter/pull/192).
+Governing preparation record: [ADPR-0005](../architecture-records/ADPR-0005-evidence-assembly-supporting-authorities.md). Related issues: [#190](https://github.com/fafa33/Project-Hunter/issues/190), completed preparation issue [#191](https://github.com/fafa33/Project-Hunter/issues/191), and acceptance issue [#193](https://github.com/fafa33/Project-Hunter/issues/193). Merged PR: [#192](https://github.com/fafa33/Project-Hunter/pull/192), merge commit `89a2c2c9c2714aa2391c1fb3f26de5ab3e36eb32`. Historical Issue #193 acceptance contribution: PR #198, commit `a71af2420ee0527ba7bf845068da675c7c3d0f82`; current substantive ADR-bearing commit: `1fdffad39e4beee0990d3680980ba31583813885`.
 
-Issue #190 remains blocked. This ADR does not authorize production activation, CLI dispatch, implementation, or changes to `src/` or `tests/`.
+Issue #190 remains blocked. Acceptance of this ADR does not authorize production implementation, activation, runtime wiring, persistence, migration, CLI, scheduler, or automation changes, or any changes to `src/` or `tests/`. Implementation requires its own governed issue lifecycle and authority.
 
 ## Context
 
@@ -204,44 +204,48 @@ The Registry remains governed, immutable reference data owned by `hunter.evidenc
 
 Every lineage field participates in `assembly_content_hash` and record `content_hash`. Replay uses these exact persisted references and never reruns policy selection or semantic derivation. A missing reference or hash mismatch fails closed. Corrections create a successor assembly and never mutate earlier lineage.
 
-## Proposed amendments to accepted ADRs (effective only upon acceptance of ADR 0028)
+## Accepted amendments to governing ADRs
 
-### Proposed amendment to ADR 0021
+### Accepted amendment to ADR 0021
 
-Upon acceptance of ADR 0028, ADR 0021 SHALL be amended by appending the following paragraph to its record-family section:
+ADR 0021 is amended by appending the following paragraph to its record-family section:
 
 > *(As amended by accepted ADR 0028: `FundamentalEvidenceRecord` remains observation-only and gains no semantic-classification field. A distinct upstream `EvidenceSemanticInputPolicySnapshot` and `EvidenceSemanticInputRecord` family, produced exclusively by `CanonicalEvidenceSemanticInputAuthority` in `hunter.evidence_semantic_inputs`, supplies immutable, strict-known, provenance-complete semantic-classification inputs. These records never relabel or mutate native evidence. `ValuationMethodologySnapshot` additionally carries `accepts_assembled_evidence`, and the distinct `MethodologyEvidenceInputContract` family carries exact per-target assembly terms, as defined by ADR 0028.)*
 
-This proposed amendment would recognize:
+This accepted amendment recognizes:
 
 - `ValuationMethodologySnapshot.accepts_assembled_evidence`;
 - `MethodologyEvidenceInputContract`;
 - `EvidenceSemanticInputPolicySnapshot`;
 - `EvidenceSemanticInputRecord`.
 
-The proposed amendment explicitly reaffirms that `FundamentalEvidenceRecord` remains observation-only and gains none of the semantic fields owned by the new authority.
+The accepted amendment explicitly reaffirms that `FundamentalEvidenceRecord` remains observation-only and gains none of the semantic fields owned by the new authority.
 
-### Proposed amendment to ADR 0025 (effective only upon acceptance of ADR 0028)
+### Accepted amendment to ADR 0025
 
-ADR 0025 is Accepted and remains unchanged in this PR. Upon acceptance of ADR 0028, ADR 0025 SHALL be amended as follows. No part of this proposal is normative before ADR 0028 is accepted.
+ADR 0025 remains Accepted and is amended as follows. These changes are normative as part of accepted ADR 0028 revision 9.
 
-> ### Supporting authority ownership *(to be added by accepted ADR 0028 revision 8)*
+> ### Supporting authority ownership *(as amended by accepted ADR 0028 revision 9)*
 >
-> Upon acceptance of ADR 0028, ADR 0025's Authority boundaries table SHALL be amended by replacing **only** its conflicting `Representation continuity proof` ownership assignment with this exact rule:
+> ADR 0025's Authority boundaries table replaced the following pre-amendment row:
 >
-> > | Representation Continuity Proof authority boundary | **Evidence Assembly:** consumption and validation only; it consumes the exact proof reference supplied by `CanonicalEvidenceSemanticInputAuthority` and never produces, owns, infers, reconstructs, substitutes, or authorizes Representation Continuity Proof. **CanonicalEvidenceSemanticInputAuthority:** exclusive production and exclusive ownership of Representation Continuity Proof through the `EvidenceSemanticInputPolicySnapshot`, as defined by ADR 0028. |
+> > | Representation continuity proof | Methodology selection |
+>
+> with this exact two-column replacement row:
+>
+> > | Representation continuity proof consumption and validation | Representation continuity proof production and ownership (owned exclusively by `CanonicalEvidenceSemanticInputAuthority` through the `EvidenceSemanticInputPolicySnapshot`, as defined by accepted ADR 0028) |
 >
 > This amendment preserves ADR 0025's rule that methodology selection remains outside Evidence Assembly. `CanonicalValuationMethodologyAuthority` remains the sole owner of methodology definition and the `accepts_assembled_evidence` activation authority. `CanonicalValuationService` remains the sole owner of methodology-contract input-eligibility evaluation at estimate construction. Evidence Assembly remains the downstream consumer only and gains no methodology selection or activation authority. All other ADR 0025 authority-boundary rows, lossless-composition invariants, native-evidence precedence rules, unavailable-state rules, and correction rules remain unchanged.
 >
-> Upon acceptance of ADR 0028, Methodology Contract production and persistence SHALL belong exclusively to `CanonicalValuationMethodologyAuthority` and `ValuationMethodologyRepository` in `hunter.valuation_methodology`. The canonical `MethodologyEvidenceInputContract` record definition SHALL belong to that package and authority; no duplicate canonical type may be defined in Evidence Assembly. The upstream package SHALL expose the read-only `MethodologyContractAuthority` protocol and exact record type as the only public boundary consumed by Evidence Assembly. Evidence Assembly SHALL depend on that public boundary only, while the upstream owner SHALL have no dependency on Evidence Assembly, ensuring an acyclic direction with no reverse write path.
+> Methodology Contract production and persistence belongs exclusively to `CanonicalValuationMethodologyAuthority` and `ValuationMethodologyRepository` in `hunter.valuation_methodology`. The canonical `MethodologyEvidenceInputContract` record definition SHALL belong to that package and authority; no duplicate canonical type may be defined in Evidence Assembly. The upstream package SHALL expose the read-only `MethodologyContractAuthority` protocol and exact record type as the only public boundary consumed by Evidence Assembly. Evidence Assembly SHALL depend on that public boundary only, while the upstream owner SHALL have no dependency on Evidence Assembly, ensuring an acyclic direction with no reverse write path.
 >
-> Upon acceptance of ADR 0028, Evidence Shape Registry governance and persistence SHALL remain with `hunter.evidence_assembly`. Canonical semantic-classification inputs SHALL belong exclusively to `CanonicalEvidenceSemanticInputAuthority` and `EvidenceSemanticInputRepository` in upstream `hunter.evidence_semantic_inputs`; `FundamentalEvidenceRecord` SHALL remain observation-only. Evidence Semantics SHALL belong to `hunter.evidence_assembly` and may consume semantic-classification dimensions only from an exact strict-known `EvidenceSemanticInputRecord`; it may not infer, replace, weaken, or override them.
+> Evidence Shape Registry governance and persistence remains with `hunter.evidence_assembly`. Canonical semantic-classification inputs SHALL belong exclusively to `CanonicalEvidenceSemanticInputAuthority` and `EvidenceSemanticInputRepository` in upstream `hunter.evidence_semantic_inputs`; `FundamentalEvidenceRecord` SHALL remain observation-only. Evidence Semantics SHALL belong to `hunter.evidence_assembly` and may consume semantic-classification dimensions only from an exact strict-known `EvidenceSemanticInputRecord`; it may not infer, replace, weaken, or override them.
 
-> Upon acceptance of ADR 0028, ADR 0025's Assembled Fundamental Evidence Lineage table SHALL gain this exact row:
+> ADR 0025's Assembled Fundamental Evidence Lineage table gains this exact row:
 
 > | constituent semantic lineage | Ordered, index-aligned exact references and content hashes for each constituent's `AuthoritativeEvidenceSemantics`, upstream `EvidenceSemanticInputRecord`, and governing `EvidenceSemanticInputPolicySnapshot`; mandatory in assembly identity and historical replay. |
 
-Upon acceptance of ADR 0028, ADR 0025 SHALL state:
+ADR 0025 additionally states:
 
 - Methodology Contract ownership belongs to `hunter.valuation_methodology` as defined above.
 - Evidence Shape Registry ownership remains `hunter.evidence_assembly`.
@@ -249,15 +253,15 @@ Upon acceptance of ADR 0028, ADR 0025 SHALL state:
 - Evidence Semantics belongs to `hunter.evidence_assembly` and consumes only `EvidenceSemanticInputRecord`;
 - `AssembledFundamentalEvidenceRecord` requires `constituent_semantic_lineage` as defined above.
 
-Until ADR 0028 is accepted, these remain proposed amendments only. No ADR 0025 lossless-composition invariant, native-evidence precedence rule, methodology-input eligibility boundary, unavailable-state rule, or correction rule is weakened.
+No ADR 0025 lossless-composition invariant, native-evidence precedence rule, methodology-input eligibility boundary, unavailable-state rule, or correction rule is weakened by these accepted amendments.
 
 ## Compatibility
 
-- **ADR 0021:** proposed for amendment only upon acceptance of ADR 0028 for the new record families and activation field; observation-only native evidence is reaffirmed and ADR 0021 remains unchanged before acceptance.
-- **ADR 0022:** proposed amendments are acceptance-gated; methodology permitted values and `CanonicalValuationService` eligibility ownership remain unchanged before acceptance.
+- **ADR 0021:** amended by this accepted ADR for the new record families and activation field; observation-only native evidence remains reaffirmed.
+- **ADR 0022:** unaffected and reaffirmed. ADR 0028 makes no amendment to ADR 0022; its existing methodology permitted values and `CanonicalValuationService` eligibility ownership remain unchanged.
 - **ADR 0023:** supplies the amendment-governed reference-data precedent.
 - **ADR 0024:** scalar-semantics boundary is unchanged.
-- **ADR 0025:** remains Accepted and unchanged in this PR. The narrowly scoped ownership and lineage amendments above are proposed for effect only upon acceptance of ADR 0028; all unaffected methodology and assembly decisions remain preserved.
+- **ADR 0025:** remains Accepted and is amended by this ADR only for the narrowly scoped ownership and lineage changes above; all unaffected methodology and assembly decisions remain preserved.
 - **ADR 0026:** Comparative Valuation receives no right to assembled evidence.
 - **ADR 0027:** downstream Market Validation composition receives no new authority or activation.
 
@@ -265,7 +269,7 @@ Repositories remain mechanical under ADR 0009. Every selection is strict-known u
 
 ## Current availability decision
 
-Acceptance of this ADR would authorize architecture only. It would not implement or populate any authority, activate assembled evidence, dispatch a command, or unblock Issue #190. Issue #190 remains blocked until separate implementation and independent review establish all required production authorities.
+Acceptance of this ADR authorizes architecture only. It does not implement or populate any authority, activate assembled evidence, or dispatch a command. Production implementation remains incomplete and is tracked by Issues #194, #195, #196, and #197. Issue #190 remains BLOCKED until #197 verifies production constructibility and concludes `IMPLEMENTABLE` after #194, #195, and #196 are complete.
 
 ## Consequences
 
@@ -286,8 +290,16 @@ Acceptance of this ADR would authorize architecture only. It would not implement
 
 ## Traceability
 
+- Acceptance state: Accepted, revision 9.
 - Issue #190 remains blocked.
-- Issue #191 governs this architecture preparation.
+- Issue #191 is the completed architecture-preparation issue.
 - ADPR-0005 records the evidence and option analysis.
-- Draft PR #192 remains Draft.
-- No implementation plan or production activation is authorized.
+- Issue #193 governs acceptance of ADR 0028.
+- PR #192 merged this preparation revision at commit `89a2c2c9c2714aa2391c1fb3f26de5ab3e36eb32`.
+- Historical Issue #193 acceptance contribution: PR #198, commit `a71af2420ee0527ba7bf845068da675c7c3d0f82`.
+- Current substantive ADR-bearing commit: `1fdffad39e4beee0990d3680980ba31583813885`.
+- PR #198 (head `f712af8a62b40fbd80b6c213d2fe3f9562d0f72e` against base `0f1e6dda4d6f7acdaf6a8e91383d4e61203425c5`) received GitHub review approval (APPROVED by `fafa33`, submitted 2026-08-05T20:47:48Z); the PR review decision is APPROVED.
+- Architecture: Accepted.
+- Implementation: Incomplete.
+- Outstanding implementation sequence: #194, #195, and #196 remain outstanding; #197 must verify production constructibility and conclude `IMPLEMENTABLE` before #190 can proceed.
+- No production activation, CLI dispatch, scheduler wiring, or automation is authorized by this acceptance contribution.
