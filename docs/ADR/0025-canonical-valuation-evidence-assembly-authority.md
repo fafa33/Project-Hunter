@@ -308,7 +308,7 @@ The Canonical Evidence Assembly Authority must resolve the following situations 
 
 ### Accepted ADR 0028 amendments
 
-ADR 0028 is Accepted, revision 9, at the acceptance branch commit recorded by the acceptance contribution. Its amendments are effective: `MethodologyEvidenceInputContract` is owned and defined in `hunter.valuation_methodology` with `CanonicalValuationMethodologyAuthority` and `ValuationMethodologyRepository`; Evidence Shape Registry governance remains in `hunter.evidence_assembly`; semantic-classification inputs are owned exclusively upstream by `CanonicalEvidenceSemanticInputAuthority` in `hunter.evidence_semantic_inputs`; Evidence Semantics consumes only strict-known `EvidenceSemanticInputRecord`; and `AssembledFundamentalEvidenceRecord` carries the required `constituent_semantic_lineage`. These amendments do not authorize implementation or activation.
+ADR 0028 is Accepted, revision 9, at acceptance contribution commit `a71af2420ee0527ba7bf845068da675c7c3d0f82`. Its amendments are effective: `MethodologyEvidenceInputContract` is owned and defined in `hunter.valuation_methodology` with `CanonicalValuationMethodologyAuthority` and `ValuationMethodologyRepository`; Evidence Shape Registry governance remains in `hunter.evidence_assembly`; semantic-classification inputs are owned exclusively upstream by `CanonicalEvidenceSemanticInputAuthority` in `hunter.evidence_semantic_inputs`; Evidence Semantics consumes only strict-known `EvidenceSemanticInputRecord`; and `AssembledFundamentalEvidenceRecord` carries the required `constituent_semantic_lineage`. These amendments do not authorize implementation or activation.
 
 No accepted ADR 0001–0024 is superseded, weakened, or contradicted.
 
