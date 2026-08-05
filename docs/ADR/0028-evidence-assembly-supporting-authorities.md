@@ -233,7 +233,7 @@ ADR 0025 remains Accepted and is amended as follows. These changes are normative
 >
 > with this exact two-column replacement row:
 >
-> > | Representation continuity proof | Evidence Assembly: consumption and validation only; it consumes the exact proof reference supplied by `CanonicalEvidenceSemanticInputAuthority` and never produces, owns, infers, reconstructs, substitutes, or authorizes Representation Continuity Proof. `CanonicalEvidenceSemanticInputAuthority`: exclusive production and exclusive ownership of Representation Continuity Proof through the `EvidenceSemanticInputPolicySnapshot`, as defined by ADR 0028. |
+> > | Representation continuity proof consumption and validation | Representation continuity proof production and ownership (owned exclusively by `CanonicalEvidenceSemanticInputAuthority` through the `EvidenceSemanticInputPolicySnapshot`, as defined by accepted ADR 0028) |
 >
 > This amendment preserves ADR 0025's rule that methodology selection remains outside Evidence Assembly. `CanonicalValuationMethodologyAuthority` remains the sole owner of methodology definition and the `accepts_assembled_evidence` activation authority. `CanonicalValuationService` remains the sole owner of methodology-contract input-eligibility evaluation at estimate construction. Evidence Assembly remains the downstream consumer only and gains no methodology selection or activation authority. All other ADR 0025 authority-boundary rows, lossless-composition invariants, native-evidence precedence rules, unavailable-state rules, and correction rules remain unchanged.
 >
