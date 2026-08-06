@@ -27,6 +27,88 @@ It is intentionally provider-independent. Claude, Codex, OpenAI, Gemini, Groq, l
 13. Never approve code unless repository evidence supports approval.
 14. Think in systems, authority boundaries, and lifecycle consequences, not isolated files.
 15. Implementers may not approve their own work.
+16. Hunter exists to improve real-world decision quality, not to maximize architectural sophistication.
+17. Revenue must follow demonstrated usefulness; it must not define product truth.
+18. Implementation is not validation. Validation requires repeated, measurable real-world outcomes.
+19. Hunter must never claim intelligence that has not been demonstrated through reproducible evidence.
+20. The creator must be the first long-term user of every major capability before Hunter asks others to trust it.
+
+## Foundational Outcome Principles
+
+### Reality Before Revenue
+
+Hunter must create measurable value for its creator before it creates revenue from others.
+
+Revenue is an outcome of proven usefulness, not the primary design objective. Public product claims, pricing, subscriptions, or marketing must not outrun demonstrated capability.
+
+### Creator First
+
+The creator must be the first long-term user of every major Hunter capability.
+
+If the creator does not trust a capability with real decisions, Hunter must not ask others to trust it either.
+
+### Demonstrated Capability
+
+No capability may be presented as validated merely because it was designed, implemented, tested, or documented.
+
+A capability is validated only when repeated real-world use produces measurable evidence that it improves decision quality, reduces avoidable error, shortens time to insight, improves evidence coverage, or otherwise creates a named operational benefit.
+
+### Evidence Before Marketing
+
+Hunter must prove every major capability through real personal use before it is represented as a public product capability.
+
+Capabilities are earned through demonstrated outcomes, not through design documents, passing tests, screenshots, demos, or persuasive descriptions alone.
+
+### No Phantom Intelligence
+
+Hunter must never claim intelligence that has not been demonstrated.
+
+Every analytical capability must have observable evidence showing what it knew, what it did not know, what evidence it used, what decision it supported, and how the outcome compared with a defined baseline.
+
+### Outcome-Driven Architecture
+
+Architecture exists to improve decision quality, trustworthiness, operational continuity, development efficiency, or evidence integrity.
+
+An architectural improvement that does not materially improve a named outcome or reduce a named risk belongs in the backlog until its value can be demonstrated.
+
+### Decision Quality First
+
+Hunter's primary success measure is whether it improves real decisions relative to the user's baseline process.
+
+The number of ADRs, tests, PRs, agents, providers, dashboards, or architectural layers is not a substitute for decision quality.
+
+### Backlog Before Complexity
+
+A technically interesting capability must not enter the active milestone unless it is necessary to satisfy current acceptance criteria, prevent false approval, preserve evidence, protect authority boundaries, or materially accelerate a validated outcome.
+
+Otherwise it must be recorded as future work rather than converted into present complexity.
+
+## Success Validation Philosophy
+
+Hunter must be evaluated through real operational evidence, not vanity metrics.
+
+The project must define and preserve a baseline for comparison so that later claims of improvement are testable. Validation questions should include:
+
+- Did Hunter discover a relevant opportunity or risk earlier than the baseline process?
+- Did Hunter surface evidence the user would otherwise have missed?
+- Did Hunter recommend a materially better action, inaction, entry, exit, or risk response?
+- Did Hunter reduce avoidable loss, improve risk-adjusted outcome, or improve timing?
+- Was the recommendation still defensible when reviewed later using the evidence available at the original decision time?
+- Would the user reasonably have made a different decision without Hunter?
+- Did the capability create repeated value rather than one fortunate outcome?
+- Can the result be reproduced from preserved evidence, context, prompt, model, and decision records?
+
+A capability must define its real-world validation strategy before implementation is considered complete. The strategy must identify:
+
+- the baseline process or comparison;
+- the expected operational benefit;
+- measurable success and failure criteria;
+- the validation period or minimum number of decisions;
+- required provenance and replay evidence;
+- known confounders and uncertainty;
+- the rule for declaring the capability validated, inconclusive, or disproven.
+
+Personal operational validation must occur before any public-product claim. Public release remains a later decision and is not implied by successful implementation.
 
 ## Roadmap Lock
 
@@ -64,9 +146,11 @@ Significant work follows this sequence:
 5. Technical Defense.
 6. Independent review.
 7. Architecture review and knowledge extraction.
-8. Final human merge decision.
+8. Real-world validation strategy definition.
+9. Personal operational validation when the capability affects decision quality or product claims.
+10. Final human merge or release decision, as applicable.
 
-Low-risk maintenance may use a proportionate subset, but authority, replay, persistence, governance, security, and model-runtime changes require the full lifecycle.
+Low-risk maintenance may use a proportionate subset, but authority, replay, persistence, governance, security, model-runtime, decision-support, and public-product changes require the full applicable lifecycle.
 
 ## Model and Effort Selection
 
@@ -95,10 +179,12 @@ IN SCOPE:
 OUT OF SCOPE:
 EXPECTED OUTPUT:
 VERIFICATION:
+REAL-WORLD VALUE:
+VALIDATION STRATEGY:
 STOP CONDITIONS:
 ```
 
-The prompt must define the task boundary clearly enough that the model can distinguish merge blockers from improvements and future roadmap work.
+The prompt must define the task boundary clearly enough that the model can distinguish merge blockers from improvements and future roadmap work. For capabilities intended to affect decision quality, it must also explain the expected real-world value and how that value will be tested.
 
 ## Evidence and Context Rules
 
@@ -122,6 +208,8 @@ Improvements and future architecture must not be promoted into merge blockers me
 
 A reviewer must also avoid the opposite error: a false-approval path that violates the current PR's stated guarantees remains a blocker even if the long-term solution later becomes part of a broader subsystem.
 
+A reviewer evaluating a claimed decision-support capability must also distinguish implementation completeness from outcome validation. Passing tests may support merge readiness, but it must not be reported as proof of real-world effectiveness.
+
 ## Implementation Rules
 
 - Do not redesign the project while fixing a bounded issue unless repository evidence proves redesign is necessary.
@@ -131,6 +219,8 @@ A reviewer must also avoid the opposite error: a false-approval path that violat
 - Live verification defects must be reported transparently.
 - External provider failures must be distinguished from implementation failures.
 - No model may merge, self-approve, or weaken governance without explicit human authorization.
+- Every significant capability must define how its claimed real-world value will be measured.
+- Do not present implementation, simulation, backtest, or isolated success as proof of dependable real-world value.
 
 ## Provider Independence
 
@@ -160,6 +250,8 @@ Every significant AI-assisted operation should eventually preserve:
 
 Replay must reproduce the reviewed evidence state or explicitly report why exact replay is unavailable.
 
+For real-world validation, provenance must also preserve the decision timestamp, evidence available at that time, the user's baseline or alternative decision, the action taken, later outcome observations, and any retrospective corrections. Later information must not be silently used to improve an earlier decision record.
+
 ## Communication and Reporting
 
 Models and agents must:
@@ -168,7 +260,9 @@ Models and agents must:
 - distinguish verified facts from inference;
 - state what was not tested;
 - avoid claiming production readiness without production evidence;
+- avoid claiming real-world effectiveness without measured operational evidence;
 - summarize changed files, tests, live verification, remaining blockers, and deferred work;
+- distinguish implementation success, verification success, operational validation, and public-product readiness;
 - avoid persuasive language that is not backed by evidence.
 
 ## Human Authority
@@ -177,8 +271,12 @@ Final architectural and merge authority remains human.
 
 Human authority may classify scope and accept risk, but it must not pretend failed evidence is successful evidence. Overrides must be explicit, documented, and consistent with repository governance.
 
+Public-product claims also require explicit human authority backed by demonstrated operational evidence. Commercial pressure must not override uncertainty, failed validation, or missing evidence.
+
 ## Relationship to Future Architecture
 
-This document is shared operating guidance, not a claim that Prompt Intelligence OS, Context Intelligence, Provider Intelligence, Model Adapter, Replay Runtime, or Review Engine 2.0 are already implemented.
+This document is shared operating guidance, not a claim that Prompt Intelligence OS, Context Intelligence, Provider Intelligence, Model Adapter, Replay Runtime, Review Engine 2.0, or Success Validation Runtime are already implemented.
 
 Those capabilities require dedicated ADRs, bounded milestones, acceptance criteria, Technical Defense, independent review, and explicit merge decisions.
+
+A future `docs/SUCCESS_VALIDATION.md` should define the canonical personal operational validation protocol, decision journal, baselines, outcome measures, replay rules, and thresholds required before Hunter capabilities may be represented as proven or considered for public release.
