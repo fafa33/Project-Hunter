@@ -22,7 +22,7 @@ blocks the merge, and the gate is never skipped silently.
 
 ## Architecture
 
-The gate implements five explicit stages and publishes exactly one required
+The gate implements six explicit stages and publishes exactly one required
 GitHub status check.
 
 ```text
@@ -41,10 +41,20 @@ Deterministic Governance Engine    (scripts/hunter_governance_review/determinist
 Deterministic diff chunking        (scripts/hunter_governance_review/chunking.py)
         |
         v
-LLM Architecture Audit, one call per chunk   (scripts/hunter_governance_review/llm_audit.py)
+LLM Architecture Audit, one call per chunk, extracting structured
+architectural evidence in addition to a prose summary
+                                    (scripts/hunter_governance_review/llm_audit.py)
         |
         v
-Aggregation across every chunk     (scripts/hunter_governance_review/aggregate.py)
+Aggregation across every chunk, then cross-chunk consistency synthesis
+reasoning over the structured evidence
+                                    (scripts/hunter_governance_review/aggregate.py)
+        |
+        v
+Authoritative-Document Review: every mandatory document reviewed in full,
+in deterministic sections, against the structured evidence
+                                    (scripts/hunter_governance_review/llm_audit.py,
+                                     scripts/hunter_governance_review/aggregate.py)
         |
         v
 Decision Engine                    (scripts/hunter_governance_review/decision.py)
@@ -59,9 +69,10 @@ GitHub required status check: Hunter Governance Review
 The LLM is consulted only when context resolution succeeded, every
 deterministic validator passed, **and** the review pair was still fresh
 immediately before the audit started. The LLM never bypasses deterministic
-failures. `APPROVED` requires every chunk to have been reviewed successfully
--- any missing, failed, or unreviewed chunk fails the whole review closed,
-regardless of what any individual chunk concluded.
+failures. `APPROVED` requires every diff chunk AND every authoritative
+document's every section to have been reviewed successfully -- any missing,
+failed, or unreviewed chunk or section fails the whole review closed,
+regardless of what any individual chunk or section concluded.
 
 ### Stage 1 — Authoritative Context Resolution
 
@@ -204,7 +215,7 @@ parse a possibly-invalid truncated response.
 The model must return strict JSON, validated field-by-field:
 
 ```json
-{"verdict": "APPROVED" | "CHANGES_REQUIRED", "summary": "...", "findings": [{"id": "...", "severity": "blocking" | "non-blocking", "location": "...", "description": "...", "decision_impact": "..."}], "rationale": "..."}
+{"verdict": "APPROVED" | "CHANGES_REQUIRED", "summary": "...", "findings": [{"id": "...", "severity": "blocking" | "non-blocking", "location": "...", "description": "...", "decision_impact": "..."}], "rationale": "...", "architectural_evidence": {"entities_introduced": [...], "ownership_declarations": [...], "authority_changes": [...], "dependency_changes": [...], "persistence_contracts": [...], "replay_contracts": [...], "canonical_interfaces": [...], "affected_adrs_or_contracts": [...], "exported_apis": [...], "cross_file_references": [...]}}
 ```
 
 `validate_audit_payload` in `llm_audit.py` requires every field, the correct
@@ -216,6 +227,22 @@ violation raises `LLMAuditError` -- there is no lenient fallback parse path.
 `APPROVED` for a chunk is valid only when the reviewer can honestly state
 the canonical passing outcome for that chunk: **"No blocking findings were
 identified in this chunk."**
+
+`architectural_evidence` is mandatory on every response (chunk review,
+document-section review, and synthesis alike) -- a response that omits it
+entirely raises `LLMAuditError`, and each of its ten fixed categories
+(`entities_introduced`, `ownership_declarations`, `authority_changes`,
+`dependency_changes`, `persistence_contracts`, `replay_contracts`,
+`canonical_interfaces`, `affected_adrs_or_contracts`, `exported_apis`,
+`cross_file_references`) must be a list of non-empty strings when present,
+an empty list when nothing in that category applies, and no other key is
+tolerated. This field exists so a downstream reasoning step (the cross-chunk
+synthesis in Stage 4, and the authoritative-document review in Stage 5) can
+detect a contradiction spanning multiple chunks even when neither chunk's
+one-sentence prose `summary` happened to mention the relevant fact -- a
+summary is written about its own chunk in isolation, while a cross-chunk
+contradiction is, by definition, only visible when the structured evidence
+from separate chunks is compared side by side.
 
 ### Stage 4 — Aggregation
 
@@ -242,24 +269,74 @@ printed to the run log and written to `GITHUB_STEP_SUMMARY` alongside the
 context manifest from Stage 1.
 
 Once every chunk has succeeded, one further, final call performs **cross-chunk
-consistency synthesis** (`llm_audit.run_synthesis_review`): it receives only
-the already-produced chunk summaries, findings, and the file-to-chunk
-coverage map -- never the raw diff again -- and checks whether they are
-mutually consistent (e.g. a claim in one chunk contradicting another). This
-is deliberately the one minimal addition needed to catch a contradiction
-spanning multiple chunks, not a general reasoning engine: it is a single
-bounded call reusing the exact same strict schema, budget, and retry
-machinery as a per-chunk call (`llm_audit._call_chat_completion`), so it
-cannot reintroduce the token-budget or rate-limit fragility a larger,
-unbounded synthesis mechanism would. A `CHANGES_REQUIRED` synthesis verdict
-means a contradiction was found; its findings are folded into the aggregate
-result with a `SYN-` id prefix. A synthesis failure (network error,
-malformed output, or an input too large to fit even this bounded call) is
-folded in exactly like a failed chunk -- coverage that cannot be verified
-consistent is not complete, so the whole review fails closed
-(`aggregate.apply_synthesis`).
+consistency synthesis** (`llm_audit.run_synthesis_review`): it receives each
+chunk's already-extracted **structured architectural evidence** (see Stage 3)
+alongside its prose summary, findings, and the file-to-chunk coverage map --
+never the raw diff again -- and checks whether the evidence is mutually
+consistent (e.g. one chunk's `ownership_declarations` conflicting with
+another's `authority_changes`, or a `dependency_change` in one chunk breaking
+a `canonical_interface`/`exported_api` another chunk relies on). Reasoning
+over the structured evidence, not just the prose summaries, is what makes it
+possible to catch a contradiction spanning multiple chunks even when neither
+chunk's own one-sentence summary happened to mention the relevant fact --
+two individually "clean-sounding" chunks can still hide a real contradiction
+if their structured evidence disagrees. This is deliberately the one minimal
+addition needed to catch that class of contradiction, not a general
+reasoning engine: it is a single bounded call reusing the exact same strict
+schema, budget, and retry machinery as a per-chunk call
+(`llm_audit._call_chat_completion`), so it cannot reintroduce the
+token-budget or rate-limit fragility a larger, unbounded synthesis mechanism
+would. A `CHANGES_REQUIRED` synthesis verdict means a contradiction was
+found; its findings are folded into the aggregate result with a `SYN-` id
+prefix. A synthesis failure (network error, malformed output, or an input
+too large to fit even this bounded call) is folded in exactly like a failed
+chunk -- coverage that cannot be verified consistent is not complete, so the
+whole review fails closed (`aggregate.apply_synthesis`).
 
-### Stage 5 — Decision Engine
+### Stage 5 — Authoritative-Document Review
+
+**A resolved document is not the same as a reviewed document.** Stage 1
+resolves every mandatory document's full text at the exact base commit, but
+only exposes a small, bounded excerpt (`ContextManifest.brief`) to the
+per-chunk audit prompt in Stage 3 -- reviewing only that excerpt would let a
+rule stated later in a long document silently escape review entirely. Stage 5
+closes that gap: once diff-chunk coverage and cross-chunk synthesis have both
+succeeded, every mandatory document's **full text**
+(`ContextManifest.mandatory_document_texts`) is deterministically,
+losslessly split into ordered sections (`chunking.split_document_into_chunks`
+-- the same file-then-line-boundary splitting algorithm Stage 3 uses for the
+diff, generalized to plain text since a governance document has no
+`diff --git` headers to split on), and every section is reviewed by an
+independent hostile-audit call (`llm_audit.run_document_review`) against the
+pull request's structured architectural evidence from Stage 3/4 -- never the
+raw diff again. A section's prompt explicitly tells the model it is judging
+only whether *this section's* rules are violated by the supplied evidence; a
+section whose rules the evidence never touches is `APPROVED` for that
+section, since full-document coverage is enforced by aggregating every
+section afterward (`aggregate.aggregate_document_chunk_outcomes`), exactly
+mirroring Stage 4's diff-chunk aggregation.
+
+**Any failed, missing, or unreviewed section makes the whole
+authoritative-document review result `None`** (not `CHANGES_REQUIRED`, not
+`APPROVED`) -- there is no partial credit for "most sections were reviewed."
+`aggregate.apply_document_review` folds a `CHANGES_REQUIRED` document-section
+verdict into the aggregate audit result with a `CTX-` id prefix, and folds an
+incomplete document review in exactly like a failed diff chunk or a failed
+synthesis call: the whole review fails closed. The resulting **document
+review coverage manifest** (`DocumentReviewManifest`: total documents, total
+sections, sections reviewed/failed, section error messages, and
+`bytes_reviewed`/`bytes_total`) is printed to the run log and written to
+`GITHUB_STEP_SUMMARY` alongside the diff coverage and context manifests.
+`bytes_reviewed` counts only bytes that passed through an actual,
+successful `run_document_review` call -- it is `0`, never a partial fraction
+of `bytes_total`, the moment any section fails, so the manifest can never be
+misread as "mostly reviewed" when coverage is genuinely incomplete.
+
+Document review is skipped entirely (not attempted) when diff-chunk coverage
+or cross-chunk synthesis already failed closed -- there is nothing
+trustworthy yet to check any document against in that case.
+
+### Stage 6 — Decision Engine
 
 | Condition | Outcome |
 |---|---|
@@ -268,8 +345,9 @@ consistent is not complete, so the whole review fails closed
 | Any blocking deterministic finding | `CHANGES_REQUIRED` |
 | Diff coverage incomplete (any chunk failed/missing, or a changed file never appeared in any chunk) | `REVIEW_FAILED` |
 | Cross-chunk consistency synthesis failed (network/parse error, or input too large) | `REVIEW_FAILED` |
-| Aggregated audit verdict `CHANGES_REQUIRED` (per-chunk finding or synthesis-detected contradiction) | `CHANGES_REQUIRED` |
-| Aggregated audit verdict `APPROVED`, synthesis found no contradiction, deterministic clean, coverage complete, pair fresh | `APPROVED` |
+| Authoritative-document review incomplete (any mandatory document's section failed/missing) | `REVIEW_FAILED` |
+| Aggregated audit verdict `CHANGES_REQUIRED` (per-chunk finding, synthesis-detected contradiction, or document-review violation) | `CHANGES_REQUIRED` |
+| Aggregated audit verdict `APPROVED`, synthesis found no contradiction, document review found no violation, deterministic clean, coverage complete, pair fresh | `APPROVED` |
 
 When the aggregated verdict is `CHANGES_REQUIRED`, its summary, the full
 unioned findings list, and rationale are surfaced -- not just a generic
@@ -303,6 +381,9 @@ The internal system distinguishes exactly three outcomes:
   retrieved diff exceeding the sanity bound -- never silently truncated and treated as complete);
 - cross-chunk consistency synthesis failed, or found an unresolved contradiction (folds into
   `CHANGES_REQUIRED` instead when the synthesis call itself succeeded);
+- authoritative-document review incomplete (any mandatory document's section failed or was not
+  reviewed -- folds into `CHANGES_REQUIRED` instead when every section succeeded but a violation
+  was found);
 - authoritative governance context could not be resolved at the exact base commit, or a required
   (mandatory) document was retrieved but did not fit the context prompt budget;
 - missing required repository evidence;
@@ -535,13 +616,13 @@ sufficient for merge safety while `main` remains unprotected.
 
 | File | Purpose |
 |---|---|
-| `scripts/hunter_governance_review/__main__.py` | CLI orchestrator (resolve pair -> context -> deterministic -> chunk -> audit -> aggregate -> decide -> re-verify pair -> publish) |
-| `scripts/hunter_governance_review/contracts.py` | Outcomes, review pair, findings, coverage/context manifests, check mapping |
-| `scripts/hunter_governance_review/context.py` | Authoritative Context Resolver (exact-base-SHA governance docs/ADRs) |
+| `scripts/hunter_governance_review/__main__.py` | CLI orchestrator (resolve pair -> context -> deterministic -> chunk -> audit -> aggregate -> synthesize -> document review -> decide -> re-verify pair -> publish) |
+| `scripts/hunter_governance_review/contracts.py` | Outcomes, review pair, findings, coverage/context/document-review manifests, check mapping |
+| `scripts/hunter_governance_review/context.py` | Authoritative Context Resolver (exact-base-SHA governance docs/ADRs; resolves both the bounded excerpt and each mandatory document's full text) |
 | `scripts/hunter_governance_review/deterministic.py` | Deterministic Governance Engine |
 | `scripts/hunter_governance_review/chunking.py` | Deterministic, lossless diff chunking |
-| `scripts/hunter_governance_review/llm_audit.py` | LLM Architecture Audit (per chunk) |
-| `scripts/hunter_governance_review/aggregate.py` | Cross-chunk aggregation and coverage manifest |
+| `scripts/hunter_governance_review/llm_audit.py` | LLM Architecture Audit (per diff chunk, cross-chunk synthesis, and per-document-section review), structured architectural evidence schema |
+| `scripts/hunter_governance_review/aggregate.py` | Cross-chunk aggregation, synthesis folding, document-review aggregation and coverage manifest |
 | `scripts/hunter_governance_review/decision.py` | Decision Engine |
 | `scripts/hunter_governance_review/github_api.py` | `gh` CLI / GitHub API interaction |
 | `.github/workflows/hunter-governance-review.yml` | PR-event workflow |

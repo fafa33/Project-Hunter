@@ -18,13 +18,19 @@ one, final cross-chunk consistency synthesis call
 (``llm_audit.run_synthesis_review``): approval additionally requires that
 synthesis to have succeeded and found no unresolved contradiction spanning
 multiple chunks.
+
+``aggregate_document_chunk_outcomes``/``apply_document_review`` apply the
+identical fail-closed principle to authoritative-document review
+(``llm_audit.run_document_review``): approval additionally requires every
+section of every mandatory document to have actually been reviewed, not
+merely retrieved or excerpted.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from hunter_governance_review.contracts import CoverageManifest
+from hunter_governance_review.contracts import CoverageManifest, DocumentReviewManifest
 from hunter_governance_review.llm_audit import AuditVerdict
 
 
@@ -153,6 +159,13 @@ def describe_chunks_for_synthesis(outcomes: list[ChunkOutcome]) -> str:
         assert verdict is not None, "describe_chunks_for_synthesis requires every chunk to have succeeded"
         lines.append(f"Chunk {outcome.chunk_index}/{outcome.chunk_total} -- files: {', '.join(outcome.files)}")
         lines.append(f"  summary: {verdict.summary}")
+        non_empty_evidence = {k: v for k, v in verdict.architectural_evidence.items() if v}
+        if non_empty_evidence:
+            lines.append("  architectural evidence:")
+            for category, items in non_empty_evidence.items():
+                lines.append(f"    {category}: {'; '.join(items)}")
+        else:
+            lines.append("  architectural evidence: none")
         if verdict.findings:
             for finding in verdict.findings:
                 lines.append(
@@ -208,6 +221,152 @@ def apply_synthesis(
         findings=aggregated.verdict.findings,
         rationale=(
             f"{aggregated.verdict.rationale} | synthesis: no cross-chunk contradictions found " f"({synthesis.summary})"
+        ),
+    )
+    return AggregatedAudit(verdict=merged, manifest=aggregated.manifest, incomplete_reason=None)
+
+
+@dataclass(frozen=True)
+class AggregatedDocumentReview:
+    """The combined result of reviewing every section of every mandatory document.
+
+    ``verdict`` is ``None`` exactly when document-review coverage is
+    incomplete (``incomplete_reason`` is set) -- a document that was merely
+    retrieved, or only partially reviewed, never produces a meaningful
+    verdict here; the caller must map ``None`` to ``REVIEW_FAILED``.
+    """
+
+    verdict: AuditVerdict | None
+    manifest: DocumentReviewManifest
+    incomplete_reason: str | None
+
+
+def aggregate_document_chunk_outcomes(
+    outcomes: list[ChunkOutcome],
+    *,
+    bytes_total: int,
+    total_documents: int,
+) -> AggregatedDocumentReview:
+    """Combine every document section's review outcome into one result.
+
+    Identical fail-closed structure to ``aggregate_chunk_outcomes``: any
+    failed or missing section makes the whole document-review pass
+    incomplete (``verdict=None``) -- there is no partial credit toward
+    "authoritative evidence was reviewed." ``bytes_reviewed`` in the returned
+    manifest counts only bytes that passed through a successful review call,
+    never bytes that were merely retrieved or excerpted.
+    """
+    total_chunks = len(outcomes)
+    failed = [o for o in outcomes if o.error is not None or o.verdict is None]
+    chunk_errors = tuple(
+        f"section {o.chunk_index}/{o.chunk_total} of `{', '.join(o.files) or '?'}`: {o.error}" for o in failed
+    )
+    bytes_reviewed = 0 if failed else bytes_total
+
+    manifest = DocumentReviewManifest(
+        total_documents=total_documents,
+        total_chunks=total_chunks,
+        chunks_reviewed=total_chunks - len(failed),
+        chunks_failed=len(failed),
+        chunk_errors=chunk_errors,
+        bytes_total=bytes_total,
+        bytes_reviewed=bytes_reviewed,
+    )
+
+    if total_chunks == 0:
+        return AggregatedDocumentReview(
+            verdict=AuditVerdict(
+                verdict="APPROVED",
+                summary="no authoritative document content required review",
+                findings=[],
+                rationale="no mandatory document produced any section to review",
+            ),
+            manifest=manifest,
+            incomplete_reason=None,
+        )
+
+    if failed:
+        reason = (
+            f"{len(failed)}/{total_chunks} authoritative-document section(s) failed or were not "
+            "reviewed: " + "; ".join(chunk_errors)
+        )
+        return AggregatedDocumentReview(verdict=None, manifest=manifest, incomplete_reason=reason)
+
+    all_findings: list[dict[str, str]] = []
+    any_blocking = False
+    summaries: list[str] = []
+    rationales: list[str] = []
+    for outcome in outcomes:
+        verdict = outcome.verdict
+        assert verdict is not None  # guaranteed: `failed` above is empty
+        document_path = outcome.files[0] if outcome.files else "?"
+        for finding in verdict.findings:
+            namespaced = dict(finding)
+            namespaced["id"] = f"DOC{outcome.chunk_index}-{finding.get('id', '?')}"
+            all_findings.append(namespaced)
+            if finding.get("severity") == "blocking":
+                any_blocking = True
+        if verdict.summary:
+            summaries.append(
+                f"`{document_path}` section {outcome.chunk_index}/{outcome.chunk_total}: {verdict.summary}"
+            )
+        if verdict.rationale:
+            rationales.append(
+                f"`{document_path}` section {outcome.chunk_index}/{outcome.chunk_total}: {verdict.rationale}"
+            )
+
+    aggregated = AuditVerdict(
+        verdict="CHANGES_REQUIRED" if any_blocking else "APPROVED",
+        summary=(
+            "; ".join(summaries)
+            if summaries
+            else f"reviewed {total_chunks} authoritative-document section(s); no blocking findings"
+        ),
+        findings=all_findings,
+        rationale=" | ".join(rationales),
+    )
+    return AggregatedDocumentReview(verdict=aggregated, manifest=manifest, incomplete_reason=None)
+
+
+def apply_document_review(
+    aggregated: AggregatedAudit,
+    document_review: AggregatedDocumentReview,
+) -> AggregatedAudit:
+    """Fold the authoritative-document review result into the aggregated audit.
+
+    Approval additionally requires every mandatory document's every section
+    to have actually been reviewed (``document_review.manifest.complete``)
+    and no violation found. A no-op passthrough when ``aggregated.verdict``
+    is already ``None`` (diff coverage or synthesis already failed closed --
+    document review is not even attempted in that case, so there is nothing
+    to fold in).
+    """
+    if aggregated.verdict is None:
+        return aggregated
+    if document_review.verdict is None:
+        return AggregatedAudit(
+            verdict=None,
+            manifest=aggregated.manifest,
+            incomplete_reason=("authoritative-document review incomplete: " f"{document_review.incomplete_reason}"),
+        )
+    if document_review.verdict.verdict == "CHANGES_REQUIRED":
+        namespaced = [
+            {**finding, "id": f"CTX-{finding.get('id', '?')}"} for finding in document_review.verdict.findings
+        ]
+        merged = AuditVerdict(
+            verdict="CHANGES_REQUIRED",
+            summary=f"{aggregated.verdict.summary}; document review: {document_review.verdict.summary}",
+            findings=[*aggregated.verdict.findings, *namespaced],
+            rationale=f"{aggregated.verdict.rationale} | document review: {document_review.verdict.rationale}",
+        )
+        return AggregatedAudit(verdict=merged, manifest=aggregated.manifest, incomplete_reason=None)
+    merged = AuditVerdict(
+        verdict=aggregated.verdict.verdict,
+        summary=aggregated.verdict.summary,
+        findings=aggregated.verdict.findings,
+        rationale=(
+            f"{aggregated.verdict.rationale} | document review: no violation found "
+            f"({document_review.verdict.summary})"
         ),
     )
     return AggregatedAudit(verdict=merged, manifest=aggregated.manifest, incomplete_reason=None)

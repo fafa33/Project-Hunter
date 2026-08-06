@@ -76,6 +76,29 @@
   `llm_audit.PROMPT_TOKEN_BUDGET` (8,500) were raised together so the larger
   context budget does not starve the per-chunk diff budget back into
   excessive chunk counts.
+- Closes the two remaining false-approval paths identified in a further
+  independent architecture review: (1) the cross-chunk synthesis call
+  previously reasoned only over each chunk's one-line prose summary, so a
+  contradiction could hide behind two individually unremarkable summaries;
+  every chunk, document-section, and synthesis response now also extracts
+  structured architectural evidence (`llm_audit.ARCHITECTURAL_EVIDENCE_CATEGORIES`:
+  entities introduced, ownership declarations, authority changes, dependency
+  changes, persistence/replay contracts, canonical interfaces, affected
+  ADRs/contracts, exported APIs, cross-file references), which is now
+  mandatory on every response and is what synthesis primarily reasons over
+  (`aggregate.describe_chunks_for_synthesis`). (2) authoritative governance
+  documents were resolved in full at the exact base commit but only a small,
+  bounded excerpt was ever actually reviewed by the audit -- a resolved
+  document is not the same as a reviewed one. Every mandatory document's
+  full text is now deterministically, losslessly split into sections
+  (`chunking.split_document_into_chunks`, reusing the existing diff-chunking
+  algorithm generically) and every section is reviewed against the pull
+  request's structured evidence (`llm_audit.run_document_review`); any
+  failed or unreviewed section fails the whole review closed
+  (`aggregate.aggregate_document_chunk_outcomes`/`apply_document_review`,
+  `DocumentReviewManifest`), and the resulting coverage manifest's
+  `bytes_reviewed` reflects only bytes that passed through an actual review
+  call, never bytes that were merely retrieved.
 
 ### Changed
 

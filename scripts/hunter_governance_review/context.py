@@ -184,6 +184,10 @@ def resolve_context(
     #  header_length) for every successfully resolved document, in the exact
     # order they will compete for the total budget below.
     resolved: list[tuple[str, str, bool, str, int, str, int]] = []
+    # Full (uncut) text of every mandatory document -- separate from the
+    # bounded excerpt above, so a caller can losslessly review it in full
+    # (see chunking.split_document_into_chunks).
+    mandatory_texts: list[tuple[str, str]] = []
 
     def _resolve(pending: _PendingEntry) -> str | None:
         content = resolver.get_file_content(pending.path, pending.ref)
@@ -196,6 +200,8 @@ def resolve_context(
         resolved.append(
             (pending.path, pending.ref, pending.mandatory, digest, len(content), header + excerpt_content, len(header))
         )
+        if pending.mandatory:
+            mandatory_texts.append((pending.path, content))
         return content
 
     map_text = _resolve(_PendingEntry(CANONICAL_MAP_PATH, base_sha, mandatory=True))
@@ -273,4 +279,9 @@ def resolve_context(
 
     brief = "\n\n".join(bounded_pieces)
 
-    return ContextManifest(entries=tuple(entries), brief=brief, missing_references=tuple(missing_references))
+    return ContextManifest(
+        entries=tuple(entries),
+        brief=brief,
+        missing_references=tuple(missing_references),
+        mandatory_document_texts=tuple(mandatory_texts),
+    )

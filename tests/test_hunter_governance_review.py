@@ -305,17 +305,26 @@ class FakeGhRunner:
 
 
 class FakeChunkLlmRunner:
-    """Test double for the chunk-based LLMRunner protocol."""
+    """Test double for the chunk-based LLMRunner protocol.
+
+    ``architectural_evidence_by_chunk`` lets a test give distinct chunks
+    distinct structured evidence (e.g. chunk 1 declares an ownership change
+    that chunk 2's authority_changes conflicts with) while every chunk's
+    free-text ``summary`` stays identically bland -- this is what proves a
+    contradiction is caught via the structured evidence, not the prose.
+    """
 
     def __init__(
         self,
         verdict: str = "APPROVED",
         error: LLMAuditError | None = None,
         findings: list[dict[str, str]] | None = None,
+        architectural_evidence_by_chunk: dict[int, dict[str, list[str]]] | None = None,
     ) -> None:
         self.verdict = verdict
         self.error = error
         self.findings = findings if findings is not None else []
+        self.architectural_evidence_by_chunk = architectural_evidence_by_chunk or {}
         self.calls: list[DiffChunk] = []
 
     def __call__(
@@ -337,6 +346,7 @@ class FakeChunkLlmRunner:
             summary=f"chunk {chunk.index} summary",
             findings=self.findings,
             rationale="ok",
+            architectural_evidence=self.architectural_evidence_by_chunk.get(chunk.index, {}),
         )
 
 
@@ -371,6 +381,55 @@ class FakeSynthesisRunner:
             summary="synthesis summary",
             findings=self.findings,
             rationale="synthesis ok",
+        )
+
+
+class FakeDocumentReviewRunner:
+    """Test double for the DocumentReviewRunner protocol.
+
+    ``fail_on_call`` fails only the Nth section review (1-indexed across
+    every mandatory document's sections, in review order) while every other
+    call succeeds -- this exercises the fail-closed aggregation path with a
+    genuinely mixed (some succeed, one fails) outcome, rather than either
+    "all succeed" or "all fail."
+    """
+
+    def __init__(
+        self,
+        verdict: str = "APPROVED",
+        error: LLMAuditError | None = None,
+        findings: list[dict[str, str]] | None = None,
+        fail_on_call: int | None = None,
+    ) -> None:
+        self.verdict = verdict
+        self.error = error
+        self.findings = findings if findings is not None else []
+        self.fail_on_call = fail_on_call
+        self.calls: list[DiffChunk] = []
+        self.call_count = 0
+
+    def __call__(
+        self,
+        env: dict[str, str],
+        *,
+        pair: ReviewPair,
+        pr: PullRequest,
+        document_chunk: DiffChunk,
+        architectural_evidence_summary: str,
+        timeout: int = 120,
+    ) -> AuditVerdict:
+        self.call_count += 1
+        self.calls.append(document_chunk)
+        if self.fail_on_call is not None and self.call_count == self.fail_on_call:
+            raise LLMAuditError(f"simulated document section failure on call {self.call_count}")
+        if self.error is not None:
+            raise self.error
+        document_path = document_chunk.files[0] if document_chunk.files else "?"
+        return AuditVerdict(
+            verdict=self.verdict,
+            summary=f"document {document_path} section {document_chunk.index} summary",
+            findings=self.findings,
+            rationale="document review ok",
         )
 
 
@@ -473,7 +532,10 @@ def test_gate_self_modification_is_informational_only() -> None:
 
 
 def test_parse_fenced_json_approved() -> None:
-    raw = '```json\n{"verdict": "APPROVED", "summary": "ok", "findings": [], "rationale": "r"}\n```'
+    raw = (
+        '```json\n{"verdict": "APPROVED", "summary": "ok", "findings": [], "rationale": "r", '
+        '"architectural_evidence": {}}\n```'
+    )
     verdict = parse_audit_response(raw)
     assert verdict.verdict == "APPROVED"
 
@@ -482,7 +544,7 @@ def test_parse_plain_json_changes_required() -> None:
     raw = (
         '{"verdict": "CHANGES_REQUIRED", "summary": "s", "findings": '
         '[{"id": "F-001", "severity": "blocking", "location": "x", "description": "d", "decision_impact": "i"}], '
-        '"rationale": "r"}'
+        '"rationale": "r", "architectural_evidence": {}}'
     )
     verdict = parse_audit_response(raw)
     assert verdict.verdict == "CHANGES_REQUIRED"
@@ -507,10 +569,14 @@ def test_validate_audit_payload_accepts_full_valid_payload() -> None:
             {"id": "F-001", "severity": "blocking", "location": "a.py", "description": "d", "decision_impact": "i"}
         ],
         "rationale": "r",
+        "architectural_evidence": {"entities_introduced": ["Foo"]},
     }
     verdict = validate_audit_payload(payload)
     assert verdict.verdict == "CHANGES_REQUIRED"
     assert verdict.findings[0]["id"] == "F-001"
+    assert verdict.architectural_evidence["entities_introduced"] == ["Foo"]
+    # Every other category defaults to an empty list when omitted.
+    assert verdict.architectural_evidence["ownership_declarations"] == []
 
 
 def test_validate_audit_payload_rejects_non_dict() -> None:
@@ -585,12 +651,28 @@ def test_validate_audit_payload_rejects_duplicate_finding_ids() -> None:
 def test_validate_audit_payload_rejects_approved_with_blocking_finding() -> None:
     blocking = {"id": "F-001", "severity": "blocking", "location": "a.py", "description": "d", "decision_impact": "i"}
     with pytest.raises(LLMAuditError, match="contradictory"):
-        validate_audit_payload({"verdict": "APPROVED", "summary": "s", "findings": [blocking], "rationale": ""})
+        validate_audit_payload(
+            {
+                "verdict": "APPROVED",
+                "summary": "s",
+                "findings": [blocking],
+                "rationale": "",
+                "architectural_evidence": {},
+            }
+        )
 
 
 def test_validate_audit_payload_rejects_changes_required_with_no_findings() -> None:
     with pytest.raises(LLMAuditError, match="contradictory"):
-        validate_audit_payload({"verdict": "CHANGES_REQUIRED", "summary": "s", "findings": [], "rationale": ""})
+        validate_audit_payload(
+            {
+                "verdict": "CHANGES_REQUIRED",
+                "summary": "s",
+                "findings": [],
+                "rationale": "",
+                "architectural_evidence": {},
+            }
+        )
 
 
 def test_validate_audit_payload_accepts_approved_with_non_blocking_finding() -> None:
@@ -602,7 +684,13 @@ def test_validate_audit_payload_accepts_approved_with_non_blocking_finding() -> 
         "decision_impact": "i",
     }
     verdict = validate_audit_payload(
-        {"verdict": "APPROVED", "summary": "s", "findings": [non_blocking], "rationale": ""}
+        {
+            "verdict": "APPROVED",
+            "summary": "s",
+            "findings": [non_blocking],
+            "rationale": "",
+            "architectural_evidence": {},
+        }
     )
     assert verdict.verdict == "APPROVED"
 
@@ -644,7 +732,80 @@ def test_validate_audit_payload_rejects_changes_required_with_only_non_blocking_
     }
     with pytest.raises(LLMAuditError, match="contradictory"):
         validate_audit_payload(
-            {"verdict": "CHANGES_REQUIRED", "summary": "s", "findings": [non_blocking], "rationale": ""}
+            {
+                "verdict": "CHANGES_REQUIRED",
+                "summary": "s",
+                "findings": [non_blocking],
+                "rationale": "",
+                "architectural_evidence": {},
+            }
+        )
+
+
+def test_validate_audit_payload_rejects_missing_architectural_evidence() -> None:
+    """F-001 regression: architectural_evidence is mandatory, not optional --
+    a chunk review that omits it must fail closed rather than silently
+    proceeding with no structured evidence for synthesis to reason over."""
+    with pytest.raises(LLMAuditError, match="architectural_evidence is required"):
+        validate_audit_payload({"verdict": "APPROVED", "summary": "s", "findings": [], "rationale": ""})
+
+
+def test_validate_audit_payload_rejects_unknown_architectural_evidence_category() -> None:
+    with pytest.raises(LLMAuditError, match="unknown category"):
+        validate_audit_payload(
+            {
+                "verdict": "APPROVED",
+                "summary": "s",
+                "findings": [],
+                "rationale": "",
+                "architectural_evidence": {"made_up_category": ["x"]},
+            }
+        )
+
+
+def test_validate_audit_payload_rejects_architectural_evidence_category_not_a_list() -> None:
+    with pytest.raises(LLMAuditError, match="entities_introduced must be a list"):
+        validate_audit_payload(
+            {
+                "verdict": "APPROVED",
+                "summary": "s",
+                "findings": [],
+                "rationale": "",
+                "architectural_evidence": {"entities_introduced": "Foo"},
+            }
+        )
+
+
+def test_validate_audit_payload_rejects_architectural_evidence_non_string_item() -> None:
+    with pytest.raises(LLMAuditError, match="must be a non-empty string"):
+        validate_audit_payload(
+            {
+                "verdict": "APPROVED",
+                "summary": "s",
+                "findings": [],
+                "rationale": "",
+                "architectural_evidence": {"entities_introduced": [123]},
+            }
+        )
+
+
+def test_validate_audit_payload_rejects_architectural_evidence_empty_string_item() -> None:
+    with pytest.raises(LLMAuditError, match="must be a non-empty string"):
+        validate_audit_payload(
+            {
+                "verdict": "APPROVED",
+                "summary": "s",
+                "findings": [],
+                "rationale": "",
+                "architectural_evidence": {"entities_introduced": ["  "]},
+            }
+        )
+
+
+def test_validate_audit_payload_rejects_architectural_evidence_not_an_object() -> None:
+    with pytest.raises(LLMAuditError, match="architectural_evidence must be an object"):
+        validate_audit_payload(
+            {"verdict": "APPROVED", "summary": "s", "findings": [], "rationale": "", "architectural_evidence": []}
         )
 
 
@@ -741,7 +902,10 @@ def test_run_llm_audit_sets_adaptive_max_tokens_and_response_format(monkeypatch:
             "choices": [
                 {
                     "message": {
-                        "content": '{"verdict": "APPROVED", "summary": "ok", "findings": [], "rationale": "r"}'
+                        "content": (
+                            '{"verdict": "APPROVED", "summary": "ok", "findings": [], "rationale": "r", '
+                            '"architectural_evidence": {}}'
+                        )
                     },
                     "finish_reason": "stop",
                 }
@@ -819,6 +983,7 @@ def test_run_llm_audit_large_legitimate_findings_set_does_not_truncate(monkeypat
         "summary": "many findings",
         "findings": many_findings,
         "rationale": "r" * 200,
+        "architectural_evidence": {},
     }
     raw_json = json.dumps(response_content)
 
@@ -863,7 +1028,10 @@ def test_run_llm_audit_retries_on_429_then_succeeds(monkeypatch: pytest.MonkeyPa
             "choices": [
                 {
                     "message": {
-                        "content": '{"verdict": "APPROVED", "summary": "ok", "findings": [], "rationale": "r"}'
+                        "content": (
+                            '{"verdict": "APPROVED", "summary": "ok", "findings": [], "rationale": "r", '
+                            '"architectural_evidence": {}}'
+                        )
                     },
                     "finish_reason": "stop",
                 }
@@ -1060,7 +1228,14 @@ def test_decision_audit_error_is_review_failed() -> None:
 def test_run_review_happy_path_publishes_success() -> None:
     gh = FakeGhRunner()
     llm = FakeChunkLlmRunner(verdict="APPROVED")
-    code = run_review(args=_args(), env=_env(), gh=gh, llm_runner=llm, synthesis_runner=FakeSynthesisRunner())
+    code = run_review(
+        args=_args(),
+        env=_env(),
+        gh=gh,
+        llm_runner=llm,
+        synthesis_runner=FakeSynthesisRunner(),
+        document_review_runner=FakeDocumentReviewRunner(),
+    )
     assert code == 0
     assert len(llm.calls) == 1
     assert len(gh.statuses) == 1
@@ -1076,7 +1251,14 @@ def test_run_review_multi_chunk_happy_path_reviews_every_chunk() -> None:
         diff=_multi_chunk_diff(),
     )
     llm = FakeChunkLlmRunner(verdict="APPROVED")
-    code = run_review(args=_args(), env=_env(), gh=gh, llm_runner=llm, synthesis_runner=FakeSynthesisRunner())
+    code = run_review(
+        args=_args(),
+        env=_env(),
+        gh=gh,
+        llm_runner=llm,
+        synthesis_runner=FakeSynthesisRunner(),
+        document_review_runner=FakeDocumentReviewRunner(),
+    )
     assert code == 0
     assert len(llm.calls) >= 1
     covered = {f for chunk in llm.calls for f in chunk.files}
@@ -1088,7 +1270,14 @@ def test_run_review_deterministic_failure_skips_llm() -> None:
     gh = FakeGhRunner(pr=_pr(body=""))
     llm = FakeChunkLlmRunner(verdict="APPROVED")
     synthesis = FakeSynthesisRunner()
-    code = run_review(args=_args(), env=_env(), gh=gh, llm_runner=llm, synthesis_runner=synthesis)
+    code = run_review(
+        args=_args(),
+        env=_env(),
+        gh=gh,
+        llm_runner=llm,
+        synthesis_runner=synthesis,
+        document_review_runner=FakeDocumentReviewRunner(),
+    )
     assert code == 0
     assert llm.calls == []
     assert synthesis.calls == []  # never reached: deterministic blocking skips the audit entirely
@@ -1099,7 +1288,14 @@ def test_run_review_missing_secret_is_review_failed() -> None:
     gh = FakeGhRunner()
     llm = FakeChunkLlmRunner(error=LLMAuditError("missing API secret: HUNTER_LLM_API_KEY"))
     synthesis = FakeSynthesisRunner()
-    code = run_review(args=_args(), env=_env(), gh=gh, llm_runner=llm, synthesis_runner=synthesis)
+    code = run_review(
+        args=_args(),
+        env=_env(),
+        gh=gh,
+        llm_runner=llm,
+        synthesis_runner=synthesis,
+        document_review_runner=FakeDocumentReviewRunner(),
+    )
     assert code == 0
     assert gh.statuses[0]["state"] == "failure"
     assert "Review failed" in gh.statuses[0]["description"]
@@ -1113,7 +1309,14 @@ def test_run_review_one_chunk_failure_makes_coverage_incomplete_and_review_faile
     )
     llm = FakeChunkLlmRunner(error=LLMAuditError("simulated chunk failure"))
     synthesis = FakeSynthesisRunner()
-    code = run_review(args=_args(), env=_env(), gh=gh, llm_runner=llm, synthesis_runner=synthesis)
+    code = run_review(
+        args=_args(),
+        env=_env(),
+        gh=gh,
+        llm_runner=llm,
+        synthesis_runner=synthesis,
+        document_review_runner=FakeDocumentReviewRunner(),
+    )
     assert code == 0
     assert gh.statuses[0]["state"] == "failure"
     assert synthesis.calls == []  # incomplete coverage skips synthesis
@@ -1126,7 +1329,14 @@ def test_run_review_diff_exceeding_sanity_bound_fails_closed_never_approves(monk
     gh = FakeGhRunner(diff="diff --git a/x.py b/x.py\n+way more than ten characters of real content")
     llm = FakeChunkLlmRunner(verdict="APPROVED")
     synthesis = FakeSynthesisRunner()
-    code = run_review(args=_args(), env=_env(), gh=gh, llm_runner=llm, synthesis_runner=synthesis)
+    code = run_review(
+        args=_args(),
+        env=_env(),
+        gh=gh,
+        llm_runner=llm,
+        synthesis_runner=synthesis,
+        document_review_runner=FakeDocumentReviewRunner(),
+    )
     assert code == 0
     assert gh.statuses[0]["state"] == "failure"
     assert gh.statuses[0]["state"] != "success"
@@ -1138,7 +1348,14 @@ def test_run_review_stale_pair_before_audit_is_review_failed_and_skips_llm() -> 
     advanced = _pr(head_oid="c" * 40)
     gh = FakeGhRunner(current=advanced)
     llm = FakeChunkLlmRunner(verdict="APPROVED")
-    code = run_review(args=_args(), env=_env(), gh=gh, llm_runner=llm, synthesis_runner=FakeSynthesisRunner())
+    code = run_review(
+        args=_args(),
+        env=_env(),
+        gh=gh,
+        llm_runner=llm,
+        synthesis_runner=FakeSynthesisRunner(),
+        document_review_runner=FakeDocumentReviewRunner(),
+    )
     assert code == 0
     assert llm.calls == []  # the cheap early check short-circuits before any audit call
     assert gh.statuses[0]["state"] == "failure"
@@ -1159,7 +1376,14 @@ def test_run_review_pair_advances_during_audit_is_review_failed_despite_approval
     advanced = _pr(head_oid="c" * 40)
     gh = FakeGhRunner(pr_sequence=[original, original, advanced])
     llm = FakeChunkLlmRunner(verdict="APPROVED")
-    code = run_review(args=_args(), env=_env(), gh=gh, llm_runner=llm, synthesis_runner=FakeSynthesisRunner())
+    code = run_review(
+        args=_args(),
+        env=_env(),
+        gh=gh,
+        llm_runner=llm,
+        synthesis_runner=FakeSynthesisRunner(),
+        document_review_runner=FakeDocumentReviewRunner(),
+    )
     assert code == 0
     assert len(llm.calls) >= 1  # the audit DID run, against the (now stale) original pair
     assert gh.statuses[0]["state"] == "failure"
@@ -1170,7 +1394,14 @@ def test_run_review_pair_advances_during_audit_is_review_failed_despite_approval
 def test_run_review_context_resolution_failure_is_review_failed() -> None:
     gh = FakeGhRunner(canonical_docs={})  # even the canonical map itself is unresolvable
     llm = FakeChunkLlmRunner(verdict="APPROVED")
-    code = run_review(args=_args(), env=_env(), gh=gh, llm_runner=llm, synthesis_runner=FakeSynthesisRunner())
+    code = run_review(
+        args=_args(),
+        env=_env(),
+        gh=gh,
+        llm_runner=llm,
+        synthesis_runner=FakeSynthesisRunner(),
+        document_review_runner=FakeDocumentReviewRunner(),
+    )
     assert code == 0
     assert llm.calls == []
     assert gh.statuses[0]["state"] == "failure"
@@ -1179,7 +1410,14 @@ def test_run_review_context_resolution_failure_is_review_failed() -> None:
 def test_run_review_evidence_failure_is_review_failed() -> None:
     gh = FakeGhRunner(fail_files=True)
     llm = FakeChunkLlmRunner(verdict="APPROVED")
-    code = run_review(args=_args(), env=_env(), gh=gh, llm_runner=llm, synthesis_runner=FakeSynthesisRunner())
+    code = run_review(
+        args=_args(),
+        env=_env(),
+        gh=gh,
+        llm_runner=llm,
+        synthesis_runner=FakeSynthesisRunner(),
+        document_review_runner=FakeDocumentReviewRunner(),
+    )
     assert code == 0
     assert llm.calls == []
     assert gh.statuses[0]["state"] == "failure"
@@ -1188,7 +1426,14 @@ def test_run_review_evidence_failure_is_review_failed() -> None:
 def test_run_review_non_protected_base_skips_gate() -> None:
     gh = FakeGhRunner(pr=_pr(base_ref_name="staging", base_oid="d" * 40))
     llm = FakeChunkLlmRunner(verdict="APPROVED")
-    code = run_review(args=_args(), env=_env(), gh=gh, llm_runner=llm, synthesis_runner=FakeSynthesisRunner())
+    code = run_review(
+        args=_args(),
+        env=_env(),
+        gh=gh,
+        llm_runner=llm,
+        synthesis_runner=FakeSynthesisRunner(),
+        document_review_runner=FakeDocumentReviewRunner(),
+    )
     assert code == 0
     assert gh.statuses == []
     assert llm.calls == []
@@ -1197,7 +1442,12 @@ def test_run_review_non_protected_base_skips_gate() -> None:
 def test_run_review_unresolvable_pr_returns_2() -> None:
     gh = FakeGhRunner(fail_pr=True)
     code = run_review(
-        args=_args(), env=_env(), gh=gh, llm_runner=FakeChunkLlmRunner(), synthesis_runner=FakeSynthesisRunner()
+        args=_args(),
+        env=_env(),
+        gh=gh,
+        llm_runner=FakeChunkLlmRunner(),
+        synthesis_runner=FakeSynthesisRunner(),
+        document_review_runner=FakeDocumentReviewRunner(),
     )
     assert code == 2
 
@@ -1210,6 +1460,7 @@ def test_run_review_publish_failure_returns_3() -> None:
         gh=gh,
         llm_runner=FakeChunkLlmRunner(verdict="APPROVED"),
         synthesis_runner=FakeSynthesisRunner(),
+        document_review_runner=FakeDocumentReviewRunner(),
     )
     assert code == 3
 
@@ -1222,6 +1473,7 @@ def test_run_review_dry_run_does_not_publish() -> None:
         gh=gh,
         llm_runner=FakeChunkLlmRunner(verdict="APPROVED"),
         synthesis_runner=FakeSynthesisRunner(),
+        document_review_runner=FakeDocumentReviewRunner(),
     )
     assert code == 0
     assert gh.statuses == []
@@ -1237,6 +1489,7 @@ def test_run_review_writes_step_summary_with_coverage_and_context_manifests(tmp_
         gh=gh,
         llm_runner=llm,
         synthesis_runner=FakeSynthesisRunner(),
+        document_review_runner=FakeDocumentReviewRunner(),
     )
     assert code == 0
     text = summary.read_text(encoding="utf-8")
@@ -1269,6 +1522,7 @@ def test_run_review_step_summary_includes_audit_findings(tmp_path: Path) -> None
         gh=gh,
         llm_runner=llm,
         synthesis_runner=FakeSynthesisRunner(),
+        document_review_runner=FakeDocumentReviewRunner(),
     )
     assert code == 0
     text = summary.read_text(encoding="utf-8")
@@ -1307,6 +1561,7 @@ def test_run_review_cross_chunk_contradiction_blocks_approval_even_if_every_chun
         gh=gh,
         llm_runner=llm,
         synthesis_runner=synthesis,
+        document_review_runner=FakeDocumentReviewRunner(),
     )
     assert code == 0
     assert len(synthesis.calls) == 1
@@ -1323,7 +1578,14 @@ def test_run_review_synthesis_failure_fails_closed() -> None:
     gh = FakeGhRunner()
     llm = FakeChunkLlmRunner(verdict="APPROVED")
     synthesis = FakeSynthesisRunner(error=LLMAuditError("simulated synthesis network failure"))
-    code = run_review(args=_args(), env=_env(), gh=gh, llm_runner=llm, synthesis_runner=synthesis)
+    code = run_review(
+        args=_args(),
+        env=_env(),
+        gh=gh,
+        llm_runner=llm,
+        synthesis_runner=synthesis,
+        document_review_runner=FakeDocumentReviewRunner(),
+    )
     assert code == 0
     assert gh.statuses[0]["state"] == "failure"
     assert "synthesis" in gh.statuses[0]["description"].lower()
@@ -1339,7 +1601,284 @@ def test_run_review_synthesis_skipped_when_diff_is_empty() -> None:
     gh = FakeGhRunner(diff=" ", files=[])
     llm = FakeChunkLlmRunner(verdict="APPROVED")
     synthesis = FakeSynthesisRunner()
-    code = run_review(args=_args(), env=_env(), gh=gh, llm_runner=llm, synthesis_runner=synthesis)
+    code = run_review(
+        args=_args(),
+        env=_env(),
+        gh=gh,
+        llm_runner=llm,
+        synthesis_runner=synthesis,
+        document_review_runner=FakeDocumentReviewRunner(),
+    )
     assert code == 0
     assert synthesis.calls == []
     assert gh.statuses[0]["state"] == "success"
+
+
+# --- F-001 regression: synthesis must reason over structured evidence, not summaries ---
+
+
+class _EvidenceAwareSynthesisRunner:
+    """A synthesis double that only flags a contradiction when both marker
+    strings are present in its input -- proving whatever detection occurs
+    depends on the STRUCTURED evidence being visible to synthesis, not on
+    the (deliberately identical, bland) per-chunk prose summaries."""
+
+    def __init__(self, marker_a: str, marker_b: str) -> None:
+        self.marker_a = marker_a
+        self.marker_b = marker_b
+        self.calls: list[str] = []
+
+    def __call__(
+        self,
+        env: dict[str, str],
+        *,
+        pair: ReviewPair,
+        pr: PullRequest,
+        synthesis_input: str,
+        timeout: int = 120,
+    ) -> AuditVerdict:
+        self.calls.append(synthesis_input)
+        if self.marker_a in synthesis_input and self.marker_b in synthesis_input:
+            return AuditVerdict(
+                verdict="CHANGES_REQUIRED",
+                summary="cross-chunk ownership/authority contradiction",
+                findings=[
+                    {
+                        "id": "001",
+                        "severity": "blocking",
+                        "location": "chunks 1, 2",
+                        "description": f"{self.marker_a} conflicts with {self.marker_b}",
+                        "decision_impact": "ownership and authority evidence disagree across chunks",
+                    }
+                ],
+                rationale="structured evidence conflict",
+            )
+        return AuditVerdict(verdict="APPROVED", summary="no contradiction visible", findings=[], rationale="ok")
+
+
+def test_run_review_cross_chunk_contradiction_detected_via_structured_evidence_not_prose_summary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """F-001 regression: the cross-chunk synthesis stage must reason over
+    each chunk's STRUCTURED architectural evidence, not merely its one-line
+    prose summary. Both chunks here have an identically bland summary
+    ("chunk N summary") -- the only way a contradiction is visible at all is
+    through chunk 1's ownership_declarations conflicting with chunk 2's
+    authority_changes. If synthesis only saw prose summaries (the pre-F-001
+    behavior), this contradiction would be invisible and the PR would be
+    falsely approved."""
+    # Force the two files into genuinely separate chunks (the default
+    # budget is large enough to pack both into one chunk, which would not
+    # exercise the CROSS-chunk case this test is about).
+    monkeypatch.setattr("hunter_governance_review.__main__.estimate_chunk_diff_budget", lambda **kwargs: 150)
+    summary = tmp_path / "summary.md"
+    gh = FakeGhRunner(
+        files=[CODE_FILE, ChangedFile("src/b.py", "modified", 1, 1)],
+        diff=_multi_chunk_diff(),
+    )
+    ownership_evidence = "PaymentGateway owned exclusively by TeamA"
+    authority_evidence = "TeamB granted call authority over PaymentGateway"
+    llm = FakeChunkLlmRunner(
+        verdict="APPROVED",
+        architectural_evidence_by_chunk={
+            1: {"ownership_declarations": [ownership_evidence]},
+            2: {"authority_changes": [authority_evidence]},
+        },
+    )
+    synthesis = _EvidenceAwareSynthesisRunner(ownership_evidence, authority_evidence)
+    code = run_review(
+        args=_args(),
+        env=_env(GITHUB_STEP_SUMMARY=str(summary)),
+        gh=gh,
+        llm_runner=llm,
+        synthesis_runner=synthesis,
+        document_review_runner=FakeDocumentReviewRunner(),
+    )
+    assert code == 0
+    assert len(synthesis.calls) == 1
+    assert ownership_evidence in synthesis.calls[0]
+    assert authority_evidence in synthesis.calls[0]
+    assert gh.statuses[0]["state"] == "failure"
+    text = summary.read_text(encoding="utf-8")
+    assert "SYN-001" in text
+    assert f"{ownership_evidence} conflicts with {authority_evidence}" in text
+
+
+def test_run_review_baseline_no_structured_evidence_means_no_contradiction_to_find() -> None:
+    """Contrast case for the test above, using the exact same evidence-aware
+    synthesis double and marker strings: when neither chunk actually
+    produces the structured evidence (as if only prose summaries existed),
+    the double correctly finds nothing to flag -- confirming the detection
+    above depended on the structured evidence being present, not some
+    unrelated side effect of the double's construction."""
+    gh = FakeGhRunner(
+        files=[CODE_FILE, ChangedFile("src/b.py", "modified", 1, 1)],
+        diff=_multi_chunk_diff(),
+    )
+    ownership_evidence = "PaymentGateway owned exclusively by TeamA"
+    authority_evidence = "TeamB granted call authority over PaymentGateway"
+    llm = FakeChunkLlmRunner(verdict="APPROVED")  # no architectural_evidence_by_chunk supplied
+    synthesis = _EvidenceAwareSynthesisRunner(ownership_evidence, authority_evidence)
+    code = run_review(
+        args=_args(),
+        env=_env(),
+        gh=gh,
+        llm_runner=llm,
+        synthesis_runner=synthesis,
+        document_review_runner=FakeDocumentReviewRunner(),
+    )
+    assert code == 0
+    assert gh.statuses[0]["state"] == "success"
+
+
+# --- F-002 regression: full, lossless authoritative-document review -------------------
+
+
+def test_run_review_document_review_violation_blocks_approval(tmp_path: Path) -> None:
+    """F-002 regression: a violation found during full authoritative-document
+    review must block approval even though the diff-chunk audit and the
+    cross-chunk synthesis both approved -- a resolved document is not the
+    same as a reviewed one, and reviewing it in full can surface a rule an
+    excerpt-only review would have missed."""
+    summary = tmp_path / "summary.md"
+    gh = FakeGhRunner()
+    llm = FakeChunkLlmRunner(verdict="APPROVED")
+    synthesis = FakeSynthesisRunner(verdict="APPROVED")
+    document_review = FakeDocumentReviewRunner(
+        verdict="CHANGES_REQUIRED",
+        findings=[
+            {
+                "id": "001",
+                "severity": "blocking",
+                "location": "docs/DEVELOPMENT_GOVERNANCE.md#section 1",
+                "description": "the evidence shows an authority boundary this section requires was crossed",
+                "decision_impact": "violates a documented authority boundary",
+            }
+        ],
+    )
+    code = run_review(
+        args=_args(),
+        env=_env(GITHUB_STEP_SUMMARY=str(summary)),
+        gh=gh,
+        llm_runner=llm,
+        synthesis_runner=synthesis,
+        document_review_runner=document_review,
+    )
+    assert code == 0
+    assert gh.statuses[0]["state"] == "failure"
+    # Every mandatory document in DEFAULT_CANONICAL_DOCS is far smaller than
+    # one section's budget, so each produced exactly one reviewed section.
+    assert len(document_review.calls) == len(DEFAULT_CANONICAL_DOCS)
+    text = summary.read_text(encoding="utf-8")
+    assert "CTX-DOC1-001" in text
+    assert "authority boundary this section requires was crossed" in text
+
+
+def test_run_review_document_review_one_section_failure_fails_closed_never_approves() -> None:
+    """F-002 regression: if even one section of one mandatory document
+    fails to be reviewed, the whole authoritative-document review must fail
+    closed -- there is no partial credit toward "the evidence was reviewed"
+    just because most sections succeeded."""
+    gh = FakeGhRunner()
+    llm = FakeChunkLlmRunner(verdict="APPROVED")
+    synthesis = FakeSynthesisRunner(verdict="APPROVED")
+    # DEFAULT_CANONICAL_DOCS has multiple mandatory documents; fail exactly
+    # one section while every other section succeeds.
+    document_review = FakeDocumentReviewRunner(fail_on_call=3)
+    code = run_review(
+        args=_args(),
+        env=_env(),
+        gh=gh,
+        llm_runner=llm,
+        synthesis_runner=synthesis,
+        document_review_runner=document_review,
+    )
+    assert code == 0
+    assert gh.statuses[0]["state"] == "failure"
+    assert gh.statuses[0]["state"] != "success"
+    # Every section was still attempted -- a later section's success does
+    # not get skipped just because an earlier one failed.
+    assert len(document_review.calls) == len(DEFAULT_CANONICAL_DOCS)
+
+
+def test_run_review_document_review_bytes_reviewed_matches_full_document_bytes_on_success(
+    tmp_path: Path,
+) -> None:
+    """F-002 regression: the document-review coverage manifest's
+    ``bytes_reviewed`` must reflect bytes that were ACTUALLY reviewed,
+    section by section -- never bytes that were merely retrieved or
+    excerpted. When every section succeeds this must equal the full
+    combined byte length of every mandatory document's complete text."""
+    summary = tmp_path / "summary.md"
+    gh = FakeGhRunner()
+    llm = FakeChunkLlmRunner(verdict="APPROVED")
+    synthesis = FakeSynthesisRunner(verdict="APPROVED")
+    document_review = FakeDocumentReviewRunner(verdict="APPROVED")
+    code = run_review(
+        args=_args(),
+        env=_env(GITHUB_STEP_SUMMARY=str(summary)),
+        gh=gh,
+        llm_runner=llm,
+        synthesis_runner=synthesis,
+        document_review_runner=document_review,
+    )
+    assert code == 0
+    assert gh.statuses[0]["state"] == "success"
+    expected_bytes = sum(len(text) for text in DEFAULT_CANONICAL_DOCS.values())
+    summary_text = summary.read_text(encoding="utf-8")
+    assert f"Bytes actually reviewed**: {expected_bytes}/{expected_bytes}" in summary_text
+    assert f"Documents**: {len(DEFAULT_CANONICAL_DOCS)}" in summary_text
+
+
+def test_run_review_document_review_bytes_reviewed_is_zero_not_partial_when_incomplete(
+    tmp_path: Path,
+) -> None:
+    """F-002 regression: ``bytes_reviewed`` must never report a partial byte
+    count reflecting only the sections that happened to succeed before one
+    failed -- when document-review coverage is incomplete, bytes_reviewed
+    is exactly 0, not some fraction of bytes_total, so the manifest can
+    never be misread as "mostly reviewed."."""
+    summary = tmp_path / "summary.md"
+    gh = FakeGhRunner()
+    llm = FakeChunkLlmRunner(verdict="APPROVED")
+    synthesis = FakeSynthesisRunner(verdict="APPROVED")
+    document_review = FakeDocumentReviewRunner(fail_on_call=1)
+    code = run_review(
+        args=_args(),
+        env=_env(GITHUB_STEP_SUMMARY=str(summary)),
+        gh=gh,
+        llm_runner=llm,
+        synthesis_runner=synthesis,
+        document_review_runner=document_review,
+    )
+    assert code == 0
+    assert gh.statuses[0]["state"] == "failure"
+    expected_bytes = sum(len(text) for text in DEFAULT_CANONICAL_DOCS.values())
+    summary_text = summary.read_text(encoding="utf-8")
+    assert f"Bytes actually reviewed**: 0/{expected_bytes}" in summary_text
+    assert "**Reason**: authoritative-document review incomplete" in summary_text
+
+
+def test_run_review_document_review_skipped_when_diff_coverage_already_incomplete() -> None:
+    """A diff chunk that itself failed already fails the review closed --
+    authoritative-document review is not even attempted in that case, since
+    there is nothing trustworthy yet to check documents against."""
+    gh = FakeGhRunner(
+        files=[CODE_FILE, ChangedFile("src/b.py", "modified", 1, 1)],
+        diff=_multi_chunk_diff(),
+    )
+    llm = FakeChunkLlmRunner(error=LLMAuditError("simulated chunk failure"))
+    synthesis = FakeSynthesisRunner()
+    document_review = FakeDocumentReviewRunner()
+    code = run_review(
+        args=_args(),
+        env=_env(),
+        gh=gh,
+        llm_runner=llm,
+        synthesis_runner=synthesis,
+        document_review_runner=document_review,
+    )
+    assert code == 0
+    assert gh.statuses[0]["state"] == "failure"
+    assert document_review.calls == []

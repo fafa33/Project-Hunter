@@ -122,3 +122,20 @@ def covered_filenames(chunks: list[DiffChunk]) -> set[str]:
     for chunk in chunks:
         names.update(chunk.files)
     return names
+
+
+def split_document_into_chunks(path: str, text: str, max_chunk_chars: int) -> list[DiffChunk]:
+    """Deterministically, losslessly split an authoritative document's full text.
+
+    A resolved document is not the same as a reviewed one: reviewing only a
+    bounded excerpt can silently hide a rule stated later in the document.
+    This reuses ``split_diff_into_chunks``'s generic, format-agnostic
+    line-boundary splitting -- a governance document has no ``diff --git``
+    headers, so it is treated as a single (or, if oversized, line-split)
+    segment, exactly like an unparsed diff. No separate document-chunking
+    algorithm exists; this is a thin, self-documenting wrapper that gives
+    document callers their own entry point and attaches ``path`` as each
+    chunk's ``files`` tuple so downstream reporting reads naturally.
+    """
+    chunks = split_diff_into_chunks(text, max_chunk_chars)
+    return [DiffChunk(index=c.index, total=c.total, files=(path,), text=c.text) for c in chunks]

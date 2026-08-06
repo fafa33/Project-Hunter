@@ -239,11 +239,23 @@ class ContextEntry:
 
 @dataclass(frozen=True)
 class ContextManifest:
-    """Deterministic evidence of which governance documents were consulted."""
+    """Deterministic evidence of which governance documents were consulted.
+
+    ``mandatory_document_texts`` carries the *full* text of every mandatory
+    (canonical-hierarchy) document, keyed by path -- separate from ``brief``,
+    which remains a small, bounded excerpt reused cheaply across every diff
+    chunk's own prompt. Full text exists here so a caller can losslessly
+    review each mandatory document in full (see
+    ``chunking.split_document_into_chunks`` and
+    ``aggregate.aggregate_document_chunk_outcomes``) rather than relying on
+    the excerpt alone -- a resolved document is not the same as a reviewed
+    one.
+    """
 
     entries: tuple[ContextEntry, ...]
     brief: str
     missing_references: tuple[str, ...] = ()
+    mandatory_document_texts: tuple[tuple[str, str], ...] = ()
 
     @property
     def missing_mandatory(self) -> tuple[str, ...]:
@@ -254,4 +266,42 @@ class ContextManifest:
             "entries": [e.to_dict() for e in self.entries],
             "missing_mandatory": list(self.missing_mandatory),
             "missing_references": list(self.missing_references),
+        }
+
+
+@dataclass(frozen=True)
+class DocumentReviewManifest:
+    """Deterministic evidence of how completely authoritative documents were
+    actually *reviewed* -- never merely retrieved or excerpted.
+
+    ``complete`` is the fail-closed gate: any failed or unreviewed chunk of
+    any mandatory document makes document-review coverage incomplete,
+    regardless of what any individual chunk's verdict was. ``bytes_reviewed``
+    counts only bytes that passed through a successful document-review call;
+    it is never inferred from ``bytes_total`` or from what was merely
+    retrieved.
+    """
+
+    total_documents: int
+    total_chunks: int
+    chunks_reviewed: int
+    chunks_failed: int
+    chunk_errors: tuple[str, ...]
+    bytes_total: int
+    bytes_reviewed: int
+
+    @property
+    def complete(self) -> bool:
+        return self.chunks_failed == 0 and self.bytes_reviewed == self.bytes_total
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "total_documents": self.total_documents,
+            "total_chunks": self.total_chunks,
+            "chunks_reviewed": self.chunks_reviewed,
+            "chunks_failed": self.chunks_failed,
+            "chunk_errors": list(self.chunk_errors),
+            "bytes_total": self.bytes_total,
+            "bytes_reviewed": self.bytes_reviewed,
+            "complete": self.complete,
         }

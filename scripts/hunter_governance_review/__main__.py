@@ -6,9 +6,14 @@ Flow (per ``docs/HUNTER_GOVERNANCE_REVIEW.md``):
         -> Authoritative Context Resolution (exact-base-SHA canonical docs/ADRs)
         -> Deterministic Governance Engine (using resolved ADR/ADPR references)
         -> Deterministic diff chunking (complete coverage, no truncation)
-        -> LLM Architecture Audit, one call per chunk
+        -> LLM Architecture Audit, one call per chunk (extracts structured
+           architectural evidence, not just a prose summary)
         -> Aggregation across every chunk (fail-closed on any missing/failed chunk)
-        -> Cross-chunk consistency synthesis (one call, over summaries/findings only)
+        -> Cross-chunk consistency synthesis (one call, reasoning over the
+           structured architectural evidence, not just summaries)
+        -> Full, lossless authoritative-document review (every mandatory
+           document chunked and reviewed in full -- never a bounded excerpt
+           alone -- against the pull request's structured evidence)
         -> Decision Engine
         -> re-verify the review pair immediately before publishing (post-audit freshness)
         -> publish the required status check "Hunter Governance Review"
@@ -44,12 +49,20 @@ from collections.abc import Mapping
 from typing import Protocol
 
 from hunter_governance_review.aggregate import (
+    AggregatedDocumentReview,
     ChunkOutcome,
     aggregate_chunk_outcomes,
+    aggregate_document_chunk_outcomes,
+    apply_document_review,
     apply_synthesis,
     describe_chunks_for_synthesis,
 )
-from hunter_governance_review.chunking import DiffChunk, covered_filenames, split_diff_into_chunks
+from hunter_governance_review.chunking import (
+    DiffChunk,
+    covered_filenames,
+    split_diff_into_chunks,
+    split_document_into_chunks,
+)
 from hunter_governance_review.context import ContextResolutionError, resolve_context
 from hunter_governance_review.contracts import (
     CHECK_CONTEXT,
@@ -57,6 +70,7 @@ from hunter_governance_review.contracts import (
     ContextManifest,
     CoverageManifest,
     DeterministicResult,
+    DocumentReviewManifest,
     Finding,
     Outcome,
     PullRequest,
@@ -71,6 +85,8 @@ from hunter_governance_review.llm_audit import (
     AuditVerdict,
     LLMAuditError,
     estimate_chunk_diff_budget,
+    estimate_document_chunk_budget,
+    run_document_review,
     run_llm_audit,
     run_synthesis_review,
 )
@@ -112,6 +128,19 @@ class SynthesisRunner(Protocol):
         pair: ReviewPair,
         pr: PullRequest,
         synthesis_input: str,
+        timeout: int = 120,
+    ) -> AuditVerdict: ...
+
+
+class DocumentReviewRunner(Protocol):
+    def __call__(
+        self,
+        env: Mapping[str, str],
+        *,
+        pair: ReviewPair,
+        pr: PullRequest,
+        document_chunk: DiffChunk,
+        architectural_evidence_summary: str,
         timeout: int = 120,
     ) -> AuditVerdict: ...
 
@@ -178,6 +207,7 @@ def _write_summary(
     audit: AuditVerdict | None,
     coverage: CoverageManifest,
     context: ContextManifest | None,
+    document_review: DocumentReviewManifest | None,
     published_state: str,
 ) -> None:
     summary_path = env.get("GITHUB_STEP_SUMMARY")
@@ -222,6 +252,22 @@ def _write_summary(
             )
         if context.missing_references:
             lines.append("- **Missing referenced records**: " + ", ".join(context.missing_references))
+    if document_review is not None:
+        lines.append("")
+        lines.append("### Authoritative-document review coverage manifest")
+        lines.append(f"- **Complete**: `{document_review.complete}`")
+        lines.append(f"- **Documents**: {document_review.total_documents}")
+        lines.append(
+            f"- **Sections**: {document_review.total_chunks} total, {document_review.chunks_reviewed} reviewed, "
+            f"{document_review.chunks_failed} failed"
+        )
+        lines.append(
+            f"- **Bytes actually reviewed**: {document_review.bytes_reviewed}/{document_review.bytes_total} "
+            "(never retrieved-only ranges)"
+        )
+        if document_review.chunk_errors:
+            lines.append("- **Section errors**:")
+            lines.extend(f"  - {err}" for err in document_review.chunk_errors)
     if audit is not None:
         lines.append("")
         lines.append("### Hostile architecture audit (aggregated across all chunks)")
@@ -272,6 +318,7 @@ def run_review(
     gh: GitHubRunner,
     llm_runner: LLMRunner,
     synthesis_runner: SynthesisRunner,
+    document_review_runner: DocumentReviewRunner,
 ) -> int:
     """Execute the full gate for one pull request and publish the status check."""
     repository = args.repository or env.get("GITHUB_REPOSITORY") or gh.repository
@@ -371,6 +418,7 @@ def run_review(
     )
     aggregated_verdict: AuditVerdict | None = None
     coverage_incomplete_reason: str | None = None
+    document_coverage: DocumentReviewManifest | None = None
     should_audit = (
         evidence_error is None
         and context_error is None
@@ -408,22 +456,88 @@ def run_review(
             total_files=len(files),
             files_missing_from_diff=missing_from_diff,
         )
+        architectural_evidence_summary = ""
 
-        # Cross-chunk consistency synthesis: only meaningful once every chunk
-        # has already succeeded (coverage complete) and there was at least
-        # one chunk to synthesize over. Approval requires this to succeed and
-        # find no contradiction spanning multiple chunks -- a failure here is
-        # folded in exactly like a failed chunk (coverage that cannot be
-        # verified consistent is not complete).
-        if aggregation.verdict is not None and len(outcomes) > 0:
-            synthesis_input = describe_chunks_for_synthesis(outcomes)
-            try:
-                synthesis_verdict = synthesis_runner(env, pair=pair, pr=pr, synthesis_input=synthesis_input)
-                print(f"[Synthesis] {synthesis_verdict.verdict}: {synthesis_verdict.summary}")
-                aggregation = apply_synthesis(aggregation, synthesis_verdict, None)
-            except LLMAuditError as exc:
-                print(f"[Synthesis] failed: {exc}")
-                aggregation = apply_synthesis(aggregation, None, str(exc))
+        # Everything below requires complete diff-chunk coverage first:
+        # ``describe_chunks_for_synthesis`` asserts every chunk succeeded,
+        # and when coverage is already incomplete neither the synthesis nor
+        # the document-review stage has anything trustworthy to reason over
+        # (``apply_synthesis``/``apply_document_review`` are no-ops on an
+        # already-``None`` verdict anyway).
+        if aggregation.verdict is not None:
+            # Structured architectural evidence extracted by every chunk
+            # (not just prose summaries) is what both the cross-chunk
+            # synthesis and the authoritative-document review below reason
+            # over -- computed once and reused by both stages.
+            architectural_evidence_summary = describe_chunks_for_synthesis(outcomes)
+
+            # Cross-chunk consistency synthesis: only meaningful when there
+            # was at least one chunk to synthesize over. Approval requires
+            # this to succeed and find no contradiction spanning multiple
+            # chunks -- a failure here is folded in exactly like a failed
+            # chunk (coverage that cannot be verified consistent is not
+            # complete).
+            if len(outcomes) > 0:
+                try:
+                    synthesis_verdict = synthesis_runner(
+                        env, pair=pair, pr=pr, synthesis_input=architectural_evidence_summary
+                    )
+                    print(f"[Synthesis] {synthesis_verdict.verdict}: {synthesis_verdict.summary}")
+                    aggregation = apply_synthesis(aggregation, synthesis_verdict, None)
+                except LLMAuditError as exc:
+                    print(f"[Synthesis] failed: {exc}")
+                    aggregation = apply_synthesis(aggregation, None, str(exc))
+
+        # Full, lossless authoritative-document review: a resolved document
+        # is not a reviewed document. Every mandatory document is chunked
+        # into full-text sections (never a bounded excerpt) and every
+        # section is reviewed against the pull request's structured
+        # architectural evidence; any failed/unreviewed section fails the
+        # whole review closed, regardless of what the diff-chunk review or
+        # synthesis concluded. Re-checked here (not merely inherited from
+        # the outer guard) because synthesis, above, can itself turn a
+        # complete aggregation's verdict to ``None`` on failure.
+        if aggregation.verdict is not None:
+            assert context_manifest is not None
+            document_outcomes: list[ChunkOutcome] = []
+            total_document_bytes = 0
+            for document_path, document_text in context_manifest.mandatory_document_texts:
+                total_document_bytes += len(document_text)
+                section_budget = estimate_document_chunk_budget(
+                    pr=pr,
+                    architectural_evidence_summary=architectural_evidence_summary,
+                    document_path=document_path,
+                )
+                for section in split_document_into_chunks(document_path, document_text, section_budget):
+                    try:
+                        verdict = document_review_runner(
+                            env,
+                            pair=pair,
+                            pr=pr,
+                            document_chunk=section,
+                            architectural_evidence_summary=architectural_evidence_summary,
+                        )
+                        document_outcomes.append(
+                            ChunkOutcome(section.index, section.total, section.files, verdict, None)
+                        )
+                    except LLMAuditError as exc:
+                        document_outcomes.append(
+                            ChunkOutcome(section.index, section.total, section.files, None, str(exc))
+                        )
+            document_review_result: AggregatedDocumentReview = aggregate_document_chunk_outcomes(
+                document_outcomes,
+                bytes_total=total_document_bytes,
+                total_documents=len(context_manifest.mandatory_document_texts),
+            )
+            document_coverage = document_review_result.manifest
+            if document_review_result.verdict is not None:
+                print(
+                    f"[DocumentReview] {document_review_result.verdict.verdict}: "
+                    f"{document_review_result.verdict.summary}"
+                )
+            else:
+                print(f"[DocumentReview] failed: {document_review_result.incomplete_reason}")
+            aggregation = apply_document_review(aggregation, document_review_result)
 
         coverage = aggregation.manifest
         aggregated_verdict = aggregation.verdict
@@ -462,6 +576,13 @@ def run_review(
         f"[Coverage] complete={coverage.complete} chunks={coverage.chunks_reviewed}/{coverage.total_chunks} "
         f"files={len(coverage.files_covered)}/{coverage.total_files}"
     )
+    if document_coverage is not None:
+        print(
+            f"[DocumentCoverage] complete={document_coverage.complete} "
+            f"sections={document_coverage.chunks_reviewed}/{document_coverage.total_chunks} "
+            f"documents={document_coverage.total_documents} "
+            f"bytes={document_coverage.bytes_reviewed}/{document_coverage.bytes_total}"
+        )
     for finding in deterministic.findings:
         print(f"[Finding] {finding.render()}")
     if context_manifest is not None:
@@ -496,6 +617,7 @@ def run_review(
         audit=aggregated_verdict,
         coverage=coverage,
         context=context_manifest,
+        document_review=document_coverage,
         published_state=state.value,
     )
     return 0
@@ -513,7 +635,14 @@ def main(argv: list[str] | None = None) -> int:
         print("::error::GITHUB_TOKEN is not set; the gate cannot publish its status check.")
         return 2
     gh = GhCliRunner(repository, token=token)
-    return run_review(args=args, env=env, gh=gh, llm_runner=run_llm_audit, synthesis_runner=run_synthesis_review)
+    return run_review(
+        args=args,
+        env=env,
+        gh=gh,
+        llm_runner=run_llm_audit,
+        synthesis_runner=run_synthesis_review,
+        document_review_runner=run_document_review,
+    )
 
 
 if __name__ == "__main__":
