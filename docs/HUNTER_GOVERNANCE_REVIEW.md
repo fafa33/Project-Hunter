@@ -261,6 +261,24 @@ first run of the workflow.
 - Draft PRs are evaluated like any other PR. GitHub additionally blocks their
   merge until they leave draft status.
 
+## Troubleshooting
+
+- **`REVIEW_FAILED` with `LLM API returned HTTP 413`**: the assembled audit
+  prompt exceeded the provider's tokens-per-minute limit. `llm_audit.py`
+  bounds the full prompt to `PROMPT_CHAR_BUDGET`; if this still occurs, the
+  configured `HUNTER_LLM_MODEL`'s real provider TPM limit is lower than the
+  value `PROMPT_TOKEN_BUDGET` was derived against and the budget must be
+  lowered to match it.
+- **`REVIEW_FAILED` with `missing API secret`**: none of `HUNTER_LLM_API_KEY`,
+  `GROQ_API_KEY`, or `OPENAI_API_KEY` is configured as a repository secret.
+  This is the intended fail-closed bootstrap behavior, not a bug — configure
+  one of these secrets to let the LLM audit run.
+- **`CHANGES_REQUIRED` with no visible reason**: check the workflow run log
+  for `[AuditVerdict]`, `[AuditFinding]`, and `[AuditRationale]` lines, or the
+  run's step summary (`GITHUB_STEP_SUMMARY`) under "Hostile architecture
+  audit" — both are populated with the LLM's full structured findings, not
+  just the bare outcome.
+
 ## Files
 
 | File | Purpose |
