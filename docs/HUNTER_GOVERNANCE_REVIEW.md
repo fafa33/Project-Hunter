@@ -138,79 +138,135 @@ diff and that a clean chunk should still be marked `APPROVED` for itself,
 since full coverage is enforced by aggregating every chunk afterward
 (`aggregate.py`), not by any single chunk's verdict.
 
-Each chunk's OpenAI-compatible chat-completions call (Groq by default,
-matching the repository's existing CI provider convention) embeds: the exact
+Each chunk's OpenAI-compatible chat-completions call embeds: the exact
 review pair, PR metadata, that one chunk's diff text, the deterministic
 findings, and Stage 1's resolved governance-context excerpt. PR content is
 treated as untrusted data.
 
+**Provider-neutral by design (Groq removed from the production path).**
+This gate previously defaulted to Groq. Groq is now a **disqualified
+provider for this gate's production/merge-critical path**: a repository-owner
+decision made after repeated live-run evidence that a single Groq
+on-demand account's rate/quota limits could not reliably complete this
+repository's real review workload (see "Historical incident record" below
+for the specific failures that led to this decision). No vendor, endpoint,
+or model is hardcoded anywhere in `llm_audit.py` anymore. Instead, every
+call goes through a small, generic, configuration-driven provider
+abstraction:
+
+- Up to three provider **slots**, each requiring all three of its own
+  variables to be set (`llm_audit._resolve_providers`, `_PROVIDER_SLOTS`):
+  `HUNTER_LLM_API_KEY`/`HUNTER_LLM_BASE_URL`/`HUNTER_LLM_MODEL` (slot 1),
+  `HUNTER_LLM_API_KEY_2`/`HUNTER_LLM_BASE_URL_2`/`HUNTER_LLM_MODEL_2`
+  (slot 2), `HUNTER_LLM_API_KEY_3`/`HUNTER_LLM_BASE_URL_3`/`HUNTER_LLM_MODEL_3`
+  (slot 3). A slot whose key is set but whose URL or model is missing is a
+  configuration error for that slot only (recorded, not fatal) and is
+  skipped -- it never silently falls back to an assumed vendor default,
+  because none exists.
+- Slots are tried in that fixed numeric order for every call
+  (`llm_audit._call_chat_completion`). An **operational failure** (a
+  network/timeout error, or ANY non-2xx HTTP response -- rate limit, quota
+  exhaustion, service/model unavailable, server error, auth failure, ...;
+  see `ProviderOperationalError`) marks that provider unhealthy for the
+  **rest of the current review run** (`ProviderHealth`, one instance shared
+  across every diff-chunk, synthesis, and document-review call in a
+  `run_review()` invocation) and moves to the next configured, still-healthy
+  provider immediately -- there is no in-provider retry loop; the fallback
+  to the next provider IS the recovery mechanism. A **non-operational**
+  failure (a truncated completion, or a schema/validation failure in an
+  otherwise-successful response) does NOT blacklist the provider -- only
+  that one call falls over to the next provider, since a single malformed
+  response says nothing about the provider's actual availability. Before
+  any network call, each provider passes a cheap, local-only **preflight**
+  check (`llm_audit._preflight_provider`: non-empty key, an `http(s)` base
+  URL, a non-empty model) -- a provider that fails preflight is marked
+  unhealthy and skipped without spending a request on it.
+- `LLMAuditError` (which the Decision Engine maps to `REVIEW_FAILED`) is
+  raised by a call only once every currently-eligible configured provider
+  has failed for that call -- never merely because the first one did, and a
+  provider failure of any kind is never itself converted into `APPROVED` or
+  treated as a repository/architecture finding.
+- A `CHANGES_REQUIRED` (or `APPROVED`) response that is complete and
+  strictly schema-valid is the final answer for that call: the gate never
+  tries a second provider hoping for a different verdict once one provider
+  has produced a trustworthy result.
+- **Resume/replay safety.** Within one `run_review()` execution, a provider
+  switching mid-run does not re-review or invalidate chunks/sections
+  already completed by a different provider earlier in the SAME run: the
+  per-chunk/per-section loop only ever calls forward, and every provider
+  must answer the identical strict JSON schema, so results from different
+  providers within one run are directly comparable and safely combinable
+  without any special reconciliation. There is no cross-run persistence --
+  a fresh workflow run always performs a complete review from scratch
+  (unchanged, existing fail-closed behavior; no partial credit carries
+  across separate job invocations).
+- The published `Hunter Governance Review` **commit status** is the
+  authoritative merge-gate signal -- it can differ from the GitHub Actions
+  **job's** own pass/fail (a job "succeeds" whenever the Python process
+  exits 0 and finishes publishing a status, which happens for `APPROVED`,
+  `CHANGES_REQUIRED`, AND `REVIEW_FAILED` alike). Always check the commit
+  status (`gh api repos/<owner>/<repo>/commits/<sha>/statuses`, or the PR's
+  checks list), never the Actions job's own green/red, to know the real
+  verdict.
+- **No free tier is claimed to be permanently reliable.** Configuring a
+  second, genuinely independent provider slot (a different account,
+  different vendor, or different tier from slot 1) is what actually removes
+  the single-point-of-failure -- configuring only one slot leaves the gate
+  exactly as exposed to that one provider's outages/quota as before Groq's
+  removal.
+
+See "Repository secrets and provider failover" under Configuration below
+for exact setup, and `llm_audit.py`'s module docstring and
+`_resolve_providers`'s docstring for the full behavioral contract.
+
+**Historical incident record (Groq, prior to removal).** The character
+budget below was originally derived from Groq-specific failures: an HTTP
+413 (PR #200, workflow run 31056865509 -- "Request too large ... tokens per
+minute (TPM): Limit 12000, Requested 27258") when the pre-chunking bounds
+had no relationship to that limit; a 116-chunk diff producing HTTP 429 on
+113/116 chunks after 2-3 calls exhausted Groq's per-minute window (workflow
+run 31065137201); and Groq's *daily* token quota being exhausted mid-run
+(workflow run 31066459333, "... on tokens per day (TPD): Limit 100000, Used
+95514 ... Please try again in 44m34.944s") -- a wait no bounded CI job can
+absorb. These incidents are why Groq-specific retry/backoff and
+duration-parsing code (a bounded number of in-provider retries with
+provider-suggested wait times, and separate TPM-vs-TPD classification) was
+built, and later why it was removed entirely in favor of the provider-failover
+design above: no per-provider retry logic can fix a single provider's
+workload being fundamentally too small for this repository's real review
+sizes -- only an independently-quota'd second provider can.
+
 The full assembled prompt for **one chunk** (system + user messages) is
-bounded to a fixed character budget (`PROMPT_CHAR_BUDGET` in `llm_audit.py`,
-29,750 characters, using a conservative 3.5 chars/token estimate against an
-8,500-token target) so it stays within the pinned default model's actual
-provider rate limit (`PROVIDER_TPM_LIMIT`, 12,000 -- Groq's on-demand tier
-for `llama-3.3-70b-versatile`). A chunk's own diff text absorbs whatever
-budget remains after the PR body, changed-file list, findings, and context
-excerpt (`context.DEFAULT_TOTAL_CHAR_BUDGET`, 12,500 characters -- sized
-against the real canonical hierarchy: as of this writing 12 mandatory
-documents, whose full uncut excerpts measure 11,758 characters together;
-see that constant's comment for the exact `gh api` measurement) are
-rendered; `estimate_chunk_diff_budget` sizes chunks *before* they are built
-so this should never bind in practice, but if a chunk still does not fit,
-`build_chunk_audit_prompt` raises rather than silently truncating -- that
-chunk is recorded as failed, which fails the whole review's coverage closed
-(see Stage 4). This budget was derived directly from real failures on this
-gate's own live installation run: first an HTTP 413 (PR #200, workflow run
-31056865509 -- "Request too large ... tokens per minute (TPM): Limit 12000,
-Requested 27258" -- because the original pre-chunking bounds had no
-relationship to that limit), and later a context budget too small for the
-real canonical hierarchy to fit without every mandatory document being
-squeezed to zero characters and failing every run closed (workflow run
-31094837347).
+bounded to a **configuration-driven** character budget
+(`HUNTER_LLM_PROMPT_TOKEN_BUDGET`, default 6,000 tokens / 21,000 characters
+at a conservative 3.5 chars/token estimate) rather than a constant derived
+from any one provider's rate limit -- a differently-configured provider has
+a different real limit, and that real limit is frequently not published as
+a fixed public number at all (e.g. Gemini's free-tier RPM/TPM/RPD is
+account/project-specific, visible only in AI Studio, not in the public API
+docs). The default is deliberately conservative so it fits comfortably
+under most modern providers' free-tier per-request limits without any
+per-provider tuning; an operator who has verified their specific
+provider/tier's real limits can raise or lower it. A chunk's own diff text
+absorbs whatever budget remains after the PR body, changed-file list,
+findings, and context excerpt are rendered; `estimate_chunk_diff_budget`
+sizes chunks *before* they are built so this should never bind in practice,
+but if a chunk still does not fit, `build_chunk_audit_prompt` raises rather
+than silently truncating -- that chunk is recorded as failed, which fails
+the whole review's coverage closed (see Stage 4).
 
-**Rate limiting across sequential chunk calls is expected, not exceptional,
-and is retried, not treated as a hard failure.** `PROVIDER_TPM_LIMIT` bounds
-a single request, but it is actually a *rate* -- tokens per rolling 60-second
-window -- and a review with many chunks makes many sequential requests that
-all draw from that same window. Re-verifying this very fix live against
-PR #200's own (much larger, cumulative) diff produced 116 chunks, and 113 of
-them failed with HTTP 429 ("Rate limit reached ... Please try again in
-21.98s") after only the first 2-3 calls exhausted the window (workflow run
-31065137201) -- even though every individual request stayed safely under the
-per-request limit above. `run_llm_audit` now retries a 429 using the
-provider's own suggested wait time (parsed from its error message, falling
-back to a fixed conservative backoff if it cannot be parsed), bounded to
-`MAX_RATE_LIMIT_RETRIES` (5) attempts, before giving up on that chunk -- which
-correctly fails coverage closed (see Stage 4) rather than retrying forever.
-Widening the per-chunk budget (above) and shrinking the context excerpt
-directly reduce how often this triggers by reducing the total chunk count for
-a given diff size (116 -> ~20 chunks on the same real PR #200 diff).
-
-**A per-day (TPD) 429 is a different failure mode and is never retried.** A
-further live re-verification of this exact fix (workflow run 31066459333)
-hit Groq's *daily* token quota mid-run ("... on tokens per day (TPD): Limit
-100000, Used 95514 ... Please try again in 44m34.944s") -- a wait no retry
-budget sized for a 30-minute CI job can absorb, and one the prior
-seconds-only duration regex would have mis-parsed as 34.944 seconds anyway
-(silently dropping the "44m" prefix). `_parse_retry_after_seconds` now
-parses Groq's `<h>h<m>m<s>s` form correctly, and `_is_daily_rate_limit`
-detects the `"tokens per day"` marker and fails that chunk immediately --
-one wasted request, not `MAX_RATE_LIMIT_RETRIES` of them -- surfacing the
-provider's own message (which already names the limit type and suggested
-wait) directly to the operator, who needs to wait for the daily quota to
-reset or raise it, not a code fix.
-
-The completion is separately capped with an **adaptive** `max_tokens`
-(`MIN_COMPLETION_TOKENS` 512 .. `MAX_COMPLETION_TOKENS_CAP` 2,048, scaled to
-how much of the TPM budget the prompt did not use, with a safety factor)
-since the provider's per-minute token limit covers prompt and completion
-together -- a flat cap sized for a small response silently truncates a
-larger, entirely legitimate findings list into invalid JSON. The gate also
-requests `response_format: {"type": "json_object"}` (preferring the
-provider's structured-output control where supported) and explicitly checks
-the response's `finish_reason`: a value of `"length"` means the completion
-was cut off, and the gate fails that chunk closed rather than attempt to
-parse a possibly-invalid truncated response.
+The completion is separately capped with a **configuration-driven**
+`max_tokens` (`HUNTER_LLM_MAX_COMPLETION_TOKENS`, default 4,096, clamped to
+`[512, 8192]` regardless of configuration) -- a flat cap sized too small for
+a legitimate findings list would truncate it into invalid JSON, so the
+default is generous rather than tightly fitted to any one provider's shared
+prompt+completion budget (which is no longer an assumption this gate
+makes). The gate also requests `response_format: {"type": "json_object"}`
+(preferring the provider's structured-output control where supported -- not
+guaranteed for every OpenAI-compatible endpoint) and explicitly checks the
+response's `finish_reason`: a value of `"length"` means the completion was
+cut off, and the gate fails that chunk closed rather than attempt to parse
+a possibly-invalid truncated response.
 
 The model must return strict JSON, validated field-by-field:
 
@@ -283,10 +339,10 @@ two individually "clean-sounding" chunks can still hide a real contradiction
 if their structured evidence disagrees. This is deliberately the one minimal
 addition needed to catch that class of contradiction, not a general
 reasoning engine: it is a single bounded call reusing the exact same strict
-schema, budget, and retry machinery as a per-chunk call
+schema, budget, and provider-failover machinery as a per-chunk call
 (`llm_audit._call_chat_completion`), so it cannot reintroduce the
-token-budget or rate-limit fragility a larger, unbounded synthesis mechanism
-would. A `CHANGES_REQUIRED` synthesis verdict means a contradiction was
+token-budget fragility a larger, unbounded synthesis mechanism would. A
+`CHANGES_REQUIRED` synthesis verdict means a contradiction was
 found; its findings are folded into the aggregate result with a `SYN-` id
 prefix. A synthesis failure (network error, malformed output, or an input
 too large to fit even this bounded call) is folded in exactly like a failed
@@ -482,59 +538,107 @@ workflow.
 
 ### Repository secrets and provider failover
 
-| Secret | Purpose |
-|---|---|
-| `HUNTER_LLM_API_KEY` | LLM API key, tried first |
-| `GROQ_API_KEY` | LLM API key, tried second |
-| `OPENAI_API_KEY` | LLM API key, tried third; uses the OpenAI endpoint/model |
+**Groq is disqualified from this gate's production/merge-critical path** —
+a repository-owner decision (not a universal claim about Groq as a
+service), made after repeated live-run evidence that a single Groq
+on-demand account's rate/quota limits could not reliably complete this
+repository's real review workload. `GROQ_API_KEY` and `OPENAI_API_KEY` are
+**no longer recognized environment variable names anywhere in this gate** —
+setting either one, alone or together, with none of the `HUNTER_LLM_*`
+variables below set, still produces `missing API secret` and
+`REVIEW_FAILED`. There is no hidden fallback to Groq under any
+configuration.
 
-**Every configured secret above is an independently-triable provider, tried in
-this exact, fixed priority order for every single LLM call the gate makes**
-(`llm_audit._resolve_providers`) — not a first-match-wins exclusive choice.
-`_call_chat_completion` tries `HUNTER_LLM_API_KEY` first; if that provider
-fails for any reason (network error, any HTTP error including a 429 quota
-exhaustion, a truncated or malformed completion, or a schema/validation
-failure), it tries `GROQ_API_KEY` next, then `OPENAI_API_KEY`. `REVIEW_FAILED`
-occurs only once every configured provider has failed for that call — never
-when at least one configured provider can still successfully produce a
-trustworthy verdict. This applies independently to every call the gate makes
-(every diff chunk, the cross-chunk synthesis call, and every authoritative-
-document section), so a provider that fails partway through a review (e.g.
-its daily quota exhausts mid-run) does not fail the calls that come after it.
+Provider configuration is fully generic instead: up to three **provider
+slots**, each independent and each requiring all three of its own variables
+to enable it. No vendor, endpoint, or model is assumed for any slot.
 
-When no secret is configured at all, the gate publishes `REVIEW_FAILED` — it
-never skips. `HUNTER_LLM_BASE_URL`/`HUNTER_LLM_MODEL` (below) override
-`HUNTER_LLM_API_KEY`'s and `GROQ_API_KEY`'s endpoint/model when set; see
-`_resolve_providers`'s docstring for the exact (and 100%-backward-compatible)
-scoping rule when `OPENAI_API_KEY` is configured alongside one of them.
+| Secret (sensitive) | Variable (non-sensitive) | Purpose |
+|---|---|---|
+| `HUNTER_LLM_API_KEY` | `HUNTER_LLM_BASE_URL`, `HUNTER_LLM_MODEL` | Slot 1 — tried first |
+| `HUNTER_LLM_API_KEY_2` | `HUNTER_LLM_BASE_URL_2`, `HUNTER_LLM_MODEL_2` | Slot 2 — tried second |
+| `HUNTER_LLM_API_KEY_3` | `HUNTER_LLM_BASE_URL_3`, `HUNTER_LLM_MODEL_3` | Slot 3 — tried third |
 
-**Why this exists.** A single Groq on-demand account's daily quota
-(100,000 tokens) is not large enough for this repository's real review sizes:
-this gate's own installation PR's diff alone chunks into roughly 50 requests
-at up to ~8,500 tokens each (`llm_audit.PROMPT_TOKEN_BUDGET`) — several times
-the ENTIRE daily quota in one review pass, before the cross-chunk synthesis
-call or the authoritative-document review's own section-by-section calls are
-even counted. This is not primarily an inefficiency in how many calls one
-review makes: that per-chunk budget is already sized against the pinned
-model's hard, provider-imposed per-request limit (`PROVIDER_TPM_LIMIT`,
-12,000 tokens/minute for Groq's on-demand tier — see `llm_audit.py`'s
-module-level comment for the HTTP 413 failure this budget exists to avoid),
-so a materially larger chunk size is not available without either exceeding
-that hard per-request ceiling or reducing what governance context each chunk
-is judged against. Configuring a second, independent provider secret (a
-distinct account/tier, or `OPENAI_API_KEY`) is what actually removes the
-single-point-of-failure: that provider has its own, separate quota, so
-exhausting one account's daily budget no longer blocks the whole gate.
-**Configuring only one secret leaves the gate exactly as exposed to that
-one provider's outages/quota as before** — failover only helps once a
-second, genuinely independent secret is configured.
+A slot is a candidate only when **all three** of its variables are set. A
+slot whose key is set but whose base URL or model is missing is reported as
+a configuration issue for that slot only (visible in the run log / step
+summary) and skipped — it is never silently defaulted to some assumed
+vendor, because this module has no default vendor.
+
+**Failover behavior** (`llm_audit._resolve_providers`,
+`_call_chat_completion`): every enabled, currently-healthy slot is tried in
+that fixed slot order for every LLM call the gate makes (every diff chunk,
+the cross-chunk synthesis call, and every authoritative-document section).
+An **operational failure** on a slot (a network/timeout error, or ANY
+non-2xx HTTP response — rate limit, quota exhaustion, service/model
+unavailable, server error, invalid-key/auth failure, ...) marks that slot
+unhealthy for the **rest of the current review run** and moves to the next
+slot immediately; that slot is not retried and is not selected again in
+that same run (a fresh run — the next workflow trigger — gets a clean
+slate). A **non-operational** failure (a truncated completion, or a
+schema/validation failure in an otherwise-successful response) falls over
+to the next slot for that one call only, without blacklisting it — the run
+may still use it again on a later call. `REVIEW_FAILED` occurs only once
+every currently-eligible configured slot has failed for that call — never
+merely because the first one did, and a provider failure is never itself
+converted into `APPROVED` or `CHANGES_REQUIRED`, nor treated as a repository
+finding.
+
+**Manual setup required.** No slot is configured out of the box. To make
+this gate operational at all, the repository owner must:
+
+1. Obtain an API key from at least one OpenAI-compatible provider (Gemini's
+   OpenAI-compatibility endpoint, `https://generativelanguage.googleapis.com/v1beta/openai/`,
+   is a practical free-tier-suitable option, verified from Google's own
+   documentation to support the OpenAI-compatible chat-completions
+   endpoint, Bearer-token auth, and JSON structured output; its exact
+   free-tier RPM/TPM/RPD numbers are account/project-specific and are only
+   visible in Google AI Studio, not published as a fixed number in the
+   public API docs — verify your own project's limits there before relying
+   on it, and see "No claim of permanent reliability" below).
+2. Add that key as repository secret `HUNTER_LLM_API_KEY` (Settings →
+   Secrets and variables → Actions → Secrets).
+3. Add repository variables `HUNTER_LLM_BASE_URL` and `HUNTER_LLM_MODEL`
+   (Settings → Secrets and variables → Actions → Variables) set to that
+   provider's endpoint and the exact model name from your account (do not
+   guess a model name — an incorrect one surfaces as an operational failure
+   on the first real call and, if no other slot is configured, as
+   `REVIEW_FAILED`).
+4. **For actual failover** (not just code-level readiness), repeat steps
+   1-3 for slot 2 (`HUNTER_LLM_API_KEY_2`/`HUNTER_LLM_BASE_URL_2`/
+   `HUNTER_LLM_MODEL_2`) with a genuinely independent provider or account —
+   OpenRouter's free-tier models (`https://openrouter.ai/api/v1`, Bearer
+   auth) are one option, though verified free-tier limits without a credit
+   purchase are only 20 requests/minute and 50 requests/day, likely too
+   restrictive to complete this repository's full diff-chunk workload alone
+   in a single review, so it is more useful as a secondary/tertiary slot
+   than a sole provider; `response_format`/structured-output support for
+   OpenRouter's free models was not confirmed from public documentation and
+   should be verified per model before relying on it.
+5. Optionally tune `HUNTER_LLM_PROMPT_TOKEN_BUDGET` and
+   `HUNTER_LLM_MAX_COMPLETION_TOKENS` (below) once you have verified your
+   specific provider/tier's real limits.
+
+**Configuring only one slot leaves the gate exactly as exposed to that one
+provider's outages/quota as Groq was** — failover only helps once a second,
+genuinely independent slot is configured.
+
+**No claim of permanent reliability.** Neither Gemini's nor OpenRouter's
+free tier (nor any other free tier) is claimed to be permanently available
+or sufficient for this repository's workload indefinitely. The gate's
+provider-independence is what matters: it continues automatically when a
+configured provider is operationally unavailable, as long as another slot
+is configured — it does not depend on any specific vendor staying free or
+staying up.
 
 ### Repository variables (optional)
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `HUNTER_LLM_MODEL` | `llama-3.3-70b-versatile` (Groq) / `gpt-4o-mini` (OpenAI) | Model for the audit |
-| `HUNTER_LLM_BASE_URL` | provider default | OpenAI-compatible base URL |
+| `HUNTER_LLM_BASE_URL` / `_2` / `_3` | none — required per enabled slot | OpenAI-compatible base URL for that slot |
+| `HUNTER_LLM_MODEL` / `_2` / `_3` | none — required per enabled slot | Model name for that slot |
+| `HUNTER_LLM_PROMPT_TOKEN_BUDGET` | 6,000 (tokens) | Per-request prompt character budget; tune once your provider's real limits are verified |
+| `HUNTER_LLM_MAX_COMPLETION_TOKENS` | 4,096 | Completion token cap, clamped to `[512, 8192]` |
 | `HUNTER_GOVERNANCE_PROTECTED_BRANCHES` | `main` | Comma-separated protected branches the gate guards |
 
 ### Branch protection
@@ -607,55 +711,51 @@ sufficient for merge safety while `main` remains unprotected.
 ## Troubleshooting
 
 - **`REVIEW_FAILED` with `LLM API returned HTTP 413`**: a single chunk's
-  assembled audit prompt exceeded the provider's tokens-per-minute limit.
-  `llm_audit.py` bounds each chunk's prompt to `PROMPT_CHAR_BUDGET`; if this
-  still occurs, the configured `HUNTER_LLM_MODEL`'s real provider TPM limit
-  is lower than `PROVIDER_TPM_LIMIT`/`PROMPT_TOKEN_BUDGET` were derived
-  against and both must be lowered to match it.
-- **`REVIEW_FAILED` (or per-chunk failure) with `LLM API returned HTTP 429`
-  after several retries**: the review has enough chunks that sequential
-  calls are exhausting Groq's tokens-per-minute *rate* (not just a single
-  request's size) faster than `MAX_RATE_LIMIT_RETRIES` retries can wait it
-  out. Occasional 429s that resolve after 1-2 retries are expected and
-  normal on a multi-chunk review; if it happens on most chunks, reduce the
-  total chunk count (raise `PROMPT_TOKEN_BUDGET`/`PROMPT_CHAR_BUDGET`, or
-  shrink `context.DEFAULT_TOTAL_CHAR_BUDGET`) rather than the retry count.
-- **`REVIEW_FAILED` (or per-chunk failure) with `LLM API returned HTTP 429`
-  naming `tokens per day (TPD)`**: the configured LLM API key's *daily*
-  quota is exhausted (Groq's on-demand tier default: 100,000 tokens/day) --
-  not something a retry can fix within a bounded CI job. This is not a bug;
-  the message names the exact limit and its own suggested reset time. **If
-  only one provider secret is configured, this is expected and will recur on
-  every large review — configure a second, independent provider secret
-  (`GROQ_API_KEY` and/or `OPENAI_API_KEY` on a genuinely different
-  account/tier from whichever provider hit the quota) so the gate fails over
-  instead of blocking; see "Repository secrets and provider failover"
-  above.** If a second provider is already configured and this still occurs,
-  every configured provider's quota is exhausted; wait for a reset or
-  configure a higher-tier key.
-- **`REVIEW_FAILED` with `all N configured provider(s) failed`**: every
-  provider secret that IS configured failed for that specific call (see the
-  `|`-separated per-provider reasons in the message). This means provider
-  failover itself worked as designed -- it tried every configured provider,
-  in order -- but none of them could produce a trustworthy verdict. Check
-  each named provider's individual failure reason in the message; the fix
-  depends on which providers failed and why.
-- **`REVIEW_FAILED` with `missing API secret`**: none of `HUNTER_LLM_API_KEY`,
-  `GROQ_API_KEY`, or `OPENAI_API_KEY` is configured as a repository secret.
-  This is the intended fail-closed bootstrap behavior, not a bug — configure
-  at least one of these secrets to let the LLM audit run (configure more
-  than one, on independent accounts, for provider failover).
+  assembled audit prompt exceeded that slot's provider's real per-request
+  limit. Lower `HUNTER_LLM_PROMPT_TOKEN_BUDGET` (default 6,000 tokens) to
+  match your configured provider/model's actual verified limit.
+- **`REVIEW_FAILED` (or a per-call failure visible in `[ProviderHealth]` run
+  log lines) with `LLM API returned HTTP 429`**: that provider slot is rate
+  limited or its quota is exhausted. There is no in-provider retry anymore
+  (see "Provider-neutral by design" in Stage 3 above) -- a 429 immediately
+  marks that slot unhealthy for the rest of this run and moves to the next
+  configured slot. **If only one slot is configured, this is expected and
+  will recur on every large review** -- configure a second, genuinely
+  independent provider slot (a different account, vendor, or tier from
+  whichever slot hit the limit) so the gate fails over instead of blocking;
+  see "Repository secrets and provider failover" above. If every configured
+  slot is exhausted, wait for a reset or configure a higher-tier key.
+- **`REVIEW_FAILED` with `no configured provider could complete this review
+  request`**: every currently-eligible configured slot failed for that
+  specific call (see the `|`-separated per-slot reasons in the message).
+  This means provider failover itself worked as designed -- it tried every
+  eligible slot, in order -- but none of them could produce a trustworthy
+  verdict. Check each named slot's individual failure reason in the
+  message; the fix depends on which slots failed and why.
+- **`REVIEW_FAILED` with `no healthy configured provider remains for this
+  run`**: every configured slot has already been marked unhealthy earlier
+  in this same run (see the `[ProviderHealth]` run log lines for which
+  slot(s) failed and why, and when). This is fail-closed working as
+  designed, not a bug -- but if it happens on most runs, the workload is
+  larger than every configured slot combined can currently sustain;
+  configure an additional slot or a higher-tier key.
+- **`REVIEW_FAILED` with `missing API secret`**: no provider slot is fully
+  configured (see "Repository secrets and provider failover" above --
+  `GROQ_API_KEY`/`OPENAI_API_KEY` are NOT recognized names). This is the
+  intended fail-closed bootstrap behavior, not a bug — configure at least
+  slot 1's three variables to let the LLM audit run (configure a second
+  slot, on an independent account, for provider failover).
 - **`REVIEW_FAILED` with `completion was truncated (finish_reason=length)`**:
-  the adaptive completion budget (`MIN_COMPLETION_TOKENS` .. 
-  `MAX_COMPLETION_TOKENS_CAP`) was still insufficient for that chunk's
-  legitimate findings list. Consider a smaller `max_chunk_chars` (more,
-  smaller chunks leave more completion headroom per call) before raising the
-  cap, since raising the cap risks the same TPM overflow this budget exists
-  to prevent.
+  `HUNTER_LLM_MAX_COMPLETION_TOKENS` (default 4,096) was insufficient for
+  that chunk's legitimate findings list on the provider/model that served
+  it. Raise it (clamped to at most 8,192) if your configured provider's real
+  per-request limit has headroom for a larger completion.
 - **`REVIEW_FAILED` with `X/Y diff chunk(s) failed or were not reviewed`**:
   check the run's step summary under "Diff coverage manifest" for the exact
-  per-chunk error. This is fail-closed by design — coverage is either
-  complete or the review does not produce an approval, never a partial one.
+  per-chunk error, and under "Provider execution" for which provider(s) were
+  used and any health events. This is fail-closed by design — coverage is
+  either complete or the review does not produce an approval, never a
+  partial one.
 - **`REVIEW_FAILED` with `authoritative governance context could not be
   resolved`**: a document in `docs/CANONICAL_ARCHITECTURE_MAP.md`'s hierarchy
   could not be fetched at the exact base commit. Check the run's step summary
@@ -665,6 +765,14 @@ sufficient for merge safety while `main` remains unprotected.
   run's step summary (`GITHUB_STEP_SUMMARY`) under "Hostile architecture
   audit" — both are populated with the aggregated findings across every
   chunk, not just the bare outcome.
+- **The GitHub Actions job shows green but the PR is still blocked (or vice
+  versa)**: the Actions job's own pass/fail is NOT the merge-gate signal --
+  the job "succeeds" (exits 0) whenever the gate finished publishing a
+  status at all, which happens for `APPROVED`, `CHANGES_REQUIRED`, and
+  `REVIEW_FAILED` alike. Always check the published `Hunter Governance
+  Review` **commit status** itself (the PR's checks list, or
+  `gh api repos/<owner>/<repo>/commits/<sha>/statuses`), never the job's own
+  green/red icon.
 
 ## Files
 
@@ -675,7 +783,7 @@ sufficient for merge safety while `main` remains unprotected.
 | `scripts/hunter_governance_review/context.py` | Authoritative Context Resolver (exact-base-SHA governance docs/ADRs; resolves both the bounded excerpt and each mandatory document's full text) |
 | `scripts/hunter_governance_review/deterministic.py` | Deterministic Governance Engine |
 | `scripts/hunter_governance_review/chunking.py` | Deterministic, lossless diff chunking |
-| `scripts/hunter_governance_review/llm_audit.py` | LLM Architecture Audit (per diff chunk, cross-chunk synthesis, and per-document-section review), structured architectural evidence schema, deterministic multi-provider failover |
+| `scripts/hunter_governance_review/llm_audit.py` | LLM Architecture Audit (per diff chunk, cross-chunk synthesis, and per-document-section review), structured architectural evidence schema, generic provider abstraction with health-aware failover (no vendor hardcoded; Groq disqualified from the production path) |
 | `scripts/hunter_governance_review/aggregate.py` | Cross-chunk aggregation, synthesis folding, document-review aggregation and coverage manifest |
 | `scripts/hunter_governance_review/decision.py` | Decision Engine |
 | `scripts/hunter_governance_review/github_api.py` | `gh` CLI / GitHub API interaction |

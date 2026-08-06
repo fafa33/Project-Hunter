@@ -35,16 +35,16 @@ from hunter_governance_review.decision import decide
 from hunter_governance_review.deterministic import ValidationContext, run_deterministic_engine
 from hunter_governance_review.github_api import GitHubError
 from hunter_governance_review.llm_audit import (
-    DEFAULT_RATE_LIMIT_BACKOFF_SECONDS,
-    MAX_COMPLETION_TOKENS_CAP,
-    MAX_RATE_LIMIT_RETRIES,
+    MAX_COMPLETION_TOKENS_CEILING,
     MIN_COMPLETION_TOKENS,
     MIN_DIFF_CHAR_BUDGET,
     PR_BODY_CHAR_LIMIT,
     AuditVerdict,
     LLMAuditError,
+    LLMCallResult,
     ProviderConfig,
-    _parse_retry_after_seconds,
+    ProviderHealth,
+    _preflight_provider,
     _resolve_providers,
     build_chunk_audit_prompt,
     estimate_chunk_diff_budget,
@@ -188,7 +188,11 @@ def _env(**overrides: object) -> dict[str, str]:
         "GITHUB_TOKEN": "token",
         "GITHUB_RUN_ID": "123",
         "GITHUB_SERVER_URL": "https://github.com",
+        # Provider slot 1, fully configured (a fully generic, non-vendor
+        # endpoint/model -- this module makes no vendor assumption anywhere).
         "HUNTER_LLM_API_KEY": "secret",
+        "HUNTER_LLM_BASE_URL": "https://example-provider.test/v1",
+        "HUNTER_LLM_MODEL": "test-model",
     }
     for key, value in overrides.items():
         env[key] = str(value)
@@ -341,17 +345,21 @@ class FakeChunkLlmRunner:
         chunk: DiffChunk,
         context_brief: str,
         deterministic_findings: list[Finding],
+        health: ProviderHealth,
         timeout: int = 120,
-    ) -> AuditVerdict:
+    ) -> LLMCallResult:
         self.calls.append(chunk)
         if self.error is not None:
             raise self.error
-        return AuditVerdict(
-            verdict=self.verdict,
-            summary=f"chunk {chunk.index} summary",
-            findings=self.findings,
-            rationale="ok",
-            architectural_evidence=self.architectural_evidence_by_chunk.get(chunk.index, {}),
+        return LLMCallResult(
+            verdict=AuditVerdict(
+                verdict=self.verdict,
+                summary=f"chunk {chunk.index} summary",
+                findings=self.findings,
+                rationale="ok",
+                architectural_evidence=self.architectural_evidence_by_chunk.get(chunk.index, {}),
+            ),
+            provider="fake-provider",
         )
 
 
@@ -376,16 +384,20 @@ class FakeSynthesisRunner:
         pair: ReviewPair,
         pr: PullRequest,
         synthesis_input: str,
+        health: ProviderHealth,
         timeout: int = 120,
-    ) -> AuditVerdict:
+    ) -> LLMCallResult:
         self.calls.append(synthesis_input)
         if self.error is not None:
             raise self.error
-        return AuditVerdict(
-            verdict=self.verdict,
-            summary="synthesis summary",
-            findings=self.findings,
-            rationale="synthesis ok",
+        return LLMCallResult(
+            verdict=AuditVerdict(
+                verdict=self.verdict,
+                summary="synthesis summary",
+                findings=self.findings,
+                rationale="synthesis ok",
+            ),
+            provider="fake-provider",
         )
 
 
@@ -421,8 +433,9 @@ class FakeDocumentReviewRunner:
         pr: PullRequest,
         document_chunk: DiffChunk,
         architectural_evidence_summary: str,
+        health: ProviderHealth,
         timeout: int = 120,
-    ) -> AuditVerdict:
+    ) -> LLMCallResult:
         self.call_count += 1
         self.calls.append(document_chunk)
         if self.fail_on_call is not None and self.call_count == self.fail_on_call:
@@ -430,11 +443,14 @@ class FakeDocumentReviewRunner:
         if self.error is not None:
             raise self.error
         document_path = document_chunk.files[0] if document_chunk.files else "?"
-        return AuditVerdict(
-            verdict=self.verdict,
-            summary=f"document {document_path} section {document_chunk.index} summary",
-            findings=self.findings,
-            rationale="document review ok",
+        return LLMCallResult(
+            verdict=AuditVerdict(
+                verdict=self.verdict,
+                summary=f"document {document_path} section {document_chunk.index} summary",
+                findings=self.findings,
+                rationale="document review ok",
+            ),
+            provider="fake-provider",
         )
 
 
@@ -833,7 +849,12 @@ def test_parse_audit_response_rejects_embedded_json_surrounded_by_prose() -> Non
 def test_chunk_audit_prompt_contains_exact_pair_and_diff() -> None:
     chunk = DiffChunk(index=1, total=2, files=("src/hunter/mispricing/service.py",), text="@@ -1 +1 @@\n+orchestrate()")
     prompt = build_chunk_audit_prompt(
-        pair=_pair(), pr=_pr(), chunk=chunk, context_brief="GOVERNANCE BRIEF TEXT", deterministic_findings=[]
+        env=_env(),
+        pair=_pair(),
+        pr=_pr(),
+        chunk=chunk,
+        context_brief="GOVERNANCE BRIEF TEXT",
+        deterministic_findings=[],
     )
     assert "a" * 40 in prompt
     assert "b" * 40 in prompt
@@ -846,7 +867,7 @@ def test_chunk_audit_prompt_bounds_pr_body_to_limit() -> None:
     huge_body = "x" * (PR_BODY_CHAR_LIMIT * 5)
     chunk = DiffChunk(1, 1, ("a.py",), "@@ -1 +1 @@")
     prompt = build_chunk_audit_prompt(
-        pair=_pair(), pr=_pr(body=huge_body), chunk=chunk, context_brief="", deterministic_findings=[]
+        env=_env(), pair=_pair(), pr=_pr(body=huge_body), chunk=chunk, context_brief="", deterministic_findings=[]
     )
     assert "PR BODY TRUNCATED" in prompt
     assert huge_body not in prompt
@@ -855,15 +876,17 @@ def test_chunk_audit_prompt_bounds_pr_body_to_limit() -> None:
 def test_chunk_audit_prompt_raises_when_chunk_too_large_for_budget() -> None:
     huge_chunk = DiffChunk(1, 1, ("a.py",), "x" * 1_000_000)
     with pytest.raises(LLMAuditError, match="does not fit"):
-        build_chunk_audit_prompt(pair=_pair(), pr=_pr(), chunk=huge_chunk, context_brief="", deterministic_findings=[])
+        build_chunk_audit_prompt(
+            env=_env(), pair=_pair(), pr=_pr(), chunk=huge_chunk, context_brief="", deterministic_findings=[]
+        )
 
 
 def test_estimate_chunk_diff_budget_leaves_room_for_a_real_chunk() -> None:
-    budget = estimate_chunk_diff_budget(pr=_pr(), context_brief="short context", deterministic_findings=[])
+    budget = estimate_chunk_diff_budget(env=_env(), pr=_pr(), context_brief="short context", deterministic_findings=[])
     assert budget > MIN_DIFF_CHAR_BUDGET
     chunk = DiffChunk(1, 1, ("a.py", "b.py", "c.py"), "x" * budget)
     prompt = build_chunk_audit_prompt(
-        pair=_pair(), pr=_pr(), chunk=chunk, context_brief="short context", deterministic_findings=[]
+        env=_env(), pair=_pair(), pr=_pr(), chunk=chunk, context_brief="short context", deterministic_findings=[]
     )
     assert len(prompt) > 0  # did not raise for a chunk sized at the estimated budget
 
@@ -881,6 +904,7 @@ def test_missing_api_secret_fails_closed() -> None:
             chunk=chunk,
             context_brief="",
             deterministic_findings=[],
+            health=ProviderHealth(),
         )
 
 
@@ -921,12 +945,21 @@ def test_run_llm_audit_sets_adaptive_max_tokens_and_response_format(monkeypatch:
     monkeypatch.setattr("hunter_governance_review.llm_audit.urllib.request.urlopen", _fake_urlopen)
 
     chunk = DiffChunk(1, 1, ("a.py",), "@@ -1 +1 @@\n+ok")
-    verdict = run_llm_audit(_env(), pair=_pair(), pr=_pr(), chunk=chunk, context_brief="ctx", deterministic_findings=[])
+    result = run_llm_audit(
+        _env(),
+        pair=_pair(),
+        pr=_pr(),
+        chunk=chunk,
+        context_brief="ctx",
+        deterministic_findings=[],
+        health=ProviderHealth(),
+    )
 
-    assert verdict.verdict == "APPROVED"
+    assert result.verdict.verdict == "APPROVED"
+    assert result.provider == "slot 1 (HUNTER_LLM_API_KEY)"
     payload = captured["payload"]
     assert payload["response_format"] == {"type": "json_object"}  # type: ignore[index]
-    assert MIN_COMPLETION_TOKENS <= payload["max_tokens"] <= MAX_COMPLETION_TOKENS_CAP  # type: ignore[index]
+    assert MIN_COMPLETION_TOKENS <= payload["max_tokens"] <= MAX_COMPLETION_TOKENS_CEILING  # type: ignore[index]
 
 
 def test_run_llm_audit_fails_closed_on_truncated_completion(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -938,7 +971,15 @@ def test_run_llm_audit_fails_closed_on_truncated_completion(monkeypatch: pytest.
 
     chunk = DiffChunk(1, 1, ("a.py",), "@@ -1 +1 @@")
     with pytest.raises(LLMAuditError, match="truncated"):
-        run_llm_audit(_env(), pair=_pair(), pr=_pr(), chunk=chunk, context_brief="ctx", deterministic_findings=[])
+        run_llm_audit(
+            _env(),
+            pair=_pair(),
+            pr=_pr(),
+            chunk=chunk,
+            context_brief="ctx",
+            deterministic_findings=[],
+            health=ProviderHealth(),
+        )
 
 
 def test_run_llm_audit_rejects_unsupported_finish_reason(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -962,7 +1003,15 @@ def test_run_llm_audit_rejects_unsupported_finish_reason(monkeypatch: pytest.Mon
 
     chunk = DiffChunk(1, 1, ("a.py",), "@@ -1 +1 @@")
     with pytest.raises(LLMAuditError, match="unsupported finish_reason"):
-        run_llm_audit(_env(), pair=_pair(), pr=_pr(), chunk=chunk, context_brief="ctx", deterministic_findings=[])
+        run_llm_audit(
+            _env(),
+            pair=_pair(),
+            pr=_pr(),
+            chunk=chunk,
+            context_brief="ctx",
+            deterministic_findings=[],
+            health=ProviderHealth(),
+        )
 
 
 def test_run_llm_audit_large_legitimate_findings_set_does_not_truncate(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1004,162 +1053,33 @@ def test_run_llm_audit_large_legitimate_findings_set_does_not_truncate(monkeypat
     monkeypatch.setattr("hunter_governance_review.llm_audit.urllib.request.urlopen", _fake_urlopen)
 
     chunk = DiffChunk(1, 1, ("a.py",), "@@ -1 +1 @@\n+small diff")
-    verdict = run_llm_audit(
-        _env(), pair=_pair(), pr=_pr(), chunk=chunk, context_brief="short", deterministic_findings=[]
+    result = run_llm_audit(
+        _env(),
+        pair=_pair(),
+        pr=_pr(),
+        chunk=chunk,
+        context_brief="short",
+        deterministic_findings=[],
+        health=ProviderHealth(),
     )
-    assert verdict.verdict == "APPROVED"
-    assert len(verdict.findings) == 15
+    assert result.verdict.verdict == "APPROVED"
+    assert len(result.verdict.findings) == 15
 
 
 def _http_error(code: int, body: bytes) -> urllib.error.HTTPError:
     return urllib.error.HTTPError(url="http://x", code=code, msg="", hdrs=None, fp=io.BytesIO(body))  # type: ignore[arg-type]
 
 
-def test_run_llm_audit_retries_on_429_then_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Regression test for the live 116-chunk rate-limit failure on PR #200 itself."""
-    calls = {"count": 0}
-    sleeps: list[float] = []
-
-    def _fake_urlopen(request: object, timeout: int) -> _FakeHTTPResponse:
-        calls["count"] += 1
-        if calls["count"] == 1:
-            body = (
-                b'{"error":{"message":"Rate limit reached for model llama-3.3-70b-versatile '
-                b"... tokens per minute (TPM): Limit 12000, Used 10929, Requested 5467. "
-                b'Please try again in 5.5s.","type":"tokens","code":"rate_limit_exceeded"}}'
-            )
-            raise _http_error(429, body)
-        response_body = {
-            "choices": [
-                {
-                    "message": {
-                        "content": (
-                            '{"verdict": "APPROVED", "summary": "ok", "findings": [], "rationale": "r", '
-                            '"architectural_evidence": {}}'
-                        )
-                    },
-                    "finish_reason": "stop",
-                }
-            ]
-        }
-        return _FakeHTTPResponse(json.dumps(response_body).encode("utf-8"))
-
-    monkeypatch.setattr("hunter_governance_review.llm_audit.urllib.request.urlopen", _fake_urlopen)
-
-    chunk = DiffChunk(1, 1, ("a.py",), "@@ -1 +1 @@\n+ok")
-    verdict = run_llm_audit(
-        _env(),
-        pair=_pair(),
-        pr=_pr(),
-        chunk=chunk,
-        context_brief="ctx",
-        deterministic_findings=[],
-        sleep=sleeps.append,
-    )
-    assert verdict.verdict == "APPROVED"
-    assert calls["count"] == 2
-    assert sleeps == [5.5]
-
-
-def test_run_llm_audit_gives_up_after_max_rate_limit_retries(monkeypatch: pytest.MonkeyPatch) -> None:
-    sleeps: list[float] = []
-
-    def _fake_urlopen(request: object, timeout: int) -> _FakeHTTPResponse:
-        raise _http_error(429, b'{"error":{"message":"Rate limit reached"}}')
-
-    monkeypatch.setattr("hunter_governance_review.llm_audit.urllib.request.urlopen", _fake_urlopen)
-
-    chunk = DiffChunk(1, 1, ("a.py",), "@@ -1 +1 @@")
-    with pytest.raises(LLMAuditError, match="HTTP 429"):
-        run_llm_audit(
-            _env(),
-            pair=_pair(),
-            pr=_pr(),
-            chunk=chunk,
-            context_brief="ctx",
-            deterministic_findings=[],
-            sleep=sleeps.append,
-        )
-    assert len(sleeps) == MAX_RATE_LIMIT_RETRIES
-
-
-def test_run_llm_audit_does_not_retry_non_429_http_errors(monkeypatch: pytest.MonkeyPatch) -> None:
-    sleeps: list[float] = []
-
-    def _fake_urlopen(request: object, timeout: int) -> _FakeHTTPResponse:
-        raise _http_error(500, b"internal server error")
-
-    monkeypatch.setattr("hunter_governance_review.llm_audit.urllib.request.urlopen", _fake_urlopen)
-
-    chunk = DiffChunk(1, 1, ("a.py",), "@@ -1 +1 @@")
-    with pytest.raises(LLMAuditError, match="HTTP 500"):
-        run_llm_audit(
-            _env(),
-            pair=_pair(),
-            pr=_pr(),
-            chunk=chunk,
-            context_brief="ctx",
-            deterministic_findings=[],
-            sleep=sleeps.append,
-        )
-    assert sleeps == []
-
-
-def test_parse_retry_after_seconds_extracts_groq_message_format() -> None:
-    msg = "Rate limit reached ... Please try again in 21.98s. Need more tokens?"
-    assert _parse_retry_after_seconds(msg) == 21.98
-
-
-def test_parse_retry_after_seconds_falls_back_to_default() -> None:
-    assert _parse_retry_after_seconds("no timing info in this message") == DEFAULT_RATE_LIMIT_BACKOFF_SECONDS
-
-
-def test_parse_retry_after_seconds_handles_minutes_and_seconds_format() -> None:
-    """Regression test: the live TPD failure on PR #200 used '44m34.944s',
-    which the prior seconds-only regex mis-parsed as 34.944 seconds."""
-    msg = "Rate limit reached ... Please try again in 44m34.944s. Need more tokens?"
-    assert _parse_retry_after_seconds(msg) == pytest.approx(44 * 60 + 34.944)
-
-
-def test_parse_retry_after_seconds_handles_hours_minutes_seconds_format() -> None:
-    msg = "Please try again in 1h2m3.5s."
-    assert _parse_retry_after_seconds(msg) == pytest.approx(3600 + 120 + 3.5)
-
-
-def test_run_llm_audit_does_not_retry_daily_rate_limit(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Regression test for the live TPD failure on PR #200 (run 31066459333):
-
-    a daily quota 429 must fail immediately, not burn through
-    MAX_RATE_LIMIT_RETRIES waiting on a window that won't reopen for
-    tens of minutes -- far longer than any bounded CI job's timeout.
-    """
-    sleeps: list[float] = []
-
-    def _fake_urlopen(request: object, timeout: int) -> _FakeHTTPResponse:
-        body = (
-            b'{"error":{"message":"Rate limit reached for model llama-3.3-70b-versatile '
-            b"... on tokens per day (TPD): Limit 100000, Used 95514, Requested 7582. "
-            b'Please try again in 44m34.944s.","type":"tokens","code":"rate_limit_exceeded"}}'
-        )
-        raise _http_error(429, body)
-
-    monkeypatch.setattr("hunter_governance_review.llm_audit.urllib.request.urlopen", _fake_urlopen)
-
-    chunk = DiffChunk(1, 1, ("a.py",), "@@ -1 +1 @@")
-    with pytest.raises(LLMAuditError, match="tokens per day"):
-        run_llm_audit(
-            _env(),
-            pair=_pair(),
-            pr=_pr(),
-            chunk=chunk,
-            context_brief="ctx",
-            deterministic_findings=[],
-            sleep=sleeps.append,
-        )
-    assert sleeps == []  # not a single retry attempted
-
-
 # --- Provider resolution and failover ---------------------------------------------------
+#
+# Groq-specific retry/backoff (TPM vs TPD 429 duration parsing, bounded
+# in-provider retry) has been intentionally REMOVED as part of this
+# repository's decision to disqualify Groq from Hunter Governance Review's
+# production path -- see docs/HUNTER_GOVERNANCE_REVIEW.md. There is no
+# per-provider retry loop anymore: a single operational failure on one
+# provider immediately falls over to the next configured provider (the
+# fallback itself IS the retry). The tests below exercise that
+# health-aware, multi-provider design directly.
 
 
 def test_resolve_providers_raises_when_none_configured() -> None:
@@ -1167,95 +1087,159 @@ def test_resolve_providers_raises_when_none_configured() -> None:
         _resolve_providers({})
 
 
-def test_resolve_providers_single_hunter_key() -> None:
-    providers = _resolve_providers({"HUNTER_LLM_API_KEY": "h"})
-    assert providers == [
-        ProviderConfig("HUNTER_LLM_API_KEY", "h", "https://api.groq.com/openai/v1", "llama-3.3-70b-versatile")
-    ]
+def test_resolve_providers_groq_api_key_has_no_special_meaning() -> None:
+    """Groq-removal regression: GROQ_API_KEY (and OPENAI_API_KEY) are no
+    longer recognized names at all -- setting ONLY one of them, with none
+    of the generic HUNTER_LLM_API_KEY[_2/_3] variables set, must still
+    raise "missing API secret", proving neither vendor-named variable has
+    any special meaning left in this module."""
+    with pytest.raises(LLMAuditError, match="missing API secret"):
+        _resolve_providers({"GROQ_API_KEY": "g"})
+    with pytest.raises(LLMAuditError, match="missing API secret"):
+        _resolve_providers({"OPENAI_API_KEY": "o"})
+    with pytest.raises(LLMAuditError, match="missing API secret"):
+        _resolve_providers({"GROQ_API_KEY": "g", "OPENAI_API_KEY": "o"})
 
 
-def test_resolve_providers_single_groq_key() -> None:
-    providers = _resolve_providers({"GROQ_API_KEY": "g"})
-    assert providers == [
-        ProviderConfig("GROQ_API_KEY", "g", "https://api.groq.com/openai/v1", "llama-3.3-70b-versatile")
-    ]
-
-
-def test_resolve_providers_single_openai_key_uses_openai_defaults() -> None:
-    providers = _resolve_providers({"OPENAI_API_KEY": "o"})
-    assert providers == [ProviderConfig("OPENAI_API_KEY", "o", "https://api.openai.com/v1", "gpt-4o-mini")]
-
-
-def test_resolve_providers_single_openai_key_honors_overrides() -> None:
-    """Matches the single-provider predecessor's behavior exactly: when
-    OPENAI_API_KEY is the only configured secret, HUNTER_LLM_BASE_URL /
-    HUNTER_LLM_MODEL (if set) still override it."""
-    providers = _resolve_providers(
-        {"OPENAI_API_KEY": "o", "HUNTER_LLM_BASE_URL": "https://custom.example/v1", "HUNTER_LLM_MODEL": "custom-model"}
+def test_resolve_providers_no_vendor_default_anywhere() -> None:
+    """A fully-configured slot's base_url/model are EXACTLY what was
+    configured -- never silently substituted with a vendor default. This is
+    the generic-abstraction guarantee: the module has no opinion about which
+    vendor(s) are configured."""
+    providers, skipped = _resolve_providers(
+        {
+            "HUNTER_LLM_API_KEY": "k",
+            "HUNTER_LLM_BASE_URL": "https://my-provider.example/v1",
+            "HUNTER_LLM_MODEL": "my-model",
+        }
     )
-    assert providers == [ProviderConfig("OPENAI_API_KEY", "o", "https://custom.example/v1", "custom-model")]
+    assert skipped == []
+    assert providers == [
+        ProviderConfig("slot 1 (HUNTER_LLM_API_KEY)", "k", "https://my-provider.example/v1", "my-model")
+    ]
+
+
+def test_resolve_providers_slot_with_key_but_missing_url_and_model_is_skipped_not_fatal() -> None:
+    """A slot whose key is set but whose base URL/model are missing is a
+    configuration error for THAT SLOT (reported in ``skipped``), not a
+    fatal error for the whole review -- exactly the preflight-style "skip
+    this one, try the next" behavior required for provider configuration
+    mistakes."""
+    providers, skipped = _resolve_providers({"HUNTER_LLM_API_KEY": "k"})
+    assert providers == []
+    assert len(skipped) == 1
+    assert "slot 1" in skipped[0]
+    assert "HUNTER_LLM_BASE_URL" in skipped[0]
+    assert "HUNTER_LLM_MODEL" in skipped[0]
+
+
+def test_resolve_providers_second_slot_used_when_first_is_incomplete() -> None:
+    providers, skipped = _resolve_providers(
+        {
+            "HUNTER_LLM_API_KEY": "incomplete",
+            "HUNTER_LLM_API_KEY_2": "k2",
+            "HUNTER_LLM_BASE_URL_2": "https://b.example/v1",
+            "HUNTER_LLM_MODEL_2": "m2",
+        }
+    )
+    assert len(skipped) == 1
+    assert [p.name for p in providers] == ["slot 2 (HUNTER_LLM_API_KEY_2)"]
 
 
 def test_resolve_providers_deterministic_priority_order_all_three_configured() -> None:
-    """F-provider-order regression: HUNTER_LLM_API_KEY, then GROQ_API_KEY,
-    then OPENAI_API_KEY -- always in this fixed order, never re-ordered by
-    any runtime signal."""
-    providers = _resolve_providers({"HUNTER_LLM_API_KEY": "h", "GROQ_API_KEY": "g", "OPENAI_API_KEY": "o"})
-    assert [p.name for p in providers] == ["HUNTER_LLM_API_KEY", "GROQ_API_KEY", "OPENAI_API_KEY"]
-    assert [p.api_key for p in providers] == ["h", "g", "o"]
-
-
-def test_resolve_providers_openai_ignores_groq_scoped_overrides_when_multi_provider() -> None:
-    """When a Groq-family key is ALSO configured, HUNTER_LLM_BASE_URL /
-    HUNTER_LLM_MODEL are scoped to that Groq-family candidate; the OpenAI
-    candidate uses its own defaults regardless -- one override pair cannot
-    mean two different things for two provider families in the same
-    review."""
-    providers = _resolve_providers(
+    """Deterministic provider-order regression: slot 1, then slot 2, then
+    slot 3 -- always in this fixed order, never re-ordered by any runtime
+    signal."""
+    providers, skipped = _resolve_providers(
         {
-            "HUNTER_LLM_API_KEY": "h",
-            "OPENAI_API_KEY": "o",
-            "HUNTER_LLM_BASE_URL": "https://custom.example/v1",
-            "HUNTER_LLM_MODEL": "custom-model",
+            "HUNTER_LLM_API_KEY": "k1",
+            "HUNTER_LLM_BASE_URL": "https://a.example/v1",
+            "HUNTER_LLM_MODEL": "m1",
+            "HUNTER_LLM_API_KEY_2": "k2",
+            "HUNTER_LLM_BASE_URL_2": "https://b.example/v1",
+            "HUNTER_LLM_MODEL_2": "m2",
+            "HUNTER_LLM_API_KEY_3": "k3",
+            "HUNTER_LLM_BASE_URL_3": "https://c.example/v1",
+            "HUNTER_LLM_MODEL_3": "m3",
         }
     )
-    by_name = {p.name: p for p in providers}
-    assert by_name["HUNTER_LLM_API_KEY"].base_url == "https://custom.example/v1"
-    assert by_name["HUNTER_LLM_API_KEY"].model == "custom-model"
-    assert by_name["OPENAI_API_KEY"].base_url == "https://api.openai.com/v1"
-    assert by_name["OPENAI_API_KEY"].model == "gpt-4o-mini"
+    assert skipped == []
+    assert [p.name for p in providers] == [
+        "slot 1 (HUNTER_LLM_API_KEY)",
+        "slot 2 (HUNTER_LLM_API_KEY_2)",
+        "slot 3 (HUNTER_LLM_API_KEY_3)",
+    ]
+    assert [p.api_key for p in providers] == ["k1", "k2", "k3"]
 
 
 def test_resolve_providers_deduplicates_identical_credentials() -> None:
-    """HUNTER_LLM_API_KEY and GROQ_API_KEY set to the literally same value
-    resolve to the same (api_key, base_url, model) triple -- retrying the
-    identical account against the identical endpoint a second time would
-    never recover anything, so only one candidate is produced."""
-    providers = _resolve_providers({"HUNTER_LLM_API_KEY": "same-secret", "GROQ_API_KEY": "same-secret"})
+    """Two slots resolving to the literally identical (api_key, base_url,
+    model) triple would otherwise retry the same account against the same
+    endpoint a second time for no benefit -- only one candidate survives."""
+    providers, skipped = _resolve_providers(
+        {
+            "HUNTER_LLM_API_KEY": "same-secret",
+            "HUNTER_LLM_BASE_URL": "https://a.example/v1",
+            "HUNTER_LLM_MODEL": "m",
+            "HUNTER_LLM_API_KEY_2": "same-secret",
+            "HUNTER_LLM_BASE_URL_2": "https://a.example/v1",
+            "HUNTER_LLM_MODEL_2": "m",
+        }
+    )
     assert len(providers) == 1
     assert providers[0].api_key == "same-secret"
+    assert len(skipped) == 1
+
+
+# --- Provider preflight (local-only, no network call) ---------------------------------
+
+
+def test_preflight_provider_accepts_valid_config() -> None:
+    provider = ProviderConfig("slot 1", "key", "https://example.com/v1", "model")
+    assert _preflight_provider(provider) is None
+
+
+def test_preflight_provider_rejects_empty_api_key() -> None:
+    provider = ProviderConfig("slot 1", "", "https://example.com/v1", "model")
+    assert _preflight_provider(provider) is not None
+
+
+def test_preflight_provider_rejects_non_http_base_url() -> None:
+    provider = ProviderConfig("slot 1", "key", "not-a-url", "model")
+    error = _preflight_provider(provider)
+    assert error is not None
+    assert "http" in error
+
+
+def test_preflight_provider_rejects_empty_model() -> None:
+    provider = ProviderConfig("slot 1", "key", "https://example.com/v1", "")
+    assert _preflight_provider(provider) is not None
 
 
 def _provider_env(**keys: str) -> dict[str, str]:
-    return _env(**keys)
+    """Build an env with ONLY the given provider-slot keys set (no default
+    slot 1 config from ``_env()``) -- lets a test configure exactly the
+    slots it wants to exercise."""
+    env = {
+        "GITHUB_REPOSITORY": "fafa33/Project-Hunter",
+        "GITHUB_TOKEN": "token",
+        "GITHUB_RUN_ID": "123",
+        "GITHUB_SERVER_URL": "https://github.com",
+    }
+    env.update(keys)
+    return env
 
 
 class _RecordingMultiProviderTransport:
     """Fake ``urllib.request.urlopen`` that behaves differently per API key.
 
     ``behaviors`` maps an API key value to a zero-argument FACTORY, called
-    fresh on every request that uses that key -- never a pre-built instance.
-    A real ``HTTPError``'s body (``fp``) is a single-read stream: reusing one
-    instance across multiple calls (a real review makes many -- one per diff
-    chunk, plus synthesis, plus one per document section) would silently
-    return an EMPTY body on the second and later reads, which
-    ``_is_daily_rate_limit`` would then read as "not a daily-quota message"
-    and incorrectly fall into the real (non-injectable, since this goes
-    through the full ``run_review`` -> ``run_llm_audit`` path with no
-    ``sleep=`` override) per-minute retry-and-sleep path. A fresh factory
-    call sidesteps this entirely. Records, in ``self.calls``, the
-    ``Authorization`` header seen on every request, in order, so a test can
-    verify both WHICH providers were contacted and in what order.
+    fresh on every request that uses that key -- never a pre-built instance,
+    since a real ``HTTPError``'s body (``fp``) is a single-read stream and
+    reusing one instance across multiple calls would silently return an
+    EMPTY body on the second and later reads. Records, in ``self.calls``,
+    the ``Authorization`` header seen on every request, in order, so a test
+    can verify both WHICH providers were contacted and in what order.
     """
 
     def __init__(self, behaviors: dict[str, Callable[[], _FakeHTTPResponse]]) -> None:
@@ -1295,65 +1279,180 @@ _APPROVED_BODY = (
 )
 
 
-def test_run_llm_audit_falls_back_to_second_provider_on_first_provider_failure(
+def _multi_provider_env(*keys: str) -> dict[str, str]:
+    """An env with N fully-configured, generic provider slots (slot i uses
+    ``keys[i-1]`` as its API key) -- for tests exercising failover across
+    real slots. No vendor name, endpoint, or model appears anywhere."""
+    suffixes = ("", "_2", "_3")
+    env: dict[str, str] = {}
+    for i, key in enumerate(keys):
+        suffix = suffixes[i]
+        env[f"HUNTER_LLM_API_KEY{suffix}"] = key
+        env[f"HUNTER_LLM_BASE_URL{suffix}"] = f"https://provider-{i + 1}.example/v1"
+        env[f"HUNTER_LLM_MODEL{suffix}"] = f"model-{i + 1}"
+    return _provider_env(**env)
+
+
+def _slot_name(n: int) -> str:
+    suffix = "" if n == 1 else f"_{n}"
+    return f"slot {n} (HUNTER_LLM_API_KEY{suffix})"
+
+
+def test_run_llm_audit_falls_back_to_second_provider_on_operational_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Provider-failover regression: the first configured provider (a daily
-    quota 429, matching the live PR #200 failure) does not fail the whole
-    review -- the second configured provider is tried next, and its
-    APPROVED verdict is what the caller receives."""
-    daily_quota_body = (
-        b'{"error":{"message":"Rate limit reached ... on tokens per day (TPD): Limit 100000, '
-        b'Used 99000, Requested 5000. Please try again in 1h.","type":"tokens","code":"rate_limit_exceeded"}}'
-    )
+    """Provider-failover regression: the first configured provider failing
+    operationally (HTTP 429, matching the live PR #200 Groq failure) does
+    not fail the whole review -- the second configured provider is tried
+    next, and its APPROVED verdict is what the caller receives. The first
+    provider is also marked unhealthy for the rest of this run."""
+    quota_body = b'{"error":{"message":"rate limit exceeded"}}'
     transport = _RecordingMultiProviderTransport(
-        {
-            "hunter-key": _fail_with(429, daily_quota_body),
-            "groq-key": _succeed_with(_APPROVED_BODY),
-        }
+        {"key1": _fail_with(429, quota_body), "key2": _succeed_with(_APPROVED_BODY)}
     )
     monkeypatch.setattr("hunter_governance_review.llm_audit.urllib.request.urlopen", transport)
 
+    health = ProviderHealth()
     chunk = DiffChunk(1, 1, ("a.py",), "@@ -1 +1 @@\n+ok")
-    verdict = run_llm_audit(
-        _provider_env(HUNTER_LLM_API_KEY="hunter-key", GROQ_API_KEY="groq-key"),
+    result = run_llm_audit(
+        _multi_provider_env("key1", "key2"),
         pair=_pair(),
         pr=_pr(),
         chunk=chunk,
         context_brief="ctx",
         deterministic_findings=[],
+        health=health,
     )
-    assert verdict.verdict == "APPROVED"
-    assert transport.calls == ["hunter-key", "groq-key"]  # deterministic priority order, both attempted
+    assert result.verdict.verdict == "APPROVED"
+    assert result.provider == _slot_name(2)
+    assert transport.calls == ["key1", "key2"]
+    assert not health.is_healthy(_slot_name(1))
+    assert health.is_healthy(_slot_name(2))
 
 
-def test_run_llm_audit_falls_back_past_malformed_output_to_a_valid_provider(
+def test_run_llm_audit_falls_back_past_malformed_output_without_blacklisting(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A schema/validation failure (not just a transport failure) on one
-    provider also triggers fallback -- REVIEW_FAILED must occur only when NO
-    configured provider can produce a trustworthy verdict, not merely when
-    the FIRST one happens to fail at the network layer."""
+    """A schema/validation failure (not a transport failure) on one provider
+    also triggers fallback for THIS call -- but, unlike an operational
+    failure, does NOT mark that provider unhealthy for the rest of the run,
+    since a malformed response is about that one response's quality, not
+    the provider's availability."""
     malformed_body = b'{"choices": [{"message": {"content": "not valid json"}, "finish_reason": "stop"}]}'
     transport = _RecordingMultiProviderTransport(
-        {
-            "hunter-key": _succeed_with(malformed_body),
-            "groq-key": _succeed_with(_APPROVED_BODY),
-        }
+        {"key1": _succeed_with(malformed_body), "key2": _succeed_with(_APPROVED_BODY)}
     )
     monkeypatch.setattr("hunter_governance_review.llm_audit.urllib.request.urlopen", transport)
 
+    health = ProviderHealth()
     chunk = DiffChunk(1, 1, ("a.py",), "@@ -1 +1 @@\n+ok")
-    verdict = run_llm_audit(
-        _provider_env(HUNTER_LLM_API_KEY="hunter-key", GROQ_API_KEY="groq-key"),
+    result = run_llm_audit(
+        _multi_provider_env("key1", "key2"),
         pair=_pair(),
         pr=_pr(),
         chunk=chunk,
         context_brief="ctx",
         deterministic_findings=[],
+        health=health,
     )
-    assert verdict.verdict == "APPROVED"
-    assert transport.calls == ["hunter-key", "groq-key"]
+    assert result.verdict.verdict == "APPROVED"
+    assert transport.calls == ["key1", "key2"]
+    assert health.is_healthy(_slot_name(1))  # NOT blacklisted -- non-operational failure
+
+
+def test_operational_failure_persists_across_separate_calls_in_the_same_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Health-aware execution regression: a provider that fails
+    operationally on one call (e.g. diff chunk 1) is excluded from EVERY
+    later call in the SAME run (e.g. diff chunk 2), not merely retried on
+    the call that failed -- the shared ``ProviderHealth`` is what makes this
+    possible."""
+    transport = _RecordingMultiProviderTransport(
+        {"key1": _fail_with(500, b"internal server error"), "key2": _succeed_with(_APPROVED_BODY)}
+    )
+    monkeypatch.setattr("hunter_governance_review.llm_audit.urllib.request.urlopen", transport)
+
+    health = ProviderHealth()
+    env = _multi_provider_env("key1", "key2")
+    chunk1 = DiffChunk(1, 2, ("a.py",), "@@ -1 +1 @@\n+ok")
+    chunk2 = DiffChunk(2, 2, ("b.py",), "@@ -1 +1 @@\n+ok2")
+
+    run_llm_audit(
+        env, pair=_pair(), pr=_pr(), chunk=chunk1, context_brief="ctx", deterministic_findings=[], health=health
+    )
+    assert transport.calls == ["key1", "key2"]
+
+    transport.calls.clear()
+    result2 = run_llm_audit(
+        env, pair=_pair(), pr=_pr(), chunk=chunk2, context_brief="ctx", deterministic_findings=[], health=health
+    )
+    # key1 (slot 1) is skipped entirely on the second call -- never attempted again this run.
+    assert transport.calls == ["key2"]
+    assert result2.verdict.verdict == "APPROVED"
+
+
+def test_non_operational_failure_does_not_persist_across_separate_calls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Contrast case for the test above: a NON-operational (schema) failure
+    on one call does not exclude that provider from a later call in the
+    same run -- it gets a fresh chance every time, since nothing indicated
+    it was actually unavailable."""
+    malformed_body = b'{"choices": [{"message": {"content": "not valid json"}, "finish_reason": "stop"}]}'
+    transport = _RecordingMultiProviderTransport(
+        {"key1": _succeed_with(malformed_body), "key2": _succeed_with(_APPROVED_BODY)}
+    )
+    monkeypatch.setattr("hunter_governance_review.llm_audit.urllib.request.urlopen", transport)
+
+    health = ProviderHealth()
+    env = _multi_provider_env("key1", "key2")
+    chunk1 = DiffChunk(1, 2, ("a.py",), "@@ -1 +1 @@\n+ok")
+    chunk2 = DiffChunk(2, 2, ("b.py",), "@@ -1 +1 @@\n+ok2")
+
+    run_llm_audit(
+        env, pair=_pair(), pr=_pr(), chunk=chunk1, context_brief="ctx", deterministic_findings=[], health=health
+    )
+    transport.calls.clear()
+    run_llm_audit(
+        env, pair=_pair(), pr=_pr(), chunk=chunk2, context_brief="ctx", deterministic_findings=[], health=health
+    )
+    # key1 is tried AGAIN on the second call -- not excluded.
+    assert transport.calls == ["key1", "key2"]
+
+
+def test_changes_required_from_first_provider_does_not_fail_over_seeking_approval(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A COMPLETE, validly-schemed CHANGES_REQUIRED response from the first
+    provider is the final answer for this call -- the gate never tries a
+    second provider hoping for a more lenient verdict. The second
+    configured provider must never even be contacted."""
+    blocking_body = (
+        b'{"choices": [{"message": {"content": '
+        b'"{\\"verdict\\": \\"CHANGES_REQUIRED\\", \\"summary\\": \\"s\\", \\"findings\\": '
+        b'[{\\"id\\": \\"F-001\\", \\"severity\\": \\"blocking\\", \\"location\\": \\"a.py\\", '
+        b'\\"description\\": \\"d\\", \\"decision_impact\\": \\"i\\"}], '
+        b'\\"rationale\\": \\"r\\", \\"architectural_evidence\\": {}}"}, "finish_reason": "stop"}]}'
+    )
+    transport = _RecordingMultiProviderTransport(
+        {"key1": _succeed_with(blocking_body), "key2": _succeed_with(_APPROVED_BODY)}
+    )
+    monkeypatch.setattr("hunter_governance_review.llm_audit.urllib.request.urlopen", transport)
+
+    chunk = DiffChunk(1, 1, ("a.py",), "@@ -1 +1 @@\n+ok")
+    result = run_llm_audit(
+        _multi_provider_env("key1", "key2"),
+        pair=_pair(),
+        pr=_pr(),
+        chunk=chunk,
+        context_brief="ctx",
+        deterministic_findings=[],
+        health=ProviderHealth(),
+    )
+    assert result.verdict.verdict == "CHANGES_REQUIRED"
+    assert result.provider == _slot_name(1)
+    assert transport.calls == ["key1"]  # key2 never contacted
 
 
 def test_run_llm_audit_tries_all_three_providers_in_deterministic_order_before_succeeding(
@@ -1361,24 +1460,47 @@ def test_run_llm_audit_tries_all_three_providers_in_deterministic_order_before_s
 ) -> None:
     transport = _RecordingMultiProviderTransport(
         {
-            "hunter-key": _fail_with(500, b"internal server error"),
-            "groq-key": _fail_with(500, b"internal server error"),
-            "openai-key": _succeed_with(_APPROVED_BODY),
+            "key1": _fail_with(500, b"internal server error"),
+            "key2": _fail_with(500, b"internal server error"),
+            "key3": _succeed_with(_APPROVED_BODY),
         }
     )
     monkeypatch.setattr("hunter_governance_review.llm_audit.urllib.request.urlopen", transport)
 
     chunk = DiffChunk(1, 1, ("a.py",), "@@ -1 +1 @@\n+ok")
-    verdict = run_llm_audit(
-        _provider_env(HUNTER_LLM_API_KEY="hunter-key", GROQ_API_KEY="groq-key", OPENAI_API_KEY="openai-key"),
+    result = run_llm_audit(
+        _multi_provider_env("key1", "key2", "key3"),
         pair=_pair(),
         pr=_pr(),
         chunk=chunk,
         context_brief="ctx",
         deterministic_findings=[],
+        health=ProviderHealth(),
     )
-    assert verdict.verdict == "APPROVED"
-    assert transport.calls == ["hunter-key", "groq-key", "openai-key"]
+    assert result.verdict.verdict == "APPROVED"
+    assert transport.calls == ["key1", "key2", "key3"]
+
+
+def test_preflight_failure_skips_provider_with_no_network_call(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A provider whose configuration is complete (all three variables set)
+    but locally invalid (a non-http(s) base URL) fails preflight and is
+    skipped WITHOUT ever making a network request -- the next provider is
+    tried immediately."""
+    transport = _RecordingMultiProviderTransport({"key1": _fail_with(500, b"x"), "key3": _succeed_with(_APPROVED_BODY)})
+    monkeypatch.setattr("hunter_governance_review.llm_audit.urllib.request.urlopen", transport)
+
+    env = _multi_provider_env("key1", "key2", "key3")
+    env["HUNTER_LLM_BASE_URL_2"] = "not-a-url"  # complete but invalid -- preflight catches this
+
+    chunk = DiffChunk(1, 1, ("a.py",), "@@ -1 +1 @@\n+ok")
+    health = ProviderHealth()
+    result = run_llm_audit(
+        env, pair=_pair(), pr=_pr(), chunk=chunk, context_brief="ctx", deterministic_findings=[], health=health
+    )
+    assert result.verdict.verdict == "APPROVED"
+    assert "key2" not in transport.calls  # slot 2 never reached the network
+    assert transport.calls == ["key1", "key3"]
+    assert not health.is_healthy(_slot_name(2))  # preflight failure still marks it unhealthy
 
 
 def test_run_llm_audit_fails_closed_when_every_configured_provider_fails(
@@ -1388,24 +1510,22 @@ def test_run_llm_audit_fails_closed_when_every_configured_provider_fails(
     raises LLMAuditError (which the Decision Engine maps to REVIEW_FAILED)
     -- never a partial, best-effort, or default-to-approved outcome."""
     transport = _RecordingMultiProviderTransport(
-        {
-            "hunter-key": _fail_with(500, b"internal server error"),
-            "groq-key": _fail_with(503, b"service unavailable"),
-        }
+        {"key1": _fail_with(500, b"internal server error"), "key2": _fail_with(503, b"service unavailable")}
     )
     monkeypatch.setattr("hunter_governance_review.llm_audit.urllib.request.urlopen", transport)
 
     chunk = DiffChunk(1, 1, ("a.py",), "@@ -1 +1 @@\n+ok")
-    with pytest.raises(LLMAuditError, match="all 2 configured provider"):
+    with pytest.raises(LLMAuditError, match="no configured provider could complete"):
         run_llm_audit(
-            _provider_env(HUNTER_LLM_API_KEY="hunter-key", GROQ_API_KEY="groq-key"),
+            _multi_provider_env("key1", "key2"),
             pair=_pair(),
             pr=_pr(),
             chunk=chunk,
             context_brief="ctx",
             deterministic_findings=[],
+            health=ProviderHealth(),
         )
-    assert transport.calls == ["hunter-key", "groq-key"]
+    assert transport.calls == ["key1", "key2"]
 
 
 def test_run_llm_audit_single_provider_still_fails_closed_with_no_fallback_configured() -> None:
@@ -1413,40 +1533,47 @@ def test_run_llm_audit_single_provider_still_fails_closed_with_no_fallback_confi
     one provider secret configured, a failure still fails closed exactly as
     before -- there is simply nothing to fall back to."""
     chunk = DiffChunk(1, 1, ("a.py",), "@@ -1 +1 @@")
-    with pytest.raises(LLMAuditError, match="all 1 configured provider"):
+    with pytest.raises(LLMAuditError, match="no configured provider could complete"):
         run_llm_audit(
-            _provider_env(HUNTER_LLM_API_KEY="only-key"),
+            _multi_provider_env("only-key"),
             pair=_pair(),
             pr=_pr(),
             chunk=chunk,
             context_brief="ctx",
             deterministic_findings=[],
+            health=ProviderHealth(),
         )
+
+
+def test_secrets_and_provider_failures_never_appear_in_health_events() -> None:
+    """No secret leakage: a provider's actual API key value must never
+    appear anywhere in ``ProviderHealth.events`` (attempt/switch/failure
+    provenance) -- only the slot name, never the credential."""
+    health = ProviderHealth()
+    secret_value = "sk-super-secret-value-should-never-leak"
+    health.mark_unhealthy(
+        _slot_name(1), f"LLM API returned HTTP 401: unauthorized for key ending in ...{secret_value[-4:]}"
+    )
+    for event in health.events:
+        assert secret_value not in event
 
 
 def test_run_review_provider_fallback_produces_no_false_approval_end_to_end(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """End-to-end (run_review, real run_llm_audit) proof that provider
-    fallback integrates correctly with the rest of the gate: a first
-    provider that is completely unusable (daily quota exhausted) does not
-    prevent a legitimate APPROVED outcome from a second configured
+    """End-to-end (run_review, real run_llm_audit/run_synthesis_review/
+    run_document_review) proof that provider fallback integrates correctly
+    with the rest of the gate: a first provider that is completely unusable
+    does not prevent a legitimate APPROVED outcome from a second configured
     provider, and the published status is success only because a real
     provider actually produced a valid, complete review -- not a default."""
-    daily_quota_body = (
-        b'{"error":{"message":"Rate limit reached ... on tokens per day (TPD): Limit 100000, '
-        b'Used 99000, Requested 5000. Please try again in 1h.","type":"tokens","code":"rate_limit_exceeded"}}'
-    )
     transport = _RecordingMultiProviderTransport(
-        {
-            "hunter-key": _fail_with(429, daily_quota_body),
-            "groq-key": _succeed_with(_APPROVED_BODY),
-        }
+        {"key1": _fail_with(429, b'{"error":"rate limited"}'), "key2": _succeed_with(_APPROVED_BODY)}
     )
     monkeypatch.setattr("hunter_governance_review.llm_audit.urllib.request.urlopen", transport)
 
     gh = FakeGhRunner()
-    env = _env(HUNTER_LLM_API_KEY="hunter-key", GROQ_API_KEY="groq-key")
+    env = _multi_provider_env("key1", "key2")
     code = run_review(
         args=_args(),
         env=env,
@@ -1458,10 +1585,102 @@ def test_run_review_provider_fallback_produces_no_false_approval_end_to_end(
     assert code == 0
     assert gh.statuses[0]["state"] == "success"
     # Every real provider call (chunk audit, synthesis, and every mandatory
-    # document section) failed over from hunter-key to groq-key.
+    # document section) failed over from key1 to key2, and key1 was never
+    # retried after its first operational failure.
     assert transport.calls
-    assert all(call in ("hunter-key", "groq-key") for call in transport.calls)
-    assert "groq-key" in transport.calls
+    assert transport.calls.count("key1") == 1
+    assert all(call in ("key1", "key2") for call in transport.calls)
+    assert "key2" in transport.calls
+
+
+def test_a_429_on_one_provider_is_never_retried_against_that_same_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ "429/quota does not repeatedly retry forever" regression, made
+    explicit: a 429 (or any operational failure) results in EXACTLY ONE
+    request to the failing provider, never a retry loop against it -- the
+    fallback to the next configured provider IS the recovery mechanism,
+    not an in-provider wait-and-retry."""
+    transport = _RecordingMultiProviderTransport(
+        {"key1": _fail_with(429, b'{"error":"rate limited"}'), "key2": _succeed_with(_APPROVED_BODY)}
+    )
+    monkeypatch.setattr("hunter_governance_review.llm_audit.urllib.request.urlopen", transport)
+
+    chunk = DiffChunk(1, 1, ("a.py",), "@@ -1 +1 @@\n+ok")
+    result = run_llm_audit(
+        _multi_provider_env("key1", "key2"),
+        pair=_pair(),
+        pr=_pr(),
+        chunk=chunk,
+        context_brief="ctx",
+        deterministic_findings=[],
+        health=ProviderHealth(),
+    )
+    assert result.verdict.verdict == "APPROVED"
+    assert transport.calls.count("key1") == 1  # exactly one attempt, never retried
+
+
+def test_run_review_all_providers_failing_operationally_publishes_review_failed_never_approved(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """End-to-end: when every configured provider fails operationally, the
+    published status must be REVIEW_FAILED (failure) -- never APPROVED,
+    never a default, never a silently-downgraded CHANGES_REQUIRED."""
+    transport = _RecordingMultiProviderTransport(
+        {"key1": _fail_with(500, b"internal server error"), "key2": _fail_with(503, b"service unavailable")}
+    )
+    monkeypatch.setattr("hunter_governance_review.llm_audit.urllib.request.urlopen", transport)
+
+    gh = FakeGhRunner()
+    env = _multi_provider_env("key1", "key2")
+    code = run_review(
+        args=_args(),
+        env=env,
+        gh=gh,
+        llm_runner=run_llm_audit,
+        synthesis_runner=run_synthesis_review,
+        document_review_runner=run_document_review,
+    )
+    assert code == 0
+    assert gh.statuses[0]["state"] == "failure"
+    assert "Review failed" in gh.statuses[0]["description"]
+    assert gh.statuses[0]["state"] != "success"
+
+
+def test_run_review_step_summary_never_contains_provider_secret_values(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """No secret leakage end-to-end: even with a real failing provider
+    (producing health events, printed provider names, and error text in the
+    published step summary), the actual secret VALUE must never appear
+    anywhere in the summary file -- only slot names and error text derived
+    from the (non-secret) HTTP response body."""
+    secret_1 = "sk-provider-one-should-never-leak-anywhere"
+    secret_2 = "sk-provider-two-should-never-leak-either"
+    transport = _RecordingMultiProviderTransport(
+        {secret_1: _fail_with(401, b'{"error":"invalid api key"}'), secret_2: _succeed_with(_APPROVED_BODY)}
+    )
+    monkeypatch.setattr("hunter_governance_review.llm_audit.urllib.request.urlopen", transport)
+
+    summary = tmp_path / "summary.md"
+    gh = FakeGhRunner()
+    env = _multi_provider_env(secret_1, secret_2)
+    env["GITHUB_STEP_SUMMARY"] = str(summary)
+    code = run_review(
+        args=_args(),
+        env=env,
+        gh=gh,
+        llm_runner=run_llm_audit,
+        synthesis_runner=run_synthesis_review,
+        document_review_runner=run_document_review,
+    )
+    assert code == 0
+    assert gh.statuses[0]["state"] == "success"
+    summary_text = summary.read_text(encoding="utf-8")
+    assert secret_1 not in summary_text
+    assert secret_2 not in summary_text
+    # Provenance IS present -- just never the secret value itself.
+    assert "slot 1" in summary_text or "slot 2" in summary_text
 
 
 # --- Decision Engine -------------------------------------------------------------------
@@ -1945,25 +2164,32 @@ class _EvidenceAwareSynthesisRunner:
         pair: ReviewPair,
         pr: PullRequest,
         synthesis_input: str,
+        health: ProviderHealth,
         timeout: int = 120,
-    ) -> AuditVerdict:
+    ) -> LLMCallResult:
         self.calls.append(synthesis_input)
         if self.marker_a in synthesis_input and self.marker_b in synthesis_input:
-            return AuditVerdict(
-                verdict="CHANGES_REQUIRED",
-                summary="cross-chunk ownership/authority contradiction",
-                findings=[
-                    {
-                        "id": "001",
-                        "severity": "blocking",
-                        "location": "chunks 1, 2",
-                        "description": f"{self.marker_a} conflicts with {self.marker_b}",
-                        "decision_impact": "ownership and authority evidence disagree across chunks",
-                    }
-                ],
-                rationale="structured evidence conflict",
+            return LLMCallResult(
+                verdict=AuditVerdict(
+                    verdict="CHANGES_REQUIRED",
+                    summary="cross-chunk ownership/authority contradiction",
+                    findings=[
+                        {
+                            "id": "001",
+                            "severity": "blocking",
+                            "location": "chunks 1, 2",
+                            "description": f"{self.marker_a} conflicts with {self.marker_b}",
+                            "decision_impact": "ownership and authority evidence disagree across chunks",
+                        }
+                    ],
+                    rationale="structured evidence conflict",
+                ),
+                provider="fake-provider",
             )
-        return AuditVerdict(verdict="APPROVED", summary="no contradiction visible", findings=[], rationale="ok")
+        return LLMCallResult(
+            verdict=AuditVerdict(verdict="APPROVED", summary="no contradiction visible", findings=[], rationale="ok"),
+            provider="fake-provider",
+        )
 
 
 def test_run_review_cross_chunk_contradiction_detected_via_structured_evidence_not_prose_summary(

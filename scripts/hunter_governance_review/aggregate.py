@@ -36,13 +36,32 @@ from hunter_governance_review.llm_audit import AuditVerdict
 
 @dataclass(frozen=True)
 class ChunkOutcome:
-    """The result of reviewing one diff chunk: exactly one of verdict/error is set."""
+    """The result of reviewing one diff chunk: exactly one of verdict/error is set.
+
+    ``provider`` is the name of the configured provider slot that actually
+    produced ``verdict`` (``None`` when ``verdict`` is ``None``, i.e. this
+    outcome failed) -- provenance for which provider served each individual
+    chunk, since provider failover means different chunks in the same run
+    can be served by different providers.
+    """
 
     chunk_index: int
     chunk_total: int
     files: tuple[str, ...]
     verdict: AuditVerdict | None
     error: str | None
+    provider: str | None = None
+
+
+def providers_used(outcomes: list[ChunkOutcome]) -> tuple[str, ...]:
+    """The distinct providers that actually served at least one successful
+    outcome, in first-seen order -- provenance for "final provider(s) used"
+    across a run's chunks/sections."""
+    seen: list[str] = []
+    for outcome in outcomes:
+        if outcome.provider and outcome.provider not in seen:
+            seen.append(outcome.provider)
+    return tuple(seen)
 
 
 @dataclass(frozen=True)

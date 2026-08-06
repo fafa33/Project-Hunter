@@ -1,7 +1,6 @@
 """LLM Architecture Audit.
 
-Calls an OpenAI-compatible chat-completions endpoint (Groq by default,
-matching the repository's existing CI provider convention) with a hostile
+Calls an OpenAI-compatible chat-completions endpoint with a hostile
 architecture audit prompt built from the exact PR data, resolved
 authoritative governance context, and exactly one diff chunk (see
 ``chunking.py`` -- the full diff is never sent in one request; ``aggregate.py``
@@ -22,26 +21,44 @@ internally contradictory verdict -- raises ``LLMAuditError``, which the
 Decision Engine maps to ``REVIEW_FAILED``. A failed audit can never approve
 a pull request.
 
-Every one of these three calls goes through ``_call_chat_completion``, which
-tries every configured provider (``_resolve_providers``: ``HUNTER_LLM_API_KEY``,
-then ``GROQ_API_KEY``, then ``OPENAI_API_KEY``) in that fixed order, falling
-over to the next configured provider on ANY failure from the current one.
-``LLMAuditError`` is raised only once every configured provider has failed
-for that specific call -- a single provider's outage or exhausted quota no
-longer blocks the whole review by itself, as long as another provider
-secret is also configured. See ``_resolve_providers``'s docstring for why
-this exists: a single Groq on-demand account's daily quota is not large
-enough for this repository's real review sizes.
+**Provider-neutral by design; no vendor is hardcoded.** This module has no
+default endpoint, model, or vendor identity anywhere in it: every provider
+slot (``_resolve_providers``) must be fully configured via environment
+variables (API key, base URL, and model, all three) before it is even a
+candidate. This is a deliberate repository-owner decision, not a stylistic
+preference: Groq was previously the gate's default provider and was
+disqualified from Project Hunter's merge-critical review path after
+repeated live-run evidence that a single Groq on-demand account's rate/quota
+limits could not reliably complete this repository's real review workload
+(see ``docs/HUNTER_GOVERNANCE_REVIEW.md`` for the historical record). Rather
+than replace one hardcoded vendor dependency with a different hardcoded
+vendor dependency, every configured provider slot is an independently
+triable, fully generic candidate, and this module makes no assumption about
+which vendor(s) an operator configures.
+
+Every one of the three top-level calls (``run_llm_audit``,
+``run_synthesis_review``, ``run_document_review``) goes through
+``_call_chat_completion``, which tries every configured, currently-healthy
+provider (``_resolve_providers``, in deterministic numeric slot order) for
+that call, falling over to the next one on ANY failure. An OPERATIONAL
+failure (network error, timeout, or any non-2xx HTTP response -- see
+``ProviderOperationalError``) additionally marks that provider unhealthy for
+the REMAINDER of the current review run (``ProviderHealth``): it is not
+retried indefinitely and is not selected again for any later call in the
+same run. A non-operational failure (a truncated completion, or a
+schema/validation failure in an otherwise-successful response) does not
+blacklist the provider -- only that specific call falls over to the next
+provider. ``LLMAuditError`` is raised only once every currently-eligible
+configured provider has failed for that specific call.
 """
 
 from __future__ import annotations
 
 import json
 import re
-import time
 import urllib.error
 import urllib.request
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -61,119 +78,65 @@ SYSTEM_PROMPT = (
 )
 
 # ---------------------------------------------------------------------------
-# Audit prompt token budget.
+# Audit prompt/completion token budgets -- configuration-driven, not tied to
+# any specific provider's rate limit.
 #
-# The gate's own live installation run (PR #200, workflow run 31056865509)
-# was rejected outright by Groq: HTTP 413, "Request too large for model
-# `llama-3.3-70b-versatile` ... on tokens per minute (TPM): Limit 12000,
-# Requested 27258". The prior bounds -- a 150,000-character diff cap, a
-# 20,000-character PR body cap, and a 300-file changed-file list -- had no
-# relationship to the pinned default model's actual provider rate limit, and
-# together routinely exceed it on any non-trivial pull request, including
-# this gate's own installation PR (its real diff alone was 99,671 characters,
-# and the full assembled prompt measured 107,586 characters against the
-# 27,258 tokens Groq actually reported -- ~3.95 characters/token for this
-# repository's real content).
-#
-# The full assembled prompt (system + user messages) for ONE CHUNK is now
-# bounded to a fixed character budget using a conservative 3.5 chars/token
-# estimate, well below the measured ~3.95 ratio. Complete diff coverage is
-# achieved by reviewing MULTIPLE chunks (chunking.py), not by enlarging this
-# per-request budget -- enlarging it just reproduces the original failure on
-# a large enough PR. ``PROVIDER_TPM_LIMIT`` is specific to the pinned default
-# model/provider pair; it is not automatically correct for a different
-# ``HUNTER_LLM_MODEL``/``HUNTER_LLM_BASE_URL`` -- see
-# docs/HUNTER_GOVERNANCE_REVIEW.md's Troubleshooting section.
+# A prior version of this gate hardcoded these budgets against Groq's
+# specific tokens-per-minute limit (12,000 TPM for the on-demand tier),
+# discovered from a live HTTP 413 rejection. That approach cannot generalize:
+# a differently-configured provider (Gemini, OpenRouter, a paid tier, ...)
+# has a different real limit, and that real limit is often not published as
+# a fixed public number at all (Gemini's free-tier RPM/TPM/RPD, for example,
+# is account/project-specific and viewable only in AI Studio, not in the
+# public API docs). Rather than guess a provider's real limit, the budget is
+# configuration-driven: ``HUNTER_LLM_PROMPT_TOKEN_BUDGET`` and
+# ``HUNTER_LLM_MAX_COMPLETION_TOKENS`` (both optional) let an operator tune
+# these to their specific configured provider/tier's real, verified limits;
+# the defaults below are deliberately conservative -- small enough to fit
+# comfortably under most modern providers' free-tier per-request limits,
+# erring toward more, smaller requests rather than risking an outright
+# rejection. See docs/HUNTER_GOVERNANCE_REVIEW.md's Troubleshooting section.
+DEFAULT_PROMPT_TOKEN_BUDGET = 6_000
 CHARS_PER_TOKEN_ESTIMATE = 3.5
-PROVIDER_TPM_LIMIT = 12_000
-# Raised from 7,000 alongside context.DEFAULT_TOTAL_CHAR_BUDGET's increase
-# (12,500, up from 2,000 -- see that constant's comment for why): a smaller
-# per-chunk budget would force the larger context excerpt to starve the
-# diff's share, reproducing the excessive chunk count the prior round's
-# smaller context budget was chosen to avoid. Still leaves a real margin
-# below PROVIDER_TPM_LIMIT: at the measured ~3.95 real chars/token ratio (vs
-# this constant's conservative 3.5), a maximally-sized chunk plus its
-# capped completion measures ~9,580 real tokens, ~20% under the 12,000 limit.
-PROMPT_TOKEN_BUDGET = 8_500
-PROMPT_CHAR_BUDGET = int(PROMPT_TOKEN_BUDGET * CHARS_PER_TOKEN_ESTIMATE)
 PR_BODY_CHAR_LIMIT = 4_000
 MIN_DIFF_CHAR_BUDGET = 500
 FILES_LINE_RESERVED_CHARS = 2_000
 
-# ---------------------------------------------------------------------------
-# Rate-limit retry.
-#
-# PROVIDER_TPM_LIMIT is a rate (tokens per rolling 60-second window), not a
-# per-request-only cap. Chunking (chunking.py) means a single review makes
-# many *sequential* requests that all draw from that same window -- on
-# PR #200's own live re-verification of this fix (workflow run 31065137201),
-# a 116-chunk diff produced HTTP 429 on 113/116 chunks ("Rate limit reached
-# ... Please try again in 21.98s") after only the first 2-3 calls exhausted
-# the window, despite every individual request staying safely under the
-# single-request 413 limit this budget already guards against. Some rate
-# limiting during a long multi-chunk review is normal and expected, not a
-# fatal error: a per-minute (TPM) 429 is retried with the provider's own
-# suggested wait (falling back to a fixed conservative backoff if it cannot
-# be parsed), bounded to a small number of attempts, before that chunk is
-# given up on and reported as failed (which correctly fails coverage closed,
-# per aggregate.py, rather than silently retrying forever).
-#
-# A per-DAY (TPD) 429 is a different failure mode and is NOT retried: the
-# next live re-verification of this exact fix (workflow run 31066459333)
-# hit Groq's tokens-per-day quota mid-run ("... on tokens per day (TPD):
-# Limit 100000, Used 95514 ... Please try again in 44m34.944s"), which no
-# retry budget sized for a 30-minute CI job can wait out, and which the
-# prior regex would have mis-parsed as a 34.944-SECOND wait anyway (it only
-# matched the trailing "<seconds>s" and silently dropped the "44m" prefix,
-# so retries would have burned through their whole budget in under three
-# minutes without ever waiting long enough). Duration parsing now handles
-# the "<h>h<m>m<s>s" form Groq uses for longer (TPD-scale) waits, and a TPD
-# limit fails that chunk immediately -- one wasted request, not
-# MAX_RATE_LIMIT_RETRIES of them -- with the provider's own message
-# (which already names the limit type and reset time) surfacing directly to
-# the operator, who needs to wait for the quota to reset or raise it, not a
-# code fix.
-MAX_RATE_LIMIT_RETRIES = 5
-DEFAULT_RATE_LIMIT_BACKOFF_SECONDS = 25.0
-_RETRY_AFTER_PATTERN = re.compile(r"try again in (?:(\d+)h)?(?:(\d+)m)?([\d.]+)s", re.IGNORECASE)
-_DAILY_LIMIT_MARKER = "tokens per day"
+DEFAULT_MAX_COMPLETION_TOKENS = 4_096
+MIN_COMPLETION_TOKENS = 512
+MAX_COMPLETION_TOKENS_CEILING = 8_192
 
 
-def _parse_retry_after_seconds(detail: str) -> float:
-    match = _RETRY_AFTER_PATTERN.search(detail)
-    if match:
-        hours_str, minutes_str, seconds_str = match.groups()
+def _resolve_prompt_char_budget(env: Mapping[str, str]) -> int:
+    """The full assembled per-request prompt budget (system + user messages),
+    in characters. Configurable via ``HUNTER_LLM_PROMPT_TOKEN_BUDGET``
+    (tokens); see the module-level comment above for why this is
+    configuration-driven rather than a hardcoded provider-specific constant.
+    """
+    raw = env.get("HUNTER_LLM_PROMPT_TOKEN_BUDGET")
+    token_budget = DEFAULT_PROMPT_TOKEN_BUDGET
+    if raw:
         try:
-            total = float(seconds_str)
-            if minutes_str:
-                total += float(minutes_str) * 60
-            if hours_str:
-                total += float(hours_str) * 3600
-            return total
+            token_budget = max(1_000, int(raw))
         except ValueError:
             pass
-    return DEFAULT_RATE_LIMIT_BACKOFF_SECONDS
+    return int(token_budget * CHARS_PER_TOKEN_ESTIMATE)
 
 
-def _is_daily_rate_limit(detail: str) -> bool:
-    """True when a 429's detail names a per-day (not per-minute) limit.
-
-    A daily quota cannot be waited out within a bounded CI job's lifetime,
-    unlike a per-minute rate limit -- see the module comment above.
+def _resolve_max_completion_tokens(env: Mapping[str, str]) -> int:
+    """The ``max_tokens`` value sent with every completion request.
+    Configurable via ``HUNTER_LLM_MAX_COMPLETION_TOKENS``; clamped to
+    ``[MIN_COMPLETION_TOKENS, MAX_COMPLETION_TOKENS_CEILING]`` regardless of
+    configuration, as a sanity bound against a misconfigured value.
     """
-    return _DAILY_LIMIT_MARKER in detail.lower()
-
-
-# Adaptive completion budget: Groq's TPM limit covers prompt and completion
-# together in the same per-minute window, so a flat completion cap sized for
-# the smallest realistic response silently truncates a larger, entirely
-# legitimate findings list into invalid JSON. The completion budget instead
-# scales with how much of the TPM limit the prompt did NOT use, bounded to a
-# sane floor/ceiling, with a safety factor below the theoretical remainder to
-# absorb chars-per-token estimation error.
-MIN_COMPLETION_TOKENS = 512
-MAX_COMPLETION_TOKENS_CAP = 2_048
-COMPLETION_SAFETY_FACTOR = 0.8
+    raw = env.get("HUNTER_LLM_MAX_COMPLETION_TOKENS")
+    value = DEFAULT_MAX_COMPLETION_TOKENS
+    if raw:
+        try:
+            value = int(raw)
+        except ValueError:
+            pass
+    return max(MIN_COMPLETION_TOKENS, min(MAX_COMPLETION_TOKENS_CEILING, value))
 
 
 @dataclass(frozen=True)
@@ -203,11 +166,11 @@ class LLMAuditError(RuntimeError):
 
 @dataclass(frozen=True)
 class ProviderConfig:
-    """One configured, independently-triable LLM provider.
+    """One fully-configured, independently-triable LLM provider.
 
-    ``name`` identifies which repository secret supplied this provider's key
-    -- used only for diagnostics (error messages, run logs), never to change
-    behavior.
+    ``name`` identifies which configuration slot supplied this provider --
+    used only for diagnostics (error messages, run logs, provenance) and to
+    key ``ProviderHealth``, never to change behavior or select a vendor.
     """
 
     name: str
@@ -216,78 +179,153 @@ class ProviderConfig:
     model: str
 
 
-def _resolve_providers(env: Mapping[str, str]) -> list[ProviderConfig]:
-    """Every configured provider, in deterministic fallback priority order.
-
-    Priority: ``HUNTER_LLM_API_KEY``, then ``GROQ_API_KEY``, then
-    ``OPENAI_API_KEY`` -- the same three secrets the gate has always
-    documented, now each contributing an independently-triable provider
-    instead of only the first one found being used for the whole review with
-    no recovery if it fails at request time. This closes a single-provider
-    dependency: Project Hunter's real diff/document sizes require far more
-    total tokens per full review than a single Groq on-demand account's daily
-    quota (100,000 tokens) -- PR #200's own diff alone chunks into ~50
-    requests at up to ~8,500 tokens each, several times the entire daily
-    budget in one review pass, so quota exhaustion on one account is a
-    routine occurrence, not a rare edge case; a second configured provider
-    with its own independent quota lets the same review keep running.
-
-    ``HUNTER_LLM_BASE_URL``/``HUNTER_LLM_MODEL`` override the Groq-compatible
-    candidates' (``HUNTER_LLM_API_KEY``, ``GROQ_API_KEY``) endpoint/model
-    when set. The ``OPENAI_API_KEY`` candidate uses those same two overrides
-    only when it is the ONLY configured secret (matching this function's
-    single-provider predecessor's behavior exactly for every
-    already-possible single-key configuration); when a Groq-family key is
-    ALSO configured, the two override variables are scoped to that
-    Groq-family candidate and the OpenAI candidate uses its own defaults --
-    one override pair cannot mean two different things for two provider
-    families in the same review. Raises ``LLMAuditError`` if no provider
-    secret is configured at all, with the same message the single-provider
-    predecessor used.
+class ProviderOperationalError(LLMAuditError):
+    """An OPERATIONAL provider failure: a network/timeout error, or any
+    non-2xx HTTP response (rate limit, quota exhaustion, service
+    unavailable, model unavailable, server error, ...). Distinct from a
+    validation/schema failure in an otherwise-successful HTTP response
+    (plain ``LLMAuditError``): an operational failure marks the offending
+    provider unhealthy for the rest of the current review run
+    (``ProviderHealth``), since it indicates the provider itself is not
+    currently usable, not that this one response was malformed. Never
+    itself a review finding, and never converted into ``APPROVED``.
     """
-    hunter_key = env.get("HUNTER_LLM_API_KEY")
-    groq_key = env.get("GROQ_API_KEY")
-    openai_key = env.get("OPENAI_API_KEY")
-    if not (hunter_key or groq_key or openai_key):
-        raise LLMAuditError(
-            "missing API secret: set HUNTER_LLM_API_KEY (or GROQ_API_KEY / OPENAI_API_KEY) as a repository secret"
-        )
 
-    override_base_url = env.get("HUNTER_LLM_BASE_URL")
-    override_model = env.get("HUNTER_LLM_MODEL")
-    groq_base_url = override_base_url or "https://api.groq.com/openai/v1"
-    groq_model = override_model or "llama-3.3-70b-versatile"
 
-    candidates: list[ProviderConfig] = []
-    if hunter_key:
-        candidates.append(ProviderConfig("HUNTER_LLM_API_KEY", hunter_key, groq_base_url, groq_model))
-    if groq_key:
-        candidates.append(ProviderConfig("GROQ_API_KEY", groq_key, groq_base_url, groq_model))
-    if openai_key:
-        openai_only = not hunter_key and not groq_key
-        openai_base_url = (
-            (override_base_url or "https://api.openai.com/v1") if openai_only else "https://api.openai.com/v1"
-        )
-        openai_model = (override_model or "gpt-4o-mini") if openai_only else "gpt-4o-mini"
-        candidates.append(ProviderConfig("OPENAI_API_KEY", openai_key, openai_base_url, openai_model))
+@dataclass(frozen=True)
+class LLMCallResult:
+    """One successful LLM call's verdict, plus which provider produced it.
 
-    # De-duplicate candidates that resolved to the literally identical
-    # (api_key, base_url, model) triple -- e.g. HUNTER_LLM_API_KEY and
-    # GROQ_API_KEY set to the same value would otherwise retry the same
-    # account against the same endpoint a second time for no benefit.
+    The ``provider`` name is provenance for the published review: which
+    configured provider actually served this specific chunk/synthesis/
+    document-section call. See ``ProviderHealth`` for the run-level record
+    of every attempt, switch, and failure classification.
+    """
+
+    verdict: AuditVerdict
+    provider: str
+
+
+@dataclass
+class ProviderHealth:
+    """Tracks which configured providers have failed OPERATIONALLY during
+    the CURRENT review run, so a provider is not retried indefinitely and is
+    not re-selected after an operational failure within the same run (a
+    fresh run -- the next workflow trigger -- gets a clean slate; there is
+    no cross-run persistence, so a transient outage is not held against a
+    provider forever). A non-operational (schema/validation) failure does
+    not mark a provider unhealthy -- see ``_call_chat_completion``.
+
+    One instance is created per ``run_review()`` call and threaded through
+    every ``run_llm_audit``/``run_synthesis_review``/``run_document_review``
+    call in that run, so a provider that fails operationally on, say, diff
+    chunk 5 is excluded from chunk 6 onward, from synthesis, and from every
+    document-review section -- not just retried on chunk 5 itself.
+    """
+
+    unhealthy: set[str] = field(default_factory=set)
+    events: list[str] = field(default_factory=list)
+
+    def mark_unhealthy(self, name: str, reason: str) -> None:
+        if name not in self.unhealthy:
+            self.events.append(f"{name}: marked unhealthy for this run -- {reason}")
+        self.unhealthy.add(name)
+
+    def record(self, message: str) -> None:
+        self.events.append(message)
+
+    def is_healthy(self, name: str) -> bool:
+        return name not in self.unhealthy
+
+
+# Provider configuration slots, in deterministic priority order. Fully
+# generic: no vendor name, default endpoint, or default model appears
+# anywhere in this module. Each slot requires ALL THREE of its variables
+# (api key, base URL, model) to be set to become a candidate -- a slot whose
+# key is set but whose base URL or model is missing is reported as a
+# configuration/preflight issue for that slot (see _resolve_providers) and
+# skipped, not silently defaulted to some assumed vendor. Add a fourth slot
+# here (mechanically, following the same pattern) if a fourth provider is
+# ever genuinely needed; three is deliberately the minimum needed to
+# support a primary + a free-tier fallback + one more without inventing an
+# unbounded/dynamic provider list this PR does not need.
+_PROVIDER_SLOTS: tuple[tuple[str, str, str, str], ...] = (
+    ("1", "HUNTER_LLM_API_KEY", "HUNTER_LLM_BASE_URL", "HUNTER_LLM_MODEL"),
+    ("2", "HUNTER_LLM_API_KEY_2", "HUNTER_LLM_BASE_URL_2", "HUNTER_LLM_MODEL_2"),
+    ("3", "HUNTER_LLM_API_KEY_3", "HUNTER_LLM_BASE_URL_3", "HUNTER_LLM_MODEL_3"),
+)
+
+
+def _resolve_providers(env: Mapping[str, str]) -> tuple[list[ProviderConfig], list[str]]:
+    """Every FULLY configured provider, in deterministic slot-order priority.
+
+    Returns ``(providers, skipped)``: ``providers`` is every slot with all
+    three of its variables (api key, base URL, model) set, in slot order;
+    ``skipped`` is a human-readable message per slot whose key is set but
+    whose base URL or model is missing -- a configuration error for that
+    specific slot, not a fatal error for the whole run (the caller treats
+    this exactly like a preflight failure: skip this slot, try the next
+    one). Raises ``LLMAuditError`` only when NO slot's key is set at all.
+    """
+    providers: list[ProviderConfig] = []
+    skipped: list[str] = []
+    any_key_configured = False
     seen: set[tuple[str, str, str]] = set()
-    unique: list[ProviderConfig] = []
-    for candidate in candidates:
-        key = (candidate.api_key, candidate.base_url, candidate.model)
-        if key in seen:
+    for slot_name, key_var, base_url_var, model_var in _PROVIDER_SLOTS:
+        api_key = env.get(key_var)
+        if not api_key:
             continue
-        seen.add(key)
-        unique.append(candidate)
-    return unique
+        any_key_configured = True
+        base_url = env.get(base_url_var)
+        model = env.get(model_var)
+        if not base_url or not model:
+            missing = [name for name, value in ((base_url_var, base_url), (model_var, model)) if not value]
+            skipped.append(f"provider slot {slot_name} ({key_var} is set): missing {', '.join(missing)}")
+            continue
+        # De-duplicate slots that resolved to the literally identical
+        # (api_key, base_url, model) triple -- e.g. two slots pointed at the
+        # same account/endpoint/model would otherwise retry the same
+        # provider a second time for no benefit.
+        dedupe_key = (api_key, base_url, model)
+        if dedupe_key in seen:
+            skipped.append(f"provider slot {slot_name}: identical to an earlier slot, skipped as redundant")
+            continue
+        seen.add(dedupe_key)
+        providers.append(ProviderConfig(f"slot {slot_name} ({key_var})", api_key, base_url, model))
+    if not any_key_configured:
+        raise LLMAuditError(
+            "missing API secret: configure at least one provider slot -- set HUNTER_LLM_API_KEY, "
+            "HUNTER_LLM_BASE_URL, and HUNTER_LLM_MODEL (or the _2/_3 suffixed variables for "
+            "additional provider slots) as repository secrets/variables"
+        )
+    return providers, skipped
+
+
+def _preflight_provider(provider: ProviderConfig) -> str | None:
+    """Cheap, local-only capability check for one provider -- no network
+    call. Catches an obviously broken configuration (empty/malformed
+    endpoint, empty model) before spending a real request on it, so a
+    preflight failure moves immediately to the next provider without
+    wasting a call. A capability gap this cannot see (an unsupported model
+    name, or a context/output limit too small for this workload) still
+    surfaces on the first real request, which the operational-failure
+    handling in ``_call_chat_completion`` already treats as a reason to
+    fail this provider over to the next one -- this function deliberately
+    does not perform a network probe of its own (no wasteful full-workload,
+    or even minimal-workload, probe call).
+    """
+    if not provider.api_key.strip():
+        return "empty API key"
+    if not (provider.base_url.startswith("http://") or provider.base_url.startswith("https://")):
+        return f"base URL {provider.base_url!r} is not a valid http(s) URL"
+    if not provider.model.strip():
+        return "empty model name"
+    return None
 
 
 def build_chunk_audit_prompt(
     *,
+    env: Mapping[str, str],
     pair: ReviewPair,
     pr: PullRequest,
     chunk: DiffChunk,
@@ -295,6 +333,10 @@ def build_chunk_audit_prompt(
     deterministic_findings: list[Finding],
 ) -> str:
     """Build the hostile audit prompt for exactly one diff chunk.
+
+    ``env`` is used only to resolve the configured (or default) prompt
+    character budget (``_resolve_prompt_char_budget``) -- never to select a
+    provider here.
 
     Raises ``LLMAuditError`` (fail-closed, never silently truncates) if the
     chunk's own diff text does not fit the remaining budget after every
@@ -360,7 +402,7 @@ def build_chunk_audit_prompt(
         "in this chunk must produce CHANGES_REQUIRED."
     )
     overhead = len(SYSTEM_PROMPT) + len(header) + len(footer)
-    diff_budget = max(MIN_DIFF_CHAR_BUDGET, PROMPT_CHAR_BUDGET - overhead)
+    diff_budget = max(MIN_DIFF_CHAR_BUDGET, _resolve_prompt_char_budget(env) - overhead)
     if len(chunk.text) > diff_budget:
         raise LLMAuditError(
             f"chunk {chunk.index}/{chunk.total} ({len(chunk.text)} chars) does not fit the "
@@ -372,6 +414,7 @@ def build_chunk_audit_prompt(
 
 def estimate_chunk_diff_budget(
     *,
+    env: Mapping[str, str],
     pr: PullRequest,
     context_brief: str,
     deterministic_findings: list[Finding],
@@ -397,6 +440,7 @@ def estimate_chunk_diff_budget(
     )
     placeholder_chunk = DiffChunk(index=1, total=1, files=("<placeholder>",), text="")
     rendered = build_chunk_audit_prompt(
+        env=env,
         pair=placeholder_pair,
         pr=pr,
         chunk=placeholder_chunk,
@@ -404,15 +448,7 @@ def estimate_chunk_diff_budget(
         deterministic_findings=deterministic_findings,
     )
     overhead = len(SYSTEM_PROMPT) + len(rendered)
-    return max(MIN_DIFF_CHAR_BUDGET, PROMPT_CHAR_BUDGET - overhead - files_line_reserved_chars)
-
-
-def _adaptive_max_tokens(prompt_char_len: int) -> int:
-    """A completion-token cap sized against how much TPM budget the prompt left."""
-    prompt_tokens_estimate = prompt_char_len / CHARS_PER_TOKEN_ESTIMATE
-    remaining = PROVIDER_TPM_LIMIT - prompt_tokens_estimate
-    budget = remaining * COMPLETION_SAFETY_FACTOR
-    return int(max(MIN_COMPLETION_TOKENS, min(MAX_COMPLETION_TOKENS_CAP, budget)))
+    return max(MIN_DIFF_CHAR_BUDGET, _resolve_prompt_char_budget(env) - overhead - files_line_reserved_chars)
 
 
 _ALLOWED_VERDICTS = ("APPROVED", "CHANGES_REQUIRED")
@@ -616,22 +652,22 @@ def _call_chat_completion_once(
     prompt: str,
     *,
     timeout: int,
-    sleep: Callable[[float], None],
+    max_tokens: int,
 ) -> AuditVerdict:
-    """POST one chat-completion request to exactly ONE provider.
+    """POST exactly ONE chat-completion request to exactly ONE provider, with
+    NO retry -- a provider that fails here is the caller's (``_call_chat_completion``'s)
+    signal to try the next configured provider, not to wait and retry this
+    one. This is a deliberate simplification: with multiple providers
+    configured, the fallback IS the retry -- a transient blip on this
+    provider means "try the next one now," and if the blip really was
+    transient, this same provider gets a clean chance again on the NEXT
+    review run (the next CI trigger), rather than this run burning CI time
+    re-hitting a provider that may still be unavailable.
 
-    Retry/backoff, adaptive completion budget, strict ``finish_reason``
-    handling, and strict schema validation, scoped to a single provider
-    attempt -- ``_call_chat_completion`` below loops this over every
-    configured provider for failover. A per-minute (TPM) 429 is retried
-    against THIS SAME provider, bounded to ``MAX_RATE_LIMIT_RETRIES``
-    attempts, using the provider's own suggested wait time when it can be
-    parsed -- see the module-level comment above for why this is expected,
-    not exceptional. Every other failure (a per-day quota 429, any other
-    HTTP error, a network/timeout failure, a truncated or unsupported
-    completion, or a schema/validation failure) raises ``LLMAuditError``
-    immediately so the caller can fall back to the next configured
-    provider, if any -- none of these failure modes may produce approval.
+    Raises ``ProviderOperationalError`` (a network/timeout failure or any
+    non-2xx HTTP response) or plain ``LLMAuditError`` (a truncated/
+    unsupported completion, or a schema/validation failure) -- see each
+    class's docstring for why the distinction matters to the caller.
     """
     payload = {
         "model": provider.model,
@@ -640,13 +676,13 @@ def _call_chat_completion_once(
             {"role": "user", "content": prompt},
         ],
         "temperature": 0.1,
-        "max_tokens": _adaptive_max_tokens(len(system_prompt) + len(prompt)),
+        "max_tokens": max_tokens,
         # Prefer the provider's structured-output control where supported
-        # (standard OpenAI-compatible field; Groq accepts it for
-        # OpenAI-compatible chat completions). This does not by itself
-        # prevent truncation -- the finish_reason check below still fails
-        # closed if the completion is cut off -- but it reduces the odds of
-        # non-JSON prose wrapping the verdict.
+        # (standard OpenAI-compatible field, widely but not universally
+        # supported by OpenAI-compatible endpoints). This does not by
+        # itself prevent truncation -- the finish_reason check below still
+        # fails closed if the completion is cut off -- but it reduces the
+        # odds of non-JSON prose wrapping the verdict.
         "response_format": {"type": "json_object"},
     }
     request = urllib.request.Request(
@@ -661,29 +697,22 @@ def _call_chat_completion_once(
         },
         method="POST",
     )
-    attempt = 0
-    response_payload: dict[str, Any] | None = None
-    while response_payload is None:
-        try:
-            with urllib.request.urlopen(request, timeout=timeout) as response:
-                response_payload = json.load(response)
-        except urllib.error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace")[:400]
-            if exc.code == 429 and not _is_daily_rate_limit(detail) and attempt < MAX_RATE_LIMIT_RETRIES:
-                attempt += 1
-                sleep(_parse_retry_after_seconds(detail))
-                continue
-            raise LLMAuditError(f"LLM API returned HTTP {exc.code}: {detail}") from exc
-        except json.JSONDecodeError as exc:
-            raise LLMAuditError(f"LLM API returned malformed JSON: {exc}") from exc
-        except (urllib.error.URLError, TimeoutError, OSError) as exc:
-            raise LLMAuditError(f"LLM API request could not be completed: {exc}") from exc
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            response_payload = json.load(response)
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")[:400]
+        raise ProviderOperationalError(f"LLM API returned HTTP {exc.code}: {detail}") from exc
+    except json.JSONDecodeError as exc:
+        raise ProviderOperationalError(f"LLM API returned malformed JSON: {exc}") from exc
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        raise ProviderOperationalError(f"LLM API request could not be completed: {exc}") from exc
 
     finish_reason = _extract_finish_reason(response_payload)
     if finish_reason == "length":
         raise LLMAuditError(
             "incomplete model output: completion was truncated (finish_reason=length); the "
-            "adaptive completion budget was insufficient for this response -- fail-closed "
+            "configured completion budget was insufficient for this response -- fail-closed "
             "rather than accept a truncated, potentially invalid verdict"
         )
     if finish_reason != "stop":
@@ -697,39 +726,62 @@ def _call_chat_completion(
     system_prompt: str,
     prompt: str,
     *,
+    health: ProviderHealth,
     timeout: int = 120,
-    sleep: Callable[[float], None] = time.sleep,
-) -> AuditVerdict:
-    """POST one chat-completion request and return a validated ``AuditVerdict``.
+) -> LLMCallResult:
+    """POST one chat-completion request and return a validated result.
 
     Shared by the per-chunk audit call, the cross-chunk synthesis call, and
     the per-document-section call -- provider resolution/failover,
-    retry/backoff, adaptive budget, strict ``finish_reason`` handling, and
+    preflight, budget resolution, strict ``finish_reason`` handling, and
     strict schema validation are identical; only the system/user prompt text
     differs between callers.
 
-    **Provider failover.** Every configured provider (``_resolve_providers``)
-    is tried in deterministic priority order; ``LLMAuditError`` is raised
-    only once EVERY configured provider has failed. A single provider's
-    outage or exhausted quota no longer fails the whole review by itself, as
-    long as at least one other configured provider secret can still serve
-    the request -- see ``_resolve_providers``'s docstring for why this
-    matters given this repository's real diff/document sizes relative to a
-    single Groq on-demand account's daily quota.
-
-    Every failure mode still raises ``LLMAuditError``; none may produce
-    approval. ``sleep`` is injectable so tests never actually wait.
+    **Provider failover.** Every FULLY CONFIGURED provider that is not
+    already marked unhealthy for this run (``health``) is tried, in
+    deterministic slot-order priority. A provider whose local preflight
+    check fails, or that raises ``ProviderOperationalError``, is marked
+    unhealthy for the REST OF THIS RUN and the next provider is tried
+    immediately. A provider that raises a plain (non-operational)
+    ``LLMAuditError`` is NOT marked unhealthy (only this specific call falls
+    over to the next provider -- see ``ProviderOperationalError``'s
+    docstring for the distinction). ``LLMAuditError`` is raised by this
+    function only once every currently-eligible provider has failed for
+    this call -- never merely because the first one did, and never by
+    silently treating a provider failure as an approval or as a review
+    finding.
     """
-    providers = _resolve_providers(env)
+    providers, skipped = _resolve_providers(env)
+    for message in skipped:
+        health.record(message)
+    candidates = [p for p in providers if health.is_healthy(p.name)]
+    if not candidates:
+        raise LLMAuditError(
+            "no healthy configured provider remains for this run: " + ("; ".join(health.events) or "none configured")
+        )
+    max_tokens = _resolve_max_completion_tokens(env)
     failures: list[str] = []
-    for provider in providers:
+    for provider in candidates:
+        preflight_error = _preflight_provider(provider)
+        if preflight_error is not None:
+            health.mark_unhealthy(provider.name, f"preflight failed: {preflight_error}")
+            failures.append(f"{provider.name}: preflight failed: {preflight_error}")
+            continue
         try:
-            return _call_chat_completion_once(provider, system_prompt, prompt, timeout=timeout, sleep=sleep)
+            verdict = _call_chat_completion_once(
+                provider, system_prompt, prompt, timeout=timeout, max_tokens=max_tokens
+            )
+            health.record(f"{provider.name}: succeeded")
+            return LLMCallResult(verdict=verdict, provider=provider.name)
+        except ProviderOperationalError as exc:
+            health.mark_unhealthy(provider.name, str(exc))
+            failures.append(f"{provider.name}: {exc}")
         except LLMAuditError as exc:
+            health.record(f"{provider.name}: non-operational failure (not blacklisted for this run): {exc}")
             failures.append(f"{provider.name}: {exc}")
     raise LLMAuditError(
-        f"all {len(providers)} configured provider(s) failed to produce a trustworthy review "
-        "verdict: " + " | ".join(failures)
+        f"no configured provider could complete this review request ({len(candidates)} attempted): "
+        + " | ".join(failures)
     )
 
 
@@ -741,18 +793,19 @@ def run_llm_audit(
     chunk: DiffChunk,
     context_brief: str,
     deterministic_findings: list[Finding],
+    health: ProviderHealth,
     timeout: int = 120,
-    sleep: Callable[[float], None] = time.sleep,
-) -> AuditVerdict:
+) -> LLMCallResult:
     """Run the hostile architecture audit for exactly one diff chunk."""
     prompt = build_chunk_audit_prompt(
+        env=env,
         pair=pair,
         pr=pr,
         chunk=chunk,
         context_brief=context_brief,
         deterministic_findings=deterministic_findings,
     )
-    return _call_chat_completion(env, SYSTEM_PROMPT, prompt, timeout=timeout, sleep=sleep)
+    return _call_chat_completion(env, SYSTEM_PROMPT, prompt, health=health, timeout=timeout)
 
 
 SYNTHESIS_SYSTEM_PROMPT = (
@@ -779,7 +832,7 @@ SYNTHESIS_SYSTEM_PROMPT = (
 )
 
 
-def build_synthesis_prompt(*, pair: ReviewPair, pr: PullRequest, synthesis_input: str) -> str:
+def build_synthesis_prompt(*, env: Mapping[str, str], pair: ReviewPair, pr: PullRequest, synthesis_input: str) -> str:
     """Build the cross-chunk consistency synthesis prompt.
 
     Deliberately minimal: this is the one synthesis call the gate performs
@@ -827,7 +880,7 @@ def build_synthesis_prompt(*, pair: ReviewPair, pr: PullRequest, synthesis_input
         "categories/chunks conflict, not merely that the summaries seemed inconsistent."
     )
     overhead = len(SYNTHESIS_SYSTEM_PROMPT) + len(header) + len(footer)
-    budget = max(MIN_DIFF_CHAR_BUDGET, PROMPT_CHAR_BUDGET - overhead)
+    budget = max(MIN_DIFF_CHAR_BUDGET, _resolve_prompt_char_budget(env) - overhead)
     if len(synthesis_input) > budget:
         raise LLMAuditError(
             f"cross-chunk synthesis input ({len(synthesis_input)} chars) does not fit the audit "
@@ -844,17 +897,17 @@ def run_synthesis_review(
     pair: ReviewPair,
     pr: PullRequest,
     synthesis_input: str,
+    health: ProviderHealth,
     timeout: int = 120,
-    sleep: Callable[[float], None] = time.sleep,
-) -> AuditVerdict:
+) -> LLMCallResult:
     """Run the one, final cross-chunk consistency synthesis review.
 
     A ``CHANGES_REQUIRED`` verdict means a contradiction spanning multiple
     chunks was found; its findings describe each contradiction. This call
     never sees the raw diff -- see ``build_synthesis_prompt``.
     """
-    prompt = build_synthesis_prompt(pair=pair, pr=pr, synthesis_input=synthesis_input)
-    return _call_chat_completion(env, SYNTHESIS_SYSTEM_PROMPT, prompt, timeout=timeout, sleep=sleep)
+    prompt = build_synthesis_prompt(env=env, pair=pair, pr=pr, synthesis_input=synthesis_input)
+    return _call_chat_completion(env, SYNTHESIS_SYSTEM_PROMPT, prompt, health=health, timeout=timeout)
 
 
 DOCUMENT_REVIEW_SYSTEM_PROMPT = (
@@ -879,6 +932,7 @@ DOCUMENT_REVIEW_SYSTEM_PROMPT = (
 
 def build_document_review_prompt(
     *,
+    env: Mapping[str, str],
     pair: ReviewPair,
     pr: PullRequest,
     document_chunk: DiffChunk,
@@ -935,7 +989,7 @@ def build_document_review_prompt(
         "sufficient."
     )
     overhead = len(DOCUMENT_REVIEW_SYSTEM_PROMPT) + len(header) + len(footer)
-    section_budget = max(MIN_DIFF_CHAR_BUDGET, PROMPT_CHAR_BUDGET - overhead)
+    section_budget = max(MIN_DIFF_CHAR_BUDGET, _resolve_prompt_char_budget(env) - overhead)
     if len(document_chunk.text) > section_budget:
         raise LLMAuditError(
             f"document section {document_chunk.index}/{document_chunk.total} of `{document_path}` "
@@ -948,6 +1002,7 @@ def build_document_review_prompt(
 
 def estimate_document_chunk_budget(
     *,
+    env: Mapping[str, str],
     pr: PullRequest,
     architectural_evidence_summary: str,
     document_path: str,
@@ -971,13 +1026,14 @@ def estimate_document_chunk_budget(
     )
     placeholder_chunk = DiffChunk(index=1, total=1, files=(document_path,), text="")
     rendered = build_document_review_prompt(
+        env=env,
         pair=placeholder_pair,
         pr=pr,
         document_chunk=placeholder_chunk,
         architectural_evidence_summary=architectural_evidence_summary,
     )
     overhead = len(DOCUMENT_REVIEW_SYSTEM_PROMPT) + len(rendered)
-    return max(MIN_DIFF_CHAR_BUDGET, PROMPT_CHAR_BUDGET - overhead)
+    return max(MIN_DIFF_CHAR_BUDGET, _resolve_prompt_char_budget(env) - overhead)
 
 
 def run_document_review(
@@ -987,9 +1043,9 @@ def run_document_review(
     pr: PullRequest,
     document_chunk: DiffChunk,
     architectural_evidence_summary: str,
+    health: ProviderHealth,
     timeout: int = 120,
-    sleep: Callable[[float], None] = time.sleep,
-) -> AuditVerdict:
+) -> LLMCallResult:
     """Run the hostile review for exactly one full section of one authoritative document.
 
     This is what makes document review lossless: every section of every
@@ -1000,9 +1056,10 @@ def run_document_review(
     treated as equivalent to reviewing it.
     """
     prompt = build_document_review_prompt(
+        env=env,
         pair=pair,
         pr=pr,
         document_chunk=document_chunk,
         architectural_evidence_summary=architectural_evidence_summary,
     )
-    return _call_chat_completion(env, DOCUMENT_REVIEW_SYSTEM_PROMPT, prompt, timeout=timeout, sleep=sleep)
+    return _call_chat_completion(env, DOCUMENT_REVIEW_SYSTEM_PROMPT, prompt, health=health, timeout=timeout)

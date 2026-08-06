@@ -77,11 +77,27 @@ jobs:
           GITHUB_RUN_ID: ${{ github.run_id }}
           GITHUB_SERVER_URL: ${{ github.server_url }}
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+          # Provider-neutral, generic configuration -- no vendor is
+          # hardcoded here or in the engine. GROQ_API_KEY / OPENAI_API_KEY
+          # are deliberately NOT read: Groq was disqualified from this
+          # merge-critical review path after repeated live-run evidence
+          # that a single Groq on-demand account's rate/quota limits could
+          # not reliably complete this repository's real review workload
+          # (see docs/HUNTER_GOVERNANCE_REVIEW.md). Configure at least one
+          # of the three provider slots below (all three of its variables)
+          # as repository secrets/variables; configure a second slot with a
+          # genuinely independent provider/account for failover.
           HUNTER_LLM_API_KEY: ${{ secrets.HUNTER_LLM_API_KEY }}
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          HUNTER_LLM_MODEL: ${{ vars.HUNTER_LLM_MODEL }}
           HUNTER_LLM_BASE_URL: ${{ vars.HUNTER_LLM_BASE_URL }}
+          HUNTER_LLM_MODEL: ${{ vars.HUNTER_LLM_MODEL }}
+          HUNTER_LLM_API_KEY_2: ${{ secrets.HUNTER_LLM_API_KEY_2 }}
+          HUNTER_LLM_BASE_URL_2: ${{ vars.HUNTER_LLM_BASE_URL_2 }}
+          HUNTER_LLM_MODEL_2: ${{ vars.HUNTER_LLM_MODEL_2 }}
+          HUNTER_LLM_API_KEY_3: ${{ secrets.HUNTER_LLM_API_KEY_3 }}
+          HUNTER_LLM_BASE_URL_3: ${{ vars.HUNTER_LLM_BASE_URL_3 }}
+          HUNTER_LLM_MODEL_3: ${{ vars.HUNTER_LLM_MODEL_3 }}
+          HUNTER_LLM_PROMPT_TOKEN_BUDGET: ${{ vars.HUNTER_LLM_PROMPT_TOKEN_BUDGET }}
+          HUNTER_LLM_MAX_COMPLETION_TOKENS: ${{ vars.HUNTER_LLM_MAX_COMPLETION_TOKENS }}
           HUNTER_GOVERNANCE_PROTECTED_BRANCHES: ${{ vars.HUNTER_GOVERNANCE_PROTECTED_BRANCHES }}
         run: |
           set -euo pipefail

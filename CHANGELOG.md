@@ -121,6 +121,67 @@
   independently), with `REVIEW_FAILED` occurring only once every configured
   provider has failed for that specific call. 100% backward compatible for
   every existing single-secret configuration.
+- **Repository-owner decision: Groq removed from Hunter Governance Review's
+  production/merge-critical path.** The multi-provider failover above still
+  left a live, operational gap: the very first genuine live run after it
+  shipped (PR #200, workflow run 31117767718 and reruns) hit Groq's
+  tokens-per-day quota on the only configured slot, since `GROQ_API_KEY` was
+  the sole repository secret configured at the time -- failover code with no
+  second, independent provider actually configured provides no real
+  resilience. The repository owner reviewed this operational evidence and
+  disqualified Groq from this gate's production path entirely (a repository
+  operational decision, not a claim about Groq as a service). This closes
+  that gap architecturally rather than by adding another single vendor:
+  - `GROQ_API_KEY` and `OPENAI_API_KEY` are no longer recognized variable
+    names anywhere in `llm_audit.py` -- no hidden fallback to either
+    remains under any configuration.
+  - The provider contract is now fully generic: three configuration slots
+    (`HUNTER_LLM_API_KEY`/`_BASE_URL`/`_MODEL`, with `_2`/`_3` suffixed
+    variants), each requiring all three of its own variables -- no vendor,
+    default endpoint, or default model is hardcoded anywhere. A slot with an
+    incomplete configuration (key set, URL/model missing) is skipped for
+    that slot only, never a fatal error for the run.
+  - Operational failures (network/timeout, or ANY non-2xx HTTP response --
+    rate limit, quota, service/model unavailable, server error, auth
+    failure) now mark a provider unhealthy for the **rest of the current
+    review run** (new `ProviderHealth`, shared across every diff-chunk,
+    synthesis, and document-review call in one `run_review()` execution) --
+    it is not retried indefinitely and is not reselected later in the same
+    run, closing the gap where the prior round's per-call-only failover
+    would have retried an already-exhausted provider on every subsequent
+    chunk. A non-operational failure (truncated/malformed output) does
+    **not** blacklist the provider, since it reflects that one response's
+    quality, not the provider's actual availability.
+  - A cheap, local-only preflight check (`_preflight_provider`: non-empty
+    key, `http(s)` base URL, non-empty model) catches an obviously broken
+    slot configuration before spending a network request on it.
+  - The entire Groq-specific retry/backoff and duration-parsing layer
+    (`MAX_RATE_LIMIT_RETRIES`, `_parse_retry_after_seconds`,
+    `_is_daily_rate_limit`, the TPM-vs-TPD distinction) is removed: with
+    multiple providers configured, the fallback to the next provider IS the
+    retry, so no in-provider wait-and-retry loop is needed.
+  - The prompt/completion token budgets (`PROVIDER_TPM_LIMIT`,
+    `PROMPT_TOKEN_BUDGET`, the "adaptive" completion-budget calculation) --
+    all previously derived from Groq's specific 12,000 TPM limit -- are
+    replaced with configuration-driven budgets
+    (`HUNTER_LLM_PROMPT_TOKEN_BUDGET`, default 6,000 tokens;
+    `HUNTER_LLM_MAX_COMPLETION_TOKENS`, default 4,096), since a real
+    provider's actual limits are neither knowable in advance nor always
+    published (e.g. Gemini's free-tier RPM/TPM/RPD is account-specific,
+    visible only in Google AI Studio).
+  - `.github/workflows/hunter-governance-review.yml` and
+    `hunter-governance-reconcile.yml` no longer pass `GROQ_API_KEY`/
+    `OPENAI_API_KEY` to the gate process; they pass the three generic slots'
+    secrets/variables instead.
+  - Tests added: Groq/OpenAI variable names have no special meaning,
+    deterministic slot ordering across all combinations, preflight
+    rejection without a network call, operational-failure blacklisting
+    persisting across separate calls in one run, non-operational failures
+    NOT persisting, a complete `CHANGES_REQUIRED` never triggering fallback
+    seeking a different verdict, a 429 producing exactly one request (never
+    an in-provider retry loop), all-providers-failing publishing
+    `REVIEW_FAILED` end-to-end, and no provider secret value ever appearing
+    in `ProviderHealth` events or the published step summary.
 
 ### Changed
 

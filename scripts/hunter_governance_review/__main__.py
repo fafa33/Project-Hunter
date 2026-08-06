@@ -29,10 +29,16 @@ Environment:
     GITHUB_RUN_ID              workflow run id recorded in the review pair
     GITHUB_SERVER_URL          server base used for the status target URL
     GITHUB_STEP_SUMMARY        path to append a summary to (GitHub Actions)
-    HUNTER_LLM_API_KEY         LLM API key (fallbacks: GROQ_API_KEY, OPENAI_API_KEY)
-    HUNTER_LLM_BASE_URL        OpenAI-compatible base URL (default: Groq)
-    HUNTER_LLM_MODEL           model id (default: llama-3.3-70b-versatile)
     HUNTER_GOVERNANCE_PROTECTED_BRANCHES  comma-separated protected branches (default: main)
+
+    Provider configuration (see llm_audit.py's ``_resolve_providers``):
+    at least one of the three provider slots below must be fully configured
+    (no default vendor, endpoint, or model -- every value is explicit):
+        HUNTER_LLM_API_KEY / HUNTER_LLM_BASE_URL / HUNTER_LLM_MODEL       (slot 1, tried first)
+        HUNTER_LLM_API_KEY_2 / HUNTER_LLM_BASE_URL_2 / HUNTER_LLM_MODEL_2 (slot 2, tried second)
+        HUNTER_LLM_API_KEY_3 / HUNTER_LLM_BASE_URL_3 / HUNTER_LLM_MODEL_3 (slot 3, tried third)
+    HUNTER_LLM_PROMPT_TOKEN_BUDGET      optional, tunes the per-request prompt budget
+    HUNTER_LLM_MAX_COMPLETION_TOKENS    optional, tunes the completion token cap
 
 Exit codes:
     0  review completed and status published (or the gate is not required for
@@ -56,6 +62,7 @@ from hunter_governance_review.aggregate import (
     apply_document_review,
     apply_synthesis,
     describe_chunks_for_synthesis,
+    providers_used,
 )
 from hunter_governance_review.chunking import (
     DiffChunk,
@@ -84,6 +91,8 @@ from hunter_governance_review.github_api import GhCliRunner, GitHubError, GitHub
 from hunter_governance_review.llm_audit import (
     AuditVerdict,
     LLMAuditError,
+    LLMCallResult,
+    ProviderHealth,
     estimate_chunk_diff_budget,
     estimate_document_chunk_budget,
     run_document_review,
@@ -116,8 +125,9 @@ class LLMRunner(Protocol):
         chunk: DiffChunk,
         context_brief: str,
         deterministic_findings: list[Finding],
+        health: ProviderHealth,
         timeout: int = 120,
-    ) -> AuditVerdict: ...
+    ) -> LLMCallResult: ...
 
 
 class SynthesisRunner(Protocol):
@@ -128,8 +138,9 @@ class SynthesisRunner(Protocol):
         pair: ReviewPair,
         pr: PullRequest,
         synthesis_input: str,
+        health: ProviderHealth,
         timeout: int = 120,
-    ) -> AuditVerdict: ...
+    ) -> LLMCallResult: ...
 
 
 class DocumentReviewRunner(Protocol):
@@ -141,8 +152,9 @@ class DocumentReviewRunner(Protocol):
         pr: PullRequest,
         document_chunk: DiffChunk,
         architectural_evidence_summary: str,
+        health: ProviderHealth,
         timeout: int = 120,
-    ) -> AuditVerdict: ...
+    ) -> LLMCallResult: ...
 
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
@@ -208,6 +220,8 @@ def _write_summary(
     coverage: CoverageManifest,
     context: ContextManifest | None,
     document_review: DocumentReviewManifest | None,
+    used_providers: tuple[str, ...],
+    provider_events: tuple[str, ...],
     published_state: str,
 ) -> None:
     summary_path = env.get("GITHUB_STEP_SUMMARY")
@@ -268,6 +282,16 @@ def _write_summary(
         if document_review.chunk_errors:
             lines.append("- **Section errors**:")
             lines.extend(f"  - {err}" for err in document_review.chunk_errors)
+    if used_providers or provider_events:
+        lines.append("")
+        lines.append("### Provider execution")
+        lines.append("- **Provider(s) used**: " + (", ".join(used_providers) if used_providers else "none succeeded"))
+        if provider_events:
+            lines.append(
+                "- **Provider health events** (attempt/switch/failure-classification provenance; never "
+                "includes secret values, only slot names):"
+            )
+            lines.extend(f"  - {event}" for event in provider_events)
     if audit is not None:
         lines.append("")
         lines.append("### Hostile architecture audit (aggregated across all chunks)")
@@ -419,6 +443,7 @@ def run_review(
     aggregated_verdict: AuditVerdict | None = None
     coverage_incomplete_reason: str | None = None
     document_coverage: DocumentReviewManifest | None = None
+    used_providers: tuple[str, ...] = ()
     should_audit = (
         evidence_error is None
         and context_error is None
@@ -426,9 +451,16 @@ def run_review(
         and not deterministic.blocking
         and early_fresh
     )
+    # One ProviderHealth per run: shared across every diff-chunk, synthesis,
+    # and document-review call in this run so a provider that fails
+    # operationally partway through is excluded from every later call in
+    # the SAME run, not just retried on the call that failed -- see
+    # llm_audit.ProviderHealth's docstring.
+    health = ProviderHealth()
     if should_audit:
         assert context_manifest is not None
         max_chunk_chars = estimate_chunk_diff_budget(
+            env=env,
             pr=pr,
             context_brief=context_manifest.brief,
             deterministic_findings=deterministic.findings,
@@ -437,17 +469,20 @@ def run_review(
         outcomes: list[ChunkOutcome] = []
         for chunk in chunks:
             try:
-                verdict = llm_runner(
+                result = llm_runner(
                     env,
                     pair=pair,
                     pr=pr,
                     chunk=chunk,
                     context_brief=context_manifest.brief,
                     deterministic_findings=deterministic.findings,
+                    health=health,
                 )
-                outcomes.append(ChunkOutcome(chunk.index, chunk.total, chunk.files, verdict, None))
+                outcomes.append(
+                    ChunkOutcome(chunk.index, chunk.total, chunk.files, result.verdict, None, result.provider)
+                )
             except LLMAuditError as exc:
-                outcomes.append(ChunkOutcome(chunk.index, chunk.total, chunk.files, None, str(exc)))
+                outcomes.append(ChunkOutcome(chunk.index, chunk.total, chunk.files, None, str(exc), None))
         expected_files = {f.filename for f in files}
         missing_from_diff = tuple(sorted(expected_files - covered_filenames(chunks)))
         aggregation = aggregate_chunk_outcomes(
@@ -457,6 +492,8 @@ def run_review(
             files_missing_from_diff=missing_from_diff,
         )
         architectural_evidence_summary = ""
+        document_outcomes: list[ChunkOutcome] = []
+        synthesis_provider: str | None = None
 
         # Everything below requires complete diff-chunk coverage first:
         # ``describe_chunks_for_synthesis`` asserts every chunk succeeded,
@@ -479,11 +516,15 @@ def run_review(
             # complete).
             if len(outcomes) > 0:
                 try:
-                    synthesis_verdict = synthesis_runner(
-                        env, pair=pair, pr=pr, synthesis_input=architectural_evidence_summary
+                    synthesis_result = synthesis_runner(
+                        env, pair=pair, pr=pr, synthesis_input=architectural_evidence_summary, health=health
                     )
-                    print(f"[Synthesis] {synthesis_verdict.verdict}: {synthesis_verdict.summary}")
-                    aggregation = apply_synthesis(aggregation, synthesis_verdict, None)
+                    print(
+                        f"[Synthesis] {synthesis_result.verdict.verdict}: {synthesis_result.verdict.summary} "
+                        f"(provider={synthesis_result.provider})"
+                    )
+                    synthesis_provider = synthesis_result.provider
+                    aggregation = apply_synthesis(aggregation, synthesis_result.verdict, None)
                 except LLMAuditError as exc:
                     print(f"[Synthesis] failed: {exc}")
                     aggregation = apply_synthesis(aggregation, None, str(exc))
@@ -499,30 +540,33 @@ def run_review(
         # complete aggregation's verdict to ``None`` on failure.
         if aggregation.verdict is not None:
             assert context_manifest is not None
-            document_outcomes: list[ChunkOutcome] = []
             total_document_bytes = 0
             for document_path, document_text in context_manifest.mandatory_document_texts:
                 total_document_bytes += len(document_text)
                 section_budget = estimate_document_chunk_budget(
+                    env=env,
                     pr=pr,
                     architectural_evidence_summary=architectural_evidence_summary,
                     document_path=document_path,
                 )
                 for section in split_document_into_chunks(document_path, document_text, section_budget):
                     try:
-                        verdict = document_review_runner(
+                        result = document_review_runner(
                             env,
                             pair=pair,
                             pr=pr,
                             document_chunk=section,
                             architectural_evidence_summary=architectural_evidence_summary,
+                            health=health,
                         )
                         document_outcomes.append(
-                            ChunkOutcome(section.index, section.total, section.files, verdict, None)
+                            ChunkOutcome(
+                                section.index, section.total, section.files, result.verdict, None, result.provider
+                            )
                         )
                     except LLMAuditError as exc:
                         document_outcomes.append(
-                            ChunkOutcome(section.index, section.total, section.files, None, str(exc))
+                            ChunkOutcome(section.index, section.total, section.files, None, str(exc), None)
                         )
             document_review_result: AggregatedDocumentReview = aggregate_document_chunk_outcomes(
                 document_outcomes,
@@ -538,6 +582,14 @@ def run_review(
             else:
                 print(f"[DocumentReview] failed: {document_review_result.incomplete_reason}")
             aggregation = apply_document_review(aggregation, document_review_result)
+
+        # Provenance: every distinct provider that actually served a
+        # successful chunk/section, plus the synthesis provider if it
+        # succeeded -- "final provider(s) used" for this run.
+        combined_providers = list(providers_used(outcomes)) + list(providers_used(document_outcomes))
+        if synthesis_provider and synthesis_provider not in combined_providers:
+            combined_providers.append(synthesis_provider)
+        used_providers = tuple(combined_providers)
 
         coverage = aggregation.manifest
         aggregated_verdict = aggregation.verdict
@@ -583,6 +635,10 @@ def run_review(
             f"documents={document_coverage.total_documents} "
             f"bytes={document_coverage.bytes_reviewed}/{document_coverage.bytes_total}"
         )
+    if used_providers:
+        print(f"[ProvidersUsed] {', '.join(used_providers)}")
+    for event in health.events:
+        print(f"[ProviderHealth] {event}")
     for finding in deterministic.findings:
         print(f"[Finding] {finding.render()}")
     if context_manifest is not None:
@@ -618,6 +674,8 @@ def run_review(
         coverage=coverage,
         context=context_manifest,
         document_review=document_coverage,
+        used_providers=used_providers,
+        provider_events=tuple(health.events),
         published_state=state.value,
     )
     return 0
