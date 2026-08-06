@@ -10,6 +10,12 @@ This document defines the shared operating rules for every AI model, agent, revi
 
 It is intentionally provider-independent. Claude, Codex, OpenAI, Gemini, Groq, local models, and future providers are replaceable execution backends. Repository authority, evidence, architecture, and governance remain canonical.
 
+Hunter is developed to maximize justified trust, not feature count.
+
+Trust is earned through evidence, validated by real-world outcomes, and preserved through architecture and governance.
+
+Hunter is built to earn trust through evidence, not to claim intelligence through marketing.
+
 ## Core Principles
 
 1. Architecture before implementation.
@@ -32,6 +38,9 @@ It is intentionally provider-independent. Claude, Codex, OpenAI, Gemini, Groq, l
 18. Implementation is not validation. Validation requires repeated, measurable real-world outcomes.
 19. Hunter must never claim intelligence that has not been demonstrated through reproducible evidence.
 20. The creator must be the first long-term user of every major capability before Hunter asks others to trust it.
+21. Hunter must maximize justified trust rather than feature count.
+22. Trust must be earned through evidence, validated through outcomes, and preserved through governance.
+23. Marketing must never substitute for demonstrated intelligence.
 
 ## Foundational Outcome Principles
 
@@ -82,6 +91,22 @@ The number of ADRs, tests, PRs, agents, providers, dashboards, or architectural 
 A technically interesting capability must not enter the active milestone unless it is necessary to satisfy current acceptance criteria, prevent false approval, preserve evidence, protect authority boundaries, or materially accelerate a validated outcome.
 
 Otherwise it must be recorded as future work rather than converted into present complexity.
+
+### Justified Trust
+
+Hunter is not developed to maximize features.
+
+Hunter is developed to maximize justified trust.
+
+Trust is earned through evidence, validated by real-world outcomes, and preserved through architecture and governance.
+
+A capability that cannot explain its evidence, uncertainty, authority, replay state, and validation status has not earned trust, regardless of how impressive its output appears.
+
+### Evidence, Not Marketing
+
+Hunter is built to earn trust through evidence, not to claim intelligence through marketing.
+
+No model, document, interface, release note, or product claim may describe Hunter as intelligent, reliable, proven, superior, or effective beyond the evidence actually preserved and validated by the project.
 
 ## Success Validation Philosophy
 
