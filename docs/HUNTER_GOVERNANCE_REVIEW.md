@@ -168,7 +168,21 @@ back to a fixed conservative backoff if it cannot be parsed), bounded to
 correctly fails coverage closed (see Stage 4) rather than retrying forever.
 Widening the per-chunk budget (above) and shrinking the context excerpt
 directly reduce how often this triggers by reducing the total chunk count for
-a given diff size (116 -> 16 chunks on the same real PR #200 diff).
+a given diff size (116 -> ~20 chunks on the same real PR #200 diff).
+
+**A per-day (TPD) 429 is a different failure mode and is never retried.** A
+further live re-verification of this exact fix (workflow run 31066459333)
+hit Groq's *daily* token quota mid-run ("... on tokens per day (TPD): Limit
+100000, Used 95514 ... Please try again in 44m34.944s") -- a wait no retry
+budget sized for a 30-minute CI job can absorb, and one the prior
+seconds-only duration regex would have mis-parsed as 34.944 seconds anyway
+(silently dropping the "44m" prefix). `_parse_retry_after_seconds` now
+parses Groq's `<h>h<m>m<s>s` form correctly, and `_is_daily_rate_limit`
+detects the `"tokens per day"` marker and fails that chunk immediately --
+one wasted request, not `MAX_RATE_LIMIT_RETRIES` of them -- surfacing the
+provider's own message (which already names the limit type and suggested
+wait) directly to the operator, who needs to wait for the daily quota to
+reset or raise it, not a code fix.
 
 The completion is separately capped with an **adaptive** `max_tokens`
 (`MIN_COMPLETION_TOKENS` 512 .. `MAX_COMPLETION_TOKENS_CAP` 2,048, scaled to
@@ -444,6 +458,12 @@ unprotected.
   normal on a multi-chunk review; if it happens on most chunks, reduce the
   total chunk count (raise `PROMPT_TOKEN_BUDGET`/`PROMPT_CHAR_BUDGET`, or
   shrink `context.DEFAULT_TOTAL_CHAR_BUDGET`) rather than the retry count.
+- **`REVIEW_FAILED` (or per-chunk failure) with `LLM API returned HTTP 429`
+  naming `tokens per day (TPD)`**: the configured LLM API key's *daily*
+  quota is exhausted (Groq's on-demand tier default: 100,000 tokens/day) --
+  not something a retry can fix within a bounded CI job. This is not a bug;
+  the message names the exact limit and its own suggested reset time. Wait
+  for the quota to reset, or configure a higher-tier key.
 - **`REVIEW_FAILED` with `missing API secret`**: none of `HUNTER_LLM_API_KEY`,
   `GROQ_API_KEY`, or `OPENAI_API_KEY` is configured as a repository secret.
   This is the intended fail-closed bootstrap behavior, not a bug — configure

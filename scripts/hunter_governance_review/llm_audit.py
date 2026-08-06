@@ -86,24 +86,56 @@ FILES_LINE_RESERVED_CHARS = 2_000
 # the window, despite every individual request staying safely under the
 # single-request 413 limit this budget already guards against. Some rate
 # limiting during a long multi-chunk review is normal and expected, not a
-# fatal error: a 429 is retried with the provider's own suggested wait
-# (falling back to a fixed conservative backoff if it cannot be parsed),
-# bounded to a small number of attempts, before that chunk is given up on
-# and reported as failed (which correctly fails coverage closed, per
-# aggregate.py, rather than silently retrying forever).
+# fatal error: a per-minute (TPM) 429 is retried with the provider's own
+# suggested wait (falling back to a fixed conservative backoff if it cannot
+# be parsed), bounded to a small number of attempts, before that chunk is
+# given up on and reported as failed (which correctly fails coverage closed,
+# per aggregate.py, rather than silently retrying forever).
+#
+# A per-DAY (TPD) 429 is a different failure mode and is NOT retried: the
+# next live re-verification of this exact fix (workflow run 31066459333)
+# hit Groq's tokens-per-day quota mid-run ("... on tokens per day (TPD):
+# Limit 100000, Used 95514 ... Please try again in 44m34.944s"), which no
+# retry budget sized for a 30-minute CI job can wait out, and which the
+# prior regex would have mis-parsed as a 34.944-SECOND wait anyway (it only
+# matched the trailing "<seconds>s" and silently dropped the "44m" prefix,
+# so retries would have burned through their whole budget in under three
+# minutes without ever waiting long enough). Duration parsing now handles
+# the "<h>h<m>m<s>s" form Groq uses for longer (TPD-scale) waits, and a TPD
+# limit fails that chunk immediately -- one wasted request, not
+# MAX_RATE_LIMIT_RETRIES of them -- with the provider's own message
+# (which already names the limit type and reset time) surfacing directly to
+# the operator, who needs to wait for the quota to reset or raise it, not a
+# code fix.
 MAX_RATE_LIMIT_RETRIES = 5
 DEFAULT_RATE_LIMIT_BACKOFF_SECONDS = 25.0
-_RETRY_AFTER_PATTERN = re.compile(r"try again in ([\d.]+)s", re.IGNORECASE)
+_RETRY_AFTER_PATTERN = re.compile(r"try again in (?:(\d+)h)?(?:(\d+)m)?([\d.]+)s", re.IGNORECASE)
+_DAILY_LIMIT_MARKER = "tokens per day"
 
 
 def _parse_retry_after_seconds(detail: str) -> float:
     match = _RETRY_AFTER_PATTERN.search(detail)
     if match:
+        hours_str, minutes_str, seconds_str = match.groups()
         try:
-            return float(match.group(1))
+            total = float(seconds_str)
+            if minutes_str:
+                total += float(minutes_str) * 60
+            if hours_str:
+                total += float(hours_str) * 3600
+            return total
         except ValueError:
             pass
     return DEFAULT_RATE_LIMIT_BACKOFF_SECONDS
+
+
+def _is_daily_rate_limit(detail: str) -> bool:
+    """True when a 429's detail names a per-day (not per-minute) limit.
+
+    A daily quota cannot be waited out within a bounded CI job's lifetime,
+    unlike a per-minute rate limit -- see the module comment above.
+    """
+    return _DAILY_LIMIT_MARKER in detail.lower()
 
 
 # Adaptive completion budget: Groq's TPM limit covers prompt and completion
@@ -451,7 +483,7 @@ def run_llm_audit(
                 response_payload = json.load(response)
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")[:400]
-            if exc.code == 429 and attempt < MAX_RATE_LIMIT_RETRIES:
+            if exc.code == 429 and not _is_daily_rate_limit(detail) and attempt < MAX_RATE_LIMIT_RETRIES:
                 attempt += 1
                 sleep(_parse_retry_after_seconds(detail))
                 continue

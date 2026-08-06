@@ -834,6 +834,51 @@ def test_parse_retry_after_seconds_falls_back_to_default() -> None:
     assert _parse_retry_after_seconds("no timing info in this message") == DEFAULT_RATE_LIMIT_BACKOFF_SECONDS
 
 
+def test_parse_retry_after_seconds_handles_minutes_and_seconds_format() -> None:
+    """Regression test: the live TPD failure on PR #200 used '44m34.944s',
+    which the prior seconds-only regex mis-parsed as 34.944 seconds."""
+    msg = "Rate limit reached ... Please try again in 44m34.944s. Need more tokens?"
+    assert _parse_retry_after_seconds(msg) == pytest.approx(44 * 60 + 34.944)
+
+
+def test_parse_retry_after_seconds_handles_hours_minutes_seconds_format() -> None:
+    msg = "Please try again in 1h2m3.5s."
+    assert _parse_retry_after_seconds(msg) == pytest.approx(3600 + 120 + 3.5)
+
+
+def test_run_llm_audit_does_not_retry_daily_rate_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regression test for the live TPD failure on PR #200 (run 31066459333):
+
+    a daily quota 429 must fail immediately, not burn through
+    MAX_RATE_LIMIT_RETRIES waiting on a window that won't reopen for
+    tens of minutes -- far longer than any bounded CI job's timeout.
+    """
+    sleeps: list[float] = []
+
+    def _fake_urlopen(request: object, timeout: int) -> _FakeHTTPResponse:
+        body = (
+            b'{"error":{"message":"Rate limit reached for model llama-3.3-70b-versatile '
+            b"... on tokens per day (TPD): Limit 100000, Used 95514, Requested 7582. "
+            b'Please try again in 44m34.944s.","type":"tokens","code":"rate_limit_exceeded"}}'
+        )
+        raise _http_error(429, body)
+
+    monkeypatch.setattr("hunter_governance_review.llm_audit.urllib.request.urlopen", _fake_urlopen)
+
+    chunk = DiffChunk(1, 1, ("a.py",), "@@ -1 +1 @@")
+    with pytest.raises(LLMAuditError, match="tokens per day"):
+        run_llm_audit(
+            _env(),
+            pair=_pair(),
+            pr=_pr(),
+            chunk=chunk,
+            context_brief="ctx",
+            deterministic_findings=[],
+            sleep=sleeps.append,
+        )
+    assert sleeps == []  # not a single retry attempted
+
+
 # --- Decision Engine -------------------------------------------------------------------
 
 
