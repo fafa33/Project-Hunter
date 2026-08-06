@@ -1,5 +1,29 @@
 # Project Hunter
 
+## Purpose
+
+Hunter exists to improve real-world decision quality through evidence.
+
+It is built to help its creator make better decisions before it is ever asked to help anyone else.
+
+## Validation Principle
+
+Implementation is not validation.
+
+Architecture is not value.
+
+Only demonstrably better real-world decisions validate Hunter.
+
+## Engineering Principle
+
+Before introducing any new capability, ask:
+
+> How will this improve real-world decision quality, and how will that improvement be measured?
+
+If that question cannot be answered with evidence, the capability belongs in the backlog, not in the current milestone.
+
+---
+
 Project Hunter is a deterministic, evidence-first cryptocurrency intelligence platform designed to discover, validate, prioritize, and continuously monitor asymmetric investment opportunities through auditable, explainable, and replayable analytical workflows.
 
 Project Hunter is governed by a specification-first governance model. Every implementation, runtime behavior, engineering decision, and release must comply with the project's canonical governance hierarchy.
