@@ -135,20 +135,40 @@ treated as untrusted data.
 
 The full assembled prompt for **one chunk** (system + user messages) is
 bounded to a fixed character budget (`PROMPT_CHAR_BUDGET` in `llm_audit.py`,
-17,500 characters, using a conservative 3.5 chars/token estimate against a
-5,000-token target) so it stays within the pinned default model's actual
+24,500 characters, using a conservative 3.5 chars/token estimate against a
+7,000-token target) so it stays within the pinned default model's actual
 provider rate limit (`PROVIDER_TPM_LIMIT`, 12,000 -- Groq's on-demand tier
 for `llama-3.3-70b-versatile`). A chunk's own diff text absorbs whatever
 budget remains after the PR body, changed-file list, findings, and context
-excerpt are rendered; `estimate_chunk_diff_budget` sizes chunks *before* they
-are built so this should never bind in practice, but if a chunk still does
-not fit, `build_chunk_audit_prompt` raises rather than silently truncating
--- that chunk is recorded as failed, which fails the whole review's coverage
-closed (see Stage 4). This budget was derived directly from a real failure:
-the gate's own live installation run (PR #200, workflow run 31056865509) was
+excerpt (deliberately small -- `context.DEFAULT_TOTAL_CHAR_BUDGET`, 2,000
+characters -- since it is re-sent identically on every chunk) are rendered;
+`estimate_chunk_diff_budget` sizes chunks *before* they are built so this
+should never bind in practice, but if a chunk still does not fit,
+`build_chunk_audit_prompt` raises rather than silently truncating -- that
+chunk is recorded as failed, which fails the whole review's coverage closed
+(see Stage 4). This budget was derived directly from a real failure: the
+gate's own live installation run (PR #200, workflow run 31056865509) was
 rejected outright by Groq -- HTTP 413, "Request too large ... tokens per
 minute (TPM): Limit 12000, Requested 27258" -- because the original
 (pre-chunking) bounds had no relationship to that limit.
+
+**Rate limiting across sequential chunk calls is expected, not exceptional,
+and is retried, not treated as a hard failure.** `PROVIDER_TPM_LIMIT` bounds
+a single request, but it is actually a *rate* -- tokens per rolling 60-second
+window -- and a review with many chunks makes many sequential requests that
+all draw from that same window. Re-verifying this very fix live against
+PR #200's own (much larger, cumulative) diff produced 116 chunks, and 113 of
+them failed with HTTP 429 ("Rate limit reached ... Please try again in
+21.98s") after only the first 2-3 calls exhausted the window (workflow run
+31065137201) -- even though every individual request stayed safely under the
+per-request limit above. `run_llm_audit` now retries a 429 using the
+provider's own suggested wait time (parsed from its error message, falling
+back to a fixed conservative backoff if it cannot be parsed), bounded to
+`MAX_RATE_LIMIT_RETRIES` (5) attempts, before giving up on that chunk -- which
+correctly fails coverage closed (see Stage 4) rather than retrying forever.
+Widening the per-chunk budget (above) and shrinking the context excerpt
+directly reduce how often this triggers by reducing the total chunk count for
+a given diff size (116 -> 16 chunks on the same real PR #200 diff).
 
 The completion is separately capped with an **adaptive** `max_tokens`
 (`MIN_COMPLETION_TOKENS` 512 .. `MAX_COMPLETION_TOKENS_CAP` 2,048, scaled to
@@ -416,6 +436,14 @@ unprotected.
   still occurs, the configured `HUNTER_LLM_MODEL`'s real provider TPM limit
   is lower than `PROVIDER_TPM_LIMIT`/`PROMPT_TOKEN_BUDGET` were derived
   against and both must be lowered to match it.
+- **`REVIEW_FAILED` (or per-chunk failure) with `LLM API returned HTTP 429`
+  after several retries**: the review has enough chunks that sequential
+  calls are exhausting Groq's tokens-per-minute *rate* (not just a single
+  request's size) faster than `MAX_RATE_LIMIT_RETRIES` retries can wait it
+  out. Occasional 429s that resolve after 1-2 retries are expected and
+  normal on a multi-chunk review; if it happens on most chunks, reduce the
+  total chunk count (raise `PROMPT_TOKEN_BUDGET`/`PROMPT_CHAR_BUDGET`, or
+  shrink `context.DEFAULT_TOTAL_CHAR_BUDGET`) rather than the retry count.
 - **`REVIEW_FAILED` with `missing API secret`**: none of `HUNTER_LLM_API_KEY`,
   `GROQ_API_KEY`, or `OPENAI_API_KEY` is configured as a repository secret.
   This is the intended fail-closed bootstrap behavior, not a bug — configure

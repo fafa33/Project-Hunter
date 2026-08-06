@@ -37,6 +37,20 @@
   gap found on this gate's own installation PR: once the token-budget fix
   above let the audit actually run, the gate returned `CHANGES_REQUIRED` with
   no findings visible anywhere on GitHub to act on.
+- Deterministic, lossless diff chunking (`chunking.py`), authoritative
+  governance context resolved via the GitHub API at the exact base commit
+  instead of a hardcoded brief (`context.py`), cross-chunk aggregation with
+  fail-closed coverage guarantees (`aggregate.py`), a post-audit (not just
+  pre-audit) freshness re-check, strict structured-verdict schema
+  validation, and an adaptive completion-token budget. Closes five
+  merge-blocking findings from an independent review of this gate. Also
+  fixes a rate-limit failure mode the chunking work itself introduced and
+  that a live re-verification against PR #200's own diff caught directly:
+  116 sequential per-chunk calls exhausted Groq's tokens-per-minute *rate*
+  (not any single request's size) after 2-3 calls, failing 113/116 chunks
+  with HTTP 429; `run_llm_audit` now retries 429 with the provider's
+  suggested backoff, and the per-chunk budget was widened while the context
+  excerpt was shrunk to cut the real chunk count from 116 to 16.
 
 ### Changed
 

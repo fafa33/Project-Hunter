@@ -20,9 +20,10 @@ from __future__ import annotations
 
 import json
 import re
+import time
 import urllib.error
 import urllib.request
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -67,11 +68,43 @@ SYSTEM_PROMPT = (
 # docs/HUNTER_GOVERNANCE_REVIEW.md's Troubleshooting section.
 CHARS_PER_TOKEN_ESTIMATE = 3.5
 PROVIDER_TPM_LIMIT = 12_000
-PROMPT_TOKEN_BUDGET = 5_000
+PROMPT_TOKEN_BUDGET = 7_000
 PROMPT_CHAR_BUDGET = int(PROMPT_TOKEN_BUDGET * CHARS_PER_TOKEN_ESTIMATE)
 PR_BODY_CHAR_LIMIT = 4_000
 MIN_DIFF_CHAR_BUDGET = 500
 FILES_LINE_RESERVED_CHARS = 2_000
+
+# ---------------------------------------------------------------------------
+# Rate-limit retry.
+#
+# PROVIDER_TPM_LIMIT is a rate (tokens per rolling 60-second window), not a
+# per-request-only cap. Chunking (chunking.py) means a single review makes
+# many *sequential* requests that all draw from that same window -- on
+# PR #200's own live re-verification of this fix (workflow run 31065137201),
+# a 116-chunk diff produced HTTP 429 on 113/116 chunks ("Rate limit reached
+# ... Please try again in 21.98s") after only the first 2-3 calls exhausted
+# the window, despite every individual request staying safely under the
+# single-request 413 limit this budget already guards against. Some rate
+# limiting during a long multi-chunk review is normal and expected, not a
+# fatal error: a 429 is retried with the provider's own suggested wait
+# (falling back to a fixed conservative backoff if it cannot be parsed),
+# bounded to a small number of attempts, before that chunk is given up on
+# and reported as failed (which correctly fails coverage closed, per
+# aggregate.py, rather than silently retrying forever).
+MAX_RATE_LIMIT_RETRIES = 5
+DEFAULT_RATE_LIMIT_BACKOFF_SECONDS = 25.0
+_RETRY_AFTER_PATTERN = re.compile(r"try again in ([\d.]+)s", re.IGNORECASE)
+
+
+def _parse_retry_after_seconds(detail: str) -> float:
+    match = _RETRY_AFTER_PATTERN.search(detail)
+    if match:
+        try:
+            return float(match.group(1))
+        except ValueError:
+            pass
+    return DEFAULT_RATE_LIMIT_BACKOFF_SECONDS
+
 
 # Adaptive completion budget: Groq's TPM limit covers prompt and completion
 # together in the same per-minute window, so a flat completion cap sized for
@@ -363,10 +396,16 @@ def run_llm_audit(
     context_brief: str,
     deterministic_findings: list[Finding],
     timeout: int = 120,
+    sleep: Callable[[float], None] = time.sleep,
 ) -> AuditVerdict:
     """Run the hostile architecture audit for exactly one diff chunk.
 
     Every failure mode raises ``LLMAuditError``; none may produce approval.
+    A rate-limit response (HTTP 429) is retried, bounded to
+    ``MAX_RATE_LIMIT_RETRIES`` attempts, using the provider's own suggested
+    wait time when it can be parsed -- see the module-level comment above
+    for why this is expected, not exceptional, once a review has more than
+    one or two chunks. ``sleep`` is injectable so tests never actually wait.
     """
     api_key, base_url, model = _resolve_provider(env)
     prompt = build_chunk_audit_prompt(
@@ -404,16 +443,23 @@ def run_llm_audit(
         },
         method="POST",
     )
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            response_payload = json.load(response)
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")[:400]
-        raise LLMAuditError(f"LLM API returned HTTP {exc.code}: {detail}") from exc
-    except json.JSONDecodeError as exc:
-        raise LLMAuditError(f"LLM API returned malformed JSON: {exc}") from exc
-    except (urllib.error.URLError, TimeoutError, OSError) as exc:
-        raise LLMAuditError(f"LLM API request could not be completed: {exc}") from exc
+    attempt = 0
+    response_payload: dict[str, Any] | None = None
+    while response_payload is None:
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                response_payload = json.load(response)
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")[:400]
+            if exc.code == 429 and attempt < MAX_RATE_LIMIT_RETRIES:
+                attempt += 1
+                sleep(_parse_retry_after_seconds(detail))
+                continue
+            raise LLMAuditError(f"LLM API returned HTTP {exc.code}: {detail}") from exc
+        except json.JSONDecodeError as exc:
+            raise LLMAuditError(f"LLM API returned malformed JSON: {exc}") from exc
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            raise LLMAuditError(f"LLM API request could not be completed: {exc}") from exc
 
     finish_reason = _extract_finish_reason(response_payload)
     if finish_reason == "length":

@@ -11,7 +11,9 @@ freshness re-check. No live network access is used.
 from __future__ import annotations
 
 import argparse
+import io
 import json
+import urllib.error
 from pathlib import Path
 
 import pytest
@@ -32,12 +34,15 @@ from hunter_governance_review.decision import decide
 from hunter_governance_review.deterministic import ValidationContext, run_deterministic_engine
 from hunter_governance_review.github_api import GitHubError
 from hunter_governance_review.llm_audit import (
+    DEFAULT_RATE_LIMIT_BACKOFF_SECONDS,
     MAX_COMPLETION_TOKENS_CAP,
+    MAX_RATE_LIMIT_RETRIES,
     MIN_COMPLETION_TOKENS,
     MIN_DIFF_CHAR_BUDGET,
     PR_BODY_CHAR_LIMIT,
     AuditVerdict,
     LLMAuditError,
+    _parse_retry_after_seconds,
     build_chunk_audit_prompt,
     estimate_chunk_diff_budget,
     parse_audit_response,
@@ -727,6 +732,106 @@ def test_run_llm_audit_large_legitimate_findings_set_does_not_truncate(monkeypat
     )
     assert verdict.verdict == "APPROVED"
     assert len(verdict.findings) == 15
+
+
+def _http_error(code: int, body: bytes) -> urllib.error.HTTPError:
+    return urllib.error.HTTPError(url="http://x", code=code, msg="", hdrs=None, fp=io.BytesIO(body))  # type: ignore[arg-type]
+
+
+def test_run_llm_audit_retries_on_429_then_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regression test for the live 116-chunk rate-limit failure on PR #200 itself."""
+    calls = {"count": 0}
+    sleeps: list[float] = []
+
+    def _fake_urlopen(request: object, timeout: int) -> _FakeHTTPResponse:
+        calls["count"] += 1
+        if calls["count"] == 1:
+            body = (
+                b'{"error":{"message":"Rate limit reached for model llama-3.3-70b-versatile '
+                b"... tokens per minute (TPM): Limit 12000, Used 10929, Requested 5467. "
+                b'Please try again in 5.5s.","type":"tokens","code":"rate_limit_exceeded"}}'
+            )
+            raise _http_error(429, body)
+        response_body = {
+            "choices": [
+                {
+                    "message": {
+                        "content": '{"verdict": "APPROVED", "summary": "ok", "findings": [], "rationale": "r"}'
+                    },
+                    "finish_reason": "stop",
+                }
+            ]
+        }
+        return _FakeHTTPResponse(json.dumps(response_body).encode("utf-8"))
+
+    monkeypatch.setattr("hunter_governance_review.llm_audit.urllib.request.urlopen", _fake_urlopen)
+
+    chunk = DiffChunk(1, 1, ("a.py",), "@@ -1 +1 @@\n+ok")
+    verdict = run_llm_audit(
+        _env(),
+        pair=_pair(),
+        pr=_pr(),
+        chunk=chunk,
+        context_brief="ctx",
+        deterministic_findings=[],
+        sleep=sleeps.append,
+    )
+    assert verdict.verdict == "APPROVED"
+    assert calls["count"] == 2
+    assert sleeps == [5.5]
+
+
+def test_run_llm_audit_gives_up_after_max_rate_limit_retries(monkeypatch: pytest.MonkeyPatch) -> None:
+    sleeps: list[float] = []
+
+    def _fake_urlopen(request: object, timeout: int) -> _FakeHTTPResponse:
+        raise _http_error(429, b'{"error":{"message":"Rate limit reached"}}')
+
+    monkeypatch.setattr("hunter_governance_review.llm_audit.urllib.request.urlopen", _fake_urlopen)
+
+    chunk = DiffChunk(1, 1, ("a.py",), "@@ -1 +1 @@")
+    with pytest.raises(LLMAuditError, match="HTTP 429"):
+        run_llm_audit(
+            _env(),
+            pair=_pair(),
+            pr=_pr(),
+            chunk=chunk,
+            context_brief="ctx",
+            deterministic_findings=[],
+            sleep=sleeps.append,
+        )
+    assert len(sleeps) == MAX_RATE_LIMIT_RETRIES
+
+
+def test_run_llm_audit_does_not_retry_non_429_http_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    sleeps: list[float] = []
+
+    def _fake_urlopen(request: object, timeout: int) -> _FakeHTTPResponse:
+        raise _http_error(500, b"internal server error")
+
+    monkeypatch.setattr("hunter_governance_review.llm_audit.urllib.request.urlopen", _fake_urlopen)
+
+    chunk = DiffChunk(1, 1, ("a.py",), "@@ -1 +1 @@")
+    with pytest.raises(LLMAuditError, match="HTTP 500"):
+        run_llm_audit(
+            _env(),
+            pair=_pair(),
+            pr=_pr(),
+            chunk=chunk,
+            context_brief="ctx",
+            deterministic_findings=[],
+            sleep=sleeps.append,
+        )
+    assert sleeps == []
+
+
+def test_parse_retry_after_seconds_extracts_groq_message_format() -> None:
+    msg = "Rate limit reached ... Please try again in 21.98s. Need more tokens?"
+    assert _parse_retry_after_seconds(msg) == 21.98
+
+
+def test_parse_retry_after_seconds_falls_back_to_default() -> None:
+    assert _parse_retry_after_seconds("no timing info in this message") == DEFAULT_RATE_LIMIT_BACKOFF_SECONDS
 
 
 # --- Decision Engine -------------------------------------------------------------------

@@ -34,7 +34,16 @@ from hunter_governance_review.contracts import ContextEntry, ContextManifest
 
 CANONICAL_MAP_PATH = "docs/CANONICAL_ARCHITECTURE_MAP.md"
 DEFAULT_EXCERPT_CHARS = 900
-DEFAULT_TOTAL_CHAR_BUDGET = 6_000
+# Deliberately small: this brief is re-sent, identically, on every one of a
+# potentially large number of sequential per-chunk audit calls (see
+# chunking.py). A large context budget doesn't make it any more authoritative
+# -- the full-fidelity evidence trail is the coverage manifest (every
+# resolved document's exact path/ref/sha256/length), not this inline
+# excerpt -- but it does directly shrink how much diff budget each chunk has
+# left, which was the proximate cause of a 116-chunk review on PR #200's own
+# real diff hitting Groq's tokens-per-minute rate limit on almost every
+# sequential call (workflow run 31065137201).
+DEFAULT_TOTAL_CHAR_BUDGET = 2_000
 
 _NUMBERED_LINE_PATTERN = re.compile(r"^\d+\.\s")
 _BACKTICK_PATTERN = re.compile(r"`([^`]+)`")
