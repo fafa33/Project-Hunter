@@ -191,10 +191,3 @@ class GhCliRunner:
                 f"target_url={target_url}",
             ]
         )
-
-
-def truncate_diff(diff: str, limit: int) -> str:
-    """Bound the diff size sent to the LLM, marking truncation explicitly."""
-    if len(diff) <= limit:
-        return diff
-    return diff[:limit] + f"\n\n[DIFF TRUNCATED at {limit} characters]"

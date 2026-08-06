@@ -8,6 +8,7 @@ Flow (per ``docs/HUNTER_GOVERNANCE_REVIEW.md``):
         -> Deterministic diff chunking (complete coverage, no truncation)
         -> LLM Architecture Audit, one call per chunk
         -> Aggregation across every chunk (fail-closed on any missing/failed chunk)
+        -> Cross-chunk consistency synthesis (one call, over summaries/findings only)
         -> Decision Engine
         -> re-verify the review pair immediately before publishing (post-audit freshness)
         -> publish the required status check "Hunter Governance Review"
@@ -42,7 +43,12 @@ import os
 from collections.abc import Mapping
 from typing import Protocol
 
-from hunter_governance_review.aggregate import ChunkOutcome, aggregate_chunk_outcomes
+from hunter_governance_review.aggregate import (
+    ChunkOutcome,
+    aggregate_chunk_outcomes,
+    apply_synthesis,
+    describe_chunks_for_synthesis,
+)
 from hunter_governance_review.chunking import DiffChunk, covered_filenames, split_diff_into_chunks
 from hunter_governance_review.context import ContextResolutionError, resolve_context
 from hunter_governance_review.contracts import (
@@ -60,12 +66,13 @@ from hunter_governance_review.contracts import (
 )
 from hunter_governance_review.decision import Decision, decide
 from hunter_governance_review.deterministic import ValidationContext, run_deterministic_engine
-from hunter_governance_review.github_api import GhCliRunner, GitHubError, GitHubRunner, truncate_diff
+from hunter_governance_review.github_api import GhCliRunner, GitHubError, GitHubRunner
 from hunter_governance_review.llm_audit import (
     AuditVerdict,
     LLMAuditError,
     estimate_chunk_diff_budget,
     run_llm_audit,
+    run_synthesis_review,
 )
 
 # Coarse memory/sanity bound only -- guards against holding a pathologically
@@ -76,7 +83,10 @@ from hunter_governance_review.llm_audit import (
 # provider rate limit -- see llm_audit.py's module-level comment for why
 # (PR #200's own live installation run was rejected by Groq for exceeding
 # its tokens-per-minute limit with the prior, disconnected 150,000-character
-# single-request cap).
+# single-request cap). Exceeding this bound fails the review closed (see
+# below) -- it is never used to silently truncate the diff and continue,
+# which would make coverage accounting blind to the loss (a file's content
+# could be cut off after chunking already recorded that file as "covered").
 DIFF_LIMIT = 5_000_000
 
 
@@ -90,6 +100,18 @@ class LLMRunner(Protocol):
         chunk: DiffChunk,
         context_brief: str,
         deterministic_findings: list[Finding],
+        timeout: int = 120,
+    ) -> AuditVerdict: ...
+
+
+class SynthesisRunner(Protocol):
+    def __call__(
+        self,
+        env: Mapping[str, str],
+        *,
+        pair: ReviewPair,
+        pr: PullRequest,
+        synthesis_input: str,
         timeout: int = 120,
     ) -> AuditVerdict: ...
 
@@ -249,6 +271,7 @@ def run_review(
     env: Mapping[str, str],
     gh: GitHubRunner,
     llm_runner: LLMRunner,
+    synthesis_runner: SynthesisRunner,
 ) -> int:
     """Execute the full gate for one pull request and publish the status check."""
     repository = args.repository or env.get("GITHUB_REPOSITORY") or gh.repository
@@ -289,9 +312,24 @@ def run_review(
     diff = ""
     try:
         files = gh.get_pull_files(pr.number)
-        diff = truncate_diff(gh.get_pull_diff(pr.number), DIFF_LIMIT)
+        diff = gh.get_pull_diff(pr.number)
     except GitHubError as exc:
         evidence_error = f"missing required repository evidence: {exc}"
+
+    if evidence_error is None and len(diff) > DIFF_LIMIT:
+        # The retrieved diff exceeds even the coarse memory/sanity bound.
+        # Coverage accounting (chunking.py, aggregate.py) must operate on the
+        # complete retrieved diff -- silently truncating here and letting
+        # chunking/coverage proceed on the truncated remainder would let a
+        # file's content be silently dropped before coverage accounting ever
+        # saw it, while still reporting that file as "covered" (it would
+        # still appear in a chunk's file list up to the cut point). Fail
+        # closed instead: never treat truncated input as complete evidence.
+        evidence_error = (
+            f"retrieved diff ({len(diff)} chars) exceeds the sanity bound (DIFF_LIMIT={DIFF_LIMIT} "
+            "chars); refusing to silently truncate and continue -- coverage accounting must operate "
+            "on the complete retrieved diff, never a truncated one"
+        )
 
     context_manifest: ContextManifest | None = None
     context_error: str | None = None
@@ -370,6 +408,23 @@ def run_review(
             total_files=len(files),
             files_missing_from_diff=missing_from_diff,
         )
+
+        # Cross-chunk consistency synthesis: only meaningful once every chunk
+        # has already succeeded (coverage complete) and there was at least
+        # one chunk to synthesize over. Approval requires this to succeed and
+        # find no contradiction spanning multiple chunks -- a failure here is
+        # folded in exactly like a failed chunk (coverage that cannot be
+        # verified consistent is not complete).
+        if aggregation.verdict is not None and len(outcomes) > 0:
+            synthesis_input = describe_chunks_for_synthesis(outcomes)
+            try:
+                synthesis_verdict = synthesis_runner(env, pair=pair, pr=pr, synthesis_input=synthesis_input)
+                print(f"[Synthesis] {synthesis_verdict.verdict}: {synthesis_verdict.summary}")
+                aggregation = apply_synthesis(aggregation, synthesis_verdict, None)
+            except LLMAuditError as exc:
+                print(f"[Synthesis] failed: {exc}")
+                aggregation = apply_synthesis(aggregation, None, str(exc))
+
         coverage = aggregation.manifest
         aggregated_verdict = aggregation.verdict
         coverage_incomplete_reason = aggregation.incomplete_reason
@@ -458,7 +513,7 @@ def main(argv: list[str] | None = None) -> int:
         print("::error::GITHUB_TOKEN is not set; the gate cannot publish its status check.")
         return 2
     gh = GhCliRunner(repository, token=token)
-    return run_review(args=args, env=env, gh=gh, llm_runner=run_llm_audit)
+    return run_review(args=args, env=env, gh=gh, llm_runner=run_llm_audit, synthesis_runner=run_synthesis_review)
 
 
 if __name__ == "__main__":

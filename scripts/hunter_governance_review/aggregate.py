@@ -12,6 +12,12 @@ approval, and no aggregate verdict is produced at all in that case
 The aggregate verdict is computed here, deterministically, from the union of
 every chunk's findings -- it is never taken from any single chunk's
 self-reported label, because no single chunk ever saw the whole diff.
+
+Once every chunk succeeds, ``apply_synthesis`` folds in the result of the
+one, final cross-chunk consistency synthesis call
+(``llm_audit.run_synthesis_review``): approval additionally requires that
+synthesis to have succeeded and found no unresolved contradiction spanning
+multiple chunks.
 """
 
 from __future__ import annotations
@@ -127,3 +133,81 @@ def aggregate_chunk_outcomes(
         rationale=" | ".join(rationales),
     )
     return AggregatedAudit(verdict=aggregated, manifest=manifest, incomplete_reason=None)
+
+
+def describe_chunks_for_synthesis(outcomes: list[ChunkOutcome]) -> str:
+    """Render per-chunk summaries/findings/file-coverage as compact text.
+
+    Input to the one cross-chunk consistency synthesis call
+    (``llm_audit.run_synthesis_review``) -- never the raw diff, only what
+    each chunk already reported. Callers must only call this after
+    confirming every outcome succeeded (``aggregate_chunk_outcomes``'s
+    ``verdict is not None`` result already guarantees this); it asserts
+    rather than silently skipping a missing verdict, since synthesizing over
+    partial data would be exactly the "silent evidence loss" this gate must
+    never produce.
+    """
+    lines: list[str] = []
+    for outcome in outcomes:
+        verdict = outcome.verdict
+        assert verdict is not None, "describe_chunks_for_synthesis requires every chunk to have succeeded"
+        lines.append(f"Chunk {outcome.chunk_index}/{outcome.chunk_total} -- files: {', '.join(outcome.files)}")
+        lines.append(f"  summary: {verdict.summary}")
+        if verdict.findings:
+            for finding in verdict.findings:
+                lines.append(
+                    f"  finding [{finding.get('id')}] ({finding.get('severity')}) "
+                    f"{finding.get('location')}: {finding.get('description')} -- {finding.get('decision_impact')}"
+                )
+        else:
+            lines.append("  findings: none")
+    return "\n".join(lines)
+
+
+def apply_synthesis(
+    aggregated: AggregatedAudit,
+    synthesis: AuditVerdict | None,
+    synthesis_error: str | None,
+) -> AggregatedAudit:
+    """Fold the cross-chunk consistency synthesis result into the aggregated audit.
+
+    Approval requires complete chunk coverage (already enforced by
+    ``aggregated.verdict is not None``), a successful synthesis call, and no
+    unresolved cross-chunk contradiction. A synthesis failure is treated
+    exactly like a failed chunk: coverage that cannot be verified consistent
+    is not complete, so the result becomes incomplete (``verdict=None``),
+    which the caller maps to ``REVIEW_FAILED``.
+
+    A no-op passthrough when ``aggregated.verdict`` is already ``None``
+    (coverage was incomplete before synthesis was ever attempted) or when
+    ``synthesis`` is ``None`` with no error (synthesis was skipped, e.g. a
+    zero-chunk review with nothing to synthesize).
+    """
+    if aggregated.verdict is None:
+        return aggregated
+    if synthesis_error is not None:
+        return AggregatedAudit(
+            verdict=None,
+            manifest=aggregated.manifest,
+            incomplete_reason=f"cross-chunk consistency synthesis failed: {synthesis_error}",
+        )
+    if synthesis is None:
+        return aggregated
+    if synthesis.verdict == "CHANGES_REQUIRED":
+        namespaced = [{**finding, "id": f"SYN-{finding.get('id', '?')}"} for finding in synthesis.findings]
+        merged = AuditVerdict(
+            verdict="CHANGES_REQUIRED",
+            summary=f"{aggregated.verdict.summary}; cross-chunk synthesis: {synthesis.summary}",
+            findings=[*aggregated.verdict.findings, *namespaced],
+            rationale=f"{aggregated.verdict.rationale} | synthesis: {synthesis.rationale}",
+        )
+        return AggregatedAudit(verdict=merged, manifest=aggregated.manifest, incomplete_reason=None)
+    merged = AuditVerdict(
+        verdict=aggregated.verdict.verdict,
+        summary=aggregated.verdict.summary,
+        findings=aggregated.verdict.findings,
+        rationale=(
+            f"{aggregated.verdict.rationale} | synthesis: no cross-chunk contradictions found " f"({synthesis.summary})"
+        ),
+    )
+    return AggregatedAudit(verdict=merged, manifest=aggregated.manifest, incomplete_reason=None)

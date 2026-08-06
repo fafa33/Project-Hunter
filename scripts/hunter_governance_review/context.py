@@ -156,10 +156,23 @@ def resolve_context(
     """Resolve authoritative governance context at the exact base commit.
 
     Raises ``ContextResolutionError`` if the canonical map itself, or any
-    document its hierarchy lists, cannot be retrieved at ``base_sha``.
+    document its hierarchy lists, cannot be retrieved at ``base_sha`` -- or if
+    a document *was* retrieved but the total prompt budget left zero room for
+    it, for a document the hierarchy marks mandatory (required authority that
+    cannot fit fails closed rather than being silently omitted while its
+    manifest entry still claims "resolved").
+
+    Every ``ContextEntry.included_chars`` reports the exact number of
+    characters of that document's content that made it into ``brief`` --
+    never an amount that was merely *attempted* before the total budget was
+    applied. The included range is always ``[0, included_chars)`` from the
+    start of the document (excerpts are never taken from the middle or end).
     """
     entries: list[ContextEntry] = []
-    excerpts: list[str] = []
+    # (path, ref, mandatory, sha256, byte_length, full_excerpt_with_header,
+    #  header_length) for every successfully resolved document, in the exact
+    # order they will compete for the total budget below.
+    resolved: list[tuple[str, str, bool, str, int, str, int]] = []
 
     def _resolve(pending: _PendingEntry) -> str | None:
         content = resolver.get_file_content(pending.path, pending.ref)
@@ -167,12 +180,10 @@ def resolve_context(
             entries.append(ContextEntry(pending.path, pending.ref, pending.mandatory, "missing", "", 0, 0))
             return None
         digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
-        included = min(len(content), excerpt_chars)
-        entries.append(
-            ContextEntry(pending.path, pending.ref, pending.mandatory, "resolved", digest, len(content), included)
-        )
-        excerpts.append(
-            f"--- {pending.path} (base {pending.ref[:12]}, sha256 {digest[:12]}) ---\n{content[:excerpt_chars]}"
+        excerpt_content = content[:excerpt_chars]
+        header = f"--- {pending.path} (base {pending.ref[:12]}, sha256 {digest[:12]}) ---\n"
+        resolved.append(
+            (pending.path, pending.ref, pending.mandatory, digest, len(content), header + excerpt_content, len(header))
         )
         return content
 
@@ -200,29 +211,55 @@ def resolve_context(
             + ", ".join(missing_mandatory)
         )
 
-    resolved_paths = {e.path for e in entries}
+    already_resolved_paths = {item[0] for item in resolved}
     for path in extract_doc_references(pr_body):
-        if path in resolved_paths:
+        if path in already_resolved_paths:
             continue
         _resolve(_PendingEntry(path, base_sha, mandatory=False))
-        resolved_paths.add(path)
+        already_resolved_paths.add(path)
 
     resolved_records, missing_references = resolve_referenced_records(
         resolver, base_sha=base_sha, pr_body=pr_body, excerpt_chars=excerpt_chars
     )
-    for entry, content in resolved_records:
-        entries.append(entry)
-        excerpts.append(
-            f"--- {entry.path} (base {entry.ref[:12]}, sha256 {entry.sha256[:12]}) ---\n{content[:excerpt_chars]}"
+    for record_entry, content in resolved_records:
+        excerpt_content = content[:excerpt_chars]
+        header = f"--- {record_entry.path} (base {record_entry.ref[:12]}, sha256 {record_entry.sha256[:12]}) ---\n"
+        resolved.append(
+            (
+                record_entry.path,
+                record_entry.ref,
+                record_entry.mandatory,
+                record_entry.sha256,
+                record_entry.byte_length,
+                header + excerpt_content,
+                len(header),
+            )
         )
 
+    # Apply the total prompt-budget pass, tracking the EXACT number of
+    # content characters (excluding the header line) each document actually
+    # contributed to ``brief`` -- this is the only place ``included_chars``
+    # is decided; nothing upstream may claim a larger figure.
     budget = total_char_budget
-    bounded: list[str] = []
-    for excerpt in excerpts:
+    bounded_pieces: list[str] = []
+    for path, ref, mandatory, digest, byte_length, full_excerpt, header_length in resolved:
         if budget <= 0:
-            break
-        bounded.append(excerpt[:budget])
-        budget -= len(excerpt[:budget])
-    brief = "\n\n".join(bounded)
+            included_chars = 0
+        else:
+            piece = full_excerpt[:budget]
+            bounded_pieces.append(piece)
+            included_chars = max(0, len(piece) - header_length)
+            budget -= len(piece)
+        entries.append(ContextEntry(path, ref, mandatory, "resolved", digest, byte_length, included_chars))
+
+    zeroed_mandatory = [e.path for e in entries if e.mandatory and e.status == "resolved" and e.included_chars == 0]
+    if zeroed_mandatory:
+        raise ContextResolutionError(
+            "required canonical document(s) were retrieved but did not fit the context prompt budget "
+            f"(total_char_budget={total_char_budget} chars) and were entirely omitted from the prompt: "
+            + ", ".join(zeroed_mandatory)
+        )
+
+    brief = "\n\n".join(bounded_pieces)
 
     return ContextManifest(entries=tuple(entries), brief=brief, missing_references=tuple(missing_references))

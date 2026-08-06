@@ -236,6 +236,24 @@ reviewed/failed, chunk error messages, files covered, diff bytes covered) is
 printed to the run log and written to `GITHUB_STEP_SUMMARY` alongside the
 context manifest from Stage 1.
 
+Once every chunk has succeeded, one further, final call performs **cross-chunk
+consistency synthesis** (`llm_audit.run_synthesis_review`): it receives only
+the already-produced chunk summaries, findings, and the file-to-chunk
+coverage map -- never the raw diff again -- and checks whether they are
+mutually consistent (e.g. a claim in one chunk contradicting another). This
+is deliberately the one minimal addition needed to catch a contradiction
+spanning multiple chunks, not a general reasoning engine: it is a single
+bounded call reusing the exact same strict schema, budget, and retry
+machinery as a per-chunk call (`llm_audit._call_chat_completion`), so it
+cannot reintroduce the token-budget or rate-limit fragility a larger,
+unbounded synthesis mechanism would. A `CHANGES_REQUIRED` synthesis verdict
+means a contradiction was found; its findings are folded into the aggregate
+result with a `SYN-` id prefix. A synthesis failure (network error,
+malformed output, or an input too large to fit even this bounded call) is
+folded in exactly like a failed chunk -- coverage that cannot be verified
+consistent is not complete, so the whole review fails closed
+(`aggregate.apply_synthesis`).
+
 ### Stage 5 — Decision Engine
 
 | Condition | Outcome |
@@ -244,8 +262,9 @@ context manifest from Stage 1.
 | Pair is stale (head or base SHA changed) -- checked once early as a cheap short-circuit, and again immediately before publishing (authoritative) | `REVIEW_FAILED` |
 | Any blocking deterministic finding | `CHANGES_REQUIRED` |
 | Diff coverage incomplete (any chunk failed/missing, or a changed file never appeared in any chunk) | `REVIEW_FAILED` |
-| Aggregated audit verdict `CHANGES_REQUIRED` | `CHANGES_REQUIRED` |
-| Aggregated audit verdict `APPROVED`, deterministic clean, coverage complete, pair fresh | `APPROVED` |
+| Cross-chunk consistency synthesis failed (network/parse error, or input too large) | `REVIEW_FAILED` |
+| Aggregated audit verdict `CHANGES_REQUIRED` (per-chunk finding or synthesis-detected contradiction) | `CHANGES_REQUIRED` |
+| Aggregated audit verdict `APPROVED`, synthesis found no contradiction, deterministic clean, coverage complete, pair fresh | `APPROVED` |
 
 When the aggregated verdict is `CHANGES_REQUIRED`, its summary, the full
 unioned findings list, and rationale are surfaced -- not just a generic
@@ -270,12 +289,17 @@ The internal system distinguishes exactly three outcomes:
 - missing API secret;
 - network/API failure;
 - timeout;
-- truncated completion (`finish_reason=length`);
-- malformed or internally contradictory model output;
+- truncated completion (`finish_reason=length`) or any `finish_reason` other than `"stop"`;
+- malformed, unrecognized-field, or internally contradictory model output (embedded JSON surrounded by
+  extra prose is rejected, not extracted);
 - unsupported response schema;
 - stale source or target pair;
-- incomplete diff coverage (any failed/missing chunk, or a changed file absent from every chunk);
-- authoritative governance context could not be resolved at the exact base commit;
+- incomplete diff coverage (any failed/missing chunk, a changed file absent from every chunk, or a
+  retrieved diff exceeding the sanity bound -- never silently truncated and treated as complete);
+- cross-chunk consistency synthesis failed, or found an unresolved contradiction (folds into
+  `CHANGES_REQUIRED` instead when the synthesis call itself succeeded);
+- authoritative governance context could not be resolved at the exact base commit, or a required
+  (mandatory) document was retrieved but did not fit the context prompt budget;
 - missing required repository evidence;
 - internal validator exception;
 - inability to inspect required files.
@@ -425,11 +449,24 @@ separate authorization from a code change:
    queue") provides the same guarantee under concurrent merge load without
    relying on humans to always rebase before merging.
 
-**Do not treat merge safety as mandatory until Farhad has enabled these
-settings and their effect has been verified** (e.g., by confirming a status
-check failure actually blocks the Merge button in the GitHub UI). This gate
-passing is necessary but not sufficient for merge safety while `main` remains
-unprotected.
+**Mandatory enforcement is inactive until these settings are configured.**
+This repository's code (the gate, the reconcile workflow, the post-audit
+freshness re-check) is complete and correct on its own terms, but none of it
+can force a merge decision while `main` has no branch protection rule: a
+`failure` status from this gate does not currently block the GitHub Merge
+button at all. Do not claim, report, or rely on production enforcement
+before Farhad has enabled the settings above **and** verified their effect
+(e.g., by confirming a status check failure actually blocks the Merge button
+in the GitHub UI) -- verify with:
+
+```
+gh api repos/<owner>/<repo>/branches/main/protection
+gh api repos/<owner>/<repo>/rulesets
+```
+
+A `404 Branch not protected` response or an empty ruleset list means
+enforcement is still inactive. This gate passing is necessary but not
+sufficient for merge safety while `main` remains unprotected.
 
 ## Behavior Notes
 

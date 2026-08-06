@@ -204,7 +204,18 @@ class CoverageManifest:
 
 @dataclass(frozen=True)
 class ContextEntry:
-    """One document consulted (or attempted) while resolving governance context."""
+    """One document consulted (or attempted) while resolving governance context.
+
+    ``included_chars`` is the exact number of characters of this document's
+    content that made it into the final audit prompt (``ContextManifest.brief``)
+    -- never a length that was merely attempted before the total prompt
+    budget was applied. The included range is always ``[0, included_chars)``
+    from the start of the document. A ``"resolved"`` entry with
+    ``included_chars == 0`` means the document was retrieved but the budget
+    left no room for it -- this can only occur for a non-mandatory entry
+    (see ``context.resolve_context``, which fails closed instead of
+    producing such an entry for a mandatory document).
+    """
 
     path: str
     ref: str

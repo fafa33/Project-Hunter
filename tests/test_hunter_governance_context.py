@@ -132,9 +132,12 @@ def test_resolve_context_bounds_total_brief_length() -> None:
             "docs/PROJECT_PRINCIPLES.md": big_content,
         }
     )
-    manifest = resolve_context(resolver, base_sha="abc", pr_body="", total_char_budget=500)
+    # Large enough that every mandatory doc gets at least some non-zero
+    # inclusion (avoiding the fail-closed path below), but far smaller than
+    # the 100,000-character documents themselves.
+    manifest = resolve_context(resolver, base_sha="abc", pr_body="", total_char_budget=2_000)
     assert len(manifest.brief) < len(big_content)
-    assert len(manifest.brief) <= 600  # small slack for the per-entry header/separator text
+    assert len(manifest.brief) <= 2_100  # small slack for the per-entry header/separator text
 
 
 def test_resolve_referenced_records_finds_adr_by_number() -> None:
@@ -180,3 +183,46 @@ def test_resolve_context_integrates_adr_resolution() -> None:
     manifest = resolve_context(resolver, base_sha="abc", pr_body="Accepts ADR-0028.")
     assert manifest.missing_references == ()
     assert any(e.path == "docs/ADR/0028-governance-docs.md" for e in manifest.entries)
+
+
+def test_resolve_context_raises_when_mandatory_doc_zeroed_out_by_total_budget() -> None:
+    """F-003 regression: a document resolved from GitHub but squeezed out
+    entirely by the total prompt budget must fail closed, not silently
+    report "resolved" while contributing nothing to the actual prompt."""
+    resolver = FakeResolver(
+        files={
+            "docs/CANONICAL_ARCHITECTURE_MAP.md": MAP_TEXT,
+            "docs/PROJECT_CONSTITUTION.md": "c" * 2000,
+            "docs/PROJECT_PRINCIPLES.md": "p" * 2000,
+        }
+    )
+    with pytest.raises(ContextResolutionError, match="did not fit the context prompt budget"):
+        resolve_context(resolver, base_sha="abc", pr_body="", total_char_budget=1)
+
+
+def test_resolve_context_included_chars_reflects_actual_budget_truncation() -> None:
+    """F-003 regression: included_chars must report the exact amount of a
+    document's content that made it into ``brief`` after the total prompt
+    budget was applied -- not the amount merely attempted before that pass.
+    Without the fix this always reported min(len(content), excerpt_chars)
+    regardless of how much of the total budget remained by the time this
+    document's turn came."""
+    resolver = FakeResolver(
+        files={
+            "docs/CANONICAL_ARCHITECTURE_MAP.md": MAP_TEXT,
+            "docs/PROJECT_CONSTITUTION.md": "c" * 2000,
+            "docs/PROJECT_PRINCIPLES.md": "p" * 2000,
+        }
+    )
+    # Generous room for the map and the constitution's full (capped-at-900)
+    # excerpt, but only a small remainder for principles -- forcing a real,
+    # partial (not zero, not full) cut for the last-resolved mandatory doc.
+    budget = len(MAP_TEXT) + 200 + 900 + 100
+    manifest = resolve_context(resolver, base_sha="abc", pr_body="", total_char_budget=budget)
+    entries_by_path = {e.path: e for e in manifest.entries}
+    principles_entry = entries_by_path["docs/PROJECT_PRINCIPLES.md"]
+
+    assert 0 < principles_entry.included_chars < 900
+    assert ("p" * principles_entry.included_chars) in manifest.brief
+    assert ("p" * 900) not in manifest.brief  # the full attempted excerpt never actually made it in
+    assert ("p" * (principles_entry.included_chars + 1)) not in manifest.brief  # not one char more than claimed

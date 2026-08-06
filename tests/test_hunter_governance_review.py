@@ -340,6 +340,40 @@ class FakeChunkLlmRunner:
         )
 
 
+class FakeSynthesisRunner:
+    """Test double for the SynthesisRunner protocol."""
+
+    def __init__(
+        self,
+        verdict: str = "APPROVED",
+        error: LLMAuditError | None = None,
+        findings: list[dict[str, str]] | None = None,
+    ) -> None:
+        self.verdict = verdict
+        self.error = error
+        self.findings = findings if findings is not None else []
+        self.calls: list[str] = []
+
+    def __call__(
+        self,
+        env: dict[str, str],
+        *,
+        pair: ReviewPair,
+        pr: PullRequest,
+        synthesis_input: str,
+        timeout: int = 120,
+    ) -> AuditVerdict:
+        self.calls.append(synthesis_input)
+        if self.error is not None:
+            raise self.error
+        return AuditVerdict(
+            verdict=self.verdict,
+            summary="synthesis summary",
+            findings=self.findings,
+            rationale="synthesis ok",
+        )
+
+
 def _deterministic(
     body: str | None = None,
     pr: PullRequest | None = None,
@@ -578,6 +612,55 @@ def test_validate_audit_payload_rejects_non_string_rationale() -> None:
         validate_audit_payload({"verdict": "APPROVED", "summary": "s", "findings": [], "rationale": 123})
 
 
+def test_validate_audit_payload_rejects_unknown_top_level_field() -> None:
+    with pytest.raises(LLMAuditError, match="unknown top-level field"):
+        validate_audit_payload(
+            {"verdict": "APPROVED", "summary": "s", "findings": [], "rationale": "", "confidence": 0.9}
+        )
+
+
+def test_validate_audit_payload_rejects_unknown_finding_field() -> None:
+    finding_with_extra = {
+        "id": "F-001",
+        "severity": "blocking",
+        "location": "a.py",
+        "description": "d",
+        "decision_impact": "i",
+        "confidence": 0.9,
+    }
+    with pytest.raises(LLMAuditError, match="unknown field"):
+        validate_audit_payload(
+            {"verdict": "CHANGES_REQUIRED", "summary": "s", "findings": [finding_with_extra], "rationale": ""}
+        )
+
+
+def test_validate_audit_payload_rejects_changes_required_with_only_non_blocking_findings() -> None:
+    non_blocking = {
+        "id": "F-001",
+        "severity": "non-blocking",
+        "location": "a.py",
+        "description": "d",
+        "decision_impact": "i",
+    }
+    with pytest.raises(LLMAuditError, match="contradictory"):
+        validate_audit_payload(
+            {"verdict": "CHANGES_REQUIRED", "summary": "s", "findings": [non_blocking], "rationale": ""}
+        )
+
+
+def test_parse_audit_response_rejects_embedded_json_surrounded_by_prose() -> None:
+    """F-004 regression: embedded JSON must be rejected outright, not
+    extracted from surrounding prose (a previous, more permissive fallback
+    would have accepted this)."""
+    raw = (
+        "Sure, here is my analysis of the change. "
+        '{"verdict": "APPROVED", "summary": "ok", "findings": [], "rationale": "r"}'
+        " Let me know if you have any questions!"
+    )
+    with pytest.raises(LLMAuditError, match="not a single clean JSON object"):
+        parse_audit_response(raw)
+
+
 # --- LLM Architecture Audit: chunk prompt building ------------------------------------
 
 
@@ -686,6 +769,30 @@ def test_run_llm_audit_fails_closed_on_truncated_completion(monkeypatch: pytest.
 
     chunk = DiffChunk(1, 1, ("a.py",), "@@ -1 +1 @@")
     with pytest.raises(LLMAuditError, match="truncated"):
+        run_llm_audit(_env(), pair=_pair(), pr=_pr(), chunk=chunk, context_brief="ctx", deterministic_findings=[])
+
+
+def test_run_llm_audit_rejects_unsupported_finish_reason(monkeypatch: pytest.MonkeyPatch) -> None:
+    """F-004 regression: only finish_reason == 'stop' is accepted; any other
+    value (missing, 'content_filter', 'tool_calls', etc.) fails closed."""
+
+    def _fake_urlopen(request: object, timeout: int) -> _FakeHTTPResponse:
+        body = {
+            "choices": [
+                {
+                    "message": {
+                        "content": '{"verdict": "APPROVED", "summary": "ok", "findings": [], "rationale": "r"}'
+                    },
+                    "finish_reason": "content_filter",
+                }
+            ]
+        }
+        return _FakeHTTPResponse(json.dumps(body).encode("utf-8"))
+
+    monkeypatch.setattr("hunter_governance_review.llm_audit.urllib.request.urlopen", _fake_urlopen)
+
+    chunk = DiffChunk(1, 1, ("a.py",), "@@ -1 +1 @@")
+    with pytest.raises(LLMAuditError, match="unsupported finish_reason"):
         run_llm_audit(_env(), pair=_pair(), pr=_pr(), chunk=chunk, context_brief="ctx", deterministic_findings=[])
 
 
@@ -953,7 +1060,7 @@ def test_decision_audit_error_is_review_failed() -> None:
 def test_run_review_happy_path_publishes_success() -> None:
     gh = FakeGhRunner()
     llm = FakeChunkLlmRunner(verdict="APPROVED")
-    code = run_review(args=_args(), env=_env(), gh=gh, llm_runner=llm)
+    code = run_review(args=_args(), env=_env(), gh=gh, llm_runner=llm, synthesis_runner=FakeSynthesisRunner())
     assert code == 0
     assert len(llm.calls) == 1
     assert len(gh.statuses) == 1
@@ -969,7 +1076,7 @@ def test_run_review_multi_chunk_happy_path_reviews_every_chunk() -> None:
         diff=_multi_chunk_diff(),
     )
     llm = FakeChunkLlmRunner(verdict="APPROVED")
-    code = run_review(args=_args(), env=_env(), gh=gh, llm_runner=llm)
+    code = run_review(args=_args(), env=_env(), gh=gh, llm_runner=llm, synthesis_runner=FakeSynthesisRunner())
     assert code == 0
     assert len(llm.calls) >= 1
     covered = {f for chunk in llm.calls for f in chunk.files}
@@ -980,19 +1087,23 @@ def test_run_review_multi_chunk_happy_path_reviews_every_chunk() -> None:
 def test_run_review_deterministic_failure_skips_llm() -> None:
     gh = FakeGhRunner(pr=_pr(body=""))
     llm = FakeChunkLlmRunner(verdict="APPROVED")
-    code = run_review(args=_args(), env=_env(), gh=gh, llm_runner=llm)
+    synthesis = FakeSynthesisRunner()
+    code = run_review(args=_args(), env=_env(), gh=gh, llm_runner=llm, synthesis_runner=synthesis)
     assert code == 0
     assert llm.calls == []
+    assert synthesis.calls == []  # never reached: deterministic blocking skips the audit entirely
     assert gh.statuses[0]["state"] == "failure"
 
 
 def test_run_review_missing_secret_is_review_failed() -> None:
     gh = FakeGhRunner()
     llm = FakeChunkLlmRunner(error=LLMAuditError("missing API secret: HUNTER_LLM_API_KEY"))
-    code = run_review(args=_args(), env=_env(), gh=gh, llm_runner=llm)
+    synthesis = FakeSynthesisRunner()
+    code = run_review(args=_args(), env=_env(), gh=gh, llm_runner=llm, synthesis_runner=synthesis)
     assert code == 0
     assert gh.statuses[0]["state"] == "failure"
     assert "Review failed" in gh.statuses[0]["description"]
+    assert synthesis.calls == []  # incomplete coverage skips synthesis
 
 
 def test_run_review_one_chunk_failure_makes_coverage_incomplete_and_review_failed() -> None:
@@ -1001,16 +1112,33 @@ def test_run_review_one_chunk_failure_makes_coverage_incomplete_and_review_faile
         diff=_multi_chunk_diff(),
     )
     llm = FakeChunkLlmRunner(error=LLMAuditError("simulated chunk failure"))
-    code = run_review(args=_args(), env=_env(), gh=gh, llm_runner=llm)
+    synthesis = FakeSynthesisRunner()
+    code = run_review(args=_args(), env=_env(), gh=gh, llm_runner=llm, synthesis_runner=synthesis)
     assert code == 0
     assert gh.statuses[0]["state"] == "failure"
+    assert synthesis.calls == []  # incomplete coverage skips synthesis
+
+
+def test_run_review_diff_exceeding_sanity_bound_fails_closed_never_approves(monkeypatch: pytest.MonkeyPatch) -> None:
+    """F-001 regression: a diff that cannot be fully retrieved/represented must
+    never be silently truncated and treated as complete evidence."""
+    monkeypatch.setattr("hunter_governance_review.__main__.DIFF_LIMIT", 10)
+    gh = FakeGhRunner(diff="diff --git a/x.py b/x.py\n+way more than ten characters of real content")
+    llm = FakeChunkLlmRunner(verdict="APPROVED")
+    synthesis = FakeSynthesisRunner()
+    code = run_review(args=_args(), env=_env(), gh=gh, llm_runner=llm, synthesis_runner=synthesis)
+    assert code == 0
+    assert gh.statuses[0]["state"] == "failure"
+    assert gh.statuses[0]["state"] != "success"
+    assert llm.calls == []  # no chunk was ever built from the oversized diff
+    assert synthesis.calls == []
 
 
 def test_run_review_stale_pair_before_audit_is_review_failed_and_skips_llm() -> None:
     advanced = _pr(head_oid="c" * 40)
     gh = FakeGhRunner(current=advanced)
     llm = FakeChunkLlmRunner(verdict="APPROVED")
-    code = run_review(args=_args(), env=_env(), gh=gh, llm_runner=llm)
+    code = run_review(args=_args(), env=_env(), gh=gh, llm_runner=llm, synthesis_runner=FakeSynthesisRunner())
     assert code == 0
     assert llm.calls == []  # the cheap early check short-circuits before any audit call
     assert gh.statuses[0]["state"] == "failure"
@@ -1031,7 +1159,7 @@ def test_run_review_pair_advances_during_audit_is_review_failed_despite_approval
     advanced = _pr(head_oid="c" * 40)
     gh = FakeGhRunner(pr_sequence=[original, original, advanced])
     llm = FakeChunkLlmRunner(verdict="APPROVED")
-    code = run_review(args=_args(), env=_env(), gh=gh, llm_runner=llm)
+    code = run_review(args=_args(), env=_env(), gh=gh, llm_runner=llm, synthesis_runner=FakeSynthesisRunner())
     assert code == 0
     assert len(llm.calls) >= 1  # the audit DID run, against the (now stale) original pair
     assert gh.statuses[0]["state"] == "failure"
@@ -1042,7 +1170,7 @@ def test_run_review_pair_advances_during_audit_is_review_failed_despite_approval
 def test_run_review_context_resolution_failure_is_review_failed() -> None:
     gh = FakeGhRunner(canonical_docs={})  # even the canonical map itself is unresolvable
     llm = FakeChunkLlmRunner(verdict="APPROVED")
-    code = run_review(args=_args(), env=_env(), gh=gh, llm_runner=llm)
+    code = run_review(args=_args(), env=_env(), gh=gh, llm_runner=llm, synthesis_runner=FakeSynthesisRunner())
     assert code == 0
     assert llm.calls == []
     assert gh.statuses[0]["state"] == "failure"
@@ -1051,7 +1179,7 @@ def test_run_review_context_resolution_failure_is_review_failed() -> None:
 def test_run_review_evidence_failure_is_review_failed() -> None:
     gh = FakeGhRunner(fail_files=True)
     llm = FakeChunkLlmRunner(verdict="APPROVED")
-    code = run_review(args=_args(), env=_env(), gh=gh, llm_runner=llm)
+    code = run_review(args=_args(), env=_env(), gh=gh, llm_runner=llm, synthesis_runner=FakeSynthesisRunner())
     assert code == 0
     assert llm.calls == []
     assert gh.statuses[0]["state"] == "failure"
@@ -1060,7 +1188,7 @@ def test_run_review_evidence_failure_is_review_failed() -> None:
 def test_run_review_non_protected_base_skips_gate() -> None:
     gh = FakeGhRunner(pr=_pr(base_ref_name="staging", base_oid="d" * 40))
     llm = FakeChunkLlmRunner(verdict="APPROVED")
-    code = run_review(args=_args(), env=_env(), gh=gh, llm_runner=llm)
+    code = run_review(args=_args(), env=_env(), gh=gh, llm_runner=llm, synthesis_runner=FakeSynthesisRunner())
     assert code == 0
     assert gh.statuses == []
     assert llm.calls == []
@@ -1068,19 +1196,33 @@ def test_run_review_non_protected_base_skips_gate() -> None:
 
 def test_run_review_unresolvable_pr_returns_2() -> None:
     gh = FakeGhRunner(fail_pr=True)
-    code = run_review(args=_args(), env=_env(), gh=gh, llm_runner=FakeChunkLlmRunner())
+    code = run_review(
+        args=_args(), env=_env(), gh=gh, llm_runner=FakeChunkLlmRunner(), synthesis_runner=FakeSynthesisRunner()
+    )
     assert code == 2
 
 
 def test_run_review_publish_failure_returns_3() -> None:
     gh = FakeGhRunner(publish_fail=True)
-    code = run_review(args=_args(), env=_env(), gh=gh, llm_runner=FakeChunkLlmRunner(verdict="APPROVED"))
+    code = run_review(
+        args=_args(),
+        env=_env(),
+        gh=gh,
+        llm_runner=FakeChunkLlmRunner(verdict="APPROVED"),
+        synthesis_runner=FakeSynthesisRunner(),
+    )
     assert code == 3
 
 
 def test_run_review_dry_run_does_not_publish() -> None:
     gh = FakeGhRunner()
-    code = run_review(args=_args(dry_run=True), env=_env(), gh=gh, llm_runner=FakeChunkLlmRunner(verdict="APPROVED"))
+    code = run_review(
+        args=_args(dry_run=True),
+        env=_env(),
+        gh=gh,
+        llm_runner=FakeChunkLlmRunner(verdict="APPROVED"),
+        synthesis_runner=FakeSynthesisRunner(),
+    )
     assert code == 0
     assert gh.statuses == []
 
@@ -1094,6 +1236,7 @@ def test_run_review_writes_step_summary_with_coverage_and_context_manifests(tmp_
         env=_env(GITHUB_STEP_SUMMARY=str(summary)),
         gh=gh,
         llm_runner=llm,
+        synthesis_runner=FakeSynthesisRunner(),
     )
     assert code == 0
     text = summary.read_text(encoding="utf-8")
@@ -1125,6 +1268,7 @@ def test_run_review_step_summary_includes_audit_findings(tmp_path: Path) -> None
         env=_env(GITHUB_STEP_SUMMARY=str(summary)),
         gh=gh,
         llm_runner=llm,
+        synthesis_runner=FakeSynthesisRunner(),
     )
     assert code == 0
     text = summary.read_text(encoding="utf-8")
@@ -1132,3 +1276,70 @@ def test_run_review_step_summary_includes_audit_findings(tmp_path: Path) -> None
     assert "C1-F-001" in text
     assert "provenance field is dropped during migration" in text
     assert "silently loses evidence lineage" in text
+
+
+def test_run_review_cross_chunk_contradiction_blocks_approval_even_if_every_chunk_approved(
+    tmp_path: Path,
+) -> None:
+    """F-002 regression: synthesis finding a contradiction must block approval
+    even though every individual chunk was independently APPROVED."""
+    summary = tmp_path / "summary.md"
+    gh = FakeGhRunner(
+        files=[CODE_FILE, ChangedFile("src/b.py", "modified", 1, 1)],
+        diff=_multi_chunk_diff(),
+    )
+    llm = FakeChunkLlmRunner(verdict="APPROVED")
+    synthesis = FakeSynthesisRunner(
+        verdict="CHANGES_REQUIRED",
+        findings=[
+            {
+                "id": "001",
+                "severity": "blocking",
+                "location": "chunks 1, 2",
+                "description": "chunk 1 claims a function was removed; chunk 2's summary still calls it",
+                "decision_impact": "merged understanding of the change would be incorrect",
+            }
+        ],
+    )
+    code = run_review(
+        args=_args(),
+        env=_env(GITHUB_STEP_SUMMARY=str(summary)),
+        gh=gh,
+        llm_runner=llm,
+        synthesis_runner=synthesis,
+    )
+    assert code == 0
+    assert len(synthesis.calls) == 1
+    assert gh.statuses[0]["state"] == "failure"
+    text = summary.read_text(encoding="utf-8")
+    assert "SYN-001" in text
+    assert "chunk 1 claims a function was removed; chunk 2's summary still calls it" in text
+
+
+def test_run_review_synthesis_failure_fails_closed() -> None:
+    """A synthesis call that itself fails must not silently fall back to the
+    per-chunk aggregate -- coverage that cannot be verified consistent is
+    not complete."""
+    gh = FakeGhRunner()
+    llm = FakeChunkLlmRunner(verdict="APPROVED")
+    synthesis = FakeSynthesisRunner(error=LLMAuditError("simulated synthesis network failure"))
+    code = run_review(args=_args(), env=_env(), gh=gh, llm_runner=llm, synthesis_runner=synthesis)
+    assert code == 0
+    assert gh.statuses[0]["state"] == "failure"
+    assert "synthesis" in gh.statuses[0]["description"].lower()
+
+
+def test_run_review_synthesis_skipped_when_diff_is_empty() -> None:
+    """A zero-chunk (empty diff) review has nothing to synthesize over."""
+    # diff=" " is whitespace-only: truthy (bypasses FakeGhRunner's `diff or
+    # default`), but chunking.split_diff_into_chunks treats it as empty via
+    # .strip(). files=[] keeps the changed-files list consistent with the
+    # empty diff (a non-empty files list here would separately -- and
+    # correctly -- trip the "file missing from every chunk" coverage check).
+    gh = FakeGhRunner(diff=" ", files=[])
+    llm = FakeChunkLlmRunner(verdict="APPROVED")
+    synthesis = FakeSynthesisRunner()
+    code = run_review(args=_args(), env=_env(), gh=gh, llm_runner=llm, synthesis_runner=synthesis)
+    assert code == 0
+    assert synthesis.calls == []
+    assert gh.statuses[0]["state"] == "success"
