@@ -59,7 +59,10 @@ def decide(
             Outcome.APPROVED,
             "deterministic validation passed and the hostile architecture audit approved " "the exact review pair.",
         )
-    return Decision(
-        Outcome.CHANGES_REQUIRED,
-        "the hostile architecture audit returned CHANGES_REQUIRED with blocking findings.",
+    summary = audit.summary.strip()
+    reason = (
+        f"the hostile architecture audit returned CHANGES_REQUIRED: {summary}"
+        if summary
+        else "the hostile architecture audit returned CHANGES_REQUIRED with blocking findings."
     )
+    return Decision(Outcome.CHANGES_REQUIRED, reason)

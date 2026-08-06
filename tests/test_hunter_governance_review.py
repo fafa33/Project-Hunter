@@ -252,9 +252,19 @@ class FakeGhRunner:
 class FakeLlmRunner:
     """Test double for the LLMRunner protocol."""
 
-    def __init__(self, verdict: str = "APPROVED", error: LLMAuditError | None = None) -> None:
+    def __init__(
+        self,
+        verdict: str = "APPROVED",
+        error: LLMAuditError | None = None,
+        summary: str = "audit summary",
+        findings: list[dict[str, str]] | None = None,
+        rationale: str = "ok",
+    ) -> None:
         self.verdict = verdict
         self.error = error
+        self.summary = summary
+        self.findings = findings if findings is not None else []
+        self.rationale = rationale
         self.calls: list[tuple[ReviewPair, PullRequest, list[ChangedFile], str, list[Finding]]] = []
 
     def __call__(
@@ -271,7 +281,9 @@ class FakeLlmRunner:
         self.calls.append((pair, pr, files, diff, deterministic_findings))
         if self.error is not None:
             raise self.error
-        return AuditVerdict(verdict=self.verdict, summary="audit summary", findings=[], rationale="ok")
+        return AuditVerdict(
+            verdict=self.verdict, summary=self.summary, findings=self.findings, rationale=self.rationale
+        )
 
 
 def _deterministic(body: str | None = None, pr: PullRequest | None = None) -> DeterministicResult:
@@ -565,6 +577,18 @@ def test_decision_llm_changes_required() -> None:
         pair_fresh=True,
     )
     assert decision.outcome is Outcome.CHANGES_REQUIRED
+    assert decision.reason == "the hostile architecture audit returned CHANGES_REQUIRED with blocking findings."
+
+
+def test_decision_llm_changes_required_includes_audit_summary() -> None:
+    decision = decide(
+        deterministic=DeterministicResult(),
+        audit=AuditVerdict(verdict="CHANGES_REQUIRED", summary="the migration drops evidence provenance"),
+        audit_error=None,
+        pair_fresh=True,
+    )
+    assert decision.outcome is Outcome.CHANGES_REQUIRED
+    assert "the migration drops evidence provenance" in decision.reason
 
 
 def test_decision_audit_error_is_review_failed() -> None:
@@ -676,3 +700,36 @@ def test_run_review_writes_step_summary(tmp_path: Path) -> None:
     assert "Hunter Governance Review" in text
     assert "APPROVED" in text
     assert "a" * 40 in text
+
+
+def test_run_review_step_summary_includes_audit_findings(tmp_path: Path) -> None:
+    summary = tmp_path / "summary.md"
+    gh = FakeGhRunner()
+    llm = FakeLlmRunner(
+        verdict="CHANGES_REQUIRED",
+        summary="the migration drops evidence provenance",
+        findings=[
+            {
+                "id": "F-001",
+                "severity": "blocking",
+                "location": "src/hunter/mispricing/service.py",
+                "description": "provenance field is dropped during migration",
+                "decision_impact": "silently loses evidence lineage",
+            }
+        ],
+        rationale="the change removes a required provenance field without a migration path",
+    )
+    code = run_review(
+        args=_args(),
+        env=_env(GITHUB_STEP_SUMMARY=str(summary)),
+        gh=gh,
+        llm_runner=llm,
+    )
+    assert code == 0
+    text = summary.read_text(encoding="utf-8")
+    assert "CHANGES_REQUIRED" in text
+    assert "the migration drops evidence provenance" in text
+    assert "F-001" in text
+    assert "provenance field is dropped during migration" in text
+    assert "silently loses evidence lineage" in text
+    assert "the change removes a required provenance field without a migration path" in text

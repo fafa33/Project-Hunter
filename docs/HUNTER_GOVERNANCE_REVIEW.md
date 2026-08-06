@@ -106,6 +106,18 @@ The model must return strict JSON:
 `APPROVED` is valid only when the reviewer can honestly state the canonical
 passing outcome: **"No blocking findings were identified."**
 
+When the LLM verdict is `CHANGES_REQUIRED`, the audit's own summary,
+structured findings, and rationale are surfaced -- not just a generic
+sentence. `decide()` folds the audit's one-sentence summary into
+`Decision.reason` (visible in the 140-character GitHub status description),
+and the workflow prints `[AuditVerdict]`, `[AuditFinding]`, and
+`[AuditRationale]` lines to the run log and writes the full findings list
+(id, severity, location, description, decision impact) and rationale to
+`GITHUB_STEP_SUMMARY`. Previously this content was parsed from the model's
+response only to pick an `APPROVED`/`CHANGES_REQUIRED` outcome and then
+discarded, leaving a blocked PR with no visible reason anywhere on GitHub for
+what to fix -- confirmed directly on this gate's own installation PR (#200).
+
 ### Layer 3 — Decision Engine
 
 | Condition | Outcome |

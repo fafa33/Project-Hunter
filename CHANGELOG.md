@@ -30,6 +30,13 @@
   the prior, disconnected 150,000-character diff cap produced a request Groq
   rejected outright (HTTP 413, TPM limit 12,000, requested 27,258) on this
   gate's own installation PR.
+- Hostile-audit finding visibility: a `CHANGES_REQUIRED` verdict's summary,
+  structured findings, and rationale are now surfaced in the GitHub status
+  description, the workflow run log, and `GITHUB_STEP_SUMMARY`, instead of
+  being discarded after picking the bare outcome. This closes a second real
+  gap found on this gate's own installation PR: once the token-budget fix
+  above let the audit actually run, the gate returned `CHANGES_REQUIRED` with
+  no findings visible anywhere on GitHub to act on.
 
 ### Changed
 

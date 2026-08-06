@@ -140,6 +140,7 @@ def _write_summary(
     decision: Decision,
     pair: ReviewPair,
     deterministic: DeterministicResult,
+    audit: AuditVerdict | None,
     published_state: str,
 ) -> None:
     summary_path = env.get("GITHUB_STEP_SUMMARY")
@@ -160,6 +161,25 @@ def _write_summary(
         lines.append("")
         lines.append("### Deterministic findings")
         lines.extend(f"- {finding.render()}" for finding in deterministic.findings)
+    if audit is not None:
+        lines.append("")
+        lines.append("### Hostile architecture audit")
+        lines.append(f"- **Verdict**: `{audit.verdict}`")
+        if audit.summary:
+            lines.append(f"- **Summary**: {audit.summary}")
+        if audit.findings:
+            lines.append("")
+            lines.append("#### Audit findings")
+            for finding in audit.findings:
+                fid = finding.get("id", "?")
+                severity = finding.get("severity", "?")
+                location = finding.get("location", "")
+                description = finding.get("description", "")
+                impact = finding.get("decision_impact", "")
+                lines.append(f"- `{fid}` ({severity}) {location}: {description} -- {impact}")
+        if audit.rationale:
+            lines.append("")
+            lines.append(f"**Rationale**: {audit.rationale}")
     with open(summary_path, "a", encoding="utf-8") as handle:
         handle.write("\n".join(lines) + "\n")
 
@@ -283,6 +303,12 @@ def run_review(
     print(f"[Reason] {decision.reason}")
     for finding in deterministic.findings:
         print(f"[Finding] {finding.render()}")
+    if audit is not None:
+        print(f"[AuditVerdict] {audit.verdict}: {audit.summary}")
+        for audit_finding in audit.findings:
+            print(f"[AuditFinding] {audit_finding}")
+        if audit.rationale:
+            print(f"[AuditRationale] {audit.rationale}")
     print(f"[StatusCheck] context={CHECK_CONTEXT!r} state={state.value} on {target_sha[:12]}")
 
     if not args.dry_run:
@@ -303,6 +329,7 @@ def run_review(
         decision=decision,
         pair=pair,
         deterministic=deterministic,
+        audit=audit,
         published_state=state.value,
     )
     return 0
