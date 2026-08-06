@@ -22,7 +22,7 @@ blocks the merge, and the gate is never skipped silently.
 
 ## Architecture
 
-The gate implements three explicit layers and publishes exactly one required
+The gate implements five explicit stages and publishes exactly one required
 GitHub status check.
 
 ```text
@@ -32,25 +32,69 @@ Pull Request Event
 Resolve exact source HEAD and target BASE
         |
         v
-Deterministic Governance Engine   (scripts/hunter_governance_review/deterministic.py)
+Authoritative Context Resolution   (scripts/hunter_governance_review/context.py)
         |
         v
-LLM Architecture Audit            (scripts/hunter_governance_review/llm_audit.py)
+Deterministic Governance Engine    (scripts/hunter_governance_review/deterministic.py)
         |
         v
-Decision Engine                   (scripts/hunter_governance_review/decision.py)
+Deterministic diff chunking        (scripts/hunter_governance_review/chunking.py)
         |
         v
-Re-verify review pair at decision time
+LLM Architecture Audit, one call per chunk   (scripts/hunter_governance_review/llm_audit.py)
+        |
+        v
+Aggregation across every chunk     (scripts/hunter_governance_review/aggregate.py)
+        |
+        v
+Decision Engine                    (scripts/hunter_governance_review/decision.py)
+        |
+        v
+Re-verify review pair AGAIN, immediately before publishing
         |
         v
 GitHub required status check: Hunter Governance Review
 ```
 
-The LLM is consulted only when every deterministic validator passes **and** the
-review pair is still fresh. The LLM never bypasses deterministic failures.
+The LLM is consulted only when context resolution succeeded, every
+deterministic validator passed, **and** the review pair was still fresh
+immediately before the audit started. The LLM never bypasses deterministic
+failures. `APPROVED` requires every chunk to have been reviewed successfully
+-- any missing, failed, or unreviewed chunk fails the whole review closed,
+regardless of what any individual chunk concluded.
 
-### Layer 1 — Deterministic Governance Engine
+### Stage 1 — Authoritative Context Resolution
+
+Resolves the canonical governance documents, referenced ADRs/ADPRs, and any
+other document literally referenced in the PR body at the **exact base
+commit**, via the GitHub Contents API -- never from whatever happens to be
+checked out locally, which is a single shallow checkout made once per
+workflow run and is not guaranteed to be pinned to the exact recorded base
+SHA for every validator that might read it.
+
+The document set is not hardcoded: the canonical hierarchy is parsed
+directly out of `docs/CANONICAL_ARCHITECTURE_MAP.md`'s own numbered
+"Canonical Document Authority Hierarchy" list (itself fetched at the same
+exact base commit), so a governance change to that hierarchy is picked up
+automatically. Every document from that hierarchy is **mandatory**: if any
+cannot be retrieved at the exact base SHA, resolution raises
+`ContextResolutionError` and the run publishes `REVIEW_FAILED` -- context
+resolution never fails open. ADR/ADPR numbers and other `docs/*.md` paths
+mentioned only in the PR body are optional context; missing ones are
+recorded in the manifest but do not by themselves fail the review (the
+deterministic V-070 validator, below, already blocks a PR that references a
+non-existent ADR/ADPR, now using this same exact-SHA resolution instead of a
+local-filesystem glob).
+
+Every document consulted (or attempted) is recorded in a deterministic
+**coverage manifest**: exact path, exact ref, resolved/missing status,
+SHA-256 content hash, byte length, and how many characters were included in
+the audit prompt. This manifest is printed to the run log, written to
+`GITHUB_STEP_SUMMARY`, and is the auditable evidence for what context an
+approval was actually based on -- replacing a single hardcoded, hand-written
+governance paraphrase that could silently drift from the real documents.
+
+### Stage 2 — Deterministic Governance Engine
 
 Validates the pull request against the repository's canonical governance rules
 (`docs/DEVELOPMENT_GOVERNANCE.md`, `docs/MERGE_READINESS_GATE.md`,
@@ -65,68 +109,117 @@ invoking an LLM. The validators:
 | V-040 | Acceptance-criteria matrix present with only `PASS` / `FAIL` / `BLOCKED` / `NOT APPLICABLE`; no `FAIL` or `BLOCKED` criterion on a merge-ready PR |
 | V-050 | Exactly one implementer readiness declaration is checked; a merge-ready PR must declare `READY FOR REVIEW` |
 | V-060 | Verification evidence recorded (code changes) |
-| V-070 | Every referenced ADPR/ADR resolves to an existing record (missing references are missing repository evidence) |
+| V-070 | Every referenced ADPR/ADR resolves to an existing record at the exact base commit (Stage 1's resolution result; missing references are missing repository evidence) |
 | V-080 | PR is not in a conflicting merge state |
 | V-090 | Gate self-modification is flagged (informational, hostile audit must scrutinize it) |
 | V-100 | Draft state is recorded (informational; GitHub blocks draft merges) |
 
-### Layer 2 — LLM Architecture Audit
+### Stage 3 — Deterministic Diff Chunking and the LLM Architecture Audit
 
-An OpenAI-compatible chat-completions call (Groq by default, matching the
-repository's existing CI provider convention) performs the independent hostile
-architecture audit required by `docs/AI_REVIEW_PROTOCOL.md`. The prompt embeds
-a condensed governance brief derived from the canonical documents, the exact
-review pair, PR metadata, the changed-file list, the bounded diff, and the
-deterministic findings. PR content is treated as untrusted data.
+**Complete diff coverage, not truncation.** The full diff is never sent in
+one request and never truncated to fit one. Instead, `chunking.py`
+deterministically splits the diff into ordered chunks -- on file boundaries
+first, and on line boundaries within a single oversized file's own diff if
+needed -- such that every character of the original diff appears in exactly
+one chunk. Each chunk is reviewed by an independent hostile-audit call; a
+chunk's own prompt explicitly tells the model it is seeing only part of the
+diff and that a clean chunk should still be marked `APPROVED` for itself,
+since full coverage is enforced by aggregating every chunk afterward
+(`aggregate.py`), not by any single chunk's verdict.
 
-The full assembled prompt (system + user messages) is bounded to a fixed
-character budget (`PROMPT_CHAR_BUDGET` in `llm_audit.py`, currently 17,500
-characters, using a conservative 3.5 chars/token estimate against a 5,000
-token target) so that it stays within the pinned default model's actual
-provider rate limit. The completion is separately capped with `max_tokens`
-(`MAX_COMPLETION_TOKENS`, 1,000) since the provider's per-minute token limit
-covers prompt and completion together. The diff — the most compressible part
-of the prompt — absorbs whatever budget remains after the PR body (capped at
-`PR_BODY_CHAR_LIMIT`), the changed-file list (capped at
-`MAX_CHANGED_FILES_LISTED` entries), the deterministic findings, and the
-governance brief are rendered, so the total is bounded regardless of how
-large any individual section is. This budget was derived directly from a
-real failure: the gate's own live installation run (PR #200, workflow run
-31056865509) was rejected outright by Groq — HTTP 413, "Request too large
-... tokens per minute (TPM): Limit 12000, Requested 27258" — because the
-prior bounds (a 150,000-character diff cap, a 20,000-character PR body cap,
-and a 300-file list) had no relationship to that limit.
+Each chunk's OpenAI-compatible chat-completions call (Groq by default,
+matching the repository's existing CI provider convention) embeds: the exact
+review pair, PR metadata, that one chunk's diff text, the deterministic
+findings, and Stage 1's resolved governance-context excerpt. PR content is
+treated as untrusted data.
 
-The model must return strict JSON:
+The full assembled prompt for **one chunk** (system + user messages) is
+bounded to a fixed character budget (`PROMPT_CHAR_BUDGET` in `llm_audit.py`,
+17,500 characters, using a conservative 3.5 chars/token estimate against a
+5,000-token target) so it stays within the pinned default model's actual
+provider rate limit (`PROVIDER_TPM_LIMIT`, 12,000 -- Groq's on-demand tier
+for `llama-3.3-70b-versatile`). A chunk's own diff text absorbs whatever
+budget remains after the PR body, changed-file list, findings, and context
+excerpt are rendered; `estimate_chunk_diff_budget` sizes chunks *before* they
+are built so this should never bind in practice, but if a chunk still does
+not fit, `build_chunk_audit_prompt` raises rather than silently truncating
+-- that chunk is recorded as failed, which fails the whole review's coverage
+closed (see Stage 4). This budget was derived directly from a real failure:
+the gate's own live installation run (PR #200, workflow run 31056865509) was
+rejected outright by Groq -- HTTP 413, "Request too large ... tokens per
+minute (TPM): Limit 12000, Requested 27258" -- because the original
+(pre-chunking) bounds had no relationship to that limit.
+
+The completion is separately capped with an **adaptive** `max_tokens`
+(`MIN_COMPLETION_TOKENS` 512 .. `MAX_COMPLETION_TOKENS_CAP` 2,048, scaled to
+how much of the TPM budget the prompt did not use, with a safety factor)
+since the provider's per-minute token limit covers prompt and completion
+together -- a flat cap sized for a small response silently truncates a
+larger, entirely legitimate findings list into invalid JSON. The gate also
+requests `response_format: {"type": "json_object"}` (preferring the
+provider's structured-output control where supported) and explicitly checks
+the response's `finish_reason`: a value of `"length"` means the completion
+was cut off, and the gate fails that chunk closed rather than attempt to
+parse a possibly-invalid truncated response.
+
+The model must return strict JSON, validated field-by-field:
 
 ```json
-{"verdict": "APPROVED" | "CHANGES_REQUIRED", "summary": "...", "findings": [...], "rationale": "..."}
+{"verdict": "APPROVED" | "CHANGES_REQUIRED", "summary": "...", "findings": [{"id": "...", "severity": "blocking" | "non-blocking", "location": "...", "description": "...", "decision_impact": "..."}], "rationale": "..."}
 ```
 
-`APPROVED` is valid only when the reviewer can honestly state the canonical
-passing outcome: **"No blocking findings were identified."**
+`validate_audit_payload` in `llm_audit.py` requires every field, the correct
+type for each, `verdict` and each finding's `severity` to be one of the
+allowed values, every finding id to be unique within the response, and
+rejects internally contradictory output outright: `APPROVED` with any
+`blocking` finding, or `CHANGES_REQUIRED` with an empty findings list. Any
+violation raises `LLMAuditError` -- there is no lenient fallback parse path.
+`APPROVED` for a chunk is valid only when the reviewer can honestly state
+the canonical passing outcome for that chunk: **"No blocking findings were
+identified in this chunk."**
 
-When the LLM verdict is `CHANGES_REQUIRED`, the audit's own summary,
-structured findings, and rationale are surfaced -- not just a generic
-sentence. `decide()` folds the audit's one-sentence summary into
-`Decision.reason` (visible in the 140-character GitHub status description),
-and the workflow prints `[AuditVerdict]`, `[AuditFinding]`, and
-`[AuditRationale]` lines to the run log and writes the full findings list
-(id, severity, location, description, decision impact) and rationale to
-`GITHUB_STEP_SUMMARY`. Previously this content was parsed from the model's
-response only to pick an `APPROVED`/`CHANGES_REQUIRED` outcome and then
-discarded, leaving a blocked PR with no visible reason anywhere on GitHub for
-what to fix -- confirmed directly on this gate's own installation PR (#200).
+### Stage 4 — Aggregation
 
-### Layer 3 — Decision Engine
+`aggregate.py` combines every chunk's outcome into one result, deterministically
+-- never by trusting any single chunk's self-reported label for the whole PR,
+since no chunk ever saw the whole diff. Findings from every chunk are unioned
+(with finding ids re-namespaced per chunk, e.g. `C2-F-001`, to keep them
+globally unique) and the aggregate verdict is `CHANGES_REQUIRED` if **any**
+chunk had a blocking finding, otherwise `APPROVED`.
+
+**Any failed, missing, or unreviewed chunk makes the aggregate result `None`**
+(not `CHANGES_REQUIRED`, not `APPROVED` -- no meaningful verdict), which the
+Decision Engine maps to `REVIEW_FAILED`. The same applies if any file GitHub's
+API lists as changed never appeared in any diff chunk actually reviewed (a
+coverage cross-check against the authoritative changed-files list, independent
+of the diff-splitting logic itself). A PR whose diff was empty (e.g. a pure
+metadata change) trivially produces zero chunks and an `APPROVED` audit
+result, deferring entirely to the deterministic findings for anything
+substantive.
+
+The resulting **coverage manifest** (total files, total chunks, chunks
+reviewed/failed, chunk error messages, files covered, diff bytes covered) is
+printed to the run log and written to `GITHUB_STEP_SUMMARY` alongside the
+context manifest from Stage 1.
+
+### Stage 5 — Decision Engine
 
 | Condition | Outcome |
 |---|---|
-| Pair is stale (head or base SHA changed during review) | `REVIEW_FAILED` |
+| Authoritative context could not be resolved (Stage 1) | `REVIEW_FAILED` |
+| Pair is stale (head or base SHA changed) -- checked once early as a cheap short-circuit, and again immediately before publishing (authoritative) | `REVIEW_FAILED` |
 | Any blocking deterministic finding | `CHANGES_REQUIRED` |
-| LLM audit error / no verdict / malformed / unsupported schema | `REVIEW_FAILED` |
-| LLM verdict `CHANGES_REQUIRED` | `CHANGES_REQUIRED` |
-| LLM verdict `APPROVED`, deterministic clean, pair fresh | `APPROVED` |
+| Diff coverage incomplete (any chunk failed/missing, or a changed file never appeared in any chunk) | `REVIEW_FAILED` |
+| Aggregated audit verdict `CHANGES_REQUIRED` | `CHANGES_REQUIRED` |
+| Aggregated audit verdict `APPROVED`, deterministic clean, coverage complete, pair fresh | `APPROVED` |
+
+When the aggregated verdict is `CHANGES_REQUIRED`, its summary, the full
+unioned findings list, and rationale are surfaced -- not just a generic
+sentence. `decide()` folds the summary into `Decision.reason` (visible in
+the 140-character GitHub status description), and the workflow prints
+`[AuditVerdict]`, `[AuditFinding]`, and `[AuditRationale]` lines to the run
+log and writes the full findings list (id, severity, location, description,
+decision impact) and rationale to `GITHUB_STEP_SUMMARY`.
 
 ## Supported Outcomes and Check Mapping
 
@@ -143,9 +236,12 @@ The internal system distinguishes exactly three outcomes:
 - missing API secret;
 - network/API failure;
 - timeout;
-- malformed model output;
+- truncated completion (`finish_reason=length`);
+- malformed or internally contradictory model output;
 - unsupported response schema;
 - stale source or target pair;
+- incomplete diff coverage (any failed/missing chunk, or a changed file absent from every chunk);
+- authoritative governance context could not be resolved at the exact base commit;
 - missing required repository evidence;
 - internal validator exception;
 - inability to inspect required files.
@@ -164,12 +260,27 @@ Every run resolves and records:
 - workflow run ID;
 - review timestamp.
 
-Every approval applies only to that exact pair. Immediately before publishing,
-the gate re-resolves the pull request and compares both SHAs. If either
-changed, the run publishes `REVIEW_FAILED` (stale pair) and no approval is
-ever published for a pair that no longer exists. The status is published to the
-**current** PR head SHA so the live head remains fail-closed until a fresh
-review completes.
+Every approval applies only to that exact pair, and the pair is verified
+**twice**:
+
+1. **Early (optimization only)** -- right after deterministic validation,
+   before the (possibly slow, multi-chunk) LLM audit starts, so a PR that is
+   already stale doesn't pay for an audit whose result would be discarded
+   anyway. This check does not by itself gate the outcome.
+2. **Post-audit (authoritative)** -- immediately before publishing, *after*
+   every chunk of the LLM audit has completed. This is the check that
+   actually gates approval: an approval must apply to the exact pair the
+   audit reviewed, and if either SHA changed at any point up to the moment
+   of publishing -- including during the audit itself, which can take
+   several chunk calls -- the run publishes `REVIEW_FAILED` (stale pair) and
+   no approval is ever published for a pair that no longer exists.
+
+The status is published to the **current** PR head SHA (as observed at the
+post-audit check) so the live head remains fail-closed until a fresh review
+completes. This two-tier design closes a real gap: the previous
+implementation re-verified freshness only *before* starting the audit, so a
+PR that advanced during the (up to 120-second, per-call) audit window could
+have a stale pair's result published to a head that had already moved on.
 
 ## Triggers
 
@@ -245,10 +356,46 @@ When no key is configured the gate publishes `REVIEW_FAILED` — it never skips.
 
 ### Branch protection
 
-On each protected branch, add the required status check **Hunter Governance
-Review** under *Require status checks to pass before merging*. Until the check
-exists on the branch, GitHub will not enforce it — configure this after the
-first run of the workflow.
+**Reconciliation (`.github/workflows/hunter-governance-reconcile.yml`) is
+recovery, not the primary guarantee.** It re-evaluates open PRs on a push to
+a protected branch and on a 30-minute schedule, closing the specific gap that
+GitHub Actions does not fire `pull_request` events when the target branch
+advances. It cannot, by itself, prevent a merge between the moment this gate
+re-verifies the review pair (see "Post-audit freshness verification" above)
+and the moment a human clicks Merge -- only GitHub's own branch protection,
+enforced natively at merge time, closes that residual window.
+
+**Verified current state (checked via `gh api repos/fafa33/Project-Hunter/branches/main/protection` and
+`gh api repos/fafa33/Project-Hunter/rulesets`):** as of this writing, `main` has
+**no branch protection rule and no repository ruleset at all** -- the API
+returns `404 Branch not protected` and an empty ruleset list. Nothing
+currently prevents a merge into `main` regardless of any status check's
+result.
+
+**Manual GitHub settings Farhad must enable** (Settings → Branches → Add
+branch protection rule for `main`, or the equivalent Rulesets UI) -- this
+gate cannot enable these itself; doing so is a repository-setting change
+with blast radius across every future PR, which requires an explicit,
+separate authorization from a code change:
+
+1. **Require status checks to pass before merging**, with **Hunter
+   Governance Review** and **Quality Gates** (the CI workflow's job name)
+   added to the required list. Until this is enabled, a failing or missing
+   check does not block merge at all.
+2. **Require branches to be up to date before merging** (the "strict" flag
+   on required status checks). This is the setting that actually closes the
+   base-advanced-during-review race natively -- it forces GitHub to
+   re-evaluate mergeability against the *current* base immediately at merge
+   time, which no CI-side polling or reconciliation can fully replicate.
+3. Optionally, a **merge queue** (repository Rulesets → "Require merge
+   queue") provides the same guarantee under concurrent merge load without
+   relying on humans to always rebase before merging.
+
+**Do not treat merge safety as mandatory until Farhad has enabled these
+settings and their effect has been verified** (e.g., by confirming a status
+check failure actually blocks the Merge button in the GitHub UI). This gate
+passing is necessary but not sufficient for merge safety while `main` remains
+unprotected.
 
 ## Behavior Notes
 
@@ -263,35 +410,53 @@ first run of the workflow.
 
 ## Troubleshooting
 
-- **`REVIEW_FAILED` with `LLM API returned HTTP 413`**: the assembled audit
-  prompt exceeded the provider's tokens-per-minute limit. `llm_audit.py`
-  bounds the full prompt to `PROMPT_CHAR_BUDGET`; if this still occurs, the
-  configured `HUNTER_LLM_MODEL`'s real provider TPM limit is lower than the
-  value `PROMPT_TOKEN_BUDGET` was derived against and the budget must be
-  lowered to match it.
+- **`REVIEW_FAILED` with `LLM API returned HTTP 413`**: a single chunk's
+  assembled audit prompt exceeded the provider's tokens-per-minute limit.
+  `llm_audit.py` bounds each chunk's prompt to `PROMPT_CHAR_BUDGET`; if this
+  still occurs, the configured `HUNTER_LLM_MODEL`'s real provider TPM limit
+  is lower than `PROVIDER_TPM_LIMIT`/`PROMPT_TOKEN_BUDGET` were derived
+  against and both must be lowered to match it.
 - **`REVIEW_FAILED` with `missing API secret`**: none of `HUNTER_LLM_API_KEY`,
   `GROQ_API_KEY`, or `OPENAI_API_KEY` is configured as a repository secret.
   This is the intended fail-closed bootstrap behavior, not a bug — configure
   one of these secrets to let the LLM audit run.
+- **`REVIEW_FAILED` with `completion was truncated (finish_reason=length)`**:
+  the adaptive completion budget (`MIN_COMPLETION_TOKENS` .. 
+  `MAX_COMPLETION_TOKENS_CAP`) was still insufficient for that chunk's
+  legitimate findings list. Consider a smaller `max_chunk_chars` (more,
+  smaller chunks leave more completion headroom per call) before raising the
+  cap, since raising the cap risks the same TPM overflow this budget exists
+  to prevent.
+- **`REVIEW_FAILED` with `X/Y diff chunk(s) failed or were not reviewed`**:
+  check the run's step summary under "Diff coverage manifest" for the exact
+  per-chunk error. This is fail-closed by design — coverage is either
+  complete or the review does not produce an approval, never a partial one.
+- **`REVIEW_FAILED` with `authoritative governance context could not be
+  resolved`**: a document in `docs/CANONICAL_ARCHITECTURE_MAP.md`'s hierarchy
+  could not be fetched at the exact base commit. Check the run's step summary
+  under "Authoritative context coverage manifest" for which document and ref.
 - **`CHANGES_REQUIRED` with no visible reason**: check the workflow run log
   for `[AuditVerdict]`, `[AuditFinding]`, and `[AuditRationale]` lines, or the
   run's step summary (`GITHUB_STEP_SUMMARY`) under "Hostile architecture
-  audit" — both are populated with the LLM's full structured findings, not
-  just the bare outcome.
+  audit" — both are populated with the aggregated findings across every
+  chunk, not just the bare outcome.
 
 ## Files
 
 | File | Purpose |
 |---|---|
-| `scripts/hunter_governance_review/__main__.py` | CLI orchestrator (resolve pair -> deterministic -> LLM -> decision -> publish) |
-| `scripts/hunter_governance_review/contracts.py` | Outcomes, review pair, findings, check mapping |
+| `scripts/hunter_governance_review/__main__.py` | CLI orchestrator (resolve pair -> context -> deterministic -> chunk -> audit -> aggregate -> decide -> re-verify pair -> publish) |
+| `scripts/hunter_governance_review/contracts.py` | Outcomes, review pair, findings, coverage/context manifests, check mapping |
+| `scripts/hunter_governance_review/context.py` | Authoritative Context Resolver (exact-base-SHA governance docs/ADRs) |
 | `scripts/hunter_governance_review/deterministic.py` | Deterministic Governance Engine |
-| `scripts/hunter_governance_review/llm_audit.py` | LLM Architecture Audit |
+| `scripts/hunter_governance_review/chunking.py` | Deterministic, lossless diff chunking |
+| `scripts/hunter_governance_review/llm_audit.py` | LLM Architecture Audit (per chunk) |
+| `scripts/hunter_governance_review/aggregate.py` | Cross-chunk aggregation and coverage manifest |
 | `scripts/hunter_governance_review/decision.py` | Decision Engine |
 | `scripts/hunter_governance_review/github_api.py` | `gh` CLI / GitHub API interaction |
 | `.github/workflows/hunter-governance-review.yml` | PR-event workflow |
 | `.github/workflows/hunter-governance-reconcile.yml` | Target-advancement + scheduled reconciliation |
-| `tests/test_hunter_governance_review.py` | Unit tests for all layers |
+| `tests/test_hunter_governance_review.py` | Unit tests for all stages |
 
 The engine is stdlib-only and runs with the Python interpreter already present
 on GitHub-hosted runners; no dependency installation is required.

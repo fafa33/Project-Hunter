@@ -14,8 +14,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
-from dataclasses import dataclass
-from pathlib import Path
+from dataclasses import dataclass, field
 
 from hunter_governance_review.contracts import (
     ChangedFile,
@@ -54,9 +53,6 @@ ACCEPTANCE_STATUSES = ("pass", "fail", "blocked", "not applicable")
 
 READINESS_DECLARATIONS = ("ready for review", "changes required", "blocked")
 
-_ADPR_PATTERN = re.compile(r"\bADPR-(\d{4})\b", re.IGNORECASE)
-_ADR_PATTERN = re.compile(r"\bADR[- ]?(\d{4})\b", re.IGNORECASE)
-
 GATE_PATH_MARKERS = (
     "hunter-governance-review",
     "hunter_governance_review",
@@ -66,11 +62,18 @@ GATE_PATH_MARKERS = (
 
 @dataclass(frozen=True)
 class ValidationContext:
-    """Everything the deterministic engine needs to evaluate a PR."""
+    """Everything the deterministic engine needs to evaluate a PR.
+
+    ``missing_references`` is precomputed by
+    ``context.resolve_referenced_records`` against the exact base commit via
+    the GitHub API -- this engine never reads the local filesystem, so a
+    checkout that happens to differ from the recorded review pair's exact
+    base SHA cannot produce a wrong answer here.
+    """
 
     pr: PullRequest
     files: list[ChangedFile]
-    repository_root: Path
+    missing_references: tuple[str, ...] = field(default_factory=tuple)
 
     @property
     def body(self) -> str:
@@ -147,20 +150,6 @@ def _parse_readiness(body: str) -> tuple[str | None, str | None]:
     if len(set(checked)) > 1:
         return None, "more than one implementer readiness declaration is checked"
     return checked[0], None
-
-
-def _verify_references(body: str, repository_root: Path) -> list[str]:
-    """Verify every ADPR/ADR number referenced in the body resolves to a file."""
-    missing: list[str] = []
-    for number in _ADPR_PATTERN.findall(body):
-        candidates = list((repository_root / "docs" / "architecture-records").glob(f"ADPR-{number}-*"))
-        if not candidates:
-            missing.append(f"ADPR-{number}")
-    for number in _ADR_PATTERN.findall(body):
-        candidates = list((repository_root / "docs" / "ADR").glob(f"{number}-*"))
-        if not candidates:
-            missing.append(f"ADR {number}")
-    return sorted(set(missing))
 
 
 # --- Validators -------------------------------------------------------------------
@@ -280,13 +269,12 @@ def _verification_validator(ctx: ValidationContext) -> Finding | None:
 
 
 def _adr_references_validator(ctx: ValidationContext) -> Finding | None:
-    missing = _verify_references(ctx.body, ctx.repository_root)
-    if missing:
+    if ctx.missing_references:
         return Finding(
             "V-070",
             "PR references architecture records that do not exist",
             Severity.BLOCKING,
-            "missing required repository evidence: " + ", ".join(missing),
+            "missing required repository evidence: " + ", ".join(ctx.missing_references),
         )
     return None
 

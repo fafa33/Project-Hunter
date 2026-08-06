@@ -3,10 +3,13 @@
 Flow (per ``docs/HUNTER_GOVERNANCE_REVIEW.md``):
 
     Resolve exact source HEAD and target BASE
-        -> Deterministic Governance Engine
-        -> LLM Architecture Audit (only when deterministic validation passes)
+        -> Authoritative Context Resolution (exact-base-SHA canonical docs/ADRs)
+        -> Deterministic Governance Engine (using resolved ADR/ADPR references)
+        -> Deterministic diff chunking (complete coverage, no truncation)
+        -> LLM Architecture Audit, one call per chunk
+        -> Aggregation across every chunk (fail-closed on any missing/failed chunk)
         -> Decision Engine
-        -> re-verify the review pair at decision time
+        -> re-verify the review pair immediately before publishing (post-audit freshness)
         -> publish the required status check "Hunter Governance Review"
 
 Usage::
@@ -37,12 +40,16 @@ from __future__ import annotations
 import argparse
 import os
 from collections.abc import Mapping
-from pathlib import Path
 from typing import Protocol
 
+from hunter_governance_review.aggregate import ChunkOutcome, aggregate_chunk_outcomes
+from hunter_governance_review.chunking import DiffChunk, covered_filenames, split_diff_into_chunks
+from hunter_governance_review.context import ContextResolutionError, resolve_context
 from hunter_governance_review.contracts import (
     CHECK_CONTEXT,
     ChangedFile,
+    ContextManifest,
+    CoverageManifest,
     DeterministicResult,
     Finding,
     Outcome,
@@ -54,17 +61,22 @@ from hunter_governance_review.contracts import (
 from hunter_governance_review.decision import Decision, decide
 from hunter_governance_review.deterministic import ValidationContext, run_deterministic_engine
 from hunter_governance_review.github_api import GhCliRunner, GitHubError, GitHubRunner, truncate_diff
-from hunter_governance_review.llm_audit import AuditVerdict, LLMAuditError, run_llm_audit
+from hunter_governance_review.llm_audit import (
+    AuditVerdict,
+    LLMAuditError,
+    estimate_chunk_diff_budget,
+    run_llm_audit,
+)
 
 # Coarse memory/sanity bound only -- guards against holding a pathologically
-# large diff in memory before it ever reaches the audit prompt builder. It is
-# deliberately far larger than any realistic PR diff and is NOT the real
-# per-request token bound: that bound is computed in
-# ``hunter_governance_review.llm_audit.build_audit_prompt`` from the full
-# assembled prompt against the pinned model's actual provider rate limit --
-# see the module-level comment there for why (PR #200's own live installation
-# run was rejected by Groq for exceeding its tokens-per-minute limit with the
-# prior, disconnected 150,000-character cap).
+# large diff in memory before it ever reaches the chunker. It is deliberately
+# far larger than any realistic PR diff and is NOT the real per-chunk token
+# bound: that bound is computed per-review by
+# ``llm_audit.estimate_chunk_diff_budget`` against the pinned model's actual
+# provider rate limit -- see llm_audit.py's module-level comment for why
+# (PR #200's own live installation run was rejected by Groq for exceeding
+# its tokens-per-minute limit with the prior, disconnected 150,000-character
+# single-request cap).
 DIFF_LIMIT = 5_000_000
 
 
@@ -75,8 +87,8 @@ class LLMRunner(Protocol):
         *,
         pair: ReviewPair,
         pr: PullRequest,
-        files: list[ChangedFile],
-        diff: str,
+        chunk: DiffChunk,
+        context_brief: str,
         deterministic_findings: list[Finding],
         timeout: int = 120,
     ) -> AuditVerdict: ...
@@ -96,7 +108,8 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument(
         "--root",
         default=None,
-        help="Repository root used for evidence lookups. Defaults to the current directory.",
+        help="Unused by the review pipeline itself (context/ADR resolution is exact-SHA, API-based); "
+        "accepted for backward-compatible invocation only.",
     )
     parser.add_argument(
         "--protected-branches",
@@ -141,6 +154,8 @@ def _write_summary(
     pair: ReviewPair,
     deterministic: DeterministicResult,
     audit: AuditVerdict | None,
+    coverage: CoverageManifest,
+    context: ContextManifest | None,
     published_state: str,
 ) -> None:
     summary_path = env.get("GITHUB_STEP_SUMMARY")
@@ -161,9 +176,33 @@ def _write_summary(
         lines.append("")
         lines.append("### Deterministic findings")
         lines.extend(f"- {finding.render()}" for finding in deterministic.findings)
+    lines.append("")
+    lines.append("### Diff coverage manifest")
+    lines.append(f"- **Complete**: `{coverage.complete}`")
+    lines.append(f"- **Files changed**: {coverage.total_files}; **files covered**: {len(coverage.files_covered)}")
+    lines.append(
+        f"- **Chunks**: {coverage.total_chunks} total, {coverage.chunks_reviewed} reviewed, {coverage.chunks_failed} failed"
+    )
+    lines.append(f"- **Diff bytes**: {coverage.diff_bytes_covered}/{coverage.diff_bytes_total} covered")
+    if coverage.chunk_errors:
+        lines.append("- **Chunk errors**:")
+        lines.extend(f"  - {err}" for err in coverage.chunk_errors)
+    if coverage.files_missing_from_diff:
+        lines.append("- **Files missing from diff**: " + ", ".join(coverage.files_missing_from_diff))
+    if context is not None:
+        lines.append("")
+        lines.append("### Authoritative context coverage manifest")
+        for entry in context.entries:
+            mark = "mandatory" if entry.mandatory else "referenced"
+            lines.append(
+                f"- `{entry.path}`@`{entry.ref[:12]}` ({mark}, {entry.status}) "
+                f"sha256={entry.sha256[:12] or 'n/a'} bytes={entry.byte_length} included_chars={entry.included_chars}"
+            )
+        if context.missing_references:
+            lines.append("- **Missing referenced records**: " + ", ".join(context.missing_references))
     if audit is not None:
         lines.append("")
-        lines.append("### Hostile architecture audit")
+        lines.append("### Hostile architecture audit (aggregated across all chunks)")
         lines.append(f"- **Verdict**: `{audit.verdict}`")
         if audit.summary:
             lines.append(f"- **Summary**: {audit.summary}")
@@ -184,6 +223,26 @@ def _write_summary(
         handle.write("\n".join(lines) + "\n")
 
 
+def _resolve_pair_freshness(
+    gh: GitHubRunner, pr_number: int, pair: ReviewPair
+) -> tuple[PullRequest | None, bool, str | None]:
+    """Re-resolve the PR and compare against ``pair``. Returns (current, fresh, error)."""
+    try:
+        current = gh.get_pull_request(pr_number)
+    except GitHubError as exc:
+        return None, False, f"could not re-resolve PR #{pr_number} to verify the review pair: {exc}"
+    if current.head_oid != pair.source_head_sha or current.base_oid != pair.target_base_sha:
+        return (
+            current,
+            False,
+            "stale source or target pair: the PR advanced while the review was running "
+            f"(head {pair.source_head_sha[:12]} -> {current.head_oid[:12]}, "
+            f"base {pair.target_base_sha[:12]} -> {current.base_oid[:12]}); the review is "
+            "invalid for the current head/base and must be re-run.",
+        )
+    return current, True, None
+
+
 def run_review(
     *,
     args: argparse.Namespace,
@@ -198,7 +257,6 @@ def run_review(
         return 2
     protected = _protected_branches(args.protected_branches or env.get("HUNTER_GOVERNANCE_PROTECTED_BRANCHES"))
     run_id = env.get("GITHUB_RUN_ID") or "local"
-    root = Path(args.root).resolve() if args.root else Path.cwd()
 
     try:
         pr = gh.get_pull_request(args.pr)
@@ -235,61 +293,105 @@ def run_review(
     except GitHubError as exc:
         evidence_error = f"missing required repository evidence: {exc}"
 
-    deterministic = DeterministicResult()
-    validator_error: str | None = None
+    context_manifest: ContextManifest | None = None
+    context_error: str | None = None
     if evidence_error is None:
         try:
-            deterministic = run_deterministic_engine(ValidationContext(pr=pr, files=files, repository_root=root))
+            context_manifest = resolve_context(gh, base_sha=pair.target_base_sha, pr_body=pr.body)
+        except ContextResolutionError as exc:
+            context_error = f"authoritative governance context could not be resolved: {exc}"
+        except GitHubError as exc:
+            context_error = f"could not retrieve authoritative governance context: {exc}"
+
+    deterministic = DeterministicResult()
+    validator_error: str | None = None
+    if evidence_error is None and context_error is None:
+        assert context_manifest is not None
+        try:
+            deterministic = run_deterministic_engine(
+                ValidationContext(pr=pr, files=files, missing_references=context_manifest.missing_references)
+            )
         except Exception as exc:  # internal validator exception -> REVIEW_FAILED
             validator_error = f"internal validator exception: {exc!r}"
 
-    # Re-resolve the PR at decision time so the approval can only ever apply
-    # to the exact current source HEAD and target BASE.
-    current: PullRequest | None = None
-    try:
-        current = gh.get_pull_request(pr.number)
-    except GitHubError as exc:
-        print(f"::warning::could not re-resolve PR #{pr.number} at decision time: {exc}")
-    pair_fresh = False
-    pair_fresh_error: str | None = None
-    if current is None:
-        pair_fresh_error = f"could not re-resolve PR #{pr.number} to verify the review pair at decision time"
-    elif current.head_oid != pair.source_head_sha or current.base_oid != pair.target_base_sha:
-        pair_fresh_error = (
-            "stale source or target pair: the PR advanced while the review was running "
-            f"(head {pair.source_head_sha[:12]} -> {current.head_oid[:12]}, "
-            f"base {pair.target_base_sha[:12]} -> {current.base_oid[:12]}); the review is "
-            "invalid for the current head/base and must be re-run."
-        )
-    else:
-        pair_fresh = True
+    # Early freshness check: a cheap short-circuit so a PR that is already
+    # stale doesn't pay for a (possibly multi-call) LLM audit whose result
+    # would be discarded anyway. This is NOT the authoritative guarantee --
+    # see the post-audit check below, which is what actually gates approval.
+    _, early_fresh, _ = _resolve_pair_freshness(gh, pr.number, pair)
 
-    audit: AuditVerdict | None = None
-    audit_error: str | None = None
-    # The LLM is consulted only when the review can still matter: evidence is
-    # available, deterministic validation passed, and the pair is still fresh.
-    if evidence_error is None and validator_error is None and not deterministic.blocking and pair_fresh:
-        try:
-            audit = llm_runner(
-                env,
-                pair=pair,
-                pr=pr,
-                files=files,
-                diff=diff,
-                deterministic_findings=deterministic.findings,
-            )
-        except LLMAuditError as exc:
-            audit_error = str(exc)
+    coverage = CoverageManifest(
+        total_files=len(files),
+        total_chunks=0,
+        chunks_reviewed=0,
+        chunks_failed=0,
+        chunk_errors=(),
+        files_covered=(),
+        files_missing_from_diff=(),
+        diff_bytes_total=len(diff),
+        diff_bytes_covered=0,
+    )
+    aggregated_verdict: AuditVerdict | None = None
+    coverage_incomplete_reason: str | None = None
+    should_audit = (
+        evidence_error is None
+        and context_error is None
+        and validator_error is None
+        and not deterministic.blocking
+        and early_fresh
+    )
+    if should_audit:
+        assert context_manifest is not None
+        max_chunk_chars = estimate_chunk_diff_budget(
+            pr=pr,
+            context_brief=context_manifest.brief,
+            deterministic_findings=deterministic.findings,
+        )
+        chunks = split_diff_into_chunks(diff, max_chunk_chars)
+        outcomes: list[ChunkOutcome] = []
+        for chunk in chunks:
+            try:
+                verdict = llm_runner(
+                    env,
+                    pair=pair,
+                    pr=pr,
+                    chunk=chunk,
+                    context_brief=context_manifest.brief,
+                    deterministic_findings=deterministic.findings,
+                )
+                outcomes.append(ChunkOutcome(chunk.index, chunk.total, chunk.files, verdict, None))
+            except LLMAuditError as exc:
+                outcomes.append(ChunkOutcome(chunk.index, chunk.total, chunk.files, None, str(exc)))
+        expected_files = {f.filename for f in files}
+        missing_from_diff = tuple(sorted(expected_files - covered_filenames(chunks)))
+        aggregation = aggregate_chunk_outcomes(
+            outcomes,
+            diff_bytes_total=len(diff),
+            total_files=len(files),
+            files_missing_from_diff=missing_from_diff,
+        )
+        coverage = aggregation.manifest
+        aggregated_verdict = aggregation.verdict
+        coverage_incomplete_reason = aggregation.incomplete_reason
+
+    # Authoritative freshness check: re-resolve the PR again, AFTER the
+    # (possibly slow, multi-call) audit completed, immediately before
+    # publishing. An approval must apply to the exact pair the audit
+    # actually reviewed -- if either SHA advanced during the audit, publish
+    # no approval regardless of what the audit concluded.
+    current, pair_fresh, pair_fresh_error = _resolve_pair_freshness(gh, pr.number, pair)
 
     if evidence_error is not None:
         decision = Decision(Outcome.REVIEW_FAILED, evidence_error)
+    elif context_error is not None:
+        decision = Decision(Outcome.REVIEW_FAILED, context_error)
     elif validator_error is not None:
         decision = Decision(Outcome.REVIEW_FAILED, validator_error)
     else:
         decision = decide(
             deterministic=deterministic,
-            audit=audit,
-            audit_error=audit_error,
+            audit=aggregated_verdict,
+            audit_error=coverage_incomplete_reason,
             pair_fresh=pair_fresh,
             pair_fresh_error=pair_fresh_error,
         )
@@ -301,14 +403,21 @@ def run_review(
 
     print(f"[Outcome] {decision.outcome.value}")
     print(f"[Reason] {decision.reason}")
+    print(
+        f"[Coverage] complete={coverage.complete} chunks={coverage.chunks_reviewed}/{coverage.total_chunks} "
+        f"files={len(coverage.files_covered)}/{coverage.total_files}"
+    )
     for finding in deterministic.findings:
         print(f"[Finding] {finding.render()}")
-    if audit is not None:
-        print(f"[AuditVerdict] {audit.verdict}: {audit.summary}")
-        for audit_finding in audit.findings:
+    if context_manifest is not None:
+        for entry in context_manifest.entries:
+            print(f"[Context] {entry.path}@{entry.ref[:12]} status={entry.status} sha256={entry.sha256[:12] or 'n/a'}")
+    if aggregated_verdict is not None:
+        print(f"[AuditVerdict] {aggregated_verdict.verdict}: {aggregated_verdict.summary}")
+        for audit_finding in aggregated_verdict.findings:
             print(f"[AuditFinding] {audit_finding}")
-        if audit.rationale:
-            print(f"[AuditRationale] {audit.rationale}")
+        if aggregated_verdict.rationale:
+            print(f"[AuditRationale] {aggregated_verdict.rationale}")
     print(f"[StatusCheck] context={CHECK_CONTEXT!r} state={state.value} on {target_sha[:12]}")
 
     if not args.dry_run:
@@ -329,7 +438,9 @@ def run_review(
         decision=decision,
         pair=pair,
         deterministic=deterministic,
-        audit=audit,
+        audit=aggregated_verdict,
+        coverage=coverage,
+        context=context_manifest,
         published_state=state.value,
     )
     return 0

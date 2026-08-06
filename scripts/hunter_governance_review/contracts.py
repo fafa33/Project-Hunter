@@ -162,3 +162,85 @@ class ChangedFile:
     status: str
     additions: int
     deletions: int
+
+
+@dataclass(frozen=True)
+class CoverageManifest:
+    """Deterministic evidence of how completely the diff was reviewed.
+
+    ``complete`` is the fail-closed gate for approval: any failed or
+    unreviewed chunk makes the whole review's diff coverage incomplete,
+    regardless of what any individual chunk's verdict was.
+    """
+
+    total_files: int
+    total_chunks: int
+    chunks_reviewed: int
+    chunks_failed: int
+    chunk_errors: tuple[str, ...]
+    files_covered: tuple[str, ...]
+    files_missing_from_diff: tuple[str, ...]
+    diff_bytes_total: int
+    diff_bytes_covered: int
+
+    @property
+    def complete(self) -> bool:
+        return self.chunks_failed == 0 and not self.files_missing_from_diff
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "total_files": self.total_files,
+            "total_chunks": self.total_chunks,
+            "chunks_reviewed": self.chunks_reviewed,
+            "chunks_failed": self.chunks_failed,
+            "chunk_errors": list(self.chunk_errors),
+            "files_covered": list(self.files_covered),
+            "files_missing_from_diff": list(self.files_missing_from_diff),
+            "diff_bytes_total": self.diff_bytes_total,
+            "diff_bytes_covered": self.diff_bytes_covered,
+            "complete": self.complete,
+        }
+
+
+@dataclass(frozen=True)
+class ContextEntry:
+    """One document consulted (or attempted) while resolving governance context."""
+
+    path: str
+    ref: str
+    mandatory: bool
+    status: str  # "resolved" or "missing"
+    sha256: str
+    byte_length: int
+    included_chars: int
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "path": self.path,
+            "ref": self.ref,
+            "mandatory": self.mandatory,
+            "status": self.status,
+            "sha256": self.sha256,
+            "byte_length": self.byte_length,
+            "included_chars": self.included_chars,
+        }
+
+
+@dataclass(frozen=True)
+class ContextManifest:
+    """Deterministic evidence of which governance documents were consulted."""
+
+    entries: tuple[ContextEntry, ...]
+    brief: str
+    missing_references: tuple[str, ...] = ()
+
+    @property
+    def missing_mandatory(self) -> tuple[str, ...]:
+        return tuple(e.path for e in self.entries if e.mandatory and e.status == "missing")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "entries": [e.to_dict() for e in self.entries],
+            "missing_mandatory": list(self.missing_mandatory),
+            "missing_references": list(self.missing_references),
+        }

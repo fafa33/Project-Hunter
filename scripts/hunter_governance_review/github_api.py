@@ -34,6 +34,8 @@ class GitHubRunner(Protocol):
     def get_pull_request(self, number: int) -> PullRequest: ...
     def get_pull_files(self, number: int) -> list[ChangedFile]: ...
     def get_pull_diff(self, number: int) -> str: ...
+    def get_file_content(self, path: str, ref: str) -> str | None: ...
+    def list_directory(self, path: str, ref: str) -> list[str] | None: ...
     def post_commit_status(
         self,
         *,
@@ -116,6 +118,54 @@ class GhCliRunner:
 
     def get_pull_diff(self, number: int) -> str:
         return self._run(["pr", "diff", str(number)])
+
+    def get_file_content(self, path: str, ref: str) -> str | None:
+        """Fetch a file's exact content at ``ref`` via the Contents API.
+
+        Returns ``None`` when the file does not exist at that ref (HTTP 404)
+        -- a fact, not an error. Any other failure (network, auth, rate
+        limit) raises ``GitHubError``, since the caller cannot distinguish
+        "genuinely missing" from "could not be retrieved" otherwise.
+        """
+        endpoint = f"repos/{self.repository}/contents/{path}"
+        try:
+            completed = subprocess.run(
+                ["gh", "api", "-H", "Accept: application/vnd.github.raw", f"{endpoint}?ref={ref}"],
+                capture_output=True,
+                text=True,
+                env=self._env,
+                timeout=60,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise GitHubError(f"gh api {endpoint}@{ref} timed out") from exc
+        if completed.returncode != 0:
+            stderr = (completed.stderr or "").strip()
+            if "404" in stderr or "Not Found" in stderr:
+                return None
+            raise GitHubError(f"gh api {endpoint}@{ref} failed ({completed.returncode}): {stderr or 'no output'}")
+        return completed.stdout
+
+    def list_directory(self, path: str, ref: str) -> list[str] | None:
+        """List entry names of a directory at ``ref``, or ``None`` if it does not exist."""
+        endpoint = f"repos/{self.repository}/contents/{path}"
+        try:
+            completed = subprocess.run(
+                ["gh", "api", f"{endpoint}?ref={ref}", "--jq", ".[].name"],
+                capture_output=True,
+                text=True,
+                env=self._env,
+                timeout=60,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise GitHubError(f"gh api {endpoint}@{ref} timed out") from exc
+        if completed.returncode != 0:
+            stderr = (completed.stderr or "").strip()
+            if "404" in stderr or "Not Found" in stderr:
+                return None
+            raise GitHubError(f"gh api {endpoint}@{ref} failed ({completed.returncode}): {stderr or 'no output'}")
+        return [line for line in completed.stdout.splitlines() if line]
 
     def post_commit_status(
         self,

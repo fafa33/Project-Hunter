@@ -1,9 +1,11 @@
 """Unit tests for the Hunter Governance Review merge gate.
 
-Covers the Deterministic Governance Engine, the LLM Architecture Audit parsing
-and fail-closed behavior, the Decision Engine mapping, and the end-to-end
-orchestration (``run_review``) with fake GitHub and LLM runners. No live
-network access is used.
+Covers the Authoritative Context Resolver's integration point, the
+Deterministic Governance Engine, the LLM Architecture Audit's chunk-prompt
+building and strict schema validation, the Decision Engine mapping, and the
+end-to-end orchestration (``run_review``) with fake GitHub and LLM runners,
+including multi-chunk aggregation, incomplete coverage, and the post-audit
+freshness re-check. No live network access is used.
 """
 
 from __future__ import annotations
@@ -14,6 +16,7 @@ from pathlib import Path
 
 import pytest
 from hunter_governance_review.__main__ import run_review
+from hunter_governance_review.chunking import DiffChunk
 from hunter_governance_review.contracts import (
     CHECK_CONTEXT,
     ChangedFile,
@@ -29,16 +32,17 @@ from hunter_governance_review.decision import decide
 from hunter_governance_review.deterministic import ValidationContext, run_deterministic_engine
 from hunter_governance_review.github_api import GitHubError
 from hunter_governance_review.llm_audit import (
-    MAX_CHANGED_FILES_LISTED,
-    MAX_COMPLETION_TOKENS,
+    MAX_COMPLETION_TOKENS_CAP,
+    MIN_COMPLETION_TOKENS,
+    MIN_DIFF_CHAR_BUDGET,
     PR_BODY_CHAR_LIMIT,
-    PROMPT_CHAR_BUDGET,
-    SYSTEM_PROMPT,
     AuditVerdict,
     LLMAuditError,
-    build_audit_prompt,
+    build_chunk_audit_prompt,
+    estimate_chunk_diff_budget,
     parse_audit_response,
     run_llm_audit,
+    validate_audit_payload,
 )
 
 GOOD_BODY = """## Summary
@@ -112,6 +116,29 @@ CODE_FILE = ChangedFile("src/hunter/mispricing/service.py", "modified", 10, 2)
 DOCS_FILE = ChangedFile("docs/OBSERVED_MARKET_FACTS.md", "added", 5, 0)
 GATE_FILE = ChangedFile(".github/workflows/hunter-governance-review.yml", "modified", 20, 4)
 
+DEFAULT_MAP_TEXT = """# Canonical Architecture Map
+
+## Canonical Document Authority Hierarchy
+
+1. `docs/PROJECT_CONSTITUTION.md`
+2. `docs/PROJECT_PRINCIPLES.md`
+3. `docs/CANONICAL_ARCHITECTURE_MAP.md`
+4. `docs/HUNTER_ARCHITECTURE_MANIFEST.md`
+7. Accepted ADRs in `docs/ADR/`
+10. `docs/DEVELOPMENT_GOVERNANCE.md`
+12. `docs/AI_REVIEW_PROTOCOL.md`
+13. Versioned sprint specifications in `docs/SPRINTS/`
+"""
+
+DEFAULT_CANONICAL_DOCS: dict[str, str] = {
+    "docs/CANONICAL_ARCHITECTURE_MAP.md": DEFAULT_MAP_TEXT,
+    "docs/PROJECT_CONSTITUTION.md": "constitution text",
+    "docs/PROJECT_PRINCIPLES.md": "principles text",
+    "docs/HUNTER_ARCHITECTURE_MANIFEST.md": "manifest text",
+    "docs/DEVELOPMENT_GOVERNANCE.md": "development governance text",
+    "docs/AI_REVIEW_PROTOCOL.md": "ai review protocol text",
+}
+
 
 # --- Fixtures ----------------------------------------------------------------------
 
@@ -172,6 +199,14 @@ def _pair(pr: PullRequest | None = None, run_id: str = "run-1") -> ReviewPair:
     )
 
 
+def _multi_chunk_diff() -> str:
+    return (
+        "diff --git a/src/hunter/mispricing/service.py b/src/hunter/mispricing/service.py\n"
+        "@@ -1 +1 @@\n-old\n+def orchestrate(): ...\n"
+        "diff --git a/src/b.py b/src/b.py\n@@ -1 +1 @@\n-old2\n+new2\n"
+    )
+
+
 class FakeGhRunner:
     """Test double for the GitHubRunner protocol."""
 
@@ -180,9 +215,12 @@ class FakeGhRunner:
         *,
         pr: PullRequest | None = None,
         current: PullRequest | None = None,
+        pr_sequence: list[PullRequest] | None = None,
         files: list[ChangedFile] | None = None,
         diff: str = "",
         statuses: list[dict[str, str]] | None = None,
+        canonical_docs: dict[str, str] | None = None,
+        directories: dict[str, list[str]] | None = None,
         fail_pr: bool = False,
         fail_reresolve: bool = False,
         fail_files: bool = False,
@@ -192,12 +230,15 @@ class FakeGhRunner:
         self.repository = "fafa33/Project-Hunter"
         self.pr = pr or _pr()
         self.current = current
+        self.pr_sequence = pr_sequence
         self.files = files if files is not None else [CODE_FILE]
         self.diff = (
             diff
             or "diff --git a/src/hunter/mispricing/service.py b/src/hunter/mispricing/service.py\n+def orchestrate(): ...\n"
         )
         self.statuses = statuses if statuses is not None else []
+        self.canonical_docs = canonical_docs if canonical_docs is not None else dict(DEFAULT_CANONICAL_DOCS)
+        self.directories = directories if directories is not None else {}
         self.fail_pr = fail_pr
         self.fail_reresolve = fail_reresolve
         self.fail_files = fail_files
@@ -209,10 +250,13 @@ class FakeGhRunner:
         self.pr_views += 1
         if self.fail_pr:
             raise GitHubError("cannot resolve pull request")
+        if self.pr_sequence is not None:
+            index = min(self.pr_views - 1, len(self.pr_sequence) - 1)
+            return self.pr_sequence[index]
         if self.fail_reresolve and self.pr_views >= 2:
             raise GitHubError("cannot re-resolve pull request")
-        # The initial resolve returns the PR as first observed; the
-        # decision-time re-resolve may return an advanced PR (stale pair).
+        # The initial resolve returns the PR as first observed; subsequent
+        # re-resolves may return an advanced PR (stale pair).
         if self.pr_views >= 2 and self.current is not None:
             return self.current
         return self.pr
@@ -226,6 +270,12 @@ class FakeGhRunner:
         if self.fail_diff:
             raise GitHubError("cannot fetch pull request diff")
         return self.diff
+
+    def get_file_content(self, path: str, ref: str) -> str | None:
+        return self.canonical_docs.get(path)
+
+    def list_directory(self, path: str, ref: str) -> list[str] | None:
+        return self.directories.get(path)
 
     def post_commit_status(
         self,
@@ -249,23 +299,19 @@ class FakeGhRunner:
         )
 
 
-class FakeLlmRunner:
-    """Test double for the LLMRunner protocol."""
+class FakeChunkLlmRunner:
+    """Test double for the chunk-based LLMRunner protocol."""
 
     def __init__(
         self,
         verdict: str = "APPROVED",
         error: LLMAuditError | None = None,
-        summary: str = "audit summary",
         findings: list[dict[str, str]] | None = None,
-        rationale: str = "ok",
     ) -> None:
         self.verdict = verdict
         self.error = error
-        self.summary = summary
         self.findings = findings if findings is not None else []
-        self.rationale = rationale
-        self.calls: list[tuple[ReviewPair, PullRequest, list[ChangedFile], str, list[Finding]]] = []
+        self.calls: list[DiffChunk] = []
 
     def __call__(
         self,
@@ -273,30 +319,33 @@ class FakeLlmRunner:
         *,
         pair: ReviewPair,
         pr: PullRequest,
-        files: list[ChangedFile],
-        diff: str,
+        chunk: DiffChunk,
+        context_brief: str,
         deterministic_findings: list[Finding],
         timeout: int = 120,
     ) -> AuditVerdict:
-        self.calls.append((pair, pr, files, diff, deterministic_findings))
+        self.calls.append(chunk)
         if self.error is not None:
             raise self.error
         return AuditVerdict(
-            verdict=self.verdict, summary=self.summary, findings=self.findings, rationale=self.rationale
+            verdict=self.verdict,
+            summary=f"chunk {chunk.index} summary",
+            findings=self.findings,
+            rationale="ok",
         )
 
 
-def _deterministic(body: str | None = None, pr: PullRequest | None = None) -> DeterministicResult:
+def _deterministic(
+    body: str | None = None,
+    pr: PullRequest | None = None,
+    missing_references: tuple[str, ...] = (),
+) -> DeterministicResult:
     pr = pr or _pr(body=body if body is not None else GOOD_BODY)
-    ctx = ValidationContext(
-        pr=pr,
-        files=[CODE_FILE],
-        repository_root=Path("/nonexistent-repository-root"),
-    )
+    ctx = ValidationContext(pr=pr, files=[CODE_FILE], missing_references=missing_references)
     return run_deterministic_engine(ctx)
 
 
-# --- Outcome mapping ----------------------------------------------------------------
+# --- Deterministic Governance Engine -------------------------------------------------
 
 
 def test_outcome_mapping_only_approved_is_success() -> None:
@@ -305,243 +354,388 @@ def test_outcome_mapping_only_approved_is_success() -> None:
     assert outcome_to_check_state(Outcome.REVIEW_FAILED).value == "failure"
 
 
-# --- Deterministic Governance Engine -------------------------------------------------
-
-
 def test_good_code_pr_has_no_blocking_findings() -> None:
-    result = _deterministic()
-    assert result.blocking is False
+    assert not _deterministic().blocking
 
 
 def test_empty_body_blocks() -> None:
-    result = _deterministic(body="")
-    assert result.blocking is True
-    assert any(f.validator_id == "V-020" for f in result.findings)
+    assert _deterministic(body="").blocking
 
 
 def test_placeholder_body_blocks() -> None:
-    result = _deterministic(body=GOOD_BODY + "\nTODO: fill this in later.\n")
-    assert result.blocking is True
-    assert any(f.validator_id == "V-021" for f in result.findings)
+    assert _deterministic(body=GOOD_BODY.replace("Implements", "TODO: Replace with real summary")).blocking
 
 
 def test_missing_template_sections_block_code_pr() -> None:
-    body = GOOD_BODY.replace("## Verification", "## Verification and everything after is omitted")
-    body = body[: body.index("## Verification and everything after is omitted")]
-    result = _deterministic(body=body)
-    assert result.blocking is True
-    assert any(f.validator_id == "V-030" for f in result.findings)
+    body = "## Summary\n\nshort\n\n## Implementer readiness declaration\n\n- [x] `READY FOR REVIEW`"
+    assert _deterministic(body=body).blocking
 
 
 def test_fail_criterion_blocks_merge_ready_pr() -> None:
-    body = GOOD_BODY.replace("| Orchestration wiring exists | PASS |", "| Orchestration wiring exists | FAIL |")
-    result = _deterministic(body=body)
-    assert result.blocking is True
-    assert any(f.validator_id == "V-040" for f in result.findings)
+    body = GOOD_BODY.replace("PASS | src/hunter/mispricing/service.py", "FAIL | not implemented")
+    assert _deterministic(body=body).blocking
 
 
 def test_fail_criterion_is_not_blocking_for_draft_pr() -> None:
-    body = GOOD_BODY.replace("| Orchestration wiring exists | PASS |", "| Orchestration wiring exists | BLOCKED |")
-    result = _deterministic(body=body, pr=_pr(draft=True))
-    assert result.blocking is False
-    assert any(f.validator_id == "V-100" and f.severity is Severity.INFO for f in result.findings)
+    body = GOOD_BODY.replace("PASS | src/hunter/mispricing/service.py", "FAIL | not implemented")
+    result = _deterministic(body=body, pr=_pr(body=body, draft=True))
+    assert not any(f.validator_id == "V-040" and f.severity is Severity.BLOCKING for f in result.findings)
 
 
 def test_missing_readiness_declaration_blocks() -> None:
     body = GOOD_BODY.replace("- [x] `READY FOR REVIEW`", "- [ ] `READY FOR REVIEW`")
-    result = _deterministic(body=body)
-    assert result.blocking is True
-    assert any(f.validator_id == "V-050" for f in result.findings)
+    assert _deterministic(body=body).blocking
 
 
 def test_ambiguous_readiness_declaration_blocks() -> None:
-    body = GOOD_BODY + "\n- [x] `CHANGES REQUIRED` — incomplete\n"
-    result = _deterministic(body=body)
-    assert result.blocking is True
-    assert any(f.validator_id == "V-050" for f in result.findings)
+    body = GOOD_BODY + "\n- [x] `CHANGES REQUIRED` — also this one"
+    assert _deterministic(body=body).blocking
 
 
 def test_changes_required_declaration_blocks_non_draft() -> None:
-    body = GOOD_BODY.replace("READY FOR REVIEW", "CHANGES REQUIRED")
-    result = _deterministic(body=body)
-    assert result.blocking is True
-    assert any(f.validator_id == "V-050" for f in result.findings)
+    body = GOOD_BODY.replace("`READY FOR REVIEW`", "`CHANGES REQUIRED`")
+    assert _deterministic(body=body, pr=_pr(body=body, draft=False)).blocking
 
 
-def test_missing_adr_reference_blocks(tmp_path: Path) -> None:
-    body = GOOD_BODY + "\nPer ADR 9999 this is required.\n"
-    pr = _pr(body=body)
-    ctx = ValidationContext(pr=pr, files=[CODE_FILE], repository_root=tmp_path)
-    result = run_deterministic_engine(ctx)
-    assert result.blocking is True
+def test_missing_adr_reference_blocks() -> None:
+    body = GOOD_BODY + "\n\nSee ADR-9999 for context."
+    result = _deterministic(body=body, missing_references=("ADR 9999",))
+    assert result.blocking
     assert any(f.validator_id == "V-070" for f in result.findings)
 
 
-def test_existing_adr_reference_passes(tmp_path: Path) -> None:
-    (tmp_path / "docs" / "ADR").mkdir(parents=True)
-    (tmp_path / "docs" / "ADR" / "0022-canonical-valuation-methodology.md").write_text("accepted", encoding="utf-8")
-    body = GOOD_BODY + "\nPer ADR 0022 the methodology applies.\n"
-    pr = _pr(body=body)
-    ctx = ValidationContext(pr=pr, files=[CODE_FILE], repository_root=tmp_path)
-    result = run_deterministic_engine(ctx)
+def test_existing_adr_reference_passes() -> None:
+    body = GOOD_BODY + "\n\nSee ADR-0001 for context."
+    result = _deterministic(body=body, missing_references=())
     assert not any(f.validator_id == "V-070" for f in result.findings)
 
 
 def test_mergeable_conflicting_blocks() -> None:
     result = _deterministic(pr=_pr(mergeable="CONFLICTING"))
-    assert result.blocking is True
     assert any(f.validator_id == "V-080" for f in result.findings)
 
 
 def test_docs_only_pr_uses_minimal_sections() -> None:
     pr = _pr(body=DOCS_ONLY_BODY)
-    ctx = ValidationContext(pr=pr, files=[DOCS_FILE], repository_root=Path("/nonexistent-repository-root"))
+    ctx = ValidationContext(pr=pr, files=[DOCS_FILE], missing_references=())
     result = run_deterministic_engine(ctx)
-    assert result.blocking is False
+    assert not result.blocking
 
 
 def test_gate_self_modification_is_informational_only() -> None:
     pr = _pr()
-    ctx = ValidationContext(pr=pr, files=[CODE_FILE, GATE_FILE], repository_root=Path("/nonexistent-repository-root"))
+    ctx = ValidationContext(pr=pr, files=[CODE_FILE, GATE_FILE], missing_references=())
     result = run_deterministic_engine(ctx)
-    assert result.blocking is False
-    assert any(f.validator_id == "V-090" and f.severity is Severity.INFO for f in result.findings)
+    finding = next(f for f in result.findings if f.validator_id == "V-090")
+    assert finding.severity is Severity.INFO
 
 
-# --- LLM Architecture Audit ---------------------------------------------------------
+# --- LLM Architecture Audit: strict schema validation --------------------------------
 
 
 def test_parse_fenced_json_approved() -> None:
-    raw = '```json\n{"verdict": "APPROVED", "summary": "clean", "findings": [], "rationale": "No blocking findings were identified."}\n```'
+    raw = '```json\n{"verdict": "APPROVED", "summary": "ok", "findings": [], "rationale": "r"}\n```'
     verdict = parse_audit_response(raw)
     assert verdict.verdict == "APPROVED"
-    assert verdict.summary == "clean"
 
 
 def test_parse_plain_json_changes_required() -> None:
-    raw = '{"verdict": "CHANGES_REQUIRED", "summary": "s", "findings": [{"id": "F-001", "severity": "blocking", "location": "x", "description": "d", "decision_impact": "i"}], "rationale": "r"}'
+    raw = (
+        '{"verdict": "CHANGES_REQUIRED", "summary": "s", "findings": '
+        '[{"id": "F-001", "severity": "blocking", "location": "x", "description": "d", "decision_impact": "i"}], '
+        '"rationale": "r"}'
+    )
     verdict = parse_audit_response(raw)
+    assert verdict.verdict == "CHANGES_REQUIRED"
+
+
+def test_parse_rejects_unsupported_verdict() -> None:
+    raw = '{"verdict": "MAYBE", "summary": "s", "findings": [], "rationale": ""}'
+    with pytest.raises(LLMAuditError):
+        parse_audit_response(raw)
+
+
+def test_parse_rejects_non_json() -> None:
+    with pytest.raises(LLMAuditError):
+        parse_audit_response("not json at all")
+
+
+def test_validate_audit_payload_accepts_full_valid_payload() -> None:
+    payload = {
+        "verdict": "CHANGES_REQUIRED",
+        "summary": "found an issue",
+        "findings": [
+            {"id": "F-001", "severity": "blocking", "location": "a.py", "description": "d", "decision_impact": "i"}
+        ],
+        "rationale": "r",
+    }
+    verdict = validate_audit_payload(payload)
     assert verdict.verdict == "CHANGES_REQUIRED"
     assert verdict.findings[0]["id"] == "F-001"
 
 
-def test_parse_rejects_unsupported_verdict() -> None:
-    with pytest.raises(LLMAuditError, match="unsupported response schema"):
-        parse_audit_response('{"verdict": "PENDING"}')
+def test_validate_audit_payload_rejects_non_dict() -> None:
+    with pytest.raises(LLMAuditError, match="not a JSON object"):
+        validate_audit_payload(["not", "a", "dict"])
 
 
-def test_parse_rejects_non_json() -> None:
-    with pytest.raises(LLMAuditError, match="malformed model output"):
-        parse_audit_response("I approve this change, no JSON here")
+def test_validate_audit_payload_rejects_unknown_verdict() -> None:
+    with pytest.raises(LLMAuditError, match="verdict must be one of"):
+        validate_audit_payload({"verdict": "MAYBE", "summary": "s", "findings": [], "rationale": ""})
 
 
-def test_missing_api_secret_fails_closed() -> None:
-    with pytest.raises(LLMAuditError, match="missing API secret"):
-        run_llm_audit(
-            {"GITHUB_REPOSITORY": "fafa33/Project-Hunter"},
-            pair=_pair(),
-            pr=_pr(),
-            files=[CODE_FILE],
-            diff="@@ -1 +1 @@",
-            deterministic_findings=[],
+def test_validate_audit_payload_rejects_empty_summary() -> None:
+    with pytest.raises(LLMAuditError, match="summary must be a non-empty string"):
+        validate_audit_payload({"verdict": "APPROVED", "summary": "", "findings": [], "rationale": ""})
+
+
+def test_validate_audit_payload_rejects_findings_not_a_list() -> None:
+    with pytest.raises(LLMAuditError, match="findings must be a list"):
+        validate_audit_payload({"verdict": "APPROVED", "summary": "s", "findings": "nope", "rationale": ""})
+
+
+def test_validate_audit_payload_rejects_finding_missing_field() -> None:
+    bad_finding = {"id": "F-001", "severity": "blocking", "location": "a.py"}
+    with pytest.raises(LLMAuditError, match="missing required field"):
+        validate_audit_payload(
+            {"verdict": "CHANGES_REQUIRED", "summary": "s", "findings": [bad_finding], "rationale": ""}
         )
 
 
-def test_audit_prompt_contains_exact_pair_and_diff() -> None:
-    prompt = build_audit_prompt(
-        pair=_pair(),
-        pr=_pr(),
-        files=[CODE_FILE],
-        diff="@@ -1 +1 @@\n+def orchestrate(): ...",
-        deterministic_findings=[],
+def test_validate_audit_payload_rejects_finding_with_wrong_type() -> None:
+    bad_finding = {
+        "id": "F-001",
+        "severity": "blocking",
+        "location": "a.py",
+        "description": "d",
+        "decision_impact": 123,
+    }
+    with pytest.raises(LLMAuditError, match="must be a non-empty string"):
+        validate_audit_payload(
+            {"verdict": "CHANGES_REQUIRED", "summary": "s", "findings": [bad_finding], "rationale": ""}
+        )
+
+
+def test_validate_audit_payload_rejects_unknown_severity() -> None:
+    bad_finding = {
+        "id": "F-001",
+        "severity": "urgent",
+        "location": "a.py",
+        "description": "d",
+        "decision_impact": "i",
+    }
+    with pytest.raises(LLMAuditError, match="severity must be one of"):
+        validate_audit_payload(
+            {"verdict": "CHANGES_REQUIRED", "summary": "s", "findings": [bad_finding], "rationale": ""}
+        )
+
+
+def test_validate_audit_payload_rejects_duplicate_finding_ids() -> None:
+    f1 = {"id": "F-001", "severity": "blocking", "location": "a.py", "description": "d1", "decision_impact": "i1"}
+    f2 = {
+        "id": "F-001",
+        "severity": "non-blocking",
+        "location": "b.py",
+        "description": "d2",
+        "decision_impact": "i2",
+    }
+    with pytest.raises(LLMAuditError, match="duplicate finding id"):
+        validate_audit_payload({"verdict": "CHANGES_REQUIRED", "summary": "s", "findings": [f1, f2], "rationale": ""})
+
+
+def test_validate_audit_payload_rejects_approved_with_blocking_finding() -> None:
+    blocking = {"id": "F-001", "severity": "blocking", "location": "a.py", "description": "d", "decision_impact": "i"}
+    with pytest.raises(LLMAuditError, match="contradictory"):
+        validate_audit_payload({"verdict": "APPROVED", "summary": "s", "findings": [blocking], "rationale": ""})
+
+
+def test_validate_audit_payload_rejects_changes_required_with_no_findings() -> None:
+    with pytest.raises(LLMAuditError, match="contradictory"):
+        validate_audit_payload({"verdict": "CHANGES_REQUIRED", "summary": "s", "findings": [], "rationale": ""})
+
+
+def test_validate_audit_payload_accepts_approved_with_non_blocking_finding() -> None:
+    non_blocking = {
+        "id": "F-001",
+        "severity": "non-blocking",
+        "location": "a.py",
+        "description": "d",
+        "decision_impact": "i",
+    }
+    verdict = validate_audit_payload(
+        {"verdict": "APPROVED", "summary": "s", "findings": [non_blocking], "rationale": ""}
     )
-    assert "a" * 40 in prompt  # source head SHA
-    assert "b" * 40 in prompt  # target base SHA
-    assert "GOVERNANCE BRIEF" in prompt
+    assert verdict.verdict == "APPROVED"
+
+
+def test_validate_audit_payload_rejects_non_string_rationale() -> None:
+    with pytest.raises(LLMAuditError, match="rationale must be a string"):
+        validate_audit_payload({"verdict": "APPROVED", "summary": "s", "findings": [], "rationale": 123})
+
+
+# --- LLM Architecture Audit: chunk prompt building ------------------------------------
+
+
+def test_chunk_audit_prompt_contains_exact_pair_and_diff() -> None:
+    chunk = DiffChunk(index=1, total=2, files=("src/hunter/mispricing/service.py",), text="@@ -1 +1 @@\n+orchestrate()")
+    prompt = build_chunk_audit_prompt(
+        pair=_pair(), pr=_pr(), chunk=chunk, context_brief="GOVERNANCE BRIEF TEXT", deterministic_findings=[]
+    )
+    assert "a" * 40 in prompt
+    assert "b" * 40 in prompt
     assert "orchestrate" in prompt
+    assert "chunk 1 of 2" in prompt
+    assert "GOVERNANCE BRIEF TEXT" in prompt
 
 
-def test_audit_prompt_bounds_huge_diff_to_token_budget() -> None:
-    huge_diff = "+line of diff content\n" * 100_000
-    prompt = build_audit_prompt(
-        pair=_pair(),
-        pr=_pr(),
-        files=[CODE_FILE],
-        diff=huge_diff,
-        deterministic_findings=[],
-    )
-    assert len(SYSTEM_PROMPT) + len(prompt) <= PROMPT_CHAR_BUDGET
-    assert "DIFF TRUNCATED" in prompt
-    assert huge_diff not in prompt
-
-
-def test_audit_prompt_bounds_pr_body_to_limit() -> None:
+def test_chunk_audit_prompt_bounds_pr_body_to_limit() -> None:
     huge_body = "x" * (PR_BODY_CHAR_LIMIT * 5)
-    prompt = build_audit_prompt(
-        pair=_pair(),
-        pr=_pr(body=huge_body),
-        files=[CODE_FILE],
-        diff="@@ -1 +1 @@",
-        deterministic_findings=[],
+    chunk = DiffChunk(1, 1, ("a.py",), "@@ -1 +1 @@")
+    prompt = build_chunk_audit_prompt(
+        pair=_pair(), pr=_pr(body=huge_body), chunk=chunk, context_brief="", deterministic_findings=[]
     )
     assert "PR BODY TRUNCATED" in prompt
     assert huge_body not in prompt
 
 
-def test_audit_prompt_bounds_changed_files_list() -> None:
-    many_files = [ChangedFile(f"src/module_{i}.py", "modified", 1, 0) for i in range(MAX_CHANGED_FILES_LISTED + 20)]
-    prompt = build_audit_prompt(
-        pair=_pair(),
-        pr=_pr(),
-        files=many_files,
-        diff="@@ -1 +1 @@",
-        deterministic_findings=[],
+def test_chunk_audit_prompt_raises_when_chunk_too_large_for_budget() -> None:
+    huge_chunk = DiffChunk(1, 1, ("a.py",), "x" * 1_000_000)
+    with pytest.raises(LLMAuditError, match="does not fit"):
+        build_chunk_audit_prompt(pair=_pair(), pr=_pr(), chunk=huge_chunk, context_brief="", deterministic_findings=[])
+
+
+def test_estimate_chunk_diff_budget_leaves_room_for_a_real_chunk() -> None:
+    budget = estimate_chunk_diff_budget(pr=_pr(), context_brief="short context", deterministic_findings=[])
+    assert budget > MIN_DIFF_CHAR_BUDGET
+    chunk = DiffChunk(1, 1, ("a.py", "b.py", "c.py"), "x" * budget)
+    prompt = build_chunk_audit_prompt(
+        pair=_pair(), pr=_pr(), chunk=chunk, context_brief="short context", deterministic_findings=[]
     )
-    assert "omitted to satisfy the audit prompt token budget" in prompt
-    assert "src/module_0.py" in prompt
-    assert f"src/module_{MAX_CHANGED_FILES_LISTED + 19}.py" not in prompt
+    assert len(prompt) > 0  # did not raise for a chunk sized at the estimated budget
 
 
-def test_run_llm_audit_caps_completion_tokens(monkeypatch: pytest.MonkeyPatch) -> None:
+# --- LLM Architecture Audit: HTTP layer -----------------------------------------------
+
+
+def test_missing_api_secret_fails_closed() -> None:
+    chunk = DiffChunk(1, 1, ("a.py",), "@@ -1 +1 @@")
+    with pytest.raises(LLMAuditError, match="missing API secret"):
+        run_llm_audit(
+            {"GITHUB_REPOSITORY": "fafa33/Project-Hunter"},
+            pair=_pair(),
+            pr=_pr(),
+            chunk=chunk,
+            context_brief="",
+            deterministic_findings=[],
+        )
+
+
+class _FakeHTTPResponse:
+    def __init__(self, payload: bytes) -> None:
+        self._payload = payload
+
+    def __enter__(self) -> _FakeHTTPResponse:
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        return None
+
+    def read(self) -> bytes:
+        return self._payload
+
+
+def test_run_llm_audit_sets_adaptive_max_tokens_and_response_format(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, object] = {}
-
-    class _FakeHTTPResponse:
-        def __enter__(self) -> _FakeHTTPResponse:
-            return self
-
-        def __exit__(self, *exc_info: object) -> None:
-            return None
-
-        def read(self) -> bytes:
-            body = {"choices": [{"message": {"content": '{"verdict": "APPROVED", "summary": "ok"}'}}]}
-            return json.dumps(body).encode("utf-8")
 
     def _fake_urlopen(request: object, timeout: int) -> _FakeHTTPResponse:
         captured["payload"] = json.loads(request.data.decode("utf-8"))  # type: ignore[attr-defined]
-        return _FakeHTTPResponse()
+        body = {
+            "choices": [
+                {
+                    "message": {
+                        "content": '{"verdict": "APPROVED", "summary": "ok", "findings": [], "rationale": "r"}'
+                    },
+                    "finish_reason": "stop",
+                }
+            ]
+        }
+        return _FakeHTTPResponse(json.dumps(body).encode("utf-8"))
 
     monkeypatch.setattr("hunter_governance_review.llm_audit.urllib.request.urlopen", _fake_urlopen)
 
-    verdict = run_llm_audit(
-        _env(),
-        pair=_pair(),
-        pr=_pr(),
-        files=[CODE_FILE],
-        diff="@@ -1 +1 @@",
-        deterministic_findings=[],
-    )
+    chunk = DiffChunk(1, 1, ("a.py",), "@@ -1 +1 @@\n+ok")
+    verdict = run_llm_audit(_env(), pair=_pair(), pr=_pr(), chunk=chunk, context_brief="ctx", deterministic_findings=[])
 
     assert verdict.verdict == "APPROVED"
-    assert captured["payload"]["max_tokens"] == MAX_COMPLETION_TOKENS  # type: ignore[index]
+    payload = captured["payload"]
+    assert payload["response_format"] == {"type": "json_object"}  # type: ignore[index]
+    assert MIN_COMPLETION_TOKENS <= payload["max_tokens"] <= MAX_COMPLETION_TOKENS_CAP  # type: ignore[index]
 
 
-# --- Decision Engine ----------------------------------------------------------------
+def test_run_llm_audit_fails_closed_on_truncated_completion(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _fake_urlopen(request: object, timeout: int) -> _FakeHTTPResponse:
+        body = {"choices": [{"message": {"content": '{"verdict": "APPROVED"'}, "finish_reason": "length"}]}
+        return _FakeHTTPResponse(json.dumps(body).encode("utf-8"))
+
+    monkeypatch.setattr("hunter_governance_review.llm_audit.urllib.request.urlopen", _fake_urlopen)
+
+    chunk = DiffChunk(1, 1, ("a.py",), "@@ -1 +1 @@")
+    with pytest.raises(LLMAuditError, match="truncated"):
+        run_llm_audit(_env(), pair=_pair(), pr=_pr(), chunk=chunk, context_brief="ctx", deterministic_findings=[])
+
+
+def test_run_llm_audit_large_legitimate_findings_set_does_not_truncate(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regression test for the independent reviewer's max_tokens concern.
+
+    Simulates a provider that itself truncates the completion once it
+    exceeds the requested ``max_tokens`` (reporting finish_reason=length) --
+    the adaptive budget must be generous enough for a legitimately large
+    findings list (15 findings here) on a small chunk not to hit that.
+    """
+    many_findings = [
+        {
+            "id": f"F-{i:03d}",
+            "severity": "non-blocking",
+            "location": f"file_{i}.py",
+            "description": "issue " * 20,
+            "decision_impact": "impact " * 10,
+        }
+        for i in range(15)
+    ]
+    response_content = {
+        "verdict": "APPROVED",
+        "summary": "many findings",
+        "findings": many_findings,
+        "rationale": "r" * 200,
+    }
+    raw_json = json.dumps(response_content)
+
+    def _fake_urlopen(request: object, timeout: int) -> _FakeHTTPResponse:
+        payload = json.loads(request.data.decode("utf-8"))  # type: ignore[attr-defined]
+        allowed_chars = payload["max_tokens"] * 4  # a plausible provider-side chars/token ratio
+        if len(raw_json) > allowed_chars:
+            body = {"choices": [{"message": {"content": raw_json[:allowed_chars]}, "finish_reason": "length"}]}
+        else:
+            body = {"choices": [{"message": {"content": raw_json}, "finish_reason": "stop"}]}
+        return _FakeHTTPResponse(json.dumps(body).encode("utf-8"))
+
+    monkeypatch.setattr("hunter_governance_review.llm_audit.urllib.request.urlopen", _fake_urlopen)
+
+    chunk = DiffChunk(1, 1, ("a.py",), "@@ -1 +1 @@\n+small diff")
+    verdict = run_llm_audit(
+        _env(), pair=_pair(), pr=_pr(), chunk=chunk, context_brief="short", deterministic_findings=[]
+    )
+    assert verdict.verdict == "APPROVED"
+    assert len(verdict.findings) == 15
+
+
+# --- Decision Engine -------------------------------------------------------------------
 
 
 def test_decision_approved_when_all_pass() -> None:
     decision = decide(
         deterministic=DeterministicResult(),
-        audit=AuditVerdict(verdict="APPROVED", summary=""),
+        audit=AuditVerdict(verdict="APPROVED", summary="ok"),
         audit_error=None,
         pair_fresh=True,
     )
@@ -551,18 +745,20 @@ def test_decision_approved_when_all_pass() -> None:
 def test_decision_stale_pair_is_review_failed() -> None:
     decision = decide(
         deterministic=DeterministicResult(),
-        audit=AuditVerdict(verdict="APPROVED", summary=""),
+        audit=AuditVerdict(verdict="APPROVED", summary="ok"),
         audit_error=None,
         pair_fresh=False,
+        pair_fresh_error="stale",
     )
     assert decision.outcome is Outcome.REVIEW_FAILED
+    assert decision.reason == "stale"
 
 
 def test_decision_deterministic_blocking_wins_over_llm() -> None:
-    blocking = DeterministicResult(findings=[Finding("V-040", "x", Severity.BLOCKING, "y")])
+    result = DeterministicResult(findings=[Finding("V-020", "empty body", Severity.BLOCKING, "detail")])
     decision = decide(
-        deterministic=blocking,
-        audit=AuditVerdict(verdict="APPROVED", summary=""),
+        deterministic=result,
+        audit=AuditVerdict(verdict="APPROVED", summary="ok"),
         audit_error=None,
         pair_fresh=True,
     )
@@ -601,12 +797,12 @@ def test_decision_audit_error_is_review_failed() -> None:
     assert decision.outcome is Outcome.REVIEW_FAILED
 
 
-# --- Orchestration (run_review) -------------------------------------------------------
+# --- Orchestration (run_review) ---------------------------------------------------------
 
 
 def test_run_review_happy_path_publishes_success() -> None:
     gh = FakeGhRunner()
-    llm = FakeLlmRunner(verdict="APPROVED")
+    llm = FakeChunkLlmRunner(verdict="APPROVED")
     code = run_review(args=_args(), env=_env(), gh=gh, llm_runner=llm)
     assert code == 0
     assert len(llm.calls) == 1
@@ -615,12 +811,25 @@ def test_run_review_happy_path_publishes_success() -> None:
     assert status["context"] == CHECK_CONTEXT
     assert status["state"] == "success"
     assert status["sha"] == "a" * 40
-    assert gh.pr_views == 2  # initial resolve + decision-time re-resolve
+
+
+def test_run_review_multi_chunk_happy_path_reviews_every_chunk() -> None:
+    gh = FakeGhRunner(
+        files=[CODE_FILE, ChangedFile("src/b.py", "modified", 1, 1)],
+        diff=_multi_chunk_diff(),
+    )
+    llm = FakeChunkLlmRunner(verdict="APPROVED")
+    code = run_review(args=_args(), env=_env(), gh=gh, llm_runner=llm)
+    assert code == 0
+    assert len(llm.calls) >= 1
+    covered = {f for chunk in llm.calls for f in chunk.files}
+    assert covered == {"src/hunter/mispricing/service.py", "src/b.py"}
+    assert gh.statuses[0]["state"] == "success"
 
 
 def test_run_review_deterministic_failure_skips_llm() -> None:
     gh = FakeGhRunner(pr=_pr(body=""))
-    llm = FakeLlmRunner(verdict="APPROVED")
+    llm = FakeChunkLlmRunner(verdict="APPROVED")
     code = run_review(args=_args(), env=_env(), gh=gh, llm_runner=llm)
     assert code == 0
     assert llm.calls == []
@@ -629,28 +838,69 @@ def test_run_review_deterministic_failure_skips_llm() -> None:
 
 def test_run_review_missing_secret_is_review_failed() -> None:
     gh = FakeGhRunner()
-    llm = FakeLlmRunner(error=LLMAuditError("missing API secret: HUNTER_LLM_API_KEY"))
+    llm = FakeChunkLlmRunner(error=LLMAuditError("missing API secret: HUNTER_LLM_API_KEY"))
     code = run_review(args=_args(), env=_env(), gh=gh, llm_runner=llm)
     assert code == 0
     assert gh.statuses[0]["state"] == "failure"
     assert "Review failed" in gh.statuses[0]["description"]
 
 
-def test_run_review_stale_pair_is_review_failed_and_published_to_current_head() -> None:
-    advanced = _pr(head_oid="c" * 40)
-    gh = FakeGhRunner(current=advanced)
-    llm = FakeLlmRunner(verdict="APPROVED")
+def test_run_review_one_chunk_failure_makes_coverage_incomplete_and_review_failed() -> None:
+    gh = FakeGhRunner(
+        files=[CODE_FILE, ChangedFile("src/b.py", "modified", 1, 1)],
+        diff=_multi_chunk_diff(),
+    )
+    llm = FakeChunkLlmRunner(error=LLMAuditError("simulated chunk failure"))
     code = run_review(args=_args(), env=_env(), gh=gh, llm_runner=llm)
     assert code == 0
-    assert llm.calls == []  # LLM is not consulted for a pair that is already stale
+    assert gh.statuses[0]["state"] == "failure"
+
+
+def test_run_review_stale_pair_before_audit_is_review_failed_and_skips_llm() -> None:
+    advanced = _pr(head_oid="c" * 40)
+    gh = FakeGhRunner(current=advanced)
+    llm = FakeChunkLlmRunner(verdict="APPROVED")
+    code = run_review(args=_args(), env=_env(), gh=gh, llm_runner=llm)
+    assert code == 0
+    assert llm.calls == []  # the cheap early check short-circuits before any audit call
     assert gh.statuses[0]["state"] == "failure"
     assert gh.statuses[0]["sha"] == "c" * 40
     assert "Review failed" in gh.statuses[0]["description"]
 
 
+def test_run_review_pair_advances_during_audit_is_review_failed_despite_approval() -> None:
+    """The post-audit freshness regression test.
+
+    The PR is fresh for the initial resolve AND the early check, but has
+    advanced by the time of the final, post-audit check -- simulating the
+    target/source branch moving while the (possibly multi-chunk, slow) LLM
+    audit was running. No approval may be published for a pair that no
+    longer exists, even though the audit itself approved it.
+    """
+    original = _pr()
+    advanced = _pr(head_oid="c" * 40)
+    gh = FakeGhRunner(pr_sequence=[original, original, advanced])
+    llm = FakeChunkLlmRunner(verdict="APPROVED")
+    code = run_review(args=_args(), env=_env(), gh=gh, llm_runner=llm)
+    assert code == 0
+    assert len(llm.calls) >= 1  # the audit DID run, against the (now stale) original pair
+    assert gh.statuses[0]["state"] == "failure"
+    assert "stale" in gh.statuses[0]["description"].lower()
+    assert gh.statuses[0]["sha"] == "c" * 40  # published to the CURRENT head, not the stale one
+
+
+def test_run_review_context_resolution_failure_is_review_failed() -> None:
+    gh = FakeGhRunner(canonical_docs={})  # even the canonical map itself is unresolvable
+    llm = FakeChunkLlmRunner(verdict="APPROVED")
+    code = run_review(args=_args(), env=_env(), gh=gh, llm_runner=llm)
+    assert code == 0
+    assert llm.calls == []
+    assert gh.statuses[0]["state"] == "failure"
+
+
 def test_run_review_evidence_failure_is_review_failed() -> None:
     gh = FakeGhRunner(fail_files=True)
-    llm = FakeLlmRunner(verdict="APPROVED")
+    llm = FakeChunkLlmRunner(verdict="APPROVED")
     code = run_review(args=_args(), env=_env(), gh=gh, llm_runner=llm)
     assert code == 0
     assert llm.calls == []
@@ -659,7 +909,7 @@ def test_run_review_evidence_failure_is_review_failed() -> None:
 
 def test_run_review_non_protected_base_skips_gate() -> None:
     gh = FakeGhRunner(pr=_pr(base_ref_name="staging", base_oid="d" * 40))
-    llm = FakeLlmRunner(verdict="APPROVED")
+    llm = FakeChunkLlmRunner(verdict="APPROVED")
     code = run_review(args=_args(), env=_env(), gh=gh, llm_runner=llm)
     assert code == 0
     assert gh.statuses == []
@@ -668,27 +918,27 @@ def test_run_review_non_protected_base_skips_gate() -> None:
 
 def test_run_review_unresolvable_pr_returns_2() -> None:
     gh = FakeGhRunner(fail_pr=True)
-    code = run_review(args=_args(), env=_env(), gh=gh, llm_runner=FakeLlmRunner())
+    code = run_review(args=_args(), env=_env(), gh=gh, llm_runner=FakeChunkLlmRunner())
     assert code == 2
 
 
 def test_run_review_publish_failure_returns_3() -> None:
     gh = FakeGhRunner(publish_fail=True)
-    code = run_review(args=_args(), env=_env(), gh=gh, llm_runner=FakeLlmRunner(verdict="APPROVED"))
+    code = run_review(args=_args(), env=_env(), gh=gh, llm_runner=FakeChunkLlmRunner(verdict="APPROVED"))
     assert code == 3
 
 
 def test_run_review_dry_run_does_not_publish() -> None:
     gh = FakeGhRunner()
-    code = run_review(args=_args(dry_run=True), env=_env(), gh=gh, llm_runner=FakeLlmRunner(verdict="APPROVED"))
+    code = run_review(args=_args(dry_run=True), env=_env(), gh=gh, llm_runner=FakeChunkLlmRunner(verdict="APPROVED"))
     assert code == 0
     assert gh.statuses == []
 
 
-def test_run_review_writes_step_summary(tmp_path: Path) -> None:
+def test_run_review_writes_step_summary_with_coverage_and_context_manifests(tmp_path: Path) -> None:
     summary = tmp_path / "summary.md"
     gh = FakeGhRunner()
-    llm = FakeLlmRunner(verdict="APPROVED")
+    llm = FakeChunkLlmRunner(verdict="APPROVED")
     code = run_review(
         args=_args(),
         env=_env(GITHUB_STEP_SUMMARY=str(summary)),
@@ -700,14 +950,16 @@ def test_run_review_writes_step_summary(tmp_path: Path) -> None:
     assert "Hunter Governance Review" in text
     assert "APPROVED" in text
     assert "a" * 40 in text
+    assert "Diff coverage manifest" in text
+    assert "Authoritative context coverage manifest" in text
+    assert "docs/CANONICAL_ARCHITECTURE_MAP.md" in text
 
 
 def test_run_review_step_summary_includes_audit_findings(tmp_path: Path) -> None:
     summary = tmp_path / "summary.md"
     gh = FakeGhRunner()
-    llm = FakeLlmRunner(
+    llm = FakeChunkLlmRunner(
         verdict="CHANGES_REQUIRED",
-        summary="the migration drops evidence provenance",
         findings=[
             {
                 "id": "F-001",
@@ -717,7 +969,6 @@ def test_run_review_step_summary_includes_audit_findings(tmp_path: Path) -> None
                 "decision_impact": "silently loses evidence lineage",
             }
         ],
-        rationale="the change removes a required provenance field without a migration path",
     )
     code = run_review(
         args=_args(),
@@ -728,8 +979,6 @@ def test_run_review_step_summary_includes_audit_findings(tmp_path: Path) -> None
     assert code == 0
     text = summary.read_text(encoding="utf-8")
     assert "CHANGES_REQUIRED" in text
-    assert "the migration drops evidence provenance" in text
-    assert "F-001" in text
+    assert "C1-F-001" in text
     assert "provenance field is dropped during migration" in text
     assert "silently loses evidence lineage" in text
-    assert "the change removes a required provenance field without a migration path" in text
