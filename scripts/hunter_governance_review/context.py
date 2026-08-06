@@ -34,16 +34,27 @@ from hunter_governance_review.contracts import ContextEntry, ContextManifest
 
 CANONICAL_MAP_PATH = "docs/CANONICAL_ARCHITECTURE_MAP.md"
 DEFAULT_EXCERPT_CHARS = 900
-# Deliberately small: this brief is re-sent, identically, on every one of a
-# potentially large number of sequential per-chunk audit calls (see
-# chunking.py). A large context budget doesn't make it any more authoritative
-# -- the full-fidelity evidence trail is the coverage manifest (every
-# resolved document's exact path/ref/sha256/length), not this inline
-# excerpt -- but it does directly shrink how much diff budget each chunk has
-# left, which was the proximate cause of a 116-chunk review on PR #200's own
-# real diff hitting Groq's tokens-per-minute rate limit on almost every
-# sequential call (workflow run 31065137201).
-DEFAULT_TOTAL_CHAR_BUDGET = 2_000
+# Sized against the real canonical hierarchy, not guessed: as of this
+# writing, docs/CANONICAL_ARCHITECTURE_MAP.md lists 12 mandatory documents,
+# and fetching every one of them at the exact base commit and summing
+# (header + min(len(content), DEFAULT_EXCERPT_CHARS)) for each measures
+# exactly 11,758 characters for their full, uncut excerpts to all fit
+# together. A smaller budget (2,000 was tried first) meant most of those 12
+# mandatory documents were squeezed to zero characters by the total-budget
+# pass on every real run, which correctly -- but uselessly -- fails the
+# review closed every time (confirmed live, workflow run 31094837347) rather
+# than the rare, genuine "required authority cannot fit" case this
+# fail-closed check exists for. This budget is deliberately proportioned so
+# the CURRENT real hierarchy fits in full with headroom; if governance adds
+# enough further mandatory documents to exceed it, later documents are
+# truncated (never silently, and never below the mandatory floor of zero --
+# see resolve_context) before this budget would need raising again. This is
+# a known, accepted limit of correcting the accounting, not a general
+# Context Intelligence Layer (out of scope -- see docs/HUNTER_GOVERNANCE_REVIEW.md).
+# llm_audit.PROMPT_TOKEN_BUDGET was raised alongside this so the per-chunk
+# diff budget does not collapse back into the chunk-count/rate-limit
+# fragility the prior round's smaller context budget was chosen to avoid.
+DEFAULT_TOTAL_CHAR_BUDGET = 12_500
 
 _NUMBERED_LINE_PATTERN = re.compile(r"^\d+\.\s")
 _BACKTICK_PATTERN = re.compile(r"`([^`]+)`")

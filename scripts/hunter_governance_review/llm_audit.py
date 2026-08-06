@@ -68,7 +68,15 @@ SYSTEM_PROMPT = (
 # docs/HUNTER_GOVERNANCE_REVIEW.md's Troubleshooting section.
 CHARS_PER_TOKEN_ESTIMATE = 3.5
 PROVIDER_TPM_LIMIT = 12_000
-PROMPT_TOKEN_BUDGET = 7_000
+# Raised from 7,000 alongside context.DEFAULT_TOTAL_CHAR_BUDGET's increase
+# (12,500, up from 2,000 -- see that constant's comment for why): a smaller
+# per-chunk budget would force the larger context excerpt to starve the
+# diff's share, reproducing the excessive chunk count the prior round's
+# smaller context budget was chosen to avoid. Still leaves a real margin
+# below PROVIDER_TPM_LIMIT: at the measured ~3.95 real chars/token ratio (vs
+# this constant's conservative 3.5), a maximally-sized chunk plus its
+# capped completion measures ~9,580 real tokens, ~20% under the 12,000 limit.
+PROMPT_TOKEN_BUDGET = 8_500
 PROMPT_CHAR_BUDGET = int(PROMPT_TOKEN_BUDGET * CHARS_PER_TOKEN_ESTIMATE)
 PR_BODY_CHAR_LIMIT = 4_000
 MIN_DIFF_CHAR_BUDGET = 500

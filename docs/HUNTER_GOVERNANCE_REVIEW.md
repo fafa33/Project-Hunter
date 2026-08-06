@@ -135,22 +135,27 @@ treated as untrusted data.
 
 The full assembled prompt for **one chunk** (system + user messages) is
 bounded to a fixed character budget (`PROMPT_CHAR_BUDGET` in `llm_audit.py`,
-24,500 characters, using a conservative 3.5 chars/token estimate against a
-7,000-token target) so it stays within the pinned default model's actual
+29,750 characters, using a conservative 3.5 chars/token estimate against an
+8,500-token target) so it stays within the pinned default model's actual
 provider rate limit (`PROVIDER_TPM_LIMIT`, 12,000 -- Groq's on-demand tier
 for `llama-3.3-70b-versatile`). A chunk's own diff text absorbs whatever
 budget remains after the PR body, changed-file list, findings, and context
-excerpt (deliberately small -- `context.DEFAULT_TOTAL_CHAR_BUDGET`, 2,000
-characters -- since it is re-sent identically on every chunk) are rendered;
-`estimate_chunk_diff_budget` sizes chunks *before* they are built so this
-should never bind in practice, but if a chunk still does not fit,
+excerpt (`context.DEFAULT_TOTAL_CHAR_BUDGET`, 12,500 characters -- sized
+against the real canonical hierarchy: as of this writing 12 mandatory
+documents, whose full uncut excerpts measure 11,758 characters together;
+see that constant's comment for the exact `gh api` measurement) are
+rendered; `estimate_chunk_diff_budget` sizes chunks *before* they are built
+so this should never bind in practice, but if a chunk still does not fit,
 `build_chunk_audit_prompt` raises rather than silently truncating -- that
 chunk is recorded as failed, which fails the whole review's coverage closed
-(see Stage 4). This budget was derived directly from a real failure: the
-gate's own live installation run (PR #200, workflow run 31056865509) was
-rejected outright by Groq -- HTTP 413, "Request too large ... tokens per
-minute (TPM): Limit 12000, Requested 27258" -- because the original
-(pre-chunking) bounds had no relationship to that limit.
+(see Stage 4). This budget was derived directly from real failures on this
+gate's own live installation run: first an HTTP 413 (PR #200, workflow run
+31056865509 -- "Request too large ... tokens per minute (TPM): Limit 12000,
+Requested 27258" -- because the original pre-chunking bounds had no
+relationship to that limit), and later a context budget too small for the
+real canonical hierarchy to fit without every mandatory document being
+squeezed to zero characters and failing every run closed (workflow run
+31094837347).
 
 **Rate limiting across sequential chunk calls is expected, not exceptional,
 and is retried, not treated as a hard failure.** `PROVIDER_TPM_LIMIT` bounds

@@ -48,9 +48,34 @@
   that a live re-verification against PR #200's own diff caught directly:
   116 sequential per-chunk calls exhausted Groq's tokens-per-minute *rate*
   (not any single request's size) after 2-3 calls, failing 113/116 chunks
-  with HTTP 429; `run_llm_audit` now retries 429 with the provider's
-  suggested backoff, and the per-chunk budget was widened while the context
-  excerpt was shrunk to cut the real chunk count from 116 to 16.
+  with HTTP 429; `run_llm_audit` now retries a per-minute 429 with the
+  provider's suggested backoff (a per-day quota 429 is never retried --
+  no CI-job-bounded wait can outlast a daily reset), and duration parsing
+  now handles Groq's full `<h>h<m>m<s>s` form after a live run showed the
+  prior seconds-only parser silently dropping an `"44m"` prefix.
+- A second round of fixes for five further merge-blocking findings:
+  outer diff truncation is removed entirely (a retrieved diff exceeding the
+  coarse sanity bound now fails closed rather than silently truncating
+  before coverage accounting ever sees the loss); one minimal, additional
+  LLM call performs cross-chunk consistency synthesis after every chunk
+  succeeds, over chunk summaries/findings only, reusing the exact same
+  schema/budget/retry machinery as a per-chunk call
+  (`llm_audit.run_synthesis_review`, `aggregate.apply_synthesis`); the
+  context manifest's `included_chars` now reports the real, post-budget
+  content length actually sent to the model instead of the pre-budget
+  attempted length, and a mandatory document squeezed to zero characters by
+  the budget fails closed; `validate_audit_payload` rejects unknown
+  top-level/finding fields, `CHANGES_REQUIRED` with only non-blocking
+  findings, and any `finish_reason` other than `"stop"`; and
+  `parse_audit_response` no longer extracts JSON embedded in surrounding
+  prose. A further live re-verification then caught a genuine miscalibration
+  the new context fail-closed check exposed: the real canonical hierarchy's
+  12 mandatory documents need 11,758 characters to all fit in full, not the
+  2,000-character budget chosen in the prior round -- both
+  `context.DEFAULT_TOTAL_CHAR_BUDGET` (12,500) and
+  `llm_audit.PROMPT_TOKEN_BUDGET` (8,500) were raised together so the larger
+  context budget does not starve the per-chunk diff budget back into
+  excessive chunk counts.
 
 ### Changed
 
