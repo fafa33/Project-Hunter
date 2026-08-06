@@ -99,6 +99,28 @@
   `DocumentReviewManifest`), and the resulting coverage manifest's
   `bytes_reviewed` reflects only bytes that passed through an actual review
   call, never bytes that were merely retrieved.
+- Deterministic multi-provider LLM failover (`llm_audit._resolve_providers`,
+  `_call_chat_completion`), closing the gate's single-provider dependency.
+  Live re-verification against PR #200's own current diff (workflow run
+  31107051102) hit Groq's tokens-per-day quota after only 1/50 diff chunks
+  succeeded and correctly published `REVIEW_FAILED` rather than a false
+  approval -- but analysis showed the real problem is architectural, not a
+  one-off: this repository's diff/document sizes require far more tokens per
+  full review (this PR's diff alone chunks into ~50 requests at up to
+  ~8,500 tokens each) than a single Groq on-demand account's entire daily
+  quota (100,000 tokens), and that per-chunk budget is already sized against
+  a hard, provider-imposed per-request ceiling (12,000 TPM), so reducing
+  invocation count alone cannot close the gap without either exceeding that
+  ceiling or reducing the governance context each chunk is judged against.
+  `HUNTER_LLM_API_KEY`, `GROQ_API_KEY`, and `OPENAI_API_KEY` were already the
+  three documented provider secrets, but were previously a first-match-wins
+  exclusive choice with no runtime recovery if the chosen one failed; every
+  configured secret is now an independently-triable provider, tried in that
+  same fixed priority order for every LLM call the gate makes (each diff
+  chunk, the synthesis call, and each document-review section
+  independently), with `REVIEW_FAILED` occurring only once every configured
+  provider has failed for that specific call. 100% backward compatible for
+  every existing single-secret configuration.
 
 ### Changed
 

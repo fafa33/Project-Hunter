@@ -21,6 +21,17 @@ completion, malformed output, an unsupported response schema, or an
 internally contradictory verdict -- raises ``LLMAuditError``, which the
 Decision Engine maps to ``REVIEW_FAILED``. A failed audit can never approve
 a pull request.
+
+Every one of these three calls goes through ``_call_chat_completion``, which
+tries every configured provider (``_resolve_providers``: ``HUNTER_LLM_API_KEY``,
+then ``GROQ_API_KEY``, then ``OPENAI_API_KEY``) in that fixed order, falling
+over to the next configured provider on ANY failure from the current one.
+``LLMAuditError`` is raised only once every configured provider has failed
+for that specific call -- a single provider's outage or exhausted quota no
+longer blocks the whole review by itself, as long as another provider
+secret is also configured. See ``_resolve_providers``'s docstring for why
+this exists: a single Groq on-demand account's daily quota is not large
+enough for this repository's real review sizes.
 """
 
 from __future__ import annotations
@@ -190,29 +201,89 @@ class LLMAuditError(RuntimeError):
     """Raised when the audit cannot produce a trustworthy verdict."""
 
 
-def _resolve_provider(env: Mapping[str, str]) -> tuple[str, str, str]:
-    """Return ``(api_key, base_url, model)``.
+@dataclass(frozen=True)
+class ProviderConfig:
+    """One configured, independently-triable LLM provider.
 
-    Key precedence: ``HUNTER_LLM_API_KEY``, then ``GROQ_API_KEY``, then
-    ``OPENAI_API_KEY``. When only ``OPENAI_API_KEY`` is present, the OpenAI
-    endpoint and a default model are used; otherwise the Groq-compatible
-    endpoint is used (the repository's existing provider convention).
+    ``name`` identifies which repository secret supplied this provider's key
+    -- used only for diagnostics (error messages, run logs), never to change
+    behavior.
     """
-    api_key = env.get("HUNTER_LLM_API_KEY") or env.get("GROQ_API_KEY") or env.get("OPENAI_API_KEY")
-    if not api_key:
+
+    name: str
+    api_key: str
+    base_url: str
+    model: str
+
+
+def _resolve_providers(env: Mapping[str, str]) -> list[ProviderConfig]:
+    """Every configured provider, in deterministic fallback priority order.
+
+    Priority: ``HUNTER_LLM_API_KEY``, then ``GROQ_API_KEY``, then
+    ``OPENAI_API_KEY`` -- the same three secrets the gate has always
+    documented, now each contributing an independently-triable provider
+    instead of only the first one found being used for the whole review with
+    no recovery if it fails at request time. This closes a single-provider
+    dependency: Project Hunter's real diff/document sizes require far more
+    total tokens per full review than a single Groq on-demand account's daily
+    quota (100,000 tokens) -- PR #200's own diff alone chunks into ~50
+    requests at up to ~8,500 tokens each, several times the entire daily
+    budget in one review pass, so quota exhaustion on one account is a
+    routine occurrence, not a rare edge case; a second configured provider
+    with its own independent quota lets the same review keep running.
+
+    ``HUNTER_LLM_BASE_URL``/``HUNTER_LLM_MODEL`` override the Groq-compatible
+    candidates' (``HUNTER_LLM_API_KEY``, ``GROQ_API_KEY``) endpoint/model
+    when set. The ``OPENAI_API_KEY`` candidate uses those same two overrides
+    only when it is the ONLY configured secret (matching this function's
+    single-provider predecessor's behavior exactly for every
+    already-possible single-key configuration); when a Groq-family key is
+    ALSO configured, the two override variables are scoped to that
+    Groq-family candidate and the OpenAI candidate uses its own defaults --
+    one override pair cannot mean two different things for two provider
+    families in the same review. Raises ``LLMAuditError`` if no provider
+    secret is configured at all, with the same message the single-provider
+    predecessor used.
+    """
+    hunter_key = env.get("HUNTER_LLM_API_KEY")
+    groq_key = env.get("GROQ_API_KEY")
+    openai_key = env.get("OPENAI_API_KEY")
+    if not (hunter_key or groq_key or openai_key):
         raise LLMAuditError(
             "missing API secret: set HUNTER_LLM_API_KEY (or GROQ_API_KEY / OPENAI_API_KEY) as a repository secret"
         )
-    base_url = env.get("HUNTER_LLM_BASE_URL")
-    model = env.get("HUNTER_LLM_MODEL")
-    openai_only = bool(env.get("OPENAI_API_KEY")) and not (env.get("HUNTER_LLM_API_KEY") or env.get("GROQ_API_KEY"))
-    if openai_only:
-        base_url = base_url or "https://api.openai.com/v1"
-        model = model or "gpt-4o-mini"
-    else:
-        base_url = base_url or "https://api.groq.com/openai/v1"
-        model = model or "llama-3.3-70b-versatile"
-    return api_key, base_url, model
+
+    override_base_url = env.get("HUNTER_LLM_BASE_URL")
+    override_model = env.get("HUNTER_LLM_MODEL")
+    groq_base_url = override_base_url or "https://api.groq.com/openai/v1"
+    groq_model = override_model or "llama-3.3-70b-versatile"
+
+    candidates: list[ProviderConfig] = []
+    if hunter_key:
+        candidates.append(ProviderConfig("HUNTER_LLM_API_KEY", hunter_key, groq_base_url, groq_model))
+    if groq_key:
+        candidates.append(ProviderConfig("GROQ_API_KEY", groq_key, groq_base_url, groq_model))
+    if openai_key:
+        openai_only = not hunter_key and not groq_key
+        openai_base_url = (
+            (override_base_url or "https://api.openai.com/v1") if openai_only else "https://api.openai.com/v1"
+        )
+        openai_model = (override_model or "gpt-4o-mini") if openai_only else "gpt-4o-mini"
+        candidates.append(ProviderConfig("OPENAI_API_KEY", openai_key, openai_base_url, openai_model))
+
+    # De-duplicate candidates that resolved to the literally identical
+    # (api_key, base_url, model) triple -- e.g. HUNTER_LLM_API_KEY and
+    # GROQ_API_KEY set to the same value would otherwise retry the same
+    # account against the same endpoint a second time for no benefit.
+    seen: set[tuple[str, str, str]] = set()
+    unique: list[ProviderConfig] = []
+    for candidate in candidates:
+        key = (candidate.api_key, candidate.base_url, candidate.model)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(candidate)
+    return unique
 
 
 def build_chunk_audit_prompt(
@@ -539,35 +610,31 @@ def parse_audit_response(raw: str) -> AuditVerdict:
     return validate_audit_payload(payload)
 
 
-def _call_chat_completion(
-    env: Mapping[str, str],
+def _call_chat_completion_once(
+    provider: ProviderConfig,
     system_prompt: str,
     prompt: str,
     *,
-    timeout: int = 120,
-    sleep: Callable[[float], None] = time.sleep,
+    timeout: int,
+    sleep: Callable[[float], None],
 ) -> AuditVerdict:
-    """POST one chat-completion request and return a validated ``AuditVerdict``.
+    """POST one chat-completion request to exactly ONE provider.
 
-    Shared by the per-chunk audit call and the cross-chunk synthesis call --
-    provider resolution, retry/backoff, adaptive budget, strict
-    ``finish_reason`` handling, and strict schema validation are identical;
-    only the system/user prompt text differs between the two callers.
-
-    Every failure mode raises ``LLMAuditError``; none may produce approval.
-    A rate-limit response (HTTP 429) is retried, bounded to
-    ``MAX_RATE_LIMIT_RETRIES`` attempts, using the provider's own suggested
-    wait time when it can be parsed -- see the module-level comment above
-    for why this is expected, not exceptional, once a review has more than
-    one or two chunks. ``sleep`` is injectable so tests never actually wait.
-
-    ``finish_reason`` must be exactly ``"stop"``; any other value (including
-    ``"length"`` or a missing/unrecognized reason) fails closed rather than
-    risk parsing a completion the provider itself did not consider complete.
+    Retry/backoff, adaptive completion budget, strict ``finish_reason``
+    handling, and strict schema validation, scoped to a single provider
+    attempt -- ``_call_chat_completion`` below loops this over every
+    configured provider for failover. A per-minute (TPM) 429 is retried
+    against THIS SAME provider, bounded to ``MAX_RATE_LIMIT_RETRIES``
+    attempts, using the provider's own suggested wait time when it can be
+    parsed -- see the module-level comment above for why this is expected,
+    not exceptional. Every other failure (a per-day quota 429, any other
+    HTTP error, a network/timeout failure, a truncated or unsupported
+    completion, or a schema/validation failure) raises ``LLMAuditError``
+    immediately so the caller can fall back to the next configured
+    provider, if any -- none of these failure modes may produce approval.
     """
-    api_key, base_url, model = _resolve_provider(env)
     payload = {
-        "model": model,
+        "model": provider.model,
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": prompt},
@@ -583,10 +650,10 @@ def _call_chat_completion(
         "response_format": {"type": "json_object"},
     }
     request = urllib.request.Request(
-        base_url.rstrip("/") + "/chat/completions",
+        provider.base_url.rstrip("/") + "/chat/completions",
         data=json.dumps(payload).encode("utf-8"),
         headers={
-            "Authorization": f"Bearer {api_key}",
+            "Authorization": f"Bearer {provider.api_key}",
             "Content-Type": "application/json",
             # A descriptive User-Agent avoids edge rejection; this mirrors the
             # repository's existing CI LLM client convention.
@@ -623,6 +690,47 @@ def _call_chat_completion(
         raise LLMAuditError(f"unsupported finish_reason: {finish_reason!r} (only 'stop' is accepted)")
     content = _extract_message_content(response_payload)
     return parse_audit_response(content)
+
+
+def _call_chat_completion(
+    env: Mapping[str, str],
+    system_prompt: str,
+    prompt: str,
+    *,
+    timeout: int = 120,
+    sleep: Callable[[float], None] = time.sleep,
+) -> AuditVerdict:
+    """POST one chat-completion request and return a validated ``AuditVerdict``.
+
+    Shared by the per-chunk audit call, the cross-chunk synthesis call, and
+    the per-document-section call -- provider resolution/failover,
+    retry/backoff, adaptive budget, strict ``finish_reason`` handling, and
+    strict schema validation are identical; only the system/user prompt text
+    differs between callers.
+
+    **Provider failover.** Every configured provider (``_resolve_providers``)
+    is tried in deterministic priority order; ``LLMAuditError`` is raised
+    only once EVERY configured provider has failed. A single provider's
+    outage or exhausted quota no longer fails the whole review by itself, as
+    long as at least one other configured provider secret can still serve
+    the request -- see ``_resolve_providers``'s docstring for why this
+    matters given this repository's real diff/document sizes relative to a
+    single Groq on-demand account's daily quota.
+
+    Every failure mode still raises ``LLMAuditError``; none may produce
+    approval. ``sleep`` is injectable so tests never actually wait.
+    """
+    providers = _resolve_providers(env)
+    failures: list[str] = []
+    for provider in providers:
+        try:
+            return _call_chat_completion_once(provider, system_prompt, prompt, timeout=timeout, sleep=sleep)
+        except LLMAuditError as exc:
+            failures.append(f"{provider.name}: {exc}")
+    raise LLMAuditError(
+        f"all {len(providers)} configured provider(s) failed to produce a trustworthy review "
+        "verdict: " + " | ".join(failures)
+    )
 
 
 def run_llm_audit(

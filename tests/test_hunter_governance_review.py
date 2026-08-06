@@ -14,6 +14,7 @@ import argparse
 import io
 import json
 import urllib.error
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -42,11 +43,15 @@ from hunter_governance_review.llm_audit import (
     PR_BODY_CHAR_LIMIT,
     AuditVerdict,
     LLMAuditError,
+    ProviderConfig,
     _parse_retry_after_seconds,
+    _resolve_providers,
     build_chunk_audit_prompt,
     estimate_chunk_diff_budget,
     parse_audit_response,
+    run_document_review,
     run_llm_audit,
+    run_synthesis_review,
     validate_audit_payload,
 )
 
@@ -1152,6 +1157,311 @@ def test_run_llm_audit_does_not_retry_daily_rate_limit(monkeypatch: pytest.Monke
             sleep=sleeps.append,
         )
     assert sleeps == []  # not a single retry attempted
+
+
+# --- Provider resolution and failover ---------------------------------------------------
+
+
+def test_resolve_providers_raises_when_none_configured() -> None:
+    with pytest.raises(LLMAuditError, match="missing API secret"):
+        _resolve_providers({})
+
+
+def test_resolve_providers_single_hunter_key() -> None:
+    providers = _resolve_providers({"HUNTER_LLM_API_KEY": "h"})
+    assert providers == [
+        ProviderConfig("HUNTER_LLM_API_KEY", "h", "https://api.groq.com/openai/v1", "llama-3.3-70b-versatile")
+    ]
+
+
+def test_resolve_providers_single_groq_key() -> None:
+    providers = _resolve_providers({"GROQ_API_KEY": "g"})
+    assert providers == [
+        ProviderConfig("GROQ_API_KEY", "g", "https://api.groq.com/openai/v1", "llama-3.3-70b-versatile")
+    ]
+
+
+def test_resolve_providers_single_openai_key_uses_openai_defaults() -> None:
+    providers = _resolve_providers({"OPENAI_API_KEY": "o"})
+    assert providers == [ProviderConfig("OPENAI_API_KEY", "o", "https://api.openai.com/v1", "gpt-4o-mini")]
+
+
+def test_resolve_providers_single_openai_key_honors_overrides() -> None:
+    """Matches the single-provider predecessor's behavior exactly: when
+    OPENAI_API_KEY is the only configured secret, HUNTER_LLM_BASE_URL /
+    HUNTER_LLM_MODEL (if set) still override it."""
+    providers = _resolve_providers(
+        {"OPENAI_API_KEY": "o", "HUNTER_LLM_BASE_URL": "https://custom.example/v1", "HUNTER_LLM_MODEL": "custom-model"}
+    )
+    assert providers == [ProviderConfig("OPENAI_API_KEY", "o", "https://custom.example/v1", "custom-model")]
+
+
+def test_resolve_providers_deterministic_priority_order_all_three_configured() -> None:
+    """F-provider-order regression: HUNTER_LLM_API_KEY, then GROQ_API_KEY,
+    then OPENAI_API_KEY -- always in this fixed order, never re-ordered by
+    any runtime signal."""
+    providers = _resolve_providers({"HUNTER_LLM_API_KEY": "h", "GROQ_API_KEY": "g", "OPENAI_API_KEY": "o"})
+    assert [p.name for p in providers] == ["HUNTER_LLM_API_KEY", "GROQ_API_KEY", "OPENAI_API_KEY"]
+    assert [p.api_key for p in providers] == ["h", "g", "o"]
+
+
+def test_resolve_providers_openai_ignores_groq_scoped_overrides_when_multi_provider() -> None:
+    """When a Groq-family key is ALSO configured, HUNTER_LLM_BASE_URL /
+    HUNTER_LLM_MODEL are scoped to that Groq-family candidate; the OpenAI
+    candidate uses its own defaults regardless -- one override pair cannot
+    mean two different things for two provider families in the same
+    review."""
+    providers = _resolve_providers(
+        {
+            "HUNTER_LLM_API_KEY": "h",
+            "OPENAI_API_KEY": "o",
+            "HUNTER_LLM_BASE_URL": "https://custom.example/v1",
+            "HUNTER_LLM_MODEL": "custom-model",
+        }
+    )
+    by_name = {p.name: p for p in providers}
+    assert by_name["HUNTER_LLM_API_KEY"].base_url == "https://custom.example/v1"
+    assert by_name["HUNTER_LLM_API_KEY"].model == "custom-model"
+    assert by_name["OPENAI_API_KEY"].base_url == "https://api.openai.com/v1"
+    assert by_name["OPENAI_API_KEY"].model == "gpt-4o-mini"
+
+
+def test_resolve_providers_deduplicates_identical_credentials() -> None:
+    """HUNTER_LLM_API_KEY and GROQ_API_KEY set to the literally same value
+    resolve to the same (api_key, base_url, model) triple -- retrying the
+    identical account against the identical endpoint a second time would
+    never recover anything, so only one candidate is produced."""
+    providers = _resolve_providers({"HUNTER_LLM_API_KEY": "same-secret", "GROQ_API_KEY": "same-secret"})
+    assert len(providers) == 1
+    assert providers[0].api_key == "same-secret"
+
+
+def _provider_env(**keys: str) -> dict[str, str]:
+    return _env(**keys)
+
+
+class _RecordingMultiProviderTransport:
+    """Fake ``urllib.request.urlopen`` that behaves differently per API key.
+
+    ``behaviors`` maps an API key value to a zero-argument FACTORY, called
+    fresh on every request that uses that key -- never a pre-built instance.
+    A real ``HTTPError``'s body (``fp``) is a single-read stream: reusing one
+    instance across multiple calls (a real review makes many -- one per diff
+    chunk, plus synthesis, plus one per document section) would silently
+    return an EMPTY body on the second and later reads, which
+    ``_is_daily_rate_limit`` would then read as "not a daily-quota message"
+    and incorrectly fall into the real (non-injectable, since this goes
+    through the full ``run_review`` -> ``run_llm_audit`` path with no
+    ``sleep=`` override) per-minute retry-and-sleep path. A fresh factory
+    call sidesteps this entirely. Records, in ``self.calls``, the
+    ``Authorization`` header seen on every request, in order, so a test can
+    verify both WHICH providers were contacted and in what order.
+    """
+
+    def __init__(self, behaviors: dict[str, Callable[[], _FakeHTTPResponse]]) -> None:
+        self.behaviors = behaviors
+        self.calls: list[str] = []
+
+    def __call__(self, request: object, timeout: int) -> _FakeHTTPResponse:
+        auth = request.get_header("Authorization")  # type: ignore[attr-defined]
+        api_key = auth.removeprefix("Bearer ") if auth else ""
+        self.calls.append(api_key)
+        factory = self.behaviors.get(api_key)
+        if factory is None:
+            raise AssertionError(f"no configured behavior for API key {api_key!r}")
+        return factory()
+
+
+def _fail_with(code: int, body: bytes) -> Callable[[], _FakeHTTPResponse]:
+    """A factory that raises a FRESH HTTPError (fresh, unread body) each call."""
+
+    def _raise() -> _FakeHTTPResponse:
+        raise _http_error(code, body)
+
+    return _raise
+
+
+def _succeed_with(body: bytes) -> Callable[[], _FakeHTTPResponse]:
+    def _respond() -> _FakeHTTPResponse:
+        return _FakeHTTPResponse(body)
+
+    return _respond
+
+
+_APPROVED_BODY = (
+    b'{"choices": [{"message": {"content": '
+    b'"{\\"verdict\\": \\"APPROVED\\", \\"summary\\": \\"ok\\", \\"findings\\": [], '
+    b'\\"rationale\\": \\"r\\", \\"architectural_evidence\\": {}}"}, "finish_reason": "stop"}]}'
+)
+
+
+def test_run_llm_audit_falls_back_to_second_provider_on_first_provider_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Provider-failover regression: the first configured provider (a daily
+    quota 429, matching the live PR #200 failure) does not fail the whole
+    review -- the second configured provider is tried next, and its
+    APPROVED verdict is what the caller receives."""
+    daily_quota_body = (
+        b'{"error":{"message":"Rate limit reached ... on tokens per day (TPD): Limit 100000, '
+        b'Used 99000, Requested 5000. Please try again in 1h.","type":"tokens","code":"rate_limit_exceeded"}}'
+    )
+    transport = _RecordingMultiProviderTransport(
+        {
+            "hunter-key": _fail_with(429, daily_quota_body),
+            "groq-key": _succeed_with(_APPROVED_BODY),
+        }
+    )
+    monkeypatch.setattr("hunter_governance_review.llm_audit.urllib.request.urlopen", transport)
+
+    chunk = DiffChunk(1, 1, ("a.py",), "@@ -1 +1 @@\n+ok")
+    verdict = run_llm_audit(
+        _provider_env(HUNTER_LLM_API_KEY="hunter-key", GROQ_API_KEY="groq-key"),
+        pair=_pair(),
+        pr=_pr(),
+        chunk=chunk,
+        context_brief="ctx",
+        deterministic_findings=[],
+    )
+    assert verdict.verdict == "APPROVED"
+    assert transport.calls == ["hunter-key", "groq-key"]  # deterministic priority order, both attempted
+
+
+def test_run_llm_audit_falls_back_past_malformed_output_to_a_valid_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A schema/validation failure (not just a transport failure) on one
+    provider also triggers fallback -- REVIEW_FAILED must occur only when NO
+    configured provider can produce a trustworthy verdict, not merely when
+    the FIRST one happens to fail at the network layer."""
+    malformed_body = b'{"choices": [{"message": {"content": "not valid json"}, "finish_reason": "stop"}]}'
+    transport = _RecordingMultiProviderTransport(
+        {
+            "hunter-key": _succeed_with(malformed_body),
+            "groq-key": _succeed_with(_APPROVED_BODY),
+        }
+    )
+    monkeypatch.setattr("hunter_governance_review.llm_audit.urllib.request.urlopen", transport)
+
+    chunk = DiffChunk(1, 1, ("a.py",), "@@ -1 +1 @@\n+ok")
+    verdict = run_llm_audit(
+        _provider_env(HUNTER_LLM_API_KEY="hunter-key", GROQ_API_KEY="groq-key"),
+        pair=_pair(),
+        pr=_pr(),
+        chunk=chunk,
+        context_brief="ctx",
+        deterministic_findings=[],
+    )
+    assert verdict.verdict == "APPROVED"
+    assert transport.calls == ["hunter-key", "groq-key"]
+
+
+def test_run_llm_audit_tries_all_three_providers_in_deterministic_order_before_succeeding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = _RecordingMultiProviderTransport(
+        {
+            "hunter-key": _fail_with(500, b"internal server error"),
+            "groq-key": _fail_with(500, b"internal server error"),
+            "openai-key": _succeed_with(_APPROVED_BODY),
+        }
+    )
+    monkeypatch.setattr("hunter_governance_review.llm_audit.urllib.request.urlopen", transport)
+
+    chunk = DiffChunk(1, 1, ("a.py",), "@@ -1 +1 @@\n+ok")
+    verdict = run_llm_audit(
+        _provider_env(HUNTER_LLM_API_KEY="hunter-key", GROQ_API_KEY="groq-key", OPENAI_API_KEY="openai-key"),
+        pair=_pair(),
+        pr=_pr(),
+        chunk=chunk,
+        context_brief="ctx",
+        deterministic_findings=[],
+    )
+    assert verdict.verdict == "APPROVED"
+    assert transport.calls == ["hunter-key", "groq-key", "openai-key"]
+
+
+def test_run_llm_audit_fails_closed_when_every_configured_provider_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No false approvals: when every configured provider fails, the call
+    raises LLMAuditError (which the Decision Engine maps to REVIEW_FAILED)
+    -- never a partial, best-effort, or default-to-approved outcome."""
+    transport = _RecordingMultiProviderTransport(
+        {
+            "hunter-key": _fail_with(500, b"internal server error"),
+            "groq-key": _fail_with(503, b"service unavailable"),
+        }
+    )
+    monkeypatch.setattr("hunter_governance_review.llm_audit.urllib.request.urlopen", transport)
+
+    chunk = DiffChunk(1, 1, ("a.py",), "@@ -1 +1 @@\n+ok")
+    with pytest.raises(LLMAuditError, match="all 2 configured provider"):
+        run_llm_audit(
+            _provider_env(HUNTER_LLM_API_KEY="hunter-key", GROQ_API_KEY="groq-key"),
+            pair=_pair(),
+            pr=_pr(),
+            chunk=chunk,
+            context_brief="ctx",
+            deterministic_findings=[],
+        )
+    assert transport.calls == ["hunter-key", "groq-key"]
+
+
+def test_run_llm_audit_single_provider_still_fails_closed_with_no_fallback_configured() -> None:
+    """No regression for the common single-provider deployment: with only
+    one provider secret configured, a failure still fails closed exactly as
+    before -- there is simply nothing to fall back to."""
+    chunk = DiffChunk(1, 1, ("a.py",), "@@ -1 +1 @@")
+    with pytest.raises(LLMAuditError, match="all 1 configured provider"):
+        run_llm_audit(
+            _provider_env(HUNTER_LLM_API_KEY="only-key"),
+            pair=_pair(),
+            pr=_pr(),
+            chunk=chunk,
+            context_brief="ctx",
+            deterministic_findings=[],
+        )
+
+
+def test_run_review_provider_fallback_produces_no_false_approval_end_to_end(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """End-to-end (run_review, real run_llm_audit) proof that provider
+    fallback integrates correctly with the rest of the gate: a first
+    provider that is completely unusable (daily quota exhausted) does not
+    prevent a legitimate APPROVED outcome from a second configured
+    provider, and the published status is success only because a real
+    provider actually produced a valid, complete review -- not a default."""
+    daily_quota_body = (
+        b'{"error":{"message":"Rate limit reached ... on tokens per day (TPD): Limit 100000, '
+        b'Used 99000, Requested 5000. Please try again in 1h.","type":"tokens","code":"rate_limit_exceeded"}}'
+    )
+    transport = _RecordingMultiProviderTransport(
+        {
+            "hunter-key": _fail_with(429, daily_quota_body),
+            "groq-key": _succeed_with(_APPROVED_BODY),
+        }
+    )
+    monkeypatch.setattr("hunter_governance_review.llm_audit.urllib.request.urlopen", transport)
+
+    gh = FakeGhRunner()
+    env = _env(HUNTER_LLM_API_KEY="hunter-key", GROQ_API_KEY="groq-key")
+    code = run_review(
+        args=_args(),
+        env=env,
+        gh=gh,
+        llm_runner=run_llm_audit,
+        synthesis_runner=run_synthesis_review,
+        document_review_runner=run_document_review,
+    )
+    assert code == 0
+    assert gh.statuses[0]["state"] == "success"
+    # Every real provider call (chunk audit, synthesis, and every mandatory
+    # document section) failed over from hunter-key to groq-key.
+    assert transport.calls
+    assert all(call in ("hunter-key", "groq-key") for call in transport.calls)
+    assert "groq-key" in transport.calls
 
 
 # --- Decision Engine -------------------------------------------------------------------

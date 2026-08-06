@@ -480,15 +480,54 @@ workflow.
 
 ## Configuration
 
-### Repository secrets
+### Repository secrets and provider failover
 
 | Secret | Purpose |
 |---|---|
-| `HUNTER_LLM_API_KEY` | LLM API key for the audit (preferred) |
-| `GROQ_API_KEY` | Fallback (repository's existing provider convention) |
-| `OPENAI_API_KEY` | Fallback; when only this is set, the OpenAI endpoint is used |
+| `HUNTER_LLM_API_KEY` | LLM API key, tried first |
+| `GROQ_API_KEY` | LLM API key, tried second |
+| `OPENAI_API_KEY` | LLM API key, tried third; uses the OpenAI endpoint/model |
 
-When no key is configured the gate publishes `REVIEW_FAILED` — it never skips.
+**Every configured secret above is an independently-triable provider, tried in
+this exact, fixed priority order for every single LLM call the gate makes**
+(`llm_audit._resolve_providers`) — not a first-match-wins exclusive choice.
+`_call_chat_completion` tries `HUNTER_LLM_API_KEY` first; if that provider
+fails for any reason (network error, any HTTP error including a 429 quota
+exhaustion, a truncated or malformed completion, or a schema/validation
+failure), it tries `GROQ_API_KEY` next, then `OPENAI_API_KEY`. `REVIEW_FAILED`
+occurs only once every configured provider has failed for that call — never
+when at least one configured provider can still successfully produce a
+trustworthy verdict. This applies independently to every call the gate makes
+(every diff chunk, the cross-chunk synthesis call, and every authoritative-
+document section), so a provider that fails partway through a review (e.g.
+its daily quota exhausts mid-run) does not fail the calls that come after it.
+
+When no secret is configured at all, the gate publishes `REVIEW_FAILED` — it
+never skips. `HUNTER_LLM_BASE_URL`/`HUNTER_LLM_MODEL` (below) override
+`HUNTER_LLM_API_KEY`'s and `GROQ_API_KEY`'s endpoint/model when set; see
+`_resolve_providers`'s docstring for the exact (and 100%-backward-compatible)
+scoping rule when `OPENAI_API_KEY` is configured alongside one of them.
+
+**Why this exists.** A single Groq on-demand account's daily quota
+(100,000 tokens) is not large enough for this repository's real review sizes:
+this gate's own installation PR's diff alone chunks into roughly 50 requests
+at up to ~8,500 tokens each (`llm_audit.PROMPT_TOKEN_BUDGET`) — several times
+the ENTIRE daily quota in one review pass, before the cross-chunk synthesis
+call or the authoritative-document review's own section-by-section calls are
+even counted. This is not primarily an inefficiency in how many calls one
+review makes: that per-chunk budget is already sized against the pinned
+model's hard, provider-imposed per-request limit (`PROVIDER_TPM_LIMIT`,
+12,000 tokens/minute for Groq's on-demand tier — see `llm_audit.py`'s
+module-level comment for the HTTP 413 failure this budget exists to avoid),
+so a materially larger chunk size is not available without either exceeding
+that hard per-request ceiling or reducing what governance context each chunk
+is judged against. Configuring a second, independent provider secret (a
+distinct account/tier, or `OPENAI_API_KEY`) is what actually removes the
+single-point-of-failure: that provider has its own, separate quota, so
+exhausting one account's daily budget no longer blocks the whole gate.
+**Configuring only one secret leaves the gate exactly as exposed to that
+one provider's outages/quota as before** — failover only helps once a
+second, genuinely independent secret is configured.
 
 ### Repository variables (optional)
 
@@ -585,12 +624,27 @@ sufficient for merge safety while `main` remains unprotected.
   naming `tokens per day (TPD)`**: the configured LLM API key's *daily*
   quota is exhausted (Groq's on-demand tier default: 100,000 tokens/day) --
   not something a retry can fix within a bounded CI job. This is not a bug;
-  the message names the exact limit and its own suggested reset time. Wait
-  for the quota to reset, or configure a higher-tier key.
+  the message names the exact limit and its own suggested reset time. **If
+  only one provider secret is configured, this is expected and will recur on
+  every large review — configure a second, independent provider secret
+  (`GROQ_API_KEY` and/or `OPENAI_API_KEY` on a genuinely different
+  account/tier from whichever provider hit the quota) so the gate fails over
+  instead of blocking; see "Repository secrets and provider failover"
+  above.** If a second provider is already configured and this still occurs,
+  every configured provider's quota is exhausted; wait for a reset or
+  configure a higher-tier key.
+- **`REVIEW_FAILED` with `all N configured provider(s) failed`**: every
+  provider secret that IS configured failed for that specific call (see the
+  `|`-separated per-provider reasons in the message). This means provider
+  failover itself worked as designed -- it tried every configured provider,
+  in order -- but none of them could produce a trustworthy verdict. Check
+  each named provider's individual failure reason in the message; the fix
+  depends on which providers failed and why.
 - **`REVIEW_FAILED` with `missing API secret`**: none of `HUNTER_LLM_API_KEY`,
   `GROQ_API_KEY`, or `OPENAI_API_KEY` is configured as a repository secret.
   This is the intended fail-closed bootstrap behavior, not a bug — configure
-  one of these secrets to let the LLM audit run.
+  at least one of these secrets to let the LLM audit run (configure more
+  than one, on independent accounts, for provider failover).
 - **`REVIEW_FAILED` with `completion was truncated (finish_reason=length)`**:
   the adaptive completion budget (`MIN_COMPLETION_TOKENS` .. 
   `MAX_COMPLETION_TOKENS_CAP`) was still insufficient for that chunk's
@@ -621,7 +675,7 @@ sufficient for merge safety while `main` remains unprotected.
 | `scripts/hunter_governance_review/context.py` | Authoritative Context Resolver (exact-base-SHA governance docs/ADRs; resolves both the bounded excerpt and each mandatory document's full text) |
 | `scripts/hunter_governance_review/deterministic.py` | Deterministic Governance Engine |
 | `scripts/hunter_governance_review/chunking.py` | Deterministic, lossless diff chunking |
-| `scripts/hunter_governance_review/llm_audit.py` | LLM Architecture Audit (per diff chunk, cross-chunk synthesis, and per-document-section review), structured architectural evidence schema |
+| `scripts/hunter_governance_review/llm_audit.py` | LLM Architecture Audit (per diff chunk, cross-chunk synthesis, and per-document-section review), structured architectural evidence schema, deterministic multi-provider failover |
 | `scripts/hunter_governance_review/aggregate.py` | Cross-chunk aggregation, synthesis folding, document-review aggregation and coverage manifest |
 | `scripts/hunter_governance_review/decision.py` | Decision Engine |
 | `scripts/hunter_governance_review/github_api.py` | `gh` CLI / GitHub API interaction |
