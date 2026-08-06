@@ -56,7 +56,16 @@ from hunter_governance_review.deterministic import ValidationContext, run_determ
 from hunter_governance_review.github_api import GhCliRunner, GitHubError, GitHubRunner, truncate_diff
 from hunter_governance_review.llm_audit import AuditVerdict, LLMAuditError, run_llm_audit
 
-DIFF_LIMIT = 150_000
+# Coarse memory/sanity bound only -- guards against holding a pathologically
+# large diff in memory before it ever reaches the audit prompt builder. It is
+# deliberately far larger than any realistic PR diff and is NOT the real
+# per-request token bound: that bound is computed in
+# ``hunter_governance_review.llm_audit.build_audit_prompt`` from the full
+# assembled prompt against the pinned model's actual provider rate limit --
+# see the module-level comment there for why (PR #200's own live installation
+# run was rejected by Groq for exceeding its tokens-per-minute limit with the
+# prior, disconnected 150,000-character cap).
+DIFF_LIMIT = 5_000_000
 
 
 class LLMRunner(Protocol):

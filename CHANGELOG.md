@@ -21,6 +21,15 @@
   30-minute schedule, so target-branch advancement invalidates stale approvals.
 - Stdlib-only gate engine under `scripts/hunter_governance_review/` and unit
   tests in `tests/test_hunter_governance_review.py`.
+- LLM audit prompt token budget (`PROMPT_CHAR_BUDGET`, `MAX_COMPLETION_TOKENS`
+  in `llm_audit.py`): the full assembled prompt is now bounded to a fixed
+  character budget derived from the pinned default model's actual provider
+  rate limit, with the diff absorbing whatever budget remains after the PR
+  body, changed-file list, findings, and governance brief are rendered. This
+  closes a real gap found during the gate's own live installation validation:
+  the prior, disconnected 150,000-character diff cap produced a request Groq
+  rejected outright (HTTP 413, TPM limit 12,000, requested 27,258) on this
+  gate's own installation PR.
 
 ### Changed
 

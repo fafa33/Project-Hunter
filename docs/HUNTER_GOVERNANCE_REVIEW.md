@@ -79,6 +79,24 @@ a condensed governance brief derived from the canonical documents, the exact
 review pair, PR metadata, the changed-file list, the bounded diff, and the
 deterministic findings. PR content is treated as untrusted data.
 
+The full assembled prompt (system + user messages) is bounded to a fixed
+character budget (`PROMPT_CHAR_BUDGET` in `llm_audit.py`, currently 17,500
+characters, using a conservative 3.5 chars/token estimate against a 5,000
+token target) so that it stays within the pinned default model's actual
+provider rate limit. The completion is separately capped with `max_tokens`
+(`MAX_COMPLETION_TOKENS`, 1,000) since the provider's per-minute token limit
+covers prompt and completion together. The diff — the most compressible part
+of the prompt — absorbs whatever budget remains after the PR body (capped at
+`PR_BODY_CHAR_LIMIT`), the changed-file list (capped at
+`MAX_CHANGED_FILES_LISTED` entries), the deterministic findings, and the
+governance brief are rendered, so the total is bounded regardless of how
+large any individual section is. This budget was derived directly from a
+real failure: the gate's own live installation run (PR #200, workflow run
+31056865509) was rejected outright by Groq — HTTP 413, "Request too large
+... tokens per minute (TPM): Limit 12000, Requested 27258" — because the
+prior bounds (a 150,000-character diff cap, a 20,000-character PR body cap,
+and a 300-file list) had no relationship to that limit.
+
 The model must return strict JSON:
 
 ```json

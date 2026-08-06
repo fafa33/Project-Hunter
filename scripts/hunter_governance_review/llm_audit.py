@@ -113,6 +113,38 @@ def _resolve_provider(env: Mapping[str, str]) -> tuple[str, str, str]:
     return api_key, base_url, model
 
 
+# ---------------------------------------------------------------------------
+# Audit prompt token budget.
+#
+# The gate's own live installation run (PR #200, workflow run 31056865509)
+# was rejected outright by Groq: HTTP 413, "Request too large for model
+# `llama-3.3-70b-versatile` ... on tokens per minute (TPM): Limit 12000,
+# Requested 27258". The prior bounds -- a 150,000-character diff cap, a
+# 20,000-character PR body cap, and a 300-file changed-file list -- had no
+# relationship to the pinned default model's actual provider rate limit, and
+# together routinely exceed it on any non-trivial pull request, including
+# this gate's own installation PR (its real diff alone was 99,671 characters,
+# and the full assembled prompt measured 107,586 characters against the
+# 27,258 tokens Groq actually reported -- ~3.95 characters/token for this
+# repository's real content).
+#
+# The full assembled prompt (system + user messages) is now bounded to a
+# fixed character budget using a conservative 3.5 chars/token estimate, well
+# below the measured ~3.95 ratio. The diff -- the most compressible,
+# least fixed-size part of the prompt -- absorbs whatever budget remains
+# after every other section is rendered, so the total is bounded regardless
+# of how large any individual section is. The completion is separately
+# capped with ``max_tokens`` since Groq's TPM limit covers the full request,
+# prompt and completion together.
+CHARS_PER_TOKEN_ESTIMATE = 3.5
+PROMPT_TOKEN_BUDGET = 5_000
+PROMPT_CHAR_BUDGET = int(PROMPT_TOKEN_BUDGET * CHARS_PER_TOKEN_ESTIMATE)
+MAX_COMPLETION_TOKENS = 1_000
+PR_BODY_CHAR_LIMIT = 4_000
+MAX_CHANGED_FILES_LISTED = 100
+MIN_DIFF_CHAR_BUDGET = 500
+
+
 def build_audit_prompt(
     *,
     pair: ReviewPair,
@@ -121,13 +153,27 @@ def build_audit_prompt(
     diff: str,
     deterministic_findings: list[Finding],
 ) -> str:
-    """Build the hostile audit prompt from the exact review pair and PR data."""
-    changed = "\n".join(f"- {f.filename} ({f.status}, +{f.additions}/-{f.deletions})" for f in files[:300])
+    """Build the hostile audit prompt from the exact review pair and PR data.
+
+    The diff is bounded to whatever character budget remains after every
+    other section is rendered, so the total prompt (system + user messages)
+    stays within ``PROMPT_CHAR_BUDGET`` -- see the module-level comment above
+    for why that budget exists and how it was derived.
+    """
+    listed_files = files[:MAX_CHANGED_FILES_LISTED]
+    changed = "\n".join(f"- {f.filename} ({f.status}, +{f.additions}/-{f.deletions})" for f in listed_files)
+    if len(files) > MAX_CHANGED_FILES_LISTED:
+        changed += (
+            f"\n... and {len(files) - MAX_CHANGED_FILES_LISTED} more changed file(s) "
+            "omitted to satisfy the audit prompt token budget."
+        )
     findings = "\n".join(finding.render() for finding in deterministic_findings) or (
         "(none — deterministic validation passed)"
     )
-    body = pr.body[:20000] or "(empty)"
-    return (
+    body = pr.body[:PR_BODY_CHAR_LIMIT] or "(empty)"
+    if len(pr.body) > PR_BODY_CHAR_LIMIT:
+        body += "\n[PR BODY TRUNCATED to satisfy the audit prompt token budget]"
+    header = (
         "You are reviewing a Project Hunter pull request as an independent hostile reviewer. "
         "You must attempt to reject the change.\n\n"
         "REVIEW PAIR (the exact pair this verdict applies to):\n"
@@ -137,8 +183,10 @@ def build_audit_prompt(
         f"Title: {pr.title}\n"
         f"Body:\n{body}\n\n"
         f"Changed files ({len(files)} total):\n{changed or '(none)'}\n\n"
-        f"DIFF (possibly truncated):\n{diff}\n\n"
-        "DETERMINISTIC GOVERNANCE VALIDATION FINDINGS (already enforced by the gate; "
+        "DIFF (bounded to the remaining audit prompt token budget):\n"
+    )
+    footer = (
+        "\n\nDETERMINISTIC GOVERNANCE VALIDATION FINDINGS (already enforced by the gate; "
         "do not re-litigate them, but consider them in your audit):\n"
         f"{findings}\n\n"
         "GOVERNANCE BRIEF:\n"
@@ -153,6 +201,18 @@ def build_audit_prompt(
         '"No blocking findings were identified." Any unresolved blocking finding '
         "must produce CHANGES_REQUIRED."
     )
+    overhead = len(SYSTEM_PROMPT) + len(header) + len(footer)
+    diff_budget = max(MIN_DIFF_CHAR_BUDGET, PROMPT_CHAR_BUDGET - overhead)
+    if len(diff) <= diff_budget:
+        bounded_diff = diff
+    else:
+        marker = (
+            f"\n\n[DIFF TRUNCATED at {diff_budget} characters to satisfy the "
+            f"{PROMPT_TOKEN_BUDGET}-token audit prompt budget]"
+        )
+        cut = diff_budget - len(marker) if diff_budget > len(marker) else diff_budget
+        bounded_diff = diff[:cut] + marker
+    return header + bounded_diff + footer
 
 
 def _extract_message_content(payload: dict[str, Any]) -> str:
@@ -231,6 +291,7 @@ def run_llm_audit(
             {"role": "user", "content": prompt},
         ],
         "temperature": 0.1,
+        "max_tokens": MAX_COMPLETION_TOKENS,
     }
     request = urllib.request.Request(
         base_url.rstrip("/") + "/chat/completions",

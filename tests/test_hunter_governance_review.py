@@ -9,6 +9,7 @@ network access is used.
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
 import pytest
@@ -28,6 +29,11 @@ from hunter_governance_review.decision import decide
 from hunter_governance_review.deterministic import ValidationContext, run_deterministic_engine
 from hunter_governance_review.github_api import GitHubError
 from hunter_governance_review.llm_audit import (
+    MAX_CHANGED_FILES_LISTED,
+    MAX_COMPLETION_TOKENS,
+    PR_BODY_CHAR_LIMIT,
+    PROMPT_CHAR_BUDGET,
+    SYSTEM_PROMPT,
     AuditVerdict,
     LLMAuditError,
     build_audit_prompt,
@@ -441,6 +447,80 @@ def test_audit_prompt_contains_exact_pair_and_diff() -> None:
     assert "b" * 40 in prompt  # target base SHA
     assert "GOVERNANCE BRIEF" in prompt
     assert "orchestrate" in prompt
+
+
+def test_audit_prompt_bounds_huge_diff_to_token_budget() -> None:
+    huge_diff = "+line of diff content\n" * 100_000
+    prompt = build_audit_prompt(
+        pair=_pair(),
+        pr=_pr(),
+        files=[CODE_FILE],
+        diff=huge_diff,
+        deterministic_findings=[],
+    )
+    assert len(SYSTEM_PROMPT) + len(prompt) <= PROMPT_CHAR_BUDGET
+    assert "DIFF TRUNCATED" in prompt
+    assert huge_diff not in prompt
+
+
+def test_audit_prompt_bounds_pr_body_to_limit() -> None:
+    huge_body = "x" * (PR_BODY_CHAR_LIMIT * 5)
+    prompt = build_audit_prompt(
+        pair=_pair(),
+        pr=_pr(body=huge_body),
+        files=[CODE_FILE],
+        diff="@@ -1 +1 @@",
+        deterministic_findings=[],
+    )
+    assert "PR BODY TRUNCATED" in prompt
+    assert huge_body not in prompt
+
+
+def test_audit_prompt_bounds_changed_files_list() -> None:
+    many_files = [ChangedFile(f"src/module_{i}.py", "modified", 1, 0) for i in range(MAX_CHANGED_FILES_LISTED + 20)]
+    prompt = build_audit_prompt(
+        pair=_pair(),
+        pr=_pr(),
+        files=many_files,
+        diff="@@ -1 +1 @@",
+        deterministic_findings=[],
+    )
+    assert "omitted to satisfy the audit prompt token budget" in prompt
+    assert "src/module_0.py" in prompt
+    assert f"src/module_{MAX_CHANGED_FILES_LISTED + 19}.py" not in prompt
+
+
+def test_run_llm_audit_caps_completion_tokens(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    class _FakeHTTPResponse:
+        def __enter__(self) -> _FakeHTTPResponse:
+            return self
+
+        def __exit__(self, *exc_info: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            body = {"choices": [{"message": {"content": '{"verdict": "APPROVED", "summary": "ok"}'}}]}
+            return json.dumps(body).encode("utf-8")
+
+    def _fake_urlopen(request: object, timeout: int) -> _FakeHTTPResponse:
+        captured["payload"] = json.loads(request.data.decode("utf-8"))  # type: ignore[attr-defined]
+        return _FakeHTTPResponse()
+
+    monkeypatch.setattr("hunter_governance_review.llm_audit.urllib.request.urlopen", _fake_urlopen)
+
+    verdict = run_llm_audit(
+        _env(),
+        pair=_pair(),
+        pr=_pr(),
+        files=[CODE_FILE],
+        diff="@@ -1 +1 @@",
+        deterministic_findings=[],
+    )
+
+    assert verdict.verdict == "APPROVED"
+    assert captured["payload"]["max_tokens"] == MAX_COMPLETION_TOKENS  # type: ignore[index]
 
 
 # --- Decision Engine ----------------------------------------------------------------
