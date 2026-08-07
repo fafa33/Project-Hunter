@@ -18,11 +18,12 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-from hunter_governance_review.__main__ import run_review
+from hunter_governance_review.__main__ import _dedupe_error_lines, _write_summary, run_review
 from hunter_governance_review.chunking import DiffChunk
 from hunter_governance_review.contracts import (
     CHECK_CONTEXT,
     ChangedFile,
+    CoverageManifest,
     DeterministicResult,
     Finding,
     Outcome,
@@ -31,7 +32,7 @@ from hunter_governance_review.contracts import (
     Severity,
     outcome_to_check_state,
 )
-from hunter_governance_review.decision import decide
+from hunter_governance_review.decision import Decision, decide
 from hunter_governance_review.deterministic import ValidationContext, run_deterministic_engine
 from hunter_governance_review.github_api import GitHubError
 from hunter_governance_review.llm_audit import (
@@ -44,6 +45,7 @@ from hunter_governance_review.llm_audit import (
     LLMCallResult,
     ProviderConfig,
     ProviderHealth,
+    _completion_token_param_name,
     _preflight_provider,
     _resolve_providers,
     build_chunk_audit_prompt,
@@ -962,6 +964,70 @@ def test_run_llm_audit_sets_adaptive_max_tokens_and_response_format(monkeypatch:
     assert MIN_COMPLETION_TOKENS <= payload["max_tokens"] <= MAX_COMPLETION_TOKENS_CEILING  # type: ignore[index]
 
 
+@pytest.mark.parametrize(
+    "model",
+    ["gpt-5", "gpt-5-mini", "gpt-5-2025-08-07", "o1", "o1-mini", "o1-preview", "o3", "o3-mini", "o4-mini"],
+)
+def test_completion_token_param_name_uses_max_completion_tokens_for_reasoning_family(model: str) -> None:
+    """Regression test for the live incident: a real gpt-5-class slot 2
+    rejected `max_tokens` with `HTTP 400 unsupported_parameter`, requiring
+    `max_completion_tokens` instead."""
+    assert _completion_token_param_name(model) == "max_completion_tokens"
+
+
+@pytest.mark.parametrize(
+    "model",
+    ["test-model", "gemini-1.5-flash", "gemini-2.0-flash-exp", "gpt-4o", "gpt-4o-mini", "llama-3.3-70b-versatile"],
+)
+def test_completion_token_param_name_uses_max_tokens_for_every_other_model(model: str) -> None:
+    """Every other configured provider/model -- including Gemini's
+    OpenAI-compatibility endpoint (slot 1 in production today) -- keeps the
+    existing, unchanged `max_tokens` field."""
+    assert _completion_token_param_name(model) == "max_tokens"
+
+
+def test_run_llm_audit_sends_max_completion_tokens_for_gpt5_class_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    """End-to-end regression test for the exact live incident (PR #200,
+    slot 2): the actual request payload sent to a gpt-5-class model must use
+    `max_completion_tokens`, never the rejected `max_tokens` field."""
+    captured: dict[str, object] = {}
+
+    def _fake_urlopen(request: object, timeout: int) -> _FakeHTTPResponse:
+        captured["payload"] = json.loads(request.data.decode("utf-8"))  # type: ignore[attr-defined]
+        body = {
+            "choices": [
+                {
+                    "message": {
+                        "content": (
+                            '{"verdict": "APPROVED", "summary": "ok", "findings": [], "rationale": "r", '
+                            '"architectural_evidence": {}}'
+                        )
+                    },
+                    "finish_reason": "stop",
+                }
+            ]
+        }
+        return _FakeHTTPResponse(json.dumps(body).encode("utf-8"))
+
+    monkeypatch.setattr("hunter_governance_review.llm_audit.urllib.request.urlopen", _fake_urlopen)
+
+    chunk = DiffChunk(1, 1, ("a.py",), "@@ -1 +1 @@\n+ok")
+    result = run_llm_audit(
+        _env(HUNTER_LLM_MODEL="gpt-5"),
+        pair=_pair(),
+        pr=_pr(),
+        chunk=chunk,
+        context_brief="ctx",
+        deterministic_findings=[],
+        health=ProviderHealth(),
+    )
+
+    assert result.verdict.verdict == "APPROVED"
+    payload = captured["payload"]
+    assert "max_completion_tokens" in payload  # type: ignore[operator]
+    assert "max_tokens" not in payload  # type: ignore[operator]
+
+
 def test_run_llm_audit_fails_closed_on_truncated_completion(monkeypatch: pytest.MonkeyPatch) -> None:
     def _fake_urlopen(request: object, timeout: int) -> _FakeHTTPResponse:
         body = {"choices": [{"message": {"content": '{"verdict": "APPROVED"'}, "finish_reason": "length"}]}
@@ -1330,6 +1396,54 @@ def test_run_llm_audit_falls_back_to_second_provider_on_operational_failure(
     assert health.is_healthy(_slot_name(2))
 
 
+def test_run_llm_audit_gemini_failover_to_gpt5_uses_correct_param_for_each(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """End-to-end regression test for the full live incident (PR #200): slot
+    1 (a Gemini-class model) fails operationally with HTTP 503, failover
+    reaches slot 2 (a gpt-5-class model), and each slot's own request uses
+    the field name it actually requires -- `max_tokens` for slot 1,
+    `max_completion_tokens` for slot 2 -- so both providers remain fully
+    supported by the same request builder and failover itself is
+    unaffected by the request-shape fix."""
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    def _fake_urlopen(request: object, timeout: int) -> _FakeHTTPResponse:
+        auth = request.get_header("Authorization")  # type: ignore[attr-defined]
+        api_key = auth.removeprefix("Bearer ") if auth else ""
+        payload = json.loads(request.data.decode("utf-8"))  # type: ignore[attr-defined]
+        calls.append((api_key, payload))
+        if api_key == "gemini-key":
+            raise _http_error(503, b'{"error": {"message": "high demand", "status": "UNAVAILABLE"}}')
+        return _FakeHTTPResponse(_APPROVED_BODY)
+
+    monkeypatch.setattr("hunter_governance_review.llm_audit.urllib.request.urlopen", _fake_urlopen)
+
+    env = _provider_env(
+        HUNTER_LLM_API_KEY="gemini-key",
+        HUNTER_LLM_BASE_URL="https://generativelanguage.googleapis.com/v1beta/openai",
+        HUNTER_LLM_MODEL="gemini-1.5-flash",
+        HUNTER_LLM_API_KEY_2="openai-key",
+        HUNTER_LLM_BASE_URL_2="https://api.openai.com/v1",
+        HUNTER_LLM_MODEL_2="gpt-5",
+    )
+    health = ProviderHealth()
+    chunk = DiffChunk(1, 1, ("a.py",), "@@ -1 +1 @@\n+ok")
+    result = run_llm_audit(
+        env, pair=_pair(), pr=_pr(), chunk=chunk, context_brief="ctx", deterministic_findings=[], health=health
+    )
+
+    assert result.verdict.verdict == "APPROVED"
+    assert result.provider == _slot_name(2)
+    assert [c[0] for c in calls] == ["gemini-key", "openai-key"]  # deterministic slot order preserved
+    assert not health.is_healthy(_slot_name(1))
+    assert health.is_healthy(_slot_name(2))
+
+    gemini_payload, openai_payload = calls[0][1], calls[1][1]
+    assert "max_tokens" in gemini_payload and "max_completion_tokens" not in gemini_payload
+    assert "max_completion_tokens" in openai_payload and "max_tokens" not in openai_payload
+
+
 def test_run_llm_audit_falls_back_past_malformed_output_without_blacklisting(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1681,6 +1795,95 @@ def test_run_review_step_summary_never_contains_provider_secret_values(
     assert secret_2 not in summary_text
     # Provenance IS present -- just never the secret value itself.
     assert "slot 1" in summary_text or "slot 2" in summary_text
+
+
+def test_dedupe_error_lines_collapses_identical_text_but_keeps_every_reference() -> None:
+    """Regression test for the incident where 760 chunks failing with the
+    exact same provider-unavailable message exceeded GitHub's 1024 KiB
+    step-summary limit: identical error TEXT is reported once, but every
+    chunk reference that hit it is still listed -- no reference is dropped."""
+    errors = tuple(f"chunk {i}/761 (tests/x.py): no healthy configured provider remains" for i in range(2, 762))
+    lines = _dedupe_error_lines(errors, label="Chunk errors")
+    rendered = "\n".join(lines)
+    assert "760 total, 1 distinct error message(s)" in rendered
+    assert "no healthy configured provider remains" in rendered
+    # Every reference must still be recoverable from the rendered output,
+    # not silently discarded by deduplication.
+    assert "chunk 2/761" in rendered
+    assert "+" in rendered and "more" in rendered  # long reference lists are capped, not dropped
+
+
+def test_dedupe_error_lines_keeps_genuinely_distinct_errors_separate() -> None:
+    errors = (
+        "chunk 1/3 (a.py): HTTP 503 unavailable",
+        "chunk 2/3 (b.py): HTTP 503 unavailable",
+        "chunk 3/3 (c.py): HTTP 400 bad request",
+    )
+    lines = _dedupe_error_lines(errors, label="Chunk errors")
+    rendered = "\n".join(lines)
+    assert "3 total, 2 distinct error message(s)" in rendered
+    assert "2x: HTTP 503 unavailable" in rendered
+    assert "1x: HTTP 400 bad request" in rendered
+
+
+def test_dedupe_error_lines_empty_input_returns_empty_list() -> None:
+    assert _dedupe_error_lines((), label="Chunk errors") == []
+
+
+def test_write_summary_stays_under_github_step_summary_limit_for_mass_identical_failures(
+    tmp_path: Path,
+) -> None:
+    """End-to-end regression test for the exact incident: hundreds of chunks
+    failing with identical text must never make the written step summary
+    exceed GitHub's 1024 KiB ($GITHUB_STEP_SUMMARY) limit, and the decision
+    outcome/reason must still be present and un-truncated (truncation, if it
+    ever triggers, may only ever cut the verbose tail)."""
+    chunk_errors = tuple(
+        f"chunk {i}/761 (tests/test_hunter_governance_review.py): no healthy configured provider remains "
+        "for this run: slot 1 (HUNTER_LLM_API_KEY): marked unhealthy -- HTTP 503; "
+        "slot 2 (HUNTER_LLM_API_KEY_2): marked unhealthy -- HTTP 400 unsupported_parameter"
+        for i in range(2, 762)
+    )
+    coverage = CoverageManifest(
+        total_files=21,
+        total_chunks=761,
+        chunks_reviewed=1,
+        chunks_failed=760,
+        chunk_errors=chunk_errors,
+        files_covered=("tests/test_hunter_governance_review.py",),
+        files_missing_from_diff=(),
+        diff_bytes_total=500_000,
+        diff_bytes_covered=0,
+    )
+    summary = tmp_path / "summary.md"
+    _write_summary(
+        {"GITHUB_STEP_SUMMARY": str(summary)},
+        decision=Decision(Outcome.REVIEW_FAILED, "760/761 diff chunk(s) failed or were not reviewed"),
+        pair=ReviewPair(
+            repository="fafa33/Project-Hunter",
+            pull_request_number=200,
+            source_branch="feat/x",
+            source_head_sha="1f6027b8e188d9907cac281670f75539a8dd7ebe",
+            target_branch="main",
+            target_base_sha="4c12fee5e188140e411cdef5b6073af9eddd371d",
+            workflow_run_id="123",
+            review_timestamp="2026-08-07T00:00:00+00:00",
+        ),
+        deterministic=DeterministicResult(),
+        audit=None,
+        coverage=coverage,
+        context=None,
+        document_review=None,
+        used_providers=(),
+        provider_events=(),
+        published_state="failure",
+    )
+    written = summary.read_bytes()
+    assert len(written) <= 1024 * 1024, f"step summary is {len(written)} bytes, exceeds GitHub's 1024 KiB limit"
+    text = written.decode("utf-8")
+    assert "REVIEW_FAILED" in text
+    assert "760/761 diff chunk(s) failed or were not reviewed" in text
+    assert "760 total, 1 distinct error message(s)" in text
 
 
 # --- Decision Engine -------------------------------------------------------------------

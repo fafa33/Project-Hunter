@@ -646,6 +646,37 @@ def parse_audit_response(raw: str) -> AuditVerdict:
     return validate_audit_payload(payload)
 
 
+# Every configured provider speaks the OpenAI-compatible chat-completions
+# schema, but the field name for the output-token cap is not actually
+# uniform across it: OpenAI's newer reasoning-family models (o1/o3/o4,
+# gpt-5) reject the historical `max_tokens` field outright and require
+# `max_completion_tokens` instead -- confirmed live against a real
+# gpt-5-class slot: `HTTP 400 {"error": {"message": "Unsupported parameter:
+# 'max_tokens' is not supported with this model. Use 'max_completion_tokens'
+# instead.", "type": "invalid_request_error", "param": "max_tokens", "code":
+# "unsupported_parameter"}}`. This is a genuine per-model request-shape
+# difference in one real provider's own API, not a vendor default or
+# endpoint choice (base URL, key, and model remain fully operator-supplied,
+# per this module's provider-neutral design) -- so it is resolved here,
+# deterministically, by model name, and never by trial-and-error retry
+# (which would add a retry path this module deliberately does not have --
+# see `_call_chat_completion_once`'s own docstring on why).
+_MAX_COMPLETION_TOKENS_MODEL_PREFIXES: tuple[str, ...] = ("gpt-5", "o1", "o3", "o4")
+
+
+def _completion_token_param_name(model: str) -> str:
+    """The chat-completions request field this model expects for its
+    output-token cap: ``"max_completion_tokens"`` for OpenAI's newer
+    reasoning-family models (which reject ``"max_tokens"`` outright),
+    ``"max_tokens"`` for every other configured provider/model (unchanged
+    behavior -- e.g. Gemini's OpenAI-compatibility endpoint, still tried
+    first as slot 1, is unaffected by this)."""
+    normalized = model.strip().lower()
+    if any(normalized.startswith(prefix) for prefix in _MAX_COMPLETION_TOKENS_MODEL_PREFIXES):
+        return "max_completion_tokens"
+    return "max_tokens"
+
+
 def _call_chat_completion_once(
     provider: ProviderConfig,
     system_prompt: str,
@@ -676,7 +707,7 @@ def _call_chat_completion_once(
             {"role": "user", "content": prompt},
         ],
         "temperature": 0.1,
-        "max_tokens": max_tokens,
+        _completion_token_param_name(provider.model): max_tokens,
         # Prefer the provider's structured-output control where supported
         # (standard OpenAI-compatible field, widely but not universally
         # supported by OpenAI-compatible endpoints). This does not by
