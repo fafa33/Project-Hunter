@@ -545,8 +545,17 @@ def run_review(
                 outcomes.append(
                     ChunkOutcome(chunk.index, chunk.total, chunk.files, result.verdict, None, result.provider)
                 )
+                # Pure observability: a large diff's sequential review can
+                # run for many minutes with nothing else printed (the full
+                # error text stays in `outcomes`/coverage.chunk_errors,
+                # surfaced once, deduplicated, in the final summary --
+                # never repeated here) -- see the incident where a run was
+                # silently killed by the job timeout with no visibility
+                # into how far it had actually gotten.
+                print(f"[Progress] chunk {chunk.index}/{chunk.total} reviewed (provider={result.provider})")
             except LLMAuditError as exc:
                 outcomes.append(ChunkOutcome(chunk.index, chunk.total, chunk.files, None, str(exc), None))
+                print(f"[Progress] chunk {chunk.index}/{chunk.total} failed: {exc.__class__.__name__}")
         expected_files = {f.filename for f in files}
         missing_from_diff = tuple(sorted(expected_files - covered_filenames(chunks)))
         aggregation = aggregate_chunk_outcomes(
@@ -628,9 +637,17 @@ def run_review(
                                 section.index, section.total, section.files, result.verdict, None, result.provider
                             )
                         )
+                        print(
+                            f"[Progress] {document_path} section {section.index}/{section.total} reviewed "
+                            f"(provider={result.provider})"
+                        )
                     except LLMAuditError as exc:
                         document_outcomes.append(
                             ChunkOutcome(section.index, section.total, section.files, None, str(exc), None)
+                        )
+                        print(
+                            f"[Progress] {document_path} section {section.index}/{section.total} failed: "
+                            f"{exc.__class__.__name__}"
                         )
             document_review_result: AggregatedDocumentReview = aggregate_document_chunk_outcomes(
                 document_outcomes,

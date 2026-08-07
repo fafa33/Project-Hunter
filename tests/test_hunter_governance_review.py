@@ -18,6 +18,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
+import yaml
 from hunter_governance_review.__main__ import _dedupe_error_lines, _write_summary, run_review
 from hunter_governance_review.chunking import DiffChunk
 from hunter_governance_review.contracts import (
@@ -2650,3 +2651,76 @@ def test_run_review_document_review_skipped_when_diff_coverage_already_incomplet
     assert code == 0
     assert gh.statuses[0]["state"] == "failure"
     assert document_review.calls == []
+
+
+# --- Job timeout / progress observability ----------------------------------------------
+
+
+def test_hunter_governance_review_job_timeout_has_safe_headroom() -> None:
+    """Regression test for a real cancellation (PR #200, run 31175014693,
+    head bf44c7d): a large diff (792 chunks) ran the full 30-minute job
+    timeout with no error before GitHub's own runner killed it -- not a
+    hang, not a provider failure. GitHub-hosted runners support up to 360
+    minutes; this asserts the configured value has real headroom above the
+    30 minutes already proven insufficient, so a future edit cannot
+    silently regress it back down."""
+    workflow_path = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "hunter-governance-review.yml"
+    workflow = yaml.safe_load(workflow_path.read_text(encoding="utf-8"))
+    timeout_minutes = workflow["jobs"]["governance-review"]["timeout-minutes"]
+    assert timeout_minutes >= 60, (
+        f"timeout-minutes is {timeout_minutes}, which does not have safe headroom above the 30 minutes "
+        "already proven insufficient by a real cancellation"
+    )
+    assert timeout_minutes <= 360, "GitHub-hosted runners do not support a job timeout above 360 minutes"
+
+
+def test_run_review_prints_per_chunk_progress(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression test for the same incident: the reviewed process printed
+    NOTHING to the console for the full 30 minutes it ran before being
+    silently killed, making it impossible to tell whether it was
+    progressing or stuck. Every chunk's outcome (success or failure) must
+    now be visible immediately as it happens, not only in the final
+    summary produced after the whole review completes."""
+
+    class _MixedChunkLlmRunner:
+        def __call__(
+            self,
+            env: dict[str, str],
+            *,
+            pair: ReviewPair,
+            pr: PullRequest,
+            chunk: DiffChunk,
+            context_brief: str,
+            deterministic_findings: list[Finding],
+            health: ProviderHealth,
+            timeout: int = 120,
+        ) -> LLMCallResult:
+            if chunk.index == 2:
+                raise LLMAuditError("simulated failure")
+            return LLMCallResult(
+                verdict=AuditVerdict(verdict="APPROVED", summary="ok", findings=[], rationale="r"),
+                provider="fake-provider",
+            )
+
+    # Force the two files into genuinely separate chunks -- see the
+    # identical technique in
+    # test_run_review_cross_chunk_contradiction_detected_via_structured_evidence_not_prose_summary.
+    monkeypatch.setattr("hunter_governance_review.__main__.estimate_chunk_diff_budget", lambda **kwargs: 150)
+
+    gh = FakeGhRunner(files=[CODE_FILE, ChangedFile("src/b.py", "modified", 1, 1)], diff=_multi_chunk_diff())
+    summary = tmp_path / "summary.md"
+    code = run_review(
+        args=_args(),
+        env=_env(GITHUB_STEP_SUMMARY=str(summary)),
+        gh=gh,
+        llm_runner=_MixedChunkLlmRunner(),
+        synthesis_runner=FakeSynthesisRunner(),
+        document_review_runner=FakeDocumentReviewRunner(),
+    )
+
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "[Progress] chunk 1/2 reviewed (provider=fake-provider)" in out
+    assert "[Progress] chunk 2/2 failed: LLMAuditError" in out

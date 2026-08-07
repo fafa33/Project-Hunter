@@ -55,7 +55,18 @@ jobs:
   governance-review:
     name: Hunter Governance Review
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Proven cause of a real cancellation (PR #200, run 31175014693, head
+    # bf44c7d): a large diff (792 chunks after fixing the two OpenAI
+    # request-shape incompatibilities that were previously failing fast)
+    # ran the full 30 minutes with no error before GitHub's own job timeout
+    # killed it ("Terminate orphan process ... (python)") -- not a hang,
+    # not a provider failure, not a code defect; the sequential per-chunk
+    # review genuinely needed more wall-clock time than 30 minutes allowed.
+    # 120 is a bounded, evidence-informed increase (GitHub-hosted runners
+    # support up to 360 minutes) -- generous headroom for ordinary PRs,
+    # which have far fewer chunks than this gate's own unusually large
+    # self-installation diff, without being unbounded.
+    timeout-minutes: 120
 
     steps:
       - name: Checkout trusted gate engine (default branch)
