@@ -14,6 +14,15 @@ name: Provider Slot 2 Connectivity Check (temporary diagnostic)
 # ${{ secrets.* }} value from step logs regardless of how it is used below.
 
 on:
+  # workflow_dispatch only becomes callable via the API once a workflow
+  # file exists on the default branch; this is a temporary, non-default
+  # branch, so `push` (which GitHub evaluates directly from the pushed
+  # ref) is used instead, scoped to this one diagnostic branch only.
+  push:
+    branches:
+      - claude/pr-200-post-outage-df9rew
+    paths:
+      - .github/workflows/tmp-provider-slot2-connectivity-check.yml
   workflow_dispatch: {}
 
 permissions:
