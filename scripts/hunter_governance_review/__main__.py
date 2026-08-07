@@ -210,6 +210,57 @@ def build_status_description(decision: Decision, pair: ReviewPair) -> str:
     return text[:140]
 
 
+# GitHub rejects a single step's total $GITHUB_STEP_SUMMARY write once it
+# exceeds 1024 KiB (1,048,576 bytes) -- see
+# https://docs.github.com/actions/using-workflows/workflow-commands-for-github-actions#adding-a-markdown-summary.
+# This budget is kept safely under that hard limit so the truncation marker
+# itself (appended after the cut) never pushes the file back over.
+_SUMMARY_BYTE_BUDGET = 900_000
+
+
+def _dedupe_error_lines(errors: tuple[str, ...], *, label: str) -> list[str]:
+    """Render a per-chunk/per-section error list compactly for the step
+    summary: identical error TEXT is reported once, with every chunk/section
+    reference that hit it listed alongside it, instead of repeating the full
+    text per occurrence.
+
+    This is a rendering change only -- no error text and no chunk/section
+    reference is dropped, deduplication never changes which chunks/sections
+    are counted as failed (``coverage``/``document_review`` manifests are
+    unaffected), and the full run log still prints every occurrence
+    verbatim, untouched by this function. It exists because a single
+    provider/coverage failure early in a large review (e.g. every configured
+    provider becoming unhealthy) typically produces hundreds of chunks whose
+    error text is byte-for-byte identical, which is what actually exceeds
+    GitHub's step-summary size limit -- not a large number of genuinely
+    distinct errors.
+    """
+    if not errors:
+        return []
+    groups: dict[str, list[str]] = {}
+    order: list[str] = []
+    for raw in errors:
+        # Each entry is "<chunk/section reference>: <error text>" (see
+        # aggregate.py's chunk_errors/section_errors construction). Splitting
+        # on only the FIRST ": " isolates the reference even though the
+        # error text itself commonly contains further colons.
+        ref, sep, text = raw.partition(": ")
+        if not sep:
+            ref, text = "?", raw
+        if text not in groups:
+            groups[text] = []
+            order.append(text)
+        groups[text].append(ref)
+    lines = [f"- **{label}** ({len(errors)} total, {len(groups)} distinct error message(s)):"]
+    for text in order:
+        refs = groups[text]
+        shown = ", ".join(refs[:20])
+        more = f", +{len(refs) - 20} more" if len(refs) > 20 else ""
+        lines.append(f"  - {len(refs)}x: {text}")
+        lines.append(f"    affected: {shown}{more}")
+    return lines
+
+
 def _write_summary(
     env: Mapping[str, str],
     *,
@@ -251,8 +302,7 @@ def _write_summary(
     )
     lines.append(f"- **Diff bytes**: {coverage.diff_bytes_covered}/{coverage.diff_bytes_total} covered")
     if coverage.chunk_errors:
-        lines.append("- **Chunk errors**:")
-        lines.extend(f"  - {err}" for err in coverage.chunk_errors)
+        lines.extend(_dedupe_error_lines(coverage.chunk_errors, label="Chunk errors"))
     if coverage.files_missing_from_diff:
         lines.append("- **Files missing from diff**: " + ", ".join(coverage.files_missing_from_diff))
     if context is not None:
@@ -280,8 +330,7 @@ def _write_summary(
             "(never retrieved-only ranges)"
         )
         if document_review.chunk_errors:
-            lines.append("- **Section errors**:")
-            lines.extend(f"  - {err}" for err in document_review.chunk_errors)
+            lines.extend(_dedupe_error_lines(document_review.chunk_errors, label="Section errors"))
     if used_providers or provider_events:
         lines.append("")
         lines.append("### Provider execution")
@@ -311,8 +360,23 @@ def _write_summary(
         if audit.rationale:
             lines.append("")
             lines.append(f"**Rationale**: {audit.rationale}")
+    body = "\n".join(lines) + "\n"
+    body_bytes = body.encode("utf-8")
+    if len(body_bytes) > _SUMMARY_BYTE_BUDGET:
+        # Defensive backstop for a review with enough genuinely distinct
+        # errors that deduplication alone does not fit the budget. The
+        # decision, reason, and coverage-count lines are always written
+        # first (above), so this can only ever truncate the verbose findings
+        # tail -- never the outcome itself. Nothing is lost: the full,
+        # untruncated text is still in the run's own log output, which has
+        # no size limit.
+        truncated = body_bytes[:_SUMMARY_BYTE_BUDGET].decode("utf-8", errors="ignore")
+        body = (
+            truncated + "\n\n... [step summary truncated to stay under GitHub's 1024 KiB limit; "
+            "the complete, untruncated detail is in this run's own log output] ...\n"
+        )
     with open(summary_path, "a", encoding="utf-8") as handle:
-        handle.write("\n".join(lines) + "\n")
+        handle.write(body)
 
 
 def _resolve_pair_freshness(
