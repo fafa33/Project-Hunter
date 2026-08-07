@@ -87,26 +87,29 @@ jobs:
       # this run completes is written to CHECKPOINT_DIR immediately; this
       # cache step is what makes that durable ACROSS separate workflow runs
       # (a fresh container each time), not merely within one run. The cache
-      # key is scoped to this exact PR/head/base -- it never mixes progress
-      # across different diffs -- and is intentionally unique per run
+      # key is scoped to this PR/head -- it is intentionally unique per run
       # attempt (suffixed with run id/attempt) so the automatic post-job
       # save step below always uploads this run's updated progress; the
       # `restore-keys` prefix match is what finds the most recent prior
-      # attempt's checkpoint for the SAME pull request/head/base to resume
-      # from. The engine itself (checkpoint.py) independently re-verifies
-      # head SHA, base SHA, and a review-semantics version before trusting
-      # anything restored here, so an imprecise or stale cache hit can only
-      # ever cost a wasted restore, never an incorrect verdict.
+      # attempt's checkpoint for the SAME pull request/head to resume from.
+      # Base SHA is deliberately NOT part of this key: github.event.pull_
+      # request.base.sha is only populated for pull_request-triggered runs,
+      # not workflow_dispatch (a manual rerun would otherwise always miss
+      # the cache another trigger type populated, permanently losing resume
+      # for that path -- confirmed live). The engine itself (checkpoint.py)
+      # independently re-verifies repository, PR number, head SHA, base SHA,
+      # PR title/body, and a review-semantics version before trusting
+      # anything restored here, so an imprecise or stale cache hit here can
+      # only ever cost a wasted restore, never an incorrect verdict.
       - name: Restore/save Hunter Governance Review chunk checkpoint
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ${{ github.workspace }}/.hunter_governance_checkpoint
           key: >-
             hunter-gov-checkpoint-v1-${{ github.event.pull_request.number || github.event.inputs.pr_number }}-${{
-            github.event.pull_request.head.sha || github.sha }}-${{ github.event.pull_request.base.sha || 'dispatch'
-            }}-${{ github.run_id }}-${{ github.run_attempt }}
+            github.event.pull_request.head.sha || github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
-            hunter-gov-checkpoint-v1-${{ github.event.pull_request.number || github.event.inputs.pr_number }}-${{ github.event.pull_request.head.sha || github.sha }}-${{ github.event.pull_request.base.sha || 'dispatch' }}-
+            hunter-gov-checkpoint-v1-${{ github.event.pull_request.number || github.event.inputs.pr_number }}-${{ github.event.pull_request.head.sha || github.sha }}-
 
       - name: Run Hunter Governance Review
         env:
