@@ -647,34 +647,47 @@ def parse_audit_response(raw: str) -> AuditVerdict:
 
 
 # Every configured provider speaks the OpenAI-compatible chat-completions
-# schema, but the field name for the output-token cap is not actually
-# uniform across it: OpenAI's newer reasoning-family models (o1/o3/o4,
-# gpt-5) reject the historical `max_tokens` field outright and require
-# `max_completion_tokens` instead -- confirmed live against a real
-# gpt-5-class slot: `HTTP 400 {"error": {"message": "Unsupported parameter:
-# 'max_tokens' is not supported with this model. Use 'max_completion_tokens'
-# instead.", "type": "invalid_request_error", "param": "max_tokens", "code":
-# "unsupported_parameter"}}`. This is a genuine per-model request-shape
-# difference in one real provider's own API, not a vendor default or
-# endpoint choice (base URL, key, and model remain fully operator-supplied,
-# per this module's provider-neutral design) -- so it is resolved here,
-# deterministically, by model name, and never by trial-and-error retry
-# (which would add a retry path this module deliberately does not have --
-# see `_call_chat_completion_once`'s own docstring on why).
-_MAX_COMPLETION_TOKENS_MODEL_PREFIXES: tuple[str, ...] = ("gpt-5", "o1", "o3", "o4")
+# schema, but two request fields are not actually uniform across it: OpenAI's
+# newer reasoning-family models (o1/o3/o4, gpt-5) reject two fields this
+# module previously sent unconditionally to every provider, confirmed live
+# against a real gpt-5-class slot:
+#
+#   1. the output-token cap field name -- `HTTP 400 {"error": {"message":
+#      "Unsupported parameter: 'max_tokens' is not supported with this
+#      model. Use 'max_completion_tokens' instead.", "type":
+#      "invalid_request_error", "param": "max_tokens", "code":
+#      "unsupported_parameter"}}`.
+#   2. a non-default `temperature` -- `HTTP 400 {"error": {"message":
+#      "Unsupported value: 'temperature' does not support 0.1 with this
+#      model. Only the default (1) value is supported.", "type":
+#      "invalid_request_error", "param": "temperature", "code":
+#      "unsupported_value"}}`.
+#
+# Both are genuine per-model request-shape differences in one real
+# provider's own API, not a vendor default or endpoint choice (base URL,
+# key, and model remain fully operator-supplied, per this module's
+# provider-neutral design) -- so both are resolved here, deterministically,
+# by model name, and never by trial-and-error retry (which would add a
+# retry path this module deliberately does not have -- see
+# `_call_chat_completion_once`'s own docstring on why).
+_OPENAI_REASONING_FAMILY_MODEL_PREFIXES: tuple[str, ...] = ("gpt-5", "o1", "o3", "o4")
+
+
+def _is_reasoning_family_model(model: str) -> bool:
+    """True for OpenAI's reasoning-family models (o1/o3/o4, gpt-5), which
+    reject `max_tokens` and any non-default `temperature` outright. False
+    for every other configured provider/model -- e.g. Gemini's
+    OpenAI-compatibility endpoint, still tried first as slot 1, is
+    unaffected by this."""
+    normalized = model.strip().lower()
+    return any(normalized.startswith(prefix) for prefix in _OPENAI_REASONING_FAMILY_MODEL_PREFIXES)
 
 
 def _completion_token_param_name(model: str) -> str:
     """The chat-completions request field this model expects for its
-    output-token cap: ``"max_completion_tokens"`` for OpenAI's newer
-    reasoning-family models (which reject ``"max_tokens"`` outright),
-    ``"max_tokens"`` for every other configured provider/model (unchanged
-    behavior -- e.g. Gemini's OpenAI-compatibility endpoint, still tried
-    first as slot 1, is unaffected by this)."""
-    normalized = model.strip().lower()
-    if any(normalized.startswith(prefix) for prefix in _MAX_COMPLETION_TOKENS_MODEL_PREFIXES):
-        return "max_completion_tokens"
-    return "max_tokens"
+    output-token cap: ``"max_completion_tokens"`` for a reasoning-family
+    model, ``"max_tokens"`` otherwise (unchanged behavior)."""
+    return "max_completion_tokens" if _is_reasoning_family_model(model) else "max_tokens"
 
 
 def _call_chat_completion_once(
@@ -700,13 +713,12 @@ def _call_chat_completion_once(
     unsupported completion, or a schema/validation failure) -- see each
     class's docstring for why the distinction matters to the caller.
     """
-    payload = {
+    payload: dict[str, object] = {
         "model": provider.model,
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": prompt},
         ],
-        "temperature": 0.1,
         _completion_token_param_name(provider.model): max_tokens,
         # Prefer the provider's structured-output control where supported
         # (standard OpenAI-compatible field, widely but not universally
@@ -716,6 +728,12 @@ def _call_chat_completion_once(
         # odds of non-JSON prose wrapping the verdict.
         "response_format": {"type": "json_object"},
     }
+    if not _is_reasoning_family_model(provider.model):
+        # A reasoning-family model rejects any non-default temperature
+        # outright (see the module-level comment above); every other
+        # configured provider/model keeps this unchanged, low-temperature
+        # setting for a deterministic, low-creativity hostile audit.
+        payload["temperature"] = 0.1
     request = urllib.request.Request(
         provider.base_url.rstrip("/") + "/chat/completions",
         data=json.dumps(payload).encode("utf-8"),

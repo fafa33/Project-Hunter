@@ -46,6 +46,7 @@ from hunter_governance_review.llm_audit import (
     ProviderConfig,
     ProviderHealth,
     _completion_token_param_name,
+    _is_reasoning_family_model,
     _preflight_provider,
     _resolve_providers,
     build_chunk_audit_prompt,
@@ -962,6 +963,7 @@ def test_run_llm_audit_sets_adaptive_max_tokens_and_response_format(monkeypatch:
     payload = captured["payload"]
     assert payload["response_format"] == {"type": "json_object"}  # type: ignore[index]
     assert MIN_COMPLETION_TOKENS <= payload["max_tokens"] <= MAX_COMPLETION_TOKENS_CEILING  # type: ignore[index]
+    assert payload["temperature"] == 0.1  # type: ignore[index]  # unchanged for a non-reasoning-family model
 
 
 @pytest.mark.parametrize(
@@ -984,6 +986,23 @@ def test_completion_token_param_name_uses_max_tokens_for_every_other_model(model
     OpenAI-compatibility endpoint (slot 1 in production today) -- keeps the
     existing, unchanged `max_tokens` field."""
     assert _completion_token_param_name(model) == "max_tokens"
+
+
+@pytest.mark.parametrize("model", ["gpt-5", "gpt-5-mini", "o1", "o1-mini", "o1-preview", "o3", "o3-mini", "o4-mini"])
+def test_is_reasoning_family_model_true_for_gpt5_and_o_series(model: str) -> None:
+    """Regression test for the live incident: a real gpt-5-class slot also
+    rejected a non-default `temperature` with `HTTP 400 unsupported_value`
+    ("Only the default (1) value is supported"), so this predicate gates
+    BOTH the token-cap field name and whether `temperature` is sent at
+    all -- see `_call_chat_completion_once`."""
+    assert _is_reasoning_family_model(model) is True
+
+
+@pytest.mark.parametrize(
+    "model", ["test-model", "gemini-1.5-flash", "gemini-2.0-flash-exp", "gpt-4o", "gpt-4o-mini", "llama-3.3-70b"]
+)
+def test_is_reasoning_family_model_false_for_gemini_and_every_other_model(model: str) -> None:
+    assert _is_reasoning_family_model(model) is False
 
 
 def test_run_llm_audit_sends_max_completion_tokens_for_gpt5_class_model(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1026,6 +1045,10 @@ def test_run_llm_audit_sends_max_completion_tokens_for_gpt5_class_model(monkeypa
     payload = captured["payload"]
     assert "max_completion_tokens" in payload  # type: ignore[operator]
     assert "max_tokens" not in payload  # type: ignore[operator]
+    # A reasoning-family model also rejects a non-default temperature
+    # ("Only the default (1) value is supported") -- omitted entirely
+    # rather than sent, so the provider's own default (1) applies.
+    assert "temperature" not in payload  # type: ignore[operator]
 
 
 def test_run_llm_audit_fails_closed_on_truncated_completion(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1402,10 +1425,11 @@ def test_run_llm_audit_gemini_failover_to_gpt5_uses_correct_param_for_each(
     """End-to-end regression test for the full live incident (PR #200): slot
     1 (a Gemini-class model) fails operationally with HTTP 503, failover
     reaches slot 2 (a gpt-5-class model), and each slot's own request uses
-    the field name it actually requires -- `max_tokens` for slot 1,
-    `max_completion_tokens` for slot 2 -- so both providers remain fully
-    supported by the same request builder and failover itself is
-    unaffected by the request-shape fix."""
+    exactly the fields it actually requires -- slot 1 keeps `max_tokens`
+    and its existing `temperature`, slot 2 uses `max_completion_tokens` and
+    omits `temperature` entirely -- so both providers remain fully
+    supported by the same request builder and failover itself (provider
+    order, health tracking) is unaffected by the request-shape fix."""
     calls: list[tuple[str, dict[str, object]]] = []
 
     def _fake_urlopen(request: object, timeout: int) -> _FakeHTTPResponse:
@@ -1442,6 +1466,11 @@ def test_run_llm_audit_gemini_failover_to_gpt5_uses_correct_param_for_each(
     gemini_payload, openai_payload = calls[0][1], calls[1][1]
     assert "max_tokens" in gemini_payload and "max_completion_tokens" not in gemini_payload
     assert "max_completion_tokens" in openai_payload and "max_tokens" not in openai_payload
+    # Gemini keeps its existing temperature; the gpt-5-class slot omits it
+    # entirely (it rejects any non-default value) -- Requirement: preserve
+    # Gemini's existing behavior unchanged while adapting GPT-5's.
+    assert gemini_payload.get("temperature") == 0.1
+    assert "temperature" not in openai_payload
 
 
 def test_run_llm_audit_falls_back_past_malformed_output_without_blacklisting(
