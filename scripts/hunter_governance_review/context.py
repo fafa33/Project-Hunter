@@ -1,13 +1,14 @@
 """Authoritative Repository Context Resolver.
 
-Resolves canonical governance documents and referenced ADRs/docs at the
+Confirms that the repository's canonical governance documents, and any
+ADR/ADPR record referenced by the pull request body, actually exist at the
 EXACT base commit via the GitHub Contents API -- never from whatever
 happens to be checked out locally. The gate engine's own checkout
 (``--root``) is a single shallow checkout of the default branch made once
 per workflow run; it is not guaranteed to be pinned to the exact recorded
-``ReviewPair.target_base_sha`` for every validator that reads it. Resolving
-via the API against the exact SHA closes that gap and produces a
-deterministic, auditable manifest of every document actually consulted.
+``ReviewPair.target_base_sha``. Resolving via the API against the exact SHA
+closes that gap and produces a deterministic, auditable manifest of every
+document actually consulted.
 
 The document set is not hardcoded: the canonical hierarchy is parsed
 directly out of ``docs/CANONICAL_ARCHITECTURE_MAP.md``'s own numbered
@@ -17,10 +18,15 @@ without a code change -- per that document's own Maintenance Rule.
 
 Fail-closed: any document from the canonical hierarchy that cannot be
 retrieved at the exact base SHA raises ``ContextResolutionError``, which the
-caller must map to ``REVIEW_FAILED``. Documents referenced only in the PR
-body (ADRs, other docs) are optional context: missing ones are recorded in
-the manifest but do not by themselves fail the review -- the deterministic
-V-070 validator already blocks a PR that references a non-existent ADR.
+caller must map to ``REVIEW_FAILED`` -- required repository evidence is
+missing. Documents referenced only in the PR body (ADRs, other docs) are
+optional context: missing ones are recorded in the manifest but do not by
+themselves fail the review -- the deterministic V-070 validator already
+blocks a PR that references a non-existent ADR/ADPR.
+
+This module only confirms EXISTENCE and records provenance (path, ref,
+sha256, byte length) -- it never builds prompt text or a bounded excerpt,
+since nothing downstream of it consumes document content anymore.
 """
 
 from __future__ import annotations
@@ -33,28 +39,6 @@ from typing import Protocol
 from hunter_governance_review.contracts import ContextEntry, ContextManifest
 
 CANONICAL_MAP_PATH = "docs/CANONICAL_ARCHITECTURE_MAP.md"
-DEFAULT_EXCERPT_CHARS = 900
-# Sized against the real canonical hierarchy, not guessed: as of this
-# writing, docs/CANONICAL_ARCHITECTURE_MAP.md lists 12 mandatory documents,
-# and fetching every one of them at the exact base commit and summing
-# (header + min(len(content), DEFAULT_EXCERPT_CHARS)) for each measures
-# exactly 11,758 characters for their full, uncut excerpts to all fit
-# together. A smaller budget (2,000 was tried first) meant most of those 12
-# mandatory documents were squeezed to zero characters by the total-budget
-# pass on every real run, which correctly -- but uselessly -- fails the
-# review closed every time (confirmed live, workflow run 31094837347) rather
-# than the rare, genuine "required authority cannot fit" case this
-# fail-closed check exists for. This budget is deliberately proportioned so
-# the CURRENT real hierarchy fits in full with headroom; if governance adds
-# enough further mandatory documents to exceed it, later documents are
-# truncated (never silently, and never below the mandatory floor of zero --
-# see resolve_context) before this budget would need raising again. This is
-# a known, accepted limit of correcting the accounting, not a general
-# Context Intelligence Layer (out of scope -- see docs/HUNTER_GOVERNANCE_REVIEW.md).
-# llm_audit.PROMPT_TOKEN_BUDGET was raised alongside this so the per-chunk
-# diff budget does not collapse back into the chunk-count/rate-limit
-# fragility the prior round's smaller context budget was chosen to avoid.
-DEFAULT_TOTAL_CHAR_BUDGET = 12_500
 
 _NUMBERED_LINE_PATTERN = re.compile(r"^\d+\.\s")
 _BACKTICK_PATTERN = re.compile(r"`([^`]+)`")
@@ -108,7 +92,6 @@ def resolve_referenced_records(
     *,
     base_sha: str,
     pr_body: str,
-    excerpt_chars: int = DEFAULT_EXCERPT_CHARS,
 ) -> tuple[list[tuple[ContextEntry, str]], list[str]]:
     """Resolve every ADR/ADPR number referenced in the PR body at the exact base SHA.
 
@@ -119,9 +102,9 @@ def resolve_referenced_records(
     the module docstring).
 
     Returns ``(resolved, missing_references)`` where ``resolved`` pairs each
-    entry with its actual fetched content (so callers can build a real
-    excerpt, not just a hash); ``missing_references`` lists each unresolved
-    reference exactly as V-070 reports it (e.g. ``"ADR 0028"``,
+    entry with its actual fetched content (so callers can record a real
+    sha256, not just existence); ``missing_references`` lists each
+    unresolved reference exactly as V-070 reports it (e.g. ``"ADR 0028"``,
     ``"ADPR-0012"``).
     """
     resolved: list[tuple[ContextEntry, str]] = []
@@ -138,7 +121,7 @@ def resolve_referenced_records(
             missing.append(label)
             return
         digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
-        entry = ContextEntry(path, base_sha, False, "resolved", digest, len(content), min(len(content), excerpt_chars))
+        entry = ContextEntry(path, base_sha, False, "resolved", digest, len(content))
         resolved.append((entry, content))
 
     adpr_numbers = sorted(set(_ADPR_PATTERN.findall(pr_body)))
@@ -156,52 +139,23 @@ def resolve_referenced_records(
     return resolved, sorted(set(missing))
 
 
-def resolve_context(
-    resolver: FileResolver,
-    *,
-    base_sha: str,
-    pr_body: str,
-    excerpt_chars: int = DEFAULT_EXCERPT_CHARS,
-    total_char_budget: int = DEFAULT_TOTAL_CHAR_BUDGET,
-) -> ContextManifest:
-    """Resolve authoritative governance context at the exact base commit.
+def resolve_context(resolver: FileResolver, *, base_sha: str, pr_body: str) -> ContextManifest:
+    """Confirm required repository evidence exists at the exact base commit.
 
     Raises ``ContextResolutionError`` if the canonical map itself, or any
-    document its hierarchy lists, cannot be retrieved at ``base_sha`` -- or if
-    a document *was* retrieved but the total prompt budget left zero room for
-    it, for a document the hierarchy marks mandatory (required authority that
-    cannot fit fails closed rather than being silently omitted while its
-    manifest entry still claims "resolved").
-
-    Every ``ContextEntry.included_chars`` reports the exact number of
-    characters of that document's content that made it into ``brief`` --
-    never an amount that was merely *attempted* before the total budget was
-    applied. The included range is always ``[0, included_chars)`` from the
-    start of the document (excerpts are never taken from the middle or end).
+    document its hierarchy lists, cannot be retrieved at ``base_sha`` --
+    required repository evidence is missing, which the caller maps to
+    ``REVIEW_FAILED``.
     """
     entries: list[ContextEntry] = []
-    # (path, ref, mandatory, sha256, byte_length, full_excerpt_with_header,
-    #  header_length) for every successfully resolved document, in the exact
-    # order they will compete for the total budget below.
-    resolved: list[tuple[str, str, bool, str, int, str, int]] = []
-    # Full (uncut) text of every mandatory document -- separate from the
-    # bounded excerpt above, so a caller can losslessly review it in full
-    # (see chunking.split_document_into_chunks).
-    mandatory_texts: list[tuple[str, str]] = []
 
     def _resolve(pending: _PendingEntry) -> str | None:
         content = resolver.get_file_content(pending.path, pending.ref)
         if content is None:
-            entries.append(ContextEntry(pending.path, pending.ref, pending.mandatory, "missing", "", 0, 0))
+            entries.append(ContextEntry(pending.path, pending.ref, pending.mandatory, "missing", "", 0))
             return None
         digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
-        excerpt_content = content[:excerpt_chars]
-        header = f"--- {pending.path} (base {pending.ref[:12]}, sha256 {digest[:12]}) ---\n"
-        resolved.append(
-            (pending.path, pending.ref, pending.mandatory, digest, len(content), header + excerpt_content, len(header))
-        )
-        if pending.mandatory:
-            mandatory_texts.append((pending.path, content))
+        entries.append(ContextEntry(pending.path, pending.ref, pending.mandatory, "resolved", digest, len(content)))
         return content
 
     map_text = _resolve(_PendingEntry(CANONICAL_MAP_PATH, base_sha, mandatory=True))
@@ -228,60 +182,15 @@ def resolve_context(
             + ", ".join(missing_mandatory)
         )
 
-    already_resolved_paths = {item[0] for item in resolved}
+    already_resolved_paths = {e.path for e in entries}
     for path in extract_doc_references(pr_body):
         if path in already_resolved_paths:
             continue
         _resolve(_PendingEntry(path, base_sha, mandatory=False))
         already_resolved_paths.add(path)
 
-    resolved_records, missing_references = resolve_referenced_records(
-        resolver, base_sha=base_sha, pr_body=pr_body, excerpt_chars=excerpt_chars
-    )
-    for record_entry, content in resolved_records:
-        excerpt_content = content[:excerpt_chars]
-        header = f"--- {record_entry.path} (base {record_entry.ref[:12]}, sha256 {record_entry.sha256[:12]}) ---\n"
-        resolved.append(
-            (
-                record_entry.path,
-                record_entry.ref,
-                record_entry.mandatory,
-                record_entry.sha256,
-                record_entry.byte_length,
-                header + excerpt_content,
-                len(header),
-            )
-        )
+    resolved_records, missing_references = resolve_referenced_records(resolver, base_sha=base_sha, pr_body=pr_body)
+    for record_entry, _content in resolved_records:
+        entries.append(record_entry)
 
-    # Apply the total prompt-budget pass, tracking the EXACT number of
-    # content characters (excluding the header line) each document actually
-    # contributed to ``brief`` -- this is the only place ``included_chars``
-    # is decided; nothing upstream may claim a larger figure.
-    budget = total_char_budget
-    bounded_pieces: list[str] = []
-    for path, ref, mandatory, digest, byte_length, full_excerpt, header_length in resolved:
-        if budget <= 0:
-            included_chars = 0
-        else:
-            piece = full_excerpt[:budget]
-            bounded_pieces.append(piece)
-            included_chars = max(0, len(piece) - header_length)
-            budget -= len(piece)
-        entries.append(ContextEntry(path, ref, mandatory, "resolved", digest, byte_length, included_chars))
-
-    zeroed_mandatory = [e.path for e in entries if e.mandatory and e.status == "resolved" and e.included_chars == 0]
-    if zeroed_mandatory:
-        raise ContextResolutionError(
-            "required canonical document(s) were retrieved but did not fit the context prompt budget "
-            f"(total_char_budget={total_char_budget} chars) and were entirely omitted from the prompt: "
-            + ", ".join(zeroed_mandatory)
-        )
-
-    brief = "\n\n".join(bounded_pieces)
-
-    return ContextManifest(
-        entries=tuple(entries),
-        brief=brief,
-        missing_references=tuple(missing_references),
-        mandatory_document_texts=tuple(mandatory_texts),
-    )
+    return ContextManifest(entries=tuple(entries), missing_references=tuple(missing_references))

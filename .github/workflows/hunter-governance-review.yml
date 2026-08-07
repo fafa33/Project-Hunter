@@ -3,12 +3,23 @@ name: Hunter Governance Review
 # Mandatory fail-closed merge gate for pull requests targeting protected
 # branches. See docs/HUNTER_GOVERNANCE_REVIEW.md.
 #
+# This gate is entirely deterministic, repository-native, and CI-native: it
+# validates the pull request against the repository's canonical governance
+# rules and confirms required repository evidence (canonical documents,
+# referenced ADR/ADPR records) exists at the exact base commit. It never
+# calls an external LLM or any other network service besides GitHub itself,
+# requires no API key or provider secret, and makes zero paid or external
+# API calls. No external provider's availability, quota, billing state, or
+# API error can ever block or approve a merge -- only a genuine
+# deterministic governance violation or missing required repository
+# evidence can.
+#
 # Security notes:
 # - Uses the plain `pull_request` event (never `pull_request_target`).
 # - The gate engine is checked out from the DEFAULT branch only; code from the
 #   pull request under review is never checked out or executed.
-# - The engine reads PR metadata, changed files, and the diff via the GitHub
-#   API and publishes exactly one commit status check: "Hunter Governance Review".
+# - The engine reads PR metadata and changed files via the GitHub API and
+#   publishes exactly one commit status check: "Hunter Governance Review".
 # - Minimal permissions: contents read, pull-requests read, statuses write.
 #   The gate never writes PR comments and never runs untrusted code.
 #
@@ -55,18 +66,13 @@ jobs:
   governance-review:
     name: Hunter Governance Review
     runs-on: ubuntu-latest
-    # Proven cause of a real cancellation (PR #200, run 31175014693, head
-    # bf44c7d): a large diff (792 chunks after fixing the two OpenAI
-    # request-shape incompatibilities that were previously failing fast)
-    # ran the full 30 minutes with no error before GitHub's own job timeout
-    # killed it ("Terminate orphan process ... (python)") -- not a hang,
-    # not a provider failure, not a code defect; the sequential per-chunk
-    # review genuinely needed more wall-clock time than 30 minutes allowed.
-    # 120 is a bounded, evidence-informed increase (GitHub-hosted runners
-    # support up to 360 minutes) -- generous headroom for ordinary PRs,
-    # which have far fewer chunks than this gate's own unusually large
-    # self-installation diff, without being unbounded.
-    timeout-minutes: 120
+    # Deterministic-only review: no external LLM call, chunking, or retry
+    # loop remains in this path, so there is no realistic scenario where a
+    # single PR's evaluation takes more than a few minutes (GitHub API
+    # calls for PR metadata, changed files, and a handful of governance
+    # document lookups). 15 minutes is generous headroom over that, not a
+    # figure tuned against any external provider's behavior.
+    timeout-minutes: 15
 
     steps:
       - name: Checkout trusted gate engine (default branch)
@@ -81,36 +87,6 @@ jobs:
           path: pr-engine
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
-      # Durable chunk-level checkpoint (see scripts/hunter_governance_review/
-      # checkpoint.py): a large PR's diff can take more provider-call budget
-      # (rate limits, quota, credits) than one run has available. Every chunk
-      # this run completes is written to CHECKPOINT_DIR immediately; this
-      # cache step is what makes that durable ACROSS separate workflow runs
-      # (a fresh container each time), not merely within one run. The cache
-      # key is scoped to this PR/head -- it is intentionally unique per run
-      # attempt (suffixed with run id/attempt) so the automatic post-job
-      # save step below always uploads this run's updated progress; the
-      # `restore-keys` prefix match is what finds the most recent prior
-      # attempt's checkpoint for the SAME pull request/head to resume from.
-      # Base SHA is deliberately NOT part of this key: github.event.pull_
-      # request.base.sha is only populated for pull_request-triggered runs,
-      # not workflow_dispatch (a manual rerun would otherwise always miss
-      # the cache another trigger type populated, permanently losing resume
-      # for that path -- confirmed live). The engine itself (checkpoint.py)
-      # independently re-verifies repository, PR number, head SHA, base SHA,
-      # PR title/body, and a review-semantics version before trusting
-      # anything restored here, so an imprecise or stale cache hit here can
-      # only ever cost a wasted restore, never an incorrect verdict.
-      - name: Restore/save Hunter Governance Review chunk checkpoint
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: ${{ github.workspace }}/.hunter_governance_checkpoint
-          key: >-
-            hunter-gov-checkpoint-v1-${{ github.event.pull_request.number || github.event.inputs.pr_number }}-${{
-            github.event.pull_request.head.sha || github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: |
-            hunter-gov-checkpoint-v1-${{ github.event.pull_request.number || github.event.inputs.pr_number }}-${{ github.event.pull_request.head.sha || github.sha }}-
-
       - name: Run Hunter Governance Review
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -118,28 +94,6 @@ jobs:
           GITHUB_RUN_ID: ${{ github.run_id }}
           GITHUB_SERVER_URL: ${{ github.server_url }}
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
-          HUNTER_GOVERNANCE_CHECKPOINT_PATH: ${{ github.workspace }}/.hunter_governance_checkpoint/checkpoint.json
-          # Provider-neutral, generic configuration -- no vendor is
-          # hardcoded here or in the engine. GROQ_API_KEY / OPENAI_API_KEY
-          # are deliberately NOT read: Groq was disqualified from this
-          # merge-critical review path after repeated live-run evidence
-          # that a single Groq on-demand account's rate/quota limits could
-          # not reliably complete this repository's real review workload
-          # (see docs/HUNTER_GOVERNANCE_REVIEW.md). Configure at least one
-          # of the three provider slots below (all three of its variables)
-          # as repository secrets/variables; configure a second slot with a
-          # genuinely independent provider/account for failover.
-          HUNTER_LLM_API_KEY: ${{ secrets.HUNTER_LLM_API_KEY }}
-          HUNTER_LLM_BASE_URL: ${{ vars.HUNTER_LLM_BASE_URL }}
-          HUNTER_LLM_MODEL: ${{ vars.HUNTER_LLM_MODEL }}
-          HUNTER_LLM_API_KEY_2: ${{ secrets.HUNTER_LLM_API_KEY_2 }}
-          HUNTER_LLM_BASE_URL_2: ${{ vars.HUNTER_LLM_BASE_URL_2 }}
-          HUNTER_LLM_MODEL_2: ${{ vars.HUNTER_LLM_MODEL_2 }}
-          HUNTER_LLM_API_KEY_3: ${{ secrets.HUNTER_LLM_API_KEY_3 }}
-          HUNTER_LLM_BASE_URL_3: ${{ vars.HUNTER_LLM_BASE_URL_3 }}
-          HUNTER_LLM_MODEL_3: ${{ vars.HUNTER_LLM_MODEL_3 }}
-          HUNTER_LLM_PROMPT_TOKEN_BUDGET: ${{ vars.HUNTER_LLM_PROMPT_TOKEN_BUDGET }}
-          HUNTER_LLM_MAX_COMPLETION_TOKENS: ${{ vars.HUNTER_LLM_MAX_COMPLETION_TOKENS }}
           HUNTER_GOVERNANCE_PROTECTED_BRANCHES: ${{ vars.HUNTER_GOVERNANCE_PROTECTED_BRANCHES }}
         run: |
           set -euo pipefail

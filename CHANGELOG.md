@@ -183,6 +183,55 @@
     `REVIEW_FAILED` end-to-end, and no provider secret value ever appearing
     in `ProviderHealth` events or the published step summary.
 
+### Removed
+
+- **Final architectural decision: all external LLM/provider integration
+  removed from Hunter Governance Review.** Everything documented above under
+  "Added" that depended on an external LLM (the hostile architecture audit,
+  diff/document chunking, cross-chunk synthesis, structured architectural
+  evidence extraction, the generic multi-provider failover abstraction, and
+  the durable chunk-level checkpoint mechanism built to survive provider
+  quota exhaustion across separate workflow runs) is removed entirely --
+  `llm_audit.py`, `chunking.py`, `aggregate.py`, and `checkpoint.py`, and
+  their dedicated test files, no longer exist. This is not a rollback to
+  "optional AI" or a swap to a different AI service: no LLM or other
+  external provider is called anywhere in the gate's authoritative merge
+  path, no provider API key or secret is required or read, and zero paid or
+  external API calls are made. The repository-owner decision followed
+  repeated live production evidence (documented above) that both configured
+  providers -- Gemini's free-tier request quota and OpenAI's account credit
+  balance -- exhausted mid-review on this repository's real diff sizes,
+  demonstrating that any external-provider dependency in the mandatory merge
+  path means the required status check's outcome can be governed by a third
+  party's availability or billing state rather than by this repository's own
+  rules, regardless of how much retry/failover/resume engineering surrounds
+  it.
+  - `Outcome`/check-mapping semantics, `ReviewPair`, `Finding`,
+    `DeterministicResult`, and the Authoritative Context Resolver's role in
+    confirming (not reviewing) required repository evidence are unchanged
+    and remain the entire authoritative gate.
+  - `context.py` is simplified to existence/provenance confirmation only
+    (`ContextEntry`/`ContextManifest` drop the excerpt-budget/`brief`/
+    `mandatory_document_texts` fields that existed solely to build an LLM
+    prompt); `resolve_referenced_records` (ADR/ADPR existence, feeding V-070)
+    is unchanged.
+  - `decision.py`'s `decide()` no longer takes an `audit`/`audit_error`
+    argument and has zero import dependency on any LLM-related module.
+  - `github_api.py` no longer fetches the PR diff (`get_pull_diff` removed)
+    -- no deterministic validator ever inspected diff content, only PR
+    metadata and the changed-files list.
+  - `.github/workflows/hunter-governance-review.yml` and
+    `hunter-governance-reconcile.yml` no longer reference any
+    `HUNTER_LLM_*`/`GROQ_API_KEY`/`OPENAI_API_KEY` secret or variable, and no
+    longer cache anything via `actions/cache`; job timeouts are reduced from
+    120/90 minutes (sized for a multi-chunk LLM audit) to 15/20 minutes
+    (sized for GitHub API calls alone).
+  - A dedicated architectural test suite
+    (`tests/test_hunter_governance_no_llm_dependency.py`) inspects the
+    actual source of every module and workflow file in the gate's package,
+    so a future change that reintroduces a provider dependency -- even one
+    exercised only in an untested code path -- fails a test immediately.
+
 ### Changed
 
 - Removed the fail-open, comment-only "Adversarial AI Review" job from

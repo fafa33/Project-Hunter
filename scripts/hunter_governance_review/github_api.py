@@ -2,8 +2,9 @@
 
 The gate talks to GitHub exclusively through the ``gh`` CLI authenticated with
 the repository-scoped ``GITHUB_TOKEN``. The gate never checks out or executes
-code from the pull request under review: it reads PR metadata, changed files,
-and the diff through the GitHub API, and publishes a commit status.
+code from the pull request under review: it reads PR metadata and changed
+files through the GitHub API, and publishes a commit status. No other
+network service is ever contacted.
 
 ``GitHubRunner`` is a small protocol so tests can substitute a fake runner.
 """
@@ -33,7 +34,6 @@ class GitHubRunner(Protocol):
 
     def get_pull_request(self, number: int) -> PullRequest: ...
     def get_pull_files(self, number: int) -> list[ChangedFile]: ...
-    def get_pull_diff(self, number: int) -> str: ...
     def get_file_content(self, path: str, ref: str) -> str | None: ...
     def list_directory(self, path: str, ref: str) -> list[str] | None: ...
     def post_commit_status(
@@ -115,9 +115,6 @@ class GhCliRunner:
                 )
             )
         return files
-
-    def get_pull_diff(self, number: int) -> str:
-        return self._run(["pr", "diff", str(number)])
 
     def get_file_content(self, path: str, ref: str) -> str | None:
         """Fetch a file's exact content at ``ref`` via the Contents API.

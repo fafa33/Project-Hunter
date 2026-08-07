@@ -1,17 +1,20 @@
 """Decision Engine.
 
-Combines the Deterministic Governance Engine result, the LLM Architecture
-Audit verdict, and review-pair freshness into exactly one of the three allowed
-outcomes (``APPROVED``, ``CHANGES_REQUIRED``, ``REVIEW_FAILED``).
+Combines the Deterministic Governance Engine result and review-pair
+freshness into exactly one of the three allowed outcomes (``APPROVED``,
+``CHANGES_REQUIRED``, ``REVIEW_FAILED``).
 
 Rules enforced here:
 
-- The LLM never bypasses a deterministic failure: any blocking deterministic
-  finding produces ``CHANGES_REQUIRED`` regardless of the LLM verdict.
 - A stale source-head or target-base pair produces ``REVIEW_FAILED``.
-- Only a valid ``APPROVED`` LLM verdict, with all deterministic validators
-  passing and a fresh pair, may produce ``APPROVED``.
-- Missing, errored, or unsupported audit output produces ``REVIEW_FAILED``.
+- Any blocking deterministic finding produces ``CHANGES_REQUIRED``.
+- Otherwise, with a fresh pair and no blocking deterministic finding,
+  the outcome is ``APPROVED``.
+
+This module has no dependency, direct or transitive, on any external LLM or
+other network service other than what already fed ``deterministic`` and
+``pair_fresh`` -- the decision itself is a pure function of repository-native
+evidence.
 """
 
 from __future__ import annotations
@@ -19,7 +22,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from hunter_governance_review.contracts import DeterministicResult, Outcome
-from hunter_governance_review.llm_audit import AuditVerdict
 
 
 @dataclass(frozen=True)
@@ -31,8 +33,6 @@ class Decision:
 def decide(
     *,
     deterministic: DeterministicResult,
-    audit: AuditVerdict | None,
-    audit_error: str | None,
     pair_fresh: bool,
     pair_fresh_error: str | None = None,
 ) -> Decision:
@@ -47,22 +47,9 @@ def decide(
     if deterministic.blocking:
         return Decision(
             Outcome.CHANGES_REQUIRED,
-            "deterministic governance validation failed; the LLM audit cannot bypass it.",
+            "deterministic governance validation failed.",
         )
-    if audit is None:
-        return Decision(
-            Outcome.REVIEW_FAILED,
-            audit_error or "LLM architecture audit did not produce a verdict.",
-        )
-    if audit.verdict == "APPROVED":
-        return Decision(
-            Outcome.APPROVED,
-            "deterministic validation passed and the hostile architecture audit approved " "the exact review pair.",
-        )
-    summary = audit.summary.strip()
-    reason = (
-        f"the hostile architecture audit returned CHANGES_REQUIRED: {summary}"
-        if summary
-        else "the hostile architecture audit returned CHANGES_REQUIRED with blocking findings."
+    return Decision(
+        Outcome.APPROVED,
+        "deterministic governance validation passed for the exact review pair.",
     )
-    return Decision(Outcome.CHANGES_REQUIRED, reason)
