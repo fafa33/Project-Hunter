@@ -143,8 +143,9 @@ def _write_summary(
         lines.append("### Authoritative context coverage manifest")
         for entry in context.entries:
             mark = "mandatory" if entry.mandatory else "referenced"
+            provenance = " proposed-by-PR-HEAD" if entry.provenance == "head" else ""
             lines.append(
-                f"- `{entry.path}`@`{entry.ref[:12]}` ({mark}, {entry.status}) "
+                f"- `{entry.path}`@`{entry.ref[:12]}` ({mark}, {entry.status}{provenance}) "
                 f"sha256={entry.sha256[:12] or 'n/a'} bytes={entry.byte_length}"
             )
         if context.missing_references:
@@ -225,7 +226,19 @@ def run_review(
     context_error: str | None = None
     if evidence_error is None:
         try:
-            context_manifest = resolve_context(gh, base_sha=pair.target_base_sha, pr_body=pr.body)
+            # head_sha/changed_paths let a PR that genuinely introduces a new
+            # canonical record (a new ADR/ADPR, or another referenced
+            # governed document) resolve it as a proposed record rather than
+            # deadlocking on "it can't exist yet because this is the PR that
+            # adds it" -- see context.py's module docstring for the full
+            # base-trusted-authority vs. head-proposed-evidence boundary.
+            context_manifest = resolve_context(
+                gh,
+                base_sha=pair.target_base_sha,
+                pr_body=pr.body,
+                head_sha=pair.source_head_sha,
+                changed_paths=frozenset(f.filename for f in files),
+            )
         except ContextResolutionError as exc:
             context_error = f"authoritative governance context could not be resolved: {exc}"
         except GitHubError as exc:
@@ -268,7 +281,10 @@ def run_review(
         print(f"[Finding] {finding.render()}")
     if context_manifest is not None:
         for entry in context_manifest.entries:
-            print(f"[Context] {entry.path}@{entry.ref[:12]} status={entry.status} sha256={entry.sha256[:12] or 'n/a'}")
+            print(
+                f"[Context] {entry.path}@{entry.ref[:12]} status={entry.status} "
+                f"provenance={entry.provenance} sha256={entry.sha256[:12] or 'n/a'}"
+            )
     print(f"[StatusCheck] context={CHECK_CONTEXT!r} state={state.value} on {target_sha[:12]}")
 
     if not args.dry_run:

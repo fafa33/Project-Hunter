@@ -169,7 +169,22 @@ class ChangedFile:
 @dataclass(frozen=True)
 class ContextEntry:
     """One canonical governance document or referenced ADR/ADPR record
-    consulted (or attempted) while resolving required repository evidence."""
+    consulted (or attempted) while resolving required repository evidence.
+
+    ``provenance`` distinguishes WHICH commit an entry's authority actually
+    comes from -- ``"base"`` (the trusted, pre-PR canonical state) or
+    ``"head"`` (content that exists only because this PR itself proposes it,
+    not yet trusted historical authority). A mandatory canonical-hierarchy
+    document is always ``"base"`` -- a PR can never expand what governance
+    considers mandatory. A referenced ADR/ADPR record resolved from ``"head"``
+    is a genuinely new record this PR is proposing, confirmed to actually be
+    part of the PR's own changed files (see ``context.resolve_referenced_records``)
+    and structurally validated before being trusted even provisionally --
+    never fabricated authority from a canonical-looking filename alone.
+    ``ref`` records the exact commit this entry's content was fetched from,
+    consistent with ``provenance`` (``base_sha`` for ``"base"``, ``head_sha``
+    for ``"head"``).
+    """
 
     path: str
     ref: str
@@ -177,6 +192,7 @@ class ContextEntry:
     status: str  # "resolved" or "missing"
     sha256: str
     byte_length: int
+    provenance: str = "base"  # "base" or "head"
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -184,6 +200,7 @@ class ContextEntry:
             "ref": self.ref,
             "mandatory": self.mandatory,
             "status": self.status,
+            "provenance": self.provenance,
             "sha256": self.sha256,
             "byte_length": self.byte_length,
         }
