@@ -1,0 +1,77 @@
+name: Provider Slot 2 Connectivity Check (temporary diagnostic)
+
+# One-off, minimal connectivity probe for Hunter Governance Review's LLM
+# provider slot 2. NOT part of the gate itself: does not touch
+# scripts/hunter_governance_review/*, is not wired into any merge-gate
+# decision, and is intended to be deleted after use.
+#
+# Purpose: verify the three slot-2 configuration values are present, then
+# make exactly ONE minimal chat-completion request to prove reachability,
+# auth, and model validity BEFORE the full (many-chunk, many-minute)
+# Hunter Governance Review is re-run against it.
+#
+# Never echoes the API key. GitHub Actions automatically redacts any
+# ${{ secrets.* }} value from step logs regardless of how it is used below.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  probe-slot-2:
+    name: Probe provider slot 2
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      HUNTER_LLM_API_KEY_2: ${{ secrets.HUNTER_LLM_API_KEY_2 }}
+      HUNTER_LLM_BASE_URL_2: ${{ vars.HUNTER_LLM_BASE_URL_2 }}
+      HUNTER_LLM_MODEL_2: ${{ vars.HUNTER_LLM_MODEL_2 }}
+    steps:
+      - name: Verify all three slot-2 values are present
+        run: |
+          set -u
+          missing=()
+          [ -z "${HUNTER_LLM_API_KEY_2}" ] && missing+=("HUNTER_LLM_API_KEY_2 (repository secret)")
+          [ -z "${HUNTER_LLM_BASE_URL_2}" ] && missing+=("HUNTER_LLM_BASE_URL_2 (repository variable)")
+          [ -z "${HUNTER_LLM_MODEL_2}" ] && missing+=("HUNTER_LLM_MODEL_2 (repository variable)")
+          if [ ${#missing[@]} -ne 0 ]; then
+            echo "::error::provider slot 2 is NOT fully configured; missing: ${missing[*]}"
+            exit 1
+          fi
+          echo "provider slot 2 detected as fully configured:"
+          echo "  HUNTER_LLM_API_KEY_2  = <set, value masked>"
+          echo "  HUNTER_LLM_BASE_URL_2 = ${HUNTER_LLM_BASE_URL_2}"
+          echo "  HUNTER_LLM_MODEL_2    = ${HUNTER_LLM_MODEL_2}"
+
+      - name: Minimal single-call connectivity probe
+        run: |
+          set -euo pipefail
+          url="${HUNTER_LLM_BASE_URL_2%/}/chat/completions"
+          payload=$(python3 -c '
+          import json, os
+          print(json.dumps({
+              "model": os.environ["HUNTER_LLM_MODEL_2"],
+              "messages": [{"role": "user", "content": "Reply with exactly the single word: OK"}],
+              "max_tokens": 5,
+              "temperature": 0,
+          }))
+          ')
+          http_code=$(curl -sS -o response_body.json -w "%{http_code}" \
+            --max-time 30 \
+            -X POST "$url" \
+            -H "Authorization: Bearer ${HUNTER_LLM_API_KEY_2}" \
+            -H "Content-Type: application/json" \
+            -d "$payload") || http_code="curl_error"
+          echo "Target URL: ${url}"
+          echo "HTTP status: ${http_code}"
+          echo "--- response body ---"
+          cat response_body.json || true
+          echo ""
+          echo "--- end response body ---"
+          if [ "$http_code" != "200" ]; then
+            echo "::error::provider slot 2 connectivity probe FAILED with HTTP ${http_code}"
+            exit 1
+          fi
+          echo "provider slot 2 connectivity probe SUCCEEDED (HTTP 200)"
