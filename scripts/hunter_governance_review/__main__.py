@@ -261,6 +261,13 @@ def _dedupe_error_lines(errors: tuple[str, ...], *, label: str) -> list[str]:
     return lines
 
 
+def _format_rate(rate: float | None) -> str:
+    """Render a retry/recovery rate for human display. ``None`` (no retry
+    ever attempted this run) is rendered as "n/a", never as "0%" -- the two
+    are not the same claim."""
+    return "n/a" if rate is None else f"{rate * 100:.0f}%"
+
+
 def _write_summary(
     env: Mapping[str, str],
     *,
@@ -273,6 +280,9 @@ def _write_summary(
     document_review: DocumentReviewManifest | None,
     used_providers: tuple[str, ...],
     provider_events: tuple[str, ...],
+    retry_count: int,
+    retry_success_rate: float | None,
+    provider_recovery_rate: float | None,
     published_state: str,
 ) -> None:
     summary_path = env.get("GITHUB_STEP_SUMMARY")
@@ -335,6 +345,12 @@ def _write_summary(
         lines.append("")
         lines.append("### Provider execution")
         lines.append("- **Provider(s) used**: " + (", ".join(used_providers) if used_providers else "none succeeded"))
+        if retry_count:
+            lines.append(
+                f"- **Retry metrics**: {retry_count} retry attempt(s); "
+                f"retry success rate: {_format_rate(retry_success_rate)}; "
+                f"provider recovery rate: {_format_rate(provider_recovery_rate)}"
+            )
         if provider_events:
             lines.append(
                 "- **Provider health events** (attempt/switch/failure-classification provenance; never "
@@ -718,6 +734,12 @@ def run_review(
         )
     if used_providers:
         print(f"[ProvidersUsed] {', '.join(used_providers)}")
+    if health.retry_count:
+        print(
+            f"[RetryMetrics] attempts={health.retry_count} "
+            f"retry_success_rate={_format_rate(health.retry_success_rate)} "
+            f"provider_recovery_rate={_format_rate(health.provider_recovery_rate)}"
+        )
     for event in health.events:
         print(f"[ProviderHealth] {event}")
     for finding in deterministic.findings:
@@ -757,6 +779,9 @@ def run_review(
         document_review=document_coverage,
         used_providers=used_providers,
         provider_events=tuple(health.events),
+        retry_count=health.retry_count,
+        retry_success_rate=health.retry_success_rate,
+        provider_recovery_rate=health.provider_recovery_rate,
         published_state=state.value,
     )
     return 0

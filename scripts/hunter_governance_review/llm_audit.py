@@ -40,22 +40,30 @@ Every one of the three top-level calls (``run_llm_audit``,
 ``run_synthesis_review``, ``run_document_review``) goes through
 ``_call_chat_completion``, which tries every configured, currently-healthy
 provider (``_resolve_providers``, in deterministic numeric slot order) for
-that call, falling over to the next one on ANY failure. An OPERATIONAL
-failure (network error, timeout, or any non-2xx HTTP response -- see
-``ProviderOperationalError``) additionally marks that provider unhealthy for
-the REMAINDER of the current review run (``ProviderHealth``): it is not
-retried indefinitely and is not selected again for any later call in the
-same run. A non-operational failure (a truncated completion, or a
-schema/validation failure in an otherwise-successful response) does not
-blacklist the provider -- only that specific call falls over to the next
-provider. ``LLMAuditError`` is raised only once every currently-eligible
-configured provider has failed for that specific call.
+that call. A CLASSIFIED-TRANSIENT operational failure (a network error, an
+HTTP 5xx, or a non-permanent HTTP 429 -- see ``_retryable_http_status``) is
+retried against the SAME provider up to ``MAX_RETRY_ATTEMPTS`` times with
+exponential backoff and jitter, hard-capped at ``RETRY_MAX_DELAY_SECONDS``,
+before falling over to the next provider. A NON-retryable operational
+failure (auth, an invalid model/request parameter, a permanent quota
+exhaustion, or the retry budget being exhausted -- see
+``ProviderOperationalError``) marks that provider unhealthy for the
+REMAINDER of the current review run (``ProviderHealth``): it is not retried
+indefinitely and is not selected again for any later call in the same run.
+A non-operational failure (a truncated completion, or a schema/validation
+failure in an otherwise-successful response) does not blacklist the
+provider and is not retried -- only that specific call falls over to the
+next provider. ``LLMAuditError`` is raised only once every
+currently-eligible configured provider (including its own retry budget) has
+failed for that specific call.
 """
 
 from __future__ import annotations
 
 import json
+import random
 import re
+import time
 import urllib.error
 import urllib.request
 from collections.abc import Mapping
@@ -105,6 +113,23 @@ FILES_LINE_RESERVED_CHARS = 2_000
 DEFAULT_MAX_COMPLETION_TOKENS = 4_096
 MIN_COMPLETION_TOKENS = 512
 MAX_COMPLETION_TOKENS_CEILING = 8_192
+
+# Retry policy for CLASSIFIED-TRANSIENT operational failures only (network
+# error, HTTP 5xx, or a non-permanent HTTP 429 -- see
+# `_retryable_http_status`). A provider is marked unhealthy only after this
+# budget is exhausted (`_call_chat_completion_once`), not on the first
+# transient blip -- live evidence (PR #200) proved the difference: a
+# provider that had just succeeded on 17/20 real calls was permanently
+# blacklisted for the remaining ~780 chunks of an 809-chunk run because of
+# ONE read-timeout. Deliberately small and hard-capped: this bounds the
+# worst-case added latency per call to roughly
+# `MAX_RETRY_ATTEMPTS * RETRY_MAX_DELAY_SECONDS` before falling over to the
+# next provider, so a genuinely down provider does not meaningfully eat into
+# the workflow's job budget across hundreds of chunks.
+MAX_RETRY_ATTEMPTS = 2
+RETRY_BASE_DELAY_SECONDS = 1.0
+RETRY_MAX_DELAY_SECONDS = 8.0
+RETRY_JITTER_FRACTION = 0.25
 
 
 def _resolve_prompt_char_budget(env: Mapping[str, str]) -> int:
@@ -206,6 +231,27 @@ class LLMCallResult:
     provider: str
 
 
+@dataclass(frozen=True)
+class RetryRecord:
+    """One row of retry evidence, appended to ``ProviderHealth.retry_log``.
+
+    ``outcome`` is one of:
+
+    - ``"retrying"`` -- a classified-transient failure is about to be
+      retried against the SAME provider (not yet resolved either way).
+    - ``"succeeded"`` -- the call ultimately succeeded after 1+ retries.
+    - ``"exhausted"`` -- the retry budget (``MAX_RETRY_ATTEMPTS``) was used
+      up without success; the caller marks the provider unhealthy
+      immediately after logging this.
+    """
+
+    provider: str
+    attempt: int
+    reason: str
+    delay_seconds: float | None
+    outcome: str
+
+
 @dataclass
 class ProviderHealth:
     """Tracks which configured providers have failed OPERATIONALLY during
@@ -220,11 +266,16 @@ class ProviderHealth:
     every ``run_llm_audit``/``run_synthesis_review``/``run_document_review``
     call in that run, so a provider that fails operationally on, say, diff
     chunk 5 is excluded from chunk 6 onward, from synthesis, and from every
-    document-review section -- not just retried on chunk 5 itself.
+    document-review section -- not just retried on chunk 5 itself. Within a
+    single call, a classified-transient failure (see
+    ``_retryable_http_status``) is retried against the SAME provider, up to
+    ``MAX_RETRY_ATTEMPTS`` times, BEFORE this object marks it unhealthy --
+    see ``retry_log`` and the three metrics below for that evidence.
     """
 
     unhealthy: set[str] = field(default_factory=set)
     events: list[str] = field(default_factory=list)
+    retry_log: list[RetryRecord] = field(default_factory=list)
 
     def mark_unhealthy(self, name: str, reason: str) -> None:
         if name not in self.unhealthy:
@@ -236,6 +287,55 @@ class ProviderHealth:
 
     def is_healthy(self, name: str) -> bool:
         return name not in self.unhealthy
+
+    def record_retry(self, provider: str, *, attempt: int, reason: str, delay_seconds: float) -> None:
+        """A classified-transient failure is about to be retried against
+        the same provider (not yet resolved)."""
+        self.retry_log.append(RetryRecord(provider, attempt, reason, delay_seconds, "retrying"))
+        self.events.append(
+            f"{provider}: transient failure, retry {attempt}/{MAX_RETRY_ATTEMPTS} in "
+            f"{delay_seconds:.1f}s -- {reason}"
+        )
+
+    def record_retry_succeeded(self, provider: str, *, attempts: int) -> None:
+        """The call ultimately succeeded after ``attempts`` retries (>0)."""
+        self.retry_log.append(RetryRecord(provider, attempts, "", None, "succeeded"))
+        self.events.append(f"{provider}: succeeded after {attempts} retry(ies)")
+
+    def record_retry_exhausted(self, provider: str, *, attempts: int, reason: str) -> None:
+        """The retry budget was used up without success. The caller marks
+        the provider unhealthy immediately after this (see
+        ``mark_unhealthy``); this only records the retry-specific evidence."""
+        self.retry_log.append(RetryRecord(provider, attempts, reason, None, "exhausted"))
+
+    @property
+    def retry_count(self) -> int:
+        """Total number of individual retry attempts made this run, across
+        every provider and call -- not the number of calls that retried."""
+        return sum(1 for r in self.retry_log if r.outcome == "retrying")
+
+    @property
+    def retry_success_rate(self) -> float | None:
+        """Of calls that needed at least one retry, the fraction that
+        ultimately succeeded rather than exhausting the retry budget.
+        ``None`` (not ``0.0``) when no call needed a retry this run -- the
+        rate is undefined, not measured-zero."""
+        resolved = [r for r in self.retry_log if r.outcome in ("succeeded", "exhausted")]
+        if not resolved:
+            return None
+        return sum(1 for r in resolved if r.outcome == "succeeded") / len(resolved)
+
+    @property
+    def provider_recovery_rate(self) -> float | None:
+        """Of providers that hit at least one classified-transient failure
+        this run, the fraction that are STILL healthy (recovered via retry,
+        never exhausted into ``unhealthy``) as of now. ``None`` when no
+        provider hit a transient failure this run."""
+        providers_retried = {r.provider for r in self.retry_log}
+        if not providers_retried:
+            return None
+        recovered = sum(1 for p in providers_retried if self.is_healthy(p))
+        return recovered / len(providers_retried)
 
 
 # Provider configuration slots, in deterministic priority order. Fully
@@ -690,6 +790,132 @@ def _completion_token_param_name(model: str) -> str:
     return "max_completion_tokens" if _is_reasoning_family_model(model) else "max_tokens"
 
 
+# Body substrings that, on an HTTP 429, indicate a hard, non-recoverable-
+# within-this-run quota exhaustion (e.g. a daily free-tier cap) rather than
+# a short-lived rate limit. Retrying a permanent quota error cannot succeed
+# within this run's bounded retry budget and only wastes time before the
+# provider is (correctly) still marked unhealthy -- confirmed live: a real
+# HTTP 429 in the incident this fix responds to said "You exceeded your
+# current quota... Quota exceeded for metric: ...free_tier_requests, limit:
+# 20." Matching is deliberately conservative (English-language substrings
+# from real provider responses seen live) -- an unmatched 429 defaults to
+# retryable, since a bounded, hard-capped retry wasted on an actually-
+# permanent quota costs at most a few seconds, while treating a genuinely
+# transient 429 as permanent throws away a provider that would have
+# recovered.
+_PERMANENT_QUOTA_MARKERS: tuple[str, ...] = (
+    "exceeded your current quota",
+    "check your plan and billing",
+    "requests per day",
+    "quota exceeded for metric",
+)
+
+
+def _is_permanent_quota_exhaustion(body: str) -> bool:
+    """True when an HTTP 429 response body indicates a hard quota
+    exhaustion no bounded retry can wait out (see
+    ``_PERMANENT_QUOTA_MARKERS``)."""
+    lowered = body.lower()
+    return any(marker in lowered for marker in _PERMANENT_QUOTA_MARKERS)
+
+
+def _retryable_http_status(status_code: int, body: str) -> bool:
+    """Whether an HTTP error status is a classified-transient, retryable
+    operational failure.
+
+    - 5xx is always transient (server/provider-side).
+    - 429 is transient UNLESS the body indicates a permanent quota
+      exhaustion (``_is_permanent_quota_exhaustion``).
+    - Every other 4xx (400 invalid request/parameter, 401/403 auth, 404
+      unknown model, 422, ...) is a deterministic client error -- a retry
+      cannot fix a bad request or bad credentials, so these are never
+      retryable and fail over to the next provider immediately, exactly as
+      before this fix.
+    """
+    if 500 <= status_code < 600:
+        return True
+    if status_code == 429:
+        return not _is_permanent_quota_exhaustion(body)
+    return False
+
+
+def _parse_retry_after_seconds(headers: Mapping[str, str]) -> float | None:
+    """Parse a standard ``Retry-After`` header (seconds form -- the only
+    form observed live from these providers). Returns ``None`` if absent or
+    unparseable; the caller still hard-caps whatever this returns to
+    ``RETRY_MAX_DELAY_SECONDS``, so an honest but very large wait (e.g. a
+    provider asking for 44+ minutes, seen historically in this gate's own
+    incident record) is never blindly honored in full."""
+    raw = headers.get("Retry-After") or headers.get("retry-after")
+    if not raw:
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        return None
+
+
+def _retry_backoff_seconds(attempt: int) -> float:
+    """Exponential backoff with jitter, hard-capped at
+    ``RETRY_MAX_DELAY_SECONDS``. ``attempt`` is 1-indexed (the first retry
+    is attempt 1). Used only when the provider did not supply its own
+    ``Retry-After`` value."""
+    base = min(RETRY_MAX_DELAY_SECONDS, RETRY_BASE_DELAY_SECONDS * (2 ** (attempt - 1)))
+    jitter = base * RETRY_JITTER_FRACTION
+    return max(0.0, min(RETRY_MAX_DELAY_SECONDS, base + random.uniform(-jitter, jitter)))
+
+
+class _TransportFailure(RuntimeError):
+    """Internal-only signal from ``_post_chat_completion`` to the retry loop
+    in ``_call_chat_completion_once``; never escapes that function -- it is
+    always converted to ``ProviderOperationalError`` (same message format
+    as before this fix) once the retry budget is exhausted or the failure
+    is classified as non-retryable."""
+
+    def __init__(self, message: str, *, retryable: bool, retry_after_seconds: float | None = None) -> None:
+        super().__init__(message)
+        self.retryable = retryable
+        self.retry_after_seconds = retry_after_seconds
+
+
+def _post_chat_completion(provider: ProviderConfig, payload: dict[str, object], *, timeout: int) -> dict[str, Any]:
+    """Perform exactly ONE HTTP POST with no retry of its own. Returns the
+    parsed JSON response body on a 2xx response; raises
+    ``_TransportFailure`` (already classified retryable/not) on any
+    failure. Internal to the retry loop in ``_call_chat_completion_once`` --
+    never called directly by ``_call_chat_completion``."""
+    request = urllib.request.Request(
+        provider.base_url.rstrip("/") + "/chat/completions",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {provider.api_key}",
+            "Content-Type": "application/json",
+            # A descriptive User-Agent avoids edge rejection; this mirrors the
+            # repository's existing CI LLM client convention.
+            "User-Agent": "Project-Hunter-GovernanceReview/1.0",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return json.load(response)  # type: ignore[no-any-return]
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")[:400]
+        retryable = _retryable_http_status(exc.code, detail)
+        retry_after = _parse_retry_after_seconds(dict(exc.headers)) if retryable and exc.headers else None
+        raise _TransportFailure(
+            f"LLM API returned HTTP {exc.code}: {detail}", retryable=retryable, retry_after_seconds=retry_after
+        ) from exc
+    except json.JSONDecodeError as exc:
+        # The HTTP response body itself was not valid JSON (a transport-
+        # level oddity, e.g. a truncated/garbled body) -- distinct from
+        # `parse_audit_response`'s later job of parsing the MODEL's own
+        # generated `content` string, which is never retried (see below).
+        raise _TransportFailure(f"LLM API returned malformed JSON: {exc}", retryable=True) from exc
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        raise _TransportFailure(f"LLM API request could not be completed: {exc}", retryable=True) from exc
+
+
 def _call_chat_completion_once(
     provider: ProviderConfig,
     system_prompt: str,
@@ -697,21 +923,23 @@ def _call_chat_completion_once(
     *,
     timeout: int,
     max_tokens: int,
+    health: ProviderHealth,
 ) -> AuditVerdict:
-    """POST exactly ONE chat-completion request to exactly ONE provider, with
-    NO retry -- a provider that fails here is the caller's (``_call_chat_completion``'s)
-    signal to try the next configured provider, not to wait and retry this
-    one. This is a deliberate simplification: with multiple providers
-    configured, the fallback IS the retry -- a transient blip on this
-    provider means "try the next one now," and if the blip really was
-    transient, this same provider gets a clean chance again on the NEXT
-    review run (the next CI trigger), rather than this run burning CI time
-    re-hitting a provider that may still be unavailable.
-
-    Raises ``ProviderOperationalError`` (a network/timeout failure or any
-    non-2xx HTTP response) or plain ``LLMAuditError`` (a truncated/
-    unsupported completion, or a schema/validation failure) -- see each
-    class's docstring for why the distinction matters to the caller.
+    """POST a chat-completion request to exactly ONE provider, retrying
+    against that SAME provider up to ``MAX_RETRY_ATTEMPTS`` times on a
+    classified-transient operational failure (``_retryable_http_status``),
+    with exponential backoff and jitter hard-capped at
+    ``RETRY_MAX_DELAY_SECONDS``. A non-retryable operational failure (auth,
+    invalid model/parameter, permanent quota exhaustion) raises immediately
+    with zero retries, exactly as before this fix -- retrying a
+    deterministic client error cannot succeed and would only waste the
+    bounded budget. Only once the retry budget is exhausted (or the failure
+    is non-retryable) does this raise ``ProviderOperationalError``, the
+    caller's (``_call_chat_completion``'s) signal to mark the provider
+    unhealthy and fail over to the next one. A non-operational failure
+    (truncated completion, schema/validation failure) is never retried
+    here either -- see ``ProviderOperationalError``'s docstring for why
+    that distinction matters.
     """
     payload: dict[str, object] = {
         "model": provider.model,
@@ -734,40 +962,39 @@ def _call_chat_completion_once(
         # configured provider/model keeps this unchanged, low-temperature
         # setting for a deterministic, low-creativity hostile audit.
         payload["temperature"] = 0.1
-    request = urllib.request.Request(
-        provider.base_url.rstrip("/") + "/chat/completions",
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {provider.api_key}",
-            "Content-Type": "application/json",
-            # A descriptive User-Agent avoids edge rejection; this mirrors the
-            # repository's existing CI LLM client convention.
-            "User-Agent": "Project-Hunter-GovernanceReview/1.0",
-        },
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            response_payload = json.load(response)
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")[:400]
-        raise ProviderOperationalError(f"LLM API returned HTTP {exc.code}: {detail}") from exc
-    except json.JSONDecodeError as exc:
-        raise ProviderOperationalError(f"LLM API returned malformed JSON: {exc}") from exc
-    except (urllib.error.URLError, TimeoutError, OSError) as exc:
-        raise ProviderOperationalError(f"LLM API request could not be completed: {exc}") from exc
 
-    finish_reason = _extract_finish_reason(response_payload)
-    if finish_reason == "length":
-        raise LLMAuditError(
-            "incomplete model output: completion was truncated (finish_reason=length); the "
-            "configured completion budget was insufficient for this response -- fail-closed "
-            "rather than accept a truncated, potentially invalid verdict"
-        )
-    if finish_reason != "stop":
-        raise LLMAuditError(f"unsupported finish_reason: {finish_reason!r} (only 'stop' is accepted)")
-    content = _extract_message_content(response_payload)
-    return parse_audit_response(content)
+    for attempt in range(MAX_RETRY_ATTEMPTS + 1):  # attempt 0 = first try; 1..MAX_RETRY_ATTEMPTS = retries
+        try:
+            response_payload = _post_chat_completion(provider, payload, timeout=timeout)
+        except _TransportFailure as exc:
+            if not exc.retryable or attempt == MAX_RETRY_ATTEMPTS:
+                if attempt > 0:
+                    health.record_retry_exhausted(provider.name, attempts=attempt, reason=str(exc))
+                raise ProviderOperationalError(str(exc)) from exc
+            delay = (
+                exc.retry_after_seconds if exc.retry_after_seconds is not None else _retry_backoff_seconds(attempt + 1)
+            )
+            delay = min(delay, RETRY_MAX_DELAY_SECONDS)
+            health.record_retry(provider.name, attempt=attempt + 1, reason=str(exc), delay_seconds=delay)
+            time.sleep(delay)
+            continue
+
+        finish_reason = _extract_finish_reason(response_payload)
+        if finish_reason == "length":
+            raise LLMAuditError(
+                "incomplete model output: completion was truncated (finish_reason=length); the "
+                "configured completion budget was insufficient for this response -- fail-closed "
+                "rather than accept a truncated, potentially invalid verdict"
+            )
+        if finish_reason != "stop":
+            raise LLMAuditError(f"unsupported finish_reason: {finish_reason!r} (only 'stop' is accepted)")
+        content = _extract_message_content(response_payload)
+        verdict = parse_audit_response(content)
+        if attempt > 0:
+            health.record_retry_succeeded(provider.name, attempts=attempt)
+        return verdict
+
+    raise AssertionError("unreachable: the retry loop above always returns or raises")
 
 
 def _call_chat_completion(
@@ -818,7 +1045,7 @@ def _call_chat_completion(
             continue
         try:
             verdict = _call_chat_completion_once(
-                provider, system_prompt, prompt, timeout=timeout, max_tokens=max_tokens
+                provider, system_prompt, prompt, timeout=timeout, max_tokens=max_tokens, health=health
             )
             health.record(f"{provider.name}: succeeded")
             return LLMCallResult(verdict=verdict, provider=provider.name)

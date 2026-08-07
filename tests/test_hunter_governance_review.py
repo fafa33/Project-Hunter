@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-from hunter_governance_review.__main__ import _dedupe_error_lines, _write_summary, run_review
+from hunter_governance_review.__main__ import _dedupe_error_lines, _format_rate, _write_summary, run_review
 from hunter_governance_review.chunking import DiffChunk
 from hunter_governance_review.contracts import (
     CHECK_CONTEXT,
@@ -38,18 +38,23 @@ from hunter_governance_review.deterministic import ValidationContext, run_determ
 from hunter_governance_review.github_api import GitHubError
 from hunter_governance_review.llm_audit import (
     MAX_COMPLETION_TOKENS_CEILING,
+    MAX_RETRY_ATTEMPTS,
     MIN_COMPLETION_TOKENS,
     MIN_DIFF_CHAR_BUDGET,
     PR_BODY_CHAR_LIMIT,
+    RETRY_MAX_DELAY_SECONDS,
     AuditVerdict,
     LLMAuditError,
     LLMCallResult,
     ProviderConfig,
     ProviderHealth,
     _completion_token_param_name,
+    _is_permanent_quota_exhaustion,
     _is_reasoning_family_model,
     _preflight_provider,
     _resolve_providers,
+    _retry_backoff_seconds,
+    _retryable_http_status,
     build_chunk_audit_prompt,
     estimate_chunk_diff_budget,
     parse_audit_response,
@@ -58,6 +63,16 @@ from hunter_governance_review.llm_audit import (
     run_synthesis_review,
     validate_audit_payload,
 )
+
+
+@pytest.fixture(autouse=True)
+def _no_real_retry_sleep(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every test in this module runs with retry-backoff sleeps neutered.
+    The backoff/jitter math itself is tested directly
+    (``test_retry_backoff_seconds_*``); no test should spend real
+    wall-clock time waiting out a bounded retry delay."""
+    monkeypatch.setattr("hunter_governance_review.llm_audit.time.sleep", lambda _seconds: None)
+
 
 GOOD_BODY = """## Summary
 
@@ -1160,16 +1175,74 @@ def _http_error(code: int, body: bytes) -> urllib.error.HTTPError:
     return urllib.error.HTTPError(url="http://x", code=code, msg="", hdrs=None, fp=io.BytesIO(body))  # type: ignore[arg-type]
 
 
-# --- Provider resolution and failover ---------------------------------------------------
+# --- Retry classification and backoff ----------------------------------------------------
 #
-# Groq-specific retry/backoff (TPM vs TPD 429 duration parsing, bounded
-# in-provider retry) has been intentionally REMOVED as part of this
-# repository's decision to disqualify Groq from Hunter Governance Review's
-# production path -- see docs/HUNTER_GOVERNANCE_REVIEW.md. There is no
-# per-provider retry loop anymore: a single operational failure on one
-# provider immediately falls over to the next configured provider (the
-# fallback itself IS the retry). The tests below exercise that
-# health-aware, multi-provider design directly.
+# Groq-specific retry/backoff (TPM vs TPD 429 duration parsing) was
+# intentionally REMOVED as part of this repository's decision to
+# disqualify Groq from Hunter Governance Review's production path -- see
+# docs/HUNTER_GOVERNANCE_REVIEW.md. A GENERIC, provider-neutral bounded
+# retry was reintroduced afterward, live evidence (PR #200) having shown
+# that falling over on the very first transient blip, with zero retry,
+# permanently blacklisted an otherwise-healthy provider (17/20 real
+# successes) for the rest of a long run. Only a CLASSIFIED-TRANSIENT
+# operational failure (network error, HTTP 5xx, or a non-permanent HTTP
+# 429) is retried against the SAME provider, up to MAX_RETRY_ATTEMPTS
+# times, before that provider is marked unhealthy -- see
+# `_retryable_http_status`/`_is_permanent_quota_exhaustion`.
+
+
+@pytest.mark.parametrize("status", [500, 502, 503, 504])
+def test_retryable_http_status_5xx_always_retryable(status: int) -> None:
+    assert _retryable_http_status(status, "any body") is True
+
+
+@pytest.mark.parametrize("status", [400, 401, 403, 404, 422])
+def test_retryable_http_status_other_4xx_never_retryable(status: int) -> None:
+    """A retry cannot fix a bad request, bad credentials, an unknown model,
+    or any other deterministic client error -- these fail over immediately,
+    exactly as before this fix."""
+    assert _retryable_http_status(status, "any body") is False
+
+
+def test_retryable_http_status_429_without_permanent_marker_is_retryable() -> None:
+    assert _retryable_http_status(429, '{"error":"rate limited, try again shortly"}') is True
+
+
+def test_retryable_http_status_429_with_permanent_quota_marker_is_not_retryable() -> None:
+    """Real body text from the live incident (PR #200, Gemini's actual
+    HTTP 429) -- retrying a daily quota exhaustion cannot succeed within a
+    bounded budget."""
+    body = (
+        "You exceeded your current quota, please check your plan and billing details. "
+        "Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, "
+        "limit: 20"
+    )
+    assert _retryable_http_status(429, body) is False
+    assert _is_permanent_quota_exhaustion(body) is True
+
+
+def test_retry_backoff_seconds_grows_exponentially_and_is_hard_capped() -> None:
+    # Run many samples per attempt to account for jitter, and assert the
+    # observed range brackets the expected exponential growth while never
+    # exceeding the hard cap.
+    for attempt in range(1, 6):
+        samples = [_retry_backoff_seconds(attempt) for _ in range(200)]
+        assert all(0.0 <= s <= RETRY_MAX_DELAY_SECONDS for s in samples)
+    # A later attempt's samples must, on average, be >= an earlier
+    # attempt's -- exponential growth, not a flat or shrinking delay --
+    # until both are saturated at the hard cap.
+    early = [_retry_backoff_seconds(1) for _ in range(200)]
+    later = [_retry_backoff_seconds(3) for _ in range(200)]
+    assert sum(later) / len(later) >= sum(early) / len(early)
+
+
+def test_retry_backoff_seconds_never_negative_or_over_cap_even_at_high_attempt_numbers() -> None:
+    for attempt in range(1, 20):
+        delay = _retry_backoff_seconds(attempt)
+        assert 0.0 <= delay <= RETRY_MAX_DELAY_SECONDS
+
+
+# --- Provider resolution and failover ---------------------------------------------------
 
 
 def test_resolve_providers_raises_when_none_configured() -> None:
@@ -1394,8 +1467,10 @@ def test_run_llm_audit_falls_back_to_second_provider_on_operational_failure(
     """Provider-failover regression: the first configured provider failing
     operationally (HTTP 429, matching the live PR #200 Groq failure) does
     not fail the whole review -- the second configured provider is tried
-    next, and its APPROVED verdict is what the caller receives. The first
-    provider is also marked unhealthy for the rest of this run."""
+    next, and its APPROVED verdict is what the caller receives. The failing
+    provider's own 429 has no permanent-quota marker, so it is retried
+    (MAX_RETRY_ATTEMPTS times) against ITSELF before being marked unhealthy
+    for the rest of this run -- see ``_retryable_http_status``."""
     quota_body = b'{"error":{"message":"rate limit exceeded"}}'
     transport = _RecordingMultiProviderTransport(
         {"key1": _fail_with(429, quota_body), "key2": _succeed_with(_APPROVED_BODY)}
@@ -1415,22 +1490,26 @@ def test_run_llm_audit_falls_back_to_second_provider_on_operational_failure(
     )
     assert result.verdict.verdict == "APPROVED"
     assert result.provider == _slot_name(2)
-    assert transport.calls == ["key1", "key2"]
+    assert transport.calls == ["key1", "key1", "key1", "key2"]  # 1 initial + 2 retries, then failover
     assert not health.is_healthy(_slot_name(1))
     assert health.is_healthy(_slot_name(2))
+    assert health.retry_count == 2
+    assert health.retry_success_rate == 0.0  # the one call that retried ultimately exhausted its budget
 
 
 def test_run_llm_audit_gemini_failover_to_gpt5_uses_correct_param_for_each(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """End-to-end regression test for the full live incident (PR #200): slot
-    1 (a Gemini-class model) fails operationally with HTTP 503, failover
-    reaches slot 2 (a gpt-5-class model), and each slot's own request uses
-    exactly the fields it actually requires -- slot 1 keeps `max_tokens`
-    and its existing `temperature`, slot 2 uses `max_completion_tokens` and
-    omits `temperature` entirely -- so both providers remain fully
-    supported by the same request builder and failover itself (provider
-    order, health tracking) is unaffected by the request-shape fix."""
+    1 (a Gemini-class model) fails operationally with HTTP 503 (retried
+    MAX_RETRY_ATTEMPTS times against itself -- 5xx is always transient --
+    before being marked unhealthy), failover reaches slot 2 (a gpt-5-class
+    model), and each slot's own request uses exactly the fields it actually
+    requires -- slot 1 keeps `max_tokens` and its existing `temperature`,
+    slot 2 uses `max_completion_tokens` and omits `temperature` entirely --
+    so both providers remain fully supported by the same request builder
+    and failover itself (provider order, health tracking) is unaffected by
+    either the request-shape fix or the retry fix."""
     calls: list[tuple[str, dict[str, object]]] = []
 
     def _fake_urlopen(request: object, timeout: int) -> _FakeHTTPResponse:
@@ -1460,11 +1539,13 @@ def test_run_llm_audit_gemini_failover_to_gpt5_uses_correct_param_for_each(
 
     assert result.verdict.verdict == "APPROVED"
     assert result.provider == _slot_name(2)
-    assert [c[0] for c in calls] == ["gemini-key", "openai-key"]  # deterministic slot order preserved
+    # 1 initial + 2 retries against Gemini (all 503, all transient), then failover.
+    assert [c[0] for c in calls] == ["gemini-key", "gemini-key", "gemini-key", "openai-key"]
     assert not health.is_healthy(_slot_name(1))
     assert health.is_healthy(_slot_name(2))
+    assert health.retry_count == 2
 
-    gemini_payload, openai_payload = calls[0][1], calls[1][1]
+    gemini_payload, openai_payload = calls[0][1], calls[-1][1]
     assert "max_tokens" in gemini_payload and "max_completion_tokens" not in gemini_payload
     assert "max_completion_tokens" in openai_payload and "max_tokens" not in openai_payload
     # Gemini keeps its existing temperature; the gpt-5-class slot omits it
@@ -1507,11 +1588,13 @@ def test_run_llm_audit_falls_back_past_malformed_output_without_blacklisting(
 def test_operational_failure_persists_across_separate_calls_in_the_same_run(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Health-aware execution regression: a provider that fails
-    operationally on one call (e.g. diff chunk 1) is excluded from EVERY
+    """Health-aware execution regression: a provider that exhausts its
+    retry budget on one call (e.g. diff chunk 1) is excluded from EVERY
     later call in the SAME run (e.g. diff chunk 2), not merely retried on
     the call that failed -- the shared ``ProviderHealth`` is what makes this
-    possible."""
+    possible. Within chunk 1's own call, key1 IS retried (HTTP 500 is
+    always transient) before being marked unhealthy; it is never retried
+    again afterward."""
     transport = _RecordingMultiProviderTransport(
         {"key1": _fail_with(500, b"internal server error"), "key2": _succeed_with(_APPROVED_BODY)}
     )
@@ -1525,7 +1608,7 @@ def test_operational_failure_persists_across_separate_calls_in_the_same_run(
     run_llm_audit(
         env, pair=_pair(), pr=_pr(), chunk=chunk1, context_brief="ctx", deterministic_findings=[], health=health
     )
-    assert transport.calls == ["key1", "key2"]
+    assert transport.calls == ["key1", "key1", "key1", "key2"]  # 1 initial + 2 retries, then failover
 
     transport.calls.clear()
     result2 = run_llm_audit(
@@ -1622,14 +1705,17 @@ def test_run_llm_audit_tries_all_three_providers_in_deterministic_order_before_s
         health=ProviderHealth(),
     )
     assert result.verdict.verdict == "APPROVED"
-    assert transport.calls == ["key1", "key2", "key3"]
+    # Each of key1/key2 (both HTTP 500, always transient) is retried
+    # MAX_RETRY_ATTEMPTS times against itself before failing over.
+    assert transport.calls == ["key1", "key1", "key1", "key2", "key2", "key2", "key3"]
 
 
 def test_preflight_failure_skips_provider_with_no_network_call(monkeypatch: pytest.MonkeyPatch) -> None:
     """A provider whose configuration is complete (all three variables set)
     but locally invalid (a non-http(s) base URL) fails preflight and is
     skipped WITHOUT ever making a network request -- the next provider is
-    tried immediately."""
+    tried immediately, with no retry (preflight failure is a local,
+    deterministic configuration error, never a transient one)."""
     transport = _RecordingMultiProviderTransport({"key1": _fail_with(500, b"x"), "key3": _succeed_with(_APPROVED_BODY)})
     monkeypatch.setattr("hunter_governance_review.llm_audit.urllib.request.urlopen", transport)
 
@@ -1643,7 +1729,9 @@ def test_preflight_failure_skips_provider_with_no_network_call(monkeypatch: pyte
     )
     assert result.verdict.verdict == "APPROVED"
     assert "key2" not in transport.calls  # slot 2 never reached the network
-    assert transport.calls == ["key1", "key3"]
+    # key1 (HTTP 500, always transient) is retried before failing over;
+    # key2 is skipped entirely at preflight (no retry applies to it at all).
+    assert transport.calls == ["key1", "key1", "key1", "key3"]
     assert not health.is_healthy(_slot_name(2))  # preflight failure still marks it unhealthy
 
 
@@ -1652,7 +1740,9 @@ def test_run_llm_audit_fails_closed_when_every_configured_provider_fails(
 ) -> None:
     """No false approvals: when every configured provider fails, the call
     raises LLMAuditError (which the Decision Engine maps to REVIEW_FAILED)
-    -- never a partial, best-effort, or default-to-approved outcome."""
+    -- never a partial, best-effort, or default-to-approved outcome. Both
+    HTTP 500 and 503 are always-transient, so each provider is retried
+    against itself before the next is tried."""
     transport = _RecordingMultiProviderTransport(
         {"key1": _fail_with(500, b"internal server error"), "key2": _fail_with(503, b"service unavailable")}
     )
@@ -1669,7 +1759,7 @@ def test_run_llm_audit_fails_closed_when_every_configured_provider_fails(
             deterministic_findings=[],
             health=ProviderHealth(),
         )
-    assert transport.calls == ["key1", "key2"]
+    assert transport.calls == ["key1", "key1", "key1", "key2", "key2", "key2"]
 
 
 def test_run_llm_audit_single_provider_still_fails_closed_with_no_fallback_configured() -> None:
@@ -1729,27 +1819,38 @@ def test_run_review_provider_fallback_produces_no_false_approval_end_to_end(
     assert code == 0
     assert gh.statuses[0]["state"] == "success"
     # Every real provider call (chunk audit, synthesis, and every mandatory
-    # document section) failed over from key1 to key2, and key1 was never
-    # retried after its first operational failure.
+    # document section) failed over from key1 to key2. key1's 429 has no
+    # permanent-quota marker, so it IS retried (MAX_RETRY_ATTEMPTS times)
+    # against itself on the very first call that reaches it -- but only
+    # once total: once that retry budget is exhausted, key1 is marked
+    # unhealthy for the rest of the run and every LATER call (synthesis,
+    # document sections) skips it entirely, going straight to key2.
     assert transport.calls
-    assert transport.calls.count("key1") == 1
+    assert transport.calls.count("key1") == 1 + MAX_RETRY_ATTEMPTS
     assert all(call in ("key1", "key2") for call in transport.calls)
     assert "key2" in transport.calls
 
 
-def test_a_429_on_one_provider_is_never_retried_against_that_same_provider(
+def test_a_permanent_quota_429_is_never_retried_against_that_same_provider(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """ "429/quota does not repeatedly retry forever" regression, made
-    explicit: a 429 (or any operational failure) results in EXACTLY ONE
-    request to the failing provider, never a retry loop against it -- the
-    fallback to the next configured provider IS the recovery mechanism,
-    not an in-provider wait-and-retry."""
+    """A 429 that indicates a PERMANENT (e.g. daily) quota exhaustion
+    results in EXACTLY ONE request to the failing provider, never a retry
+    loop against it -- retrying it cannot succeed within a bounded budget,
+    so this fails over to the next provider immediately, exactly as before
+    the retry fix. Body text matches a real live incident (PR #200,
+    Gemini's actual HTTP 429)."""
+    permanent_quota_body = (
+        b'{"error":{"message":"You exceeded your current quota, please check your plan and billing details. '
+        b"Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, "
+        b'limit: 20"}}'
+    )
     transport = _RecordingMultiProviderTransport(
-        {"key1": _fail_with(429, b'{"error":"rate limited"}'), "key2": _succeed_with(_APPROVED_BODY)}
+        {"key1": _fail_with(429, permanent_quota_body), "key2": _succeed_with(_APPROVED_BODY)}
     )
     monkeypatch.setattr("hunter_governance_review.llm_audit.urllib.request.urlopen", transport)
 
+    health = ProviderHealth()
     chunk = DiffChunk(1, 1, ("a.py",), "@@ -1 +1 @@\n+ok")
     result = run_llm_audit(
         _multi_provider_env("key1", "key2"),
@@ -1758,10 +1859,184 @@ def test_a_429_on_one_provider_is_never_retried_against_that_same_provider(
         chunk=chunk,
         context_brief="ctx",
         deterministic_findings=[],
-        health=ProviderHealth(),
+        health=health,
     )
     assert result.verdict.verdict == "APPROVED"
     assert transport.calls.count("key1") == 1  # exactly one attempt, never retried
+    assert not health.is_healthy(_slot_name(1))
+    assert health.retry_count == 0  # no retry was ever attempted
+
+
+def test_a_transient_429_is_retried_before_blacklisting(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Contrast case: a 429 with no permanent-quota marker (a generic,
+    short-lived rate limit) IS retried against the same provider, up to
+    MAX_RETRY_ATTEMPTS times, before that provider is marked unhealthy --
+    this is the exact fix for the live incident where a provider that had
+    just succeeded on 17/20 real calls was permanently blacklisted for the
+    remaining ~780 chunks of an 809-chunk run because of one transient
+    failure."""
+    transport = _RecordingMultiProviderTransport(
+        {"key1": _fail_with(429, b'{"error":"rate limited, try again shortly"}'), "key2": _succeed_with(_APPROVED_BODY)}
+    )
+    monkeypatch.setattr("hunter_governance_review.llm_audit.urllib.request.urlopen", transport)
+
+    health = ProviderHealth()
+    chunk = DiffChunk(1, 1, ("a.py",), "@@ -1 +1 @@\n+ok")
+    result = run_llm_audit(
+        _multi_provider_env("key1", "key2"),
+        pair=_pair(),
+        pr=_pr(),
+        chunk=chunk,
+        context_brief="ctx",
+        deterministic_findings=[],
+        health=health,
+    )
+    assert result.verdict.verdict == "APPROVED"
+    assert transport.calls.count("key1") == 1 + MAX_RETRY_ATTEMPTS
+    assert not health.is_healthy(_slot_name(1))  # still eventually blacklisted -- it never actually recovered
+    assert health.retry_count == MAX_RETRY_ATTEMPTS
+
+
+def test_a_transient_failure_that_recovers_mid_retry_never_blacklists_the_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The direct regression test for the live incident this fix responds
+    to: a provider with a real track record of success hits ONE transient
+    failure and recovers on the very next attempt -- it must NOT be
+    blacklisted, and the call must succeed via THAT SAME provider (no
+    failover was even needed)."""
+    attempts: list[int] = [0]
+
+    def _fake_urlopen(request: object, timeout: int) -> _FakeHTTPResponse:
+        attempts[0] += 1
+        if attempts[0] == 1:
+            raise _http_error(503, b'{"error": {"message": "high demand"}}')
+        return _FakeHTTPResponse(_APPROVED_BODY)
+
+    monkeypatch.setattr("hunter_governance_review.llm_audit.urllib.request.urlopen", _fake_urlopen)
+
+    health = ProviderHealth()
+    chunk = DiffChunk(1, 1, ("a.py",), "@@ -1 +1 @@\n+ok")
+    result = run_llm_audit(
+        _env(), pair=_pair(), pr=_pr(), chunk=chunk, context_brief="ctx", deterministic_findings=[], health=health
+    )
+    assert result.verdict.verdict == "APPROVED"
+    assert result.provider == _slot_name(1)
+    assert attempts[0] == 2
+    assert health.is_healthy(_slot_name(1))  # recovered -- never blacklisted
+    assert health.retry_count == 1
+    assert health.retry_success_rate == 1.0
+    assert health.provider_recovery_rate == 1.0
+
+
+def test_retry_metrics_are_none_not_zero_when_nothing_ever_retried() -> None:
+    """A clean run with no transient failures at all must report the retry
+    metrics as undefined (None), never a measured zero -- there is a real
+    difference between "0% of retries succeeded" and "no retry ever
+    happened"."""
+    health = ProviderHealth()
+    health.record("slot 1 (HUNTER_LLM_API_KEY): succeeded")
+    assert health.retry_count == 0
+    assert health.retry_success_rate is None
+    assert health.provider_recovery_rate is None
+
+
+@pytest.mark.parametrize("status", [400, 401, 403, 404, 422])
+def test_deterministic_client_errors_are_never_retried_end_to_end(monkeypatch: pytest.MonkeyPatch, status: int) -> None:
+    """A deterministic client error (bad request, bad credentials, unknown
+    model, ...) fails over to the next provider immediately, with zero
+    retries -- a retry cannot fix a malformed request or an invalid key,
+    and retrying one would only waste the bounded budget."""
+    transport = _RecordingMultiProviderTransport(
+        {"key1": _fail_with(status, b'{"error":"client error"}'), "key2": _succeed_with(_APPROVED_BODY)}
+    )
+    monkeypatch.setattr("hunter_governance_review.llm_audit.urllib.request.urlopen", transport)
+
+    health = ProviderHealth()
+    chunk = DiffChunk(1, 1, ("a.py",), "@@ -1 +1 @@\n+ok")
+    result = run_llm_audit(
+        _multi_provider_env("key1", "key2"),
+        pair=_pair(),
+        pr=_pr(),
+        chunk=chunk,
+        context_brief="ctx",
+        deterministic_findings=[],
+        health=health,
+    )
+    assert result.verdict.verdict == "APPROVED"
+    assert transport.calls.count("key1") == 1
+    assert health.retry_count == 0
+    assert not health.is_healthy(_slot_name(1))
+
+
+def test_retry_after_header_is_honored_when_within_the_hard_cap(monkeypatch: pytest.MonkeyPatch) -> None:
+    """When the provider supplies a short `Retry-After`, that exact value is
+    used as the backoff delay instead of the computed exponential one."""
+    recorded_delays: list[float] = []
+    health = ProviderHealth()
+    monkeypatch.setattr(
+        "hunter_governance_review.llm_audit.time.sleep", lambda seconds: recorded_delays.append(seconds)
+    )
+
+    attempts: list[int] = [0]
+
+    def _fake_urlopen(request: object, timeout: int) -> _FakeHTTPResponse:
+        attempts[0] += 1
+        if attempts[0] == 1:
+            exc = urllib.error.HTTPError(
+                url="http://x", code=429, msg="", hdrs={"Retry-After": "2"}, fp=io.BytesIO(b'{"error":"slow down"}')
+            )
+            raise exc
+        return _FakeHTTPResponse(_APPROVED_BODY)
+
+    monkeypatch.setattr("hunter_governance_review.llm_audit.urllib.request.urlopen", _fake_urlopen)
+
+    chunk = DiffChunk(1, 1, ("a.py",), "@@ -1 +1 @@\n+ok")
+    result = run_llm_audit(
+        _env(), pair=_pair(), pr=_pr(), chunk=chunk, context_brief="ctx", deterministic_findings=[], health=health
+    )
+    assert result.verdict.verdict == "APPROVED"
+    assert recorded_delays == [2.0]
+
+
+def test_retry_after_header_is_capped_at_the_hard_maximum(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A provider asking for a wait far beyond the hard cap (the historical
+    Groq incident asked for 44+ minutes) is never blindly honored in full
+    -- the delay is clamped to RETRY_MAX_DELAY_SECONDS."""
+    recorded_delays: list[float] = []
+    monkeypatch.setattr(
+        "hunter_governance_review.llm_audit.time.sleep", lambda seconds: recorded_delays.append(seconds)
+    )
+
+    attempts: list[int] = [0]
+
+    def _fake_urlopen(request: object, timeout: int) -> _FakeHTTPResponse:
+        attempts[0] += 1
+        if attempts[0] == 1:
+            exc = urllib.error.HTTPError(
+                url="http://x",
+                code=429,
+                msg="",
+                hdrs={"Retry-After": "2674"},  # 44m34s, matching the historical Groq incident
+                fp=io.BytesIO(b'{"error":"slow down"}'),
+            )
+            raise exc
+        return _FakeHTTPResponse(_APPROVED_BODY)
+
+    monkeypatch.setattr("hunter_governance_review.llm_audit.urllib.request.urlopen", _fake_urlopen)
+
+    chunk = DiffChunk(1, 1, ("a.py",), "@@ -1 +1 @@\n+ok")
+    result = run_llm_audit(
+        _env(),
+        pair=_pair(),
+        pr=_pr(),
+        chunk=chunk,
+        context_brief="ctx",
+        deterministic_findings=[],
+        health=ProviderHealth(),
+    )
+    assert result.verdict.verdict == "APPROVED"
+    assert recorded_delays == [RETRY_MAX_DELAY_SECONDS]
 
 
 def test_run_review_all_providers_failing_operationally_publishes_review_failed_never_approved(
@@ -1906,6 +2181,9 @@ def test_write_summary_stays_under_github_step_summary_limit_for_mass_identical_
         document_review=None,
         used_providers=(),
         provider_events=(),
+        retry_count=0,
+        retry_success_rate=None,
+        provider_recovery_rate=None,
         published_state="failure",
     )
     written = summary.read_bytes()
@@ -1914,6 +2192,49 @@ def test_write_summary_stays_under_github_step_summary_limit_for_mass_identical_
     assert "REVIEW_FAILED" in text
     assert "760/761 diff chunk(s) failed or were not reviewed" in text
     assert "760 total, 1 distinct error message(s)" in text
+
+
+def test_write_summary_renders_retry_metrics_when_present(tmp_path: Path) -> None:
+    summary = tmp_path / "summary.md"
+    coverage = CoverageManifest(
+        total_files=1,
+        total_chunks=1,
+        chunks_reviewed=1,
+        chunks_failed=0,
+        chunk_errors=(),
+        files_covered=("a.py",),
+        files_missing_from_diff=(),
+        diff_bytes_total=10,
+        diff_bytes_covered=10,
+    )
+    _write_summary(
+        {"GITHUB_STEP_SUMMARY": str(summary)},
+        decision=Decision(Outcome.APPROVED, "ok"),
+        pair=_pair(),
+        deterministic=DeterministicResult(),
+        audit=None,
+        coverage=coverage,
+        context=None,
+        document_review=None,
+        used_providers=("slot 1 (HUNTER_LLM_API_KEY)",),
+        provider_events=("slot 1 (HUNTER_LLM_API_KEY): succeeded after 1 retry(ies)",),
+        retry_count=1,
+        retry_success_rate=1.0,
+        provider_recovery_rate=1.0,
+        published_state="success",
+    )
+    text = summary.read_text(encoding="utf-8")
+    assert "Retry metrics" in text
+    assert "1 retry attempt(s)" in text
+    assert "retry success rate: 100%" in text
+    assert "provider recovery rate: 100%" in text
+
+
+def test_format_rate_renders_none_as_not_available() -> None:
+    assert _format_rate(None) == "n/a"
+    assert _format_rate(0.5) == "50%"
+    assert _format_rate(1.0) == "100%"
+    assert _format_rate(0.0) == "0%"
 
 
 # --- Decision Engine -------------------------------------------------------------------
