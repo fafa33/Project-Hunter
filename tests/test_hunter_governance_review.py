@@ -2405,6 +2405,264 @@ def test_run_review_one_chunk_failure_makes_coverage_incomplete_and_review_faile
     assert synthesis.calls == []  # incomplete coverage skips synthesis
 
 
+# --- Durable chunk-level checkpoint / resume (run_review integration) --------------
+
+
+class _FailAfterNCallsLlmRunner:
+    """Test double for the chunk-based LLMRunner protocol: the first
+    ``succeed_calls`` invocations succeed, every one after that raises --
+    simulating a provider (or every configured provider) running out of
+    quota/credits partway through a large review, exactly like PR #200's
+    own incident."""
+
+    def __init__(self, succeed_calls: int, verdict: str = "APPROVED") -> None:
+        self.succeed_calls = succeed_calls
+        self.verdict = verdict
+        self.calls: list[DiffChunk] = []
+
+    def __call__(
+        self,
+        env: dict[str, str],
+        *,
+        pair: ReviewPair,
+        pr: PullRequest,
+        chunk: DiffChunk,
+        context_brief: str,
+        deterministic_findings: list[Finding],
+        health: ProviderHealth,
+        timeout: int = 120,
+    ) -> LLMCallResult:
+        self.calls.append(chunk)
+        if len(self.calls) > self.succeed_calls:
+            raise LLMAuditError("simulated provider exhaustion")
+        return LLMCallResult(
+            verdict=AuditVerdict(verdict=self.verdict, summary=f"chunk {chunk.index}", findings=[], rationale="ok"),
+            provider="fake-provider",
+        )
+
+
+def _checkpointed_multi_chunk_gh() -> FakeGhRunner:
+    return FakeGhRunner(files=[CODE_FILE, ChangedFile("src/b.py", "modified", 1, 1)], diff=_multi_chunk_diff())
+
+
+def test_run_review_resumes_completed_chunks_from_checkpoint_and_skips_them(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr("hunter_governance_review.__main__.estimate_chunk_diff_budget", lambda **_: 40)
+    env = _env(HUNTER_GOVERNANCE_CHECKPOINT_PATH=str(tmp_path / "checkpoint.json"))
+    gh = _checkpointed_multi_chunk_gh()
+
+    llm_first = FakeChunkLlmRunner(verdict="APPROVED")
+    code = run_review(
+        args=_args(),
+        env=env,
+        gh=gh,
+        llm_runner=llm_first,
+        synthesis_runner=FakeSynthesisRunner(),
+        document_review_runner=FakeDocumentReviewRunner(),
+    )
+    assert code == 0
+    assert gh.statuses[-1]["state"] == "success"
+    total_chunks = len(llm_first.calls)
+    assert total_chunks > 1  # the monkeypatched tiny budget must force real splitting
+
+    gh.statuses.clear()
+    llm_second = FakeChunkLlmRunner(verdict="APPROVED")
+    code = run_review(
+        args=_args(),
+        env=env,
+        gh=gh,
+        llm_runner=llm_second,
+        synthesis_runner=FakeSynthesisRunner(),
+        document_review_runner=FakeDocumentReviewRunner(),
+    )
+    assert code == 0
+    assert llm_second.calls == []  # every chunk was resumed from checkpoint -- zero new provider calls
+    assert gh.statuses[-1]["state"] == "success"
+
+
+def test_run_review_resumes_from_first_unresolved_chunk_after_a_partial_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The direct regression test for PR #200's own incident: a run that
+    exhausts its provider budget partway through must not force the NEXT
+    attempt back to chunk 1 -- only the chunks that never produced a
+    validated verdict are reviewed again."""
+    monkeypatch.setattr("hunter_governance_review.__main__.estimate_chunk_diff_budget", lambda **_: 40)
+    env = _env(HUNTER_GOVERNANCE_CHECKPOINT_PATH=str(tmp_path / "checkpoint.json"))
+    gh = _checkpointed_multi_chunk_gh()
+
+    failing_llm = _FailAfterNCallsLlmRunner(succeed_calls=1)
+    code = run_review(
+        args=_args(),
+        env=env,
+        gh=gh,
+        llm_runner=failing_llm,
+        synthesis_runner=FakeSynthesisRunner(),
+        document_review_runner=FakeDocumentReviewRunner(),
+    )
+    assert code == 0
+    assert gh.statuses[-1]["state"] == "failure"  # incomplete coverage -> REVIEW_FAILED, never APPROVED
+    total_chunks = len(failing_llm.calls)
+    assert total_chunks > 1
+
+    gh.statuses.clear()
+    resuming_llm = FakeChunkLlmRunner(verdict="APPROVED")
+    code = run_review(
+        args=_args(),
+        env=env,
+        gh=gh,
+        llm_runner=resuming_llm,
+        synthesis_runner=FakeSynthesisRunner(),
+        document_review_runner=FakeDocumentReviewRunner(),
+    )
+    assert code == 0
+    assert gh.statuses[-1]["state"] == "success"
+    # Only the (total_chunks - 1) previously-failed chunks are reviewed
+    # again; chunk 1, which succeeded and was checkpointed, is never
+    # resent to the LLM.
+    assert len(resuming_llm.calls) == total_chunks - 1
+    assert all(chunk.index != 1 for chunk in resuming_llm.calls)
+
+
+def test_run_review_without_checkpoint_path_configured_never_resumes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Checkpointing is opt-in: unset ``HUNTER_GOVERNANCE_CHECKPOINT_PATH``
+    (every existing caller before this feature existed, including every
+    other test in this module) must behave exactly as before -- no
+    cross-run reuse, ever."""
+    monkeypatch.setattr("hunter_governance_review.__main__.estimate_chunk_diff_budget", lambda **_: 40)
+    env = _env()
+    gh = _checkpointed_multi_chunk_gh()
+
+    llm_first = FakeChunkLlmRunner(verdict="APPROVED")
+    run_review(
+        args=_args(),
+        env=env,
+        gh=gh,
+        llm_runner=llm_first,
+        synthesis_runner=FakeSynthesisRunner(),
+        document_review_runner=FakeDocumentReviewRunner(),
+    )
+    total_chunks = len(llm_first.calls)
+    assert total_chunks > 1
+
+    llm_second = FakeChunkLlmRunner(verdict="APPROVED")
+    run_review(
+        args=_args(),
+        env=env,
+        gh=gh,
+        llm_runner=llm_second,
+        synthesis_runner=FakeSynthesisRunner(),
+        document_review_runner=FakeDocumentReviewRunner(),
+    )
+    assert len(llm_second.calls) == total_chunks  # nothing resumed -- checkpointing was never configured
+
+
+def test_run_review_checkpoint_not_reused_across_a_different_head_sha(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr("hunter_governance_review.__main__.estimate_chunk_diff_budget", lambda **_: 40)
+    env = _env(HUNTER_GOVERNANCE_CHECKPOINT_PATH=str(tmp_path / "checkpoint.json"))
+
+    first_pr = _pr(head_oid="a" * 40)
+    gh1 = FakeGhRunner(
+        pr=first_pr, files=[CODE_FILE, ChangedFile("src/b.py", "modified", 1, 1)], diff=_multi_chunk_diff()
+    )
+    llm_first = FakeChunkLlmRunner(verdict="APPROVED")
+    run_review(
+        args=_args(),
+        env=env,
+        gh=gh1,
+        llm_runner=llm_first,
+        synthesis_runner=FakeSynthesisRunner(),
+        document_review_runner=FakeDocumentReviewRunner(),
+    )
+    total_chunks = len(llm_first.calls)
+    assert total_chunks > 1
+
+    second_pr = _pr(head_oid="c" * 40)  # simulates a new push -- different head SHA, same PR number
+    gh2 = FakeGhRunner(
+        pr=second_pr, files=[CODE_FILE, ChangedFile("src/b.py", "modified", 1, 1)], diff=_multi_chunk_diff()
+    )
+    llm_second = FakeChunkLlmRunner(verdict="APPROVED")
+    run_review(
+        args=_args(),
+        env=env,
+        gh=gh2,
+        llm_runner=llm_second,
+        synthesis_runner=FakeSynthesisRunner(),
+        document_review_runner=FakeDocumentReviewRunner(),
+    )
+    assert len(llm_second.calls) == total_chunks  # nothing reused -- the head SHA changed
+
+
+def test_run_review_resumes_document_sections_from_checkpoint(tmp_path: Path) -> None:
+    env = _env(HUNTER_GOVERNANCE_CHECKPOINT_PATH=str(tmp_path / "checkpoint.json"))
+    gh = FakeGhRunner()
+
+    doc_runner_first = FakeDocumentReviewRunner(verdict="APPROVED", fail_on_call=3)
+    code = run_review(
+        args=_args(),
+        env=env,
+        gh=gh,
+        llm_runner=FakeChunkLlmRunner(verdict="APPROVED"),
+        synthesis_runner=FakeSynthesisRunner(),
+        document_review_runner=doc_runner_first,
+    )
+    assert code == 0
+    assert gh.statuses[-1]["state"] == "failure"  # the one failed section makes document coverage incomplete
+    total_sections = doc_runner_first.call_count
+    assert total_sections > 1
+
+    gh.statuses.clear()
+    doc_runner_second = FakeDocumentReviewRunner(verdict="APPROVED")
+    code = run_review(
+        args=_args(),
+        env=env,
+        gh=gh,
+        llm_runner=FakeChunkLlmRunner(verdict="APPROVED"),
+        synthesis_runner=FakeSynthesisRunner(),
+        document_review_runner=doc_runner_second,
+    )
+    assert code == 0
+    assert gh.statuses[-1]["state"] == "success"
+    # Every section except the one that previously failed is resumed from
+    # checkpoint -- only that one section needs a fresh call.
+    assert doc_runner_second.call_count == 1
+
+
+def test_run_review_step_summary_and_console_report_resumed_chunks(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr("hunter_governance_review.__main__.estimate_chunk_diff_budget", lambda **_: 40)
+    summary = tmp_path / "summary.md"
+    env = _env(HUNTER_GOVERNANCE_CHECKPOINT_PATH=str(tmp_path / "checkpoint.json"), GITHUB_STEP_SUMMARY=str(summary))
+    gh = _checkpointed_multi_chunk_gh()
+
+    run_review(
+        args=_args(),
+        env=env,
+        gh=gh,
+        llm_runner=FakeChunkLlmRunner(verdict="APPROVED"),
+        synthesis_runner=FakeSynthesisRunner(),
+        document_review_runner=FakeDocumentReviewRunner(),
+    )
+    capsys.readouterr()  # discard the first run's own (unresumed) output
+
+    run_review(
+        args=_args(),
+        env=env,
+        gh=gh,
+        llm_runner=FakeChunkLlmRunner(verdict="APPROVED"),
+        synthesis_runner=FakeSynthesisRunner(),
+        document_review_runner=FakeDocumentReviewRunner(),
+    )
+    captured = capsys.readouterr()
+    assert "[Checkpoint] resumed" in captured.out
+    text = summary.read_text(encoding="utf-8")
+    assert "Checkpoint (resumed from a prior run)" in text
+
+
 def test_run_review_diff_exceeding_sanity_bound_fails_closed_never_approves(monkeypatch: pytest.MonkeyPatch) -> None:
     """F-001 regression: a diff that cannot be fully retrieved/represented must
     never be silently truncated and treated as complete evidence."""

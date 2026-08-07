@@ -10,3 +10,4 @@ __pycache__/
 *.log
 nohup.out
 reports/
+.hunter_governance_checkpoint/

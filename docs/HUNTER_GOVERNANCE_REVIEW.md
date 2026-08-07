@@ -640,6 +640,47 @@ staying up.
 | `HUNTER_LLM_PROMPT_TOKEN_BUDGET` | 6,000 (tokens) | Per-request prompt character budget; tune once your provider's real limits are verified |
 | `HUNTER_LLM_MAX_COMPLETION_TOKENS` | 4,096 | Completion token cap, clamped to `[512, 8192]` |
 | `HUNTER_GOVERNANCE_PROTECTED_BRANCHES` | `main` | Comma-separated protected branches the gate guards |
+| `HUNTER_GOVERNANCE_CHECKPOINT_PATH` | unset (checkpointing disabled) | Path to a durable chunk-level checkpoint file (see "Durable chunk-level checkpoint" below); the workflow YAML sets this and pairs it with `actions/cache` |
+
+### Durable chunk-level checkpoint
+
+A large pull request's diff can need more provider-call budget (rate
+limits, quota, credits) than a single run has available. Every diff chunk
+and authoritative-document section is written to
+`scripts/hunter_governance_review/checkpoint.py`'s durable store
+immediately after it produces a validated verdict — not batched, not
+deferred to the end of the run — so a run interrupted by a job timeout, a
+cancelled/superseded workflow run, or every configured provider's
+quota/credits running out mid-run leaves every already-completed unit of
+work available for the next attempt to resume from, instead of restarting
+at chunk 1.
+
+A checkpoint entry is only ever reused when the whole review's fingerprint
+(repository, pull request number, exact head SHA, exact base SHA, PR
+title/body, and an internal review-semantics version) **and** that
+specific chunk's own content hash both still match exactly, and it is
+re-validated through the same strict schema/consistency validation used
+for a live response before it is trusted. Any mismatch — a new commit, an
+edited PR description, a changed chunk-token budget that reshuffled chunk
+boundaries, or a corrupted/foreign checkpoint file — is simply a miss: the
+affected unit of work (or, for a whole-fingerprint mismatch, the entire
+checkpoint) is reviewed live again, exactly as if no checkpoint existed.
+`APPROVED` still requires every chunk and section, resumed or freshly
+reviewed, to have succeeded — checkpointing changes only where an
+already-validated verdict is kept, never what counts as complete coverage.
+
+Checkpointing is entirely opt-in: unset `HUNTER_GOVERNANCE_CHECKPOINT_PATH`
+(the default) makes it a complete no-op. The workflow sets this path and
+restores/saves the directory via `actions/cache`, scoped to this exact
+PR/head/base so a fresh workflow run's container can resume where a prior
+attempt left off; the engine itself independently re-verifies every
+invalidation condition above before trusting anything restored from cache,
+so an imprecise or stale cache hit can only ever cost a wasted restore,
+never an incorrect verdict. `actions/cache` cannot write a new cache entry
+for a workflow run triggered from a fork pull request (GitHub's own
+cache-poisoning protection), so checkpointing has no effect for external
+fork contributions — those simply behave exactly as before this feature
+existed.
 
 ### Branch protection
 

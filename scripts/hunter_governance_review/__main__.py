@@ -52,6 +52,7 @@ from __future__ import annotations
 import argparse
 import os
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Protocol
 
 from hunter_governance_review.aggregate import (
@@ -64,6 +65,7 @@ from hunter_governance_review.aggregate import (
     describe_chunks_for_synthesis,
     providers_used,
 )
+from hunter_governance_review.checkpoint import CheckpointStore, chunk_content_hash
 from hunter_governance_review.chunking import (
     DiffChunk,
     covered_filenames,
@@ -113,6 +115,16 @@ from hunter_governance_review.llm_audit import (
 # which would make coverage accounting blind to the loss (a file's content
 # could be cut off after chunking already recorded that file as "covered").
 DIFF_LIMIT = 5_000_000
+
+# Durable chunk-level checkpoint file (see checkpoint.py). Opt-in only: a
+# checkpoint is loaded/written only when HUNTER_GOVERNANCE_CHECKPOINT_PATH is
+# set in the environment -- unset (the default for every existing caller,
+# including this module's own test suite), checkpointing is a complete
+# no-op and behavior is byte-for-byte unchanged from before it existed. The
+# workflow YAML sets this path and pairs it with actions/cache so the file
+# survives across separate workflow runs, not just across chunks within one
+# run -- see .github/workflows/hunter-governance-review.yml.
+_CHECKPOINT_PATH_ENV = "HUNTER_GOVERNANCE_CHECKPOINT_PATH"
 
 
 class LLMRunner(Protocol):
@@ -283,6 +295,8 @@ def _write_summary(
     retry_count: int,
     retry_success_rate: float | None,
     provider_recovery_rate: float | None,
+    resumed_diff_chunks: int = 0,
+    resumed_document_sections: int = 0,
     published_state: str,
 ) -> None:
     summary_path = env.get("GITHUB_STEP_SUMMARY")
@@ -341,6 +355,14 @@ def _write_summary(
         )
         if document_review.chunk_errors:
             lines.extend(_dedupe_error_lines(document_review.chunk_errors, label="Section errors"))
+    if resumed_diff_chunks or resumed_document_sections:
+        lines.append("")
+        lines.append("### Checkpoint (resumed from a prior run)")
+        lines.append(
+            f"- **Diff chunks resumed**: {resumed_diff_chunks}; "
+            f"**document sections resumed**: {resumed_document_sections} "
+            "(reused a prior run's already-validated verdict instead of a new provider call)"
+        )
     if used_providers or provider_events:
         lines.append("")
         lines.append("### Provider execution")
@@ -537,6 +559,18 @@ def run_review(
     # the SAME run, not just retried on the call that failed -- see
     # llm_audit.ProviderHealth's docstring.
     health = ProviderHealth()
+    checkpoint_path_raw = env.get(_CHECKPOINT_PATH_ENV)
+    checkpoint = CheckpointStore.load(
+        Path(checkpoint_path_raw) if checkpoint_path_raw else None,
+        repository=repository,
+        pull_request_number=pr.number,
+        source_head_sha=pair.source_head_sha,
+        target_base_sha=pair.target_base_sha,
+        pr_title=pr.title,
+        pr_body=pr.body,
+    )
+    resumed_diff_chunks = 0
+    resumed_document_sections = 0
     if should_audit:
         assert context_manifest is not None
         max_chunk_chars = estimate_chunk_diff_budget(
@@ -548,6 +582,18 @@ def run_review(
         chunks = split_diff_into_chunks(diff, max_chunk_chars)
         outcomes: list[ChunkOutcome] = []
         for chunk in chunks:
+            chunk_hash = chunk_content_hash(chunk.text)
+            cached = checkpoint.get(kind="diff", index=chunk.index, chunk_hash=chunk_hash)
+            if cached is not None:
+                outcomes.append(
+                    ChunkOutcome(chunk.index, chunk.total, chunk.files, cached.verdict, None, cached.provider)
+                )
+                resumed_diff_chunks += 1
+                print(
+                    f"[Progress] chunk {chunk.index}/{chunk.total} resumed from checkpoint "
+                    f"(provider={cached.provider})"
+                )
+                continue
             try:
                 result = llm_runner(
                     env,
@@ -561,6 +607,21 @@ def run_review(
                 outcomes.append(
                     ChunkOutcome(chunk.index, chunk.total, chunk.files, result.verdict, None, result.provider)
                 )
+                # Durable the moment this chunk succeeds -- not batched, not
+                # deferred to the end of the run -- so a run interrupted by
+                # a job timeout, cancellation, or every provider's
+                # quota/credits running out mid-run (see PR #200's own
+                # incident record) still leaves every already-completed
+                # chunk available for the next attempt to resume from
+                # instead of restarting at chunk 1. A no-op when
+                # checkpointing is not configured (see checkpoint.py).
+                checkpoint.put(
+                    kind="diff",
+                    index=chunk.index,
+                    chunk_hash=chunk_hash,
+                    provider=result.provider,
+                    verdict=result.verdict,
+                )
                 # Pure observability: a large diff's sequential review can
                 # run for many minutes with nothing else printed (the full
                 # error text stays in `outcomes`/coverage.chunk_errors,
@@ -572,6 +633,8 @@ def run_review(
             except LLMAuditError as exc:
                 outcomes.append(ChunkOutcome(chunk.index, chunk.total, chunk.files, None, str(exc), None))
                 print(f"[Progress] chunk {chunk.index}/{chunk.total} failed: {exc.__class__.__name__}")
+        if resumed_diff_chunks:
+            print(f"[Checkpoint] resumed {resumed_diff_chunks}/{len(chunks)} diff chunk(s) from a prior run")
         expected_files = {f.filename for f in files}
         missing_from_diff = tuple(sorted(expected_files - covered_filenames(chunks)))
         aggregation = aggregate_chunk_outcomes(
@@ -638,7 +701,22 @@ def run_review(
                     architectural_evidence_summary=architectural_evidence_summary,
                     document_path=document_path,
                 )
+                document_kind = f"document:{document_path}"
                 for section in split_document_into_chunks(document_path, document_text, section_budget):
+                    section_hash = chunk_content_hash(section.text)
+                    cached = checkpoint.get(kind=document_kind, index=section.index, chunk_hash=section_hash)
+                    if cached is not None:
+                        document_outcomes.append(
+                            ChunkOutcome(
+                                section.index, section.total, section.files, cached.verdict, None, cached.provider
+                            )
+                        )
+                        resumed_document_sections += 1
+                        print(
+                            f"[Progress] {document_path} section {section.index}/{section.total} resumed "
+                            f"from checkpoint (provider={cached.provider})"
+                        )
+                        continue
                     try:
                         result = document_review_runner(
                             env,
@@ -653,6 +731,13 @@ def run_review(
                                 section.index, section.total, section.files, result.verdict, None, result.provider
                             )
                         )
+                        checkpoint.put(
+                            kind=document_kind,
+                            index=section.index,
+                            chunk_hash=section_hash,
+                            provider=result.provider,
+                            verdict=result.verdict,
+                        )
                         print(
                             f"[Progress] {document_path} section {section.index}/{section.total} reviewed "
                             f"(provider={result.provider})"
@@ -665,6 +750,11 @@ def run_review(
                             f"[Progress] {document_path} section {section.index}/{section.total} failed: "
                             f"{exc.__class__.__name__}"
                         )
+            if resumed_document_sections:
+                print(
+                    f"[Checkpoint] resumed {resumed_document_sections}/{len(document_outcomes)} "
+                    "authoritative-document section(s) from a prior run"
+                )
             document_review_result: AggregatedDocumentReview = aggregate_document_chunk_outcomes(
                 document_outcomes,
                 bytes_total=total_document_bytes,
@@ -734,6 +824,11 @@ def run_review(
         )
     if used_providers:
         print(f"[ProvidersUsed] {', '.join(used_providers)}")
+    if resumed_diff_chunks or resumed_document_sections:
+        print(
+            f"[Checkpoint] resumed diff_chunks={resumed_diff_chunks} "
+            f"document_sections={resumed_document_sections} from a prior run's durable checkpoint"
+        )
     if health.retry_count:
         print(
             f"[RetryMetrics] attempts={health.retry_count} "
@@ -782,6 +877,8 @@ def run_review(
         retry_count=health.retry_count,
         retry_success_rate=health.retry_success_rate,
         provider_recovery_rate=health.provider_recovery_rate,
+        resumed_diff_chunks=resumed_diff_chunks,
+        resumed_document_sections=resumed_document_sections,
         published_state=state.value,
     )
     return 0
