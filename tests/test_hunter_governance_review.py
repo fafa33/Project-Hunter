@@ -198,6 +198,8 @@ class FakeGhRunner:
         statuses: list[dict[str, str]] | None = None,
         canonical_docs: dict[str, str] | None = None,
         directories: dict[str, list[str]] | None = None,
+        canonical_docs_by_ref: dict[str, dict[str, str]] | None = None,
+        directories_by_ref: dict[str, dict[str, list[str]]] | None = None,
         fail_pr: bool = False,
         fail_reresolve: bool = False,
         fail_files: bool = False,
@@ -211,6 +213,11 @@ class FakeGhRunner:
         self.statuses = statuses if statuses is not None else []
         self.canonical_docs = canonical_docs if canonical_docs is not None else dict(DEFAULT_CANONICAL_DOCS)
         self.directories = directories if directories is not None else {}
+        # ref-specific overrides -- e.g. content that exists at the PR's own
+        # head SHA but not at base, simulating a PR that genuinely
+        # introduces a new canonical record (see the bootstrap-fix tests).
+        self.canonical_docs_by_ref = canonical_docs_by_ref or {}
+        self.directories_by_ref = directories_by_ref or {}
         self.fail_pr = fail_pr
         self.fail_reresolve = fail_reresolve
         self.fail_files = fail_files
@@ -238,9 +245,13 @@ class FakeGhRunner:
         return list(self.files)
 
     def get_file_content(self, path: str, ref: str) -> str | None:
+        if ref in self.canonical_docs_by_ref and path in self.canonical_docs_by_ref[ref]:
+            return self.canonical_docs_by_ref[ref][path]
         return self.canonical_docs.get(path)
 
     def list_directory(self, path: str, ref: str) -> list[str] | None:
+        if ref in self.directories_by_ref and path in self.directories_by_ref[ref]:
+            return self.directories_by_ref[ref][path]
         return self.directories.get(path)
 
     def post_commit_status(
@@ -423,6 +434,44 @@ def test_run_review_evidence_failure_is_review_failed() -> None:
 
 def test_run_review_missing_adr_reference_end_to_end_is_changes_required() -> None:
     gh = FakeGhRunner(pr=_pr(body=GOOD_BODY + "\n\nSee ADR-9999 for context."))
+    code = run_review(args=_args(), env=_env(), gh=gh)
+    assert code == 0
+    assert gh.statuses[0]["state"] == "failure"
+    assert "Changes required" in gh.statuses[0]["description"]
+
+
+def _valid_new_adr_text(number: str, title: str) -> str:
+    return (
+        f"# ADR {number}: {title}\n\n## Status\n\nProposed.\n\n## Context\n\nc\n\n"
+        "## Decision\n\nd\n\n## Consequences\n\n- c\n\n## Alternatives Considered\n\n- a\n"
+    )
+
+
+def test_run_review_bootstrap_pr_introducing_a_new_adr_is_approved_end_to_end() -> None:
+    """Direct regression test for the post-PR-#200 bootstrap defect: a PR
+    that legitimately introduces a brand-new ADR referenced from its own
+    body must not deadlock on "the record can't exist yet because this is
+    the PR that adds it" -- it must resolve as a proposed record and the
+    review must be able to reach APPROVED."""
+    pr = _pr(body=GOOD_BODY + "\n\nThis PR proposes ADR-0029.")
+    adr_path = "docs/ADR/0029-something.md"
+    gh = FakeGhRunner(
+        pr=pr,
+        directories_by_ref={pr.head_oid: {"docs/ADR": ["0029-something.md"]}},
+        canonical_docs_by_ref={pr.head_oid: {adr_path: _valid_new_adr_text("0029", "Something")}},
+        files=[CODE_FILE, ChangedFile(adr_path, "added", 20, 0)],
+    )
+    code = run_review(args=_args(), env=_env(), gh=gh)
+    assert code == 0
+    assert gh.statuses[0]["state"] == "success"
+
+
+def test_run_review_bootstrap_pr_referencing_but_not_adding_the_adr_still_fails() -> None:
+    """The bootstrap fix must not become a general bypass: a PR that merely
+    mentions a nonexistent ADR number, without actually adding it, is
+    still rejected exactly as before."""
+    pr = _pr(body=GOOD_BODY + "\n\nSee ADR-0029 for context.")
+    gh = FakeGhRunner(pr=pr)  # no ADR-0029 anywhere, at base or head
     code = run_review(args=_args(), env=_env(), gh=gh)
     assert code == 0
     assert gh.statuses[0]["state"] == "failure"
