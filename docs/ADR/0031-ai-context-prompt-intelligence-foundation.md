@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed.
+Accepted.
 
 ## Date
 
@@ -12,7 +12,7 @@ Proposed.
 
 This ADR defines architecture only. It does not authorize a production LLM integration, a Model Adapter, provider credentials, or any change to Hunter Governance Review. Runtime implementation may begin only after this ADR is accepted and a separately scoped implementation plan is approved.
 
-The governing preparation record is [ADPR-0006](../architecture-records/ADPR-0006-ai-context-prompt-intelligence-foundation.md). Its second independent preparation audit confirmed that the Evidence Intelligence-specific option is ready to govern revision of this ADR. That preparation outcome does not accept this Proposed ADR or authorize implementation.
+The governing preparation record is [ADPR-0006](../architecture-records/ADPR-0006-ai-context-prompt-intelligence-foundation.md). Its second independent preparation audit confirmed that the Evidence Intelligence-specific option is ready to govern revision of this ADR. That preparation outcome did not itself accept this ADR and does not authorize implementation.
 
 Project Hunter has no active production LLM execution path. Evidence Intelligence defines an injected `AIExtractionProvider` boundary, but no concrete external model adapter or canonical prompt builder exists. Its provider output is persisted only as a proposal and is not canonical knowledge. Hunter Governance Review is deliberately deterministic, repository-native, and protected by regression tests that prohibit an LLM dependency.
 
@@ -656,6 +656,6 @@ Rejected. The current gate intentionally has no LLM dependency, and provider ava
 - ADR 0016 is reaffirmed: existence of an AI artifact, successful provider call, or successful validation does not promote output to canonical authority.
 - ADR 0020 is extended and reaffirmed: historical source selection is strict-known, immutable, deterministic, and has no latest/current or neutral fallback.
 - ADR 0029 remains Proposed and is neither accepted, amended, nor superseded by this ADR. Development Governance supplies the binding lifecycle used for this contribution.
-- ADR 0030 remains Proposed and is neither accepted nor superseded. This ADR independently establishes only the Evidence Intelligence-specific pre-model foundation. If ADR 0030 later proceeds to acceptance, its implementation sequence and overlapping contract language must preserve this consumer scope and must not infer generic ownership from this Proposed decision.
+- ADR 0030 remains Proposed and is neither accepted nor superseded. This ADR independently establishes only the Evidence Intelligence-specific pre-model foundation. If ADR 0030 later proceeds to acceptance, its implementation sequence and overlapping contract language must preserve this consumer scope and must not infer generic ownership from this Accepted decision.
 
 No accepted ADR is superseded by this decision.
