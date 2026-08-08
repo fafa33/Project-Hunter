@@ -699,3 +699,164 @@ def test_attacker_dependency_pr_fails_governance_checks() -> None:
     assert "V-030" in validator_ids
     assert "V-040" in validator_ids
     assert "V-050" in validator_ids
+
+
+# --- Systemic Structural PR Contract & Lifecycle Regression Tests ---------------------------
+
+
+def test_contract_missing_summary() -> None:
+    # 2. Missing Summary -> rejected.
+    body = GOOD_BODY.replace("## Summary", "## Unrelated")
+    pr = _pr(body=body)
+    ctx = ValidationContext(pr=pr, files=[])
+    result = run_deterministic_engine(ctx)
+    assert any(f.validator_id == "V-030" for f in result.findings)
+
+
+def test_contract_missing_scope() -> None:
+    # 3. Missing Scope/Architecture -> rejected.
+    body = GOOD_BODY.replace("## Scope and architecture", "## Unrelated")
+    pr = _pr(body=body)
+    ctx = ValidationContext(pr=pr, files=[ChangedFile("src/hunter/core.py", "modified", 1, 1)])
+    result = run_deterministic_engine(ctx)
+    assert any(f.validator_id == "V-030" for f in result.findings)
+
+
+def test_contract_missing_matrix() -> None:
+    # 4. Missing acceptance matrix -> rejected.
+    body = (
+        GOOD_BODY.replace("## Acceptance-criteria matrix", "## Unrelated")
+        .replace("| Orchestration wiring exists | PASS | src/hunter/mispricing/service.py |", "")
+        .replace("| Deterministic replay preserved | PASS | tests/test_mispricing_replay.py |", "")
+    )
+    pr = _pr(body=body)
+    ctx = ValidationContext(pr=pr, files=[])
+    result = run_deterministic_engine(ctx)
+    # Both V-030 (missing section) and V-040 (missing matrix) should fail
+    validator_ids = {f.validator_id for f in result.findings}
+    assert "V-030" in validator_ids
+    assert "V-040" in validator_ids
+
+
+def test_contract_invalid_acceptance_status() -> None:
+    # 5. Invalid acceptance status -> rejected.
+    body = GOOD_BODY.replace("PASS", "INVALID_STATUS")
+    pr = _pr(body=body)
+    ctx = ValidationContext(pr=pr, files=[])
+    result = run_deterministic_engine(ctx)
+    # V-040 (missing matrix because of invalid status row)
+    assert any(f.validator_id == "V-040" for f in result.findings)
+
+
+def test_contract_missing_validation() -> None:
+    # 6. Missing Validation (Operational validation / Verification) -> rejected.
+    body = (
+        GOOD_BODY.replace("## Operational validation", "## Unrelated")
+        .replace("operational validation", "unrelated")
+        .replace("operational-validation", "unrelated")
+    )
+    pr = _pr(body=body)
+    ctx = ValidationContext(pr=pr, files=[ChangedFile("src/hunter/core.py", "modified", 1, 1)])
+    result = run_deterministic_engine(ctx)
+    assert any(f.validator_id == "V-030" for f in result.findings)
+
+
+def test_contract_missing_limitations() -> None:
+    # 7. Missing limitations/risks -> rejected.
+    body = GOOD_BODY.replace("## Remaining limitations and risks", "## Unrelated")
+    pr = _pr(body=body)
+    ctx = ValidationContext(pr=pr, files=[ChangedFile("src/hunter/core.py", "modified", 1, 1)])
+    result = run_deterministic_engine(ctx)
+    assert any(f.validator_id == "V-030" for f in result.findings)
+
+
+def test_contract_missing_readiness_declaration() -> None:
+    # 8. Missing readiness declaration -> rejected.
+    body = GOOD_BODY.replace("- [x] `READY FOR REVIEW`", "- [ ] `READY FOR REVIEW`")
+    pr = _pr(body=body)
+    ctx = ValidationContext(pr=pr, files=[])
+    result = run_deterministic_engine(ctx)
+    assert any(f.validator_id == "V-050" for f in result.findings)
+
+
+def test_contract_placeholder_content() -> None:
+    # 9. Placeholder content -> rejected.
+    body = GOOD_BODY + "\ntodo: fix this later"
+    pr = _pr(body=body)
+    ctx = ValidationContext(pr=pr, files=[])
+    result = run_deterministic_engine(ctx)
+    assert any(f.validator_id == "V-021" for f in result.findings)
+
+
+def test_contract_ambiguous_readiness() -> None:
+    # 10. Ambiguous readiness -> rejected.
+    body = GOOD_BODY + "\n- [x] `CHANGES REQUIRED` — implementation remains incomplete."
+    pr = _pr(body=body)
+    ctx = ValidationContext(pr=pr, files=[])
+    result = run_deterministic_engine(ctx)
+    assert any(f.validator_id == "V-050" for f in result.findings)
+
+
+def test_correct_hunter_controlled_pr_passes() -> None:
+    # 11. Correctly constructed Hunter-controlled PR -> passes structural contract.
+    # 19. PR #204-shaped regression fixture succeeds after canonical construction.
+    with open("docs/PR_204_BODY.md", encoding="utf-8") as f:
+        pr_body = f.read()
+    pr = _pr(body=pr_body, draft=False)
+    files = [
+        ChangedFile("scripts/hunter_governance_review/contracts.py", "modified", 5, 5),
+        ChangedFile("scripts/hunter_governance_review/deterministic.py", "modified", 5, 5),
+    ]
+    ctx = ValidationContext(pr=pr, files=files)
+    result = run_deterministic_engine(ctx)
+    # Should have no blocking findings (only INFO V-090 for self-modification)
+    assert not result.blocking
+
+
+def test_draft_ready_for_review_lifecycle() -> None:
+    # 16. Draft -> ready_for_review lifecycle behaves correctly.
+    # When in Draft state, structural template errors are non-blocking INFO severity
+    pr = _pr(body="completely empty body", draft=True)
+    ctx = ValidationContext(pr=pr, files=[])
+    result = run_deterministic_engine(ctx)
+    assert result.blocking is False  # All findings (V-020, V-030, etc.) are INFO severity on draft
+    assert any(f.severity is Severity.INFO for f in result.findings)
+
+    # When draft is turned off, they escalate to BLOCKING immediately
+    pr_ready = _pr(body="completely empty body", draft=False)
+    ctx_ready = ValidationContext(pr=pr_ready, files=[])
+    result_ready = run_deterministic_engine(ctx_ready)
+    assert result_ready.blocking is True
+    assert any(f.severity is Severity.BLOCKING for f in result_ready.findings)
+
+
+def test_pr_body_mutation_invalidates_governance() -> None:
+    # 17. PR body mutation invalidates/re-evaluates governance appropriately.
+    # Initially passes
+    pr = _pr(body=GOOD_BODY)
+    ctx = ValidationContext(pr=pr, files=[])
+    result = run_deterministic_engine(ctx)
+    assert len(result.findings) == 0
+
+    # Body is mutated to be invalid (empty)
+    pr_mutated = _pr(body="")
+    ctx_mutated = ValidationContext(pr=pr_mutated, files=[])
+    result_mutated = run_deterministic_engine(ctx_mutated)
+    assert len(result_mutated.findings) > 0
+    assert result_mutated.blocking is True
+
+
+def test_pr_head_mutation_stale_auth() -> None:
+    # 18. PR head mutation cannot reuse stale authorization.
+    from unittest.mock import MagicMock
+
+    from hunter_governance_review.__main__ import _resolve_pair_freshness
+
+    pair = _pair()
+    gh = MagicMock()
+    # Mock PR returning a different head SHA (mutation)
+    gh.get_pull_request.return_value = _pr(head_oid="different_sha")
+
+    current, pair_fresh, error = _resolve_pair_freshness(gh, 7, pair)
+    assert pair_fresh is False
+    assert "stale source" in error

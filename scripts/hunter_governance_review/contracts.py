@@ -226,3 +226,36 @@ class ContextManifest:
             "missing_mandatory": list(self.missing_mandatory),
             "missing_references": list(self.missing_references),
         }
+
+
+class CanonicalPRContract:
+    """The single, authoritative, machine-verifiable contract for human-authored pull requests."""
+
+    REQUIRED_SECTIONS = (
+        "Summary",
+        "Scope and architecture",
+        "Acceptance-criteria matrix",
+        "Verification",
+        "Operational validation",
+        "Remaining limitations and risks",
+        "Implementer readiness declaration",
+    )
+
+    # Docs-only contributions scale their evidence down proportionally, per
+    # DEVELOPMENT_GOVERNANCE.md proportionality rules.
+    MINIMAL_SECTIONS = ("Summary", "Acceptance-criteria matrix", "Implementer readiness declaration")
+
+    PROHIBITED_PLACEHOLDERS = (
+        "replace with",
+        "todo:",
+        "lorem ipsum",
+        "fix me",
+        "placeholder",
+        "example: ",
+    )
+
+    PROHIBITED_TITLES = {"", "wip", "draft", "untitled", "update", "updates", "change", "changes"}
+
+    ALLOWED_ACCEPTANCE_STATUSES = ("pass", "fail", "blocked", "not applicable")
+
+    ALLOWED_READINESS_DECLARATIONS = ("ready for review", "changes required", "blocked")
