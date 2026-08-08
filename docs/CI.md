@@ -34,6 +34,19 @@ Tests in CI must remain deterministic and must not require live network access, 
 
 The workflow pins GitHub Actions by commit SHA and uses pinned Python dependency constraints so quality-gate behavior does not drift silently.
 
+## Merge Gate
+
+Project Hunter also runs the **Hunter Governance Review** mandatory merge gate
+(`docs/HUNTER_GOVERNANCE_REVIEW.md`). The gate is not part of this CI
+workflow: it is a separate fail-closed, entirely deterministic and
+repository-native process (no external LLM or other provider is ever
+contacted) that validates the PR against canonical governance rules and
+confirms required repository evidence exists, and publishes the required
+`Hunter Governance Review` status check. No pull request may merge into a
+protected branch unless that check passes for the exact current source HEAD
+and target BASE. CI quality gates are necessary but never sufficient for
+merge.
+
 ## Developer Workflow
 
 Before opening or updating a pull request, run:
