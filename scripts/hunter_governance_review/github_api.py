@@ -22,6 +22,25 @@ _PR_VIEW_FIELDS = (
     "number,title,body,state,isDraft,headRefName,headRefOid," "baseRefName,baseRefOid,mergeable,changedFiles,url,author"
 )
 
+_GITHUB_APP_AUTHOR_ALIASES = {
+    "app/dependabot": "dependabot[bot]",
+    "app/renovate": "renovate[bot]",
+}
+
+
+def _normalize_author_login(login: str) -> str:
+    """Normalize GitHub CLI app-style author identities to canonical bot logins.
+
+    ``gh pr view --json author`` represents GitHub App authors such as
+    Dependabot as ``app/dependabot``. The REST API and Hunter's deterministic
+    trust policy use the canonical bot login ``dependabot[bot]``. Normalize at
+    the GitHub boundary so downstream governance does not depend on which
+    GitHub API representation supplied the same authoritative actor identity.
+    """
+
+    normalized = login.strip().lower()
+    return _GITHUB_APP_AUTHOR_ALIASES.get(normalized, normalized)
+
 
 class GitHubError(RuntimeError):
     """Raised when a GitHub query fails or returns unusable data."""
@@ -86,6 +105,7 @@ class GhCliRunner:
             author_login = str(author_payload.get("login") or "")
         else:
             author_login = str(author_payload)
+        author_login = _normalize_author_login(author_login)
 
         return PullRequest(
             number=int(payload["number"]),
