@@ -1,0 +1,110 @@
+name: Hunter Governance Review
+
+# Mandatory fail-closed merge gate for pull requests targeting protected
+# branches. See docs/HUNTER_GOVERNANCE_REVIEW.md.
+#
+# This gate is entirely deterministic, repository-native, and CI-native: it
+# validates the pull request against the repository's canonical governance
+# rules and confirms required repository evidence (canonical documents,
+# referenced ADR/ADPR records) exists at the exact base commit. It never
+# calls an external LLM or any other network service besides GitHub itself,
+# requires no API key or provider secret, and makes zero paid or external
+# API calls. No external provider's availability, quota, billing state, or
+# API error can ever block or approve a merge -- only a genuine
+# deterministic governance violation or missing required repository
+# evidence can.
+#
+# Security notes:
+# - Uses the plain `pull_request` event (never `pull_request_target`).
+# - The gate engine is checked out from the DEFAULT branch only; code from the
+#   pull request under review is never checked out or executed.
+# - The engine reads PR metadata and changed files via the GitHub API and
+#   publishes exactly one commit status check: "Hunter Governance Review".
+# - Minimal permissions: contents read, pull-requests read, statuses write.
+#   The gate never writes PR comments and never runs untrusted code.
+#
+# Bootstrap exception: until the gate engine exists on the default branch (the
+# installation PR has not merged yet), the engine is materialized from the PR
+# head so the required status check can publish during installation validation.
+# Once the installation PR merges, the default branch owns the engine and this
+# fallback never activates.
+#
+# The workflow step succeeding means only "the gate ran and reported". The
+# merge authority is the published status check, which is FAILURE for
+# CHANGES_REQUIRED and REVIEW_FAILED and SUCCESS only for APPROVED.
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - ready_for_review
+      - converted_to_draft
+      - edited
+      - review_requested
+      - review_request_removed
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "Pull request number to review"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: read
+  statuses: write
+
+concurrency:
+  group: hunter-governance-review-${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+  cancel-in-progress: true
+
+jobs:
+  governance-review:
+    name: Hunter Governance Review
+    runs-on: ubuntu-latest
+    # Deterministic-only review: no external LLM call, chunking, or retry
+    # loop remains in this path, so there is no realistic scenario where a
+    # single PR's evaluation takes more than a few minutes (GitHub API
+    # calls for PR metadata, changed files, and a handful of governance
+    # document lookups). 15 minutes is generous headroom over that, not a
+    # figure tuned against any external provider's behavior.
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout trusted gate engine (default branch)
+        uses: actions/checkout@v4
+        with:
+          path: engine
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Checkout PR engine (bootstrap fallback)
+        uses: actions/checkout@v4
+        with:
+          path: pr-engine
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Run Hunter Governance Review
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_SERVER_URL: ${{ github.server_url }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+          HUNTER_GOVERNANCE_PROTECTED_BRANCHES: ${{ vars.HUNTER_GOVERNANCE_PROTECTED_BRANCHES }}
+        run: |
+          set -euo pipefail
+          ENGINE_ROOT="${GITHUB_WORKSPACE}/engine"
+          if [ ! -f "${ENGINE_ROOT}/scripts/hunter_governance_review/__main__.py" ]; then
+            echo "::warning::Hunter Governance Review bootstrap mode: the gate engine is not yet on the default branch."
+            echo "::warning::Running the engine from the PR head for this one-time installation review."
+            ENGINE_ROOT="${GITHUB_WORKSPACE}/pr-engine"
+          fi
+          cd "${ENGINE_ROOT}/scripts"
+          python -m hunter_governance_review \
+            --pr "${PR_NUMBER}" \
+            --repository "${GITHUB_REPOSITORY}" \
+            --root "${GITHUB_WORKSPACE}/engine"
