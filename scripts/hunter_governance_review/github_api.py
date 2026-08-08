@@ -19,8 +19,7 @@ from typing import Protocol
 from hunter_governance_review.contracts import ChangedFile, PullRequest
 
 _PR_VIEW_FIELDS = (
-    "number,title,body,state,isDraft,headRefName,headRefOid,"
-    "baseRefName,baseRefOid,mergeable,changedFiles,url,author"
+    "number,title,body,state,isDraft,headRefName,headRefOid," "baseRefName,baseRefOid,mergeable,changedFiles,url,author"
 )
 
 
