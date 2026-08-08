@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import json
 
+from hunter_governance_review.contracts import ChangedFile
 from hunter_governance_review.deterministic import ValidationContext, is_trusted_dependency_pr
 from hunter_governance_review.github_api import GhCliRunner, _normalize_author_login
-from hunter_governance_review.contracts import ChangedFile
 
 
 def _payload(author_login: str) -> str:
