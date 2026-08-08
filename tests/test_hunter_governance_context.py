@@ -316,7 +316,7 @@ def test_d_pr_references_nonexistent_adr_without_adding_it_is_rejected() -> None
         (
             "# ADR 0029: Bad Status\n\n## Status\n\nWishful.\n\n## Context\n\nc\n\n## Decision\n\nd\n\n"
             "## Consequences\n\nc\n\n## Alternatives Considered\n\na\n",
-            "does not declare a recognized status",
+            "Status section",
         ),
     ],
 )
@@ -544,7 +544,41 @@ def test_resolve_context_without_head_sha_behaves_exactly_as_before() -> None:
 
 
 def _valid_adpr_text(number: str, status: str = "PROPOSED") -> str:
-    return f"# ADPR-{number} — Something\n\n## Metadata\n\n- ADPR ID: `ADPR-{number}`\n- Status: `{status}`\n"
+    """A complete proposed ADPR fixture matching ADPR_TEMPLATE.md."""
+    sections = [
+        "Executive Summary",
+        "Problem Statement",
+        "Problem Validation",
+        "Motivation",
+        "Existing Architecture",
+        "Constraints",
+        "Evidence Inventory",
+        "Assumptions",
+        "Architectural Dimensions",
+        "Candidate Options",
+        "Comparative Analysis",
+        "Falsification Results",
+        "Rejected Options",
+        "Risks",
+        "Open Questions",
+        "Constitution Review",
+        "Governance Review",
+        "Quality Assessment",
+        "Architecture Readiness",
+        "ADR Readiness",
+        "Final Recommendation",
+        "Decision History",
+        "Traceability",
+        "Immutability and Supersession",
+    ]
+    body = "\n\n".join(f"## {section}\n\nContent." for section in sections)
+    return (
+        f"# ADPR-{number} — Something\n\n"
+        "## Metadata\n\n"
+        f"- ADPR ID: `ADPR-{number}`\n"
+        f"- Status: `{status}`\n\n"
+        f"{body}\n"
+    )
 
 
 def test_adpr_absent_from_base_but_added_by_pr_is_recognized_as_proposed_not_missing() -> None:
@@ -567,7 +601,7 @@ def test_adpr_absent_from_base_but_added_by_pr_is_recognized_as_proposed_not_mis
 
 
 def test_adpr_added_by_pr_with_invalid_lifecycle_status_is_rejected() -> None:
-    bad_text = "# ADPR-0006 — Something\n\n## Metadata\n\n- ADPR ID: `ADPR-0006`\n- Status: `MADE_UP_STATUS`\n"
+    bad_text = _valid_adpr_text("0006", status="MADE_UP_STATUS")
     resolver = _bootstrap_resolver(
         directories_by_ref={HEAD_SHA: {"docs/architecture-records": ["ADPR-0006-something.md"]}},
         files_by_ref={HEAD_SHA: {"docs/architecture-records/ADPR-0006-something.md": bad_text}},
@@ -590,3 +624,67 @@ def test_adpr_referenced_but_not_added_by_pr_is_rejected() -> None:
     )
     assert resolved == []
     assert missing == ["ADPR-0099"]
+
+
+def test_adpr_with_duplicate_lifecycle_status_declarations_is_rejected() -> None:
+    malformed = _valid_adpr_text("0006").replace(
+        "## Executive Summary", "- Status: `APPROVED`\n\n## Executive Summary", 1
+    )
+    resolver = _bootstrap_resolver(
+        directories_by_ref={HEAD_SHA: {"docs/architecture-records": ["ADPR-0006-duplicate-status.md"]}},
+        files_by_ref={HEAD_SHA: {"docs/architecture-records/ADPR-0006-duplicate-status.md": malformed}},
+    )
+    resolved, missing = resolve_referenced_records(
+        resolver,
+        base_sha=BASE_SHA,
+        pr_body="Adds ADPR-0006.",
+        head_sha=HEAD_SHA,
+        changed_paths=frozenset({"docs/architecture-records/ADPR-0006-duplicate-status.md"}),
+    )
+    assert resolved == []
+    assert missing and "exactly one canonical lifecycle status" in missing[0]
+
+
+# These two tests intentionally reproduce the independently identified PR203
+# false-approval paths. They must fail against the uncorrected PR203 head.
+def test_malformed_proposed_adpr_is_not_accepted_as_head_evidence() -> None:
+    malformed = _valid_adpr_text("0006").replace("## Executive Summary", "")
+    resolver = _bootstrap_resolver(
+        directories_by_ref={HEAD_SHA: {"docs/architecture-records": ["ADPR-0006-anything.md"]}},
+        files_by_ref={HEAD_SHA: {"docs/architecture-records/ADPR-0006-anything.md": malformed}},
+    )
+    resolved, missing = resolve_referenced_records(
+        resolver,
+        base_sha=BASE_SHA,
+        pr_body="Adds ADPR-0006.",
+        head_sha=HEAD_SHA,
+        changed_paths=frozenset({"docs/architecture-records/ADPR-0006-anything.md"}),
+    )
+    assert resolved == []
+    assert missing and missing[0].startswith("ADPR-0006 (proposed but invalid:")
+
+
+@pytest.mark.parametrize(
+    "status_body",
+    [
+        "Proposed\nRejected.",
+        "Proposed.\nStatus: Rejected.",
+        "Proposed.\n\n## Status\n\nAccepted.",
+        "Proposed",
+    ],
+)
+def test_proposed_adr_with_invalid_or_conflicting_status_is_not_accepted(status_body: str) -> None:
+    malformed = _valid_adr_text("0029").replace("Proposed.\n", status_body + "\n", 1)
+    resolver = _bootstrap_resolver(
+        directories_by_ref={HEAD_SHA: {"docs/ADR": ["0029-invalid-status.md"]}},
+        files_by_ref={HEAD_SHA: {"docs/ADR/0029-invalid-status.md": malformed}},
+    )
+    resolved, missing = resolve_referenced_records(
+        resolver,
+        base_sha=BASE_SHA,
+        pr_body="Adds ADR-0029.",
+        head_sha=HEAD_SHA,
+        changed_paths=frozenset({"docs/ADR/0029-invalid-status.md"}),
+    )
+    assert resolved == []
+    assert missing and missing[0].startswith("ADR 0029 (proposed but invalid:")

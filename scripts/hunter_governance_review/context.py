@@ -78,7 +78,39 @@ _ADR_REQUIRED_SECTIONS = ("Status", "Context", "Decision", "Consequences", "Alte
 _ADR_ALLOWED_STATUS_VALUES = ("proposed", "accepted", "superseded", "deprecated")
 _ADR_FILENAME_PATTERN = re.compile(r"^\d{4}-[a-z0-9-]+\.md$")
 _ADR_HEADER_PATTERN = re.compile(r"^#\s*ADR[- ]?(\d{4})\b", re.IGNORECASE | re.MULTILINE)
-_ADR_STATUS_VALUE_PATTERN = re.compile(r"(?ms)^##\s+Status\s*\n+\s*([A-Za-z]+)")
+_ADR_STATUS_VALUE_PATTERN = re.compile(r"(?m)^##\s+Status\s*$")
+_ADR_STATUS_DECLARATION_PATTERN = re.compile(r"^(Proposed|Accepted|Superseded|Deprecated)\.$", re.IGNORECASE)
+
+_ADPR_REQUIRED_SECTIONS = (
+    "Metadata",
+    "Executive Summary",
+    "Problem Statement",
+    "Problem Validation",
+    "Motivation",
+    "Existing Architecture",
+    "Constraints",
+    "Evidence Inventory",
+    "Assumptions",
+    "Architectural Dimensions",
+    "Candidate Options",
+    "Comparative Analysis",
+    "Falsification Results",
+    "Rejected Options",
+    "Risks",
+    "Open Questions",
+    "Constitution Review",
+    "Governance Review",
+    "Quality Assessment",
+    "Architecture Readiness",
+    "ADR Readiness",
+    "Final Recommendation",
+    "Decision History",
+    "Traceability",
+    "Immutability and Supersession",
+)
+_ADPR_HEADER_PATTERN = re.compile(r"^#\s+ADPR[- ]?(\d{4})\b", re.IGNORECASE | re.MULTILINE)
+_ADPR_ID_LINE_PATTERN = re.compile(r"(?im)^\s*-\s*ADPR ID:\s*`ADPR-(\d{4})`\s*$")
+_ADPR_ID_LABEL_PATTERN = re.compile(r"(?im)^\s*-\s*ADPR ID:")
 
 # Required structure for a PROPOSED ADPR, per
 # docs/architecture-records/README.md's "Lifecycle States" and
@@ -94,8 +126,8 @@ _ADPR_ALLOWED_STATUS_VALUES = (
     "archived",
 )
 _ADPR_FILENAME_PATTERN = re.compile(r"^ADPR-\d{4}-[a-z0-9-]+\.md$")
-_ADPR_ID_PATTERN = re.compile(r"ADPR\s*ID:\s*`?ADPR-(\d{4})`?", re.IGNORECASE)
-_ADPR_STATUS_LINE_PATTERN = re.compile(r"(?im)^[\s-]*Status:\s*`?([A-Za-z_]+)`?")
+_ADPR_STATUS_LINE_PATTERN = re.compile(r"^\s*-\s*Status:\s*`([A-Z_]+)`\s*$", re.MULTILINE)
+_ADPR_STATUS_LABEL_PATTERN = re.compile(r"^\s*-\s*Status:", re.MULTILINE)
 
 
 class ContextResolutionError(RuntimeError):
@@ -157,26 +189,59 @@ def _validate_proposed_adr_structure(*, number: str, filename: str, content: str
     missing_sections = [s for s in _ADR_REQUIRED_SECTIONS if not re.search(rf"(?m)^##\s+{re.escape(s)}\b", content)]
     if missing_sections:
         return f"missing required section(s): {', '.join(missing_sections)}"
-    status_match = _ADR_STATUS_VALUE_PATTERN.search(content)
-    if status_match is None or status_match.group(1).lower() not in _ADR_ALLOWED_STATUS_VALUES:
+    status_sections = list(_ADR_STATUS_VALUE_PATTERN.finditer(content))
+    if len(status_sections) != 1:
+        return "ADR must contain exactly one Status section"
+    status_start = status_sections[0].end()
+    next_section = re.search(r"(?m)^##\s+", content[status_start:])
+    status_body = (
+        content[status_start : status_start + next_section.start()] if next_section else content[status_start:]
+    )
+    status_lines = [line.strip() for line in status_body.splitlines() if line.strip()]
+    if len(status_lines) != 1 or _ADR_STATUS_DECLARATION_PATTERN.fullmatch(status_lines[0]) is None:
+        return "Status section must contain exactly one recognized declaration"
+    if status_lines[0].split(".", 1)[0].lower() not in _ADR_ALLOWED_STATUS_VALUES:
         return "Status section does not declare a recognized status (Proposed/Accepted/Superseded/Deprecated)"
     return None
 
 
 def _validate_proposed_adpr_structure(*, number: str, filename: str, content: str) -> str | None:
-    """Structural/identity validation for a newly PROPOSED ADPR -- mirrors
-    ``_validate_proposed_adr_structure`` for the ADPR contract (filename,
-    declared ``ADPR ID:``, and a recognized lifecycle status)."""
+    """Validate a newly proposed ADPR against the canonical template.
+
+    Base records are trusted historical authority and are intentionally not
+    revalidated. Only PR-introduced records come through this fail-closed
+    structural gate, which checks identity, exact metadata declarations,
+    lifecycle, and every required section from ``ADPR_TEMPLATE.md``.
+    """
     if not _ADPR_FILENAME_PATTERN.match(filename) or not filename.startswith(f"ADPR-{number}-"):
         return f"filename {filename!r} does not match the required ADPR-NNNN-short-title.md pattern for ADPR-{number}"
-    id_match = _ADPR_ID_PATTERN.search(content)
-    if id_match is None:
-        return "missing an 'ADPR ID: `ADPR-NNNN`' metadata line"
-    if id_match.group(1) != number:
-        return f"metadata declares ADPR-{id_match.group(1)} but was referenced as ADPR-{number}"
-    status_match = _ADPR_STATUS_LINE_PATTERN.search(content)
-    if status_match is None or status_match.group(1).lower() not in _ADPR_ALLOWED_STATUS_VALUES:
+    header_match = _ADPR_HEADER_PATTERN.search(content)
+    if header_match is None:
+        return "missing an '# ADPR-NNNN' header"
+    if header_match.group(1) != number:
+        return f"header declares ADPR-{header_match.group(1)} but was referenced as ADPR-{number}"
+
+    id_lines = list(_ADPR_ID_LINE_PATTERN.finditer(content))
+    if len(id_lines) != 1:
+        return "ADPR must contain exactly one canonical ADPR ID metadata declaration"
+    if id_lines[0].group(1) != number:
+        return f"metadata declares ADPR-{id_lines[0].group(1)} but was referenced as ADPR-{number}"
+    if len(_ADPR_ID_LABEL_PATTERN.findall(content)) != 1:
+        return "ADPR contains duplicate or malformed ADPR ID metadata declarations"
+
+    status_lines = list(_ADPR_STATUS_LINE_PATTERN.finditer(content))
+    if len(status_lines) != 1 or len(_ADPR_STATUS_LABEL_PATTERN.findall(content)) != 1:
+        return "ADPR must contain exactly one canonical lifecycle status declaration"
+    if status_lines[0].group(1).lower() not in _ADPR_ALLOWED_STATUS_VALUES:
         return "metadata does not declare a recognized lifecycle status"
+
+    headings = re.findall(r"(?m)^##\s+(.+?)\s*$", content)
+    missing_sections = [section for section in _ADPR_REQUIRED_SECTIONS if section not in headings]
+    if missing_sections:
+        return f"missing required section(s): {', '.join(missing_sections)}"
+    duplicate_sections = [section for section in _ADPR_REQUIRED_SECTIONS if headings.count(section) != 1]
+    if duplicate_sections:
+        return f"ADPR contains duplicate required section(s): {', '.join(duplicate_sections)}"
     return None
 
 
