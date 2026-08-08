@@ -192,7 +192,7 @@ An `EvidenceContextSelectionPolicy` is a governed Evidence Intelligence specific
 - minimum coverage requirements; and
 - the reason-code vocabulary used by selection ledgers and allocation results.
 
-An `EvidenceContextSelectionPlan` binds one intent, one policy version, and exact `EvidenceSpan` resolver inputs before resolution begins. It prevents callers or prompt templates from silently expanding source scope during execution.
+An `EvidenceContextSelectionPlan` binds one intent, one policy version, and exact `EvidenceSpan` resolver inputs before resolution begins. Its planned candidate set must be derived from the canonical Evidence Intelligence span inventory for the governed target at the applicable cutoff, or a caller-supplied span tuple must be validated for exact set equality against that inventory before resolution. A caller-prefiltered tuple is not candidate-set authority. Any mismatch fails closed, and every canonical candidate must remain observable in the selection ledger with its resolution, selection, or non-inclusion reason. The plan prevents callers or prompt templates from silently narrowing or expanding source scope during execution.
 
 Relevance may later use deterministic lexical, graph, or learned signals only when the policy records the signal version and deterministic tie-breaking rule. Non-deterministic model selection is not authorized by this ADR.
 
@@ -244,7 +244,7 @@ The budget record must preserve:
 - coverage result; and
 - final outcome.
 
-Valid outcomes are at least `READY`, `REPLAN_REQUIRED`, and `INSUFFICIENT_BUDGET`. `READY` is prohibited when any mandatory item or mandatory coverage rule is unsatisfied. Estimation may support planning but may not be represented as exact accounting.
+Valid outcomes are at least `READY`, `REPLAN_REQUIRED`, and `INSUFFICIENT_BUDGET`. `READY` is prohibited when any mandatory item or mandatory coverage rule is unsatisfied or when the complete compiled prompt input exceeds the capability constraint after reserved completion capacity is applied. Capacity accounting covers the complete rendered prompt in the capability constraint's supported accounting unit, including selected context, trusted instructions, output contract, missingness disclosures, delimiters, and other versioned template overhead. The build must either reserve deterministic prompt overhead before allocation reports `READY`, or withhold final `READY` and fail closed through an exact post-compilation capacity check before an `EvidencePromptArtifact` or `EvidencePreModelBuildRecord` is considered ready. Overflow produces `REPLAN_REQUIRED` or `INSUFFICIENT_BUDGET`; it never yields a ready artifact. Estimation may support planning but may not be represented as exact accounting.
 
 Chunking or summarization is a new, explicit selection/build plan with its own coverage and provenance. It is never an implicit overflow behavior.
 
@@ -506,7 +506,7 @@ The migration preserves these existing boundaries:
 - `ExtractionProposal` remains proposal-only.
 - deterministic validation and the authorized claim-persistence service remain mandatory before any canonical `KnowledgeClaim` exists.
 
-`ExtractionRequest` may be adapted as the Phase 1 input without changing its current contract. The Evidence Intelligence pre-model foundation references or adapts `EvidenceSpan`, `ExtractionSchema`, `SecureAIProviderRunner`, `ExtractionProposal`, and deterministic claim validation/persistence; it does not replace their authority. `AIExtractionProvider` remains untouched until a later Model Adapter decision provides a migration path and must not be silently reinterpreted.
+`ExtractionRequest` may initiate the Phase 1 adapter without changing its current contract, but its span tuple is request input only and cannot define the complete governed candidate set. Phase 1 must derive that set from, or validate it for exact equality against, the canonical Evidence Intelligence span inventory for the governed target before building the selection plan. The Evidence Intelligence pre-model foundation references or adapts `EvidenceSpan`, `ExtractionSchema`, `SecureAIProviderRunner`, `ExtractionProposal`, and deterministic claim validation/persistence; it does not replace their authority. `AIExtractionProvider` remains untouched until a later Model Adapter decision provides a migration path and must not be silently reinterpreted.
 
 ## Governance Non-Integration Guarantee
 
@@ -573,9 +573,9 @@ Future implementation must prove:
 - capability-specific allocation, package, prompt, and pre-model build identities;
 - two capability constraints preserve the same upstream selection identity while permitting different downstream build identities;
 - exact repository revision and evidence-version binding;
-- stable reason codes for every non-included item;
+- complete canonical-candidate inventory coverage and stable reason codes for every non-included item;
 - required missingness and historical cutoff behavior with no current/latest fallback;
-- no silent truncation and fail-closed budget overflow;
+- no silent truncation and fail-closed complete-prompt budget overflow, including all compiled prompt overhead;
 - canonical Unicode, newline, path, collection, mapping, numeric, boolean/null, whitespace, source-range, and serialization behavior;
 - compiler/canonicalization version changes produce explicitly different artifact identities;
 - equal canonical inputs reconstruct byte-identical EvidencePromptArtifact bytes and digest when retention policy permits;
