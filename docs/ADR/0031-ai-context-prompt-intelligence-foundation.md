@@ -244,7 +244,7 @@ The budget record must preserve:
 - coverage result; and
 - final outcome.
 
-Valid outcomes are at least `READY`, `REPLAN_REQUIRED`, and `INSUFFICIENT_BUDGET`. `READY` is prohibited when any mandatory item or mandatory coverage rule is unsatisfied or when the complete compiled prompt input exceeds the capability constraint after reserved completion capacity is applied. Capacity accounting covers the complete rendered prompt in the capability constraint's supported accounting unit, including selected context, trusted instructions, output contract, missingness disclosures, delimiters, and other versioned template overhead. The build must either reserve deterministic prompt overhead before allocation reports `READY`, or withhold final `READY` and fail closed through an exact post-compilation capacity check before an `EvidencePromptArtifact` or `EvidencePreModelBuildRecord` is considered ready. Overflow produces `REPLAN_REQUIRED` or `INSUFFICIENT_BUDGET`; it never yields a ready artifact. Estimation may support planning but may not be represented as exact accounting.
+Valid outcomes are at least `READY`, `REPLAN_REQUIRED`, and `INSUFFICIENT_BUDGET`. Before an allocation result or package can be finalized as `READY`, the pre-model build path must deterministically preflight the complete rendered prompt for the candidate ordered context set after reserved completion capacity is applied. The preflight uses the same prompt specification, prompt-compiler identity/version, and canonicalization semantics as final compilation. It accounts in the capability constraint's supported unit for selected context, trusted instructions, output contract, delimiters, missingness disclosures, and all other deterministic compiler and template overhead. If the complete prompt cannot fit, allocation fails closed as `REPLAN_REQUIRED` or `INSUFFICIENT_BUDGET` and cannot become `READY`. Final compilation must verify that its canonical size equals the preflight result. A mismatch is an invariant failure: it cannot mutate or reidentify the finalized allocation or package and cannot yield a ready `EvidencePromptArtifact` or `EvidencePreModelBuildRecord`. `READY` is also prohibited when any mandatory item or mandatory coverage rule is unsatisfied. Estimation may support planning but may not be represented as exact accounting.
 
 Chunking or summarization is a new, explicit selection/build plan with its own coverage and provenance. It is never an implicit overflow behavior.
 
@@ -575,7 +575,7 @@ Future implementation must prove:
 - exact repository revision and evidence-version binding;
 - complete canonical-candidate inventory coverage and stable reason codes for every non-included item;
 - required missingness and historical cutoff behavior with no current/latest fallback;
-- no silent truncation and fail-closed complete-prompt budget overflow, including all compiled prompt overhead;
+- no silent truncation; deterministic complete-prompt preflight before `READY`; fail-closed overflow; and exact final canonical-size equality with the preflight result;
 - canonical Unicode, newline, path, collection, mapping, numeric, boolean/null, whitespace, source-range, and serialization behavior;
 - compiler/canonicalization version changes produce explicitly different artifact identities;
 - equal canonical inputs reconstruct byte-identical EvidencePromptArtifact bytes and digest when retention policy permits;
