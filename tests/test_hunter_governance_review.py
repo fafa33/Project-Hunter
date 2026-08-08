@@ -611,3 +611,91 @@ def test_write_summary_includes_missing_references(tmp_path: Path) -> None:
     )
     text = summary.read_text(encoding="utf-8")
     assert "ADR 9999" in text
+
+
+# --- Automated/Machine-Generated Dependency PR Validation Tests -------------------------------
+
+
+def test_trusted_dependency_pr_classification() -> None:
+    from hunter_governance_review.deterministic import is_trusted_dependency_pr
+
+    pr = _pr(author_login="dependabot[bot]")
+    files = [ChangedFile("requirements/ci-constraints.txt", "modified", 1, 1)]
+    ctx = ValidationContext(pr=pr, files=files)
+
+    assert is_trusted_dependency_pr(ctx) is True
+
+
+def test_non_bot_pr_fails_classification() -> None:
+    from hunter_governance_review.deterministic import is_trusted_dependency_pr
+
+    # Author is human, trying to spoof dependency change path
+    pr = _pr(author_login="human_attacker")
+    files = [ChangedFile("requirements/ci-constraints.txt", "modified", 1, 1)]
+    ctx = ValidationContext(pr=pr, files=files)
+
+    assert is_trusted_dependency_pr(ctx) is False
+
+
+def test_bot_pr_with_src_changes_fails_classification() -> None:
+    from hunter_governance_review.deterministic import is_trusted_dependency_pr
+
+    # Author is bot, but tries to change files in src/ (hostile or compromised)
+    pr = _pr(author_login="dependabot[bot]")
+    files = [
+        ChangedFile("requirements/ci-constraints.txt", "modified", 1, 1),
+        ChangedFile("src/hunter/tokenomics/identity.py", "modified", 1, 1),
+    ]
+    ctx = ValidationContext(pr=pr, files=files)
+
+    assert is_trusted_dependency_pr(ctx) is False
+
+
+def test_bot_pr_with_workflow_changes_fails_classification() -> None:
+    from hunter_governance_review.deterministic import is_trusted_dependency_pr
+
+    # Author is bot, tries to modify CI workflow
+    pr = _pr(author_login="dependabot[bot]")
+    files = [
+        ChangedFile("requirements/ci-constraints.txt", "modified", 1, 1),
+        ChangedFile(".github/workflows/ci.yml", "modified", 1, 1),
+    ]
+    ctx = ValidationContext(pr=pr, files=files)
+
+    assert is_trusted_dependency_pr(ctx) is False
+
+
+def test_trusted_dependency_pr_skips_template_and_readiness_checks() -> None:
+    pr = _pr(
+        author_login="dependabot[bot]",
+        body="Bumps dependency releases...",  # Lacks required sections and template sections
+    )
+    files = [ChangedFile("requirements/ci-constraints.txt", "modified", 1, 1)]
+
+    ctx = ValidationContext(pr=pr, files=files)
+    result = run_deterministic_engine(ctx)
+
+    # Since it is a trusted dependency PR, sections, matrix, and readiness validators are skipped.
+    # It should have exactly 0 findings and be approved.
+    assert len(result.findings) == 0
+    assert result.blocking is False
+
+
+def test_attacker_dependency_pr_fails_governance_checks() -> None:
+    pr = _pr(
+        author_login="attacker_user",
+        body="Bumps dependency releases...",  # Lacks required sections
+    )
+    files = [ChangedFile("requirements/ci-constraints.txt", "modified", 1, 1)]
+
+    ctx = ValidationContext(pr=pr, files=files)
+    result = run_deterministic_engine(ctx)
+
+    # Since the author is not a trusted bot, it is routed to the Manual Path and fails V-030/040/050
+    assert len(result.findings) > 0
+    assert result.blocking is True
+
+    validator_ids = {f.validator_id for f in result.findings}
+    assert "V-030" in validator_ids
+    assert "V-040" in validator_ids
+    assert "V-050" in validator_ids

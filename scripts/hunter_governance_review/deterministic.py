@@ -313,6 +313,44 @@ def _draft_validator(ctx: ValidationContext) -> Finding | None:
     return None
 
 
+def is_trusted_dependency_pr(ctx: ValidationContext) -> bool:
+    """Returns True if the PR is verified to be a trusted automated dependency update.
+
+    A PR is classified as an automated dependency update only if:
+    1. The PR author is a verified bot account (e.g. dependabot[bot] or renovate[bot]).
+    2. The changed files ONLY modify strict dependency constraint, configuration, or lock files.
+    """
+    # 1. Author check: must be a trusted automated bot login.
+    trusted_bots = {"dependabot[bot]", "renovate[bot]"}
+    if ctx.pr.author_login not in trusted_bots:
+        return False
+
+    # 2. Changed files check: must exclusively touch dependency configuration or lock files.
+    # Must NEVER allow modifications to source, scripts, tests, docs, or CI workflows.
+    for f in ctx.files:
+        filename = f.filename
+        # Check directories/paths that are strictly human-owned code or documentation
+        if (
+            filename.startswith("src/")
+            or filename.startswith("scripts/")
+            or filename.startswith("tests/")
+            or filename.startswith("docs/")
+            or filename.startswith(".github/")
+        ):
+            return False
+        # Must only touch requirements/ or specific lockfiles in the repository root
+        allowed_dirs = ("requirements/",)
+        allowed_root_files = ("pyproject.toml", "poetry.lock", "package-lock.json", "pnpm-lock.yaml")
+
+        is_allowed_dir = any(filename.startswith(d) for d in allowed_dirs)
+        is_allowed_file = filename in allowed_root_files
+
+        if not (is_allowed_dir or is_allowed_file):
+            return False
+
+    return True
+
+
 _VALIDATORS: tuple[Validator, ...] = (
     _title_validator,
     _body_validator,
@@ -329,5 +367,17 @@ _VALIDATORS: tuple[Validator, ...] = (
 
 def run_deterministic_engine(ctx: ValidationContext) -> DeterministicResult:
     """Run every deterministic validator against the PR context."""
-    findings = [validator(ctx) for validator in _VALIDATORS]
+    if is_trusted_dependency_pr(ctx):
+        # Automated Dependency Path: run a safe, streamlined subset of validators
+        dependency_validators = (
+            _title_validator,
+            _adr_references_validator,
+            _mergeable_validator,
+            _gate_self_modification_validator,
+            _draft_validator,
+        )
+        findings = [validator(ctx) for validator in dependency_validators]
+    else:
+        # Standard Manual Path for human PRs
+        findings = [validator(ctx) for validator in _VALIDATORS]
     return DeterministicResult(findings=[finding for finding in findings if finding is not None])

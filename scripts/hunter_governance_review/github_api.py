@@ -19,7 +19,8 @@ from typing import Protocol
 from hunter_governance_review.contracts import ChangedFile, PullRequest
 
 _PR_VIEW_FIELDS = (
-    "number,title,body,state,isDraft,headRefName,headRefOid," "baseRefName,baseRefOid,mergeable,changedFiles,url"
+    "number,title,body,state,isDraft,headRefName,headRefOid,"
+    "baseRefName,baseRefOid,mergeable,changedFiles,url,author"
 )
 
 
@@ -81,6 +82,12 @@ class GhCliRunner:
             payload = json.loads(raw)
         except json.JSONDecodeError as exc:
             raise GitHubError(f"gh pr view returned malformed JSON for PR #{number}") from exc
+        author_payload = payload.get("author") or {}
+        if isinstance(author_payload, dict):
+            author_login = str(author_payload.get("login") or "")
+        else:
+            author_login = str(author_payload)
+
         return PullRequest(
             number=int(payload["number"]),
             title=str(payload.get("title") or ""),
@@ -94,6 +101,7 @@ class GhCliRunner:
             mergeable=payload.get("mergeable"),
             changed_files=int(payload.get("changedFiles") or 0),
             url=str(payload.get("url") or ""),
+            author_login=author_login,
         )
 
     def get_pull_files(self, number: int) -> list[ChangedFile]:

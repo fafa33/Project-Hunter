@@ -154,6 +154,7 @@ class PullRequest:
     mergeable: str | None
     changed_files: int
     url: str
+    author_login: str = ""
 
 
 @dataclass(frozen=True)
