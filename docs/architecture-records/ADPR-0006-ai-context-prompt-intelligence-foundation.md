@@ -3,21 +3,21 @@
 ## Metadata
 
 - ADPR ID: `ADPR-0006`
-- Status: `READY_FOR_REVIEW`
-- Version: 2
+- Status: `APPROVED`
+- Version: 3
 - Author: Project Hunter Architecture Team
-- Reviewers:
+- Reviewers: second independent Architecture Preparation Audit
 - Created: 2026-08-08
-- Approved:
+- Approved: 2026-08-09
 - Related Epic: not yet created
 - Related Issue: [#206](https://github.com/fafa33/Project-Hunter/issues/206)
 - Planned or produced ADR: [ADR 0031](../ADR/0031-ai-context-prompt-intelligence-foundation.md) (`Proposed`)
 - Supersedes: not applicable
 - Superseded by: not applicable
-- Preparation self-assessment: `NEEDS_REVISION`
+- Preparation self-assessment: `READY_FOR_ADR`
 - Draft PR: [#207](https://github.com/fafa33/Project-Hunter/pull/207)
-- ADR-bearing commit reviewed before this record: `964003e97dbef57c0ab005cfc400a0285c7642e2`
-- Independent preparation audit: revision 1 concluded `ADPR_REVISION_REQUIRED`; second independent audit required for revision 2
+- ADR alignment commit: `12ac95d3582bf569fe76beb29c06a274133cf080`
+- Independent preparation audit: revision 1 at `8450917ac415779781c78f365750029fa1bab8a4` concluded `ADPR_REVISION_REQUIRED`; revision 2 at `7a64f54bf51fd9f81ee859f9ca63389e5938bdac` passed and is ready to govern ADR revision
 
 This record remediates formal review finding F-007. ADR 0031 was drafted before its mandatory permanent preparation record, contrary to the normal order in `docs/architecture-records/README.md`. This record makes that sequence deviation explicit, reconstructs the preserved decision basis from Issue #206, repository authority, the ADR draft, and its Technical Defense evidence, and does not retroactively approve either this preparation or ADR 0031.
 
@@ -27,9 +27,9 @@ This record authorizes no production implementation, provider integration, Phase
 
 Project Hunter has an Evidence Intelligence provider boundary but no canonical way to determine, explain, budget, serialize, and preserve the exact context and prompt presented to a future model. The evaluated options range from local prompt utilities and a monolithic AI service to deferral, a generic provider-independent foundation, and a governed Evidence Intelligence-specific foundation that defers generalization until a second real consumer demonstrates commonality.
 
-The updated comparison recommends the Evidence Intelligence-specific foundation first. It establishes the same deterministic selection, allocation, canonical-byte, subordinate-lineage, security, and reconstruction rules inside the only evidenced consumer boundary, while deferring generic Context/Prompt ownership until a second independent consumer proves which contracts are actually shared. Hunter Governance Review remains deterministic and zero-LLM.
+The updated comparison recommends the Evidence Intelligence-specific foundation first. It establishes the same deterministic selection, allocation, canonical-byte, subordinate-lineage, security, and reconstruction rules inside the only evidenced consumer boundary, while deferring generic Context/Prompt ownership until a second real AI consumer proves which contracts are actually shared. Hunter Governance Review remains deterministic and zero-LLM.
 
-The architecture problem is ready for decision, but the produced ADR is not ready to progress unchanged: Proposed ADR 0031 selects the generic foundation that this revision no longer recommends. The preparation self-assessment is therefore `NEEDS_REVISION`. A second independent audit must verify this revision before the ADPR can be approved or a revised ADR can enter formal acceptance.
+The second independent preparation audit confirmed that this record fairly represents the decision basis and that Option 7 is ready to govern ADR revision. Proposed ADR 0031 was then revised at `12ac95d3582bf569fe76beb29c06a274133cf080` to establish the Evidence Intelligence-specific foundation and defer generic Context/Prompt ownership. The preparation outcome is therefore `READY_FOR_ADR`; ADR 0031 remains separately Proposed pending renewed exact-pair formal review and acceptance.
 
 ## Problem Statement
 
@@ -177,7 +177,7 @@ Deferral would leave Evidence Intelligence without a governed path from its exis
 | E-007 | PR #200 operational review evidence | [PR #200](https://github.com/fafa33/Project-Hunter/pull/200) | Character limits were not a token budget; lossless chunking could exhaust quotas; resolved evidence did not prove model review; provider state was unsuitable as merge authority. | Historical operational evidence, not canonical architectural authority; conditions may differ for later providers. | Challenges ad hoc prompt building and provider-dependent governance. |
 | E-008 | Governing acceptance surface | [Issue #206](https://github.com/fafa33/Project-Hunter/issues/206) | Defines ADR 0031 scope, criteria, zero-LLM constraint, Evidence Intelligence target, and non-goals. | Governing issue; acceptance still pending. | Supports scope and traceability. |
 | E-009 | Technical Defense summary | [Draft PR #207](https://github.com/fafa33/Project-Hunter/pull/207), `## Technical Defense`, and [Issue #206](https://github.com/fafa33/Project-Hunter/issues/206) | The durable summaries state that F-001 through F-006 were identified and later reported resolved across context dimensions, identity layering, ownership, byte determinism, replanning, and retention/reconstruction. | No full Technical Defense transcript, finding matrix, or exact artifact locator is durably published. The summary is not independently reproducible and is context only, not proof that an option survived. | Identifies prior challenge areas; neither proves nor selects an option. |
-| E-010 | Prior hostile-review and revision-1 ADPR-audit summaries | Review tasks associated with commits `964003e97dbef57c0ab005cfc400a0285c7642e2` and `8450917ac415779781c78f365750029fa1bab8a4` | The prior reviews produced F-007 and then F-PA-001 through F-PA-003, prompting creation and revision of this ADPR. | No complete review report is currently published in the repository, Issue #206, or PR #207. The exact commit identities and resulting corrections are recorded here, but the absent durable artifacts cannot be cited as independent proof. | Requires a second independent audit of this self-contained revision; supplies no option authority. |
+| E-010 | Prior hostile-review and independent ADPR-audit summaries | Review tasks associated with commits `964003e97dbef57c0ab005cfc400a0285c7642e2`, `8450917ac415779781c78f365750029fa1bab8a4`, and `7a64f54bf51fd9f81ee859f9ca63389e5938bdac` | The reviews produced F-007 and then F-PA-001 through F-PA-003; the second independent preparation audit found all three resolved and confirmed Option 7 was ready to govern ADR revision. | The exact commit identities, audit outcome, and resulting corrections are recorded in this ADPR and PR #207. Full earlier review transcripts remain absent and are not treated as independent proof beyond their durable summaries. | Confirms preparation readiness and Option 7 without supplying ADR acceptance authority. |
 | E-011 | Proposed decision contract | `docs/ADR/0031-ai-context-prompt-intelligence-foundation.md` | Specifies owners, identities, byte contract, replanning, retention, reconstruction, governance isolation, and Phase 1 scope. | Proposed and non-binding until formal acceptance. It is evidence of the prepared decision, not governing authority. | Provides the exact ADR relationship this record evaluates. |
 
 ## Assumptions
@@ -300,7 +300,7 @@ These assumptions do not grant authority. Their failure invokes a fail-closed or
 
 ### Option 7: Evidence Intelligence-specific pre-model foundation first
 
-- Description: Define the complete deterministic pre-model path only for Evidence Intelligence's existing extraction boundary; defer generic Context/Prompt ownership until a second independent consumer demonstrates common contracts.
+- Description: Define the complete deterministic pre-model path only for Evidence Intelligence's existing extraction boundary; defer generic Context/Prompt ownership until a second real AI consumer demonstrates common contracts.
 - Authority and ownership: Evidence Intelligence owns consumer-specific execution intent, exact `EvidenceSpan`/`ExtractionSchema` selection, allocation, prompt compilation, and subordinate pre-model build records without gaining claim, scoring, governance, or top-level execution authority.
 - Boundaries: Resolver, selector, allocator, compiler, and persistence responsibilities remain internally distinct and service-owned, but their contracts are explicitly Evidence Intelligence-specific rather than repository-wide AI authorities.
 - Persistence and replay: Immutable consumer-scoped ledgers, allocation results, prompt artifacts, and subordinate build records use the same strict-known, canonical-byte, correction, retention, and reconstruction-unavailable rules.
@@ -383,14 +383,14 @@ A future incompatible second consumer could falsify Option 4 by proving that its
 | Replanning creates identity explosion or confusing lineage | Operational | Low | Medium | Terminal predecessor, one authorized successor path, stable reason codes, explicit semantic/policy version changes. | Concrete operator ergonomics remain untested. |
 | AI artifacts are mistaken for canonical intelligence | Authority | Medium | High | Preserve proposal-only outputs and existing deterministic/human authority boundary; require future architecture-regression tests before implementation. | Future consumers require separate authority review. |
 | Governance and AI context types converge by naming | Ownership | Low | High | Keep distinct owner, purpose, schema, lifecycle, and package; require future regression tests that forbid cross-imports. | Future refactors must preserve separation. |
-| Retrospective preparation conceals missing contemporaneous reasoning | Governance | Medium | High | Record the sequence deviation, evidence limitations, exact prior commit, and mandatory independent audit. | Independent audit may require revision or find preparation incomplete. |
+| Retrospective preparation conceals missing contemporaneous reasoning | Governance | Medium | High | Record the sequence deviation, evidence limitations, exact prior commit, and mandatory independent audit. | The audit passed, but absent contemporaneous artifacts remain a disclosed historical limitation. |
 
 ## Open Questions
 
 | Question | Blocking? | Owner | Required evidence or action | Status |
 |---|---|---|---|---|
-| Does revision 2 resolve F-PA-001 through F-PA-003 and fairly represent the decision basis? | Yes for preparation approval | Independent architecture auditor | Perform a second independent audit under `docs/ARCHITECTURE_AUDIT_PROTOCOL.md` and the audit template. | Open; deliberately not performed in this revision task. |
-| Does Proposed ADR 0031 match the rederived Option 7 recommendation? | Yes for ADR progression | Future ADR revision owner | Reconcile ADR 0031 with the audited preparation outcome through a separately reviewed ADR revision; do not change ADR architecture in this ADPR-only contribution. | Open; current ADR describes Option 4 and must not progress unchanged if Option 7 is confirmed. |
+| Does revision 2 resolve F-PA-001 through F-PA-003 and fairly represent the decision basis? | Yes for preparation approval | Independent architecture auditor | Perform a second independent audit under `docs/ARCHITECTURE_AUDIT_PROTOCOL.md` and the audit template. | Resolved; the second independent audit passed at `7a64f54bf51fd9f81ee859f9ca63389e5938bdac`. |
+| Does Proposed ADR 0031 match the rederived Option 7 recommendation? | Yes for ADR progression | ADR revision owner | Reconcile ADR 0031 with the audited preparation outcome through a separately reviewed ADR revision. | Resolved for preparation alignment at `12ac95d3582bf569fe76beb29c06a274133cf080`; ADR 0031 now expresses Option 7 and remains Proposed pending renewed exact-pair review. |
 | Which existing execution identity will the first build reference? | No for ADR; yes before Phase 1 implementation | Future Phase 1 planner | Identify and test the exact existing run/workflow/task record; open a separate decision if none is sufficient. | Deferred. |
 | Which source-owner handling policies permit exact prompt-byte retention? | No for ADR; yes per source before use | Source owners and security reviewer | Supply authoritative classification, retention, deletion, and legal-hold rules. | Deferred and fail-closed. |
 | What exact fixed capability constraint will Phase 1 use? | No for ADR; yes before Phase 1 implementation | Future Phase 1 planner | Select a provider-neutral test constraint without choosing a model adapter. | Deferred. |
@@ -408,21 +408,21 @@ A future incompatible second consumer could falsify Option 4 by proving that its
 - **Rule 8:** This record restores the mandatory preparation artifact, records the order deviation, and requires independent audit and ADR acceptance before implementation.
 - **Rule 9:** No constitutional change is proposed.
 
-Determination: compatible, subject to independent preparation audit. No constitutional conflict is known.
+Determination: compatible. The second independent preparation audit identified no remaining preparation blocker or constitutional conflict.
 
 ## Governance Review
 
 - Development Governance Stage 1 and the Architecture Decision Preparation Guide apply because the decision creates new architectural ownership, persistence, replay, and subsystem boundaries.
 - This record follows the canonical ADPR template, uses the next monotonic identifier, and is registered in `docs/architecture-index.md`.
-- The normal create-preparation-before-ADR order was violated. The deviation is not hidden: ADR 0031 remains Proposed, no implementation has begun, and this record must pass an independent preparation audit before formal ADR acceptance proceeds.
+- The normal create-preparation-before-ADR order was violated. The deviation remains explicit; the second independent preparation audit passed, ADR 0031 remains Proposed, and no implementation has begun.
 - Accepted ADRs 0002, 0004, 0009, 0016, and 0020 are extended or reaffirmed without changing their owners or guarantees.
 - ADRs 0029 and 0030 are Proposed and non-binding; neither is amended, superseded, or treated as authority.
-- Any Evidence Intelligence-specific selection ledger remains distinct from Governance `ContextManifest`, and its pre-model build record remains subordinate to existing execution identity. Proposed ADR 0031's generic names are not treated as accepted authority by this preparation revision.
+- The revised ADR's `EvidenceContextSelectionLedger` remains distinct from Governance `ContextManifest`, and `EvidencePreModelBuildRecord` remains subordinate to existing execution identity. These are Evidence Intelligence-specific contracts and create no generic cross-consumer authority.
 - Hunter Governance Review remains deterministic and zero-LLM. This decision does not modify its code, workflow, status publisher, or authority.
 - Evidence Intelligence remains proposal-only and is only the first future migration target. No Phase 1 implementation is authorized.
 - The Architecture Audit Protocol, not this self-assessment, controls the independent preparation verdict.
 
-Determination: governance-compatible as a remediation contribution. A second independent ADPR audit, later ADR alignment, and renewed exact-pair contribution review remain outstanding.
+Determination: governance-compatible and preparation-approved. The independent preparation audit and ADR alignment are complete; renewed exact-pair contribution review remains required because the source head changed during remediation.
 
 ## Quality Assessment
 
@@ -430,11 +430,11 @@ Determination: governance-compatible as a remediation contribution. A second ind
 |---|---|---|---|
 | Problem correctness | EXCELLENT | The gap is grounded in current Evidence Intelligence and missing pre-model ownership, not an implementation preference. | None identified. |
 | Scope completeness | EXCELLENT | In/out scope, consumer-specific and generic boundaries, later decisions, and prohibited governance changes are explicit. | None identified. |
-| Canonical consistency | GOOD | Constitution, Principles, accepted ADRs, Evidence Intelligence, and governance ownership were checked; Proposed ADRs are non-binding. | Independent audit required. |
+| Canonical consistency | GOOD | Constitution, Principles, accepted ADRs, Evidence Intelligence, and governance ownership were checked; Proposed ADRs are non-binding. | None remaining for preparation. |
 | Evidence integrity | GOOD | Repository authority, implementation evidence, operational evidence, issue criteria, review summaries, and absent durable artifacts are distinguished. | Full prior review artifacts are not durably published; this revision does not rely on them as proof. |
 | Assumption discipline | GOOD | Three implementation-facing assumptions have confidence, falsification, and fail-closed consequences. | None identified for the ADR decision. |
-| Option completeness | GOOD | Seven materially distinct options include both a generic foundation and a governed Evidence Intelligence-specific-first foundation. | Independent audit must confirm no viable option remains omitted. |
-| Comparative fairness | GOOD | Every option uses the same normalized fields and criteria, including ownership, replay, migration, reversibility, abstraction risk, and second-consumer impact. | Independent auditor must verify the rederived ranking. |
+| Option completeness | GOOD | Seven materially distinct options include both a generic foundation and a governed Evidence Intelligence-specific-first foundation; the second audit confirmed the option set. | None remaining for preparation. |
+| Comparative fairness | GOOD | Every option uses the same normalized fields and criteria, including ownership, replay, migration, reversibility, abstraction risk, and second-consumer impact; the second audit confirmed the rederived ranking. | None remaining for preparation. |
 | Falsifiability | GOOD | Concrete document-level scenarios show where Options 4 and 7 survive, require redesign, or lose the evidence-proportionality test. | No production or architecture-regression test is claimed as completed. |
 | Authority and ownership clarity | GOOD | Option 7 keeps pre-model responsibilities distinct inside Evidence Intelligence and prohibits claim, execution, provider-attempt, and governance authority leakage. | Generic ownership remains deliberately undecided until a second consumer exists. |
 | Persistence and replay quality | EXCELLENT | Layered identity, immutable lineage, byte retention policy, strict-known reconstruction, and unavailability are resolved. | Concrete storage remains intentionally open. |
@@ -443,33 +443,33 @@ Determination: governance-compatible as a remediation contribution. A second ind
 | Implementation and migration impact | GOOD | Option 7 defines a narrow provider-free Evidence Intelligence scope and the governed extraction cost if a second consumer appears; code and activation remain deferred. | Phase 1 plan not yet created by design. |
 | Testability and validation | GOOD | Legal dimensions, layered identities, byte equality, strict-known behavior, forbidden authority, and isolation yield explicit future verification obligations. | No implementation or architecture-regression testing has occurred. |
 | Maintainability and extensibility | GOOD | Consumer scoping avoids premature generic authority while requiring explicit future extraction from two real contracts. | A second consumer will incur a governed migration decision. |
-| Risk quality | GOOD | Governance, security, authority, operational, and retrospective-preparation risks include mitigation and uncertainty. | Independent audit may identify additional risks. |
+| Risk quality | GOOD | Governance, security, authority, operational, and retrospective-preparation risks include mitigation and uncertainty; the second audit identified no additional blocker. | Implementation risks remain future gates. |
 | Traceability | ACCEPTABLE | Issue, ADPR, Proposed ADR, Draft PR, exact review commits, review-summary limitations, and missing durable artifacts are explicit. | Full prior Technical Defense and hostile-review reports are not durably published. |
 
-No mandatory quality dimension is self-rated below `ACCEPTABLE`, but the produced ADR does not match the rederived recommendation. This is an author self-assessment only.
+No mandatory quality dimension is below `ACCEPTABLE`. The second independent audit confirmed the preparation basis, and the produced ADR now matches the rederived recommendation. ADR acceptance remains a separate lifecycle decision.
 
 ## Architecture Readiness
 
 - Outcome: `READY`
 - Rationale: The problem, authority, constraints, complete option set, equal-criteria comparison, concrete counterexamples, identity, determinism, security, retention, failure, and migration boundaries are sufficiently resolved to select Option 7.
 - Missing evidence: No second consumer exists to justify generic ownership. Concrete source handling policies, execution identity, storage, and capability constraint are required before implementation, not to select the consumer-scoped architecture.
-- Unresolved conflicts: Proposed ADR 0031 currently expresses Option 4 rather than the rederived Option 7 recommendation. That mismatch blocks ADR progression, not preparation re-audit.
+- Unresolved conflicts: None for preparation. Proposed ADR 0031 now expresses Option 7; exact-pair formal review and acceptance remain separate gates.
 
 ## ADR Readiness
 
-- Outcome: `NEEDS_REVISION`
+- Outcome: `READY_FOR_ADR`
 - Proposed ADR title: ADR 0031: AI Context and Prompt Intelligence Foundation
 - Proposed ADR scope: A deterministic provider-independent pre-model foundation scoped to Evidence Intelligence, with generic Context/Prompt ownership deferred until a second real consumer demonstrates commonality.
 - Decisions the ADR must fix: Evidence Intelligence-scoped context dimensions and identities; internal responsibility separation; canonical byte contract; subordinate build ownership; terminal replanning; retention/deletion/reconstruction semantics; proposal-only authority; zero-LLM Governance Review; and the trigger for later generic extraction.
 - Matters the ADR must leave open: Provider/model selection, adapter/routing/retry behavior, response contracts and re-execution, storage technology, production schemas, credentials, deployment, and later consumers.
 
-This outcome is a preparation-author self-assessment. It requires later ADR alignment if a second audit confirms Option 7. It is not `APPROVED`, does not accept or modify ADR 0031, and does not authorize implementation.
+This preparation outcome was confirmed by the second independent audit and ADR 0031 was aligned separately. Approval of this ADPR records the accepted decision basis only; it does not accept ADR 0031 or authorize implementation.
 
 ## Final Recommendation
 
 Recommend Option 7, the Evidence Intelligence-specific pre-model foundation first. It closes the only evidenced consumer gap with the same deterministic selection, layered identity, canonical-byte, strict-known, non-authority, security, retention, and reconstruction rules as Option 4, while avoiding durable generic owners whose commonality has not been demonstrated.
 
-If a second independent audit confirms this recommendation, ADR 0031 must be reconciled in a separate governed revision before formal ADR review resumes. A second real consumer is the reconsideration trigger for generic extraction: that later preparation must compare the two actual contracts, define common ownership, preserve historical identities, and specify migration. Do not implement Phase 1 or change ADR status as part of preparation review.
+ADR 0031 has been reconciled to this recommendation. A second real consumer remains the reconsideration trigger for generic extraction: that later preparation must compare the two actual contracts, define common ownership, preserve historical identities, and specify migration. Do not implement Phase 1 or change ADR status as part of preparation approval.
 
 ## Decision History
 
@@ -477,22 +477,23 @@ If a second independent audit confirms this recommendation, ADR 0031 must be rec
 |---|---|---|---|
 | 2026-08-08 | READY_FOR_REVIEW | Created ADPR-0006 to remediate F-007, reconstructed the preserved decision basis, recorded the sequence deviation, and linked Proposed ADR 0031 without changing its decision or status. | Project Hunter Architecture Team |
 | 2026-08-08 | READY_FOR_REVIEW | Revision 2 addressed F-PA-001 through F-PA-003: disclosed absent durable review artifacts, added and fairly compared an Evidence Intelligence-specific-first option, replaced circular falsification with concrete counterexamples, selected Option 7 from current evidence, and marked the produced ADR `NEEDS_REVISION` without editing it. | Project Hunter Architecture Team |
+| 2026-08-09 | APPROVED | Recorded the passing second independent preparation audit for revision 2, confirmed Option 7 as the governing recommendation, and verified that Proposed ADR 0031 was aligned at `12ac95d3582bf569fe76beb29c06a274133cf080`. F-FR-001 traceability is resolved; ADR acceptance and implementation remain unauthorized. | Independent preparation audit and Project Hunter Architecture Team |
 
 ## Traceability
 
 - Epic: not yet created.
 - Issue: [#206](https://github.com/fafa33/Project-Hunter/issues/206).
-- Preparation working document: no separate repository artifact; the decision basis was developed in the ADR 0031 review sequence associated with Issue #206 and Draft PR #207. PR #207 durably contains only a summary of F-001 through F-006, not the full review artifacts.
-- Checklist review: author self-review against `docs/checklists/ARCHITECTURE_DECISION_PREPARATION_CHECKLIST.md`; independent confirmation pending.
-- ADPR: ADPR-0006, this record, `READY_FOR_REVIEW`.
+- Preparation working document: no separate repository artifact; the decision basis was developed in the ADR 0031 review sequence associated with Issue #206 and Draft PR #207. PR #207 records durable summaries of F-001 through F-006, the preparation-audit sequence, and F-FR-001 through F-FR-003 remediation; full earlier review transcripts remain unavailable and are not treated as reproducible proof.
+- Checklist review: author self-review against `docs/checklists/ARCHITECTURE_DECISION_PREPARATION_CHECKLIST.md`; second independent preparation audit completed with a passing verdict.
+- ADPR: ADPR-0006, this record, `APPROVED`.
 - ADR: [ADR 0031](../ADR/0031-ai-context-prompt-intelligence-foundation.md), `Proposed`.
 - Implementation plan: not yet created; no implementation authorized.
-- PR: [Draft PR #207](https://github.com/fafa33/Project-Hunter/pull/207), which must be updated by the contribution workflow to cover the new exact head before further exact-pair review.
-- Prior reviewed pair: head `964003e97dbef57c0ab005cfc400a0285c7642e2`, base `8dfd663ddf1db7a7b54bdd46eedca8aac0d36ff0`; superseded for Draft-to-Ready review by this remediation commit.
-- Preparation audit: revision 1 at commit `8450917ac415779781c78f365750029fa1bab8a4` concluded `ADPR_REVISION_REQUIRED` with F-PA-001 through F-PA-003. No complete report is durably published in the repository, Issue #206, or PR #207; this limitation is explicit. Revision 2 requires a second independent audit under `docs/ARCHITECTURE_AUDIT_PROTOCOL.md` using `docs/ARCHITECTURE_AUDIT_TEMPLATE.md`.
+- PR: [Draft PR #207](https://github.com/fafa33/Project-Hunter/pull/207); its body records the audit sequence, ADR alignment, formal-review remediation, and exact current head before renewed review.
+- Formal ADR review pair: head `12ac95d3582bf569fe76beb29c06a274133cf080`, base `8dfd663ddf1db7a7b54bdd46eedca8aac0d36ff0`; review returned `CHANGES REQUIRED` for F-FR-001 through F-FR-003. The remediation commit requires renewed exact-pair review.
+- Preparation audit: revision 1 at `8450917ac415779781c78f365750029fa1bab8a4` concluded `ADPR_REVISION_REQUIRED` with F-PA-001 through F-PA-003. Revision 2 at `7a64f54bf51fd9f81ee859f9ca63389e5938bdac` passed and confirmed Option 7 was ready to govern ADR revision. PR #207 records the durable audit summary; absent full earlier transcripts are not treated as proof beyond that summary.
 - Merge commit: not yet created.
 - Release: not yet assigned.
 
 ## Immutability and Supersession
 
-After `APPROVED`, this record is historical evidence. Corrections that change substantive reasoning require a new ADPR that explicitly supersedes this record. Non-substantive link completion and typographical corrections must remain auditable in version history.
+This record is `APPROVED` historical evidence. Corrections that change substantive reasoning require a new ADPR that explicitly supersedes this record. Non-substantive link completion and typographical corrections must remain auditable in version history.
