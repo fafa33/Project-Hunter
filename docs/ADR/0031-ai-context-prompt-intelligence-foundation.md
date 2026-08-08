@@ -4,13 +4,13 @@
 
 Proposed.
 
-This ADR defines architecture only. It does not authorize a production LLM integration, a Model Adapter, provider credentials, or any change to Hunter Governance Review. Runtime implementation may begin only after this ADR is accepted and a separately scoped implementation plan is approved.
-
 ## Date
 
 2026-08-08.
 
 ## Context
+
+This ADR defines architecture only. It does not authorize a production LLM integration, a Model Adapter, provider credentials, or any change to Hunter Governance Review. Runtime implementation may begin only after this ADR is accepted and a separately scoped implementation plan is approved.
 
 Project Hunter has no active production LLM execution path. Evidence Intelligence defines an injected `AIExtractionProvider` boundary, but no concrete external model adapter or canonical prompt builder exists. Its provider output is persisted only as a proposal and is not canonical knowledge. Hunter Governance Review is deliberately deterministic, repository-native, and protected by regression tests that prohibit an LLM dependency.
 
