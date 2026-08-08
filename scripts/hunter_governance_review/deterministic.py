@@ -17,6 +17,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from hunter_governance_review.contracts import (
+    CanonicalPRContract,
     ChangedFile,
     DeterministicResult,
     Finding,
@@ -24,40 +25,16 @@ from hunter_governance_review.contracts import (
     Severity,
 )
 
-REQUIRED_SECTIONS = (
-    "Summary",
-    "Scope and architecture",
-    "Acceptance-criteria matrix",
-    "Verification",
-    "Operational validation",
-    "Remaining limitations and risks",
-    "Implementer readiness declaration",
-)
-
-# Docs-only contributions scale their evidence down proportionally, per
-# DEVELOPMENT_GOVERNANCE.md proportionality rules.
-MINIMAL_SECTIONS = ("Summary", "Acceptance-criteria matrix", "Implementer readiness declaration")
-
-PLACEHOLDER_MARKERS = (
-    "replace with",
-    "todo:",
-    "lorem ipsum",
-    "fix me",
-    "placeholder",
-    "example: ",
-)
-
-PLACEHOLDER_TITLES = {"", "wip", "draft", "untitled", "update", "updates", "change", "changes"}
-
-ACCEPTANCE_STATUSES = ("pass", "fail", "blocked", "not applicable")
-
-READINESS_DECLARATIONS = ("ready for review", "changes required", "blocked")
-
 GATE_PATH_MARKERS = (
     "hunter-governance-review",
     "hunter_governance_review",
     "HUNTER_GOVERNANCE_REVIEW",
 )
+
+
+def _structural_severity(ctx: ValidationContext) -> Severity:
+    """Returns Severity.INFO for draft PRs to prevent premature blocking failures, and Severity.BLOCKING for non-draft PRs."""
+    return Severity.INFO if ctx.pr.draft else Severity.BLOCKING
 
 
 @dataclass(frozen=True)
@@ -120,7 +97,7 @@ def _parse_acceptance_matrix(body: str) -> tuple[list[tuple[str, str, str]], boo
         if len(cells) < 2:
             continue
         status = cells[1].lower()
-        if status in ACCEPTANCE_STATUSES:
+        if status in CanonicalPRContract.ALLOWED_ACCEPTANCE_STATUSES:
             evidence = cells[2] if len(cells) > 2 else ""
             rows.append((cells[0], status, evidence))
     placeholder = any("replace with" in row[0].lower() or "replace with" in row[2].lower() for row in rows)
@@ -141,7 +118,7 @@ def _parse_readiness(body: str) -> tuple[str | None, str | None]:
         # Strip markdown decoration (the template wraps declarations in
         # backticks and/or bold markers) before matching the declaration name.
         text = text.replace("`", "").replace("*", "")
-        for declaration in READINESS_DECLARATIONS:
+        for declaration in CanonicalPRContract.ALLOWED_READINESS_DECLARATIONS:
             if text.startswith(declaration):
                 checked.append(declaration)
                 break
@@ -157,7 +134,7 @@ def _parse_readiness(body: str) -> tuple[str | None, str | None]:
 
 def _title_validator(ctx: ValidationContext) -> Finding | None:
     title = ctx.pr.title.strip()
-    if not title or title.lower() in PLACEHOLDER_TITLES:
+    if not title or title.lower() in CanonicalPRContract.PROHIBITED_TITLES:
         return Finding(
             "V-010",
             "PR title is missing or a placeholder",
@@ -169,40 +146,41 @@ def _title_validator(ctx: ValidationContext) -> Finding | None:
 
 def _body_validator(ctx: ValidationContext) -> Finding | None:
     body = ctx.body.strip()
+    severity = _structural_severity(ctx)
     if not body:
         return Finding(
             "V-020",
             "PR body is empty",
-            Severity.BLOCKING,
+            severity,
             "the governance evidence package must be recorded in the PR description.",
         )
     if len(body) < 80:
         return Finding(
             "V-020",
             "PR body lacks the governance evidence package",
-            Severity.BLOCKING,
+            severity,
             f"body is only {len(body)} characters; merge readiness requires evidence, not a stub.",
         )
     lowered = body.lower()
-    for marker in PLACEHOLDER_MARKERS:
+    for marker in CanonicalPRContract.PROHIBITED_PLACEHOLDERS:
         if marker in lowered:
             return Finding(
                 "V-021",
                 "PR body contains template placeholders",
-                Severity.BLOCKING,
+                severity,
                 f"found placeholder marker {marker!r}; replace it with real evidence.",
             )
     return None
 
 
 def _sections_validator(ctx: ValidationContext) -> Finding | None:
-    required = REQUIRED_SECTIONS if ctx.code_change else MINIMAL_SECTIONS
+    required = CanonicalPRContract.REQUIRED_SECTIONS if ctx.code_change else CanonicalPRContract.MINIMAL_SECTIONS
     missing = [section for section in required if not _has_section(ctx.body, section)]
     if missing:
         return Finding(
             "V-030",
             "PR body is missing required template sections",
-            Severity.BLOCKING,
+            _structural_severity(ctx),
             "missing: " + ", ".join(missing),
         )
     return None
@@ -210,18 +188,19 @@ def _sections_validator(ctx: ValidationContext) -> Finding | None:
 
 def _matrix_validator(ctx: ValidationContext) -> Finding | None:
     rows, placeholder = _parse_acceptance_matrix(ctx.body)
+    severity = _structural_severity(ctx)
     if placeholder:
         return Finding(
             "V-040",
             "acceptance-criteria matrix contains the template placeholder row",
-            Severity.BLOCKING,
+            severity,
             "replace the placeholder row with real criteria and evidence.",
         )
     if not rows:
         return Finding(
             "V-040",
             "acceptance-criteria matrix is missing",
-            Severity.BLOCKING,
+            severity,
             "every criterion must be listed with PASS, FAIL, BLOCKED, or NOT APPLICABLE.",
         )
     if not ctx.pr.draft:
@@ -238,11 +217,12 @@ def _matrix_validator(ctx: ValidationContext) -> Finding | None:
 
 def _readiness_validator(ctx: ValidationContext) -> Finding | None:
     declared, problem = _parse_readiness(ctx.body)
+    severity = _structural_severity(ctx)
     if declared is None:
         return Finding(
             "V-050",
             "implementer readiness declaration is missing or ambiguous",
-            Severity.BLOCKING,
+            severity,
             problem or "exactly one checked declaration is required.",
         )
     if declared != "ready for review" and not ctx.pr.draft:
@@ -262,7 +242,7 @@ def _verification_validator(ctx: ValidationContext) -> Finding | None:
         return Finding(
             "V-060",
             "verification evidence is a template placeholder",
-            Severity.BLOCKING,
+            _structural_severity(ctx),
             "record the exact ruff, black, mypy, and pytest results.",
         )
     return None
@@ -313,6 +293,44 @@ def _draft_validator(ctx: ValidationContext) -> Finding | None:
     return None
 
 
+def is_trusted_dependency_pr(ctx: ValidationContext) -> bool:
+    """Returns True if the PR is verified to be a trusted automated dependency update.
+
+    A PR is classified as an automated dependency update only if:
+    1. The PR author is a verified bot account (e.g. dependabot[bot] or renovate[bot]).
+    2. The changed files ONLY modify strict dependency constraint, configuration, or lock files.
+    """
+    # 1. Author check: must be a trusted automated bot login.
+    trusted_bots = {"dependabot[bot]", "renovate[bot]"}
+    if ctx.pr.author_login not in trusted_bots:
+        return False
+
+    # 2. Changed files check: must exclusively touch dependency configuration or lock files.
+    # Must NEVER allow modifications to source, scripts, tests, docs, or CI workflows.
+    for f in ctx.files:
+        filename = f.filename
+        # Check directories/paths that are strictly human-owned code or documentation
+        if (
+            filename.startswith("src/")
+            or filename.startswith("scripts/")
+            or filename.startswith("tests/")
+            or filename.startswith("docs/")
+            or filename.startswith(".github/")
+        ):
+            return False
+        # Must only touch requirements/ or specific lockfiles in the repository root
+        allowed_dirs = ("requirements/",)
+        allowed_root_files = ("pyproject.toml", "poetry.lock", "package-lock.json", "pnpm-lock.yaml")
+
+        is_allowed_dir = any(filename.startswith(d) for d in allowed_dirs)
+        is_allowed_file = filename in allowed_root_files
+
+        if not (is_allowed_dir or is_allowed_file):
+            return False
+
+    return True
+
+
 _VALIDATORS: tuple[Validator, ...] = (
     _title_validator,
     _body_validator,
@@ -329,5 +347,17 @@ _VALIDATORS: tuple[Validator, ...] = (
 
 def run_deterministic_engine(ctx: ValidationContext) -> DeterministicResult:
     """Run every deterministic validator against the PR context."""
-    findings = [validator(ctx) for validator in _VALIDATORS]
+    if is_trusted_dependency_pr(ctx):
+        # Automated Dependency Path: run a safe, streamlined subset of validators
+        dependency_validators = (
+            _title_validator,
+            _adr_references_validator,
+            _mergeable_validator,
+            _gate_self_modification_validator,
+            _draft_validator,
+        )
+        findings = [validator(ctx) for validator in dependency_validators]
+    else:
+        # Standard Manual Path for human PRs
+        findings = [validator(ctx) for validator in _VALIDATORS]
     return DeterministicResult(findings=[finding for finding in findings if finding is not None])
