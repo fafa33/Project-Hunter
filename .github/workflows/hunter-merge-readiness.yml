@@ -1,14 +1,17 @@
-name: Hunter Merge Readiness
+name: Hunter Merge Readiness Controller
 
-# One visible, deterministic answer to: "is this PR actually ready to merge now?"
+# Publishes the single user-facing `Hunter Merge Readiness` commit status.
+#
+# State model:
+# - pending: PR is Draft or exact-head prerequisites are still running.
+# - failure: PR is Ready for Review but metadata or a real prerequisite failed.
+# - success: PR is Ready for Review and every exact-head prerequisite passed.
 #
 # Security model:
-# - pull_request_target executes this workflow from the trusted default branch.
+# - pull_request_target executes only trusted default-branch workflow code.
 # - no PR code is checked out or executed.
-# - PR body, author, and changed-file metadata are treated as untrusted data.
-# - permissions are read-only.
-# - Hunter Governance Review remains the governance authority; this job only
-#   aggregates lifecycle metadata and exact-head check results into one signal.
+# - PR metadata and changed-file names are untrusted data.
+# - Hunter Governance Review remains the governance authority.
 
 on:
   pull_request_target:
@@ -27,19 +30,20 @@ permissions:
   checks: read
   contents: read
   pull-requests: read
+  statuses: write
 
 concurrency:
   group: hunter-merge-readiness-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:
-  readiness:
-    name: Hunter Merge Readiness
+  controller:
+    name: Hunter Merge Readiness Controller
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
     steps:
-      - name: Validate lifecycle metadata
+      - name: Publish deterministic merge-readiness state
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -47,12 +51,14 @@ jobs:
           PR_BODY: ${{ github.event.pull_request.body }}
           PR_DRAFT: ${{ github.event.pull_request.draft }}
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           python - <<'PY'
           import json
           import os
           import re
-          import sys
+          import time
           import urllib.request
 
           repo = os.environ["GH_REPO"]
@@ -61,121 +67,10 @@ jobs:
           body = os.environ.get("PR_BODY", "")
           draft = os.environ.get("PR_DRAFT", "").lower() == "true"
           author = os.environ.get("PR_AUTHOR", "")
-
-          def api(path):
-              request = urllib.request.Request(
-                  f"https://api.github.com/repos/{repo}/{path}",
-                  headers={
-                      "Accept": "application/vnd.github+json",
-                      "Authorization": f"Bearer {token}",
-                      "X-GitHub-Api-Version": "2022-11-28",
-                  },
-              )
-              with urllib.request.urlopen(request, timeout=30) as response:
-                  return json.load(response)
-
-          if draft:
-              print("NOT MERGE READY: PR is still Draft.")
-              sys.exit(1)
-
-          trusted_bots = {"dependabot[bot]", "renovate[bot]"}
-          trusted_dependency_pr = False
-          if author in trusted_bots:
-              files = []
-              page = 1
-              while True:
-                  batch = api(f"pulls/{pr_number}/files?per_page=100&page={page}")
-                  files.extend(item["filename"] for item in batch)
-                  if len(batch) < 100:
-                      break
-                  page += 1
-
-              def allowed_dependency_file(filename):
-                  if filename.startswith(("src/", "scripts/", "tests/", "docs/", ".github/")):
-                      return False
-                  if filename.startswith("requirements/"):
-                      return True
-                  return filename in {
-                      "pyproject.toml",
-                      "poetry.lock",
-                      "package-lock.json",
-                      "pnpm-lock.yaml",
-                  }
-
-              trusted_dependency_pr = bool(files) and all(
-                  allowed_dependency_file(filename) for filename in files
-              )
-
-          if trusted_dependency_pr:
-              print("Trusted dependency-only bot PR: template readiness metadata is exempt.")
-              sys.exit(0)
-
-          rows = []
-          in_table = False
-          for line in body.splitlines():
-              stripped = line.strip()
-              if stripped.startswith("|") and "Acceptance criterion" in stripped:
-                  in_table = True
-                  continue
-              if not stripped.startswith("|"):
-                  in_table = False
-                  continue
-              if not in_table:
-                  continue
-              cells = [cell.strip() for cell in stripped.strip("|").split("|")]
-              if len(cells) < 2:
-                  continue
-              status = cells[1].lower()
-              if status in {"pass", "fail", "blocked", "not applicable"}:
-                  rows.append((cells[0], status))
-
-          if not rows:
-              print("NOT MERGE READY: acceptance-criteria matrix has no parseable criteria.")
-              sys.exit(1)
-
-          unresolved = [name for name, status in rows if status in {"fail", "blocked"}]
-          if unresolved:
-              print("NOT MERGE READY: FAIL/BLOCKED acceptance criteria: " + ", ".join(unresolved))
-              sys.exit(1)
-
-          checked = []
-          allowed = ("ready for review", "changes required", "blocked")
-          for match in re.finditer(r"(?im)^\s*[-*+]\s*\[([ xX])\]\s*(.+)", body):
-              marker, text = match.group(1), match.group(2).strip().lower()
-              if marker not in ("x", "X"):
-                  continue
-              normalized = text.replace("`", "").replace("*", "")
-              for declaration in allowed:
-                  if normalized.startswith(declaration):
-                      checked.append(declaration)
-                      break
-
-          if len(checked) != 1:
-              print("NOT MERGE READY: exactly one implementer readiness declaration must be checked.")
-              sys.exit(1)
-          if checked[0] != "ready for review":
-              print(f"NOT MERGE READY: implementer readiness is {checked[0].upper()}.")
-              sys.exit(1)
-
-          print("Lifecycle metadata is merge-ready.")
-          PY
-
-      - name: Wait for exact-head required checks
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          python - <<'PY'
-          import json
-          import os
-          import sys
-          import time
-          import urllib.request
-
-          repo = os.environ["GH_REPO"]
           sha = os.environ["HEAD_SHA"]
-          token = os.environ["GH_TOKEN"]
+          run_url = os.environ["RUN_URL"]
+          context = "Hunter Merge Readiness"
+
           required = (
               "Hunter Governance Review",
               "Quality Gates",
@@ -189,76 +84,191 @@ jobs:
               "startup_failure",
           }
 
-          def check_runs():
+          def request_json(method, path, payload=None):
+              data = None if payload is None else json.dumps(payload).encode("utf-8")
               request = urllib.request.Request(
-                  f"https://api.github.com/repos/{repo}/commits/{sha}/check-runs?per_page=100",
+                  f"https://api.github.com/repos/{repo}/{path}",
+                  data=data,
+                  method=method,
                   headers={
                       "Accept": "application/vnd.github+json",
                       "Authorization": f"Bearer {token}",
                       "X-GitHub-Api-Version": "2022-11-28",
+                      "Content-Type": "application/json",
                   },
               )
               with urllib.request.urlopen(request, timeout=30) as response:
-                  return json.load(response)["check_runs"]
+                  return json.load(response)
 
-          for attempt in range(45):
-              runs = check_runs()
-              latest = {}
-              for run in runs:
-                  name = run.get("name")
-                  if name not in required:
-                      continue
-                  previous = latest.get(name)
-                  if previous is None or run.get("id", 0) > previous.get("id", 0):
-                      latest[name] = run
-
-              missing = [name for name in required if name not in latest]
-              pending = []
-              failed = []
-              succeeded = []
-
-              for name in required:
-                  run = latest.get(name)
-                  if run is None:
-                      continue
-                  status = run.get("status")
-                  conclusion = run.get("conclusion")
-                  if status != "completed":
-                      pending.append(name)
-                  elif conclusion == "success":
-                      succeeded.append(name)
-                  elif conclusion in hard_failures:
-                      failed.append(name)
-                  else:
-                      # Lifecycle edits/Ready transitions can cancel or supersede
-                      # an older run just before the replacement run is visible.
-                      # Treat cancelled/skipped/stale/neutral terminal results as
-                      # pending and wait for a newer exact-head run instead of
-                      # publishing a transient false red.
-                      pending.append(name)
-
-              if failed:
-                  for name in failed:
-                      run = latest[name]
-                      print(
-                          f"NOT MERGE READY: {name} concluded {run.get('conclusion')} "
-                          f"on exact head {sha}."
-                      )
-                  sys.exit(1)
-
-              if not missing and not pending and len(succeeded) == len(required):
-                  print(f"MERGE READY: all required checks passed on exact head {sha}.")
-                  for name in required:
-                      print(f"- {name}: success")
-                  sys.exit(0)
-
-              waiting = missing + pending
-              print(
-                  f"Waiting for exact-head checks ({attempt + 1}/45): "
-                  + ", ".join(waiting)
+          def publish(state, description):
+              description = description[:140]
+              request_json(
+                  "POST",
+                  f"statuses/{sha}",
+                  {
+                      "state": state,
+                      "context": context,
+                      "description": description,
+                      "target_url": run_url,
+                  },
               )
-              time.sleep(20)
+              print(f"{context}: {state} — {description}")
 
-          print("NOT MERGE READY: timed out waiting for exact-head required checks.")
-          sys.exit(1)
+          def dependency_only_pr():
+              if author not in {"dependabot[bot]", "renovate[bot]"}:
+                  return False
+              files = []
+              page = 1
+              while True:
+                  batch = request_json(
+                      "GET", f"pulls/{pr_number}/files?per_page=100&page={page}"
+                  )
+                  files.extend(item["filename"] for item in batch)
+                  if len(batch) < 100:
+                      break
+                  page += 1
+              if not files:
+                  return False
+              allowed_root = {
+                  "pyproject.toml",
+                  "poetry.lock",
+                  "package-lock.json",
+                  "pnpm-lock.yaml",
+              }
+              return all(
+                  filename.startswith("requirements/") or filename in allowed_root
+                  for filename in files
+              )
+
+          def validate_metadata():
+              if dependency_only_pr():
+                  return None
+
+              rows = []
+              in_table = False
+              for line in body.splitlines():
+                  stripped = line.strip()
+                  if stripped.startswith("|") and "Acceptance criterion" in stripped:
+                      in_table = True
+                      continue
+                  if not stripped.startswith("|"):
+                      in_table = False
+                      continue
+                  if not in_table:
+                      continue
+                  cells = [cell.strip() for cell in stripped.strip("|").split("|")]
+                  if len(cells) < 2:
+                      continue
+                  status = cells[1].lower()
+                  if status in {"pass", "fail", "blocked", "not applicable"}:
+                      rows.append((cells[0], status))
+
+              if not rows:
+                  return "Acceptance-criteria matrix is missing or unparseable."
+
+              unresolved = [name for name, status in rows if status in {"fail", "blocked"}]
+              if unresolved:
+                  return "FAIL/BLOCKED acceptance criteria remain: " + ", ".join(unresolved)
+
+              checked = []
+              allowed = ("ready for review", "changes required", "blocked")
+              for match in re.finditer(r"(?im)^\s*[-*+]\s*\[([ xX])\]\s*(.+)", body):
+                  marker, text = match.group(1), match.group(2).strip().lower()
+                  if marker.lower() != "x":
+                      continue
+                  normalized = text.replace("`", "").replace("*", "")
+                  for declaration in allowed:
+                      if normalized.startswith(declaration):
+                          checked.append(declaration)
+                          break
+
+              if len(checked) != 1:
+                  return "Exactly one implementer readiness declaration must be checked."
+              if checked[0] != "ready for review":
+                  return f"Implementer readiness is {checked[0].upper()}, not READY FOR REVIEW."
+              return None
+
+          def all_check_runs():
+              runs = []
+              page = 1
+              while True:
+                  payload = request_json(
+                      "GET", f"commits/{sha}/check-runs?per_page=100&page={page}&filter=all"
+                  )
+                  batch = payload["check_runs"]
+                  runs.extend(batch)
+                  if len(batch) < 100:
+                      break
+                  page += 1
+              return runs
+
+          try:
+              # Every lifecycle/head event first invalidates any previous green signal.
+              if draft:
+                  publish("pending", "Waiting for Ready for Review (PR is Draft).")
+                  raise SystemExit(0)
+
+              publish("pending", "Validating Ready-for-Review metadata and exact-head checks.")
+
+              metadata_error = validate_metadata()
+              if metadata_error:
+                  publish("failure", metadata_error)
+                  raise SystemExit(0)
+
+              attempts = 45
+              for attempt in range(1, attempts + 1):
+                  latest = {}
+                  for run in all_check_runs():
+                      name = run.get("name")
+                      if name not in required:
+                          continue
+                      previous = latest.get(name)
+                      if previous is None or int(run.get("id", 0)) > int(previous.get("id", 0)):
+                          latest[name] = run
+
+                  missing = []
+                  pending = []
+                  failed = []
+                  succeeded = []
+
+                  for name in required:
+                      run = latest.get(name)
+                      if run is None:
+                          missing.append(name)
+                          continue
+                      status = run.get("status")
+                      conclusion = run.get("conclusion")
+                      if status != "completed":
+                          pending.append(name)
+                      elif conclusion == "success":
+                          succeeded.append(name)
+                      elif conclusion in hard_failures:
+                          failed.append(f"{name}={conclusion}")
+                      else:
+                          # Cancelled/skipped/stale/neutral can be transient around
+                          # lifecycle edits. Wait for a newer exact-head run.
+                          pending.append(name)
+
+                  if failed:
+                      publish("failure", "Exact-head prerequisite failed: " + ", ".join(failed))
+                      raise SystemExit(0)
+
+                  if not missing and not pending and len(succeeded) == len(required):
+                      publish("success", "Ready to merge: all exact-head prerequisites passed.")
+                      raise SystemExit(0)
+
+                  waiting = missing + pending
+                  publish("pending", "Waiting for exact-head checks: " + ", ".join(waiting))
+                  if attempt < attempts:
+                      time.sleep(20)
+
+              publish("failure", "Timed out waiting for exact-head prerequisites.")
+          except SystemExit:
+              raise
+          except Exception as exc:
+              # An infrastructure/controller error is a real failure, not a lifecycle wait.
+              try:
+                  publish("failure", f"Readiness controller error: {type(exc).__name__}")
+              finally:
+                  raise
           PY
