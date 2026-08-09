@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from scripts import hunter_pr_preflight
+import hunter_pr_preflight
 
 
 def test_quality_gate_order_matches_ci_contract() -> None:
