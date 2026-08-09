@@ -45,9 +45,7 @@ def test_orchestration_builds_from_canonical_inventory_and_derives_optional_cove
         "span-c",
     )
     assert result.build_result.prompt_artifact is not None
-    assert result.build_result.build_record.prompt_artifact_id == (
-        result.build_result.prompt_artifact.artifact_id
-    )
+    assert result.build_result.build_record.prompt_artifact_id == (result.build_result.prompt_artifact.artifact_id)
 
 
 def test_orchestration_rejects_required_span_outside_canonical_inventory(
