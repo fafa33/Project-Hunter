@@ -11,7 +11,7 @@ name: Hunter Merge Readiness Controller
 # - pull_request_target executes only trusted default-branch workflow code.
 # - no PR code is checked out or executed.
 # - PR metadata and changed-file names are untrusted data.
-# - Hunter Governance Review remains the governance authority.
+# - Hunter Governance Review commit status remains the governance authority.
 
 on:
   pull_request_target:
@@ -71,8 +71,8 @@ jobs:
           run_url = os.environ["RUN_URL"]
           context = "Hunter Merge Readiness"
 
-          required = (
-              "Hunter Governance Review",
+          governance_context = "Hunter Governance Review"
+          required_checks = (
               "Quality Gates",
               "dependency-review",
               "CodeQL",
@@ -202,6 +202,25 @@ jobs:
                   page += 1
               return runs
 
+          def latest_commit_status(status_context):
+              statuses = []
+              page = 1
+              while True:
+                  batch = request_json(
+                      "GET", f"commits/{sha}/statuses?per_page=100&page={page}"
+                  )
+                  statuses.extend(
+                      status
+                      for status in batch
+                      if status.get("context") == status_context
+                  )
+                  if len(batch) < 100:
+                      break
+                  page += 1
+              if not statuses:
+                  return None
+              return max(statuses, key=lambda status: int(status.get("id", 0)))
+
           try:
               # Every lifecycle/head event first invalidates any previous green signal.
               if draft:
@@ -220,7 +239,7 @@ jobs:
                   latest = {}
                   for run in all_check_runs():
                       name = run.get("name")
-                      if name not in required:
+                      if name not in required_checks:
                           continue
                       previous = latest.get(name)
                       if previous is None or int(run.get("id", 0)) > int(previous.get("id", 0)):
@@ -231,7 +250,7 @@ jobs:
                   failed = []
                   succeeded = []
 
-                  for name in required:
+                  for name in required_checks:
                       run = latest.get(name)
                       if run is None:
                           missing.append(name)
@@ -249,11 +268,29 @@ jobs:
                           # lifecycle edits. Wait for a newer exact-head run.
                           pending.append(name)
 
+                  governance = latest_commit_status(governance_context)
+                  governance_success = False
+                  if governance is None:
+                      missing.append(governance_context)
+                  else:
+                      governance_state = governance.get("state") or "pending"
+                      if governance_state == "success":
+                          governance_success = True
+                      elif governance_state in {"failure", "error"}:
+                          failed.append(f"{governance_context}={governance_state}")
+                      else:
+                          pending.append(governance_context)
+
                   if failed:
                       publish("failure", "Exact-head prerequisite failed: " + ", ".join(failed))
                       raise SystemExit(0)
 
-                  if not missing and not pending and len(succeeded) == len(required):
+                  if (
+                      governance_success
+                      and not missing
+                      and not pending
+                      and len(succeeded) == len(required_checks)
+                  ):
                       publish("success", "Ready to merge: all exact-head prerequisites passed.")
                       raise SystemExit(0)
 
