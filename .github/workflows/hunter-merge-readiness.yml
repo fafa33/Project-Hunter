@@ -4,8 +4,8 @@ name: Hunter Merge Readiness Controller
 #
 # State model:
 # - pending: PR is Draft or the current Governance Review / exact-head checks are still running.
-# - failure: PR is Ready for Review but metadata or a real prerequisite failed.
-# - success: PR is Ready for Review and every exact-head prerequisite passed.
+# - failure: PR is Ready for Review but metadata, actionable review feedback, or a real prerequisite failed.
+# - success: PR is Ready for Review and every exact-head prerequisite passed with no unresolved review feedback.
 #
 # Freshness model:
 # - every PR lifecycle event first invalidates any previous green signal;
@@ -13,10 +13,16 @@ name: Hunter Merge Readiness Controller
 # - a Governance Review completion is accepted only for the PR head it evaluated;
 # - the authoritative governance commit status must have been created after that run started.
 #
+# Review-feedback model:
+# - any unresolved pull-request review thread blocks merge readiness;
+# - a current CHANGES_REQUESTED review blocks merge readiness;
+# - review submissions/comments re-run this controller so new feedback cannot leave a stale green status;
+# - ordinary top-level conversation comments are not blockers because GitHub gives them no resolved/unresolved state.
+#
 # Security model:
-# - pull_request_target/workflow_run execute only trusted default-branch workflow code.
+# - pull_request_target/workflow_run/review events execute only trusted default-branch workflow code.
 # - no PR code is checked out or executed.
-# - PR metadata and changed-file names are untrusted data.
+# - PR metadata, review feedback, and changed-file names are untrusted data.
 # - Hunter Governance Review commit status remains the governance authority.
 
 on:
@@ -32,6 +38,16 @@ on:
       - converted_to_draft
       - review_requested
       - review_request_removed
+  pull_request_review:
+    types:
+      - submitted
+      - edited
+      - dismissed
+  pull_request_review_comment:
+    types:
+      - created
+      - edited
+      - deleted
   workflow_run:
     workflows:
       - Hunter Governance Review
@@ -108,6 +124,25 @@ jobs:
               )
               with urllib.request.urlopen(request, timeout=30) as response:
                   return json.load(response)
+
+          def graphql_json(query, variables):
+              data = json.dumps({"query": query, "variables": variables}).encode("utf-8")
+              request = urllib.request.Request(
+                  "https://api.github.com/graphql",
+                  data=data,
+                  method="POST",
+                  headers={
+                      "Accept": "application/vnd.github+json",
+                      "Authorization": f"Bearer {token}",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                      "Content-Type": "application/json",
+                  },
+              )
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  payload = json.load(response)
+              if payload.get("errors"):
+                  raise RuntimeError(f"GraphQL review-thread query failed: {payload['errors']}")
+              return payload["data"]
 
           def parse_time(value):
               if not value:
@@ -238,6 +273,75 @@ jobs:
                   return f"Implementer readiness is {checked[0].upper()}, not READY FOR REVIEW."
               return None
 
+          def unresolved_review_thread_count():
+              owner, name = repo.split("/", 1)
+              query = """
+              query($owner: String!, $name: String!, $number: Int!, $after: String) {
+                repository(owner: $owner, name: $name) {
+                  pullRequest(number: $number) {
+                    reviewThreads(first: 100, after: $after) {
+                      nodes { isResolved }
+                      pageInfo { hasNextPage endCursor }
+                    }
+                  }
+                }
+              }
+              """
+              count = 0
+              cursor = None
+              while True:
+                  data = graphql_json(
+                      query,
+                      {
+                          "owner": owner,
+                          "name": name,
+                          "number": int(pr_number),
+                          "after": cursor,
+                      },
+                  )
+                  pull = ((data.get("repository") or {}).get("pullRequest") or {})
+                  threads = pull.get("reviewThreads") or {}
+                  count += sum(1 for node in threads.get("nodes") or [] if not node.get("isResolved"))
+                  page_info = threads.get("pageInfo") or {}
+                  if not page_info.get("hasNextPage"):
+                      return count
+                  cursor = page_info.get("endCursor")
+
+          def current_changes_requested_reviewers():
+              reviews = []
+              page = 1
+              while True:
+                  batch = request_json("GET", f"pulls/{pr_number}/reviews?per_page=100&page={page}")
+                  reviews.extend(batch)
+                  if len(batch) < 100:
+                      break
+                  page += 1
+
+              latest_terminal = {}
+              for review in reviews:
+                  login = ((review.get("user") or {}).get("login") or "").strip()
+                  state = (review.get("state") or "").upper()
+                  if not login or state not in {"APPROVED", "CHANGES_REQUESTED", "DISMISSED"}:
+                      continue
+                  previous = latest_terminal.get(login)
+                  if previous is None or int(review.get("id", 0)) > int(previous.get("id", 0)):
+                      latest_terminal[login] = review
+
+              return sorted(
+                  login
+                  for login, review in latest_terminal.items()
+                  if (review.get("state") or "").upper() == "CHANGES_REQUESTED"
+              )
+
+          def review_feedback_error():
+              unresolved_threads = unresolved_review_thread_count()
+              if unresolved_threads:
+                  return f"Unresolved review threads remain: {unresolved_threads}."
+              changes_requested = current_changes_requested_reviewers()
+              if changes_requested:
+                  return "Changes requested by: " + ", ".join(changes_requested)
+              return None
+
           def all_check_runs():
               runs = []
               page = 1
@@ -279,19 +383,24 @@ jobs:
                   )
                   raise SystemExit(0)
 
-              # Every PR lifecycle event immediately invalidates any previous green signal.
+              # Every PR lifecycle/review event immediately invalidates any previous green signal.
               if draft:
                   publish("pending", "Waiting for Ready for Review (PR is Draft).")
                   raise SystemExit(0)
 
-              publish("pending", "Validating current governance and exact-head checks.")
+              publish("pending", "Validating current governance, review feedback, and exact-head checks.")
 
               metadata_error = validate_metadata()
               if metadata_error:
                   publish("failure", metadata_error)
                   raise SystemExit(0)
 
-              # A PR event must never consume a terminal governance status left by an
+              feedback_error = review_feedback_error()
+              if feedback_error:
+                  publish("failure", feedback_error)
+                  raise SystemExit(0)
+
+              # A PR/review event must never consume a terminal governance status left by an
               # earlier evaluation of the same SHA. Final evaluation happens only after
               # the Governance Review workflow for this lifecycle event completes.
               if event_name != "workflow_run":
@@ -311,6 +420,12 @@ jobs:
 
               attempts = 45
               for attempt in range(1, attempts + 1):
+                  # Review feedback can arrive while exact-head checks are running.
+                  feedback_error = review_feedback_error()
+                  if feedback_error:
+                      publish("failure", feedback_error)
+                      raise SystemExit(0)
+
                   latest = {}
                   for run in all_check_runs():
                       name = run.get("name")
@@ -373,7 +488,7 @@ jobs:
                       and not pending
                       and len(succeeded) == len(required_checks)
                   ):
-                      publish("success", "Ready to merge: all fresh exact-head prerequisites passed.")
+                      publish("success", "Ready to merge: fresh prerequisites passed and review threads are resolved.")
                       raise SystemExit(0)
 
                   waiting = missing + pending
