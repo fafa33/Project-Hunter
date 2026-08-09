@@ -3,12 +3,18 @@ name: Hunter Merge Readiness Controller
 # Publishes the single user-facing `Hunter Merge Readiness` commit status.
 #
 # State model:
-# - pending: PR is Draft or exact-head prerequisites are still running.
+# - pending: PR is Draft or the current Governance Review / exact-head checks are still running.
 # - failure: PR is Ready for Review but metadata or a real prerequisite failed.
 # - success: PR is Ready for Review and every exact-head prerequisite passed.
 #
+# Freshness model:
+# - every PR lifecycle event first invalidates any previous green signal;
+# - final evaluation is driven by completion of the current Hunter Governance Review run;
+# - a Governance Review completion is accepted only for the PR head it evaluated;
+# - the authoritative governance commit status must have been created after that run started.
+#
 # Security model:
-# - pull_request_target executes only trusted default-branch workflow code.
+# - pull_request_target/workflow_run execute only trusted default-branch workflow code.
 # - no PR code is checked out or executed.
 # - PR metadata and changed-file names are untrusted data.
 # - Hunter Governance Review commit status remains the governance authority.
@@ -24,6 +30,13 @@ on:
       - edited
       - ready_for_review
       - converted_to_draft
+      - review_requested
+      - review_request_removed
+  workflow_run:
+    workflows:
+      - Hunter Governance Review
+    types:
+      - completed
 
 permissions:
   actions: read
@@ -33,7 +46,7 @@ permissions:
   statuses: write
 
 concurrency:
-  group: hunter-merge-readiness-${{ github.event.pull_request.number }}
+  group: hunter-merge-readiness-${{ github.event.pull_request.number || github.event.workflow_run.pull_requests[0].number || github.run_id }}
   cancel-in-progress: true
 
 jobs:
@@ -47,11 +60,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          PR_BODY: ${{ github.event.pull_request.body }}
-          PR_DRAFT: ${{ github.event.pull_request.draft }}
-          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          EVENT_NAME: ${{ github.event_name }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           python - <<'PY'
@@ -60,18 +69,15 @@ jobs:
           import re
           import time
           import urllib.request
+          from datetime import datetime, timezone
 
           repo = os.environ["GH_REPO"]
-          pr_number = os.environ["PR_NUMBER"]
           token = os.environ["GH_TOKEN"]
-          body = os.environ.get("PR_BODY", "")
-          draft = os.environ.get("PR_DRAFT", "").lower() == "true"
-          author = os.environ.get("PR_AUTHOR", "")
-          sha = os.environ["HEAD_SHA"]
+          event_name = os.environ["EVENT_NAME"]
           run_url = os.environ["RUN_URL"]
           context = "Hunter Merge Readiness"
-
           governance_context = "Hunter Governance Review"
+
           required_checks = (
               "Quality Gates",
               "dependency-review",
@@ -83,6 +89,9 @@ jobs:
               "action_required",
               "startup_failure",
           }
+
+          with open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8") as handle:
+              event = json.load(handle)
 
           def request_json(method, path, payload=None):
               data = None if payload is None else json.dumps(payload).encode("utf-8")
@@ -99,6 +108,47 @@ jobs:
               )
               with urllib.request.urlopen(request, timeout=30) as response:
                   return json.load(response)
+
+          def parse_time(value):
+              if not value:
+                  return None
+              return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
+
+          trigger_head_sha = None
+          governance_run_started_at = None
+          governance_run_conclusion = None
+
+          if event_name == "workflow_run":
+              workflow_run = event.get("workflow_run") or {}
+              pulls = workflow_run.get("pull_requests") or []
+              if not pulls:
+                  print("Governance workflow completion is not attached to a pull request; skipping.")
+                  raise SystemExit(0)
+              pr_number = str(pulls[0]["number"])
+              trigger_head_sha = ((pulls[0].get("head") or {}).get("sha") or "").strip()
+              if not trigger_head_sha:
+                  print("Governance workflow completion has no PR head SHA; leaving current readiness state unchanged.")
+                  raise SystemExit(0)
+              governance_run_started_at = parse_time(workflow_run.get("run_started_at"))
+              governance_run_conclusion = workflow_run.get("conclusion")
+          else:
+              pull_request = event.get("pull_request") or {}
+              pr_number = str(pull_request.get("number") or "")
+              if not pr_number:
+                  print("Pull request event has no PR number; skipping.")
+                  raise SystemExit(0)
+
+          pr = request_json("GET", f"pulls/{pr_number}")
+          if pr.get("state") != "open":
+              print(f"PR #{pr_number} is no longer open; skipping.")
+              raise SystemExit(0)
+
+          body = pr.get("body") or ""
+          draft = bool(pr.get("draft"))
+          author = ((pr.get("user") or {}).get("login") or "")
+          sha = ((pr.get("head") or {}).get("sha") or "").strip()
+          if not sha:
+              raise RuntimeError("Current PR head SHA is unavailable")
 
           def publish(state, description):
               description = description[:140]
@@ -222,16 +272,41 @@ jobs:
               return max(statuses, key=lambda status: int(status.get("id", 0)))
 
           try:
-              # Every lifecycle/head event first invalidates any previous green signal.
+              if event_name == "workflow_run" and trigger_head_sha != sha:
+                  print(
+                      f"Ignoring stale Governance Review completion for {trigger_head_sha}; "
+                      f"PR #{pr_number} is now at {sha}."
+                  )
+                  raise SystemExit(0)
+
+              # Every PR lifecycle event immediately invalidates any previous green signal.
               if draft:
                   publish("pending", "Waiting for Ready for Review (PR is Draft).")
                   raise SystemExit(0)
 
-              publish("pending", "Validating Ready-for-Review metadata and exact-head checks.")
+              publish("pending", "Validating current governance and exact-head checks.")
 
               metadata_error = validate_metadata()
               if metadata_error:
                   publish("failure", metadata_error)
+                  raise SystemExit(0)
+
+              # A PR event must never consume a terminal governance status left by an
+              # earlier evaluation of the same SHA. Final evaluation happens only after
+              # the Governance Review workflow for this lifecycle event completes.
+              if event_name != "workflow_run":
+                  publish("pending", "Waiting for current Hunter Governance Review.")
+                  raise SystemExit(0)
+
+              if governance_run_conclusion != "success":
+                  publish(
+                      "failure",
+                      f"Current Hunter Governance Review workflow ended {governance_run_conclusion or 'without a conclusion'}.",
+                  )
+                  raise SystemExit(0)
+
+              if governance_run_started_at is None:
+                  publish("failure", "Current Governance Review run has no trustworthy start time.")
                   raise SystemExit(0)
 
               attempts = 45
@@ -273,13 +348,20 @@ jobs:
                   if governance is None:
                       missing.append(governance_context)
                   else:
-                      governance_state = governance.get("state") or "pending"
-                      if governance_state == "success":
-                          governance_success = True
-                      elif governance_state in {"failure", "error"}:
-                          failed.append(f"{governance_context}={governance_state}")
+                      governance_created_at = parse_time(governance.get("created_at"))
+                      if (
+                          governance_created_at is None
+                          or governance_created_at < governance_run_started_at
+                      ):
+                          pending.append(f"{governance_context} (fresh evaluation)")
                       else:
-                          pending.append(governance_context)
+                          governance_state = governance.get("state") or "pending"
+                          if governance_state == "success":
+                              governance_success = True
+                          elif governance_state in {"failure", "error"}:
+                              failed.append(f"{governance_context}={governance_state}")
+                          else:
+                              pending.append(governance_context)
 
                   if failed:
                       publish("failure", "Exact-head prerequisite failed: " + ", ".join(failed))
@@ -291,7 +373,7 @@ jobs:
                       and not pending
                       and len(succeeded) == len(required_checks)
                   ):
-                      publish("success", "Ready to merge: all exact-head prerequisites passed.")
+                      publish("success", "Ready to merge: all fresh exact-head prerequisites passed.")
                       raise SystemExit(0)
 
                   waiting = missing + pending
@@ -299,7 +381,7 @@ jobs:
                   if attempt < attempts:
                       time.sleep(20)
 
-              publish("failure", "Timed out waiting for exact-head prerequisites.")
+              publish("failure", "Timed out waiting for fresh exact-head prerequisites.")
           except SystemExit:
               raise
           except Exception as exc:
