@@ -3,11 +3,12 @@ name: Hunter PR Readiness Guard
 # Deterministic safety guard for the Draft -> Ready for Review transition.
 #
 # Hunter Governance Review remains the merge authority. This workflow does not
-# approve a PR and does not alter acceptance evidence. It only prevents a PR
-# from remaining merge-ready when its own body is inconsistent with readiness.
+# approve a PR and does not alter acceptance evidence. When stale readiness
+# metadata is detected, the guard reports it without relying on a privileged
+# Draft rollback that GitHub Actions may not be allowed to perform.
 #
 # Security boundary:
-# - Uses pull_request_target so the rollback has write authority for fork PRs.
+# - Uses pull_request_target so it can inspect metadata and post operator feedback.
 # - Never checks out or executes PR-controlled code.
 # - Treats PR body, author, and changed-file names as untrusted data only.
 # - Reproduces the governance engine's narrow trusted dependency-bot exception.
@@ -21,7 +22,7 @@ on:
 
 permissions:
   contents: read
-  pull-requests: write
+  pull-requests: read
   issues: write
 
 concurrency:
@@ -148,7 +149,7 @@ jobs:
         if: steps.classify.outputs.trusted_dependency == 'true'
         run: echo "Trusted dependency-only bot PR follows the governance engine's streamlined path."
 
-      - name: Restore Draft state when metadata is stale
+      - name: Report stale readiness metadata
         if: steps.classify.outputs.trusted_dependency != 'true' && steps.validate.outputs.ready != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -157,9 +158,12 @@ jobs:
           REASON: ${{ steps.validate.outputs.reason }}
         run: |
           set -euo pipefail
-          gh pr ready "${PR_NUMBER}" --undo --repo "${GH_REPO}"
-          gh pr comment "${PR_NUMBER}" --repo "${GH_REPO}" --body "Hunter PR Readiness Guard restored this PR to **Draft** because its merge-readiness metadata was stale: ${REASON}. Update the acceptance-criteria matrix with verified evidence and check only \`READY FOR REVIEW\`, then mark the PR ready again. No repository commit is required for this correction."
+          gh pr comment "${PR_NUMBER}" --repo "${GH_REPO}" --body "Hunter PR Readiness Guard detected stale merge-readiness metadata: ${REASON}. This guard intentionally does **not** attempt a Draft rollback because the GitHub Actions token may not have permission to perform that GraphQL transition. Hunter Governance Review and Hunter Merge Readiness remain authoritative and will keep the PR non-merge-ready until the acceptance-criteria matrix is updated with verified evidence and only \`READY FOR REVIEW\` is checked. No repository commit is required for this metadata correction."
 
-      - name: Confirm transition
-        if: steps.classify.outputs.trusted_dependency == 'true' || steps.validate.outputs.ready == 'true'
-        run: echo "Ready-for-review metadata guard passed."
+      - name: Confirm guard outcome
+        run: |
+          if [[ "${{ steps.classify.outputs.trusted_dependency }}" == "true" || "${{ steps.validate.outputs.ready }}" == "true" ]]; then
+            echo "Ready-for-review metadata guard passed."
+          else
+            echo "Stale readiness metadata was reported; merge authority remains with Hunter Governance Review and Hunter Merge Readiness."
+          fi
