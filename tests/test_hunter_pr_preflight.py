@@ -47,9 +47,7 @@ def test_preflight_returns_success_when_all_gates_pass(monkeypatch) -> None:
 
     monkeypatch.setattr(hunter_pr_preflight.subprocess, "run", fake_run)
 
-    result = hunter_pr_preflight.run_quality_gates(
-        (("first", ("one",)), ("second", ("two",)))
-    )
+    result = hunter_pr_preflight.run_quality_gates((("first", ("one",)), ("second", ("two",))))
 
     assert result == 0
     assert calls == [("one",), ("two",)]
