@@ -78,9 +78,6 @@ jobs:
               print("NOT MERGE READY: PR is still Draft.")
               sys.exit(1)
 
-          # Keep the same narrow dependency-bot exception as Hunter Governance
-          # Review. Bot identity alone is never sufficient; every changed file
-          # must also be in the dependency-only allowlist.
           trusted_bots = {"dependabot[bot]", "renovate[bot]"}
           trusted_dependency_pr = False
           if author in trusted_bots:
@@ -185,6 +182,12 @@ jobs:
               "dependency-review",
               "CodeQL",
           )
+          hard_failures = {
+              "failure",
+              "timed_out",
+              "action_required",
+              "startup_failure",
+          }
 
           def check_runs():
               request = urllib.request.Request(
@@ -198,9 +201,6 @@ jobs:
               with urllib.request.urlopen(request, timeout=30) as response:
                   return json.load(response)["check_runs"]
 
-          # Quality Gates historically takes several minutes. Keep this check in
-          # progress while the real exact-head checks are still in progress,
-          # rather than publishing a misleading early green result.
           for attempt in range(45):
               runs = check_runs()
               latest = {}
@@ -213,18 +213,29 @@ jobs:
                       latest[name] = run
 
               missing = [name for name in required if name not in latest]
-              pending = [
-                  name
-                  for name in required
-                  if name in latest and latest[name].get("status") != "completed"
-              ]
-              failed = [
-                  name
-                  for name in required
-                  if name in latest
-                  and latest[name].get("status") == "completed"
-                  and latest[name].get("conclusion") != "success"
-              ]
+              pending = []
+              failed = []
+              succeeded = []
+
+              for name in required:
+                  run = latest.get(name)
+                  if run is None:
+                      continue
+                  status = run.get("status")
+                  conclusion = run.get("conclusion")
+                  if status != "completed":
+                      pending.append(name)
+                  elif conclusion == "success":
+                      succeeded.append(name)
+                  elif conclusion in hard_failures:
+                      failed.append(name)
+                  else:
+                      # Lifecycle edits/Ready transitions can cancel or supersede
+                      # an older run just before the replacement run is visible.
+                      # Treat cancelled/skipped/stale/neutral terminal results as
+                      # pending and wait for a newer exact-head run instead of
+                      # publishing a transient false red.
+                      pending.append(name)
 
               if failed:
                   for name in failed:
@@ -235,7 +246,7 @@ jobs:
                       )
                   sys.exit(1)
 
-              if not missing and not pending:
+              if not missing and not pending and len(succeeded) == len(required):
                   print(f"MERGE READY: all required checks passed on exact head {sha}.")
                   for name in required:
                       print(f"- {name}: success")
