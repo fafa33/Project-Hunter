@@ -349,18 +349,12 @@ def build_evidence_pre_model(
     spans_by_id = {span.span_id: span for span in canonical_inventory}
 
     required_unresolved = tuple(
-        decision.reason_code
-        for decision in ledger.decisions
-        if decision.resolution_status == "UNRESOLVED_REQUIRED"
+        decision.reason_code for decision in ledger.decisions if decision.resolution_status == "UNRESOLVED_REQUIRED"
     )
     optional_unresolved = tuple(
-        decision.reason_code
-        for decision in ledger.decisions
-        if decision.resolution_status == "UNRESOLVED_OPTIONAL"
+        decision.reason_code for decision in ledger.decisions if decision.resolution_status == "UNRESOLVED_OPTIONAL"
     )
-    selected_required = [
-        decision.span_id for decision in ledger.decisions if decision.selected and decision.required
-    ]
+    selected_required = [decision.span_id for decision in ledger.decisions if decision.selected and decision.required]
     selected_optional = [
         decision.span_id for decision in ledger.decisions if decision.selected and not decision.required
     ]
@@ -456,9 +450,7 @@ def build_evidence_pre_model(
         intent_id=intent.intent_id,
         package_id=package.package_id,
         prompt_specification_identity=specification.specification_identity,
-        missingness_reason_codes=tuple(
-            sorted(missingness + (["BUDGET_EXCLUDED"] if excluded else []))
-        ),
+        missingness_reason_codes=tuple(sorted(missingness + (["BUDGET_EXCLUDED"] if excluded else []))),
     )
     content = _render_prompt(
         intent=intent,
