@@ -1,0 +1,131 @@
+name: Hunter PR Readiness Guard
+
+# Deterministic safety guard for the Draft -> Ready for Review transition.
+#
+# Hunter Governance Review remains the merge authority. This workflow does not
+# approve a PR and does not alter acceptance evidence. It only prevents a PR
+# from remaining merge-ready when its own body still declares FAIL/BLOCKED
+# criteria or a non-ready implementer declaration.
+#
+# The guard exists because the ready_for_review event can be triggered before
+# PR metadata is synchronized. In that case the transition is automatically
+# rolled back to Draft instead of leaving the PR in a knowingly inconsistent
+# merge-ready state.
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - ready_for_review
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: hunter-pr-readiness-guard-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  guard:
+    name: Validate ready-for-review metadata
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Validate PR body readiness
+        id: validate
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          python - <<'PY'
+          import os
+          import re
+
+          body = os.environ.get("PR_BODY", "")
+          reasons = []
+
+          # Parse acceptance-criteria table rows using the same status vocabulary
+          # as the canonical PR contract. Header/separator rows are ignored.
+          rows = []
+          in_table = False
+          for line in body.splitlines():
+              stripped = line.strip()
+              if stripped.startswith("|") and "Acceptance criterion" in stripped:
+                  in_table = True
+                  continue
+              if not stripped.startswith("|"):
+                  in_table = False
+                  continue
+              if not in_table:
+                  continue
+              cells = [cell.strip() for cell in stripped.strip("|").split("|")]
+              if len(cells) < 2:
+                  continue
+              status = cells[1].lower()
+              if status in {"pass", "fail", "blocked", "not applicable"}:
+                  rows.append((cells[0], status))
+
+          if not rows:
+              reasons.append("acceptance-criteria matrix has no parseable criteria")
+          else:
+              unresolved = [name for name, status in rows if status in {"fail", "blocked"}]
+              if unresolved:
+                  reasons.append(
+                      "acceptance criteria still FAIL/BLOCKED: " + ", ".join(unresolved)
+                  )
+
+          # Exactly one implementer readiness declaration must be checked, and
+          # it must be READY FOR REVIEW before the PR is allowed to remain ready.
+          checked = []
+          allowed = ("ready for review", "changes required", "blocked")
+          for match in re.finditer(r"(?im)^\s*[-*+]\s*\[([ xX])\]\s*(.+)", body):
+              marker, text = match.group(1), match.group(2).strip().lower()
+              if marker not in ("x", "X"):
+                  continue
+              text = text.replace("`", "").replace("*", "")
+              for declaration in allowed:
+                  if text.startswith(declaration):
+                      checked.append(declaration)
+                      break
+
+          unique = set(checked)
+          if len(unique) != 1:
+              reasons.append("exactly one implementer readiness declaration must be checked")
+          elif checked[0] != "ready for review":
+              reasons.append(
+                  f"implementer readiness is {checked[0].upper()}, not READY FOR REVIEW"
+              )
+
+          ready = not reasons
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+              fh.write(f"ready={'true' if ready else 'false'}\n")
+              if reasons:
+                  # GitHub output must be single-line; keep the detail concise.
+                  fh.write("reason=" + " | ".join(reasons).replace("\n", " ") + "\n")
+
+          if ready:
+              print("PR metadata is consistent with READY FOR REVIEW.")
+          else:
+              print("PR metadata is not merge-ready:")
+              for reason in reasons:
+                  print(f"- {reason}")
+          PY
+
+      - name: Restore Draft state when metadata is stale
+        if: steps.validate.outputs.ready != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REASON: ${{ steps.validate.outputs.reason }}
+        run: |
+          set -euo pipefail
+          gh pr ready "${PR_NUMBER}" --undo --repo "${GH_REPO}"
+          gh pr comment "${PR_NUMBER}" --repo "${GH_REPO}" --body "Hunter PR Readiness Guard restored this PR to **Draft** because its merge-readiness metadata was stale: ${REASON}. Update the acceptance-criteria matrix with verified evidence and check only \`READY FOR REVIEW\`, then mark the PR ready again. No repository commit is required for this correction."
+
+      - name: Confirm transition
+        if: steps.validate.outputs.ready == 'true'
+        run: echo "Ready-for-review metadata guard passed."
