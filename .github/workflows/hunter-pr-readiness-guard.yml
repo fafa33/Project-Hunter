@@ -1,0 +1,165 @@
+name: Hunter PR Readiness Guard
+
+# Deterministic safety guard for the Draft -> Ready for Review transition.
+#
+# Hunter Governance Review remains the merge authority. This workflow does not
+# approve a PR and does not alter acceptance evidence. It only prevents a PR
+# from remaining merge-ready when its own body is inconsistent with readiness.
+#
+# Security boundary:
+# - Uses pull_request_target so the rollback has write authority for fork PRs.
+# - Never checks out or executes PR-controlled code.
+# - Treats PR body, author, and changed-file names as untrusted data only.
+# - Reproduces the governance engine's narrow trusted dependency-bot exception.
+
+on:
+  pull_request_target:
+    branches:
+      - main
+    types:
+      - ready_for_review
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: hunter-pr-readiness-guard-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  guard:
+    name: Validate ready-for-review metadata
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Classify trusted dependency PR
+        id: classify
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: |
+          set -euo pipefail
+          trusted=false
+
+          if [[ "${PR_AUTHOR}" == "dependabot[bot]" || "${PR_AUTHOR}" == "renovate[bot]" ]]; then
+            files="$(gh api --paginate "repos/${GH_REPO}/pulls/${PR_NUMBER}/files" --jq '.[].filename')"
+            if [[ -n "${files}" ]]; then
+              trusted=true
+              while IFS= read -r filename; do
+                [[ -z "${filename}" ]] && continue
+                case "${filename}" in
+                  src/*|scripts/*|tests/*|docs/*|.github/*)
+                    trusted=false
+                    break
+                    ;;
+                  requirements/*|pyproject.toml|poetry.lock|package-lock.json|pnpm-lock.yaml)
+                    ;;
+                  *)
+                    trusted=false
+                    break
+                    ;;
+                esac
+              done <<< "${files}"
+            fi
+          fi
+
+          echo "trusted_dependency=${trusted}" >> "${GITHUB_OUTPUT}"
+
+      - name: Validate PR body readiness
+        id: validate
+        if: steps.classify.outputs.trusted_dependency != 'true'
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          python - <<'PY'
+          import os
+          import re
+
+          body = os.environ.get("PR_BODY", "")
+          reasons = []
+
+          rows = []
+          in_table = False
+          for line in body.splitlines():
+              stripped = line.strip()
+              if stripped.startswith("|") and "Acceptance criterion" in stripped:
+                  in_table = True
+                  continue
+              if not stripped.startswith("|"):
+                  in_table = False
+                  continue
+              if not in_table:
+                  continue
+              cells = [cell.strip() for cell in stripped.strip("|").split("|")]
+              if len(cells) < 2:
+                  continue
+              status = cells[1].lower()
+              if status in {"pass", "fail", "blocked", "not applicable"}:
+                  rows.append((cells[0], status))
+
+          if not rows:
+              reasons.append("acceptance-criteria matrix has no parseable criteria")
+          else:
+              unresolved = [name for name, status in rows if status in {"fail", "blocked"}]
+              if unresolved:
+                  reasons.append(
+                      "acceptance criteria still FAIL/BLOCKED: " + ", ".join(unresolved)
+                  )
+
+          checked = []
+          allowed = ("ready for review", "changes required", "blocked")
+          for match in re.finditer(r"(?im)^\s*[-*+]\s*\[([ xX])\]\s*(.+)", body):
+              marker, text = match.group(1), match.group(2).strip().lower()
+              if marker not in ("x", "X"):
+                  continue
+              text = text.replace("`", "").replace("*", "")
+              for declaration in allowed:
+                  if text.startswith(declaration):
+                      checked.append(declaration)
+                      break
+
+          if len(checked) != 1:
+              reasons.append("exactly one implementer readiness declaration must be checked")
+          elif checked[0] != "ready for review":
+              reasons.append(
+                  f"implementer readiness is {checked[0].upper()}, not READY FOR REVIEW"
+              )
+
+          ready = not reasons
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+              fh.write(f"ready={'true' if ready else 'false'}\n")
+              if reasons:
+                  fh.write("reason=" + " | ".join(reasons).replace("\n", " ") + "\n")
+
+          if ready:
+              print("PR metadata is consistent with READY FOR REVIEW.")
+          else:
+              print("PR metadata is not merge-ready:")
+              for reason in reasons:
+                  print(f"- {reason}")
+          PY
+
+      - name: Preserve trusted dependency automation
+        if: steps.classify.outputs.trusted_dependency == 'true'
+        run: echo "Trusted dependency-only bot PR follows the governance engine's streamlined path."
+
+      - name: Restore Draft state when metadata is stale
+        if: steps.classify.outputs.trusted_dependency != 'true' && steps.validate.outputs.ready != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REASON: ${{ steps.validate.outputs.reason }}
+        run: |
+          set -euo pipefail
+          gh pr ready "${PR_NUMBER}" --undo --repo "${GH_REPO}"
+          gh pr comment "${PR_NUMBER}" --repo "${GH_REPO}" --body "Hunter PR Readiness Guard restored this PR to **Draft** because its merge-readiness metadata was stale: ${REASON}. Update the acceptance-criteria matrix with verified evidence and check only \`READY FOR REVIEW\`, then mark the PR ready again. No repository commit is required for this correction."
+
+      - name: Confirm transition
+        if: steps.classify.outputs.trusted_dependency == 'true' || steps.validate.outputs.ready == 'true'
+        run: echo "Ready-for-review metadata guard passed."
