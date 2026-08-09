@@ -30,3 +30,6 @@ Rules:
 - Never represent self-review as independent review.
 - Quote governing repository authorities for material architectural or governance conclusions.
 - Prefer the smallest valid change that satisfies repository governance.
+- Before opening a normal pull request, push the final candidate head and require `Hunter Pre-PR Preflight` to succeed on that exact head.
+- Do not use GitHub PR CI as the first execution of Ruff, Black, Mypy, or Pytest; the shared `python scripts/hunter_pr_preflight.py` command is the repository-local source of truth for those gates.
+- If the exact-head preflight fails, fix the branch and rerun preflight before creating the PR. GitHub-only checks remain independent and may still run after PR creation.
