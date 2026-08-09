@@ -4,16 +4,16 @@ name: Hunter PR Readiness Guard
 #
 # Hunter Governance Review remains the merge authority. This workflow does not
 # approve a PR and does not alter acceptance evidence. It only prevents a PR
-# from remaining merge-ready when its own body still declares FAIL/BLOCKED
-# criteria or a non-ready implementer declaration.
+# from remaining merge-ready when its own body is inconsistent with readiness.
 #
-# The guard exists because the ready_for_review event can be triggered before
-# PR metadata is synchronized. In that case the transition is automatically
-# rolled back to Draft instead of leaving the PR in a knowingly inconsistent
-# merge-ready state.
+# Security boundary:
+# - Uses pull_request_target so the rollback has write authority for fork PRs.
+# - Never checks out or executes PR-controlled code.
+# - Treats PR body, author, and changed-file names as untrusted data only.
+# - Reproduces the governance engine's narrow trusted dependency-bot exception.
 
 on:
-  pull_request:
+  pull_request_target:
     branches:
       - main
     types:
@@ -35,8 +35,44 @@ jobs:
     timeout-minutes: 5
 
     steps:
+      - name: Classify trusted dependency PR
+        id: classify
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: |
+          set -euo pipefail
+          trusted=false
+
+          if [[ "${PR_AUTHOR}" == "dependabot[bot]" || "${PR_AUTHOR}" == "renovate[bot]" ]]; then
+            files="$(gh api --paginate "repos/${GH_REPO}/pulls/${PR_NUMBER}/files" --jq '.[].filename')"
+            if [[ -n "${files}" ]]; then
+              trusted=true
+              while IFS= read -r filename; do
+                [[ -z "${filename}" ]] && continue
+                case "${filename}" in
+                  src/*|scripts/*|tests/*|docs/*|.github/*)
+                    trusted=false
+                    break
+                    ;;
+                  requirements/*|pyproject.toml|poetry.lock|package-lock.json|pnpm-lock.yaml)
+                    ;;
+                  *)
+                    trusted=false
+                    break
+                    ;;
+                esac
+              done <<< "${files}"
+            fi
+          fi
+
+          echo "trusted_dependency=${trusted}" >> "${GITHUB_OUTPUT}"
+
       - name: Validate PR body readiness
         id: validate
+        if: steps.classify.outputs.trusted_dependency != 'true'
         env:
           PR_BODY: ${{ github.event.pull_request.body }}
         run: |
@@ -47,8 +83,6 @@ jobs:
           body = os.environ.get("PR_BODY", "")
           reasons = []
 
-          # Parse acceptance-criteria table rows using the same status vocabulary
-          # as the canonical PR contract. Header/separator rows are ignored.
           rows = []
           in_table = False
           for line in body.splitlines():
@@ -77,8 +111,6 @@ jobs:
                       "acceptance criteria still FAIL/BLOCKED: " + ", ".join(unresolved)
                   )
 
-          # Exactly one implementer readiness declaration must be checked, and
-          # it must be READY FOR REVIEW before the PR is allowed to remain ready.
           checked = []
           allowed = ("ready for review", "changes required", "blocked")
           for match in re.finditer(r"(?im)^\s*[-*+]\s*\[([ xX])\]\s*(.+)", body):
@@ -91,8 +123,7 @@ jobs:
                       checked.append(declaration)
                       break
 
-          unique = set(checked)
-          if len(unique) != 1:
+          if len(checked) != 1:
               reasons.append("exactly one implementer readiness declaration must be checked")
           elif checked[0] != "ready for review":
               reasons.append(
@@ -103,7 +134,6 @@ jobs:
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
               fh.write(f"ready={'true' if ready else 'false'}\n")
               if reasons:
-                  # GitHub output must be single-line; keep the detail concise.
                   fh.write("reason=" + " | ".join(reasons).replace("\n", " ") + "\n")
 
           if ready:
@@ -114,8 +144,12 @@ jobs:
                   print(f"- {reason}")
           PY
 
+      - name: Preserve trusted dependency automation
+        if: steps.classify.outputs.trusted_dependency == 'true'
+        run: echo "Trusted dependency-only bot PR follows the governance engine's streamlined path."
+
       - name: Restore Draft state when metadata is stale
-        if: steps.validate.outputs.ready != 'true'
+        if: steps.classify.outputs.trusted_dependency != 'true' && steps.validate.outputs.ready != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -127,5 +161,5 @@ jobs:
           gh pr comment "${PR_NUMBER}" --repo "${GH_REPO}" --body "Hunter PR Readiness Guard restored this PR to **Draft** because its merge-readiness metadata was stale: ${REASON}. Update the acceptance-criteria matrix with verified evidence and check only \`READY FOR REVIEW\`, then mark the PR ready again. No repository commit is required for this correction."
 
       - name: Confirm transition
-        if: steps.validate.outputs.ready == 'true'
+        if: steps.classify.outputs.trusted_dependency == 'true' || steps.validate.outputs.ready == 'true'
         run: echo "Ready-for-review metadata guard passed."
