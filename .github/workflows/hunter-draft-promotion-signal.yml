@@ -13,12 +13,16 @@ on:
       - reopened
       - synchronize
       - converted_to_draft
+  push:
+    branches:
+      - main
   workflow_run:
     workflows:
       - CI
       - Dependency review
       - Hunter Governance Review
       - CodeQL
+      - Hunter Governance Review Reconcile
     types:
       - completed
 
@@ -29,6 +33,10 @@ permissions:
   issues: write
   pull-requests: read
   statuses: write
+
+concurrency:
+  group: hunter-draft-promotion-signal
+  cancel-in-progress: false
 
 jobs:
   signal:
@@ -53,12 +61,12 @@ jobs:
           token = os.environ["GH_TOKEN"]
           run_url = os.environ["RUN_URL"]
           context = "Hunter Draft Promotion"
-          required = (
-              "Hunter Governance Review",
+          required_checks = (
               "Quality Gates",
               "dependency-review",
               "CodeQL",
           )
+          governance_context = "Hunter Governance Review"
 
           with open(os.environ["EVENT_PATH"], encoding="utf-8") as handle:
               event = json.load(handle)
@@ -92,16 +100,21 @@ jobs:
               )
               print(f"{context}: {state} — {description}")
 
-          def open_draft_pr_for_sha(sha):
+          def open_draft_prs():
+              drafts = []
               page = 1
               while True:
-                  pulls = request_json("GET", f"pulls?state=open&per_page=100&page={page}")
-                  for pr in pulls:
-                      if pr.get("draft") and pr.get("head", {}).get("sha") == sha:
-                          return pr
+                  pulls = request_json("GET", f"pulls?state=open&base=main&per_page=100&page={page}")
+                  drafts.extend(pr for pr in pulls if pr.get("draft"))
                   if len(pulls) < 100:
-                      return None
+                      return drafts
                   page += 1
+
+          def open_draft_pr_for_sha(sha):
+              for pr in open_draft_prs():
+                  if pr.get("head", {}).get("sha") == sha:
+                      return pr
+              return None
 
           def exact_head_check_runs(sha):
               runs = []
@@ -116,6 +129,17 @@ jobs:
                   if len(batch) < 100:
                       return runs
                   page += 1
+
+          def latest_commit_status(sha, status_context):
+              payload = request_json("GET", f"commits/{sha}/status?per_page=100")
+              matches = [
+                  status
+                  for status in payload.get("statuses", [])
+                  if status.get("context") == status_context
+              ]
+              if not matches:
+                  return None
+              return max(matches, key=lambda status: int(status.get("id", 0)))
 
           def post_once(pr_number, sha):
               marker = f"<!-- hunter-draft-promotion:{sha} -->"
@@ -146,47 +170,75 @@ jobs:
                   },
               )
 
-          if "pull_request" in event:
-              pr = event["pull_request"]
+          def evaluate(pr):
               if not pr.get("draft"):
-                  print("PR is not Draft; no Draft-promotion signal is applicable.")
-                  raise SystemExit(0)
+                  print(f"PR #{pr.get('number')} is not Draft; skipping.")
+                  return
+
               sha = pr["head"]["sha"]
-          else:
-              workflow_run = event.get("workflow_run", {})
-              sha = workflow_run.get("head_sha")
-              if not sha:
-                  print("workflow_run has no head SHA; nothing to evaluate.")
-                  raise SystemExit(0)
-              pr = open_draft_pr_for_sha(sha)
-              if pr is None:
-                  print("No open Draft PR matches the completed workflow exact head.")
-                  raise SystemExit(0)
+              pr_number = pr["number"]
+              latest = {}
+              for run in exact_head_check_runs(sha):
+                  name = run.get("name")
+                  if name not in required_checks:
+                      continue
+                  previous = latest.get(name)
+                  if previous is None or int(run.get("id", 0)) > int(previous.get("id", 0)):
+                      latest[name] = run
 
-          pr_number = pr["number"]
-          latest = {}
-          for run in exact_head_check_runs(sha):
-              name = run.get("name")
-              if name not in required:
-                  continue
-              previous = latest.get(name)
-              if previous is None or int(run.get("id", 0)) > int(previous.get("id", 0)):
-                  latest[name] = run
+              waiting = []
+              for name in required_checks:
+                  run = latest.get(name)
+                  if run is None:
+                      waiting.append(name)
+                      continue
+                  if run.get("status") != "completed" or run.get("conclusion") != "success":
+                      conclusion = run.get("conclusion") or run.get("status") or "pending"
+                      waiting.append(f"{name}={conclusion}")
 
-          waiting = []
-          for name in required:
-              run = latest.get(name)
-              if run is None:
-                  waiting.append(name)
-                  continue
-              if run.get("status") != "completed" or run.get("conclusion") != "success":
-                  conclusion = run.get("conclusion") or run.get("status") or "pending"
-                  waiting.append(f"{name}={conclusion}")
+              governance = latest_commit_status(sha, governance_context)
+              if governance is None:
+                  waiting.append(governance_context)
+              elif governance.get("state") != "success":
+                  waiting.append(
+                      f"{governance_context}={governance.get('state') or 'pending'}"
+                  )
 
-          if waiting:
-              publish(sha, "pending", "Waiting for exact-head checks: " + ", ".join(waiting))
+              if waiting:
+                  publish(sha, "pending", "Waiting for exact-head checks: " + ", ".join(waiting))
+                  return
+
+              publish(sha, "success", "Ready to promote from Draft.")
+              post_once(pr_number, sha)
+
+          event_name = os.environ.get("GITHUB_EVENT_NAME", "")
+          if "pull_request" in event:
+              evaluate(event["pull_request"])
               raise SystemExit(0)
 
-          publish(sha, "success", "Ready to promote from Draft.")
-          post_once(pr_number, sha)
+          if event_name == "push":
+              for pr in open_draft_prs():
+                  publish(
+                      pr["head"]["sha"],
+                      "pending",
+                      "Target base advanced; waiting for refreshed governance.",
+                  )
+              raise SystemExit(0)
+
+          workflow_run = event.get("workflow_run", {})
+          workflow_name = workflow_run.get("name")
+          if workflow_name == "Hunter Governance Review Reconcile":
+              for pr in open_draft_prs():
+                  evaluate(pr)
+              raise SystemExit(0)
+
+          sha = workflow_run.get("head_sha")
+          if not sha:
+              print("workflow_run has no head SHA; nothing to evaluate.")
+              raise SystemExit(0)
+          pr = open_draft_pr_for_sha(sha)
+          if pr is None:
+              print("No open Draft PR matches the completed workflow exact head.")
+              raise SystemExit(0)
+          evaluate(pr)
           PY
