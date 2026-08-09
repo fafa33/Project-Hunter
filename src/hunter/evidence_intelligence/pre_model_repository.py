@@ -106,9 +106,7 @@ def build_evidence_pre_model_from_repository(
     """
 
     if intent.historical_cutoff is not None:
-        raise PreModelInvariantError(
-            "HISTORICAL_REPOSITORY_SPAN_INVENTORY_UNSUPPORTED"
-        )
+        raise PreModelInvariantError("HISTORICAL_REPOSITORY_SPAN_INVENTORY_UNSUPPORTED")
 
     inventory = load_canonical_evidence_span_inventory(
         repository,
