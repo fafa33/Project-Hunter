@@ -39,14 +39,20 @@ def test_orchestration_builds_from_canonical_inventory_and_derives_optional_cove
     assert result.policy.optional_span_ids == ("span-a", "span-c")
     assert result.build_result.allocation.outcome == "READY"
     assert result.build_result.package is not None
-    assert result.build_result.package.ordered_span_ids == ("span-b", "span-a", "span-c")
+    assert result.build_result.package.ordered_span_ids == (
+        "span-b",
+        "span-a",
+        "span-c",
+    )
     assert result.build_result.prompt_artifact is not None
     assert result.build_result.build_record.prompt_artifact_id == (
         result.build_result.prompt_artifact.artifact_id
     )
 
 
-def test_orchestration_rejects_required_span_outside_canonical_inventory(tmp_path) -> None:
+def test_orchestration_rejects_required_span_outside_canonical_inventory(
+    tmp_path,
+) -> None:
     repository = EvidenceIntelligenceRepository(tmp_path / "evidence.sqlite")
     repository.save_document(_document())
     repository.save_span(_span("span-a", "first", 0))
