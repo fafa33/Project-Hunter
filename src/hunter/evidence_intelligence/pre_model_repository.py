@@ -78,9 +78,7 @@ def load_canonical_evidence_span_inventory(
         ).fetchall()
 
     if not rows:
-        raise CanonicalEvidenceSpanInventoryError(
-            "CANONICAL_EVIDENCE_SPAN_INVENTORY_EMPTY"
-        )
+        raise CanonicalEvidenceSpanInventoryError("CANONICAL_EVIDENCE_SPAN_INVENTORY_EMPTY")
 
     spans = tuple(_evidence_span_from_row(row) for row in rows)
     return CanonicalEvidenceSpanInventory(document_id=document_id, spans=spans)
