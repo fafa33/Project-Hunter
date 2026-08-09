@@ -62,47 +62,37 @@ def test_orchestration_rejects_required_span_outside_canonical_inventory(tmp_pat
 
 
 @pytest.mark.parametrize(
-    ("document_id", "intent", "policy_id", "reason"),
+    ("document_id", "context_policy_id", "reason"),
     (
-        (
-            "document-2",
-            _intent(),
-            "policy-1",
-            "TARGET_DOCUMENT_MISMATCH",
-        ),
-        (
-            "document-1",
-            EvidenceExtractionIntent(
-                task_type="claim-extraction",
-                objective="Extract supported proposal fields.",
-                workflow_stage="evidence-intelligence",
-                target_id="document-1",
-                output_contract_id="proposal-schema",
-                output_contract_version="1",
-                context_policy_id="different-policy",
-                replay_mode="current",
-                historical_cutoff=None,
-            ),
-            "policy-1",
-            "CONTEXT_POLICY_ID_MISMATCH",
-        ),
+        ("document-2", "policy-1", "TARGET_DOCUMENT_MISMATCH"),
+        ("document-1", "different-policy", "CONTEXT_POLICY_ID_MISMATCH"),
     ),
 )
 def test_orchestration_rejects_identity_mismatch(
     tmp_path,
     document_id: str,
-    intent: EvidenceExtractionIntent,
-    policy_id: str,
+    context_policy_id: str,
     reason: str,
 ) -> None:
     repository = EvidenceIntelligenceRepository(tmp_path / "evidence.sqlite")
     repository.save_document(_document())
     repository.save_span(_span("span-a", "first", 0))
+    intent = EvidenceExtractionIntent(
+        task_type="claim-extraction",
+        objective="Extract supported proposal fields.",
+        workflow_stage="evidence-intelligence",
+        target_id="document-1",
+        output_contract_id="proposal-schema",
+        output_contract_version="1",
+        context_policy_id=context_policy_id,
+        replay_mode="current",
+        historical_cutoff=None,
+    )
     request = EvidencePreModelOrchestrationRequest(
         document_id=document_id,
         execution_owner_id="run-1",
         intent=intent,
-        policy_id=policy_id,
+        policy_id="policy-1",
         policy_version="1",
         required_span_ids=("span-a",),
         specification=_spec(),
