@@ -96,6 +96,7 @@ jobs:
           governance_context = "Hunter Governance Review"
           required_checks = ("Quality Gates", "dependency-review", "CodeQL")
           hard_failures = {"failure", "timed_out", "action_required", "startup_failure"}
+          active_sha = None
 
           with open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8") as handle:
               event = json.load(handle)
@@ -325,13 +326,27 @@ jobs:
                   return None
               return max(matches, key=lambda run: int(run.get("id", 0)))
 
+          def schedule_feedback_reconcile_allowed(sha):
+              readiness = latest_commit_status(sha, context)
+              if readiness is None or readiness.get("state") != "failure":
+                  return False
+              description = (readiness.get("description") or "").strip()
+              feedback_prefixes = (
+                  "Unresolved review threads remain:",
+                  "Changes requested by:",
+                  "Unacknowledged PR comments need owner 👍:",
+              )
+              return description.startswith(feedback_prefixes)
+
           def evaluate(pr_number, governance_started_at=None, governance_conclusion=None, trigger_head_sha=None, poll=False):
+              global active_sha
               pr = request_json("GET", f"pulls/{pr_number}")
               if pr.get("state") != "open":
                   return
               sha = ((pr.get("head") or {}).get("sha") or "").strip()
               if not sha:
                   raise RuntimeError(f"PR #{pr_number} head SHA unavailable")
+              active_sha = sha
               if trigger_head_sha and trigger_head_sha != sha:
                   print(f"Ignoring stale Governance Review completion for {trigger_head_sha}; PR #{pr_number} is at {sha}.")
                   return
@@ -342,6 +357,13 @@ jobs:
 
               if draft:
                   publish(sha, "pending", "Waiting for Ready for Review (PR is Draft).")
+                  return
+
+              # The schedule exists only to observe feedback-state changes that have no
+              # webhook (for example owner 👍 reactions or thread resolution). It must not
+              # overwrite a lifecycle invalidation with a stale same-SHA governance result.
+              if event_name == "schedule" and not schedule_feedback_reconcile_allowed(sha):
+                  print(f"Scheduled reconciliation skipped PR #{pr_number}: latest readiness is not a feedback blocker.")
                   return
 
               publish(sha, "pending", "Validating governance, every review thread/comment, and exact-head checks.")
@@ -357,18 +379,17 @@ jobs:
 
               # PR/review/comment events invalidate stale green immediately. They do not
               # consume an older same-SHA governance status. Final success is produced by
-              # Governance completion or by the periodic reconciler after proving freshness.
+              # Governance completion or by the feedback-only periodic reconciler.
               if governance_started_at is None and event_name != "schedule":
                   publish(sha, "pending", "Waiting for current Hunter Governance Review.")
                   return
 
               attempts = 45 if poll else 1
               for attempt in range(1, attempts + 1):
-                  feedback_error = review_feedback_error(pr_number)
-                  if feedback_error:
-                      publish(sha, "failure", feedback_error)
-                      return
-
+                  # Feedback is evaluated once per controller run. Any webhook-backed
+                  # feedback change starts a new same-PR controller run and cancels this
+                  # one; non-webhook resolution/👍 changes are handled by the bounded
+                  # scheduled reconciliation instead of 45×N reaction refetches.
                   runs = all_check_runs(sha)
                   if event_name == "schedule":
                       governance_run = latest_check(runs, governance_context)
@@ -453,7 +474,9 @@ jobs:
                   while True:
                       prs = request_json("GET", f"pulls?state=open&base=main&per_page=100&page={page}")
                       for pr in prs:
+                          active_sha = None
                           evaluate(int(pr["number"]), poll=False)
+                          active_sha = None
                       if len(prs) < 100:
                           break
                       page += 1
@@ -472,5 +495,10 @@ jobs:
                       evaluate(int(pr_number), poll=False)
           except Exception as exc:
               print(f"Readiness controller error: {type(exc).__name__}: {exc}")
+              if active_sha:
+                  try:
+                      publish(active_sha, "failure", f"Readiness controller error: {type(exc).__name__}.")
+                  except Exception as publish_exc:
+                      print(f"Could not publish terminal controller failure: {type(publish_exc).__name__}: {publish_exc}")
               raise
           PY
