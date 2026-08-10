@@ -1,8 +1,9 @@
 name: Hunter Draft Promotion Signal
 
-# Advisory-only signal for Draft PRs that have completed every exact-head
-# prerequisite required by Hunter Merge Readiness. This workflow never checks
-# out or executes PR code and never promotes a PR automatically.
+# Advisory signal for Draft PRs that have completed every exact-head
+# prerequisite required by Hunter Merge Readiness. Before publishing the signal,
+# it deterministically synchronizes the implementer readiness declaration so the
+# operator only has to click Ready for Review; it never promotes or merges a PR.
 
 on:
   pull_request_target:
@@ -31,7 +32,7 @@ permissions:
   checks: read
   contents: read
   issues: write
-  pull-requests: read
+  pull-requests: write
   statuses: write
 
 concurrency:
@@ -54,6 +55,7 @@ jobs:
           python - <<'PY'
           import json
           import os
+          import re
           import urllib.request
 
           repo = os.environ["GH_REPO"]
@@ -140,6 +142,45 @@ jobs:
                   return None
               return max(matches, key=lambda status: int(status.get("id", 0)))
 
+          def synchronize_ready_metadata(pr_number, body):
+              declarations = {
+                  "READY FOR REVIEW": 0,
+                  "CHANGES REQUIRED": 0,
+                  "BLOCKED": 0,
+              }
+              pattern = re.compile(
+                  r"(?im)^(?P<prefix>\s*[-*+]\s*)\[(?P<mark>[ xX])\](?P<space>\s*)"
+                  r"(?P<label>READY FOR REVIEW|CHANGES REQUIRED|BLOCKED)(?P<suffix>.*)$"
+              )
+
+              for match in pattern.finditer(body):
+                  declarations[match.group("label").upper()] += 1
+
+              if any(count != 1 for count in declarations.values()):
+                  raise RuntimeError(
+                      "Implementer readiness declaration is missing, duplicated, or unparseable; refusing automatic metadata mutation."
+                  )
+
+              def replace(match):
+                  label = match.group("label").upper()
+                  mark = "x" if label == "READY FOR REVIEW" else " "
+                  return (
+                      f"{match.group('prefix')}[{mark}]{match.group('space')}"
+                      f"{match.group('label')}{match.group('suffix')}"
+                  )
+
+              updated = pattern.sub(replace, body)
+              if updated == body:
+                  print("Implementer readiness metadata is already synchronized to READY FOR REVIEW.")
+                  return
+
+              request_json(
+                  "PATCH",
+                  f"pulls/{pr_number}",
+                  {"body": updated},
+              )
+              print("Synchronized implementer readiness metadata to READY FOR REVIEW while PR remains Draft.")
+
           def post_once(pr_number, sha):
               marker = f"<!-- hunter-draft-promotion:{sha} -->"
               page = 1
@@ -161,10 +202,12 @@ jobs:
                       "body": (
                           f"{marker}\n"
                           "✅ **Hunter Draft Promotion:** all exact-head prerequisites "
-                          "have passed. This Draft PR is ready for its metadata to be "
-                          "updated and then promoted to **Ready for Review**.\n\n"
-                          "This signal is advisory only; Hunter Governance Review and "
-                          "Hunter Merge Readiness remain the merge authorities."
+                          "have passed and implementer readiness metadata is synchronized "
+                          "to **READY FOR REVIEW**. The operator may now manually mark this "
+                          "Draft PR **Ready for Review**.\n\n"
+                          "Hunter Governance Review and Hunter Merge Readiness remain the "
+                          "merge authorities; review feedback must still be resolved or "
+                          "explicitly acknowledged under the repository merge policy."
                       )
                   },
               )
@@ -207,7 +250,13 @@ jobs:
                   publish(sha, "pending", "Waiting for exact-head checks: " + ", ".join(waiting))
                   return
 
-              publish(sha, "success", "Ready to promote from Draft.")
+              current = request_json("GET", f"pulls/{pr_number}")
+              if not current.get("draft") or current.get("head", {}).get("sha") != sha:
+                  print("PR state/head changed during evaluation; refusing metadata mutation.")
+                  return
+
+              synchronize_ready_metadata(pr_number, current.get("body") or "")
+              publish(sha, "success", "Ready to promote from Draft; metadata synchronized.")
               post_once(pr_number, sha)
 
           event_name = os.environ.get("GITHUB_EVENT_NAME", "")
