@@ -46,8 +46,16 @@ def request_json(method: str, path: str, payload: dict[str, Any] | None = None) 
             "Content-Type": "application/json",
         },
     )
-    with urllib.request.urlopen(request, timeout=30) as response:
-        return json.loads(response.read().decode("utf-8"))
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        try:
+            body = exc.read().decode("utf-8")
+            print(f"HTTP Error {exc.code} for {method} {path}: {body}")
+        except Exception as read_exc:
+            print(f"HTTP Error {exc.code} for {method} {path} (could not read response body: {read_exc})")
+        raise
 
 
 def graphql_json(query: str, variables: dict[str, Any]) -> Any:
@@ -63,8 +71,16 @@ def graphql_json(query: str, variables: dict[str, Any]) -> Any:
             "Content-Type": "application/json",
         },
     )
-    with urllib.request.urlopen(request, timeout=30) as response:
-        payload = json.loads(response.read().decode("utf-8"))
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        try:
+            body = exc.read().decode("utf-8")
+            print(f"GraphQL HTTP Error {exc.code}: {body}")
+        except Exception as read_exc:
+            print(f"GraphQL HTTP Error {exc.code} (could not read response body: {read_exc})")
+        raise
     if payload.get("errors"):
         raise RuntimeError(f"GraphQL query failed: {payload['errors']}")
     return payload["data"]
