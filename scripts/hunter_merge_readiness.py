@@ -306,7 +306,7 @@ def latest_check(runs: list[dict[str, Any]], name: str) -> dict[str, Any] | None
 def get_latest_invalidation_time(pr_number: int, pr: dict[str, Any]) -> datetime:
     """Computes a deterministic invalidation timestamp based on the latest relevant
 
-    GitHub pull request updates, comments, reviews, review comments, or reactions.
+    GitHub pull request updates, comments, reviews, or review comments.
     This provides a temporal boundary to reject stale governance runs.
     """
     timestamps = []
@@ -316,21 +316,15 @@ def get_latest_invalidation_time(pr_number: int, pr: dict[str, Any]) -> datetime
     if pr_updated:
         timestamps.append(pr_updated)
 
-    # 2. Top-level comments and their reactions
+    # 2. Top-level comments (reactions are intentionally excluded from governance
+    # invalidation freshness: an owner +1 acknowledgment must resolve the comment
+    # blocker without forcing an otherwise-fresh governance review to be rerun)
     comments = paged(f"issues/{pr_number}/comments")
     for comment in comments:
         if isinstance(comment, dict):
             c_time = parse_time(comment.get("updated_at") or comment.get("created_at"))
             if c_time:
                 timestamps.append(c_time)
-            comment_id = comment.get("id")
-            if comment_id is not None:
-                reactions = paged(f"issues/comments/{int(comment_id)}/reactions")
-                for reaction in reactions:
-                    if isinstance(reaction, dict):
-                        r_time = parse_time(reaction.get("created_at"))
-                        if r_time:
-                            timestamps.append(r_time)
 
     # 3. Reviews
     reviews = paged(f"pulls/{pr_number}/reviews")
