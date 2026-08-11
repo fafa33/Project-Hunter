@@ -7,87 +7,66 @@ if str(SCRIPTS_DIR) not in sys.path:
 
 import hunter_merge_readiness_entrypoint as policy  # noqa: E402
 
+LOGIN = "github-actions[bot]"
+DEPENDENCY_BODY = "Dependency Review\n" + policy.DEPENDENCY_REVIEW_MARKER
+DRAFT_BODY = policy.DRAFT_PROMOTION_MARKER_PREFIX + "abc123 -->\nReady."
+
 
 def comment(login: str, body: str) -> dict:
     return {"id": 1, "user": {"login": login}, "body": body}
 
 
 def test_dependency_review_status_comment_is_exempt() -> None:
-    assert policy.is_exempt_status_comment(
-        comment(
-            "github-actions[bot]",
-            "Dependency Review\n<!-- dependency-review-pr-comment-marker -->",
-        )
-    )
+    item = comment(LOGIN, DEPENDENCY_BODY)
+    assert policy.is_exempt_status_comment(item)
 
 
 def test_draft_promotion_status_comment_is_exempt() -> None:
-    assert policy.is_exempt_status_comment(
-        comment(
-            "github-actions[bot]",
-            "<!-- hunter-draft-promotion:abc123 -->\nReady to promote from Draft.",
-        )
-    )
+    item = comment(LOGIN, DRAFT_BODY)
+    assert policy.is_exempt_status_comment(item)
 
 
 def test_human_comment_is_not_exempt_even_with_marker() -> None:
-    assert not policy.is_exempt_status_comment(
-        comment(
-            "reviewer",
-            "<!-- dependency-review-pr-comment-marker -->\nPlease fix this.",
-        )
-    )
+    item = comment("reviewer", DEPENDENCY_BODY)
+    assert not policy.is_exempt_status_comment(item)
 
 
 def test_unknown_bot_is_not_exempt_even_with_marker() -> None:
-    assert not policy.is_exempt_status_comment(
-        comment(
-            "some-other-bot[bot]",
-            "<!-- dependency-review-pr-comment-marker -->",
-        )
-    )
+    item = comment("some-other-bot[bot]", DEPENDENCY_BODY)
+    assert not policy.is_exempt_status_comment(item)
 
 
 def test_github_actions_unknown_comment_is_not_exempt() -> None:
-    assert not policy.is_exempt_status_comment(
-        comment("github-actions[bot]", "An unknown automated advisory")
-    )
+    item = comment(LOGIN, "An unknown automated advisory")
+    assert not policy.is_exempt_status_comment(item)
 
 
 def test_non_exempt_comment_delegates_to_existing_owner_ack(monkeypatch) -> None:
     seen = []
 
-    def fake_owner_ack(comment_value: dict) -> bool:
-        seen.append(comment_value)
+    def fake_owner_ack(value: dict) -> bool:
+        seen.append(value)
         return True
 
-    monkeypatch.setattr(policy, "_original_owner_acknowledged_comment", fake_owner_ack)
+    name = "_original_owner_acknowledged_comment"
+    monkeypatch.setattr(policy, name, fake_owner_ack)
     item = comment("reviewer", "Human feedback")
-
-    assert policy.owner_acknowledged_comment_with_bot_exemptions(item) is True
+    assert policy.owner_acknowledged_comment_with_bot_exemptions(item)
     assert seen == [item]
 
 
 def test_exempt_comment_does_not_consume_reaction_lookup(monkeypatch) -> None:
-    def fail_if_called(_comment: dict) -> bool:
-        raise AssertionError(
-            "trusted status comments must not require owner reaction lookup"
-        )
+    def fail_if_called(_value: dict) -> bool:
+        raise AssertionError("trusted status comment consumed reaction lookup")
 
-    monkeypatch.setattr(policy, "_original_owner_acknowledged_comment", fail_if_called)
-    item = comment(
-        "github-actions[bot]",
-        "<!-- hunter-draft-promotion:def456 -->\nReady.",
-    )
-
-    assert policy.owner_acknowledged_comment_with_bot_exemptions(item) is True
+    name = "_original_owner_acknowledged_comment"
+    monkeypatch.setattr(policy, name, fail_if_called)
+    item = comment(LOGIN, DRAFT_BODY)
+    assert policy.owner_acknowledged_comment_with_bot_exemptions(item)
 
 
 def test_exempt_comments_are_removed_from_freshness_input(monkeypatch) -> None:
-    trusted = comment(
-        "github-actions[bot]",
-        "Dependency Review\n<!-- dependency-review-pr-comment-marker -->",
-    )
+    trusted = comment(LOGIN, DEPENDENCY_BODY)
     trusted["id"] = 10
     human = comment("reviewer", "Real review feedback")
     human["id"] = 11
@@ -100,17 +79,16 @@ def test_exempt_comments_are_removed_from_freshness_input(monkeypatch) -> None:
     seen = {}
 
     def fake_freshness(pr_number: int, _pr: dict):
-        seen["comments"] = policy.core.paged(f"issues/{pr_number}/comments")
-        seen["reviews"] = policy.core.paged(f"pulls/{pr_number}/reviews")
+        comments_path = f"issues/{pr_number}/comments"
+        reviews_path = f"pulls/{pr_number}/reviews"
+        seen["comments"] = policy.core.paged(comments_path)
+        seen["reviews"] = policy.core.paged(reviews_path)
         return "freshness-result"
 
     monkeypatch.setattr(policy.core, "paged", fake_paged)
-    monkeypatch.setattr(
-        policy, "_original_get_latest_invalidation_time", fake_freshness
-    )
-
+    name = "_original_get_latest_invalidation_time"
+    monkeypatch.setattr(policy, name, fake_freshness)
     result = policy.get_latest_invalidation_time_with_bot_exemptions(246, {})
-
     assert result == "freshness-result"
     assert seen["comments"] == [human]
     assert seen["reviews"] == [{"id": 99}]
@@ -118,10 +96,7 @@ def test_exempt_comments_are_removed_from_freshness_input(monkeypatch) -> None:
 
 
 def test_unknown_bot_comment_still_invalidates_freshness(monkeypatch) -> None:
-    unknown = comment(
-        "some-other-bot[bot]",
-        "<!-- dependency-review-pr-comment-marker -->",
-    )
+    unknown = comment("some-other-bot[bot]", DEPENDENCY_BODY)
 
     def fake_paged(path: str):
         if path.startswith("issues/246/comments"):
@@ -131,15 +106,13 @@ def test_unknown_bot_comment_still_invalidates_freshness(monkeypatch) -> None:
     seen = []
 
     def fake_freshness(pr_number: int, _pr: dict):
-        seen.extend(policy.core.paged(f"issues/{pr_number}/comments"))
+        path = f"issues/{pr_number}/comments"
+        seen.extend(policy.core.paged(path))
         return "freshness-result"
 
     monkeypatch.setattr(policy.core, "paged", fake_paged)
-    monkeypatch.setattr(
-        policy, "_original_get_latest_invalidation_time", fake_freshness
-    )
-
+    name = "_original_get_latest_invalidation_time"
+    monkeypatch.setattr(policy, name, fake_freshness)
     policy.get_latest_invalidation_time_with_bot_exemptions(246, {})
-
     assert seen == [unknown]
     assert policy.core.paged is fake_paged
