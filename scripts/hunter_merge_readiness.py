@@ -316,21 +316,14 @@ def get_latest_invalidation_time(pr_number: int, pr: dict[str, Any]) -> datetime
     if pr_updated:
         timestamps.append(pr_updated)
 
-    # 2. Top-level comments and their reactions
+    # 2. Top-level comments (reactions are intentionally excluded from governance invalidation freshness
+    # to avoid unnecessary invalidation cycles when owner acknowledges PR comments)
     comments = paged(f"issues/{pr_number}/comments")
     for comment in comments:
         if isinstance(comment, dict):
             c_time = parse_time(comment.get("updated_at") or comment.get("created_at"))
             if c_time:
                 timestamps.append(c_time)
-            comment_id = comment.get("id")
-            if comment_id is not None:
-                reactions = paged(f"issues/comments/{int(comment_id)}/reactions")
-                for reaction in reactions:
-                    if isinstance(reaction, dict):
-                        r_time = parse_time(reaction.get("created_at"))
-                        if r_time:
-                            timestamps.append(r_time)
 
     # 3. Reviews
     reviews = paged(f"pulls/{pr_number}/reviews")
