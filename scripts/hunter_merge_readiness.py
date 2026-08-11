@@ -299,6 +299,60 @@ def latest_check(runs: list[dict[str, Any]], name: str) -> dict[str, Any] | None
     return max(matches, key=lambda run: int(run.get("id", 0)))
 
 
+def get_latest_invalidation_time(pr_number: int, pr: dict[str, Any]) -> datetime:
+    """Computes a deterministic invalidation timestamp based on the latest relevant
+
+    GitHub pull request updates, comments, reviews, review comments, or reactions.
+    This provides a temporal boundary to reject stale governance runs.
+    """
+    timestamps = []
+
+    # 1. PR updated_at (covers body edits, ready_for_review transitions, synchronize, etc.)
+    pr_updated = parse_time(pr.get("updated_at"))
+    if pr_updated:
+        timestamps.append(pr_updated)
+
+    # 2. Top-level comments and their reactions
+    comments = paged(f"issues/{pr_number}/comments")
+    for comment in comments:
+        if isinstance(comment, dict):
+            c_time = parse_time(comment.get("updated_at") or comment.get("created_at"))
+            if c_time:
+                timestamps.append(c_time)
+            comment_id = comment.get("id")
+            if comment_id is not None:
+                reactions = paged(f"issues/comments/{int(comment_id)}/reactions")
+                for reaction in reactions:
+                    if isinstance(reaction, dict):
+                        r_time = parse_time(reaction.get("created_at"))
+                        if r_time:
+                            timestamps.append(r_time)
+
+    # 3. Reviews
+    reviews = paged(f"pulls/{pr_number}/reviews")
+    for review in reviews:
+        if isinstance(review, dict):
+            r_time = parse_time(review.get("submitted_at"))
+            if r_time:
+                timestamps.append(r_time)
+
+    # 4. Review comments (threads)
+    review_comments = paged(f"pulls/{pr_number}/comments")
+    for rc in review_comments:
+        if isinstance(rc, dict):
+            rc_time = parse_time(rc.get("updated_at") or rc.get("created_at"))
+            if rc_time:
+                timestamps.append(rc_time)
+
+    if not timestamps:
+        pr_created = parse_time(pr.get("created_at"))
+        if pr_created:
+            return pr_created
+        return datetime.fromtimestamp(0, tz=timezone.utc)
+
+    return max(timestamps)
+
+
 def evaluate(
     pr_number: int,
     governance_started_at: datetime | None = None,
@@ -320,6 +374,12 @@ def evaluate(
 
     # Cache latest_readiness status to avoid redundant API writes
     latest_readiness = latest_commit_status(sha, context)
+
+    # P1-2 Invalidate Green Immediately: Publish pending before querying any potentially
+    # lengthy metadata, feedback, or governance state to avoid concurrency race conditions.
+    if event_name != "schedule" and latest_readiness and latest_readiness.get("state") == "success":
+        print(f"Lifecycle event '{event_name}' received on already-green PR #{pr_number}. Invalidating green status immediately.")
+        publish(sha, "pending", "Validating current feedback and exact-head prerequisites.")
 
     body = pr.get("body") or ""
     draft = bool(pr.get("draft"))
@@ -371,6 +431,18 @@ def evaluate(
             return
         if governance_started_at is None:
             publish(sha, "failure", "Current Governance Review run has no trustworthy start time.")
+            return
+
+        # P1-1: Reject governance runs that started before the latest invalidation.
+        # This prevents accepting stale same-SHA governance after feedback/body changes.
+        invalidation_time = get_latest_invalidation_time(pr_number, pr)
+        if governance_started_at < invalidation_time:
+            print(f"Rejecting governance run from {governance_started_at.isoformat()} because it is older than latest invalidation time {invalidation_time.isoformat()}")
+            publish(
+                sha,
+                "pending",
+                f"Waiting for a fresh Hunter Governance Review (last run was older than latest invalidation at {invalidation_time.isoformat()}).",
+            )
             return
 
         missing, pending, failed, succeeded = [], [], [], []

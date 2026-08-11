@@ -19,11 +19,14 @@ class MockGitHubServer:
         self.comments = {}
         self.reviews = {}
         self.reactions = {}
+        self.review_comments = {}
         self.published = []
         self.gql_threads = 0
+        self.api_calls = []  # Log order of all API calls to assert sequencing
 
     def request_json(self, method, path, payload=None):
         clean_path = path.split("?")[0]
+        self.api_calls.append((method, clean_path, payload))
 
         if method == "POST":
             if clean_path.startswith("statuses/"):
@@ -53,6 +56,9 @@ class MockGitHubServer:
                     return []
                 if sub_resource == "reviews":
                     return self.reviews.get(pr_num, [])
+                if sub_resource == "comments":
+                    return self.review_comments.get(pr_num, [])
+                return []
             return self.pulls.get(pr_num, {})
 
         if clean_path.startswith("commits/"):
@@ -82,6 +88,7 @@ class MockGitHubServer:
         return {}
 
     def graphql_json(self, query, variables):
+        self.api_calls.append(("POST", "graphql", variables))
         return {
             "repository": {
                 "pullRequest": {
@@ -124,7 +131,7 @@ def test_stale_pending_after_governance_success(gh):
     """
     hunter_merge_readiness.event_name = "schedule"
 
-    # Setup PR
+    # Setup PR with updated_at matching/pre-dating governance run to ensure freshness passes
     gh.pulls[123] = {
         "number": 123,
         "state": "open",
@@ -132,6 +139,7 @@ def test_stale_pending_after_governance_success(gh):
         "body": "Acceptance-criteria matrix:\n| Acceptance criterion | Status |\n| Wire up | PASS |\n- [x] `READY FOR REVIEW`",
         "draft": False,
         "user": {"login": "human"},
+        "updated_at": "2026-08-05T00:30:00Z",
     }
 
     # Setup completed governance run and required checks
@@ -177,6 +185,7 @@ def test_stale_pending_with_required_check_still_pending(gh):
         "body": "Acceptance-criteria matrix:\n| Acceptance criterion | Status |\n| Wire up | PASS |\n- [x] `READY FOR REVIEW`",
         "draft": False,
         "user": {"login": "human"},
+        "updated_at": "2026-08-05T00:30:00Z",
     }
 
     # Setup checks with CodeQL still in progress
@@ -220,6 +229,7 @@ def test_stale_pending_with_failed_prerequisite(gh):
         "body": "Acceptance-criteria matrix:\n| Acceptance criterion | Status |\n| Wire up | PASS |\n- [x] `READY FOR REVIEW`",
         "draft": False,
         "user": {"login": "human"},
+        "updated_at": "2026-08-05T00:30:00Z",
     }
 
     # Setup checks with Quality Gates failed
@@ -350,6 +360,7 @@ def test_missing_readiness_status(gh):
         "body": "Acceptance-criteria matrix:\n| Acceptance criterion | Status |\n| Wire up | PASS |\n- [x] `READY FOR REVIEW`",
         "draft": False,
         "user": {"login": "human"},
+        "updated_at": "2026-08-05T00:30:00Z",
     }
 
     gh.check_runs["sha_123"] = [
@@ -391,6 +402,7 @@ def test_stale_governance_result(gh):
         "body": "Acceptance-criteria matrix:\n| Acceptance criterion | Status |\n| Wire up | PASS |\n- [x] `READY FOR REVIEW`",
         "draft": False,
         "user": {"login": "human"},
+        "updated_at": "2026-08-05T00:30:00Z",
     }
 
     gh.check_runs["sha_123"] = [
@@ -453,6 +465,7 @@ def test_cancelled_or_interrupted_prior_controller(gh):
         "body": "Acceptance-criteria matrix:\n| Acceptance criterion | Status |\n| Wire up | PASS |\n- [x] `READY FOR REVIEW`",
         "draft": False,
         "user": {"login": "human"},
+        "updated_at": "2026-08-05T00:30:00Z",
     }
 
     gh.check_runs["sha_123"] = [
@@ -502,6 +515,7 @@ def test_no_endless_pending_invariant(gh):
         "body": "Acceptance-criteria matrix:\n| Acceptance criterion | Status |\n| Wire up | PASS |\n- [x] `READY FOR REVIEW`",
         "draft": False,
         "user": {"login": "human"},
+        "updated_at": "2026-08-05T00:30:00Z",
     }
 
     gh.statuses["sha_123"] = [
@@ -524,3 +538,264 @@ def test_no_endless_pending_invariant(gh):
     assert len(gh.published) > 0
     assert gh.published[-1][1] == "failure"
     assert "Acceptance-criteria matrix is missing" in gh.published[-1][2]
+
+
+# ====================================================================================
+# P1 REGRESSION TESTS (L - P)
+# ====================================================================================
+
+def test_p1_1_same_head_pr_edit_invalidates_old_governance_success(gh):
+    """Test L: same-head PR edit invalidates old governance success.
+    - HEAD SHA is unchanged.
+    - An old successful Governance Review run exists (started at 00:50:00Z).
+    - PR is edited/updated afterward (updated_at at 01:10:00Z).
+    - Scheduled reconciliation runs.
+    - Expected: rejects stale governance, readiness remains recoverably pending.
+    """
+    hunter_merge_readiness.event_name = "schedule"
+
+    # PR edited/updated_at is 01:10:00Z (after governance started!)
+    gh.pulls[123] = {
+        "number": 123,
+        "state": "open",
+        "head": {"sha": "sha_123"},
+        "body": "Acceptance-criteria matrix:\n| Acceptance criterion | Status |\n| Wire up | PASS |\n- [x] `READY FOR REVIEW`",
+        "draft": False,
+        "user": {"login": "human"},
+        "updated_at": "2026-08-05T01:10:00Z",
+    }
+
+    # Governance check run started at 00:50:00Z (stale!)
+    gh.check_runs["sha_123"] = [
+        {
+            "name": "Hunter Governance Review",
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-08-05T00:50:00Z",
+            "id": 100,
+        },
+        {"name": "Quality Gates", "status": "completed", "conclusion": "success", "id": 101},
+        {"name": "dependency-review", "status": "completed", "conclusion": "success", "id": 102},
+        {"name": "CodeQL", "status": "completed", "conclusion": "success", "id": 103},
+    ]
+
+    gh.statuses["sha_123"] = [
+        {"context": "Hunter Governance Review", "state": "success", "created_at": "2026-08-05T01:00:00Z", "id": 1},
+        {"context": "Hunter Merge Readiness", "state": "pending", "description": "Waiting...", "id": 2},
+    ]
+
+    hunter_merge_readiness.evaluate(123, poll=False)
+
+    # Must be pending, waiting for a fresh run
+    assert len(gh.published) > 0
+    assert gh.published[-1][1] == "pending"
+    assert "Waiting for a fresh Hunter Governance Review" in gh.published[-1][2]
+
+
+def test_p1_1_fresh_same_head_governance_after_invalidation_is_accepted(gh):
+    """Test M: fresh same-head governance after invalidation is accepted.
+    - same HEAD SHA.
+    - invalidation/PR update occurs at 01:10:00Z.
+    - a successful Governance Review run starts at 01:20:00Z (fresh!).
+    - Expected: readiness transitions to success.
+    """
+    hunter_merge_readiness.event_name = "schedule"
+
+    # PR edited at 01:10:00Z
+    gh.pulls[123] = {
+        "number": 123,
+        "state": "open",
+        "head": {"sha": "sha_123"},
+        "body": "Acceptance-criteria matrix:\n| Acceptance criterion | Status |\n| Wire up | PASS |\n- [x] `READY FOR REVIEW`",
+        "draft": False,
+        "user": {"login": "human"},
+        "updated_at": "2026-08-05T01:10:00Z",
+    }
+
+    # Governance check run started at 01:20:00Z (fresh!)
+    gh.check_runs["sha_123"] = [
+        {
+            "name": "Hunter Governance Review",
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-08-05T01:20:00Z",
+            "id": 100,
+        },
+        {"name": "Quality Gates", "status": "completed", "conclusion": "success", "id": 101},
+        {"name": "dependency-review", "status": "completed", "conclusion": "success", "id": 102},
+        {"name": "CodeQL", "status": "completed", "conclusion": "success", "id": 103},
+    ]
+
+    # Setup a fresh governance status check too
+    gh.statuses["sha_123"] = [
+        {"context": "Hunter Governance Review", "state": "success", "created_at": "2026-08-05T01:25:00Z", "id": 1},
+        {"context": "Hunter Merge Readiness", "state": "pending", "description": "Waiting...", "id": 2},
+    ]
+
+    hunter_merge_readiness.evaluate(123, poll=False)
+
+    # Succeeds cleanly!
+    assert len(gh.published) > 0
+    assert gh.published[-1][1] == "success"
+    assert "Ready to merge" in gh.published[-1][2]
+
+
+def test_p1_2_green_status_is_invalidated_before_feedback_queries(gh):
+    """Test N: green status is invalidated before feedback queries.
+    - existing readiness is success (green).
+    - a webhook event occurs (event_name = "pull_request").
+    - Expected: pending status is published BEFORE any potentially lengthy feedback queries are performed.
+    """
+    hunter_merge_readiness.event_name = "pull_request"
+
+    gh.pulls[123] = {
+        "number": 123,
+        "state": "open",
+        "head": {"sha": "sha_123"},
+        "body": "Acceptance-criteria matrix:\n| Acceptance criterion | Status |\n| Wire up | PASS |\n- [x] `READY FOR REVIEW`",
+        "draft": False,
+        "user": {"login": "human"},
+    }
+
+    # PR is currently green (success)
+    gh.statuses["sha_123"] = [
+        {"context": "Hunter Merge Readiness", "state": "success", "description": "Ready to merge...", "id": 1}
+    ]
+
+    hunter_merge_readiness.evaluate(123, poll=False)
+
+    # Let's inspect the order of API calls
+    # The first POST to create/update status (statuses/sha_123) MUST happen BEFORE
+    # any GET requests for comments, reviews, or GraphQL POST queries!
+    first_status_post_index = None
+    first_feedback_query_index = None
+
+    for idx, (method, clean_path, payload) in enumerate(gh.api_calls):
+        if method == "POST" and clean_path == "statuses/sha_123" and payload and payload.get("state") == "pending":
+            if first_status_post_index is None:
+                first_status_post_index = idx
+        if "comments" in clean_path or "reviews" in clean_path or clean_path == "graphql":
+            if first_feedback_query_index is None:
+                first_feedback_query_index = idx
+
+    assert first_status_post_index is not None
+    assert first_feedback_query_index is not None
+    assert first_status_post_index < first_feedback_query_index, (
+        f"Pending publish (index {first_status_post_index}) must precede "
+        f"feedback queries (index {first_feedback_query_index})"
+    )
+
+
+def test_p1_2_cancellation_after_early_invalidation(gh):
+    """Test O: cancellation after early invalidation.
+    - existing readiness is success.
+    - webhook event occurs, starts execution.
+    - pending is immediately published.
+    - execution is interrupted/cancelled (simulated by raising an exception during feedback query).
+    - Expected: the previous green is immediately invalidated on GitHub, and remains pending/recoverable.
+    - Scheduled reconciliation can later produce success when run succeeds.
+    """
+    # 1. Start with green PR
+    gh.pulls[123] = {
+        "number": 123,
+        "state": "open",
+        "head": {"sha": "sha_123"},
+        "body": "Acceptance-criteria matrix:\n| Acceptance criterion | Status |\n| Wire up | PASS |\n- [x] `READY FOR REVIEW`",
+        "draft": False,
+        "user": {"login": "human"},
+        "updated_at": "2026-08-05T00:30:00Z",
+    }
+    gh.statuses["sha_123"] = [
+        {"context": "Hunter Merge Readiness", "state": "success", "description": "Ready to merge...", "id": 1}
+    ]
+
+    # 2. Simulate event and cancellation (raise an exception when GraphQL/paged query begins)
+    hunter_merge_readiness.event_name = "pull_request"
+
+    def mock_paged(path):
+        if "statuses" in path:
+            return gh.request_json("GET", path)
+        raise RuntimeError("Simulated workflow cancellation / query failure during lengthy feedback query")
+
+    with patch("hunter_merge_readiness.paged", side_effect=mock_paged):
+        try:
+            hunter_merge_readiness.evaluate(123, poll=False)
+        except RuntimeError:
+            pass
+
+    # Assert that "pending" was published before the exception cut off the execution
+    assert len(gh.published) > 0
+    assert gh.published[0][1] == "pending"
+
+    # Previous "success" is no longer the latest status
+    latest = gh.statuses["sha_123"][-1]
+    assert latest["state"] == "pending"
+
+    # 3. Simulate scheduled recovery (which has no exception)
+    hunter_merge_readiness.event_name = "schedule"
+    gh.check_runs["sha_123"] = [
+        {
+            "name": "Hunter Governance Review",
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-08-05T00:50:00Z",
+            "id": 100,
+        },
+        {"name": "Quality Gates", "status": "completed", "conclusion": "success", "id": 101},
+        {"name": "dependency-review", "status": "completed", "conclusion": "success", "id": 102},
+        {"name": "CodeQL", "status": "completed", "conclusion": "success", "id": 103},
+    ]
+    gh.statuses["sha_123"].append(
+        {"context": "Hunter Governance Review", "state": "success", "created_at": "2026-08-05T01:00:00Z", "id": 10}
+    )
+
+    hunter_merge_readiness.evaluate(123, poll=False)
+
+    # Recovers to success!
+    assert gh.published[-1][1] == "success"
+    assert "Ready to merge" in gh.published[-1][2]
+
+
+def test_p1_1_stale_governance_and_stale_pending_recovery(gh):
+    """Test P: stale governance + stale pending recovery.
+    - Scheduler runs.
+    - Latest readiness is pending "Waiting for a fresh Hunter Governance Review...".
+    - Governance run is stale (starts before PR updated_at).
+    - Expected: scheduler must NOT publish success; remains pending.
+    """
+    hunter_merge_readiness.event_name = "schedule"
+
+    gh.pulls[123] = {
+        "number": 123,
+        "state": "open",
+        "head": {"sha": "sha_123"},
+        "body": "Acceptance-criteria matrix:\n| Acceptance criterion | Status |\n| Wire up | PASS |\n- [x] `READY FOR REVIEW`",
+        "draft": False,
+        "user": {"login": "human"},
+        "updated_at": "2026-08-05T01:10:00Z",  # PR edited/invalidated
+    }
+
+    # Stale governance starts at 00:50:00Z
+    gh.check_runs["sha_123"] = [
+        {
+            "name": "Hunter Governance Review",
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-08-05T00:50:00Z",
+            "id": 100,
+        },
+        {"name": "Quality Gates", "status": "completed", "conclusion": "success", "id": 101},
+        {"name": "dependency-review", "status": "completed", "conclusion": "success", "id": 102},
+        {"name": "CodeQL", "status": "completed", "conclusion": "success", "id": 103},
+    ]
+
+    gh.statuses["sha_123"] = [
+        {"context": "Hunter Governance Review", "state": "success", "created_at": "2026-08-05T01:00:00Z", "id": 1},
+        {"context": "Hunter Merge Readiness", "state": "pending", "description": "Waiting for a fresh Hunter Governance Review...", "id": 2},
+    ]
+
+    hunter_merge_readiness.evaluate(123, poll=False)
+
+    # Must remain pending (not succeed!)
+    assert gh.published[-1][1] == "pending"
+    assert "Waiting for a fresh Hunter Governance Review" in gh.published[-1][2]
