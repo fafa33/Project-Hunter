@@ -106,7 +106,11 @@ def paged(path: str) -> list[Any]:
 
 def publish(sha: str, state: str, description: str) -> None:
     global latest_readiness
+    # Replace common emojis with text equivalents and strip characters > 0xFFFF to prevent GitHub API 422
+    description = description.replace("👍", "+1")
+    description = "".join(c for c in description if ord(c) <= 0xFFFF)
     description = description[:140]
+
     if (
         latest_readiness
         and latest_readiness.get("state") == state
