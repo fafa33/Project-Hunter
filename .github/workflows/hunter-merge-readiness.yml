@@ -83,8 +83,15 @@ jobs:
     timeout-minutes: 20
 
     steps:
-      - name: Checkout repository
+      # Always run the canonical controller from the trusted default branch, never
+      # from the ref that happened to trigger this run. This matters most for
+      # workflow_dispatch: an operator can dispatch from any branch that carries
+      # this workflow file, and an unpinned checkout would execute that branch's
+      # version of hunter_merge_readiness.py with statuses: write permission.
+      - name: Checkout trusted controller (default branch)
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
 
       - name: Publish deterministic merge-readiness state
         env:
