@@ -79,3 +79,61 @@ def test_exempt_comment_does_not_consume_reaction_lookup(monkeypatch) -> None:
     )
 
     assert policy.owner_acknowledged_comment_with_bot_exemptions(item) is True
+
+
+def test_exempt_comments_are_removed_from_freshness_input(monkeypatch) -> None:
+    trusted = comment(
+        "github-actions[bot]",
+        "Dependency Review\n<!-- dependency-review-pr-comment-marker -->",
+    )
+    trusted["id"] = 10
+    human = comment("reviewer", "Real review feedback")
+    human["id"] = 11
+
+    def fake_paged(path: str):
+        if path.startswith("issues/246/comments"):
+            return [trusted, human]
+        return [{"id": 99}]
+
+    seen = {}
+
+    def fake_freshness(pr_number: int, _pr: dict):
+        seen["comments"] = policy.core.paged(f"issues/{pr_number}/comments")
+        seen["reviews"] = policy.core.paged(f"pulls/{pr_number}/reviews")
+        return "freshness-result"
+
+    monkeypatch.setattr(policy.core, "paged", fake_paged)
+    monkeypatch.setattr(policy, "_original_get_latest_invalidation_time", fake_freshness)
+
+    result = policy.get_latest_invalidation_time_with_bot_exemptions(246, {})
+
+    assert result == "freshness-result"
+    assert seen["comments"] == [human]
+    assert seen["reviews"] == [{"id": 99}]
+    assert policy.core.paged is fake_paged
+
+
+def test_unknown_bot_comment_still_invalidates_freshness(monkeypatch) -> None:
+    unknown = comment(
+        "some-other-bot[bot]",
+        "<!-- dependency-review-pr-comment-marker -->",
+    )
+
+    def fake_paged(path: str):
+        if path.startswith("issues/246/comments"):
+            return [unknown]
+        return []
+
+    seen = []
+
+    def fake_freshness(pr_number: int, _pr: dict):
+        seen.extend(policy.core.paged(f"issues/{pr_number}/comments"))
+        return "freshness-result"
+
+    monkeypatch.setattr(policy.core, "paged", fake_paged)
+    monkeypatch.setattr(policy, "_original_get_latest_invalidation_time", fake_freshness)
+
+    policy.get_latest_invalidation_time_with_bot_exemptions(246, {})
+
+    assert seen == [unknown]
+    assert policy.core.paged is fake_paged
