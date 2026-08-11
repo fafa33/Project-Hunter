@@ -4,7 +4,7 @@
 
 - ADPR ID: `ADPR-0007`
 - Status: `READY_FOR_REVIEW`
-- Version: 1
+- Version: 2
 - Author: OpenAI / repository owner-directed architecture work
 - Reviewers: independent architecture review required
 - Created: 2026-08-10
@@ -17,356 +17,326 @@
 
 ## Executive Summary
 
-ADR 0031 deliberately kept Hunter's pre-model foundation Evidence Intelligence-specific and deferred generic Prompt/Context ownership until a second real AI consumer existed. Iran-OS now provides that second materially distinct consumer. This ADPR evaluates four ownership models and recommends a project-agnostic Prompt Intelligence core with project-specific adapters. The shared core owns only deterministic, domain-neutral pre-model mechanics; each consumer retains canonical source authority, domain semantics, permissions, persistence authority, downstream validation, and action authority. The initial implementation may incubate as a physically isolated top-level package in the Project Hunter repository, but repository location does not grant Hunter domain ownership. No model/provider routing, LLM invocation, autonomous action, or runtime implementation is authorized by this preparation record.
+Project Hunter needs a durable boundary between Hunter-specific semantics and any future reusable Prompt Intelligence infrastructure. This preparation does **not** claim that Hunter and Iran-OS already share concrete prompt/context contracts, and it does not use Iran-OS as authority for Hunter architecture. Iran-OS is only an example of a possible future consumer.
+
+The recommended architecture is a project-neutral core boundary plus project-specific adapters, with a strict admission rule: **no Hunter mechanic may be promoted into the project-neutral core merely because it appears reusable. A concrete contract enters the shared core only after independent consumer evidence demonstrates that its semantics are genuinely cross-project.** Until then, Hunter continues to own and use its ADR 0031 Evidence Intelligence contracts.
+
+This record therefore prepares the ownership boundary, dependency direction, admission rule, migration protections, and future extraction criteria without declaring any specific Hunter contract already shared with another project. No provider/model routing, LLM invocation, autonomous action, or runtime implementation is authorized.
 
 ## Problem Statement
 
 ### Current condition
 
-ADR 0031 establishes an accepted, Evidence Intelligence-specific deterministic pre-model foundation inside Project Hunter. It deliberately defers generic Context/Prompt ownership until a second real AI consumer demonstrates materially distinct contracts.
+ADR 0031 establishes Hunter's Evidence Intelligence-specific deterministic pre-model foundation and deliberately defers generic Prompt/Context ownership until a real second consumer provides enough evidence to compare actual boundaries.
 
-That trigger now exists. Iran-OS has an independent AI-agent architecture in which agents have inputs, memory, decision engines, execution policies, bounded authority, operational logging, auditability, emergency disablement, and connections to national-ledger and smart-contract systems. Those concerns are materially different from Hunter Evidence Intelligence extraction while still requiring reusable prompt/context construction primitives.
+Hunter nevertheless needs a clean architectural answer to a narrower question now: how can its future Prompt Intelligence work avoid becoming permanently coupled to `hunter.*` while still respecting ADR 0031's prohibition on prematurely generalizing Hunter semantics?
 
 ### Desired condition
 
-A reusable Prompt Intelligence foundation exists without making Hunter or Iran-OS domain semantics part of the shared core. Project-specific adapters retain authority over domain intent, canonical sources, validation, permissions, downstream actions, and promotion to authoritative state.
+Hunter has an explicit portability boundary that:
+
+- keeps Hunter domain authority in Hunter;
+- prevents future reusable infrastructure from importing Hunter domain packages;
+- allows project-specific adapters;
+- preserves ADR 0031 identities and lineage;
+- requires evidence before any concrete contract is promoted to shared ownership;
+- leaves unrelated projects fully independent.
 
 ### Decision required
 
-Determine whether reusable prompt intelligence should remain Hunter-specific, be copied per project, be extracted into a project-agnostic core with adapters, or become a standalone service/repository immediately.
+Choose the architecture for **future portability and ownership separation**, not the concrete shared contract set.
 
 ### In scope
 
-- project-independent intent envelope primitives;
-- context candidate/reference interfaces without domain ownership;
-- deterministic selection-plan interfaces and omission accounting;
-- budgeting and capability constraints;
-- prompt planning, deterministic compilation, canonicalization, hashes, reconstruction metadata, and provenance;
-- project adapter boundary;
-- dependency direction and import constraints;
-- compatibility and migration from ADR 0031;
-- criteria for later repository/package extraction;
-- evaluation primitives for deterministic pre-model artifacts.
+- project-neutral package/boundary rules;
+- one-way dependency direction;
+- project adapter authority;
+- admission criteria for future shared contracts;
+- ADR 0031 compatibility and migration constraints;
+- persistence, replay, provenance, and security boundaries;
+- criteria for later extraction into an independent package/repository.
 
 ### Out of scope
 
-- provider credentials;
-- provider/model routing;
+- declaring Hunter and Iran-OS contracts equivalent;
+- defining Iran-OS contracts;
+- implementing an Iran-OS adapter;
+- provider credentials or model routing;
 - model invocation;
 - response truth validation;
 - autonomous execution authority;
 - Hunter Governance Review modification;
-- Iran-OS governmental or constitutional decision authority;
-- replacing project-owned persistence or canonical domain records.
+- runtime implementation.
 
 ## Problem Validation
 
-ADR 0031 states that generic Context/Prompt ownership is deferred until a second real AI consumer triggers a new ADPR/ADR and that any shared abstraction must be extracted only from proven common semantics while preserving Evidence Intelligence identities and consumer-specific authority.
+ADR 0031 is authoritative for Hunter and requires evidence before generic ownership is inferred from Hunter-specific semantics. The current repository also has a practical portability need: if reusable infrastructure is allowed to grow inside Hunter domain packages without a boundary, later extraction becomes expensive and authority becomes ambiguous.
 
-Iran-OS provides that second consumer. Its agent architecture requires bounded, auditable AI execution with inputs, memory, decision logic, policies, operational records, and explicit authority constraints. These are not Evidence Intelligence semantics, so reusing Hunter-specific classes directly would create false ownership. At the same time, duplicating deterministic prompt construction, budgeting, provenance, security, and reconstruction logic would create divergent infrastructure.
+Those two facts create a real architectural problem even before a second consumer's concrete contracts are mature: Hunter needs to define **where generic ownership may exist and what evidence is required to put anything there**, while avoiding the unsupported claim that a specific set of contracts is already cross-project.
 
-The unresolved problem is therefore architectural rather than a convenience refactor.
+Iran-OS is not used as proof of common contract semantics. It is only a concrete example showing why future portability may matter.
 
 ## Motivation
 
-Without a shared boundary:
+Without an explicit boundary and admission rule:
 
-- Hunter-specific names and authority may leak into unrelated projects;
-- Iran-OS may duplicate prompt/context logic with incompatible provenance and replay semantics;
-- future projects would repeat the same infrastructure;
-- provider-specific utilities could become de facto architecture;
-- later extraction would require breaking changes across multiple consumers.
+- Hunter-specific semantics may become accidental platform APIs;
+- future reuse may require breaking migrations;
+- generic-looking names may conceal Hunter authority;
+- a later second consumer may be forced to adopt Hunter-shaped contracts;
+- provenance and replay identities may be rewritten during extraction.
 
-A correct shared core allows reuse while keeping domain authority local.
+With the boundary, Hunter can continue developing under ADR 0031 while preserving a safe path for evidence-based reuse later.
 
 ## Existing Architecture
 
 ### Hunter
 
-ADR 0031 owns Evidence Intelligence-specific concepts including `EvidenceExtractionIntent`, Evidence context resolution/selection, selection ledger, allocation result/package, prompt plan/artifact, and pre-model build record. It explicitly does not grant repository-wide generic ownership, model routing, or canonical authority.
+ADR 0031 owns Evidence Intelligence-specific concepts such as extraction intent, context resolution and selection, allocation, prompt planning/compilation, and pre-model build records. Those remain Hunter-owned unless a later governed decision, backed by independent consumer evidence, promotes a proven common contract.
 
-### Iran-OS
+### Other projects
 
-The current Iran-OS agent architecture establishes AI agents with inputs, memory, decision engines, execution policies, operation logging, auditability, bounded authority, emergency disablement, and multiple domain roles. This is sufficient to demonstrate a second consumer but not sufficient to make Iran-OS domain contracts authoritative inside Project Hunter. The shared core must therefore remain domain-neutral.
+Other repositories, including Iran-OS, remain architecturally independent. This ADPR grants no authority over their contracts, persistence, policies, or runtime. A future project may choose to consume a shared core only through its own governed adapter.
 
 ### Current ownership boundary
 
-Hunter owns Hunter semantics and Evidence Intelligence authority. Iran-OS owns Iran-OS semantics and authority. No accepted architecture currently owns a project-neutral Prompt Intelligence core. ADR 0031 intentionally left that ownership unresolved pending a second consumer.
+No accepted Hunter architecture currently owns a populated project-neutral Prompt Intelligence contract set. ADR 0031 intentionally keeps concrete semantics Hunter-specific for now.
 
 ## Constraints
 
 ### Constitutional
 
-- Project Hunter canonical authority remains with Hunter documents and accepted ADRs.
-- Iran-OS authority remains in Iran-OS; this ADPR cannot establish governmental or constitutional authority there.
+- Project Hunter canonical authority remains inside Hunter's governing documents and accepted ADRs.
+- No external project becomes subordinate to Hunter through this decision.
 - No implementation may promote itself to architecture.
 
 ### Governance and accepted ADRs
 
-- ADR 0031 identities and lineage cannot be silently replaced.
-- Generic ownership may only be introduced through a new governed ADPR/ADR after the second-consumer trigger.
-- Hunter Governance Review remains deterministic and outside the authority of Prompt Intelligence.
+- ADR 0031 remains binding.
+- Generic ownership must not be inferred from Hunter-only evidence.
+- A concrete contract may enter shared ownership only after independent consumer evidence demonstrates common semantics.
+- Hunter Governance Review remains outside Prompt Intelligence authority.
 
 ### Technical
 
-- Shared core must not import `hunter.*`.
-- Shared core must not import Iran-OS domain packages.
-- Consumer adapters may import the shared core.
-- Core contracts must be provider-independent.
-- Deterministic compilation and canonicalization must be testable without an LLM.
+- A future shared core must not import `hunter.*` or any consumer domain package.
+- Consumer adapters may depend on the shared core.
+- The core must remain provider-independent.
+- Cross-project admission must be explicit and testable.
 
 ### Operational
 
-- The first implementation must remain usable in-process; a remote service is not required.
-- The architecture must not require model/provider availability to validate pre-model behavior.
+- Hunter may continue using Hunter-owned ADR 0031 contracts before any shared contract exists.
+- No remote service is required.
 
 ### Persistence and migration
 
-- Shared core may define portable artifact schemas and identities, but each consumer owns persistence authority and storage integration.
-- Migration from Evidence Intelligence records must be adapter-based and lossless.
-- Existing Evidence Intelligence record identities remain valid historical identities.
+- Consumer persistence authority remains consumer-owned.
+- Existing ADR 0031 identities remain historically valid.
+- No historical Hunter record may be relabeled as having been produced by a generic core before that core owned the relevant contract.
 
 ### Replay and historical reconstruction
 
-- Core artifacts must preserve exact source-reference identities, policy/template/compiler versions, canonicalization version, hashes, and size/accounting evidence sufficient for consumer-authorized reconstruction.
-- Historical reconstruction availability must be explicit when source-retention policy prevents exact replay.
-- Strict reconstruction must never substitute current/latest source content for unavailable historical content.
+- Any future shared artifact must preserve exact source identity, policy/compiler versions, hashes, temporal coordinates, omission/missingness, and reconstruction availability.
+- Strict replay must never substitute current/latest content for unavailable historical content.
 
 ### Compatibility
 
-- ADR 0031 remains historically valid and is not superseded wholesale.
-- Consumer-specific fields that cannot be represented without semantic loss must remain adapter-owned rather than being forced into a neutral schema.
+- ADR 0031 is reaffirmed, not superseded wholesale.
+- Fields whose semantics are not proven cross-project remain consumer-owned.
 
 ### Security and privacy
 
-- Mechanical trusted/untrusted separation and deterministic escaping/delimiting may be core-owned.
-- Trust, sensitivity, eligibility, and data-handling classifications remain consumer-owned.
-- The core must not broaden source access or permissions.
+- Consumer projects retain source eligibility, trust, sensitivity, permissions, and data-handling authority.
+- A future shared core may own only mechanical enforcement that is proven consumer-neutral.
 
 ### Performance and scalability
 
-- Deterministic budgeting and exact-size accounting must be possible before model invocation.
-- The initial architecture should avoid distributed-service latency and operational complexity until independent deployment is justified.
+- The boundary must permit deterministic budgeting and exact-size accounting without requiring provider availability.
+- Distributed-service complexity is deferred.
 
 ### Evidence and provenance
 
-- Every selected, omitted, or unavailable context item must remain attributable to exact consumer-supplied source identity and policy/version coordinates.
-- Neutral core artifacts must not erase domain provenance or consumer authority boundaries.
+- Promotion to shared ownership requires attributable evidence from at least two independent consumers.
+- Assumptions and future reuse goals are not evidence of common semantics.
 
 ## Evidence Inventory
 
 | ID | Evidence | Authority/source | Finding | Quality and limitations | Supports or challenges |
 |---|---|---|---|---|---|
-| E-001 | ADR 0031 | Accepted Hunter ADR | Explicitly defers generic ownership until a second consumer and requires preservation of Evidence Intelligence identities and consumer-specific authority | Strong Hunter authority; Hunter-specific | Supports new ADPR trigger and preservation requirement |
-| E-002 | ADPR-0006 | Approved Hunter preparation record | Establishes prior option analysis and deterministic pre-model boundaries | Strong Hunter preparation evidence; scoped to Evidence Intelligence | Supports extraction only from proven Hunter semantics |
-| E-003 | Iran-OS agent architecture | Iran-OS repository architecture overview | Demonstrates a materially distinct AI-agent consumer with authority, audit, memory, policy, and operational needs | High-level; not yet a production prompt-runtime contract | Supports second-consumer trigger while limiting how much may be generalized |
-| E-004 | PR #200 operational history recorded in ADR 0031 | Hunter governance evidence | Shows token budgets, provider quotas, exact review inputs, and deterministic pre-model handling matter operationally | Governance-specific operational evidence | Supports deterministic budgeting/provenance mechanics, not shared domain authority |
+| E-001 | ADR 0031 | Accepted Hunter ADR | Concrete pre-model contracts are Evidence Intelligence-specific and generic ownership is deferred pending real cross-consumer evidence | Strong Hunter authority | Supports a strict admission rule and preservation requirement |
+| E-002 | ADPR-0006 | Approved Hunter preparation record | Documents Hunter's current pre-model boundaries and reasons for keeping them domain-specific | Strong Hunter preparation evidence | Supports separation of Hunter semantics from future shared ownership |
+| E-003 | Project-Hunter repository/package structure | Hunter implementation context | Future reusable code can become coupled if portability boundaries are not explicit | Direct Hunter engineering evidence | Supports defining dependency direction before extraction |
+| E-004 | Iran-OS architecture overview | Separate repository; non-authoritative for Hunter | Demonstrates only that a distinct future consumer may exist | High-level and insufficient to prove common prompt/context contracts | Supports future-use possibility only; does **not** support contract promotion |
 
-Missing evidence: a mature production Iran-OS prompt runtime does not yet exist. Therefore the shared core must remain minimal and must not invent Iran-OS-specific prompt semantics.
+Missing evidence: concrete, versioned prompt/context contracts from a second independent consumer. Consequently, this ADPR does not identify any specific Hunter contract as already shared.
 
 ## Assumptions
 
 | ID | Assumption | Rationale | Confidence | Falsification condition | Consequence if false |
 |---|---|---|---|---|---|
-| A-001 | Hunter and Iran-OS both need deterministic pre-model construction | Basis for shared core | High | Iran-OS chooses no model-facing prompt/context path | Keep core usable by Hunter; do not force Iran-OS adoption |
-| A-002 | Domain authority differs materially | Prevent false generic ownership | High | Both consumers prove identical authority contracts | Adapters may shrink but remain harmless |
-| A-003 | Standalone service is premature | Avoid distributed-system cost before stable contracts | Medium-high | Multiple independent runtimes require remote shared execution | Revisit extraction/service decision |
-| A-004 | Portable package boundary is desirable | Enables future reuse | High | Consumer requirements require deep runtime coupling | Reassess module/package split |
+| A-001 | Future reuse may be valuable | Motivates a portability boundary | Medium-high | Hunter remains the only consumer indefinitely | Boundary remains harmless; no shared contracts need be admitted |
+| A-002 | Domain authority must remain consumer-owned | Prevents accidental cross-project authority | High | A future accepted architecture explicitly centralizes authority | Revisit through a new ADPR/ADR |
+| A-003 | Standalone service is premature | Avoids operational cost before shared contracts exist | High | Multiple independent consumers require remote execution | Revisit deployment architecture |
+| A-004 | A one-way dependency boundary is useful before extraction | Prevents future coupling | High | Static separation creates more cost than value | Reassess implementation location, not authority rules |
 
 ## Architectural Dimensions
 
-The decision must cover authority, ownership, dependency direction, component boundaries, identity, persistence, versioning, provenance, replay, missingness, security, testability, performance, extensibility, migration, rollback, observability, and dependency enforcement. These dimensions matter because a reusable prompt layer can otherwise become accidental cross-project authority, lose historical provenance, or hard-code provider/runtime assumptions.
+The decision covers authority, ownership, dependency direction, identity, persistence, versioning, provenance, replay, missingness, security, testability, extensibility, migration, reversibility, and future extraction. The key distinction is between **designing a reusable boundary now** and **claiming shared semantics now**; only the former is supported by current evidence.
 
 ## Candidate Options
 
-### Option 1 — Keep all Prompt Intelligence inside Hunter
+### Option 1 — Keep all future Prompt Intelligence permanently Hunter-specific
 
-- Description: keep reusable mechanics under Hunter/Evidence Intelligence ownership.
-- Authority and ownership: Hunter Evidence Intelligence owns implementation.
-- Boundaries: unrelated consumers depend on Hunter-specific packages or semantics.
-- Persistence and replay: coherent only inside Hunter.
-- Evidence and provenance: Hunter-native.
-- Compatibility: lowest immediate Hunter migration cost.
-- Advantages: lowest immediate implementation effort.
-- Disadvantages: Iran-OS reuse requires Hunter dependency; domain leakage is likely.
-- Failure modes: Hunter becomes accidental platform authority.
-- Migration implications: later extraction becomes progressively harder.
-- Reversibility: low over time.
-- Open dependencies: none for Hunter-only use; unacceptable for a reusable cross-project architecture.
+- Description: retain all contracts and mechanics under Hunter ownership indefinitely.
+- Advantages: lowest immediate complexity.
+- Disadvantages: portability becomes expensive and unrelated projects would have to depend on Hunter semantics or reimplement later.
+- Failure mode: Hunter becomes accidental platform authority.
+- Reversibility: decreases over time.
 
-### Option 2 — Copy implementation into each project
+### Option 2 — Copy future mechanics into every project
 
-- Description: independently implement similar prompt/context mechanics per project.
-- Authority and ownership: each project owns its copy.
-- Boundaries: strong local ownership but no shared behavioral contract.
-- Persistence and replay: project-local and likely to diverge.
-- Evidence and provenance: project-local.
-- Compatibility: no shared compatibility guarantee.
-- Advantages: maximum local autonomy.
-- Disadvantages: duplicated budgeting, canonicalization, prompt hashing, provenance, security escaping, and evaluation; drift is expected.
-- Failure modes: same concept acquires incompatible semantics and bugs.
-- Migration implications: convergence later requires reconciliation of persisted artifacts and semantics.
-- Reversibility: low once histories diverge.
-- Open dependencies: duplicate maintenance and cross-project consistency work.
+- Description: each project independently duplicates similar infrastructure.
+- Advantages: strong local autonomy.
+- Disadvantages: canonicalization, provenance, replay, budgeting, and security mechanics may drift.
+- Failure mode: incompatible duplicated infrastructure.
+- Reversibility: poor after persisted histories diverge.
 
-### Option 3 — Project-agnostic core plus project adapters
+### Option 3 — Define a project-neutral core boundary plus project adapters, with evidence-gated contract admission
 
-- Description: shared core owns domain-neutral pre-model mechanics; adapters own translation from consumer semantics and all domain authority.
-- Authority and ownership: core owns only portable mechanics; adapters and projects own domain policy and authority.
-- Boundaries: one-way dependency from consumer adapter to core; no reverse consumer import.
-- Persistence and replay: portable identities/artifacts with consumer-owned persistence and reconstruction policy.
-- Evidence and provenance: exact consumer identities and classifications flow through typed neutral views without transfer of authority.
-- Compatibility: Hunter adapter preserves ADR 0031 identities; Iran-OS adapter maps its own semantics.
-- Advantages: reuse without authority leakage, deterministic testing, future extraction path.
-- Disadvantages: requires careful boundary design and adapter contracts.
-- Failure modes: over-generalization or accidental import reversal; mitigated by dependency tests and narrow contracts.
-- Migration implications: additive adapter-based migration; historical records are not relabeled.
-- Reversibility: high; core can remain in monorepo or later be extracted.
-- Open dependencies: detailed consumer adapter contracts and later model/provider architecture.
+- Description: establish the neutral ownership boundary now, but populate it only with contracts whose cross-project semantics are independently demonstrated.
+- Authority and ownership: Hunter retains Hunter semantics; each future consumer retains its semantics; only proven common mechanics may become core-owned.
+- Boundaries: consumer adapter -> shared core; never shared core -> consumer domain package.
+- Persistence and replay: consumer-owned persistence; shared artifacts only after evidence-backed admission.
+- Compatibility: ADR 0031 identities remain Hunter-owned and historically valid.
+- Advantages: preserves portability without premature generalization.
+- Disadvantages: some initially duplicated or Hunter-owned mechanics may remain outside the core until evidence exists.
+- Failure modes: premature admission; mitigated by the explicit two-consumer evidence gate.
+- Reversibility: high.
 
-### Option 4 — Standalone repository/service from day one
+### Option 4 — Create a standalone shared repository/service immediately
 
-- Description: create an independently versioned package/repository or remote service immediately.
-- Authority and ownership: separate product/package owns prompt-intelligence APIs.
-- Boundaries: strongest physical isolation.
-- Persistence and replay: potentially portable but requires early versioning and compatibility policy.
-- Evidence and provenance: can be strong if contracts are correct.
-- Compatibility: speculative until two stable adapters exist.
-- Advantages: immediate multi-project consumption and physical separation.
-- Disadvantages: premature API freezing, release/version management, deployment/auth/network complexity.
-- Failure modes: distributed monolith or lowest-common-denominator API.
-- Migration implications: higher coordination cost while contracts are still emerging.
-- Reversibility: moderate but operationally expensive.
-- Open dependencies: packaging/deployment/versioning/service-security decisions not yet justified.
+- Description: externalize Prompt Intelligence before shared contracts are proven.
+- Advantages: strong physical isolation.
+- Disadvantages: speculative APIs, versioning, deployment, authentication, and release management.
+- Failure mode: generic infrastructure that is actually Hunter-shaped.
+- Reversibility: moderate and costly.
 
 ## Comparative Analysis
 
-| Criterion | Hunter-only | Copy per project | Shared core + adapters | Standalone now |
+| Criterion | Hunter-only | Copy per project | Boundary + evidence gate | Standalone now |
 |---|---|---|---|---|
-| Correctness | Medium | Medium | High | Medium |
-| Constitutional compliance | Medium | High locally | High | Medium-high |
-| Governance compliance | Medium | Medium | High | Medium |
-| Authority clarity | Low outside Hunter | High locally, low globally | High | Medium-high |
-| Replayability | High in Hunter only | Low over time | High | High if correctly implemented |
-| Evidence integrity | High in Hunter only | Medium | High | High if correctly implemented |
-| Maintainability | Low for multi-project use | Low | High | Medium |
-| Scalability | Low organizationally | Medium | High | High after contracts stabilize |
-| Operational complexity | Low | Medium | Medium | High |
-| Migration risk | High later | High later | Low-medium | Medium-high now |
-| Implementation effort | Low | Medium | Medium | High |
+| Correctness under current evidence | Medium | Medium | High | Low-medium |
+| Authority clarity | Low for future reuse | High locally | High | Medium |
+| ADR 0031 compliance | High | High | High | Low until commonality is proven |
+| Replay/provenance safety | High in Hunter only | Drifts | High | Speculative |
+| Maintainability | Low long-term | Low | High | Medium |
+| Operational complexity | Low | Medium | Low-medium | High |
+| Migration risk | High later | High later | Low | Medium-high |
 | Reversibility | Low over time | Low | High | Medium |
-| Long-term extensibility | Low | Medium | High | High after contracts stabilize |
+| Future extensibility | Low | Medium | High | High only after contracts stabilize |
 
 ## Falsification Results
 
-Option 1 fails the second-consumer requirement because Iran-OS would need to depend on Hunter domain infrastructure or reimplement it.
+Option 1 remains viable for Hunter-only operation but fails the portability goal over time.
 
-Option 2 fails consistency and provenance goals because no common mechanism prevents security, budgeting, canonicalization, identity, or replay drift.
+Option 2 remains viable for independent projects but intentionally accepts duplication and drift.
 
-Option 3 survives current falsification only if the common core is restricted to mechanics demonstrated across consumers: intent envelopes, source-reference interfaces, deterministic selection/allocation mechanics, prompt planning/compilation, provenance, reconstruction metadata, budgeting, capability constraints, and pre-model evaluation. It is invalidated if it begins owning domain source authority, project permissions, downstream actions, provider routing, model invocation, or model-response truth.
+Option 3 survives falsification because it does **not** assume any specific Hunter contract is already shared. It establishes only the ownership/dependency boundary and an evidence gate. It is invalidated if future implementation promotes Hunter-only semantics into the core without independent consumer evidence.
 
-Option 4 remains a plausible future deployment/extraction target but is rejected for Phase 1 because only two consumers exist and Iran-OS does not yet expose a stable production prompt-runtime contract. A standalone service would freeze speculative interfaces and add operational complexity before evidence justifies it.
+Option 4 is premature because current evidence does not justify a stable shared API or remote service.
 
 ## Rejected Options
 
-### Hunter-only
+### Hunter-only as the permanent architecture
 
-- Rejection reason: violates reuse and authority separation for a real second consumer.
-- Supporting evidence: E-001, E-003.
-- Violated constraint or inferior trade-off: false cross-project Hunter ownership.
-- Reconsideration conditions: only if the generic reuse goal is abandoned and Hunter becomes the sole consumer.
+Rejected as the long-term target because it makes future reuse increasingly expensive. Reconsider if Hunter is explicitly declared the sole permanent consumer.
 
-### Copy per project
+### Copy per project as the default strategy
 
-- Rejection reason: deterministic infrastructure would drift.
-- Supporting evidence: E-001, E-002, E-003.
-- Violated constraint or inferior trade-off: weak cross-project provenance, replay, and maintenance consistency.
-- Reconsideration conditions: only if consumers prove there is no stable common mechanic worth sharing.
+Rejected as the preferred target because it accepts avoidable drift. Reconsider for any mechanic that fails the cross-consumer evidence gate.
 
 ### Standalone service immediately
 
-- Rejection reason: premature interface freezing and distributed-system cost.
-- Supporting evidence: E-003 and the absence of a mature Iran-OS production prompt contract.
-- Violated constraint or inferior trade-off: unnecessary operational complexity during contract discovery.
-- Reconsideration conditions: stable multi-consumer contracts, independent release cadence, and remote execution need are demonstrated.
+Rejected because no stable shared contract set exists. Reconsider only after at least two independent consumers use versioned shared contracts and independent deployment has a justified operational benefit.
 
 ## Risks
 
 | Risk | Category | Likelihood | Impact | Mitigation | Residual uncertainty |
 |---|---|---|---|---|---|
-| Over-generalization | Architecture | Medium | High | Extract only demonstrated common semantics; keep domain policy in adapters | Exact neutral schema shape remains to be proven in implementation design |
-| Authority leakage | Governance | Medium | Critical | One-way imports, explicit prohibited authority, architecture tests, consumer-owned validation/persistence | Adapter misuse remains possible without tests |
-| Premature repository extraction | Operations | Medium | Medium-high | Incubate as isolated in-process package first | Future release cadence may justify extraction earlier than expected |
-| Identity migration error | Data/replay | Medium | High | Preserve ADR 0031 historical IDs and add linkage rather than rewriting | Concrete persistence mappings require implementation proof |
-| Provider coupling | Architecture | Medium | High | Keep provider/model routing and invocation outside the core | Later model-adapter design still open |
+| Premature generalization | Architecture | Medium | High | Two-consumer evidence gate for every promoted contract | Future evidence may show less commonality than expected |
+| Authority leakage | Governance | Medium | Critical | One-way imports and consumer-owned policy/persistence | Adapter misuse still requires tests |
+| Over-engineering an empty boundary | Engineering | Low-medium | Medium | Keep initial shared surface minimal; do not extract speculative contracts | Exact first admitted contract remains unknown |
+| Identity migration error | Data/replay | Medium | High | Preserve ADR 0031 identities and use additive mappings only | Concrete migration proof remains future work |
+| Provider coupling | Architecture | Medium | High | Provider/model authority remains out of scope | Separate model-adapter architecture still needed |
 
 ## Open Questions
 
 | Question | Blocking? | Owner | Required evidence or action | Status |
 |---|---|---|---|---|
-| Final neutral package name | No | implementation design | Choose a project-neutral name before code lands | Open |
-| Exact language-level protocol/class names | No | implementation design | Derive from accepted architecture without leaking consumer semantics | Open |
-| Portable schema representation | No | implementation design | Compare typed representations under deterministic serialization requirements | Open |
-| Exact Iran-OS adapter source inventories and data-handling policies | Yes for Iran-OS production use, no for this architecture decision | Iran-OS architecture | Produce consumer-owned adapter policy/evidence inventory | Open |
-| Model/provider adapter architecture | Yes for model invocation, no for pre-model core | future governed architecture | Separate ADPR/ADR if model authority is introduced | Open |
-| Response-validation architecture | Yes for authoritative downstream use, no for this pre-model core | future governed architecture | Separate governed decision | Open |
+| Which concrete contract is first eligible for shared ownership? | Yes for populating the core; no for defining the boundary | future architecture review | Compare versioned contracts from at least two independent consumers | Open |
+| Final neutral package name | No | implementation design | Choose before code lands | Open |
+| Exact protocol/class names | No | implementation design | Derive only from admitted contracts | Open |
+| Model/provider adapter architecture | Yes for model invocation; no for this boundary | future governed architecture | Separate ADPR/ADR | Open |
+| Response-validation architecture | Yes for authoritative downstream use; no for this boundary | future governed architecture | Separate governed decision | Open |
 
 ## Constitution Review
 
-The proposed shared core does not become domain truth, constitutional authority, source authority, or decision authority. Project-specific constitutional and canonical owners remain unchanged. The one-way adapter boundary strengthens explicit ownership and auditability because the neutral core cannot import consumer domain packages or elevate its artifacts into authoritative project state.
+The proposed boundary does not make the shared core a source of domain truth, permissions, constitutional authority, or downstream action authority. Hunter remains authoritative only for Hunter. Other projects remain authoritative only for themselves.
 
-No constitutional conflict is identified at the preparation stage. Any implementation that grants autonomous action, model/provider authority, or cross-project source authority would exceed this ADPR and require separate governance.
+No constitutional conflict is identified at the preparation stage.
 
 ## Governance Review
 
-ADR 0031's generic-ownership trigger is satisfied by a second materially distinct consumer. This preparation preserves its requirements that shared abstraction be extracted only from common semantics, preserve Evidence Intelligence identities/lineage, define adapters and migration explicitly, and keep consumer authority local.
+ADR 0031 remains binding. This preparation no longer treats the existence of Iran-OS or any other project as proof that Hunter's current contracts are generic. Instead, it converts ADR 0031's deferral into an explicit admission rule: a concrete contract enters shared ownership only after independent consumer evidence demonstrates common semantics.
 
-The preparation record is intentionally architecture-only. It does not authorize implementation, model routing, provider selection, LLM invocation, or autonomous action. Independent architecture review remains required before ADR 0032 can become Accepted.
+The preparation is architecture-only and authorizes no implementation or model invocation.
 
 ## Quality Assessment
 
-Applied against `docs/ARCHITECTURE_DECISION_QUALITY_STANDARD.md` at the preparation stage:
-
 | Dimension | Rating | Basis |
 |---|---|---|
-| Problem clarity | Strong | Current/desired state and decision required are explicit |
-| Evidence quality | Adequate-to-strong | Accepted Hunter architecture plus a real second consumer; Iran-OS runtime evidence is still high-level and is treated as a limitation |
-| Option completeness | Strong | Four materially distinct ownership/deployment options are compared |
-| Authority clarity | Strong | Core, adapter, consumer, persistence, model/provider, and downstream authority are separated |
-| Replay/provenance | Strong | Historical identity preservation and strict reconstruction constraints are explicit |
-| Security/privacy | Strong | Mechanical separation is core-owned while classification and access remain consumer-owned |
-| Falsifiability | Strong | Each option has explicit invalidation or reconsideration conditions |
-| Migration/reversibility | Strong | Additive adapter migration and later extraction criteria are explicit |
-| Implementation independence | Strong | Architecture does not depend on an LLM or provider implementation |
-| Residual uncertainty | Explicit | Iran-OS production prompt contract, concrete schemas, model adapter, and response validation remain open and bounded |
+| Problem clarity | Strong | Portability boundary is separated from contract-commonality claims |
+| Evidence quality | Strong for Hunter boundary; intentionally insufficient for shared contract promotion | Accepted Hunter architecture is authoritative; external-project evidence is treated only as illustrative |
+| Option completeness | Strong | Four materially distinct strategies are compared |
+| Authority clarity | Strong | Hunter, future consumers, adapters, and shared-core admission are distinct |
+| Replay/provenance | Strong | Historical identities and additive migration are explicit |
+| Security/privacy | Strong | Consumer classifications and permissions remain local |
+| Falsifiability | Strong | Promotion without two-consumer evidence invalidates Option 3 |
+| Migration/reversibility | Strong | Boundary-first, admission-later minimizes irreversible coupling |
+| Implementation independence | Strong | No LLM/provider/runtime implementation is required |
+| Residual uncertainty | Explicit | Concrete shared contracts remain intentionally unknown |
 
 Overall preparation quality: `READY_FOR_REVIEW`, not yet `APPROVED`.
 
 ## Architecture Readiness
 
 - Outcome: `READY`
-- Rationale: four materially distinct options were compared; the second-consumer trigger is evidenced; Option 3 satisfies reuse and authority boundaries without premature distributed architecture.
-- Missing evidence: detailed Iran-OS production prompt runtime; deliberately excluded from generic semantics and required before Iran-OS production readiness can be claimed.
-- Unresolved conflicts: none identified that block independent review of the architecture boundary.
+- Rationale: the ownership/dependency boundary and evidence-gated admission rule can be decided from Hunter's own architecture without asserting external contract equivalence.
+- Missing evidence: concrete second-consumer contracts are still required before any specific contract may be promoted into shared ownership.
+- Unresolved conflicts: none identified for reviewing the boundary itself.
 
 ## ADR Readiness
 
 - Outcome: `READY_FOR_ADR`
 - Proposed ADR title: Project-Agnostic Prompt Intelligence Core and Project Adapter Boundary
-- Proposed ADR scope: shared mechanics, one-way dependency rule, adapter authority, ADR 0031 compatibility, persistence/replay boundaries, and extraction criteria.
-- Decisions the ADR must fix: ownership split, dependency direction, historical identity preservation, generic-core prohibited authority, persistence boundary, and extraction threshold.
-- Matters the ADR must leave open: provider/model adapter, response validation, concrete Iran-OS production integration, and standalone service timing.
+- Proposed ADR scope: ownership/dependency boundary, evidence-gated contract admission, ADR 0031 compatibility, migration protections, persistence/replay rules, and future extraction criteria.
+- Decisions the ADR must fix: no reverse consumer dependency; consumer-owned authority/persistence; no contract promotion without independent cross-consumer evidence; historical identity preservation.
+- Matters the ADR must leave open: which concrete contracts are eventually admitted, external-project adapters, provider/model architecture, response validation, and standalone extraction timing.
 
 ## Final Recommendation
 
-Adopt Option 3: a project-agnostic Prompt Intelligence core with project-specific adapters. Initially place the core in the Project Hunter repository as a physically isolated top-level package with a hard zero-import dependency on `hunter.*`. Treat repository location as incubation, not Hunter ownership. Add a Hunter Evidence Intelligence adapter that preserves ADR 0031 identities and an eventual Iran-OS adapter in the Iran-OS repository. Extract the core into its own repository/package only after stable multi-consumer contracts and independent release/runtime needs are demonstrated.
+Adopt Option 3 **as a boundary and admission policy**, not as a declaration that Hunter and Iran-OS already share concrete contracts.
+
+Project Hunter may reserve a physically isolated, project-neutral Prompt Intelligence boundary. Hunter's current ADR 0031 contracts remain Hunter-owned. A contract is promoted into the shared core only when at least two independent consumers provide concrete, versioned evidence that the contract's semantics are genuinely common. Iran-OS may become such a consumer later through its own adapter and governance, but it is not required by or subordinate to this ADPR.
 
 ## Decision History
 
 | Date | State | Change | Author or reviewer |
 |---|---|---|---|
 | 2026-08-10 | READY_FOR_REVIEW | Initial preparation completed with four-option comparison and Option 3 recommendation | OpenAI / repository owner-directed architecture work |
-| 2026-08-11 | READY_FOR_REVIEW | Reorganized into the canonical ADPR structure; preserved architecture substance and made evidence, quality, falsification, history, and immutability sections explicit | OpenAI / repository owner-directed architecture work |
+| 2026-08-11 | READY_FOR_REVIEW | Reorganized into canonical ADPR structure | OpenAI / repository owner-directed architecture work |
+| 2026-08-11 | READY_FOR_REVIEW | Corrected cross-project overclaim: Iran-OS is now illustrative only; concrete shared contracts require independent two-consumer evidence before admission | OpenAI / repository owner-directed architecture work |
 
 ## Traceability
 
@@ -383,6 +353,6 @@ Adopt Option 3: a project-agnostic Prompt Intelligence core with project-specifi
 
 ## Immutability and Supersession
 
-This record is currently `READY_FOR_REVIEW`, not yet `APPROVED`. Until approval, corrections required by review may amend the reasoning while remaining auditable in repository history.
+This record is currently `READY_FOR_REVIEW`, not yet `APPROVED`. Until approval, review-driven corrections may amend the reasoning while remaining auditable in repository history.
 
-After `APPROVED`, this record becomes historical evidence. Any correction that materially changes the decision basis, option analysis, or recommendation requires a new ADPR that explicitly supersedes ADPR-0007. Non-substantive traceability completion and typographical corrections may be made only with auditable repository history.
+After `APPROVED`, substantive changes to the decision basis require a new ADPR that explicitly supersedes ADPR-0007. Non-substantive traceability completion and typographical corrections must remain auditable.
