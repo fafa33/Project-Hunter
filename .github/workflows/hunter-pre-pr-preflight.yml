@@ -1,4 +1,4 @@
-name: Hunter Pre-PR Preflight
+name: Hunter / Pre-PR Preflight
 
 on:
   push:
