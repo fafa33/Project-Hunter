@@ -35,13 +35,7 @@ def owner_acknowledged_comment_with_bot_exemptions(comment: dict) -> bool:
 
 
 def get_latest_invalidation_time_with_bot_exemptions(pr_number: int, pr: dict):
-    """Ignore trusted advisory comments when calculating governance freshness.
-
-    The core freshness function remains authoritative for PR updates, human/unknown
-    top-level comments, reviews, and inline review comments. We only filter the
-    known trusted advisory comments from the one top-level comment collection it
-    consumes, then restore the original paging function even if evaluation fails.
-    """
+    """Ignore trusted advisory comments when calculating governance freshness."""
     original_paged = core.paged
     top_level_comments_path = f"issues/{pr_number}/comments"
 
