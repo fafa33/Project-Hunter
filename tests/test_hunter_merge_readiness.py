@@ -544,6 +544,7 @@ def test_no_endless_pending_invariant(gh):
 # P1 REGRESSION TESTS (L - P)
 # ====================================================================================
 
+
 def test_p1_1_same_head_pr_edit_invalidates_old_governance_success(gh):
     """Test L: same-head PR edit invalidates old governance success.
     - HEAD SHA is unchanged.
@@ -791,7 +792,12 @@ def test_p1_1_stale_governance_and_stale_pending_recovery(gh):
 
     gh.statuses["sha_123"] = [
         {"context": "Hunter Governance Review", "state": "success", "created_at": "2026-08-05T01:00:00Z", "id": 1},
-        {"context": "Hunter Merge Readiness", "state": "pending", "description": "Waiting for a fresh Hunter Governance Review...", "id": 2},
+        {
+            "context": "Hunter Merge Readiness",
+            "state": "pending",
+            "description": "Waiting for a fresh Hunter Governance Review...",
+            "id": 2,
+        },
     ]
 
     hunter_merge_readiness.evaluate(123, poll=False)

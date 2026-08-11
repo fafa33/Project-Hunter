@@ -348,7 +348,7 @@ def get_latest_invalidation_time(pr_number: int, pr: dict[str, Any]) -> datetime
         pr_created = parse_time(pr.get("created_at"))
         if pr_created:
             return pr_created
-        return datetime.fromtimestamp(0, tz=timezone.utc)
+        return datetime.fromtimestamp(0, tz=UTC)
 
     return max(timestamps)
 
@@ -378,7 +378,9 @@ def evaluate(
     # P1-2 Invalidate Green Immediately: Publish pending before querying any potentially
     # lengthy metadata, feedback, or governance state to avoid concurrency race conditions.
     if event_name != "schedule" and latest_readiness and latest_readiness.get("state") == "success":
-        print(f"Lifecycle event '{event_name}' received on already-green PR #{pr_number}. Invalidating green status immediately.")
+        print(
+            f"Lifecycle event '{event_name}' received on already-green PR #{pr_number}. Invalidating green status immediately."
+        )
         publish(sha, "pending", "Validating current feedback and exact-head prerequisites.")
 
     body = pr.get("body") or ""
@@ -437,7 +439,9 @@ def evaluate(
         # This prevents accepting stale same-SHA governance after feedback/body changes.
         invalidation_time = get_latest_invalidation_time(pr_number, pr)
         if governance_started_at < invalidation_time:
-            print(f"Rejecting governance run from {governance_started_at.isoformat()} because it is older than latest invalidation time {invalidation_time.isoformat()}")
+            print(
+                f"Rejecting governance run from {governance_started_at.isoformat()} because it is older than latest invalidation time {invalidation_time.isoformat()}"
+            )
             publish(
                 sha,
                 "pending",
