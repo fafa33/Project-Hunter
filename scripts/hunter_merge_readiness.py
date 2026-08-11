@@ -11,6 +11,11 @@ context = "Hunter Merge Readiness"
 governance_context = "Hunter Governance Review"
 required_checks = ("Quality Gates", "dependency-review", "CodeQL")
 hard_failures = {"failure", "timed_out", "action_required", "startup_failure"}
+# Event names that perform a full, check-runs-based reconciliation for a single PR
+# instead of the lightweight "invalidate and wait" webhook shortcut. `schedule` is
+# the periodic self-healing sweep; `workflow_dispatch` is an operator-triggered
+# on-demand equivalent for a single PR (see hunter-merge-readiness.yml).
+RECONCILIATION_EVENT_NAMES = {"schedule", "workflow_dispatch"}
 
 # Global state to allow test mocking
 repo: str = ""
@@ -375,7 +380,7 @@ def evaluate(
 
     # P1-2 Invalidate Green Immediately: Publish pending before querying any potentially
     # lengthy metadata, feedback, or governance state to avoid concurrency race conditions.
-    if event_name != "schedule" and latest_readiness and latest_readiness.get("state") == "success":
+    if event_name not in RECONCILIATION_EVENT_NAMES and latest_readiness and latest_readiness.get("state") == "success":
         print(
             f"Lifecycle event '{event_name}' received on already-green PR #{pr_number}. Invalidating green status immediately."
         )
@@ -404,14 +409,14 @@ def evaluate(
     # PR/review/comment webhooks invalidate stale green immediately.
     # They do not consume an older same-SHA governance status.
     # Final success is produced by Governance completion or by the periodic reconciler.
-    if governance_started_at is None and event_name != "schedule":
+    if governance_started_at is None and event_name not in RECONCILIATION_EVENT_NAMES:
         publish(sha, "pending", "Waiting for current Hunter Governance Review.")
         return
 
     attempts = 45 if poll else 1
     for attempt in range(1, attempts + 1):
         runs = all_check_runs(sha)
-        if event_name == "schedule":
+        if event_name in RECONCILIATION_EVENT_NAMES:
             governance_run = latest_check(runs, governance_context)
             if governance_run is None:
                 publish(sha, "pending", "Waiting for current Hunter Governance Review.")
@@ -536,6 +541,12 @@ def main() -> None:
                 print("Issue comment is not on a pull request; skipping.")
             else:
                 evaluate(int(issue["number"]), poll=False)
+        elif event_name == "workflow_dispatch":
+            pr_number = (event.get("inputs") or {}).get("pr_number")
+            if not pr_number:
+                print("workflow_dispatch requires a pr_number input; skipping.")
+                raise SystemExit(1)
+            evaluate(int(pr_number), poll=False)
         else:
             pull_request = event.get("pull_request") or {}
             pr_number = pull_request.get("number") or ((event.get("issue") or {}).get("number"))
