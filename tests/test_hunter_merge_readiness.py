@@ -72,15 +72,14 @@ class MockGitHubServer:
 
         if clean_path.startswith("issues/"):
             parts = clean_path.split("/")
+            # e.g., issues/comments/comment_id/reactions
+            if parts[1] == "comments" and len(parts) > 3 and parts[3] == "reactions":
+                comment_id = int(parts[2])
+                return self.reactions.get(comment_id, [])
             # e.g., issues/123/comments
-            if parts[2] == "comments":
-                if parts[1] == "comments":
-                    # e.g., issues/comments/comment_id/reactions
-                    comment_id = int(parts[3])
-                    return self.reactions.get(comment_id, [])
-                else:
-                    pr_num = int(parts[1])
-                    return self.comments.get(pr_num, [])
+            if len(parts) > 2 and parts[2] == "comments":
+                pr_num = int(parts[1])
+                return self.comments.get(pr_num, [])
 
         if clean_path == "pulls":
             return list(self.pulls.values())
@@ -805,3 +804,415 @@ def test_p1_1_stale_governance_and_stale_pending_recovery(gh):
     # Must remain pending (not succeed!)
     assert gh.published[-1][1] == "pending"
     assert "Waiting for a fresh Hunter Governance Review" in gh.published[-1][2]
+
+
+# ====================================================================================
+# OWNER ACKNOWLEDGMENT REACTION FRESHNESS TESTS (Q - X)
+#
+# Owner 👍 reactions on top-level PR comments are used only as acknowledgment
+# (see owner_acknowledged_comment/review_feedback_error) and must not themselves
+# count as governance-invalidating events. These tests cover the required
+# regression matrix:
+#   Q -> A. owner +1 acknowledgment does not invalidate governance
+#   R -> B. existing successful governance remains fresh
+#   S -> C. acknowledgment blocker disappears
+#   T -> D. non-owner +1 does not satisfy acknowledgment
+#   U -> E. PR body edits still invalidate governance
+#   V -> F. head SHA changes still invalidate governance
+#   W -> G. review-state invalidation behavior remains unchanged
+#   X -> H. scheduled reconciliation converges without a fresh governance run
+#           solely because of an owner +1
+# ====================================================================================
+
+
+def test_q_owner_ack_reaction_does_not_invalidate_governance(gh):
+    """Test Q: owner +1 acknowledgment does not invalidate governance.
+    - Top-level comment created at 00:35:00Z.
+    - Governance Review started at 00:50:00Z (after the comment).
+    - Owner posts a +1 reaction at 01:10:00Z (after governance started).
+    - Expected: the owner's reaction is NOT treated as an invalidation event,
+      so the existing governance run remains fresh and readiness succeeds.
+    """
+    hunter_merge_readiness.event_name = "schedule"
+
+    gh.pulls[123] = {
+        "number": 123,
+        "state": "open",
+        "head": {"sha": "sha_123"},
+        "body": "Acceptance-criteria matrix:\n| Acceptance criterion | Status |\n| Wire up | PASS |\n- [x] `READY FOR REVIEW`",
+        "draft": False,
+        "user": {"login": "human"},
+        "updated_at": "2026-08-05T00:30:00Z",
+    }
+
+    gh.comments[123] = [
+        {
+            "id": 456,
+            "body": "Needs owner acknowledgment",
+            "created_at": "2026-08-05T00:35:00Z",
+            "updated_at": "2026-08-05T00:35:00Z",
+        }
+    ]
+
+    # Owner acknowledges well after governance started.
+    gh.reactions[456] = [
+        {
+            "user": {"login": "fafa33"},
+            "content": "+1",
+            "created_at": "2026-08-05T01:10:00Z",
+        }
+    ]
+
+    gh.check_runs["sha_123"] = [
+        {
+            "name": "Hunter Governance Review",
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-08-05T00:50:00Z",
+            "id": 100,
+        },
+        {"name": "Quality Gates", "status": "completed", "conclusion": "success", "id": 101},
+        {"name": "dependency-review", "status": "completed", "conclusion": "success", "id": 102},
+        {"name": "CodeQL", "status": "completed", "conclusion": "success", "id": 103},
+    ]
+
+    gh.statuses["sha_123"] = [
+        {"context": "Hunter Governance Review", "state": "success", "created_at": "2026-08-05T01:00:00Z", "id": 1},
+        {"context": "Hunter Merge Readiness", "state": "pending", "description": "Waiting for owner +1", "id": 2},
+    ]
+
+    hunter_merge_readiness.evaluate(123, poll=False)
+
+    assert gh.published[-1][1] == "success"
+    assert "Ready to merge" in gh.published[-1][2]
+
+
+def test_r_existing_successful_governance_remains_fresh(gh):
+    """Test R: existing successful governance remains fresh.
+    Direct unit check on get_latest_invalidation_time: with only a PR update and
+    a top-level comment predating governance, plus an owner +1 reaction dated
+    after governance started, the computed invalidation time must still predate
+    governance_started_at (i.e. the reaction is excluded from the computation).
+    """
+    hunter_merge_readiness.repo_owner = "fafa33"
+
+    pr = {
+        "number": 123,
+        "updated_at": "2026-08-05T00:30:00Z",
+    }
+    gh.comments[123] = [
+        {
+            "id": 456,
+            "body": "Needs owner acknowledgment",
+            "created_at": "2026-08-05T00:35:00Z",
+            "updated_at": "2026-08-05T00:35:00Z",
+        }
+    ]
+    gh.reactions[456] = [
+        {
+            "user": {"login": "fafa33"},
+            "content": "+1",
+            "created_at": "2026-08-05T01:10:00Z",
+        }
+    ]
+
+    invalidation_time = hunter_merge_readiness.get_latest_invalidation_time(123, pr)
+    governance_started_at = hunter_merge_readiness.parse_time("2026-08-05T00:50:00Z")
+
+    # The reaction (01:10:00Z) must not push invalidation_time past governance start.
+    assert invalidation_time < governance_started_at
+    assert invalidation_time == hunter_merge_readiness.parse_time("2026-08-05T00:35:00Z")
+
+
+def test_s_acknowledgment_blocker_disappears(gh):
+    """Test S: acknowledgment blocker disappears once the owner reacts +1.
+    Direct unit check on unacknowledged_top_level_comments.
+    """
+    hunter_merge_readiness.repo_owner = "fafa33"
+
+    gh.comments[123] = [
+        {
+            "id": 456,
+            "body": "Needs owner acknowledgment",
+            "created_at": "2026-08-05T00:35:00Z",
+            "updated_at": "2026-08-05T00:35:00Z",
+        }
+    ]
+
+    # Before acknowledgment: the comment is a blocker.
+    gh.reactions[456] = []
+    assert hunter_merge_readiness.unacknowledged_top_level_comments(123) == [456]
+
+    # After the owner reacts +1: the blocker disappears.
+    gh.reactions[456] = [
+        {
+            "user": {"login": "fafa33"},
+            "content": "+1",
+            "created_at": "2026-08-05T01:10:00Z",
+        }
+    ]
+    assert hunter_merge_readiness.unacknowledged_top_level_comments(123) == []
+
+
+def test_t_non_owner_reaction_does_not_satisfy_acknowledgment(gh):
+    """Test T: a non-owner +1 must NOT satisfy owner acknowledgment.
+    End-to-end: readiness must remain a failure citing the unacknowledged comment.
+    """
+    hunter_merge_readiness.event_name = "schedule"
+
+    gh.pulls[123] = {
+        "number": 123,
+        "state": "open",
+        "head": {"sha": "sha_123"},
+        "body": "Acceptance-criteria matrix:\n| Acceptance criterion | Status |\n| Wire up | PASS |\n- [x] `READY FOR REVIEW`",
+        "draft": False,
+        "user": {"login": "human"},
+        "updated_at": "2026-08-05T00:30:00Z",
+    }
+
+    gh.comments[123] = [
+        {
+            "id": 456,
+            "body": "Needs owner acknowledgment",
+            "created_at": "2026-08-05T00:35:00Z",
+            "updated_at": "2026-08-05T00:35:00Z",
+        }
+    ]
+
+    # A non-owner reacts +1 — this must not count as acknowledgment.
+    gh.reactions[456] = [
+        {
+            "user": {"login": "attacker"},
+            "content": "+1",
+            "created_at": "2026-08-05T01:10:00Z",
+        }
+    ]
+
+    gh.check_runs["sha_123"] = [
+        {
+            "name": "Hunter Governance Review",
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-08-05T00:50:00Z",
+            "id": 100,
+        },
+        {"name": "Quality Gates", "status": "completed", "conclusion": "success", "id": 101},
+        {"name": "dependency-review", "status": "completed", "conclusion": "success", "id": 102},
+        {"name": "CodeQL", "status": "completed", "conclusion": "success", "id": 103},
+    ]
+    gh.statuses["sha_123"] = [
+        {"context": "Hunter Governance Review", "state": "success", "created_at": "2026-08-05T01:00:00Z", "id": 1},
+    ]
+
+    hunter_merge_readiness.evaluate(123, poll=False)
+
+    assert gh.published[-1][1] == "failure"
+    assert "Unacknowledged PR comments need owner" in gh.published[-1][2]
+
+
+def test_u_pr_body_edit_still_invalidates_governance(gh):
+    """Test U: PR body edits still invalidate governance, even with an owner
+    acknowledgment reaction present. The body edit alone (00:30 -> 01:15,
+    after governance started at 00:50) must reject the existing governance run.
+    """
+    hunter_merge_readiness.event_name = "schedule"
+
+    gh.pulls[123] = {
+        "number": 123,
+        "state": "open",
+        "head": {"sha": "sha_123"},
+        "body": "Acceptance-criteria matrix:\n| Acceptance criterion | Status |\n| Wire up | PASS |\n- [x] `READY FOR REVIEW`",
+        "draft": False,
+        "user": {"login": "human"},
+        "updated_at": "2026-08-05T01:15:00Z",  # Edited after governance started.
+    }
+
+    gh.comments[123] = [
+        {
+            "id": 456,
+            "body": "Needs owner acknowledgment",
+            "created_at": "2026-08-05T00:35:00Z",
+            "updated_at": "2026-08-05T00:35:00Z",
+        }
+    ]
+    gh.reactions[456] = [{"user": {"login": "fafa33"}, "content": "+1", "created_at": "2026-08-05T01:10:00Z"}]
+
+    gh.check_runs["sha_123"] = [
+        {
+            "name": "Hunter Governance Review",
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-08-05T00:50:00Z",
+            "id": 100,
+        },
+        {"name": "Quality Gates", "status": "completed", "conclusion": "success", "id": 101},
+        {"name": "dependency-review", "status": "completed", "conclusion": "success", "id": 102},
+        {"name": "CodeQL", "status": "completed", "conclusion": "success", "id": 103},
+    ]
+    gh.statuses["sha_123"] = [
+        {"context": "Hunter Governance Review", "state": "success", "created_at": "2026-08-05T01:20:00Z", "id": 1},
+    ]
+
+    hunter_merge_readiness.evaluate(123, poll=False)
+
+    assert gh.published[-1][1] == "pending"
+    assert "Waiting for a fresh Hunter Governance Review" in gh.published[-1][2]
+
+
+def test_v_head_sha_change_still_invalidates_governance(gh):
+    """Test V: head SHA changes still invalidate governance, even with an owner
+    acknowledgment reaction present on the prior head's comment thread.
+    """
+    hunter_merge_readiness.event_name = "schedule"
+
+    gh.pulls[123] = {
+        "number": 123,
+        "state": "open",
+        "head": {"sha": "sha_new"},  # HEAD changed since governance ran.
+        "body": "Acceptance-criteria matrix:\n| Acceptance criterion | Status |\n| Wire up | PASS |\n- [x] `READY FOR REVIEW`",
+        "draft": False,
+        "user": {"login": "human"},
+        "updated_at": "2026-08-05T00:30:00Z",
+    }
+
+    gh.comments[123] = [
+        {
+            "id": 456,
+            "body": "Needs owner acknowledgment",
+            "created_at": "2026-08-05T00:35:00Z",
+            "updated_at": "2026-08-05T00:35:00Z",
+        }
+    ]
+    gh.reactions[456] = [{"user": {"login": "fafa33"}, "content": "+1", "created_at": "2026-08-05T01:10:00Z"}]
+
+    # No check runs/statuses exist yet for the new HEAD SHA.
+    gh.check_runs["sha_new"] = []
+    gh.statuses["sha_new"] = []
+
+    hunter_merge_readiness.evaluate(123, poll=False)
+
+    assert gh.published[-1][1] == "pending"
+    assert "Waiting for current Hunter Governance Review" in gh.published[-1][2]
+
+
+def test_w_review_state_invalidation_unchanged(gh):
+    """Test W: review/review-thread-comment invalidation behavior remains
+    unchanged, even with an owner acknowledgment reaction present. A review
+    thread comment submitted after governance started must still reject the
+    existing governance run as stale.
+    """
+    hunter_merge_readiness.event_name = "schedule"
+
+    gh.pulls[123] = {
+        "number": 123,
+        "state": "open",
+        "head": {"sha": "sha_123"},
+        "body": "Acceptance-criteria matrix:\n| Acceptance criterion | Status |\n| Wire up | PASS |\n- [x] `READY FOR REVIEW`",
+        "draft": False,
+        "user": {"login": "human"},
+        "updated_at": "2026-08-05T00:30:00Z",
+    }
+
+    gh.comments[123] = [
+        {
+            "id": 456,
+            "body": "Needs owner acknowledgment",
+            "created_at": "2026-08-05T00:35:00Z",
+            "updated_at": "2026-08-05T00:35:00Z",
+        }
+    ]
+    gh.reactions[456] = [{"user": {"login": "fafa33"}, "content": "+1", "created_at": "2026-08-05T01:10:00Z"}]
+
+    # A review thread comment submitted after governance started (01:15:00Z).
+    gh.review_comments[123] = [
+        {
+            "id": 789,
+            "body": "New thread comment",
+            "created_at": "2026-08-05T01:15:00Z",
+            "updated_at": "2026-08-05T01:15:00Z",
+        }
+    ]
+
+    gh.check_runs["sha_123"] = [
+        {
+            "name": "Hunter Governance Review",
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-08-05T00:50:00Z",
+            "id": 100,
+        },
+        {"name": "Quality Gates", "status": "completed", "conclusion": "success", "id": 101},
+        {"name": "dependency-review", "status": "completed", "conclusion": "success", "id": 102},
+        {"name": "CodeQL", "status": "completed", "conclusion": "success", "id": 103},
+    ]
+    gh.statuses["sha_123"] = [
+        {"context": "Hunter Governance Review", "state": "success", "created_at": "2026-08-05T01:20:00Z", "id": 1},
+    ]
+
+    hunter_merge_readiness.evaluate(123, poll=False)
+
+    assert gh.published[-1][1] == "pending"
+    assert "Waiting for a fresh Hunter Governance Review" in gh.published[-1][2]
+
+
+def test_x_scheduled_reconciliation_converges_without_fresh_run_for_owner_ack(gh):
+    """Test X: scheduled reconciliation converges to success without demanding
+    a fresh governance run solely because of an owner +1.
+    - Prior readiness was pending, waiting for a fresh Hunter Governance Review
+      (a real invalidation: the PR body was edited at 01:10:00Z).
+    - A fresh Governance Review then starts at 01:20:00Z (after that edit).
+    - The owner acknowledges the outstanding comment afterward, at 01:30:00Z.
+    - A single scheduled reconciliation pass must converge to success; the
+      owner's later acknowledgment must not re-trigger a "waiting for fresh
+      governance" pending state.
+    """
+    hunter_merge_readiness.event_name = "schedule"
+
+    gh.pulls[123] = {
+        "number": 123,
+        "state": "open",
+        "head": {"sha": "sha_123"},
+        "body": "Acceptance-criteria matrix:\n| Acceptance criterion | Status |\n| Wire up | PASS |\n- [x] `READY FOR REVIEW`",
+        "draft": False,
+        "user": {"login": "human"},
+        "updated_at": "2026-08-05T01:10:00Z",
+    }
+
+    gh.comments[123] = [
+        {
+            "id": 456,
+            "body": "Needs owner acknowledgment",
+            "created_at": "2026-08-05T00:35:00Z",
+            "updated_at": "2026-08-05T00:35:00Z",
+        }
+    ]
+    # Owner acknowledges after the fresh governance run started.
+    gh.reactions[456] = [{"user": {"login": "fafa33"}, "content": "+1", "created_at": "2026-08-05T01:30:00Z"}]
+
+    # Fresh governance run, started after the PR body edit.
+    gh.check_runs["sha_123"] = [
+        {
+            "name": "Hunter Governance Review",
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-08-05T01:20:00Z",
+            "id": 200,
+        },
+        {"name": "Quality Gates", "status": "completed", "conclusion": "success", "id": 101},
+        {"name": "dependency-review", "status": "completed", "conclusion": "success", "id": 102},
+        {"name": "CodeQL", "status": "completed", "conclusion": "success", "id": 103},
+    ]
+    gh.statuses["sha_123"] = [
+        {"context": "Hunter Governance Review", "state": "success", "created_at": "2026-08-05T01:25:00Z", "id": 10},
+        {
+            "context": "Hunter Merge Readiness",
+            "state": "pending",
+            "description": "Waiting for a fresh Hunter Governance Review...",
+            "id": 9,
+        },
+    ]
+
+    hunter_merge_readiness.evaluate(123, poll=False)
+
+    assert gh.published[-1][1] == "success"
+    assert "Ready to merge" in gh.published[-1][2]
