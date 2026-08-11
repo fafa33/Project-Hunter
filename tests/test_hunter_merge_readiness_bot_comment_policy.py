@@ -70,7 +70,9 @@ def test_non_exempt_comment_delegates_to_existing_owner_ack(monkeypatch) -> None
 
 def test_exempt_comment_does_not_consume_reaction_lookup(monkeypatch) -> None:
     def fail_if_called(_comment: dict) -> bool:
-        raise AssertionError("trusted status comments must not require owner reaction lookup")
+        raise AssertionError(
+            "trusted status comments must not require owner reaction lookup"
+        )
 
     monkeypatch.setattr(policy, "_original_owner_acknowledged_comment", fail_if_called)
     item = comment(
@@ -103,7 +105,9 @@ def test_exempt_comments_are_removed_from_freshness_input(monkeypatch) -> None:
         return "freshness-result"
 
     monkeypatch.setattr(policy.core, "paged", fake_paged)
-    monkeypatch.setattr(policy, "_original_get_latest_invalidation_time", fake_freshness)
+    monkeypatch.setattr(
+        policy, "_original_get_latest_invalidation_time", fake_freshness
+    )
 
     result = policy.get_latest_invalidation_time_with_bot_exemptions(246, {})
 
@@ -131,7 +135,9 @@ def test_unknown_bot_comment_still_invalidates_freshness(monkeypatch) -> None:
         return "freshness-result"
 
     monkeypatch.setattr(policy.core, "paged", fake_paged)
-    monkeypatch.setattr(policy, "_original_get_latest_invalidation_time", fake_freshness)
+    monkeypatch.setattr(
+        policy, "_original_get_latest_invalidation_time", fake_freshness
+    )
 
     policy.get_latest_invalidation_time_with_bot_exemptions(246, {})
 
