@@ -544,6 +544,7 @@ def test_no_endless_pending_invariant(gh):
 # P1 REGRESSION TESTS (L - P)
 # ====================================================================================
 
+
 def test_p1_1_same_head_pr_edit_invalidates_old_governance_success(gh):
     """Test L: same-head PR edit invalidates old governance success.
     - HEAD SHA is unchanged.
@@ -809,6 +810,7 @@ def test_p1_1_stale_governance_and_stale_pending_recovery(gh):
 # ====================================================================================
 # PURE OWNER ACKNOWLEDGMENT REACTION REGRESSION TESTS (A - G)
 # ====================================================================================
+
 
 def test_pure_owner_acknowledgment_reaction_regression_a_g(gh):
     """Regression test suite for pure owner acknowledgment reactions.
