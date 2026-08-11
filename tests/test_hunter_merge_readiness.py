@@ -1275,3 +1275,180 @@ def test_scheduled_reconciliation_converges_on_owner_ack_without_fresh_governanc
     hunter_merge_readiness.evaluate(123, poll=False)
     assert gh.published[-1][1] == "success"
     assert "Ready to merge" in gh.published[-1][2]
+
+
+# ====================================================================================
+# WORKFLOW_DISPATCH ON-DEMAND RECONCILIATION TESTS
+# ====================================================================================
+
+
+def test_workflow_dispatch_performs_full_reconciliation_like_schedule(gh):
+    """workflow_dispatch must perform the same full, check-runs-based reconciliation
+    as schedule for a single PR, not the lightweight webhook "wait" shortcut, so an
+    operator can force an immediate accurate answer instead of waiting on the
+    schedule's real-world cadence.
+    """
+    hunter_merge_readiness.event_name = "workflow_dispatch"
+
+    gh.pulls[123] = {
+        "number": 123,
+        "state": "open",
+        "head": {"sha": "sha_123"},
+        "body": "Acceptance-criteria matrix:\n| Acceptance criterion | Status |\n| Wire up | PASS |\n- [x] `READY FOR REVIEW`",
+        "draft": False,
+        "user": {"login": "human"},
+        "updated_at": "2026-08-05T00:30:00Z",
+    }
+
+    gh.check_runs["sha_123"] = [
+        {
+            "name": "Hunter Governance Review",
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-08-05T00:50:00Z",
+            "id": 100,
+        },
+        {"name": "Quality Gates", "status": "completed", "conclusion": "success", "id": 101},
+        {"name": "dependency-review", "status": "completed", "conclusion": "success", "id": 102},
+        {"name": "CodeQL", "status": "completed", "conclusion": "success", "id": 103},
+    ]
+
+    gh.statuses["sha_123"] = [
+        {"context": "Hunter Governance Review", "state": "success", "created_at": "2026-08-05T01:00:00Z", "id": 1},
+        {"context": "Hunter Merge Readiness", "state": "pending", "description": "Waiting...", "id": 2},
+    ]
+
+    hunter_merge_readiness.evaluate(123, poll=False)
+
+    assert len(gh.published) > 0
+    assert gh.published[-1][1] == "success"
+    assert "Ready to merge" in gh.published[-1][2]
+
+
+def test_workflow_dispatch_waits_when_no_governance_run_exists(gh):
+    """workflow_dispatch must still correctly report a pending wait, rather than
+    fabricating success, when no Hunter Governance Review check run exists yet for
+    the current head SHA.
+    """
+    hunter_merge_readiness.event_name = "workflow_dispatch"
+
+    gh.pulls[123] = {
+        "number": 123,
+        "state": "open",
+        "head": {"sha": "sha_123"},
+        "body": "Acceptance-criteria matrix:\n| Acceptance criterion | Status |\n| Wire up | PASS |\n- [x] `READY FOR REVIEW`",
+        "draft": False,
+        "user": {"login": "human"},
+        "updated_at": "2026-08-05T00:30:00Z",
+    }
+    gh.check_runs["sha_123"] = []
+    gh.statuses["sha_123"] = []
+
+    hunter_merge_readiness.evaluate(123, poll=False)
+
+    assert len(gh.published) > 0
+    assert gh.published[-1][1] == "pending"
+    assert "Waiting for current Hunter Governance Review" in gh.published[-1][2]
+
+
+def test_issue_comment_event_still_uses_lightweight_shortcut(gh):
+    """Non-reconciliation events (e.g. issue_comment) must still use the lightweight
+    invalidate-and-wait shortcut rather than performing a full reconciliation; only
+    schedule and workflow_dispatch are reconciliation events. This guards against
+    accidentally broadening RECONCILIATION_EVENT_NAMES beyond its intended scope.
+    """
+    hunter_merge_readiness.event_name = "issue_comment"
+
+    gh.pulls[123] = {
+        "number": 123,
+        "state": "open",
+        "head": {"sha": "sha_123"},
+        "body": "Acceptance-criteria matrix:\n| Acceptance criterion | Status |\n| Wire up | PASS |\n- [x] `READY FOR REVIEW`",
+        "draft": False,
+        "user": {"login": "human"},
+        "updated_at": "2026-08-05T00:30:00Z",
+    }
+
+    # Checks are fully green, but issue_comment has no governance_started_at of its
+    # own and must not consume the check-runs state directly.
+    gh.check_runs["sha_123"] = [
+        {
+            "name": "Hunter Governance Review",
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-08-05T00:50:00Z",
+            "id": 100,
+        },
+        {"name": "Quality Gates", "status": "completed", "conclusion": "success", "id": 101},
+        {"name": "dependency-review", "status": "completed", "conclusion": "success", "id": 102},
+        {"name": "CodeQL", "status": "completed", "conclusion": "success", "id": 103},
+    ]
+    gh.statuses["sha_123"] = [
+        {"context": "Hunter Governance Review", "state": "success", "created_at": "2026-08-05T01:00:00Z", "id": 1},
+    ]
+
+    hunter_merge_readiness.evaluate(123, poll=False)
+
+    assert len(gh.published) > 0
+    assert gh.published[-1][1] == "pending"
+    assert "Waiting for current Hunter Governance Review" in gh.published[-1][2]
+
+
+def test_main_workflow_dispatch_evaluates_requested_pr(gh, tmp_path, monkeypatch):
+    """main() must read pr_number from the workflow_dispatch event payload's
+    `inputs` and evaluate exactly that PR with poll=False.
+    """
+    event_path = tmp_path / "event.json"
+    event_path.write_text('{"inputs": {"pr_number": "123"}}')
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_path))
+    monkeypatch.setenv("GH_REPO", "fafa33/Project-Hunter")
+    monkeypatch.setenv("GH_TOKEN", "fake-token")
+    monkeypatch.setenv("EVENT_NAME", "workflow_dispatch")
+    monkeypatch.setenv("RUN_URL", "https://github.com/fafa33/Project-Hunter/actions/runs/1")
+
+    gh.pulls[123] = {
+        "number": 123,
+        "state": "open",
+        "head": {"sha": "sha_123"},
+        "body": "Acceptance-criteria matrix:\n| Acceptance criterion | Status |\n| Wire up | PASS |\n- [x] `READY FOR REVIEW`",
+        "draft": False,
+        "user": {"login": "human"},
+        "updated_at": "2026-08-05T00:30:00Z",
+    }
+    gh.check_runs["sha_123"] = [
+        {
+            "name": "Hunter Governance Review",
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-08-05T00:50:00Z",
+            "id": 100,
+        },
+        {"name": "Quality Gates", "status": "completed", "conclusion": "success", "id": 101},
+        {"name": "dependency-review", "status": "completed", "conclusion": "success", "id": 102},
+        {"name": "CodeQL", "status": "completed", "conclusion": "success", "id": 103},
+    ]
+    gh.statuses["sha_123"] = [
+        {"context": "Hunter Governance Review", "state": "success", "created_at": "2026-08-05T01:00:00Z", "id": 1},
+    ]
+
+    hunter_merge_readiness.main()
+
+    assert len(gh.published) > 0
+    assert gh.published[-1][1] == "success"
+    assert "Ready to merge" in gh.published[-1][2]
+
+
+def test_main_workflow_dispatch_without_pr_number_exits(tmp_path, monkeypatch):
+    """main() must fail fast (not silently no-op) when workflow_dispatch fires
+    without the required pr_number input.
+    """
+    event_path = tmp_path / "event.json"
+    event_path.write_text('{"inputs": {}}')
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_path))
+    monkeypatch.setenv("GH_REPO", "fafa33/Project-Hunter")
+    monkeypatch.setenv("GH_TOKEN", "fake-token")
+    monkeypatch.setenv("EVENT_NAME", "workflow_dispatch")
+    monkeypatch.setenv("RUN_URL", "https://github.com/fafa33/Project-Hunter/actions/runs/1")
+
+    with pytest.raises(SystemExit):
+        hunter_merge_readiness.main()

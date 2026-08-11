@@ -14,6 +14,11 @@ name: Hunter Merge Readiness Controller
 #   until the owner removes/re-applies 👍 after the edit;
 # - bots, informational comments, dependency reports, and owner-authored comments
 #   receive no exemption.
+#
+# workflow_dispatch lets an operator force an immediate, full reconciliation for a
+# single PR (the same check-runs-based evaluation the periodic schedule performs),
+# instead of waiting on the schedule's real-world cadence or re-running a webhook-
+# triggered run that only performs the lightweight invalidate-and-wait shortcut.
 
 on:
   pull_request_target:
@@ -52,6 +57,12 @@ on:
   # observable without requiring a dummy PR edit/comment to wake the gate.
   schedule:
     - cron: "*/5 * * * *"
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "Pull request number to force a full reconciliation for"
+        required: true
+        type: number
 
 permissions:
   actions: read
@@ -62,7 +73,7 @@ permissions:
   statuses: write
 
 concurrency:
-  group: hunter-merge-readiness-${{ github.event.pull_request.number || github.event.issue.number || github.event.workflow_run.pull_requests[0].number || github.run_id }}
+  group: hunter-merge-readiness-${{ github.event.pull_request.number || github.event.issue.number || github.event.workflow_run.pull_requests[0].number || github.event.inputs.pr_number || github.run_id }}
   cancel-in-progress: true
 
 jobs:
