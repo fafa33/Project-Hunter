@@ -1,4 +1,4 @@
-name: Hunter PR Readiness Guard
+name: Hunter / PR Readiness Guard
 
 # Deterministic safety guard for the Draft -> Ready for Review transition.
 #

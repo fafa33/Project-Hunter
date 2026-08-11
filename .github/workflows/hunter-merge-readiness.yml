@@ -1,4 +1,4 @@
-name: Hunter Merge Readiness Controller
+name: Hunter / Merge Readiness
 
 # Publishes the single user-facing `Hunter Merge Readiness` commit status.
 #
