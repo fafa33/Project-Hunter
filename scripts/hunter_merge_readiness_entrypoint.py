@@ -2,7 +2,7 @@
 
 This module keeps the core readiness controller fail-closed while exempting only
 structurally identifiable, repository-generated status/advisory comments from the
-owner-acknowledgment requirement.
+owner-acknowledgment requirement and governance-freshness invalidation.
 """
 
 import hunter_merge_readiness as core
@@ -25,6 +25,7 @@ def is_exempt_status_comment(comment: dict) -> bool:
 
 
 _original_owner_acknowledged_comment = core.owner_acknowledged_comment
+_original_get_latest_invalidation_time = core.get_latest_invalidation_time
 
 
 def owner_acknowledged_comment_with_bot_exemptions(comment: dict) -> bool:
@@ -33,8 +34,33 @@ def owner_acknowledged_comment_with_bot_exemptions(comment: dict) -> bool:
     return _original_owner_acknowledged_comment(comment)
 
 
+def get_latest_invalidation_time_with_bot_exemptions(pr_number: int, pr: dict):
+    """Ignore trusted advisory comments when calculating governance freshness.
+
+    The core freshness function remains authoritative for PR updates, human/unknown
+    top-level comments, reviews, and inline review comments. We only filter the
+    known trusted advisory comments from the one top-level comment collection it
+    consumes, then restore the original paging function even if evaluation fails.
+    """
+    original_paged = core.paged
+    top_level_comments_path = f"issues/{pr_number}/comments"
+
+    def paged_with_bot_exemptions(path: str):
+        items = original_paged(path)
+        if path.split("?", 1)[0] == top_level_comments_path:
+            return [item for item in items if not is_exempt_status_comment(item)]
+        return items
+
+    core.paged = paged_with_bot_exemptions
+    try:
+        return _original_get_latest_invalidation_time(pr_number, pr)
+    finally:
+        core.paged = original_paged
+
+
 def main() -> None:
     core.owner_acknowledged_comment = owner_acknowledged_comment_with_bot_exemptions
+    core.get_latest_invalidation_time = get_latest_invalidation_time_with_bot_exemptions
     core.main()
 
 
