@@ -6,6 +6,8 @@ import urllib.request
 from datetime import UTC, datetime
 from typing import Any
 
+import hunter_controller_admission as admission
+
 # Configuration
 context = "Hunter Merge Readiness"
 governance_context = "Hunter Governance Review"
@@ -576,6 +578,12 @@ def evaluate(
         publish(sha, "pending", "Waiting for current Hunter Governance Review.")
         return
 
+    # Detected once per evaluation, not per poll attempt: the PR's changed-file
+    # set cannot meaningfully change within a single evaluate() invocation, so
+    # re-checking it on every one of up to 45 poll iterations would only add
+    # redundant API calls.
+    is_upgrade_candidate = admission.is_controller_upgrade_candidate(pr_number)
+
     attempts = 45 if poll else 1
     for attempt in range(1, attempts + 1):
         runs = all_check_runs(sha)
@@ -601,19 +609,36 @@ def evaluate(
             publish(sha, "failure", "Current Governance Review run has no trustworthy start time.")
             return
 
-        # P1-1: Reject governance runs that started before the latest invalidation.
-        # This prevents accepting stale same-SHA governance after feedback/body changes.
-        invalidation_time = get_latest_invalidation_time(pr_number, pr)
-        if governance_started_at < invalidation_time:
-            print(
-                f"Rejecting governance run from {governance_started_at.isoformat()} because it is older than latest invalidation time {invalidation_time.isoformat()}"
-            )
-            publish(
-                sha,
-                "pending",
-                f"Waiting for a fresh Hunter Governance Review (last run was older than latest invalidation at {invalidation_time.isoformat()}).",
-            )
-            return
+        # Controller-upgrade admission: a PR that touches controller-owned
+        # files (see hunter_controller_admission.CONTROLLER_OWNED_PATHS) is
+        # independently re-verified with fresh, uncached evidence instead of
+        # the ordinary steady-state invalidation-time comparison below. This
+        # is a strict superset of the ordinary gates (same required checks,
+        # same Governance freshness primitive, same feedback checks, plus an
+        # exact-head re-fetch) -- never a relaxation. It exists so a PR that
+        # upgrades this very controller can still be safely evaluated and
+        # merged without executing any of that PR's own (untrusted, not-yet-
+        # resident) code. See hunter_controller_admission.py for the full
+        # trust-boundary rationale and its documented bootstrap limitation.
+        if is_upgrade_candidate:
+            result = admission.evaluate_admission(pr_number, pr, sha, runs, governance_started_at)
+            if not result.admitted:
+                publish(sha, "pending", f"Controller-upgrade admission pending: {result.reason}")
+                return
+        else:
+            # P1-1: Reject governance runs that started before the latest invalidation.
+            # This prevents accepting stale same-SHA governance after feedback/body changes.
+            invalidation_time = get_latest_invalidation_time(pr_number, pr)
+            if governance_started_at < invalidation_time:
+                print(
+                    f"Rejecting governance run from {governance_started_at.isoformat()} because it is older than latest invalidation time {invalidation_time.isoformat()}"
+                )
+                publish(
+                    sha,
+                    "pending",
+                    f"Waiting for a fresh Hunter Governance Review (last run was older than latest invalidation at {invalidation_time.isoformat()}).",
+                )
+                return
 
         missing, pending, failed, succeeded = [], [], [], []
         for name in required_checks:
@@ -658,10 +683,16 @@ def evaluate(
                     "(concurrent semantic invalidation detected while confirming readiness).",
                 )
                 return
+            success_description = "Ready to merge: fresh checks passed and every PR comment is resolved/acknowledged."
+            if is_upgrade_candidate:
+                success_description = (
+                    "Ready to merge: controller-upgrade PR admitted by the current trusted generation. "
+                    + success_description
+                )
             publish(
                 sha,
                 "success",
-                "Ready to merge: fresh checks passed and every PR comment is resolved/acknowledged.",
+                success_description,
             )
             return
 

@@ -1665,6 +1665,48 @@ def test_release_pr_lock_tolerates_missing_ref():
         hunter_merge_readiness.release_pr_lock("refs/hunter-merge-readiness-locks/pr-123")
 
 
+def test_human_comment_after_governance_stales_governance_freshness(gh):
+    """A human top-level comment posted after Governance ran must stale
+    Governance freshness itself (not merely block on acknowledgment) -- an
+    owner +1 on the same comment resolves the acknowledgment blocker but a
+    fresh Governance Review is still required first.
+    """
+    hunter_merge_readiness.event_name = "schedule"
+
+    gh.pulls[123] = _fully_green_pr(updated_at="2026-08-05T00:30:00Z")
+    gh.check_runs["sha_123"] = _fully_green_check_runs(governance_started_at="2026-08-05T00:50:00Z")
+    gh.statuses["sha_123"] = [
+        {"context": "Hunter Governance Review", "state": "success", "created_at": "2026-08-05T01:00:00Z", "id": 1},
+        {"context": "Hunter Merge Readiness", "state": "pending", "description": "Waiting...", "id": 2},
+    ]
+    # Comment posted after governance started (00:50) and after its status
+    # was recorded (01:00) -- a real, later human comment. Owner acknowledges
+    # it (satisfying the separate feedback/acknowledgment gate) so this test
+    # isolates the freshness gate specifically: acknowledgment resolves the
+    # comment-blocking failure, but the comment's own timestamp still
+    # participates in governance-freshness computation regardless.
+    gh.comments[123] = [
+        {
+            "id": 999,
+            "body": "This changes the approach, please reconsider.",
+            "created_at": "2026-08-05T01:15:00Z",
+            "updated_at": "2026-08-05T01:15:00Z",
+        }
+    ]
+    gh.reactions[999] = [
+        {
+            "user": {"login": "fafa33"},
+            "content": "+1",
+            "created_at": "2026-08-05T01:20:00Z",
+        }
+    ]
+
+    hunter_merge_readiness.evaluate(123, poll=False)
+
+    assert gh.published[-1][1] == "pending"
+    assert "Waiting for a fresh Hunter Governance Review" in gh.published[-1][2]
+
+
 def test_lock_ref_is_not_under_refs_heads():
     """The reconciliation lock ref must NOT live under refs/heads/ (a branch)
     or refs/tags/. Creating/deleting a refs/heads/* ref is a `push`/`create`

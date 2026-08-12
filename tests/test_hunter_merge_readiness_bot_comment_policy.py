@@ -263,6 +263,45 @@ def test_migration_post_migration_real_edit_stales_governance(monkeypatch) -> No
     assert result == datetime(2026, 8, 12, 9, 30, tzinfo=UTC)
 
 
+def test_title_only_edit_is_treated_as_a_semantic_action(monkeypatch) -> None:
+    """A title-only edit fires the same GitHub `edited` PR action as a body
+    edit (GitHub does not distinguish which field changed at the action
+    level) and must stale governance identically -- there is no separate
+    'title edit' action to special-case, and none should be invented.
+    """
+    calls = []
+
+    def fake_acquire(pr_number, sha):
+        return "refs/hunter-merge-readiness-locks/pr-249"
+
+    def fake_release(lock_ref):
+        pass
+
+    monkeypatch.setattr(policy.core, "event_name", "pull_request_target")
+    monkeypatch.setattr(policy.core, "run_url", "https://example.invalid/run")
+    monkeypatch.setattr(
+        policy.core,
+        "request_json",
+        lambda method, path, payload: calls.append((method, path, payload)),
+    )
+    monkeypatch.setattr(policy.core, "acquire_pr_lock", fake_acquire)
+    monkeypatch.setattr(policy.core, "release_pr_lock", fake_release)
+
+    # GitHub's real payload for a title-only edit is
+    # {"action": "edited", "changes": {"title": {"from": "..."}}, ...} --
+    # no "body" key in "changes" at all.
+    policy.record_semantic_pr_invalidation(
+        {
+            "action": "edited",
+            "changes": {"title": {"from": "old title"}},
+            "pull_request": {"number": 249, "head": {"sha": "abcdef123456"}},
+        }
+    )
+
+    assert len(calls) == 1
+    assert "edited" in calls[0][2]["description"]
+
+
 def test_semantic_edit_event_persists_invalidation_status(monkeypatch) -> None:
     calls = []
     lock_calls = []
