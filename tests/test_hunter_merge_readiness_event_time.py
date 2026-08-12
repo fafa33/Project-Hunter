@@ -68,6 +68,146 @@ def test_latest_semantic_invalidation_time_uses_maximum_effective_marker_time(mo
     assert result == datetime(2026, 8, 12, 11, 37, 2, tzinfo=UTC)
 
 
+def test_latest_semantic_invalidation_time_returns_max_in_normal_persistence_order(monkeypatch) -> None:
+    """Markers persisted in the same order as their semantic event times (the
+    common case, no out-of-order rerun) must still resolve to the maximum
+    (i.e. most recent) effective time.
+    """
+    statuses = [
+        {
+            "id": 100,
+            "context": policy.INVALIDATION_CONTEXT,
+            "description": "Semantic PR invalidation recorded: synchronize; event_time=2026-08-12T11:30:00Z",
+            "created_at": "2026-08-12T11:30:05Z",
+        },
+        {
+            "id": 200,
+            "context": policy.INVALIDATION_CONTEXT,
+            "description": "Semantic PR invalidation recorded: edited; event_time=2026-08-12T11:40:00Z",
+            "created_at": "2026-08-12T11:40:05Z",
+        },
+    ]
+    monkeypatch.setattr(policy.core, "paged", lambda _path: statuses)
+
+    result = policy.latest_semantic_invalidation_time({"head": {"sha": "abcdef123456"}})
+
+    assert result == datetime(2026, 8, 12, 11, 40, 0, tzinfo=UTC)
+
+
+def test_latest_semantic_invalidation_time_max_includes_legacy_marker(monkeypatch) -> None:
+    """A legacy marker (no encoded event_time, created_at fallback only) must
+    still participate correctly in the monotonic maximum when mixed with
+    event-time-encoded markers, on either side of the comparison.
+    """
+    statuses = [
+        {
+            "id": 100,
+            "context": policy.INVALIDATION_CONTEXT,
+            "description": "Semantic PR invalidation recorded: edited",  # legacy, no event_time
+            "created_at": "2026-08-12T11:50:00Z",
+        },
+        {
+            "id": 200,
+            "context": policy.INVALIDATION_CONTEXT,
+            "description": "Semantic PR invalidation recorded: synchronize; event_time=2026-08-12T11:30:00Z",
+            "created_at": "2026-08-12T11:30:05Z",
+        },
+    ]
+    monkeypatch.setattr(policy.core, "paged", lambda _path: statuses)
+
+    result = policy.latest_semantic_invalidation_time({"head": {"sha": "abcdef123456"}})
+
+    # The legacy marker's created_at (11:50:00) is later than the other
+    # marker's event_time (11:30:00), so it must win the max().
+    assert result == datetime(2026, 8, 12, 11, 50, 0, tzinfo=UTC)
+
+
+def test_latest_semantic_invalidation_time_max_includes_migration_backfill_marker(monkeypatch) -> None:
+    """A migration backfill marker's encoded historical baseline must
+    correctly participate in the monotonic maximum alongside real markers.
+    """
+    statuses = [
+        {
+            "id": 50,
+            "context": policy.INVALIDATION_CONTEXT,
+            "description": "Migration backfill baseline (raw updated_at): 2026-08-12T12:00:00Z",
+            "created_at": "2026-08-12T12:00:01Z",
+        },
+        {
+            "id": 100,
+            "context": policy.INVALIDATION_CONTEXT,
+            "description": "Semantic PR invalidation recorded: synchronize; event_time=2026-08-12T11:30:00Z",
+            "created_at": "2026-08-12T11:30:05Z",
+        },
+    ]
+    monkeypatch.setattr(policy.core, "paged", lambda _path: statuses)
+
+    result = policy.latest_semantic_invalidation_time({"head": {"sha": "abcdef123456"}})
+
+    # The backfill baseline (12:00:00) is later than the real event's
+    # event_time (11:30:00), so the backfill marker must win the max().
+    assert result == datetime(2026, 8, 12, 12, 0, 0, tzinfo=UTC)
+
+
+def test_latest_semantic_invalidation_time_walks_multiple_pages(monkeypatch) -> None:
+    """The maximum must be found even when the invalidation-context status
+    lives on a later page than the first 100 statuses -- this exercises real
+    pagination via core.paged/request_json, not a canned status list.
+    """
+    older_unrelated = [
+        {"id": i, "context": "Some Other Status", "description": "", "created_at": "2026-08-12T00:00:00Z"}
+        for i in range(100)
+    ]
+    second_page = [
+        {
+            "id": 500,
+            "context": policy.INVALIDATION_CONTEXT,
+            "description": "Semantic PR invalidation recorded: synchronize; event_time=2026-08-12T11:30:00Z",
+            "created_at": "2026-08-12T11:30:05Z",
+        },
+        {
+            "id": 501,
+            "context": policy.INVALIDATION_CONTEXT,
+            "description": "Semantic PR invalidation recorded: edited; event_time=2026-08-12T11:45:00Z",
+            "created_at": "2026-08-12T11:45:05Z",
+        },
+    ]
+
+    def fake_request_json(method, path):
+        assert method == "GET"
+        # "page=1"/"page=2" would also match inside "per_page=100"; disambiguate
+        # with the leading "&" that only precedes the real page parameter.
+        if path.endswith("&page=1"):
+            return older_unrelated
+        if path.endswith("&page=2"):
+            return second_page
+        raise AssertionError(f"unexpected page request: {path}")
+
+    monkeypatch.setattr(policy.core, "request_json", fake_request_json)
+
+    result = policy.latest_semantic_invalidation_time({"head": {"sha": "abcdef123456"}})
+
+    assert result == datetime(2026, 8, 12, 11, 45, 0, tzinfo=UTC)
+
+
+def test_marker_with_malformed_event_time_falls_back_conservatively_not_silently() -> None:
+    """A marker whose event_time cannot be parsed must not be silently
+    dropped from consideration (which would under-count staleness) -- it
+    must fall back to created_at, the server-assigned persistence time,
+    which is always >= the true semantic event time and therefore only ever
+    makes the marker MORE conservative (more likely to correctly stale an
+    old Governance run), never less.
+    """
+    marker = {
+        "description": "Semantic PR invalidation recorded: edited; event_time=not-a-real-timestamp",
+        "created_at": "2026-08-12T11:36:46Z",
+    }
+
+    result = policy._marker_effective_time(marker)
+
+    assert result == datetime(2026, 8, 12, 11, 36, 46, tzinfo=UTC)
+
+
 def test_latest_semantic_invalidation_time_ignores_unrelated_status_contexts(monkeypatch) -> None:
     statuses = [
         {

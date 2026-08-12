@@ -107,7 +107,7 @@ def latest_semantic_invalidation_time(pr: dict) -> datetime | None:
     if not sha:
         return None
 
-    statuses = core.paged(f"commits/{sha}/statuses")
+    statuses = core.all_commit_statuses(sha)
     effective_times = []
     for status in statuses:
         if not isinstance(status, dict) or status.get("context") != INVALIDATION_CONTEXT:
