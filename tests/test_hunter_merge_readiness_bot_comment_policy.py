@@ -49,9 +49,7 @@ def test_non_exempt_comment_delegates_to_existing_owner_ack(monkeypatch) -> None
         seen.append(value)
         return True
 
-    monkeypatch.setattr(
-        policy, "_original_owner_acknowledged_comment", fake_owner_ack
-    )
+    monkeypatch.setattr(policy, "_original_owner_acknowledged_comment", fake_owner_ack)
     item = comment("reviewer", "Human feedback")
     assert policy.owner_acknowledged_comment_with_bot_exemptions(item)
     assert seen == [item]
@@ -61,9 +59,7 @@ def test_exempt_comment_does_not_consume_reaction_lookup(monkeypatch) -> None:
     def fail_if_called(_value: dict) -> bool:
         raise AssertionError("trusted status comment consumed reaction lookup")
 
-    monkeypatch.setattr(
-        policy, "_original_owner_acknowledged_comment", fail_if_called
-    )
+    monkeypatch.setattr(policy, "_original_owner_acknowledged_comment", fail_if_called)
     item = comment(LOGIN, DRAFT_BODY)
     assert policy.owner_acknowledged_comment_with_bot_exemptions(item)
 
@@ -169,11 +165,7 @@ def test_semantic_edit_event_persists_invalidation_status(monkeypatch) -> None:
 def test_nonsemantic_review_request_does_not_persist_invalidation(monkeypatch) -> None:
     calls = []
     monkeypatch.setattr(policy.core, "event_name", "pull_request_target")
-    monkeypatch.setattr(
-        policy.core,
-        "request_json",
-        lambda *args: calls.append(args),
-    )
+    monkeypatch.setattr(policy.core, "request_json", lambda *args: calls.append(args))
 
     policy.record_semantic_pr_invalidation(
         {
