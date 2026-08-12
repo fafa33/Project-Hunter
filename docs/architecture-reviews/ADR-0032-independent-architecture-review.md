@@ -69,6 +69,14 @@ No Class C or Class D findings were identified.
 - Required action: the acceptance contribution must update lifecycle/status wording and registries without changing the reviewed architecture substance.
 - Blocks ADR: NO.
 
+## Final Findings Matrix
+
+| Finding | Evidence | Location | Category | Severity | Decision impact | Consequence if ignored | Required action | Blocks ADR |
+|---|---|---|---|---|---|---|---|---|
+| F-001 | ADR 0032 is still `Proposed`; ADPR-0007 is still `READY_FOR_REVIEW` and records independent review as pending | ADR 0032 status/non-goals/implementation-status wording; ADPR-0007 metadata and traceability | Lifecycle / traceability | Class A | None; no architectural option, authority boundary, evidence rule, replay rule, persistence rule, or migration conclusion changes | Acceptance-state registries and prose would contradict the actual lifecycle outcome | In the separate acceptance contribution, update ADR 0032 to `Accepted`, mark ADPR-0007 `APPROVED`, and synchronize lifecycle registries/traceability without changing reviewed architecture substance | NO |
+
+Final matrix summary: 1 Class A finding; 0 Class B; 0 Class C; 0 Class D; 0 ADR-blocking findings.
+
 ## Materiality Assessment
 
 F-001 is purely a lifecycle synchronization requirement created by moving from review to acceptance. It does not change option viability, authority, evidence, replay, persistence, migration, or the architectural conclusion.
