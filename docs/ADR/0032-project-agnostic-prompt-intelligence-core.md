@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed.
+Accepted.
 
 ## Date
 
@@ -11,6 +11,8 @@ Proposed.
 ## Governing Preparation
 
 [ADPR-0007](../architecture-records/ADPR-0007-project-agnostic-prompt-intelligence-core.md), created under Issue #237.
+
+Independent architecture review: [ADR-0032 independent architecture review](../architecture-reviews/ADR-0032-independent-architecture-review.md), merged through PR #248 with verdict `READY_FOR_ADR`.
 
 ## Context
 
@@ -209,7 +211,7 @@ This ADR does not:
 - define generic memory architecture;
 - define generic retrieval infrastructure;
 - require immediate standalone repository creation;
-- authorize runtime implementation merely by being Proposed.
+- authorize runtime implementation merely by being Accepted.
 
 ## Consequences
 
@@ -244,6 +246,6 @@ Rejected because no stable admitted shared contract set exists. Reconsider after
 
 ## Implementation Status
 
-Not implemented or authorized by this Proposed ADR.
+Architecture accepted; runtime implementation is not yet authorized by this acceptance contribution.
 
 No Hunter contract is promoted into shared ownership by this text alone. Concrete admissions, runtime behavior, provider/model integration, and external-project adapters require their own evidence and governed implementation steps.
