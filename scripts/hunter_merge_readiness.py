@@ -80,7 +80,13 @@ def request_json(method: str, path: str, payload: dict[str, Any] | None = None) 
     )
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
-            return json.loads(response.read().decode("utf-8"))
+            # A successful DELETE (e.g. releasing the per-PR lock ref) returns
+            # 204 No Content with an empty body; json.loads("") raises, so an
+            # empty body must be treated as "no JSON payload", not an error.
+            raw_body = response.read().decode("utf-8")
+            if not raw_body:
+                return None
+            return json.loads(raw_body)
     except urllib.error.HTTPError as exc:
         try:
             body = exc.read().decode("utf-8")
