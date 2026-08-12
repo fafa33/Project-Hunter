@@ -45,6 +45,51 @@ def test_later_semantic_event_stales_older_governance() -> None:
     assert governance_started < invalidation_time
 
 
+def test_latest_semantic_invalidation_time_uses_maximum_effective_marker_time(monkeypatch) -> None:
+    """A late rerun of an older lifecycle event must never move the boundary backward."""
+    statuses = [
+        {
+            "id": 300,
+            "context": policy.INVALIDATION_CONTEXT,
+            "description": "Semantic PR invalidation recorded: synchronize; event_time=2026-08-12T11:36:33Z",
+            "created_at": "2026-08-12T11:40:00Z",
+        },
+        {
+            "id": 200,
+            "context": policy.INVALIDATION_CONTEXT,
+            "description": "Semantic PR invalidation recorded: edited; event_time=2026-08-12T11:37:02Z",
+            "created_at": "2026-08-12T11:37:05Z",
+        },
+    ]
+    monkeypatch.setattr(policy.core, "paged", lambda _path: statuses)
+
+    result = policy.latest_semantic_invalidation_time({"head": {"sha": "abcdef123456"}})
+
+    assert result == datetime(2026, 8, 12, 11, 37, 2, tzinfo=UTC)
+
+
+def test_latest_semantic_invalidation_time_ignores_unrelated_status_contexts(monkeypatch) -> None:
+    statuses = [
+        {
+            "id": 400,
+            "context": "Some Other Status",
+            "description": "event_time=2026-08-12T12:00:00Z",
+            "created_at": "2026-08-12T12:00:01Z",
+        },
+        {
+            "id": 300,
+            "context": policy.INVALIDATION_CONTEXT,
+            "description": "Semantic PR invalidation recorded: edited; event_time=2026-08-12T11:37:02Z",
+            "created_at": "2026-08-12T11:37:05Z",
+        },
+    ]
+    monkeypatch.setattr(policy.core, "paged", lambda _path: statuses)
+
+    result = policy.latest_semantic_invalidation_time({"head": {"sha": "abcdef123456"}})
+
+    assert result == datetime(2026, 8, 12, 11, 37, 2, tzinfo=UTC)
+
+
 def test_record_semantic_invalidation_persists_github_event_time(monkeypatch) -> None:
     calls = []
 
