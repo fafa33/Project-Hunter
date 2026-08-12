@@ -115,7 +115,10 @@ class EvidencePreModelPersistenceRepository:
                 (build_record_id,),
             ).fetchone()
             if existing is not None:
-                if str(existing["payload_hash"]) != payload_hash or str(existing["payload_json"]) != payload_json:
+                if (
+                    str(existing["payload_hash"]) != payload_hash
+                    or str(existing["payload_json"]) != payload_json
+                ):
                     raise PreModelPersistenceConflict(
                         f"conflicting payload for existing pre-model build {build_record_id}"
                     )
@@ -191,7 +194,11 @@ class EvidencePreModelPersistenceRepository:
 
         build = bundle.build_result.build_record
         artifact = bundle.build_result.prompt_artifact
-        if build.reconstruction_outcome != "AVAILABLE" or artifact is None or not artifact.content:
+        if (
+            build.reconstruction_outcome != "AVAILABLE"
+            or artifact is None
+            or not artifact.content
+        ):
             reason = next(
                 (
                     code
@@ -239,23 +246,35 @@ def _bundle_payload(bundle: PersistedEvidencePreModelBundle) -> dict[str, Any]:
         "policy": _jsonable(asdict(bundle.policy)),
         "specification": _jsonable(asdict(bundle.specification)),
         "capability": _jsonable(asdict(bundle.capability)),
-        "canonical_inventory": [_jsonable(asdict(span)) for span in bundle.canonical_inventory],
+        "canonical_inventory": [
+            _jsonable(asdict(span)) for span in bundle.canonical_inventory
+        ],
         "build_result": {
             "ledger": _jsonable(asdict(bundle.build_result.ledger)),
             "allocation": _jsonable(asdict(bundle.build_result.allocation)),
-            "package": _jsonable(asdict(bundle.build_result.package)) if bundle.build_result.package else None,
-            "prompt_plan": _jsonable(asdict(bundle.build_result.prompt_plan))
-            if bundle.build_result.prompt_plan
-            else None,
-            "prompt_artifact": _jsonable(asdict(bundle.build_result.prompt_artifact))
-            if bundle.build_result.prompt_artifact
-            else None,
+            "package": (
+                _jsonable(asdict(bundle.build_result.package))
+                if bundle.build_result.package
+                else None
+            ),
+            "prompt_plan": (
+                _jsonable(asdict(bundle.build_result.prompt_plan))
+                if bundle.build_result.prompt_plan
+                else None
+            ),
+            "prompt_artifact": (
+                _jsonable(asdict(bundle.build_result.prompt_artifact))
+                if bundle.build_result.prompt_artifact
+                else None
+            ),
             "build_record": _jsonable(asdict(bundle.build_result.build_record)),
         },
     }
 
 
-def _bundle_from_payload(payload: dict[str, Any], *, recorded_at: datetime) -> PersistedEvidencePreModelBundle:
+def _bundle_from_payload(
+    payload: dict[str, Any], *, recorded_at: datetime
+) -> PersistedEvidencePreModelBundle:
     intent_payload = dict(payload["intent"])
     cutoff = intent_payload.get("historical_cutoff")
     intent_payload["historical_cutoff"] = _parse_time(cutoff) if cutoff else None
@@ -268,16 +287,24 @@ def _bundle_from_payload(payload: dict[str, Any], *, recorded_at: datetime) -> P
 
     specification = EvidencePromptSpecification(**dict(payload["specification"]))
     capability = EvidenceCapabilityConstraint(**dict(payload["capability"]))
-    inventory = tuple(_span_from_payload(item) for item in payload["canonical_inventory"])
+    inventory = tuple(
+        _span_from_payload(item) for item in payload["canonical_inventory"]
+    )
 
     result_payload = dict(payload["build_result"])
     ledger_payload = dict(result_payload["ledger"])
-    ledger_payload["decisions"] = tuple(EvidenceContextDecision(**item) for item in ledger_payload["decisions"])
+    ledger_payload["decisions"] = tuple(
+        EvidenceContextDecision(**item) for item in ledger_payload["decisions"]
+    )
     ledger = EvidenceContextSelectionLedger(**ledger_payload)
 
     allocation_payload = dict(result_payload["allocation"])
-    allocation_payload["included_span_ids"] = tuple(allocation_payload["included_span_ids"])
-    allocation_payload["budget_excluded_span_ids"] = tuple(allocation_payload["budget_excluded_span_ids"])
+    allocation_payload["included_span_ids"] = tuple(
+        allocation_payload["included_span_ids"]
+    )
+    allocation_payload["budget_excluded_span_ids"] = tuple(
+        allocation_payload["budget_excluded_span_ids"]
+    )
     allocation_payload["reason_codes"] = tuple(allocation_payload["reason_codes"])
     allocation = EvidenceContextAllocationResult(**allocation_payload)
 
@@ -286,18 +313,26 @@ def _bundle_from_payload(payload: dict[str, Any], *, recorded_at: datetime) -> P
     if package_payload is not None:
         package_dict = dict(package_payload)
         package_dict["ordered_span_ids"] = tuple(package_dict["ordered_span_ids"])
-        package_dict["ordered_content_hashes"] = tuple(package_dict["ordered_content_hashes"])
+        package_dict["ordered_content_hashes"] = tuple(
+            package_dict["ordered_content_hashes"]
+        )
         package = EvidenceContextPackage(**package_dict)
 
     plan_payload = result_payload.get("prompt_plan")
     prompt_plan = None
     if plan_payload is not None:
         plan_dict = dict(plan_payload)
-        plan_dict["missingness_reason_codes"] = tuple(plan_dict["missingness_reason_codes"])
+        plan_dict["missingness_reason_codes"] = tuple(
+            plan_dict["missingness_reason_codes"]
+        )
         prompt_plan = EvidencePromptPlan(**plan_dict)
 
     artifact_payload = result_payload.get("prompt_artifact")
-    prompt_artifact = EvidencePromptArtifact(**dict(artifact_payload)) if artifact_payload is not None else None
+    prompt_artifact = (
+        EvidencePromptArtifact(**dict(artifact_payload))
+        if artifact_payload is not None
+        else None
+    )
 
     build_payload = dict(result_payload["build_record"])
     build_payload["reason_codes"] = tuple(build_payload["reason_codes"])
@@ -339,7 +374,9 @@ def _validate_prompt_artifact(artifact: EvidencePromptArtifact | None) -> None:
 
 
 def _canonical_json(value: object) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return json.dumps(
+        value, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    )
 
 
 def _jsonable(value: Any) -> Any:
