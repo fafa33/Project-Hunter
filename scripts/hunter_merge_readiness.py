@@ -6,6 +6,8 @@ import urllib.request
 from datetime import UTC, datetime
 from typing import Any
 
+import hunter_controller_admission as admission
+
 # Configuration
 context = "Hunter Merge Readiness"
 governance_context = "Hunter Governance Review"
@@ -16,6 +18,31 @@ hard_failures = {"failure", "timed_out", "action_required", "startup_failure"}
 # the periodic self-healing sweep; `workflow_dispatch` is an operator-triggered
 # on-demand equivalent for a single PR (see hunter-merge-readiness.yml).
 RECONCILIATION_EVENT_NAMES = {"schedule", "workflow_dispatch"}
+
+# Per-PR reconciliation lock. GitHub's Statuses/Comments/Issues APIs offer no
+# atomic compare-and-swap primitive, so this uses the one GitHub REST endpoint
+# that does: git ref creation fails (422) if the ref already exists. This is
+# the only mechanism in this module that can give a true mutual-exclusion
+# guarantee between a concurrent scheduled sweep and a real semantic PR edit
+# for the same PR, since GitHub Actions `concurrency:` groups cannot express a
+# per-PR key from inside a single schedule-triggered run that loops over many
+# PRs (see hunter-merge-readiness.yml).
+#
+# Deliberately NOT under refs/heads/: a refs/heads/* ref is a branch, and
+# creating one fires a `push` webhook event -- this repository's
+# hunter-pre-pr-preflight.yml triggers on `push: branches-ignore: [main]`,
+# so a lock ref living under refs/heads/ would recursively spawn a full
+# Preflight CI run on every single lock acquisition. A custom top-level ref
+# namespace (refs/hunter-merge-readiness-locks/*) is a fully supported use of
+# the Git References API, gives the identical atomic create-conflict (422)
+# semantics, never triggers `push`/`create` events, is exempt from branch
+# protection, and does not clutter the repository's branch list.
+LOCK_REF_NAMESPACE = "refs/hunter-merge-readiness-locks/pr-"
+LOCK_ACQUIRE_ATTEMPTS = 5
+LOCK_BASE_DELAY_SECONDS = 1.0
+RETRY_ATTEMPTS = 4
+RETRY_BASE_DELAY_SECONDS = 1.0
+
 
 # Global state to allow test mocking
 repo: str = ""
@@ -356,6 +383,144 @@ def get_latest_invalidation_time(pr_number: int, pr: dict[str, Any]) -> datetime
     return max(timestamps)
 
 
+def _is_transient_http_error(exc: BaseException) -> bool:
+    """Transient: worth retrying. Anything else (4xx other than 429, malformed
+    request, auth failure) is permanent and must propagate immediately.
+    """
+    if isinstance(exc, urllib.error.HTTPError):
+        return exc.code >= 500 or exc.code == 429
+    return isinstance(exc, (urllib.error.URLError, TimeoutError, ConnectionError))
+
+
+def retry_transient(
+    operation, *, attempts: int = RETRY_ATTEMPTS, base_delay: float = RETRY_BASE_DELAY_SECONDS, sleep_fn=time.sleep
+):
+    """Calls operation() with bounded exponential backoff on transient failures.
+
+    Non-transient exceptions propagate immediately without retry. After the
+    final attempt, the last transient exception propagates too -- callers
+    must treat that as a hard, fail-closed failure, not a silent no-op.
+    """
+    last_exc: BaseException | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            return operation()
+        except Exception as exc:
+            if not _is_transient_http_error(exc):
+                raise
+            last_exc = exc
+            if attempt == attempts:
+                break
+            delay = base_delay * (2 ** (attempt - 1))
+            print(
+                f"Transient error on attempt {attempt}/{attempts}: {type(exc).__name__}: {exc}; retrying in {delay:.1f}s"
+            )
+            sleep_fn(delay)
+    assert last_exc is not None
+    raise last_exc
+
+
+def acquire_pr_lock(
+    pr_number: int,
+    sha: str,
+    *,
+    attempts: int = LOCK_ACQUIRE_ATTEMPTS,
+    base_delay: float = LOCK_BASE_DELAY_SECONDS,
+    sleep_fn=time.sleep,
+) -> str | None:
+    """Attempts to atomically acquire a per-PR reconciliation lock.
+
+    Returns the acquired lock ref name, or None if acquisition could not be
+    completed. Callers MUST treat None as fail-closed: do not proceed with an
+    irreversible success publish or a semantic invalidation write.
+
+    Bounded retry with backoff on contention. If still contended after the
+    full budget, the existing lock is treated as abandoned (e.g. a crashed
+    run that never reached its `finally` release) and is force-cleared once,
+    then acquisition is retried a final time -- this bounds how long a single
+    stuck lock can block this PR's reconciliation without ever allowing two
+    holders to believe they both hold the lock at once.
+    """
+    ref_name = f"{LOCK_REF_NAMESPACE}{pr_number}"
+    for attempt in range(1, attempts + 1):
+        try:
+            request_json("POST", "git/refs", {"ref": ref_name, "sha": sha})
+            return ref_name
+        except urllib.error.HTTPError as exc:
+            if exc.code != 422:
+                if not _is_transient_http_error(exc) or attempt == attempts:
+                    print(f"Could not acquire PR #{pr_number} reconciliation lock: HTTP {exc.code}.")
+                    return None
+                sleep_fn(base_delay * (2 ** (attempt - 1)))
+                continue
+            if attempt == attempts:
+                break
+            sleep_fn(base_delay * (2 ** (attempt - 1)))
+    print(f"PR #{pr_number} reconciliation lock still contended after {attempts} attempts; treating as abandoned.")
+    try:
+        release_pr_lock(ref_name)
+    except Exception as exc:
+        print(f"Could not clear presumed-abandoned lock for PR #{pr_number}: {type(exc).__name__}: {exc}")
+        return None
+    try:
+        request_json("POST", "git/refs", {"ref": ref_name, "sha": sha})
+        return ref_name
+    except Exception as exc:
+        print(f"Final PR #{pr_number} reconciliation lock acquisition attempt failed: {type(exc).__name__}: {exc}")
+        return None
+
+
+def release_pr_lock(lock_ref: str) -> None:
+    # DELETE /repos/{repo}/git/refs/{ref} takes {ref} WITHOUT the "refs/" prefix
+    # (e.g. "heads/my-branch"), unlike the "ref" field used to CREATE it, which
+    # requires the full "refs/heads/my-branch" form.
+    ref_path = lock_ref[len("refs/") :] if lock_ref.startswith("refs/") else lock_ref
+    try:
+        request_json("DELETE", f"git/refs/{ref_path}")
+    except urllib.error.HTTPError as exc:
+        if exc.code != 404:
+            raise
+
+
+def _confirm_still_fresh_before_success(pr_number: int, sha: str, governance_started_at: datetime) -> bool:
+    """Final compare-and-check gate immediately before an irreversible success publish.
+
+    Holds the per-PR reconciliation lock while re-fetching the PR and
+    recomputing the invalidation boundary one more time. This closes the race
+    where a concurrent real PR edit's semantic invalidation write lands after
+    this evaluation began computing but before it published -- without this
+    gate, a scheduled sweep could publish a stale "success" using
+    information read just before that edit's invalidation was durably
+    recorded. Returns False (fail closed: do not publish success) if the
+    lock cannot be acquired, or if a fresh recomputation shows this
+    governance run is no longer fresh.
+    """
+    lock_ref = acquire_pr_lock(pr_number, sha)
+    if lock_ref is None:
+        print(f"PR #{pr_number}: could not acquire reconciliation lock before publishing success; staying pending.")
+        return False
+    try:
+        fresh_pr = request_json("GET", f"pulls/{pr_number}")
+        if ((fresh_pr.get("head") or {}).get("sha") or "").strip() != sha:
+            print(f"PR #{pr_number}: head SHA changed while confirming freshness; staying pending.")
+            return False
+        invalidation_time = get_latest_invalidation_time(pr_number, fresh_pr)
+        if governance_started_at < invalidation_time:
+            print(
+                f"PR #{pr_number}: concurrent invalidation at {invalidation_time.isoformat()} detected "
+                f"after governance run started at {governance_started_at.isoformat()}; staying pending."
+            )
+            return False
+        return True
+    except Exception as exc:
+        print(
+            f"PR #{pr_number}: could not confirm freshness before success ({type(exc).__name__}: {exc}); staying pending."
+        )
+        return False
+    finally:
+        release_pr_lock(lock_ref)
+
+
 def evaluate(
     pr_number: int,
     governance_started_at: datetime | None = None,
@@ -413,6 +578,12 @@ def evaluate(
         publish(sha, "pending", "Waiting for current Hunter Governance Review.")
         return
 
+    # Detected once per evaluation, not per poll attempt: the PR's changed-file
+    # set cannot meaningfully change within a single evaluate() invocation, so
+    # re-checking it on every one of up to 45 poll iterations would only add
+    # redundant API calls.
+    is_upgrade_candidate = admission.is_controller_upgrade_candidate(pr_number)
+
     attempts = 45 if poll else 1
     for attempt in range(1, attempts + 1):
         runs = all_check_runs(sha)
@@ -438,19 +609,36 @@ def evaluate(
             publish(sha, "failure", "Current Governance Review run has no trustworthy start time.")
             return
 
-        # P1-1: Reject governance runs that started before the latest invalidation.
-        # This prevents accepting stale same-SHA governance after feedback/body changes.
-        invalidation_time = get_latest_invalidation_time(pr_number, pr)
-        if governance_started_at < invalidation_time:
-            print(
-                f"Rejecting governance run from {governance_started_at.isoformat()} because it is older than latest invalidation time {invalidation_time.isoformat()}"
-            )
-            publish(
-                sha,
-                "pending",
-                f"Waiting for a fresh Hunter Governance Review (last run was older than latest invalidation at {invalidation_time.isoformat()}).",
-            )
-            return
+        # Controller-upgrade admission: a PR that touches controller-owned
+        # files (see hunter_controller_admission.CONTROLLER_OWNED_PATHS) is
+        # independently re-verified with fresh, uncached evidence instead of
+        # the ordinary steady-state invalidation-time comparison below. This
+        # is a strict superset of the ordinary gates (same required checks,
+        # same Governance freshness primitive, same feedback checks, plus an
+        # exact-head re-fetch) -- never a relaxation. It exists so a PR that
+        # upgrades this very controller can still be safely evaluated and
+        # merged without executing any of that PR's own (untrusted, not-yet-
+        # resident) code. See hunter_controller_admission.py for the full
+        # trust-boundary rationale and its documented bootstrap limitation.
+        if is_upgrade_candidate:
+            result = admission.evaluate_admission(pr_number, pr, sha, runs, governance_started_at)
+            if not result.admitted:
+                publish(sha, "pending", f"Controller-upgrade admission pending: {result.reason}")
+                return
+        else:
+            # P1-1: Reject governance runs that started before the latest invalidation.
+            # This prevents accepting stale same-SHA governance after feedback/body changes.
+            invalidation_time = get_latest_invalidation_time(pr_number, pr)
+            if governance_started_at < invalidation_time:
+                print(
+                    f"Rejecting governance run from {governance_started_at.isoformat()} because it is older than latest invalidation time {invalidation_time.isoformat()}"
+                )
+                publish(
+                    sha,
+                    "pending",
+                    f"Waiting for a fresh Hunter Governance Review (last run was older than latest invalidation at {invalidation_time.isoformat()}).",
+                )
+                return
 
         missing, pending, failed, succeeded = [], [], [], []
         for name in required_checks:
@@ -487,10 +675,24 @@ def evaluate(
             publish(sha, "failure", "Exact-head prerequisite failed: " + ", ".join(failed))
             return
         if governance_success and not missing and not pending and len(succeeded) == len(required_checks):
+            if not _confirm_still_fresh_before_success(pr_number, sha, governance_started_at):
+                publish(
+                    sha,
+                    "pending",
+                    "Waiting for a fresh Hunter Governance Review "
+                    "(concurrent semantic invalidation detected while confirming readiness).",
+                )
+                return
+            success_description = "Ready to merge: fresh checks passed and every PR comment is resolved/acknowledged."
+            if is_upgrade_candidate:
+                success_description = (
+                    "Ready to merge: controller-upgrade PR admitted by the current trusted generation. "
+                    + success_description
+                )
             publish(
                 sha,
                 "success",
-                "Ready to merge: fresh checks passed and every PR comment is resolved/acknowledged.",
+                success_description,
             )
             return
 

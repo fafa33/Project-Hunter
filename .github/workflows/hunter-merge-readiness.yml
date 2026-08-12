@@ -20,6 +20,21 @@ name: Hunter / Merge Readiness
 # single PR (the same check-runs-based evaluation the periodic schedule performs),
 # instead of waiting on the schedule's real-world cadence or re-running a webhook-
 # triggered run that only performs the lightweight invalidate-and-wait shortcut.
+#
+# Per-PR mutual exclusion: the concurrency group below only covers runs that share
+# a single triggering context (e.g. two pull_request_target events for the same
+# PR). A schedule run evaluates every open PR in one job and has no PR-specific
+# concurrency key to give it, so it cannot be serialized against a same-PR
+# pull_request_target run at the workflow level. That race (a scheduled sweep
+# reading stale state while a real edit's invalidation is still being recorded)
+# is instead closed at the controller level via an atomic per-PR git-ref lock
+# (see acquire_pr_lock/release_pr_lock in hunter_merge_readiness.py), which is
+# why `contents: write` is granted below -- git ref creation is the only GitHub
+# REST primitive here with real compare-and-swap semantics. The lock ref lives
+# under refs/hunter-merge-readiness-locks/*, not refs/heads/*, specifically so
+# creating/deleting it is not a branch push and cannot recursively trigger
+# hunter-pre-pr-preflight.yml (push: branches-ignore: [main]) or any other
+# push/create-triggered workflow in this repository.
 
 on:
   pull_request_target:
@@ -68,7 +83,13 @@ on:
 permissions:
   actions: read
   checks: read
-  contents: read
+  # write (not read) is required only for the per-PR reconciliation lock's
+  # atomic git-ref create/delete (refs/hunter-merge-readiness-locks/pr-*, a
+  # non-branch, non-tag ref namespace). The controller never creates,
+  # modifies, or deletes any other ref, tree, or blob; branch protection on
+  # `main` and every other ref is unaffected, and this ref namespace never
+  # fires a `push` or `create` webhook event.
+  contents: write
   issues: read
   pull-requests: read
   statuses: write
