@@ -95,13 +95,30 @@ def _marker_effective_time(status: dict) -> datetime | None:
 
 
 def latest_semantic_invalidation_time(pr: dict) -> datetime | None:
+    """Return the monotonic semantic invalidation boundary for the current head.
+
+    Persistence order is not semantic order: GitHub may rerun or finish an older
+    same-head lifecycle workflow after a newer one, producing a higher-ID status
+    whose encoded ``event_time`` is earlier. Therefore the boundary is the maximum
+    effective time across *all* durable invalidation markers for this exact head,
+    never simply the most recently persisted status.
+    """
     sha = ((pr.get("head") or {}).get("sha") or "").strip()
     if not sha:
         return None
-    status = core.latest_commit_status(sha, INVALIDATION_CONTEXT)
-    if not status:
+
+    statuses = core.paged(f"commits/{sha}/statuses")
+    effective_times = []
+    for status in statuses:
+        if not isinstance(status, dict) or status.get("context") != INVALIDATION_CONTEXT:
+            continue
+        effective_time = _marker_effective_time(status)
+        if effective_time is not None:
+            effective_times.append(effective_time)
+
+    if not effective_times:
         return None
-    return _marker_effective_time(status)
+    return max(effective_times)
 
 
 def backfill_semantic_baseline(pr: dict) -> datetime | None:
