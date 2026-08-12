@@ -65,6 +65,45 @@ def test_exempt_comment_does_not_consume_reaction_lookup(monkeypatch) -> None:
     assert policy.owner_acknowledged_comment_with_bot_exemptions(item)
 
 
+def test_semantic_pr_neutralizes_aggregate_updated_at() -> None:
+    pr = {
+        "created_at": "2026-08-12T06:16:37Z",
+        "updated_at": "2026-08-12T06:16:51Z",
+        "body": "unchanged",
+    }
+    semantic = policy.semantic_pr_for_freshness(pr)
+    assert semantic["updated_at"] == pr["created_at"]
+    assert semantic["body"] == pr["body"]
+    assert pr["updated_at"] == "2026-08-12T06:16:51Z"
+
+
+def test_aggregate_pr_timestamp_drift_does_not_stale_governance(monkeypatch) -> None:
+    seen = {}
+
+    def fake_paged(_path: str):
+        return []
+
+    def fake_freshness(_pr_number: int, pr: dict):
+        seen["created_at"] = pr.get("created_at")
+        seen["updated_at"] = pr.get("updated_at")
+        return "freshness-result"
+
+    monkeypatch.setattr(policy.core, "paged", fake_paged)
+    monkeypatch.setattr(policy, "_original_get_latest_invalidation_time", fake_freshness)
+    result = policy.get_latest_invalidation_time_with_bot_exemptions(
+        249,
+        {
+            "created_at": "2026-08-12T06:16:37Z",
+            "updated_at": "2026-08-12T06:16:51Z",
+        },
+    )
+    assert result == "freshness-result"
+    assert seen == {
+        "created_at": "2026-08-12T06:16:37Z",
+        "updated_at": "2026-08-12T06:16:37Z",
+    }
+
+
 def test_exempt_comments_are_removed_from_freshness_input(monkeypatch) -> None:
     trusted = comment(LOGIN, DEPENDENCY_BODY)
     trusted["id"] = 10
