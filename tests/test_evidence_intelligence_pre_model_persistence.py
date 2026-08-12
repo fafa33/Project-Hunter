@@ -65,7 +65,9 @@ def _intent() -> EvidenceExtractionIntent:
     )
 
 
-def _policy(*, required: tuple[str, ...], optional: tuple[str, ...] = ()) -> EvidenceContextSelectionPolicy:
+def _policy(
+    *, required: tuple[str, ...], optional: tuple[str, ...] = ()
+) -> EvidenceContextSelectionPolicy:
     return EvidenceContextSelectionPolicy(
         policy_id="policy-1",
         version="1",
@@ -128,7 +130,9 @@ def test_ready_build_persists_and_reconstructs_exact_prompt(tmp_path) -> None:
         build_result=result,
         recorded_at=recorded_at,
     )
-    reconstructed = persistence.strict_known_reconstruction(saved.build_record_id, recorded_at)
+    reconstructed = persistence.strict_known_reconstruction(
+        saved.build_record_id, recorded_at
+    )
 
     assert reconstructed.status == "AVAILABLE"
     assert reconstructed.bundle is not None
@@ -136,7 +140,10 @@ def test_ready_build_persists_and_reconstructs_exact_prompt(tmp_path) -> None:
     assert reconstructed.bundle.build_result.prompt_artifact is not None
     assert result.prompt_artifact is not None
     assert reconstructed.exact_prompt == result.prompt_artifact.content
-    assert reconstructed.bundle.build_result.prompt_artifact.content_hash == result.prompt_artifact.content_hash
+    assert (
+        reconstructed.bundle.build_result.prompt_artifact.content_hash
+        == result.prompt_artifact.content_hash
+    )
 
 
 def test_strict_known_cutoff_before_recording_is_unavailable(tmp_path) -> None:
@@ -290,10 +297,14 @@ def test_reconstruction_ignores_later_current_span_content(tmp_path) -> None:
     assert "later changed content" not in reconstructed.exact_prompt
 
 
-def test_retention_prohibited_prompt_remains_explicitly_unavailable(tmp_path) -> None:
+def test_retention_prohibited_prompt_remains_explicitly_unavailable(
+    tmp_path,
+) -> None:
     repository = EvidenceIntelligenceRepository(tmp_path / "evidence.sqlite")
     persistence = EvidencePreModelPersistenceRepository(repository)
-    intent, policy, specification, capability, inventory, result = _ready_build(retain_exact_prompt=False)
+    intent, policy, specification, capability, inventory, result = _ready_build(
+        retain_exact_prompt=False
+    )
     recorded_at = datetime(2026, 8, 12, 18, 30, tzinfo=UTC)
     saved = persistence.save(
         intent=intent,
@@ -305,7 +316,9 @@ def test_retention_prohibited_prompt_remains_explicitly_unavailable(tmp_path) ->
         recorded_at=recorded_at,
     )
 
-    reconstructed = persistence.strict_known_reconstruction(saved.build_record_id, recorded_at)
+    reconstructed = persistence.strict_known_reconstruction(
+        saved.build_record_id, recorded_at
+    )
 
     assert reconstructed.status == "UNAVAILABLE"
     assert reconstructed.reason_code == "EXACT_PROMPT_RETENTION_PROHIBITED"
@@ -343,10 +356,15 @@ def test_replan_build_persists_exact_failure_lineage(tmp_path) -> None:
         recorded_at=recorded_at,
     )
 
-    reconstructed = persistence.strict_known_reconstruction(saved.build_record_id, recorded_at)
+    reconstructed = persistence.strict_known_reconstruction(
+        saved.build_record_id, recorded_at
+    )
 
     assert reconstructed.status == "UNAVAILABLE"
     assert reconstructed.bundle is not None
     assert reconstructed.bundle.build_result.allocation.outcome == "REPLAN_REQUIRED"
     assert reconstructed.bundle.build_result.prompt_artifact is None
-    assert "UNRESOLVED_REQUIRED" in reconstructed.bundle.build_result.build_record.reason_codes
+    assert (
+        "UNRESOLVED_REQUIRED"
+        in reconstructed.bundle.build_result.build_record.reason_codes
+    )
