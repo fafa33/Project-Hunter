@@ -93,7 +93,9 @@ def test_aggregate_pr_timestamp_drift_does_not_stale_governance(monkeypatch) -> 
         return base_time
 
     monkeypatch.setattr(policy.core, "paged", fake_paged)
-    monkeypatch.setattr(policy, "_original_get_latest_invalidation_time", fake_freshness)
+    monkeypatch.setattr(
+        policy, "_original_get_latest_invalidation_time", fake_freshness
+    )
     result = policy.get_latest_invalidation_time_with_bot_exemptions(
         249,
         {
@@ -167,7 +169,11 @@ def test_semantic_edit_event_persists_invalidation_status(monkeypatch) -> None:
 def test_nonsemantic_review_request_does_not_persist_invalidation(monkeypatch) -> None:
     calls = []
     monkeypatch.setattr(policy.core, "event_name", "pull_request_target")
-    monkeypatch.setattr(policy.core, "request_json", lambda *args: calls.append(args))
+    monkeypatch.setattr(
+        policy.core,
+        "request_json",
+        lambda *args: calls.append(args),
+    )
 
     policy.record_semantic_pr_invalidation(
         {
@@ -200,7 +206,9 @@ def test_exempt_comments_are_removed_from_freshness_input(monkeypatch) -> None:
         return base_time
 
     monkeypatch.setattr(policy.core, "paged", fake_paged)
-    monkeypatch.setattr(policy, "_original_get_latest_invalidation_time", fake_freshness)
+    monkeypatch.setattr(
+        policy, "_original_get_latest_invalidation_time", fake_freshness
+    )
     result = policy.get_latest_invalidation_time_with_bot_exemptions(246, {})
     assert result == base_time
     assert seen["comments"] == [human]
@@ -225,7 +233,9 @@ def test_unknown_bot_comment_still_invalidates_freshness(monkeypatch) -> None:
         return base_time
 
     monkeypatch.setattr(policy.core, "paged", fake_paged)
-    monkeypatch.setattr(policy, "_original_get_latest_invalidation_time", fake_freshness)
+    monkeypatch.setattr(
+        policy, "_original_get_latest_invalidation_time", fake_freshness
+    )
     policy.get_latest_invalidation_time_with_bot_exemptions(246, {})
     assert seen == [unknown]
     assert policy.core.paged is fake_paged
