@@ -80,7 +80,13 @@ def request_json(method: str, path: str, payload: dict[str, Any] | None = None) 
     )
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
-            return json.loads(response.read().decode("utf-8"))
+            # A successful DELETE (e.g. releasing the per-PR lock ref) returns
+            # 204 No Content with an empty body; json.loads("") raises, so an
+            # empty body must be treated as "no JSON payload", not an error.
+            raw_body = response.read().decode("utf-8")
+            if not raw_body:
+                return None
+            return json.loads(raw_body)
     except urllib.error.HTTPError as exc:
         try:
             body = exc.read().decode("utf-8")
@@ -119,9 +125,21 @@ def graphql_json(query: str, variables: dict[str, Any]) -> Any:
 
 
 def parse_time(value: str | None) -> datetime | None:
+    """Parse an ISO-8601 timestamp, or return None if it cannot be parsed.
+
+    Every other caller only ever passes a GitHub-server-controlled field
+    (always valid ISO-8601 when present) or None. The one caller that parses
+    an arbitrary regex-captured substring from a status description
+    (hunter_merge_readiness_entrypoint._marker_effective_time) depends on
+    this returning None -- not raising -- for a malformed value, so it can
+    fall back to created_at instead of crashing the controller.
+    """
     if not value:
         return None
-    return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(UTC)
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(UTC)
+    except ValueError:
+        return None
 
 
 def paged(path: str) -> list[Any]:
@@ -320,8 +338,21 @@ def all_check_runs(sha: str) -> list[dict[str, Any]]:
         page += 1
 
 
+def all_commit_statuses(sha: str) -> list[dict[str, Any]]:
+    """Fetch every status ever posted for this exact SHA, unfiltered.
+
+    Mirrors all_check_runs()/latest_check(): this fetches the full,
+    paginated, unfiltered evidence; callers that need more than "the single
+    latest-by-id match for one context" (e.g. computing a monotonic maximum
+    across every same-context marker) must use this directly rather than
+    latest_commit_status(), which collapses to one status and is unsafe for
+    that purpose -- persistence order is not semantic order.
+    """
+    return paged(f"commits/{sha}/statuses")
+
+
 def latest_commit_status(sha: str, status_context: str) -> dict[str, Any] | None:
-    statuses = paged(f"commits/{sha}/statuses")
+    statuses = all_commit_statuses(sha)
     matches = [status for status in statuses if status.get("context") == status_context]
     if not matches:
         return None

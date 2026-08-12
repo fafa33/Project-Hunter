@@ -1665,6 +1665,61 @@ def test_release_pr_lock_tolerates_missing_ref():
         hunter_merge_readiness.release_pr_lock("refs/hunter-merge-readiness-locks/pr-123")
 
 
+class _FakeUrlopenResponse:
+    """Minimal context-manager stand-in for urllib.request.urlopen()'s
+    response object, for testing request_json()'s own implementation
+    (every other test in this file mocks request_json itself away, so none
+    of them exercise its real body-parsing logic).
+    """
+
+    def __init__(self, body: bytes):
+        self._body = body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        return False
+
+    def read(self):
+        return self._body
+
+
+def test_request_json_treats_empty_response_body_as_no_content(monkeypatch):
+    """A successful DELETE (e.g. releasing the per-PR lock ref) returns 204
+    No Content with an empty body. request_json must return None for that,
+    not crash trying to json.loads("") -- this is a real regression: a
+    successful lock release used to crash with JSONDecodeError, causing
+    every semantic-invalidation write to spuriously fail closed even though
+    the durable marker itself had already been persisted.
+    """
+    hunter_merge_readiness.repo = "fafa33/Project-Hunter"
+    hunter_merge_readiness.token = "fake-token"
+    monkeypatch.setattr(
+        hunter_merge_readiness.urllib.request,
+        "urlopen",
+        lambda request, timeout=30: _FakeUrlopenResponse(b""),
+    )
+
+    result = hunter_merge_readiness.request_json("DELETE", "git/refs/heads/some-lock")
+
+    assert result is None
+
+
+def test_request_json_still_parses_a_real_json_body(monkeypatch):
+    hunter_merge_readiness.repo = "fafa33/Project-Hunter"
+    hunter_merge_readiness.token = "fake-token"
+    monkeypatch.setattr(
+        hunter_merge_readiness.urllib.request,
+        "urlopen",
+        lambda request, timeout=30: _FakeUrlopenResponse(b'{"ok": true}'),
+    )
+
+    result = hunter_merge_readiness.request_json("GET", "pulls/123")
+
+    assert result == {"ok": True}
+
+
 def test_human_comment_after_governance_stales_governance_freshness(gh):
     """A human top-level comment posted after Governance ran must stale
     Governance freshness itself (not merely block on acknowledgment) -- an

@@ -116,11 +116,13 @@ def test_durable_semantic_edit_marker_stales_older_governance(monkeypatch) -> No
     )
     monkeypatch.setattr(
         policy.core,
-        "latest_commit_status",
-        lambda _sha, context: {
-            "context": context,
-            "created_at": "2026-08-12T06:16:55Z",
-        },
+        "all_commit_statuses",
+        lambda _sha: [
+            {
+                "context": policy.INVALIDATION_CONTEXT,
+                "created_at": "2026-08-12T06:16:55Z",
+            }
+        ],
     )
 
     result = policy.get_latest_invalidation_time_with_bot_exemptions(
@@ -136,6 +138,18 @@ def test_durable_semantic_edit_marker_stales_older_governance(monkeypatch) -> No
 
 # ====================================================================================
 # MIGRATION / BOOTSTRAP BACKFILL REGRESSION TESTS (A - D)
+#
+# These mock core.all_commit_statuses (a list of every status for the SHA),
+# not core.latest_commit_status (a single max-by-id status). That seam
+# changed deliberately, not incidentally: latest_semantic_invalidation_time
+# must compute a monotonic maximum across every same-context marker, because
+# persistence order is not semantic order (an out-of-order workflow
+# completion can persist an older event_time under a higher status ID). A
+# mock that can only hand back one status can no longer express that
+# requirement, so the old single-status seam is not a valid contract for
+# this code path -- it was replaced with an equivalent-or-stronger one built
+# on core.all_commit_statuses, the same fetch-all/filter-separately split
+# already used for check-runs (all_check_runs + latest_check).
 # ====================================================================================
 
 
@@ -149,7 +163,7 @@ def test_migration_backfill_fresh_pr_remains_eligible(monkeypatch) -> None:
     posts = []
     base_time = datetime(2020, 1, 1, tzinfo=UTC)
     monkeypatch.setattr(policy, "_original_get_latest_invalidation_time", lambda _n, _pr: base_time)
-    monkeypatch.setattr(policy.core, "latest_commit_status", lambda _sha, _ctx: None)
+    monkeypatch.setattr(policy.core, "all_commit_statuses", lambda _sha: [])
     monkeypatch.setattr(policy.core, "run_url", "https://example.invalid/run")
     monkeypatch.setattr(
         policy.core,
@@ -184,7 +198,7 @@ def test_migration_backfill_stale_pr_requires_fresh_governance(monkeypatch) -> N
     monkeypatch.setattr(
         policy, "_original_get_latest_invalidation_time", lambda _n, _pr: datetime(2020, 1, 1, tzinfo=UTC)
     )
-    monkeypatch.setattr(policy.core, "latest_commit_status", lambda _sha, _ctx: None)
+    monkeypatch.setattr(policy.core, "all_commit_statuses", lambda _sha: [])
     monkeypatch.setattr(policy.core, "run_url", "https://example.invalid/run")
     monkeypatch.setattr(policy.core, "request_json", lambda method, path, payload: None)
     monkeypatch.setattr(policy.core, "retry_transient", lambda operation, **kwargs: operation())
@@ -216,7 +230,7 @@ def test_migration_post_migration_bookkeeping_drift_does_not_restale(monkeypatch
     monkeypatch.setattr(
         policy, "_original_get_latest_invalidation_time", lambda _n, _pr: datetime(2020, 1, 1, tzinfo=UTC)
     )
-    monkeypatch.setattr(policy.core, "latest_commit_status", lambda _sha, _ctx: backfill_marker)
+    monkeypatch.setattr(policy.core, "all_commit_statuses", lambda _sha: [backfill_marker])
 
     def fail_if_called(*_args, **_kwargs):
         raise AssertionError("backfill/persistence must not run once a durable marker already exists")
@@ -246,7 +260,7 @@ def test_migration_post_migration_real_edit_stales_governance(monkeypatch) -> No
     monkeypatch.setattr(
         policy, "_original_get_latest_invalidation_time", lambda _n, _pr: datetime(2020, 1, 1, tzinfo=UTC)
     )
-    monkeypatch.setattr(policy.core, "latest_commit_status", lambda _sha, _ctx: real_edit_marker)
+    monkeypatch.setattr(policy.core, "all_commit_statuses", lambda _sha: [real_edit_marker])
 
     def fail_if_called(*_args, **_kwargs):
         raise AssertionError("backfill must not run when a durable (real) marker already exists")
