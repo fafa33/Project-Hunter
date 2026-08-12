@@ -297,9 +297,7 @@ def test_reconstruction_ignores_later_current_span_content(tmp_path) -> None:
     assert "later changed content" not in reconstructed.exact_prompt
 
 
-def test_retention_prohibited_prompt_remains_explicitly_unavailable(
-    tmp_path,
-) -> None:
+def test_retention_prohibited_prompt_remains_explicitly_unavailable(tmp_path) -> None:
     repository = EvidenceIntelligenceRepository(tmp_path / "evidence.sqlite")
     persistence = EvidencePreModelPersistenceRepository(repository)
     intent, policy, specification, capability, inventory, result = _ready_build(
