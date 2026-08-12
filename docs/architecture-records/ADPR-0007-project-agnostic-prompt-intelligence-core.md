@@ -3,12 +3,12 @@
 ## Metadata
 
 - ADPR ID: `ADPR-0007`
-- Status: `READY_FOR_REVIEW`
+- Status: `APPROVED`
 - Version: 2
 - Author: OpenAI / repository owner-directed architecture work
-- Reviewers: independent architecture review required
+- Reviewers: independent architecture review completed in PR #248
 - Created: 2026-08-10
-- Approved: not yet approved
+- Approved: 2026-08-12
 - Related Epic: not yet created
 - Related Issue: #237
 - Planned or produced ADR: ADR 0032 — Project-Agnostic Prompt Intelligence Core and Project Adapter Boundary
@@ -307,7 +307,7 @@ The preparation is architecture-only and authorizes no implementation or model i
 | Implementation independence | Strong | No LLM/provider/runtime implementation is required |
 | Residual uncertainty | Explicit | Concrete shared contracts remain intentionally unknown |
 
-Overall preparation quality: `READY_FOR_REVIEW`, not yet `APPROVED`.
+Overall preparation quality: `APPROVED` after independent architecture review in PR #248; no Class C/D blocker remained.
 
 ## Architecture Readiness
 
@@ -337,22 +337,23 @@ Project Hunter may reserve a physically isolated, project-neutral Prompt Intelli
 | 2026-08-10 | READY_FOR_REVIEW | Initial preparation completed with four-option comparison and Option 3 recommendation | OpenAI / repository owner-directed architecture work |
 | 2026-08-11 | READY_FOR_REVIEW | Reorganized into canonical ADPR structure | OpenAI / repository owner-directed architecture work |
 | 2026-08-11 | READY_FOR_REVIEW | Corrected cross-project overclaim: Iran-OS is now illustrative only; concrete shared contracts require independent two-consumer evidence before admission | OpenAI / repository owner-directed architecture work |
+| 2026-08-12 | APPROVED | Independent architecture review in PR #248 completed with `READY_FOR_ADR`; lifecycle-only ADR acceptance authorized | independent architecture review |
 
 ## Traceability
 
 - Epic: not yet created
-- Issue: #237
+- Issue: #237; acceptance path #247
 - Preparation working document: this record
-- Checklist review: independent review pending
+- Checklist review: completed by independent architecture review in PR #248
 - ADPR: ADPR-0007
-- ADR: ADR 0032 (Proposed)
+- ADR: ADR 0032 (Accepted by the lifecycle contribution that updates this record)
 - Implementation plan: not authorized
-- PR: #239
-- Merge commit: not yet merged
+- Preparation PR: #239
+- Independent review PR: #248
+- Preparation merge commit: `4938d2db494d72ec7479b27931814b1a979140b5`
+- Review merge commit: `c20130061fc482f1ae59f5b9e972f3766d86fddd`
 - Release: not applicable
 
 ## Immutability and Supersession
 
-This record is currently `READY_FOR_REVIEW`, not yet `APPROVED`. Until approval, review-driven corrections may amend the reasoning while remaining auditable in repository history.
-
-After `APPROVED`, substantive changes to the decision basis require a new ADPR that explicitly supersedes ADPR-0007. Non-substantive traceability completion and typographical corrections must remain auditable.
+This record is `APPROVED`. Substantive changes to the decision basis require a new ADPR that explicitly supersedes ADPR-0007. Non-substantive traceability completion and typographical corrections must remain auditable.
