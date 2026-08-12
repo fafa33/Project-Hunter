@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -40,7 +41,7 @@ def _span(
         end_offset=len(excerpt.encode("utf-8")),
         chunk_id=f"chunk-{span_id}",
         chunk_version="1",
-        text_hash=f"hash-{span_id}",
+        text_hash=f"hash-{span_id}-{len(excerpt.encode('utf-8'))}",
         excerpt=excerpt,
         section_title="Test",
         locator=f"test:{span_id}",
@@ -223,7 +224,7 @@ def test_same_build_identity_with_conflicting_bundle_fails_closed(tmp_path) -> N
         )
 
 
-def test_reconstruction_uses_persisted_bundle_not_current_span_rows(tmp_path) -> None:
+def test_reconstruction_ignores_later_current_span_content(tmp_path) -> None:
     repository = EvidenceIntelligenceRepository(tmp_path / "evidence.sqlite")
     persistence = EvidencePreModelPersistenceRepository(repository)
     intent, policy, specification, capability, inventory, result = _ready_build()
@@ -239,7 +240,43 @@ def test_reconstruction_uses_persisted_bundle_not_current_span_rows(tmp_path) ->
     )
 
     changed = _span("span-1", "later changed content")
-    repository.save_span(changed)
+    with sqlite3.connect(repository.path) as connection:
+        connection.execute(
+            """
+            INSERT INTO evidence_spans (
+                span_id, document_id, source_evidence_id, normalized_content_hash,
+                normalization_version, parser_id, rendition_id, offset_encoding,
+                start_offset, end_offset, chunk_id, chunk_version, text_hash, excerpt,
+                section_title, locator, span_status, created_at, validated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(span_id) DO UPDATE SET
+                text_hash = excluded.text_hash,
+                excerpt = excluded.excerpt,
+                end_offset = excluded.end_offset
+            """,
+            (
+                changed.span_id,
+                changed.document_id,
+                changed.source_evidence_id,
+                changed.normalized_content_hash,
+                changed.normalization_version,
+                changed.parser_id,
+                changed.rendition_id,
+                changed.offset_encoding,
+                changed.start_offset,
+                changed.end_offset,
+                changed.chunk_id,
+                changed.chunk_version,
+                changed.text_hash,
+                changed.excerpt,
+                changed.section_title,
+                changed.locator,
+                changed.span_status,
+                changed.created_at.isoformat(),
+                changed.validated_at.isoformat(),
+            ),
+        )
+
     reconstructed = persistence.strict_known_reconstruction(
         result.build_record.build_record_id,
         recorded_at + timedelta(days=1),
