@@ -136,7 +136,7 @@ Conflicts must be resolved before implementation proceeds.
 | [0029](0029-hunter-development-methodology.md) | Hunter Development Methodology | Proposed | Risk-scaled lifecycle for significant AI-assisted changes, independent review, knowledge extraction, and merge governance |
 | [0030](0030-hunter-intelligence-evolution.md) | Hunter Intelligence Evolution | Proposed | Four-layer evolution across Domain, AI, Engineering, and Architectural Intelligence |
 | [0031](0031-ai-context-prompt-intelligence-foundation.md) | AI Context and Prompt Intelligence Foundation | Accepted | Evidence Intelligence-specific provider-independent intent, exact `EvidenceSpan` resolution and selection, observable missingness/omission, deterministic allocation and prompt artifacts, conditional exact pre-model reconstruction, proposal-only authority, deferred generic ownership, and zero-LLM governance preservation |
-| [0032](0032-project-agnostic-prompt-intelligence-core.md) | Project-Agnostic Prompt Intelligence Core and Project Adapter Boundary | Proposed | Project-neutral ownership/dependency boundary, evidence-gated admission of concrete shared contracts, consumer-owned authority/persistence, ADR 0031 identity preservation, and future extraction criteria; no external-project contract equivalence is asserted |
+| [0032](0032-project-agnostic-prompt-intelligence-core.md) | Project-Agnostic Prompt Intelligence Core and Project Adapter Boundary | Accepted | Project-neutral ownership/dependency boundary, evidence-gated admission of concrete shared contracts, consumer-owned authority/persistence, ADR 0031 identity preservation, and future extraction criteria; no external-project contract equivalence is asserted |
 
 ## Creating a New ADR
 
