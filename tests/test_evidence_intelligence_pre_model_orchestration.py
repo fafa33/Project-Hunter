@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -15,9 +15,14 @@ from hunter.evidence_intelligence.pre_model_orchestration import (
     EvidencePreModelOrchestrationRequest,
     orchestrate_evidence_pre_model,
 )
+from hunter.evidence_intelligence.pre_model_persistence import (
+    REDACTED_SOURCE_EXCERPT,
+    EvidencePreModelPersistenceRepository,
+)
 from hunter.evidence_intelligence.repository import EvidenceIntelligenceRepository
 
 NOW = datetime(2026, 8, 9, tzinfo=UTC)
+RECORDED_AT = datetime(2026, 8, 9, 12, 0, tzinfo=UTC)
 
 
 def test_orchestration_builds_from_canonical_inventory_and_derives_optional_coverage(
@@ -32,6 +37,7 @@ def test_orchestration_builds_from_canonical_inventory_and_derives_optional_cove
     result = orchestrate_evidence_pre_model(
         repository=repository,
         request=_request(required_span_ids=("span-b",)),
+        recorded_at=RECORDED_AT,
     )
 
     assert result.canonical_span_ids == ("span-a", "span-b", "span-c")
@@ -46,6 +52,15 @@ def test_orchestration_builds_from_canonical_inventory_and_derives_optional_cove
     )
     assert result.build_result.prompt_artifact is not None
     assert result.build_result.build_record.prompt_artifact_id == (result.build_result.prompt_artifact.artifact_id)
+
+    # Canonical orchestration must leave durable, strict-known reconstructable
+    # state behind -- a build reported as successful here is not transient.
+    reconstructed = EvidencePreModelPersistenceRepository(repository).strict_known_reconstruction(
+        result.build_record_id,
+        RECORDED_AT,
+    )
+    assert reconstructed.status == "AVAILABLE"
+    assert reconstructed.exact_prompt == result.build_result.prompt_artifact.content
 
 
 def test_orchestration_rejects_required_span_outside_canonical_inventory(
@@ -62,6 +77,7 @@ def test_orchestration_rejects_required_span_outside_canonical_inventory(
         orchestrate_evidence_pre_model(
             repository=repository,
             request=_request(required_span_ids=("span-missing",)),
+            recorded_at=RECORDED_AT,
         )
 
 
@@ -104,7 +120,7 @@ def test_orchestration_rejects_identity_mismatch(
     )
 
     with pytest.raises(PreModelInvariantError, match=reason):
-        orchestrate_evidence_pre_model(repository=repository, request=request)
+        orchestrate_evidence_pre_model(repository=repository, request=request, recorded_at=RECORDED_AT)
 
 
 def test_orchestration_refuses_fake_historical_repository_inventory(tmp_path) -> None:
@@ -130,13 +146,79 @@ def test_orchestration_refuses_fake_historical_repository_inventory(tmp_path) ->
         orchestrate_evidence_pre_model(
             repository=repository,
             request=_request(intent=historical_intent),
+            recorded_at=RECORDED_AT,
         )
+
+
+def test_orchestration_is_idempotent_and_preserves_first_recorded_at(tmp_path) -> None:
+    """Re-running the identical canonical lifecycle must not fork durable history."""
+    repository = EvidenceIntelligenceRepository(tmp_path / "evidence.sqlite")
+    repository.save_document(_document())
+    repository.save_span(_span("span-a", "first", 0))
+
+    first = orchestrate_evidence_pre_model(
+        repository=repository,
+        request=_request(),
+        recorded_at=RECORDED_AT,
+    )
+    second = orchestrate_evidence_pre_model(
+        repository=repository,
+        request=_request(),
+        recorded_at=RECORDED_AT + timedelta(hours=3),
+    )
+
+    assert second.build_record_id == first.build_record_id
+    assert second.persisted.recorded_at == RECORDED_AT
+
+
+def test_orchestration_fails_closed_when_durability_fails(tmp_path, monkeypatch) -> None:
+    """Orchestration must never report a successful build whose evidence was lost."""
+    repository = EvidenceIntelligenceRepository(tmp_path / "evidence.sqlite")
+    repository.save_document(_document())
+    repository.save_span(_span("span-a", "first", 0))
+
+    def exploding_save(self, **_kwargs):
+        raise RuntimeError("durable write unavailable")
+
+    monkeypatch.setattr(EvidencePreModelPersistenceRepository, "save", exploding_save)
+
+    with pytest.raises(RuntimeError, match="durable write unavailable"):
+        orchestrate_evidence_pre_model(
+            repository=repository,
+            request=_request(),
+            recorded_at=RECORDED_AT,
+        )
+
+
+def test_orchestration_propagates_retention_prohibition_to_durable_state(tmp_path) -> None:
+    """retain_exact_prompt=False must also strip source bytes from durable state."""
+    repository = EvidenceIntelligenceRepository(tmp_path / "evidence.sqlite")
+    repository.save_document(_document())
+    repository.save_span(_span("span-a", "confidential source text", 0))
+
+    result = orchestrate_evidence_pre_model(
+        repository=repository,
+        request=_request(retain_exact_prompt=False),
+        recorded_at=RECORDED_AT,
+    )
+
+    assert result.persisted.exact_source_bytes_retained is False
+    assert result.persisted.canonical_inventory[0].excerpt == REDACTED_SOURCE_EXCERPT
+
+    reconstructed = EvidencePreModelPersistenceRepository(repository).strict_known_reconstruction(
+        result.build_record_id,
+        RECORDED_AT,
+    )
+    assert reconstructed.status == "UNAVAILABLE"
+    assert reconstructed.reason_code == "EXACT_PROMPT_RETENTION_PROHIBITED"
+    assert reconstructed.exact_prompt is None
 
 
 def _request(
     *,
     required_span_ids: tuple[str, ...] = ("span-a",),
     intent: EvidenceExtractionIntent | None = None,
+    retain_exact_prompt: bool = True,
 ) -> EvidencePreModelOrchestrationRequest:
     return EvidencePreModelOrchestrationRequest(
         document_id="document-1",
@@ -147,6 +229,7 @@ def _request(
         required_span_ids=required_span_ids,
         specification=_spec(),
         capability=_capability(),
+        retain_exact_prompt=retain_exact_prompt,
     )
 
 

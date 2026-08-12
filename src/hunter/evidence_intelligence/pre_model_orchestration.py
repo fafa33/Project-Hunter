@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 
 from hunter.evidence_intelligence.pre_model import (
     EvidenceCapabilityConstraint,
@@ -10,6 +11,10 @@ from hunter.evidence_intelligence.pre_model import (
     EvidencePromptSpecification,
     PreModelInvariantError,
     build_evidence_pre_model,
+)
+from hunter.evidence_intelligence.pre_model_persistence import (
+    EvidencePreModelPersistenceRepository,
+    PersistedEvidencePreModelBundle,
 )
 from hunter.evidence_intelligence.pre_model_repository import (
     load_canonical_evidence_span_inventory,
@@ -47,19 +52,32 @@ class EvidencePreModelOrchestrationResult:
     canonical_span_ids: tuple[str, ...]
     policy: EvidenceContextSelectionPolicy
     build_result: EvidencePreModelBuildResult
+    persisted: PersistedEvidencePreModelBundle
+
+    @property
+    def build_record_id(self) -> str:
+        return self.persisted.build_record_id
 
 
 def orchestrate_evidence_pre_model(
     *,
     repository: EvidenceIntelligenceRepository,
     request: EvidencePreModelOrchestrationRequest,
+    recorded_at: datetime,
 ) -> EvidencePreModelOrchestrationResult:
-    """Build one provider-free Evidence Intelligence pre-model runtime slice.
+    """Build and durably record one provider-free Evidence pre-model runtime slice.
 
     Repository-backed EvidenceSpan inventory is the candidate-set authority. The
     caller may identify spans that are required, but cannot prefilter or silently
     omit canonical spans: every remaining canonical span is deterministically
     represented as optional policy coverage.
+
+    Durability is part of this operation, not an optional follow-up: a build that
+    is reported as successful here has been persisted and is strict-known
+    reconstructable. Persistence failures propagate, so this never reports a
+    successful build whose evidence was silently lost. ``recorded_at`` is an
+    explicit known-at coordinate rather than a hidden clock read, keeping the
+    lifecycle deterministic and replayable.
     """
 
     if request.intent.target_id != request.document_id:
@@ -95,9 +113,20 @@ def orchestrate_evidence_pre_model(
         candidate_span_ids=inventory.span_ids,
         retain_exact_prompt=request.retain_exact_prompt,
     )
+    persisted = EvidencePreModelPersistenceRepository(repository).save(
+        intent=request.intent,
+        policy=policy,
+        specification=request.specification,
+        capability=request.capability,
+        canonical_inventory=inventory.spans,
+        build_result=build_result,
+        recorded_at=recorded_at,
+        retain_exact_source_bytes=request.retain_exact_prompt,
+    )
     return EvidencePreModelOrchestrationResult(
         document_id=request.document_id,
         canonical_span_ids=inventory.span_ids,
         policy=policy,
         build_result=build_result,
+        persisted=persisted,
     )

@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from typing import Any, Literal
 
@@ -26,6 +26,19 @@ from hunter.evidence_intelligence.repository import EvidenceIntelligenceReposito
 
 ReconstructionStatus = Literal["AVAILABLE", "UNAVAILABLE", "NOT_KNOWN_AT_CUTOFF"]
 
+RETENTION_PROHIBITED_REASON_CODE = "EXACT_PROMPT_RETENTION_PROHIBITED"
+
+# ADR 0031 "Data handling and retention" permits durably retaining source
+# identities, revisions, ranges, and hashes, but requires artifact retention to
+# be "at least as restrictive as the governing source classification and
+# policy". When exact prompt retention is prohibited, the raw span text that the
+# prompt is rendered from must not survive either: keeping it would leave the
+# prohibited prompt trivially regenerable from the persisted bundle while the
+# build claims EXACT_PROMPT_RETENTION_PROHIBITED. This tombstone marker records
+# that the bytes were deliberately not retained. It is never presented as, and
+# must never be mistaken for, the original content.
+REDACTED_SOURCE_EXCERPT = "[REDACTED:EXACT_PROMPT_RETENTION_PROHIBITED]"
+
 
 class PreModelPersistenceConflict(RuntimeError):
     """Raised when an existing deterministic build id is reused with different bytes."""
@@ -33,6 +46,10 @@ class PreModelPersistenceConflict(RuntimeError):
 
 class PreModelPersistenceCorruption(RuntimeError):
     """Raised when persisted payload no longer matches its recorded identity/hash."""
+
+
+class PreModelPersistenceLineageError(RuntimeError):
+    """Raised when a supplied bundle is not internally consistent with its build result."""
 
 
 @dataclass(frozen=True)
@@ -44,6 +61,7 @@ class PersistedEvidencePreModelBundle:
     capability: EvidenceCapabilityConstraint
     canonical_inventory: tuple[EvidenceSpan, ...]
     build_result: EvidencePreModelBuildResult
+    exact_source_bytes_retained: bool = True
 
     @property
     def build_record_id(self) -> str:
@@ -88,16 +106,50 @@ class EvidencePreModelPersistenceRepository:
         canonical_inventory: tuple[EvidenceSpan, ...],
         build_result: EvidencePreModelBuildResult,
         recorded_at: datetime,
+        retain_exact_source_bytes: bool | None = None,
     ) -> PersistedEvidencePreModelBundle:
+        """Persist one immutable pre-model build bundle, append-only.
+
+        The supplied bundle is validated for internal lineage consistency before
+        any INSERT: second-write conflict detection cannot protect the very
+        first write, so a mismatched combination would otherwise be recorded
+        permanently under a build identity it did not produce.
+
+        ``retain_exact_source_bytes`` carries the governing retention decision.
+        When it is None it is derived from the build record's reason codes; an
+        explicit False (e.g. the orchestration request's ``retain_exact_prompt``)
+        also covers builds that failed before a prompt artifact existed.
+        """
         _aware("recorded_at", recorded_at)
+        inventory = tuple(canonical_inventory)
+        _validate_bundle_lineage(
+            intent=intent,
+            policy=policy,
+            specification=specification,
+            capability=capability,
+            canonical_inventory=inventory,
+            build_result=build_result,
+        )
+
+        if retain_exact_source_bytes is None:
+            retain_exact_source_bytes = RETENTION_PROHIBITED_REASON_CODE not in build_result.build_record.reason_codes
+        if not retain_exact_source_bytes:
+            artifact = build_result.prompt_artifact
+            if artifact is not None and artifact.content:
+                raise PreModelPersistenceLineageError(
+                    "exact source byte retention is prohibited but the build still carries exact prompt content"
+                )
+            inventory = tuple(_redacted_span(span) for span in inventory)
+
         bundle = PersistedEvidencePreModelBundle(
             recorded_at=recorded_at.astimezone(UTC),
             intent=intent,
             policy=policy,
             specification=specification,
             capability=capability,
-            canonical_inventory=tuple(canonical_inventory),
+            canonical_inventory=inventory,
             build_result=build_result,
+            exact_source_bytes_retained=retain_exact_source_bytes,
         )
         payload = _bundle_payload(bundle)
         payload_json = _canonical_json(payload)
@@ -191,20 +243,30 @@ class EvidencePreModelPersistenceRepository:
 
         build = bundle.build_result.build_record
         artifact = bundle.build_result.prompt_artifact
-        if build.reconstruction_outcome != "AVAILABLE" or artifact is None or not artifact.content:
-            reason = next(
-                (code for code in build.reason_codes if code == "EXACT_PROMPT_RETENTION_PROHIBITED"),
-                "EXACT_PRE_MODEL_RECONSTRUCTION_UNAVAILABLE",
-            )
+        if build.reconstruction_outcome == "AVAILABLE":
+            # build_evidence_pre_model only records AVAILABLE together with a
+            # retained, non-empty prompt artifact. Reaching this state without
+            # those bytes therefore means the persisted bundle no longer matches
+            # the build it claims to be, which is corruption -- not the ordinary
+            # "exact prompt was never retainable" outcome. Downgrading it to
+            # UNAVAILABLE would silently hide a broken durability guarantee.
+            if artifact is None or not artifact.content:
+                raise PreModelPersistenceCorruption(
+                    "persisted build claims AVAILABLE reconstruction without retained prompt bytes"
+                )
             return EvidencePreModelReconstruction(
-                status="UNAVAILABLE",
-                reason_code=reason,
+                status="AVAILABLE",
+                reason_code="EXACT_PRE_MODEL_RECONSTRUCTION_AVAILABLE",
                 bundle=bundle,
             )
 
+        reason = next(
+            (code for code in build.reason_codes if code == RETENTION_PROHIBITED_REASON_CODE),
+            "EXACT_PRE_MODEL_RECONSTRUCTION_UNAVAILABLE",
+        )
         return EvidencePreModelReconstruction(
-            status="AVAILABLE",
-            reason_code="EXACT_PRE_MODEL_RECONSTRUCTION_AVAILABLE",
+            status="UNAVAILABLE",
+            reason_code=reason,
             bundle=bundle,
         )
 
@@ -235,6 +297,10 @@ def _bundle_payload(bundle: PersistedEvidencePreModelBundle) -> dict[str, Any]:
         "policy": _jsonable(asdict(bundle.policy)),
         "specification": _jsonable(asdict(bundle.specification)),
         "capability": _jsonable(asdict(bundle.capability)),
+        "source_retention": {
+            "exact_source_bytes_retained": bundle.exact_source_bytes_retained,
+            "reason_code": (None if bundle.exact_source_bytes_retained else RETENTION_PROHIBITED_REASON_CODE),
+        },
         "canonical_inventory": [_jsonable(asdict(span)) for span in bundle.canonical_inventory],
         "build_result": {
             "ledger": _jsonable(asdict(bundle.build_result.ledger)),
@@ -299,6 +365,11 @@ def _bundle_from_payload(payload: dict[str, Any], *, recorded_at: datetime) -> P
     build_payload["reason_codes"] = tuple(build_payload["reason_codes"])
     build_record = EvidencePreModelBuildRecord(**build_payload)
 
+    retention = payload.get("source_retention") or {}
+    # Payloads written before source-retention was recorded always carried the
+    # full inventory, so True is the factually correct reading for them.
+    retained = bool(retention.get("exact_source_bytes_retained", True))
+
     return PersistedEvidencePreModelBundle(
         recorded_at=recorded_at,
         intent=intent,
@@ -314,6 +385,155 @@ def _bundle_from_payload(payload: dict[str, Any], *, recorded_at: datetime) -> P
             prompt_artifact=prompt_artifact,
             build_record=build_record,
         ),
+        exact_source_bytes_retained=retained,
+    )
+
+
+def _redacted_span(span: EvidenceSpan) -> EvidenceSpan:
+    """Strip raw source text while preserving identities, ranges, and hashes.
+
+    ``excerpt`` is the exact text the prompt is rendered from, and
+    ``section_title`` is likewise source-derived free text. Everything retained
+    here (identities, offsets, versions, coordinates, content hashes, status,
+    timestamps) is explicitly listed by ADR 0031 as minimum persistable
+    provenance. ``excerpt`` cannot be emptied because EvidenceSpan requires it
+    to be non-empty, so it carries an unambiguous tombstone instead.
+    """
+    return replace(span, excerpt=REDACTED_SOURCE_EXCERPT, section_title="")
+
+
+def _require(condition: bool, message: str) -> None:
+    if not condition:
+        raise PreModelPersistenceLineageError(message)
+
+
+def _validate_bundle_lineage(
+    *,
+    intent: EvidenceExtractionIntent,
+    policy: EvidenceContextSelectionPolicy,
+    specification: EvidencePromptSpecification,
+    capability: EvidenceCapabilityConstraint,
+    canonical_inventory: tuple[EvidenceSpan, ...],
+    build_result: EvidencePreModelBuildResult,
+) -> None:
+    """Fail closed unless every supplied input actually produced this build.
+
+    Each deterministic identity in the build result is recomputed from the
+    supplied inputs and compared. Without this, the first save() of a bundle
+    that mixes one build's result with another build's intent/policy/inventory
+    would be accepted and become permanent, silently corrupting reconstruction
+    provenance for a record that can never be rewritten.
+    """
+    ledger = build_result.ledger
+    allocation = build_result.allocation
+    package = build_result.package
+    prompt_plan = build_result.prompt_plan
+    artifact = build_result.prompt_artifact
+    build = build_result.build_record
+
+    _require(ledger.intent_id == intent.intent_id, "supplied intent does not match the build's selection ledger")
+    _require(
+        ledger.policy_identity == policy.policy_identity,
+        "supplied policy does not match the build's selection ledger",
+    )
+    _require(allocation.ledger_id == ledger.ledger_id, "allocation does not belong to the build's selection ledger")
+    _require(
+        allocation.capability_identity == capability.constraint_identity,
+        "supplied capability constraint does not match the build's allocation",
+    )
+    _require(
+        allocation.prompt_specification_identity == specification.specification_identity,
+        "supplied prompt specification does not match the build's allocation",
+    )
+    _require(
+        allocation.available_input_bytes == capability.available_input_bytes,
+        "supplied capability budget does not match the build's allocation",
+    )
+
+    spans_by_id = {span.span_id: span for span in canonical_inventory}
+    _require(
+        len(spans_by_id) == len(canonical_inventory),
+        "canonical inventory contains duplicate span ids",
+    )
+    _require(
+        set(policy.required_span_ids).union(policy.optional_span_ids) == set(spans_by_id),
+        "supplied policy coverage does not match the supplied canonical inventory",
+    )
+    _require(
+        {decision.span_id for decision in ledger.decisions} == set(spans_by_id),
+        "supplied canonical inventory does not match the build's ledger decisions",
+    )
+    for decision in ledger.decisions:
+        span = spans_by_id[decision.span_id]
+        _require(
+            decision.content_hash == span.text_hash
+            and decision.start_offset == span.start_offset
+            and decision.end_offset == span.end_offset,
+            f"supplied span {decision.span_id} does not match the content recorded in the build's ledger",
+        )
+
+    if package is None:
+        _require(build.package_id is None, "build references a package that was not supplied")
+    else:
+        _require(package.allocation_id == allocation.allocation_id, "package does not belong to the build's allocation")
+        _require(
+            package.ordered_span_ids == allocation.included_span_ids,
+            "package ordering does not match the build's allocation",
+        )
+        _require(
+            len(package.ordered_span_ids) == len(package.ordered_content_hashes),
+            "package span ordering and content hashes have different lengths",
+        )
+        for span_id, content_hash in zip(package.ordered_span_ids, package.ordered_content_hashes, strict=True):
+            _require(span_id in spans_by_id, f"package references span {span_id} outside the supplied inventory")
+            _require(
+                spans_by_id[span_id].text_hash == content_hash,
+                f"supplied span {span_id} does not match the content hash recorded in the build's package",
+            )
+        _require(build.package_id == package.package_id, "build record does not reference the supplied package")
+
+    if prompt_plan is None:
+        _require(build.prompt_plan_id is None, "build references a prompt plan that was not supplied")
+    else:
+        _require(prompt_plan.intent_id == intent.intent_id, "prompt plan does not belong to the supplied intent")
+        _require(
+            prompt_plan.prompt_specification_identity == specification.specification_identity,
+            "prompt plan does not belong to the supplied prompt specification",
+        )
+        _require(package is not None, "prompt plan was supplied without its context package")
+        assert package is not None
+        _require(prompt_plan.package_id == package.package_id, "prompt plan does not belong to the supplied package")
+        _require(build.prompt_plan_id == prompt_plan.plan_id, "build record does not reference the supplied plan")
+
+    if artifact is None:
+        _require(build.prompt_artifact_id is None, "build references a prompt artifact that was not supplied")
+    else:
+        _require(prompt_plan is not None, "prompt artifact was supplied without its prompt plan")
+        assert prompt_plan is not None
+        assert package is not None
+        _require(artifact.plan_id == prompt_plan.plan_id, "prompt artifact does not belong to the supplied plan")
+        _require(artifact.ledger_id == ledger.ledger_id, "prompt artifact does not belong to the supplied ledger")
+        _require(
+            artifact.allocation_id == allocation.allocation_id,
+            "prompt artifact does not belong to the supplied allocation",
+        )
+        _require(artifact.package_id == package.package_id, "prompt artifact does not belong to the supplied package")
+        _require(
+            artifact.prompt_specification_identity == specification.specification_identity
+            and artifact.compiler_version == specification.compiler_version,
+            "prompt artifact does not belong to the supplied prompt specification",
+        )
+        _require(
+            build.prompt_artifact_id == artifact.artifact_id,
+            "build record does not reference the supplied prompt artifact",
+        )
+        _validate_prompt_artifact(artifact)
+
+    _require(build.intent_id == intent.intent_id, "build record does not belong to the supplied intent")
+    _require(build.ledger_id == ledger.ledger_id, "build record does not belong to the supplied ledger")
+    _require(
+        build.allocation_id == allocation.allocation_id,
+        "build record does not belong to the supplied allocation",
     )
 
 
