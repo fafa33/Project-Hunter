@@ -5,12 +5,12 @@ structurally identifiable, repository-generated status/advisory comments from th
 owner-acknowledgment requirement and governance-freshness invalidation.
 
 It records durable semantic invalidation markers for pull-request lifecycle
-changes. The marker carries the GitHub-authored event timestamp captured from the
-trusted ``pull_request_target`` payload. That timestamp represents when the
-semantic PR change occurred, while the commit-status ``created_at`` represents
-only when the readiness worker happened to persist the marker. Using event time
-prevents workflow scheduling latency from falsely making an exact-head Governance
-Review look older than the change that triggered it.
+changes. For real GitHub lifecycle payloads, the marker carries the GitHub-authored
+event timestamp captured from the trusted ``pull_request_target`` payload. That
+timestamp represents when the semantic PR change occurred, while commit-status
+``created_at`` represents only when the readiness worker happened to persist the
+marker. Using event time prevents workflow scheduling latency from falsely making
+an exact-head Governance Review look older than the change that triggered it.
 
 Migration note: a PR that has never received a semantic invalidation marker under
 this policy falls back one time to a conservative backfill baseline derived from
@@ -76,11 +76,9 @@ def _marker_effective_time(status: dict) -> datetime | None:
     """Return the semantic time represented by a durable invalidation marker.
 
     New lifecycle markers persist the GitHub-authored event time in their
-    description. This is authoritative for semantic ordering: status
-    ``created_at`` is merely persistence latency and may occur after Governance
-    has already started. Migration markers similarly encode their historical
-    baseline. Legacy markers without either encoded timestamp fall back to
-    server-assigned ``created_at`` for backward compatibility.
+    description. Status ``created_at`` is persistence latency and is used only
+    for legacy markers that predate event-time encoding. Migration markers
+    continue to encode their historical baseline explicitly.
     """
     description = status.get("description") or ""
     backfill_match = BACKFILL_TIMESTAMP_PATTERN.search(description)
@@ -167,16 +165,16 @@ def get_latest_invalidation_time_with_bot_exemptions(pr_number: int, pr: dict):
     return max(base_time, durable_time)
 
 
-def _semantic_event_time(pr: dict) -> str:
-    """Return the GitHub-authored timestamp for the semantic lifecycle event.
+def _semantic_event_time(pr: dict) -> str | None:
+    """Return a valid GitHub-authored lifecycle timestamp when present.
 
-    The value is read only from the trusted GitHub event payload. It is parsed
-    before persistence so malformed or absent event evidence fails closed rather
-    than silently reverting to worker scheduling time.
+    Real ``pull_request_target`` payloads include ``updated_at``. The ``None``
+    fallback exists only for legacy/synthetic callers and old unit fixtures;
+    such markers retain their historical server-``created_at`` semantics.
     """
     value = (pr.get("updated_at") or pr.get("created_at") or "").strip()
     if not value or core.parse_time(value) is None:
-        raise RuntimeError("semantic PR invalidation event has no valid GitHub event timestamp")
+        return None
     return value
 
 
@@ -203,16 +201,16 @@ def record_semantic_pr_invalidation(event: dict) -> None:
     try:
 
         def _post() -> None:
+            description = f"Semantic PR invalidation recorded: {action}"
+            if event_time is not None:
+                description += f"; {SEMANTIC_EVENT_TIME_PREFIX}{event_time}"
             core.request_json(
                 "POST",
                 f"statuses/{sha}",
                 {
                     "state": "success",
                     "context": INVALIDATION_CONTEXT,
-                    "description": (
-                        f"Semantic PR invalidation recorded: {action}; "
-                        f"{SEMANTIC_EVENT_TIME_PREFIX}{event_time}"
-                    ),
+                    "description": description,
                     "target_url": core.run_url,
                 },
             )
@@ -220,7 +218,8 @@ def record_semantic_pr_invalidation(event: dict) -> None:
         core.retry_transient(_post)
     finally:
         core.release_pr_lock(lock_ref)
-    print(f"{sha[:10]} {INVALIDATION_CONTEXT}: recorded {action} at semantic event time {event_time}")
+    suffix = f" at semantic event time {event_time}" if event_time else " using legacy persistence time"
+    print(f"{sha[:10]} {INVALIDATION_CONTEXT}: recorded {action}{suffix}")
 
 
 def main() -> None:
