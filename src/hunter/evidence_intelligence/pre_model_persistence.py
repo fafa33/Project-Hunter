@@ -7,7 +7,7 @@ from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from typing import Any, Literal
 
-from hunter.evidence_intelligence.models import EvidenceSpan
+from hunter.evidence_intelligence.models import EvidenceSpan, evidence_text_digest
 from hunter.evidence_intelligence.pre_model import (
     EvidenceCapabilityConstraint,
     EvidenceContextAllocationResult,
@@ -512,6 +512,18 @@ def _validate_bundle_lineage(
         {decision.span_id for decision in ledger.decisions} == set(spans_by_id),
         "supplied canonical inventory does not match the build's ledger decisions",
     )
+    for span in canonical_inventory:
+        # `text_hash` is a claim about the excerpt bytes. Evidence Intelligence
+        # has exactly one convention for that claim (models.evidence_text_digest,
+        # used by intake, the only original producer of EvidenceSpan), so it can
+        # be recomputed rather than trusted. Without this, an excerpt altered
+        # while its stale hash and offsets were left intact would be persisted
+        # as provenance for text it does not contain.
+        _require(
+            evidence_text_digest(span.excerpt) == span.text_hash,
+            f"supplied span {span.span_id} excerpt bytes do not match its claimed text_hash",
+        )
+
     for decision in ledger.decisions:
         span = spans_by_id[decision.span_id]
         _require(

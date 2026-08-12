@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from hunter.evidence_intelligence.models import EvidenceDocument, EvidenceSpan
+from hunter.evidence_intelligence.models import EvidenceDocument, EvidenceSpan, evidence_text_digest
 from hunter.evidence_intelligence.pre_model import (
     EvidenceCapabilityConstraint,
     EvidenceExtractionIntent,
@@ -281,7 +281,7 @@ def _span(span_id: str, excerpt: str, start_offset: int) -> EvidenceSpan:
         end_offset=start_offset + len(excerpt.encode("utf-8")),
         chunk_id=f"chunk-{span_id}",
         chunk_version="1",
-        text_hash=f"hash-{span_id}",
+        text_hash=evidence_text_digest(excerpt),
         excerpt=excerpt,
         section_title="Test",
         locator=f"test:{span_id}",
