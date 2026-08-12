@@ -374,9 +374,7 @@ def _validate_prompt_artifact(artifact: EvidencePromptArtifact | None) -> None:
 
 
 def _canonical_json(value: object) -> str:
-    return json.dumps(
-        value, sort_keys=True, separators=(",", ":"), ensure_ascii=False
-    )
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
 def _jsonable(value: Any) -> Any:
