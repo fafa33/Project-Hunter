@@ -8,12 +8,13 @@ name: Hunter / Merge Readiness
 # Feedback contract:
 # - every unresolved inline review thread blocks;
 # - every current CHANGES_REQUESTED review blocks;
-# - every top-level PR Conversation comment blocks until the repository owner
-#   acknowledges that exact current comment with a 👍 reaction;
-# - editing a previously acknowledged comment invalidates that acknowledgement
-#   until the owner removes/re-applies 👍 after the edit;
-# - bots, informational comments, dependency reports, and owner-authored comments
-#   receive no exemption.
+# - human and unknown top-level PR Conversation comments block until the
+#   repository owner acknowledges that exact current comment with a 👍 reaction;
+# - editing a previously acknowledged non-exempt comment invalidates that
+#   acknowledgement until the owner removes/re-applies 👍 after the edit;
+# - only structurally identifiable status/advisory comments emitted by trusted
+#   repository automation are exempt from owner acknowledgement. Unknown bots
+#   remain fail-closed.
 #
 # workflow_dispatch lets an operator force an immediate, full reconciliation for a
 # single PR (the same check-runs-based evaluation the periodic schedule performs),
@@ -53,8 +54,8 @@ on:
       - Hunter Governance Review
     types:
       - completed
-  # GitHub Actions has no reaction event. Polling makes owner 👍 acknowledgements
-  # observable without requiring a dummy PR edit/comment to wake the gate.
+  # GitHub Actions has no reaction event. Polling keeps acknowledgements of
+  # non-exempt comments observable without requiring a dummy PR edit/comment.
   schedule:
     - cron: "*/5 * * * *"
   workflow_dispatch:
@@ -87,7 +88,7 @@ jobs:
       # from the ref that happened to trigger this run. This matters most for
       # workflow_dispatch: an operator can dispatch from any branch that carries
       # this workflow file, and an unpinned checkout would execute that branch's
-      # version of hunter_merge_readiness.py with statuses: write permission.
+      # version of the readiness controller with statuses: write permission.
       - name: Checkout trusted controller (default branch)
         uses: actions/checkout@v4
         with:
@@ -100,4 +101,4 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          python scripts/hunter_merge_readiness.py
+          python scripts/hunter_merge_readiness_entrypoint.py
