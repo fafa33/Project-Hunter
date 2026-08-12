@@ -1,5 +1,6 @@
 import os
 import sys
+import urllib.error
 from datetime import UTC, datetime
 from unittest.mock import patch
 
@@ -11,6 +12,10 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 import hunter_merge_readiness
 
 
+def http_error(code: int) -> urllib.error.HTTPError:
+    return urllib.error.HTTPError("https://api.github.com", code, "mock", {}, None)
+
+
 class MockGitHubServer:
     def __init__(self):
         self.pulls = {}
@@ -20,6 +25,7 @@ class MockGitHubServer:
         self.reviews = {}
         self.reactions = {}
         self.review_comments = {}
+        self.refs = {}
         self.published = []
         self.gql_threads = 0
         self.api_calls = []  # Log order of all API calls to assert sequencing
@@ -29,6 +35,12 @@ class MockGitHubServer:
         self.api_calls.append((method, clean_path, payload))
 
         if method == "POST":
+            if clean_path == "git/refs":
+                ref = payload["ref"]
+                if ref in self.refs:
+                    raise http_error(422)
+                self.refs[ref] = payload["sha"]
+                return {}
             if clean_path.startswith("statuses/"):
                 sha = clean_path.split("/")[-1]
                 self.published.append((sha, payload["state"], payload["description"]))
@@ -43,6 +55,15 @@ class MockGitHubServer:
                         "created_at": datetime.now(UTC).isoformat(),
                     }
                 )
+                return {}
+            return {}
+
+        if method == "DELETE":
+            if clean_path.startswith("git/refs/"):
+                ref = "refs/" + clean_path[len("git/refs/") :]
+                if ref not in self.refs:
+                    raise http_error(404)
+                del self.refs[ref]
                 return {}
             return {}
 
@@ -1452,3 +1473,206 @@ def test_main_workflow_dispatch_without_pr_number_exits(tmp_path, monkeypatch):
 
     with pytest.raises(SystemExit):
         hunter_merge_readiness.main()
+
+
+# ====================================================================================
+# RECONCILIATION LOCK / SCHEDULE-VS-EDIT RACE REGRESSION TESTS
+# ====================================================================================
+
+
+def _fully_green_pr(sha="sha_123", updated_at="2026-08-05T00:30:00Z"):
+    return {
+        "number": 123,
+        "state": "open",
+        "head": {"sha": sha},
+        "body": "Acceptance-criteria matrix:\n| Acceptance criterion | Status |\n| Wire up | PASS |\n- [x] `READY FOR REVIEW`",
+        "draft": False,
+        "user": {"login": "human"},
+        "updated_at": updated_at,
+    }
+
+
+def _fully_green_check_runs(sha="sha_123", governance_started_at="2026-08-05T00:50:00Z"):
+    return [
+        {
+            "name": "Hunter Governance Review",
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": governance_started_at,
+            "id": 100,
+        },
+        {"name": "Quality Gates", "status": "completed", "conclusion": "success", "id": 101},
+        {"name": "dependency-review", "status": "completed", "conclusion": "success", "id": 102},
+        {"name": "CodeQL", "status": "completed", "conclusion": "success", "id": 103},
+    ]
+
+
+def test_schedule_edit_race_prevents_stale_success(gh):
+    """Test: a real PR edit that lands after evaluate()'s initial PR fetch but
+    before the final success publish must still be caught. This is the exact
+    schedule-vs-edit race: a scheduled sweep reads a fully-green snapshot, and
+    a concurrent real edit's invalidation becomes visible only when
+    ``_confirm_still_fresh_before_success`` re-fetches the PR under the lock.
+    Expected: readiness stays pending, never publishes the stale success.
+    """
+    hunter_merge_readiness.event_name = "schedule"
+
+    gh.pulls[123] = _fully_green_pr(updated_at="2026-08-05T00:30:00Z")
+    gh.check_runs["sha_123"] = _fully_green_check_runs()
+    gh.statuses["sha_123"] = [
+        {"context": "Hunter Governance Review", "state": "success", "created_at": "2026-08-05T01:00:00Z", "id": 1},
+        {"context": "Hunter Merge Readiness", "state": "pending", "description": "Waiting...", "id": 2},
+    ]
+
+    pulls_get_count = {"n": 0}
+    original_request_json = gh.request_json
+
+    def racing_request_json(method, path, payload=None):
+        clean_path = path.split("?")[0]
+        if method == "GET" and clean_path == "pulls/123":
+            pulls_get_count["n"] += 1
+            if pulls_get_count["n"] >= 2:
+                # A real edit landed concurrently, after evaluate()'s initial
+                # read but before the confirm-still-fresh recheck.
+                return _fully_green_pr(updated_at="2026-08-05T01:10:00Z")
+        return original_request_json(method, path, payload)
+
+    with patch("hunter_merge_readiness.request_json", side_effect=racing_request_json):
+        hunter_merge_readiness.evaluate(123, poll=False)
+
+    assert pulls_get_count["n"] >= 2
+    assert gh.published[-1][1] == "pending"
+    assert "concurrent semantic invalidation detected" in gh.published[-1][2]
+    # The stale success must never have been published at all.
+    assert all(state != "success" for _sha, state, _desc in gh.published)
+
+
+def test_confirm_still_fresh_blocks_on_lock_contention(gh, monkeypatch):
+    """If the per-PR reconciliation lock cannot be acquired immediately before
+    the success publish (e.g. a concurrent semantic-invalidation write holds
+    it), readiness must stay pending rather than fail open into success.
+    """
+    hunter_merge_readiness.event_name = "schedule"
+
+    gh.pulls[123] = _fully_green_pr()
+    gh.check_runs["sha_123"] = _fully_green_check_runs()
+    gh.statuses["sha_123"] = [
+        {"context": "Hunter Governance Review", "state": "success", "created_at": "2026-08-05T01:00:00Z", "id": 1},
+        {"context": "Hunter Merge Readiness", "state": "pending", "description": "Waiting...", "id": 2},
+    ]
+
+    monkeypatch.setattr(hunter_merge_readiness, "acquire_pr_lock", lambda pr_number, sha: None)
+
+    hunter_merge_readiness.evaluate(123, poll=False)
+
+    assert gh.published[-1][1] == "pending"
+    assert "concurrent semantic invalidation detected" in gh.published[-1][2]
+
+
+def test_confirm_still_fresh_blocks_on_head_change(gh):
+    """If the PR's head SHA changed by the time ``_confirm_still_fresh_before_success``
+    re-fetches it, readiness must stay pending for the (now-superseded) SHA it
+    was evaluating, never publish success for a head that has already moved on.
+    """
+    hunter_merge_readiness.event_name = "schedule"
+
+    gh.pulls[123] = _fully_green_pr(sha="sha_123")
+    gh.check_runs["sha_123"] = _fully_green_check_runs(sha="sha_123")
+    gh.statuses["sha_123"] = [
+        {"context": "Hunter Governance Review", "state": "success", "created_at": "2026-08-05T01:00:00Z", "id": 1},
+        {"context": "Hunter Merge Readiness", "state": "pending", "description": "Waiting...", "id": 2},
+    ]
+
+    pulls_get_count = {"n": 0}
+    original_request_json = gh.request_json
+
+    def head_moves_request_json(method, path, payload=None):
+        clean_path = path.split("?")[0]
+        if method == "GET" and clean_path == "pulls/123":
+            pulls_get_count["n"] += 1
+            if pulls_get_count["n"] >= 2:
+                return _fully_green_pr(sha="sha_new")
+        return original_request_json(method, path, payload)
+
+    with patch("hunter_merge_readiness.request_json", side_effect=head_moves_request_json):
+        hunter_merge_readiness.evaluate(123, poll=False)
+
+    assert gh.published[-1][1] == "pending"
+    assert "concurrent semantic invalidation detected" in gh.published[-1][2]
+    assert all(state != "success" for _sha, state, _desc in gh.published)
+
+
+def test_confirm_still_fresh_succeeds_and_releases_lock_when_still_fresh(gh):
+    """Test: fresh Governance with no concurrent invalidation -> readiness
+    succeeds, and the reconciliation lock is acquired then released exactly
+    once around the confirmation, never left held.
+    """
+    hunter_merge_readiness.event_name = "schedule"
+
+    gh.pulls[123] = _fully_green_pr()
+    gh.check_runs["sha_123"] = _fully_green_check_runs()
+    gh.statuses["sha_123"] = [
+        {"context": "Hunter Governance Review", "state": "success", "created_at": "2026-08-05T01:00:00Z", "id": 1},
+        {"context": "Hunter Merge Readiness", "state": "pending", "description": "Waiting...", "id": 2},
+    ]
+
+    hunter_merge_readiness.evaluate(123, poll=False)
+
+    assert gh.published[-1][1] == "success"
+    assert "Ready to merge" in gh.published[-1][2]
+    # Lock was created then deleted; nothing left held afterward.
+    assert gh.refs == {}
+    lock_creates = [call for call in gh.api_calls if call[0] == "POST" and call[1] == "git/refs"]
+    lock_deletes = [call for call in gh.api_calls if call[0] == "DELETE" and call[1].startswith("git/refs/")]
+    assert len(lock_creates) == 1
+    assert len(lock_deletes) == 1
+
+
+def test_acquire_pr_lock_retries_on_contention_then_succeeds():
+    """acquire_pr_lock must retry (not immediately fail closed) on a 422
+    contention response, and eventually succeed once the holder releases it.
+    """
+    sleeps = []
+    calls = {"n": 0}
+
+    def flaky_request_json(method, path, payload=None):
+        if method == "POST" and path == "git/refs":
+            calls["n"] += 1
+            if calls["n"] < 3:
+                raise http_error(422)
+            return {}
+        raise AssertionError(f"unexpected call: {method} {path}")
+
+    with patch("hunter_merge_readiness.request_json", side_effect=flaky_request_json):
+        result = hunter_merge_readiness.acquire_pr_lock(123, "sha_123", sleep_fn=sleeps.append)
+
+    assert result == "refs/hunter-merge-readiness-locks/pr-123"
+    assert calls["n"] == 3
+    assert len(sleeps) == 2
+
+
+def test_release_pr_lock_tolerates_missing_ref():
+    """release_pr_lock must not raise when the ref is already gone (404) --
+    e.g. a previous run's abandoned-lock recovery already cleared it.
+    """
+
+    def not_found(method, path, payload=None):
+        assert method == "DELETE"
+        assert path == "git/refs/hunter-merge-readiness-locks/pr-123"
+        raise http_error(404)
+
+    with patch("hunter_merge_readiness.request_json", side_effect=not_found):
+        hunter_merge_readiness.release_pr_lock("refs/hunter-merge-readiness-locks/pr-123")
+
+
+def test_lock_ref_is_not_under_refs_heads():
+    """The reconciliation lock ref must NOT live under refs/heads/ (a branch)
+    or refs/tags/. Creating/deleting a refs/heads/* ref is a `push`/`create`
+    webhook event, and this repository's hunter-pre-pr-preflight.yml workflow
+    triggers on `push: branches-ignore: [main]` -- a lock ref under
+    refs/heads/ would recursively spawn a full Preflight CI run on every
+    single lock acquisition. This guards against ever reintroducing that.
+    """
+    ref_name = hunter_merge_readiness.LOCK_REF_NAMESPACE + "123"
+    assert not ref_name.startswith("refs/heads/")
+    assert not ref_name.startswith("refs/tags/")
