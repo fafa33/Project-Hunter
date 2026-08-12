@@ -49,7 +49,9 @@ def test_non_exempt_comment_delegates_to_existing_owner_ack(monkeypatch) -> None
         seen.append(value)
         return True
 
-    monkeypatch.setattr(policy, "_original_owner_acknowledged_comment", fake_owner_ack)
+    monkeypatch.setattr(
+        policy, "_original_owner_acknowledged_comment", fake_owner_ack
+    )
     item = comment("reviewer", "Human feedback")
     assert policy.owner_acknowledged_comment_with_bot_exemptions(item)
     assert seen == [item]
@@ -59,7 +61,9 @@ def test_exempt_comment_does_not_consume_reaction_lookup(monkeypatch) -> None:
     def fail_if_called(_value: dict) -> bool:
         raise AssertionError("trusted status comment consumed reaction lookup")
 
-    monkeypatch.setattr(policy, "_original_owner_acknowledged_comment", fail_if_called)
+    monkeypatch.setattr(
+        policy, "_original_owner_acknowledged_comment", fail_if_called
+    )
     item = comment(LOGIN, DRAFT_BODY)
     assert policy.owner_acknowledged_comment_with_bot_exemptions(item)
 
@@ -109,7 +113,11 @@ def test_durable_semantic_edit_marker_stales_older_governance(monkeypatch) -> No
     edit_time = datetime(2026, 8, 12, 6, 16, 55, tzinfo=UTC)
 
     monkeypatch.setattr(policy.core, "paged", lambda _path: [])
-    monkeypatch.setattr(policy, "_original_get_latest_invalidation_time", lambda _n, _pr: base_time)
+    monkeypatch.setattr(
+        policy,
+        "_original_get_latest_invalidation_time",
+        lambda _n, _pr: base_time,
+    )
     monkeypatch.setattr(
         policy.core,
         "latest_commit_status",
@@ -134,7 +142,11 @@ def test_semantic_edit_event_persists_invalidation_status(monkeypatch) -> None:
     calls = []
     monkeypatch.setattr(policy.core, "event_name", "pull_request_target")
     monkeypatch.setattr(policy.core, "run_url", "https://example.invalid/run")
-    monkeypatch.setattr(policy.core, "request_json", lambda method, path, payload: calls.append((method, path, payload)))
+    monkeypatch.setattr(
+        policy.core,
+        "request_json",
+        lambda method, path, payload: calls.append((method, path, payload)),
+    )
 
     policy.record_semantic_pr_invalidation(
         {
