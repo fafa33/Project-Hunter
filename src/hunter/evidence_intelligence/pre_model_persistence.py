@@ -21,6 +21,7 @@ from hunter.evidence_intelligence.pre_model import (
     EvidencePromptArtifact,
     EvidencePromptPlan,
     EvidencePromptSpecification,
+    _render_prompt,
 )
 from hunter.evidence_intelligence.repository import EvidenceIntelligenceRepository
 
@@ -116,9 +117,10 @@ class EvidencePreModelPersistenceRepository:
         permanently under a build identity it did not produce.
 
         ``retain_exact_source_bytes`` carries the governing retention decision.
-        When it is None it is derived from the build record's reason codes; an
-        explicit False (e.g. the orchestration request's ``retain_exact_prompt``)
-        also covers builds that failed before a prompt artifact existed.
+        When it is None the decision is derived from the build result, and
+        persistence is refused outright when it cannot be derived: ADR 0031
+        requires a handling classification to exist before durable persistence,
+        so guessing either way would be wrong.
         """
         _aware("recorded_at", recorded_at)
         inventory = tuple(canonical_inventory)
@@ -130,9 +132,15 @@ class EvidencePreModelPersistenceRepository:
             canonical_inventory=inventory,
             build_result=build_result,
         )
+        _validate_known_at_lower_bound(recorded_at.astimezone(UTC), inventory)
 
         if retain_exact_source_bytes is None:
-            retain_exact_source_bytes = RETENTION_PROHIBITED_REASON_CODE not in build_result.build_record.reason_codes
+            retain_exact_source_bytes = _derive_source_retention(build_result)
+        if retain_exact_source_bytes is None:
+            raise PreModelPersistenceLineageError(
+                "source retention policy cannot be derived for a build that produced no prompt artifact; "
+                "pass retain_exact_source_bytes explicitly"
+            )
         if not retain_exact_source_bytes:
             artifact = build_result.prompt_artifact
             if artifact is not None and artifact.content:
@@ -407,6 +415,47 @@ def _require(condition: bool, message: str) -> None:
         raise PreModelPersistenceLineageError(message)
 
 
+def _derive_source_retention(build_result: EvidencePreModelBuildResult) -> bool | None:
+    """Infer the governing source-retention decision, or None when undecidable.
+
+    Only two states are self-evident from a build result: the explicit
+    prohibition reason code, and a build that actually retained prompt bytes.
+    A build that failed before producing a prompt (REPLAN_REQUIRED /
+    INSUFFICIENT_BUDGET) carries neither signal even when the caller requested
+    `retain_exact_prompt=False`, so its retention policy is genuinely unknown
+    here and must be supplied rather than assumed.
+    """
+    if RETENTION_PROHIBITED_REASON_CODE in build_result.build_record.reason_codes:
+        return False
+    artifact = build_result.prompt_artifact
+    if artifact is not None and artifact.content:
+        return True
+    return None
+
+
+def _validate_known_at_lower_bound(recorded_at: datetime, canonical_inventory: tuple[EvidenceSpan, ...]) -> None:
+    """Reject a known-at coordinate that predates the evidence it contains.
+
+    ``strict_known_bundle`` selects on ``recorded_at <= cutoff``, so a backdated
+    coordinate would let a cutoff query return a bundle built from spans that
+    did not yet exist at that cutoff -- a false historical-knowledge claim of
+    exactly the kind ADR 0031 forbids. The bundle's true lower bound is the
+    latest creation/validation time among its own persisted spans.
+    """
+    bounds: list[datetime] = []
+    for span in canonical_inventory:
+        bounds.append(span.created_at.astimezone(UTC))
+        bounds.append(span.validated_at.astimezone(UTC))
+    if not bounds:
+        return
+    earliest_known_at = max(bounds)
+    if recorded_at < earliest_known_at:
+        raise PreModelPersistenceLineageError(
+            f"recorded_at {recorded_at.isoformat()} predates the evidence it contains "
+            f"(earliest valid known-at coordinate is {earliest_known_at.isoformat()})"
+        )
+
+
 def _validate_bundle_lineage(
     *,
     intent: EvidenceExtractionIntent,
@@ -528,6 +577,29 @@ def _validate_bundle_lineage(
             "build record does not reference the supplied prompt artifact",
         )
         _validate_prompt_artifact(artifact)
+
+        # `text_hash` is caller-supplied metadata with no defined relationship
+        # to `excerpt` anywhere in this codebase, so comparing hashes cannot
+        # detect an excerpt that was altered while its hash was left intact.
+        # Re-rendering is the only available proof that these exact span bytes
+        # are the ones that produced this artifact. This works even when
+        # retention is prohibited, because `content_hash` is always the digest
+        # of the full rendered prompt regardless of whether it was retained.
+        rendered = _render_prompt(
+            intent=intent,
+            specification=specification,
+            spans=tuple(spans_by_id[span_id] for span_id in package.ordered_span_ids),
+            missingness_reason_codes=prompt_plan.missingness_reason_codes,
+        )
+        encoded = rendered.encode(artifact.encoding)
+        _require(
+            hashlib.sha256(encoded).hexdigest() == artifact.content_hash,
+            "supplied inventory does not re-render the build's exact prompt artifact",
+        )
+        _require(
+            len(encoded) == artifact.measured_size_bytes,
+            "supplied inventory does not re-render the build's exact prompt size",
+        )
 
     _require(build.intent_id == intent.intent_id, "build record does not belong to the supplied intent")
     _require(build.ledger_id == ledger.ledger_id, "build record does not belong to the supplied ledger")
