@@ -4,20 +4,18 @@ This module keeps the core readiness controller fail-closed while exempting only
 structurally identifiable, repository-generated status/advisory comments from the
 owner-acknowledgment requirement and governance-freshness invalidation.
 
-It also records a durable semantic invalidation marker for pull-request lifecycle
-changes that can alter the governance subject. This avoids using GitHub's aggregate
-``pull_request.updated_at`` as a semantic clock while still preventing a scheduled
-reconciliation from re-accepting an older same-head Governance Review after a
-real PR edit.
+It records durable semantic invalidation markers for pull-request lifecycle
+changes. For real GitHub lifecycle payloads, the marker carries the GitHub-authored
+event timestamp captured from the trusted ``pull_request_target`` payload. That
+timestamp represents when the semantic PR change occurred, while commit-status
+``created_at`` represents only when the readiness worker happened to persist the
+marker. Using event time prevents workflow scheduling latency from falsely making
+an exact-head Governance Review look older than the change that triggered it.
 
 Migration note: a PR that has never received a semantic invalidation marker under
-this policy (i.e. every PR that was already open the moment this code first
-evaluates it) falls back one time to a conservative backfill baseline derived
-from its raw ``updated_at`` at that moment, persisted durably so the aggregate
-clock never has to be consulted again for that PR. This is required so that a
-PR which is legitimately stale under the previous (pre-migration) policy is not
-silently forgiven the instant this code starts running -- see
-``backfill_semantic_baseline``.
+this policy falls back one time to a conservative backfill baseline derived from
+its raw ``updated_at`` at that moment, persisted durably so the aggregate clock
+never has to be consulted again for that PR.
 """
 
 import json
@@ -39,16 +37,10 @@ SEMANTIC_PR_ACTIONS = {
     "ready_for_review",
     "converted_to_draft",
 }
-# Backfill markers encode their baseline in the description because the
-# baseline is a historical timestamp (the PR's raw updated_at as observed at
-# migration time), not "now" -- and a commit status's created_at is always
-# server-assigned to the POST time, so it cannot carry a value from the past.
-# Real semantic-edit markers deliberately do NOT use this: their created_at
-# (server time) IS the correct invalidation boundary, and trusting only the
-# server clock for those is a deliberate security property -- a compromised
-# or buggy caller cannot backdate a real edit's invalidation.
 BACKFILL_DESCRIPTION_PREFIX = "Migration backfill baseline (raw updated_at):"
 BACKFILL_TIMESTAMP_PATTERN = re.compile(re.escape(BACKFILL_DESCRIPTION_PREFIX) + r"\s*(\S+)")
+SEMANTIC_EVENT_TIME_PREFIX = "event_time="
+SEMANTIC_EVENT_TIME_PATTERN = re.compile(re.escape(SEMANTIC_EVENT_TIME_PREFIX) + r"(\S+)")
 
 
 def is_exempt_status_comment(comment: dict) -> bool:
@@ -74,58 +66,63 @@ def owner_acknowledged_comment_with_bot_exemptions(comment: dict) -> bool:
 
 
 def semantic_pr_view(pr: dict) -> dict:
-    """Return a copy whose aggregate activity timestamp cannot stale governance.
-
-    ``updated_at`` is intentionally neutralized to the stable creation timestamp.
-    Real same-head PR edits are represented by the durable invalidation status
-    written from their lifecycle webhook instead.
-    """
+    """Return a copy whose aggregate activity timestamp cannot stale governance."""
     view = dict(pr)
     view["updated_at"] = pr.get("created_at")
     return view
 
 
 def _marker_effective_time(status: dict) -> datetime | None:
-    """Returns the semantic time a durable invalidation marker represents.
+    """Return the semantic time represented by a durable invalidation marker.
 
-    A migration-backfill marker encodes its historical baseline in the
-    description (see module docstring); any other marker's server-assigned
-    ``created_at`` is itself the correct, trustworthy boundary.
+    New lifecycle markers persist the GitHub-authored event time in their
+    description. Status ``created_at`` is persistence latency and is used only
+    for legacy markers that predate event-time encoding. Migration markers
+    continue to encode their historical baseline explicitly.
     """
     description = status.get("description") or ""
-    match = BACKFILL_TIMESTAMP_PATTERN.search(description)
-    if match:
-        parsed = core.parse_time(match.group(1))
+    backfill_match = BACKFILL_TIMESTAMP_PATTERN.search(description)
+    if backfill_match:
+        parsed = core.parse_time(backfill_match.group(1))
+        if parsed is not None:
+            return parsed
+    event_match = SEMANTIC_EVENT_TIME_PATTERN.search(description)
+    if event_match:
+        parsed = core.parse_time(event_match.group(1))
         if parsed is not None:
             return parsed
     return core.parse_time(status.get("created_at"))
 
 
 def latest_semantic_invalidation_time(pr: dict) -> datetime | None:
+    """Return the monotonic semantic invalidation boundary for the current head.
+
+    Persistence order is not semantic order: GitHub may rerun or finish an older
+    same-head lifecycle workflow after a newer one, producing a higher-ID status
+    whose encoded ``event_time`` is earlier. Therefore the boundary is the maximum
+    effective time across *all* durable invalidation markers for this exact head,
+    never simply the most recently persisted status.
+    """
     sha = ((pr.get("head") or {}).get("sha") or "").strip()
     if not sha:
         return None
-    status = core.latest_commit_status(sha, INVALIDATION_CONTEXT)
-    if not status:
+
+    statuses = core.all_commit_statuses(sha)
+    effective_times = []
+    for status in statuses:
+        if not isinstance(status, dict) or status.get("context") != INVALIDATION_CONTEXT:
+            continue
+        effective_time = _marker_effective_time(status)
+        if effective_time is not None:
+            effective_times.append(effective_time)
+
+    if not effective_times:
         return None
-    return _marker_effective_time(status)
+    return max(effective_times)
 
 
 def backfill_semantic_baseline(pr: dict) -> datetime | None:
-    """One-time migration step for a head SHA with no durable marker at all.
-
-    The instant this policy starts evaluating a PR that predates it, there is
-    no recorded semantic evidence for whatever real edits happened before
-    deployment -- only the (now-neutralized) aggregate ``updated_at`` still
-    reflects that history. This persists that raw value durably, under the
-    same commit-status context, so it is never silently forgiven and so every
-    later evaluation can stop consulting the aggregate clock entirely (it
-    will find this marker instead). Best-effort durability: if the write
-    itself cannot be completed, the computed baseline is still returned and
-    used for this one evaluation, so a transient persistence failure can
-    never silently drop real historical staleness -- only defer re-recording
-    it to the next evaluation.
-    """
+    """One-time migration step for a head SHA with no durable marker at all."""
     sha = ((pr.get("head") or {}).get("sha") or "").strip()
     if not sha:
         return None
@@ -161,7 +158,7 @@ def backfill_semantic_baseline(pr: dict) -> datetime | None:
 
 
 def get_latest_invalidation_time_with_bot_exemptions(pr_number: int, pr: dict):
-    """Use semantic evidence plus a durable PR-edit marker for freshness."""
+    """Use explicit feedback plus durable semantic PR-event evidence."""
     original_paged = core.paged
     top_level_comments_path = f"issues/{pr_number}/comments"
 
@@ -185,19 +182,21 @@ def get_latest_invalidation_time_with_bot_exemptions(pr_number: int, pr: dict):
     return max(base_time, durable_time)
 
 
-def record_semantic_pr_invalidation(event: dict) -> None:
-    """Persist a same-head invalidation boundary before reconciliation can race it.
+def _semantic_event_time(pr: dict) -> str | None:
+    """Return a valid GitHub-authored lifecycle timestamp when present.
 
-    Durable, fail-closed write: acquires the per-PR reconciliation lock (so
-    this cannot race a concurrent scheduled sweep's freshness recheck for the
-    same PR -- see ``hunter_merge_readiness._confirm_still_fresh_before_success``)
-    and retries the POST itself with bounded backoff on transient failures.
-    If the lock cannot be acquired, or the write cannot be completed after
-    retrying, this raises. Callers MUST NOT proceed to any path that could
-    publish a governance success for this event after this raises -- the
-    real edit's invalidation would otherwise have no record anywhere and a
-    later evaluation could wrongly treat stale governance as fresh.
+    Real ``pull_request_target`` payloads include ``updated_at``. The ``None``
+    fallback exists only for legacy/synthetic callers and old unit fixtures;
+    such markers retain their historical server-``created_at`` semantics.
     """
+    value = (pr.get("updated_at") or pr.get("created_at") or "").strip()
+    if not value or core.parse_time(value) is None:
+        return None
+    return value
+
+
+def record_semantic_pr_invalidation(event: dict) -> None:
+    """Persist a same-head invalidation boundary before reconciliation can race it."""
     if core.event_name != "pull_request_target":
         return
     action = (event.get("action") or "").strip()
@@ -208,6 +207,7 @@ def record_semantic_pr_invalidation(event: dict) -> None:
     sha = ((pr.get("head") or {}).get("sha") or "").strip()
     if not sha or not pr_number:
         raise RuntimeError("semantic PR invalidation event has no head SHA/PR number")
+    event_time = _semantic_event_time(pr)
 
     lock_ref = core.acquire_pr_lock(int(pr_number), sha)
     if lock_ref is None:
@@ -218,13 +218,16 @@ def record_semantic_pr_invalidation(event: dict) -> None:
     try:
 
         def _post() -> None:
+            description = f"Semantic PR invalidation recorded: {action}"
+            if event_time is not None:
+                description += f"; {SEMANTIC_EVENT_TIME_PREFIX}{event_time}"
             core.request_json(
                 "POST",
                 f"statuses/{sha}",
                 {
                     "state": "success",
                     "context": INVALIDATION_CONTEXT,
-                    "description": f"Semantic PR invalidation recorded: {action}",
+                    "description": description,
                     "target_url": core.run_url,
                 },
             )
@@ -232,15 +235,14 @@ def record_semantic_pr_invalidation(event: dict) -> None:
         core.retry_transient(_post)
     finally:
         core.release_pr_lock(lock_ref)
-    print(f"{sha[:10]} {INVALIDATION_CONTEXT}: recorded {action}")
+    suffix = f" at semantic event time {event_time}" if event_time else " using legacy persistence time"
+    print(f"{sha[:10]} {INVALIDATION_CONTEXT}: recorded {action}{suffix}")
 
 
 def main() -> None:
     core.owner_acknowledged_comment = owner_acknowledged_comment_with_bot_exemptions
     core.get_latest_invalidation_time = get_latest_invalidation_time_with_bot_exemptions
 
-    # Initialize once here so the durable invalidation marker is written before
-    # core.main() can evaluate or a concurrent scheduled reconciliation can win.
     core.init_globals()
     with open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8") as handle:
         event = json.load(handle)
@@ -248,11 +250,6 @@ def main() -> None:
     try:
         record_semantic_pr_invalidation(event)
     except Exception as exc:
-        # Fail closed: a real semantic edit's invalidation could not be
-        # durably recorded, so core.main() must not run for this event --
-        # doing so could compute and publish a governance success that does
-        # not account for this edit. Surface this as clearly as possible and
-        # let the next event/schedule tick retry from a clean slate.
         print(
             f"Could not durably record semantic PR invalidation ({type(exc).__name__}: {exc}); "
             "failing closed instead of proceeding to a possible success publish."
