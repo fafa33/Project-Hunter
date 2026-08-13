@@ -88,6 +88,10 @@ hard_failures = {"failure", "timed_out", "action_required", "startup_failure"}
 # gives up and withholds green instead. See reconcile_pr().
 SUCCESS_CONVERGENCE_ATTEMPTS = 3
 
+# Written over a `success` this run published when the run goes on to decide
+# against green. See _retract_greens().
+RETRACTED_DESCRIPTION = "Waiting: this readiness result was superseded while it was being published."
+
 TRUSTED_BOT_LOGIN = "github-actions[bot]"
 DEPENDENCY_REVIEW_MARKER = "<!-- dependency-review-pr-comment-marker -->"
 DRAFT_PROMOTION_MARKER_PREFIX = "<!-- hunter-draft-promotion:"
@@ -1011,12 +1015,33 @@ def _converge_after_publishing_success(
         publish(observed.head_sha, decision.state, decision.description, observed.published_readiness)
         if decision.state == "success":
             greened_heads.add(observed.head_sha)
-        else:
-            greened_heads.discard(observed.head_sha)
-            return decision
+            continue
+        # This run has decided against green. Publishing that decision on the
+        # head it observed is not enough: a green it wrote during an earlier
+        # iteration may still be standing on a *different* commit, and a force
+        # push can make that commit the head again at any moment.
+        greened_heads.discard(observed.head_sha)
+        _retract_greens(greened_heads)
+        return decision
 
     print(f"PR #{pr_number}: state is changing faster than readiness can be confirmed; withholding green.")
     return _withhold_green(pr_number, greened_heads, decision)
+
+
+def _retract_greens(greened_heads: set[str]) -> None:
+    """Retract every ``success`` this run published, on every commit it wrote one to.
+
+    Retraction is unconditional and does not depend on which commit is the head
+    right now. That is what makes the guarantee raceless rather than merely
+    bounded: a commit the pull request has moved off can become the head again
+    on the next force push, so "it is not the head at this instant" is not a
+    reason to leave a green standing on it. Once every commit this run greened
+    has been overwritten, no ordering of subsequent head movements can surface
+    one of this run's greens.
+    """
+    for head in sorted(greened_heads):
+        publish(head, "pending", RETRACTED_DESCRIPTION, None)
+    greened_heads.clear()
 
 
 def _withhold_green(
@@ -1024,28 +1049,23 @@ def _withhold_green(
     greened_heads: set[str],
     decision: ReadinessDecision,
 ) -> ReadinessDecision:
-    """Publish the withholding status and clear this run's greens off the head.
+    """Withhold green and leave none of this run's own greens behind.
 
-    Each round reads current state, writes the withholding status to *that*
-    snapshot's head paired with *that* snapshot's published status, and stops
-    once the head it just wrote to was not one this run had greened -- at which
-    point nothing this run published as green is standing on the current head.
+    Retracts first, then publishes the withholding status on the head that is
+    current afterwards. Ordering matters: once retraction has run, every commit
+    this run greened carries ``pending``, so wherever the head moves next it
+    cannot be carrying a green this run wrote.
     """
     exhausted = ReadinessDecision(
         "pending",
         "Waiting: pull-request state is changing faster than readiness can be confirmed.",
     )
-    for _ in range(SUCCESS_CONVERGENCE_ATTEMPTS):
-        final = read_current_state(pr_number)
-        if final is None:
-            print(f"PR #{pr_number} closed while withholding green; leaving the published status as is.")
-            return decision
-        was_greened = final.head_sha in greened_heads
-        publish(final.head_sha, exhausted.state, exhausted.description, final.published_readiness)
-        greened_heads.discard(final.head_sha)
-        if not was_greened:
-            return exhausted
-        print(f"PR #{pr_number}: head moved onto a commit this run had greened; clearing it and re-checking.")
+    _retract_greens(greened_heads)
+    final = read_current_state(pr_number)
+    if final is None:
+        print(f"PR #{pr_number} closed while withholding green; this run's greens were retracted.")
+        return exhausted
+    publish(final.head_sha, exhausted.state, exhausted.description, final.published_readiness)
     return exhausted
 
 

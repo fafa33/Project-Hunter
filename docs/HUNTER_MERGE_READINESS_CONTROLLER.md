@@ -155,13 +155,15 @@ through the same `_confirm_success` gate, so a converged green is never reached
 by `decide` alone and a controller-upgrade candidate is held to the admission
 kernel on each one.
 
-The guarantee the withholding path makes is about what a run leaves behind, not
-about any single write: **when the run returns, no `success` it published is
-standing on the pull request's current head.** A read-to-write window cannot be
-eliminated — nothing can write to a head that comes into existence after the
-write — so the path re-checks the head after writing and keeps correcting while
-the current head is still one this run greened, bounded, with anything beyond
-that converging on the next reconciliation.
+The guarantee is about what a run leaves behind: **when a run decides against
+green, every `success` it published is retracted, on every commit it wrote one
+to.** Retraction is unconditional and does not consult which commit is the head
+at that moment, which is what makes it raceless rather than merely bounded — a
+commit the pull request has moved off can become the head again on the next
+force push, so "not the head right now" is no reason to leave a green standing.
+Once retraction has run, no ordering of subsequent head movements can surface
+one of that run's greens. Both exits take it: the withholding path, and any
+convergence iteration that decides against green.
 
 A per-PR lock would not have been sufficient for this on its own: the lock this
 design removes was released before the status write in the generation that had

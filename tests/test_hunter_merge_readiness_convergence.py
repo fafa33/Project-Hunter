@@ -322,10 +322,22 @@ def test_a_sibling_on_another_base_branch_still_blocks_green(gh):
 
 
 def test_sibling_detection_ignores_closed_and_non_head_associations(gh):
-    """The commit->pulls endpoint is a superset; the filter must do real work."""
+    """The commit->pulls endpoint is a superset; both filters must do real work.
+
+    Three association shapes reach the filter, and only one of them shares the
+    status slot:
+
+    - a *closed* pull request on this exact head — not a sibling;
+    - an *open* pull request merely associated with the commit, whose own head
+      is elsewhere — not a sibling, because its readiness is judged at its own
+      head, not this one;
+    - an open pull request whose current head is this commit — a real sibling.
+    """
     head = "superset_head"
     gh.add_pull_request(661, head_sha=head)
     gh.add_pull_request(662, head_sha=head, state="closed")
+    gh.add_pull_request(663, head_sha="a_completely_different_head")
+    gh.associate_commit(663, head)
     gh.green_required_checks(head)
     gh.publish_governance(661)
 
@@ -333,6 +345,51 @@ def test_sibling_detection_ignores_closed_and_non_head_associations(gh):
 
     assert state.shared_head_pull_requests == ()
     assert core.decide(state).state == "success"
+
+    # And the real sibling shape is still caught.
+    gh.add_pull_request(664, head_sha=head)
+
+    assert core.read_current_state(661).shared_head_pull_requests == (664,)
+
+
+def test_a_retracted_green_does_not_survive_on_a_commit_the_head_returns_to(gh):
+    """A green on a commit the pull request left must not resurface with the head.
+
+    The run greens a commit, then decides against green while the head is
+    elsewhere. Retraction is unconditional, so when the head returns to the
+    greened commit it finds `pending`, not this run's stale `success`.
+    """
+    head_a = "retract_head_a"
+    head_b = "retract_head_b"
+    gh.add_pull_request(501, head_sha=head_a)
+    gh.green_required_checks(head_a)
+    gh.publish_governance(501)
+
+    original_publish = core.publish
+    writes = {"n": 0}
+
+    def publishing_then_moving_and_blocking(sha, state, description, published):
+        result = original_publish(sha, state, description, published)
+        writes["n"] += 1
+        if writes["n"] == 1:
+            # Move to a different head, and make that state non-green.
+            gh.pulls[501]["head"]["sha"] = head_b
+            gh.green_required_checks(head_b)
+            gh.publish_governance(501)
+            gh.add_unresolved_thread(501, "THREAD_AFTER_GREEN")
+        return result
+
+    core.publish = publishing_then_moving_and_blocking
+    try:
+        decision = core.reconcile_pr(501)
+    finally:
+        core.publish = original_publish
+
+    assert decision.state == "failure"
+    # The commit this run greened must no longer carry that green, even though
+    # it is not the head right now -- a force push can make it the head again.
+    assert gh.readiness_status(head_a)[0] == "pending"
+    assert gh.readiness_status(head_b)[0] == "failure"
 
 
 def test_a_converged_success_is_still_held_to_admission(gh, monkeypatch):

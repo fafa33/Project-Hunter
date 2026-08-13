@@ -43,6 +43,11 @@ class FakeGitHub:
         # pr number -> {current filename: previous filename}, modelling GitHub's
         # rename representation in the pull-files response.
         self.renames: dict[int, dict[str, str]] = {}
+        # pr number -> commits this pull request is *associated with* but whose
+        # head it is not. GitHub's commit->pulls endpoint returns associations,
+        # not head matches, so the two are tracked separately here; collapsing
+        # them would make the controller's exact-head filter untestable.
+        self.associated_commits: dict[int, set[str]] = {}
         self.statuses: dict[str, list[dict[str, Any]]] = {}
         self.check_runs: dict[str, list[dict[str, Any]]] = {}
         self.threads: dict[int, list[dict[str, Any]]] = {}
@@ -290,10 +295,21 @@ class FakeGitHub:
 
         raise AssertionError(f"unexpected GitHub call: {method} {path}")
 
-    @staticmethod
-    def _associated_with(pr: dict[str, Any], sha: str) -> bool:
-        """Superset match, mirroring the real endpoint's association semantics."""
-        return ((pr.get("head") or {}).get("sha") or "").strip() == sha
+    def _associated_with(self, pr: dict[str, Any], sha: str) -> bool:
+        """Superset match, mirroring the real endpoint's association semantics.
+
+        A pull request is associated with a commit when the commit is its
+        current head *or* when it merely contains the commit -- an earlier head
+        it has since force-pushed past, for instance. Both shapes are returned,
+        so the controller has to apply the exact-head filter itself.
+        """
+        if ((pr.get("head") or {}).get("sha") or "").strip() == sha:
+            return True
+        return sha in self.associated_commits.get(int(pr.get("number", 0)), set())
+
+    def associate_commit(self, number: int, sha: str) -> None:
+        """Associate a commit with a pull request without making it the head."""
+        self.associated_commits.setdefault(number, set()).add(sha)
 
     def graphql_json(self, query: str, variables: dict[str, Any]) -> Any:
         number = int(variables["number"])
