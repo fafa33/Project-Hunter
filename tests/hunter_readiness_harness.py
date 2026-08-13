@@ -229,7 +229,15 @@ class FakeGitHub:
         if clean == "pulls":
             if page > 1:
                 return []
-            return [pr for pr in self.pulls.values() if pr.get("state") == "open"]
+            # The list endpoint is base-scoped, exactly as the controller calls
+            # it. Modelled faithfully so a sibling on another base branch is
+            # genuinely invisible here -- that invisibility is the point.
+            base = params.get("base")
+            return [
+                pr
+                for pr in self.pulls.values()
+                if pr.get("state") == "open" and (base is None or ((pr.get("base") or {}).get("ref") or "") == base)
+            ]
 
         if parts[0] == "pulls" and len(parts) == 2:
             return self.pulls.get(int(parts[1]), {})
@@ -262,6 +270,15 @@ class FakeGitHub:
 
         if parts[0] == "commits" and len(parts) == 3:
             sha = parts[1]
+            if parts[2] == "pulls":
+                # GitHub's commit->pulls endpoint returns pull requests
+                # *associated with* the commit, across every base branch and
+                # regardless of state. Modelled as that superset on purpose, so
+                # the controller's own filtering is exercised rather than
+                # assumed.
+                if page > 1:
+                    return []
+                return [pr for pr in self.pulls.values() if self._associated_with(pr, sha)]
             if parts[2] == "statuses":
                 if page > 1:
                     return []
@@ -272,6 +289,11 @@ class FakeGitHub:
                 return {"check_runs": list(self.check_runs.get(sha, []))}
 
         raise AssertionError(f"unexpected GitHub call: {method} {path}")
+
+    @staticmethod
+    def _associated_with(pr: dict[str, Any], sha: str) -> bool:
+        """Superset match, mirroring the real endpoint's association semantics."""
+        return ((pr.get("head") or {}).get("sha") or "").strip() == sha
 
     def graphql_json(self, query: str, variables: dict[str, Any]) -> Any:
         number = int(variables["number"])

@@ -486,16 +486,34 @@ def open_pull_requests() -> list[dict[str, Any]]:
 
 
 def open_pull_requests_for_head(sha: str) -> list[dict[str, Any]]:
-    """Open pull requests whose exact current head is this SHA.
+    """Every open pull request whose exact current head is this SHA, any base.
 
-    A commit SHA is not a pull-request identity: several open pull requests can
-    share one head. Callers use this only to *identify candidates* to reconcile;
-    it never decides anything, because each candidate is then evaluated solely
-    against evidence that names that candidate.
+    Deliberately a head-targeted lookup rather than a scan of
+    :func:`open_pull_requests`, for two independent reasons:
+
+    - **Cost.** This is called once per :func:`read_current_state`, and a green
+      reconciliation reads state three times. Scanning every open pull request
+      would make a scheduled sweep quadratic in the number of open pull requests
+      and could exhaust the job's time or API budget before it converged.
+    - **Correctness.** :func:`open_pull_requests` is scoped to ``base=main``,
+      because that is the sweep's candidate list. Sibling detection must not be:
+      a pull request targeting a different protected branch shares the very
+      ``(SHA, context)`` status slot this controller writes, so missing it would
+      let green be published on a slot another pull request is judged by.
+
+    The endpoint returns pull requests *associated with* the commit, which is a
+    superset, so the result is filtered back to open pull requests whose current
+    head is exactly this commit.
     """
     if not sha:
         return []
-    return [pr for pr in open_pull_requests() if ((pr.get("head") or {}).get("sha") or "").strip() == sha]
+    return [
+        pr
+        for pr in paged(f"commits/{sha}/pulls")
+        if isinstance(pr, dict)
+        and (pr.get("state") or "").strip() == "open"
+        and ((pr.get("head") or {}).get("sha") or "").strip() == sha
+    ]
 
 
 def all_check_runs(sha: str) -> list[dict[str, Any]]:
@@ -919,21 +937,8 @@ def reconcile_pr(pr_number: int) -> ReadinessDecision | None:
         return None
 
     decision = decide(state)
-
     if decision.state == "success":
-        confirmation = read_current_state(pr_number)
-        if confirmation is None:
-            print(f"PR #{pr_number} closed while confirming readiness; nothing to publish.")
-            return None
-        if confirmation.semantic_revision() != state.semantic_revision():
-            decision = ReadinessDecision(
-                "pending",
-                "Waiting: pull-request state changed while readiness was being confirmed.",
-            )
-        elif state.controller_upgrade_candidate:
-            result = admission.evaluate_admission(confirmation)
-            if not result.admitted:
-                decision = ReadinessDecision("pending", f"Controller-upgrade admission pending: {result.reason}")
+        decision = _confirm_success(pr_number, state, decision)
 
     if state.unusable_governance_reasons and decision.state != "success":
         print(f"PR #{pr_number} unusable Governance evidence: " + "; ".join(state.unusable_governance_reasons))
@@ -941,19 +946,50 @@ def reconcile_pr(pr_number: int) -> ReadinessDecision | None:
     publish(state.head_sha, decision.state, decision.description, state.published_readiness)
     if decision.state != "success":
         return decision
-    return _converge_after_publishing_success(pr_number, state, decision)
+    return _converge_after_publishing_success(pr_number, state, decision, {state.head_sha})
+
+
+def _confirm_success(pr_number: int, state: CurrentState, decision: ReadinessDecision) -> ReadinessDecision:
+    """Gate every ``success`` on a second live observation, and on admission.
+
+    The single path to green. Both the first publication and every re-decision
+    made during post-publish convergence route through here, so a converged
+    success can never reach the status by way of :func:`decide` alone: a pull
+    request that becomes -- or already is -- a controller-upgrade candidate is
+    held to the independent admission kernel on every green, not only the first.
+    """
+    confirmation = read_current_state(pr_number)
+    if confirmation is None:
+        return ReadinessDecision("pending", "Waiting: pull request closed while readiness was being confirmed.")
+    if confirmation.semantic_revision() != state.semantic_revision():
+        return ReadinessDecision("pending", "Waiting: pull-request state changed while readiness was being confirmed.")
+    if state.controller_upgrade_candidate:
+        result = admission.evaluate_admission(confirmation)
+        if not result.admitted:
+            return ReadinessDecision("pending", f"Controller-upgrade admission pending: {result.reason}")
+    return decision
 
 
 def _converge_after_publishing_success(
     pr_number: int,
     state: CurrentState,
     decision: ReadinessDecision,
+    greened_heads: set[str],
 ) -> ReadinessDecision:
     """Re-read after a green write and correct it if state moved during the write.
 
-    Returns the decision actually left published. Bounded, and conservative on
-    exhaustion: a pull request whose state changes faster than it can be
-    confirmed is left ``pending``, never green.
+    ``greened_heads`` accumulates every commit this run has published ``success``
+    to. It exists because the guarantee worth making is not about any single
+    write but about what this run leaves behind:
+
+        when this run returns, no ``success`` it published is standing on the
+        pull request's current head.
+
+    A read-to-write window cannot be eliminated -- no implementation can write to
+    a head that comes into existence after the write -- so the exhaustion path
+    below re-checks the head after writing and keeps correcting while the current
+    head is still one this run greened. Bounded; anything beyond that converges on
+    the next reconciliation.
     """
     for _ in range(SUCCESS_CONVERGENCE_ATTEMPTS):
         observed = read_current_state(pr_number)
@@ -968,28 +1004,49 @@ def _converge_after_publishing_success(
         )
         state = observed
         decision = decide(observed)
+        if decision.state == "success":
+            # Every green goes through the same confirmation and admission gate
+            # as the first one; a converged success is not a lesser success.
+            decision = _confirm_success(pr_number, observed, decision)
         publish(observed.head_sha, decision.state, decision.description, observed.published_readiness)
-        if decision.state != "success":
+        if decision.state == "success":
+            greened_heads.add(observed.head_sha)
+        else:
+            greened_heads.discard(observed.head_sha)
             return decision
 
     print(f"PR #{pr_number}: state is changing faster than readiness can be confirmed; withholding green.")
-    # The exhaustion status must land on the head that is current *now*, paired
-    # with that same head's published status. Taking the head from an earlier
-    # loop snapshot while reading the published status from a newer one can
-    # write `pending` to a SHA the pull request has already moved off, leaving a
-    # `success` from an earlier iteration standing on the head that actually
-    # counts -- which is the opposite of the guarantee this branch exists to
-    # provide.
-    final = read_current_state(pr_number)
-    if final is None:
-        print(f"PR #{pr_number} closed while withholding green; leaving the published status as is.")
-        return decision
-    decision = ReadinessDecision(
+    return _withhold_green(pr_number, greened_heads, decision)
+
+
+def _withhold_green(
+    pr_number: int,
+    greened_heads: set[str],
+    decision: ReadinessDecision,
+) -> ReadinessDecision:
+    """Publish the withholding status and clear this run's greens off the head.
+
+    Each round reads current state, writes the withholding status to *that*
+    snapshot's head paired with *that* snapshot's published status, and stops
+    once the head it just wrote to was not one this run had greened -- at which
+    point nothing this run published as green is standing on the current head.
+    """
+    exhausted = ReadinessDecision(
         "pending",
         "Waiting: pull-request state is changing faster than readiness can be confirmed.",
     )
-    publish(final.head_sha, decision.state, decision.description, final.published_readiness)
-    return decision
+    for _ in range(SUCCESS_CONVERGENCE_ATTEMPTS):
+        final = read_current_state(pr_number)
+        if final is None:
+            print(f"PR #{pr_number} closed while withholding green; leaving the published status as is.")
+            return decision
+        was_greened = final.head_sha in greened_heads
+        publish(final.head_sha, exhausted.state, exhausted.description, final.published_readiness)
+        greened_heads.discard(final.head_sha)
+        if not was_greened:
+            return exhausted
+        print(f"PR #{pr_number}: head moved onto a commit this run had greened; clearing it and re-checking.")
+    return exhausted
 
 
 # --- Trigger adapters -------------------------------------------------------

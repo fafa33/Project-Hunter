@@ -258,22 +258,28 @@ def test_a_blocker_cleared_during_the_green_write_leaves_green_in_place(gh):
     assert gh.readiness_status(head)[0] == "success"
 
 
-def test_exhaustion_pending_lands_on_the_head_that_is_current_at_that_moment(gh):
-    """The exhaustion status must not be written to a head the PR has left.
+def test_exhaustion_leaves_no_green_of_its_own_on_the_settled_head(gh):
+    """The guarantee is about what the run leaves behind, not about one write.
 
-    Models a rapid force-push sequence that returns to a previously observed
-    SHA. Taking the head from an earlier loop snapshot while reading the
-    published status from a newer one writes `pending` to a stale SHA and leaves
-    a `success` from an earlier iteration standing on the head that actually
-    counts -- the opposite of what this branch guarantees.
+    Models a force-push storm that returns to previously observed SHAs and then
+    settles. Whatever the ordering, when the run returns no `success` it
+    published may still be standing on the pull request's current head.
     """
     head_a = "cycling_head_a"
     head_b = "cycling_head_b"
     gh.add_pull_request(501, head_sha=head_a)
-    original_publish = core.publish
+    gh.green_required_checks(head_a)
+    gh.publish_governance(501)
 
-    def publishing_into_a_force_push_cycle(sha, state, description, published):
+    original_publish = core.publish
+    writes = {"n": 0}
+    flips = 5
+
+    def publishing_into_a_force_push_storm(sha, state, description, published):
         result = original_publish(sha, state, description, published)
+        writes["n"] += 1
+        if writes["n"] > flips:
+            return result  # the storm subsides; the head settles
         current = gh.head_sha(501)
         nxt = head_b if current == head_a else head_a
         gh.pulls[501]["head"]["sha"] = nxt
@@ -282,35 +288,87 @@ def test_exhaustion_pending_lands_on_the_head_that_is_current_at_that_moment(gh)
         gh.publish_governance(501)
         return result
 
-    # Observe (never alter) which head each read reported, so the guarantee can
-    # be stated exactly: the exhaustion status goes to the head that was current
-    # when it was decided, not to an earlier loop snapshot's head.
-    original_read = core.read_current_state
-    observed_heads: list[str] = []
-
-    def recording_read(pr_number):
-        state = original_read(pr_number)
-        if state is not None:
-            observed_heads.append(state.head_sha)
-        return state
-
-    gh.green_required_checks(head_a)
-    gh.publish_governance(501)
-    core.publish = publishing_into_a_force_push_cycle
-    core.read_current_state = recording_read
+    core.publish = publishing_into_a_force_push_storm
     try:
         decision = core.reconcile_pr(501)
     finally:
         core.publish = original_publish
-        core.read_current_state = original_read
 
     assert decision.state == "pending"
-    last_sha, last_state, _ = gh.published[-1]
-    assert last_state == "pending"
-    assert last_sha == observed_heads[-1]
-    # The two heads alternate, so a stale-snapshot write would have targeted the
-    # other one -- this assertion is what fails without the fix.
-    assert observed_heads[-1] != observed_heads[-2]
+    settled_head = gh.head_sha(501)
+    assert gh.readiness_status(settled_head)[0] != "success"
+    assert gh.readiness_status(settled_head)[0] == "pending"
+
+
+def test_a_sibling_on_another_base_branch_still_blocks_green(gh):
+    """Sibling detection must not inherit the sweep's base scoping.
+
+    The candidate-list endpoint is scoped to `base=main`, but a pull request
+    targeting a different protected branch shares the very (SHA, context) status
+    slot this controller writes. Detecting siblings through that base-scoped list
+    would miss it and publish green on a slot another pull request is judged by.
+    """
+    shared = "cross_base_shared_head"
+    gh.add_pull_request(651, head_sha=shared, base_ref="main")
+    gh.add_pull_request(652, head_sha=shared, base_ref="release/3.6")
+    gh.green_required_checks(shared)
+    gh.publish_governance(651)
+
+    state = core.read_current_state(651)
+
+    assert state.shared_head_pull_requests == (652,)
+    assert core.decide(state).state == "pending"
+    assert "shared with open PR #652" in core.decide(state).description
+
+
+def test_sibling_detection_ignores_closed_and_non_head_associations(gh):
+    """The commit->pulls endpoint is a superset; the filter must do real work."""
+    head = "superset_head"
+    gh.add_pull_request(661, head_sha=head)
+    gh.add_pull_request(662, head_sha=head, state="closed")
+    gh.green_required_checks(head)
+    gh.publish_governance(661)
+
+    state = core.read_current_state(661)
+
+    assert state.shared_head_pull_requests == ()
+    assert core.decide(state).state == "success"
+
+
+def test_a_converged_success_is_still_held_to_admission(gh, monkeypatch):
+    """A success reached during post-publish convergence is not a lesser success.
+
+    The pull request starts as an ordinary, genuinely green change, so the first
+    publication is legitimately confirmed. It then becomes a controller-upgrade
+    candidate *with* a blocker while the green status is being written. With
+    `decide` weakened so it green-lights anything, the independent admission
+    kernel is the only thing standing between that state and a published green --
+    and it must be consulted on the converged success, not only the first one.
+    """
+    head = ready_pull_request(gh)
+    original_publish = core.publish
+    writes = {"n": 0}
+
+    def publishing_then_becoming_a_candidate(sha, state, description, published):
+        result = original_publish(sha, state, description, published)
+        writes["n"] += 1
+        if writes["n"] == 1:
+            gh.files[501] = ["scripts/hunter_merge_readiness.py"]
+            gh.add_unresolved_thread(501, "THREAD_AFTER_GREEN")
+            gh.statuses[sha] = [s for s in gh.statuses[sha] if s["context"] != "Hunter Governance Review"]
+            gh.publish_governance(501)
+        return result
+
+    monkeypatch.setattr(core, "decide", lambda state: core.ReadinessDecision("success", "weakened rule says ready"))
+    core.publish = publishing_then_becoming_a_candidate
+    try:
+        decision = core.reconcile_pr(501)
+    finally:
+        core.publish = original_publish
+
+    assert decision.state == "pending"
+    assert "Controller-upgrade admission pending" in decision.description
+    assert gh.readiness_status(head)[0] == "pending"
 
 
 def test_state_changing_faster_than_it_can_be_confirmed_withholds_green(gh):

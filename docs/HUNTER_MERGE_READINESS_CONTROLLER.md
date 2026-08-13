@@ -150,6 +150,19 @@ after it exists observes it, so whichever run writes last also checks last. If
 state is still moving after `SUCCESS_CONVERGENCE_ATTEMPTS` rounds, the run
 publishes `pending` rather than leaving an unconfirmed green.
 
+Every `success` — the first and every one re-decided during convergence — goes
+through the same `_confirm_success` gate, so a converged green is never reached
+by `decide` alone and a controller-upgrade candidate is held to the admission
+kernel on each one.
+
+The guarantee the withholding path makes is about what a run leaves behind, not
+about any single write: **when the run returns, no `success` it published is
+standing on the pull request's current head.** A read-to-write window cannot be
+eliminated — nothing can write to a head that comes into existence after the
+write — so the path re-checks the head after writing and keeps correcting while
+the current head is still one this run greened, bounded, with anything beyond
+that converging on the next reconciliation.
+
 A per-PR lock would not have been sufficient for this on its own: the lock this
 design removes was released before the status write in the generation that had
 it, so it never serialized the write either.
@@ -180,6 +193,12 @@ assert mergeability for pull requests whose own blockers were never evaluated,
 so readiness **withholds green whenever the head is shared** and publishes
 `pending` naming the other pull requests instead. `hunter_controller_admission`
 refuses independently, so the kernel never relies on the caller having refused.
+
+Sibling detection uses the head-targeted commit-to-pulls endpoint, not the
+base-scoped open-pull-request list. Both properties matter: the list is scoped to
+the sweep's base branch and would miss a sibling targeting another protected
+branch — which shares the same status slot — and scanning it on every state read
+would make a sweep quadratic in the number of open pull requests.
 
 This is the one piece of head-uniqueness logic that survives the redesign. #257
 used head uniqueness to *attribute evidence*; that job is now done by the
