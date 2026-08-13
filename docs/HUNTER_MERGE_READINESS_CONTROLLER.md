@@ -128,15 +128,37 @@ predecessor completing: a cancelled run leaves no state a successor reads, and
 the successor re-reads everything. There is no global serialized state machine
 and no distributed lock.
 
-Before publishing `success` — and only before `success` — current state is read a
-second time and the semantic revision compared. Green is the one irreversible
-direction; a stale pending or failure is a liveness problem the next
-reconciliation corrects. The comparison is optimistic, not a lock: whichever
-reconciliation observed the newer state is responsible for publishing it.
+Green is the one irreversible direction — a stale green asserts mergeability that
+may not hold, while a stale pending or failure is a liveness problem the next
+reconciliation corrects — so green is guarded on **both sides of the write**, and
+neither guard is a lock.
 
-For a pull request that changes controller-owned paths, that second reading must
-additionally satisfy `hunter_controller_admission.evaluate_admission`, an
+*Before* publishing `success`, current state is read again and the semantic
+revision compared, rejecting a green computed from an already-overtaken read.
+
+*After* publishing `success`, current state is read again and re-decided. A
+pre-publish check alone cannot close the window between the check and the write:
+a blocker can appear in that window, a concurrent reconciliation can publish
+`failure` for it, and this run's already-decided `success` can land on top. The
+post-publish pass closes that without serialization, because the blocker is
+durable repository state rather than another writer's status — any read taken
+after it exists observes it, so whichever run writes last also checks last. If
+state is still moving after `SUCCESS_CONVERGENCE_ATTEMPTS` rounds, the run
+publishes `pending` rather than leaving an unconfirmed green.
+
+A per-PR lock would not have been sufficient for this on its own: the lock this
+design removes was released before the status write in the generation that had
+it, so it never serialized the write either.
+
+For a pull request that changes controller-owned paths, the pre-publish reading
+must additionally satisfy `hunter_controller_admission.evaluate_admission`, an
 independent re-derivation of every gate that shares no logic with `decide`.
+Controller-upgrade candidacy is detected from both sides of a rename — GitHub
+reports a renamed file with the destination in `filename` and the
+controller-owned source in `previous_filename` — so renaming a controller-owned
+path away from itself cannot escape admission. Previous filenames stay out of the
+governance revision, which must cover exactly what the Governance Review engine
+reads.
 
 ## Status guarantee
 

@@ -84,6 +84,10 @@ governance_context = "Hunter Governance Review"
 required_checks = ("Quality Gates", "dependency-review", "CodeQL")
 hard_failures = {"failure", "timed_out", "action_required", "startup_failure"}
 
+# How many times a run will re-read and re-publish after writing green before it
+# gives up and withholds green instead. See reconcile_pr().
+SUCCESS_CONVERGENCE_ATTEMPTS = 3
+
 TRUSTED_BOT_LOGIN = "github-actions[bot]"
 DEPENDENCY_REVIEW_MARKER = "<!-- dependency-review-pr-comment-marker -->"
 DRAFT_PROMOTION_MARKER_PREFIX = "<!-- hunter-draft-promotion:"
@@ -233,6 +237,7 @@ class CurrentState:
     author: str
     conflicting: bool
     changed_paths: tuple[str, ...]
+    previous_paths: tuple[str, ...]
     required: tuple[RequiredCheckState, ...]
     governance: GovernanceEvidence | None
     unusable_governance_reasons: tuple[str, ...]
@@ -262,7 +267,19 @@ class CurrentState:
 
     @property
     def controller_upgrade_candidate(self) -> bool:
-        return admission.touches_trust_boundary(self.changed_paths)
+        """Whether this pull request changes the files defining the trust boundary.
+
+        Renames are included from both sides. GitHub reports a renamed file with
+        the destination in ``filename`` and the controller-owned source in
+        ``previous_filename``, so a pull request that renames a controller-owned
+        path *away* from itself would otherwise escape admission entirely.
+        ``previous_paths`` is deliberately kept out of
+        :attr:`governance_inputs`: the Governance Review engine resolves changed
+        paths as ``frozenset(f.filename ...)``, so adding previous filenames
+        there would fingerprint state no validator reads and no evaluator could
+        reproduce.
+        """
+        return admission.touches_trust_boundary(self.changed_paths + self.previous_paths)
 
     def semantic_revision(self) -> str:
         """Fingerprint of the complete readiness-relevant current state.
@@ -291,6 +308,7 @@ class CurrentState:
             self.author,
             str(self.conflicting),
             "|".join(sorted(set(self.changed_paths))),
+            "|".join(sorted(set(self.previous_paths))),
             "|".join(sorted(self.unresolved_thread_ids)),
             "|".join(sorted(self.changes_requested)),
             "|".join(str(item) for item in sorted(self.unacknowledged_comments)),
@@ -604,9 +622,13 @@ def read_current_state(pr_number: int) -> CurrentState | None:
         # pull request pending forever. Fail loudly instead.
         raise RuntimeError(f"PR #{pr_number} base SHA unavailable; cannot compute a governance revision")
 
-    changed_paths = tuple(
-        str(entry.get("filename") or "") for entry in paged(f"pulls/{pr_number}/files") if isinstance(entry, dict)
-    )
+    changed_files = [entry for entry in paged(f"pulls/{pr_number}/files") if isinstance(entry, dict)]
+    changed_paths = tuple(str(entry.get("filename") or "") for entry in changed_files)
+    # Renamed files carry their controller-owned source path here, never in
+    # `filename`. Kept separate from `changed_paths` so the governance
+    # fingerprint continues to cover exactly what the Governance Review engine
+    # reads, while trust-boundary detection sees both sides of a rename.
+    previous_paths = tuple(str(entry["previous_filename"]) for entry in changed_files if entry.get("previous_filename"))
     statuses = all_commit_statuses(head_sha)
     runs = all_check_runs(head_sha)
 
@@ -637,6 +659,7 @@ def read_current_state(pr_number: int) -> CurrentState | None:
         author=((pr.get("user") or {}).get("login") or "").strip(),
         conflicting=conflicting_from_rest(pr.get("mergeable")),
         changed_paths=changed_paths,
+        previous_paths=previous_paths,
         required=tuple(required),
         governance=None,
         unusable_governance_reasons=(),
@@ -833,19 +856,31 @@ def reconcile_pr(pr_number: int) -> ReadinessDecision | None:
     confirms exactly one readiness status. Returns the decision, or ``None`` when
     the pull request is not open and nothing is published.
 
-    Before publishing ``success`` -- and only before ``success`` -- current state
-    is read a second time. Publishing green is the one irreversible direction: a
-    stale green asserts a pull request is mergeable when it may not be, whereas a
-    stale pending or failure is a liveness problem that the next reconciliation
-    corrects. The second read is an optimistic revision comparison, not a lock:
-    if the semantic revision moved, whichever reconciliation observed the newer
-    state is responsible for publishing it, and this one declines.
+    Publishing green is the one irreversible direction: a stale green asserts a
+    pull request is mergeable when it may not be, whereas a stale pending or
+    failure is a liveness problem the next reconciliation corrects. Green is
+    therefore guarded on both sides of the write, and neither guard is a lock.
+
+    *Before* publishing ``success``, current state is read again and the semantic
+    revision compared. This rejects a green computed from a read that has already
+    been overtaken.
+
+    *After* publishing ``success``, current state is read again and re-decided.
+    A pre-publish check alone cannot close the window between that check and the
+    write itself: a blocker can appear in that window, a concurrent
+    reconciliation can publish ``failure`` for it, and this run's already-decided
+    ``success`` can then land on top and sit there until the next sweep. The
+    post-publish pass closes it without serialization, because the blocker is
+    durable repository state rather than another writer's status -- any read
+    taken after it exists observes it, so whichever run writes last also checks
+    last and converges. If state is still moving after
+    ``SUCCESS_CONVERGENCE_ATTEMPTS`` rounds, the run publishes ``pending`` rather
+    than leaving an unconfirmed green.
 
     For a controller-upgrade candidate -- a pull request that changes the files
-    defining this trust boundary -- the second read must *independently decide*
-    admission (see ``hunter_controller_admission``), not merely match revisions.
-    Two independent observations of live state must agree before a pull request
-    that can rewrite this controller is declared ready.
+    defining this trust boundary -- the pre-publish read must *independently
+    decide* admission (see ``hunter_controller_admission``), not merely match
+    revisions.
     """
     state = read_current_state(pr_number)
     if state is None:
@@ -873,6 +908,51 @@ def reconcile_pr(pr_number: int) -> ReadinessDecision | None:
         print(f"PR #{pr_number} unusable Governance evidence: " + "; ".join(state.unusable_governance_reasons))
 
     publish(state.head_sha, decision.state, decision.description, state.published_readiness)
+    if decision.state != "success":
+        return decision
+    return _converge_after_publishing_success(pr_number, state, decision)
+
+
+def _converge_after_publishing_success(
+    pr_number: int,
+    state: CurrentState,
+    decision: ReadinessDecision,
+) -> ReadinessDecision:
+    """Re-read after a green write and correct it if state moved during the write.
+
+    Returns the decision actually left published. Bounded, and conservative on
+    exhaustion: a pull request whose state changes faster than it can be
+    confirmed is left ``pending``, never green.
+    """
+    for _ in range(SUCCESS_CONVERGENCE_ATTEMPTS):
+        observed = read_current_state(pr_number)
+        if observed is None:
+            print(f"PR #{pr_number} closed after publishing readiness; leaving the published status as is.")
+            return decision
+        if observed.semantic_revision() == state.semantic_revision():
+            return decision
+        print(
+            f"PR #{pr_number}: state changed while readiness was being published; "
+            "re-deciding from the observed current state."
+        )
+        state = observed
+        decision = decide(observed)
+        publish(observed.head_sha, decision.state, decision.description, observed.published_readiness)
+        if decision.state != "success":
+            return decision
+
+    print(f"PR #{pr_number}: state is changing faster than readiness can be confirmed; withholding green.")
+    decision = ReadinessDecision(
+        "pending",
+        "Waiting: pull-request state is changing faster than readiness can be confirmed.",
+    )
+    final = read_current_state(pr_number)
+    publish(
+        state.head_sha,
+        decision.state,
+        decision.description,
+        final.published_readiness if final is not None else None,
+    )
     return decision
 
 

@@ -204,6 +204,86 @@ def test_a_state_change_during_confirmation_withholds_green(gh):
     assert "changed while readiness was being confirmed" in decision.description
 
 
+def test_a_blocker_landing_during_the_green_write_is_corrected_before_the_run_ends(gh):
+    """A pre-publish check alone cannot close the window around the write itself.
+
+    Models the ordering an independent review raised: this run confirms green,
+    and a blocker appears while the status is being written -- a concurrent
+    reconciliation may even have published `failure` for it already. The green
+    write lands on top. Without the post-publish pass the pull request would sit
+    green with an unacknowledged comment until the next sweep.
+    """
+    head = ready_pull_request(gh)
+    original_publish = core.publish
+    writes = {"n": 0}
+
+    def publishing_with_a_concurrent_blocker(sha, state, description, published):
+        writes["n"] += 1
+        if writes["n"] == 1:
+            gh.add_comment(501, 900)
+        return original_publish(sha, state, description, published)
+
+    core.publish = publishing_with_a_concurrent_blocker
+    try:
+        decision = core.reconcile_pr(501)
+    finally:
+        core.publish = original_publish
+
+    assert decision.state == "failure"
+    assert gh.readiness_status(head)[0] == "failure"
+    assert "900" in gh.readiness_status(head)[1]
+
+
+def test_a_blocker_cleared_during_the_green_write_leaves_green_in_place(gh):
+    """The post-publish pass corrects in both directions, and stays quiet otherwise."""
+    head = ready_pull_request(gh)
+    original_publish = core.publish
+    writes = {"n": 0}
+
+    def publishing_with_a_concurrent_clearance(sha, state, description, published):
+        writes["n"] += 1
+        if writes["n"] == 1:
+            gh.acknowledge(900)
+        return original_publish(sha, state, description, published)
+
+    gh.add_comment(501, 900)
+    gh.acknowledge(900)
+    core.publish = publishing_with_a_concurrent_clearance
+    try:
+        decision = core.reconcile_pr(501)
+    finally:
+        core.publish = original_publish
+
+    assert decision.state == "success"
+    assert gh.readiness_status(head)[0] == "success"
+
+
+def test_state_changing_faster_than_it_can_be_confirmed_withholds_green(gh):
+    """On exhaustion the run withholds green rather than leaving one unconfirmed."""
+    head = ready_pull_request(gh)
+    original_publish = core.publish
+    writes = {"n": 0}
+
+    def publishing_into_a_moving_target(sha, state, description, published):
+        writes["n"] += 1
+        # Every write is immediately overtaken by a fresh, still-green edit, so
+        # the revision never settles but the decision never stops being success.
+        gh.pulls[501]["title"] = f"fix: converge merge readiness (edit {writes['n']})"
+        gh.statuses[sha] = [s for s in gh.statuses[sha] if s["context"] != "Hunter Governance Review"]
+        gh.publish_governance(501)
+        return original_publish(sha, state, description, published)
+
+    core.publish = publishing_into_a_moving_target
+    try:
+        decision = core.reconcile_pr(501)
+    finally:
+        core.publish = original_publish
+
+    assert decision.state == "pending"
+    assert gh.readiness_status(head)[0] == "pending"
+    assert "changing faster than readiness can be confirmed" in gh.readiness_status(head)[1]
+
+
 # --- 4, 5, 6, 20, 21, 26: governance evidence identity ----------------------
 
 

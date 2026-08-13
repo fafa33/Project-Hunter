@@ -56,6 +56,19 @@ def test_the_trust_boundary_covers_the_controller_the_kernel_and_the_revision_de
     )
 
 
+def test_renaming_a_controller_owned_path_away_is_still_a_candidate():
+    """GitHub puts the owned source in `previous_filename`, not `filename`.
+
+    A pull request that renames a controller-owned file to a new path must not be
+    able to escape admission by making the owned path appear only on the "before"
+    side of the rename.
+    """
+    assert admission.touches_trust_boundary(["scripts/renamed_controller.py"]) is False
+    assert (
+        admission.touches_trust_boundary(["scripts/renamed_controller.py", "scripts/hunter_merge_readiness.py"]) is True
+    )
+
+
 def test_ordinary_paths_are_not_candidates():
     assert admission.touches_trust_boundary(["src/hunter/engine.py", "docs/README.md"]) is False
     assert admission.touches_trust_boundary([]) is False
@@ -63,6 +76,25 @@ def test_ordinary_paths_are_not_candidates():
 
 def test_a_mixed_pull_request_is_still_a_candidate():
     assert admission.touches_trust_boundary(["src/hunter/engine.py", "scripts/hunter_merge_readiness.py"]) is True
+
+
+def test_a_rename_of_a_controller_owned_file_is_detected_from_current_state(gh):
+    """End to end: the state reader must carry both sides of a rename."""
+    head = "rename_head" * 3
+    gh.add_pull_request(503, head_sha=head, files=["scripts/renamed_controller.py"])
+    gh.renames[503] = {"scripts/renamed_controller.py": "scripts/hunter_merge_readiness.py"}
+    gh.green_required_checks(head)
+    gh.publish_governance(503)
+
+    state = core.read_current_state(503)
+
+    assert state.changed_paths == ("scripts/renamed_controller.py",)
+    assert state.previous_paths == ("scripts/hunter_merge_readiness.py",)
+    assert state.controller_upgrade_candidate is True
+    # The governance fingerprint must still cover only what the evaluator reads,
+    # so the previous filename must not leak into it.
+    assert state.governance is not None
+    assert core.decide(state).state == "success"
 
 
 def test_candidacy_is_derived_only_from_changed_paths(gh):

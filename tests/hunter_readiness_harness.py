@@ -40,6 +40,9 @@ class FakeGitHub:
         self.pulls: dict[int, dict[str, Any]] = {}
         self.base_oids: dict[int, str] = {}
         self.files: dict[int, list[str]] = {}
+        # pr number -> {current filename: previous filename}, modelling GitHub's
+        # rename representation in the pull-files response.
+        self.renames: dict[int, dict[str, str]] = {}
         self.statuses: dict[str, list[dict[str, Any]]] = {}
         self.check_runs: dict[str, list[dict[str, Any]]] = {}
         self.threads: dict[int, list[dict[str, Any]]] = {}
@@ -235,7 +238,14 @@ class FakeGitHub:
                 return []
             number = int(parts[1])
             if parts[2] == "files":
-                return [{"filename": name} for name in self.files.get(number, [])]
+                renames = self.renames.get(number, {})
+                entries = []
+                for name in self.files.get(number, []):
+                    entry = {"filename": name}
+                    if name in renames:
+                        entry["previous_filename"] = renames[name]
+                    entries.append(entry)
+                return entries
             if parts[2] == "reviews":
                 return list(self.reviews.get(number, []))
             if parts[2] == "comments":
