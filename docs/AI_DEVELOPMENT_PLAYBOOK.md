@@ -92,16 +92,31 @@ answering these ten questions concretely:
 Concrete answers are required. "Handled by retry" and "unlikely in practice" are
 not answers to questions 3, 4, or 7.
 
-Implementation must not begin while any of the ten is unanswered. The note is
-short by design — it belongs in the Issue, the design comment, or the Technical
-Defense, and it is not a new governance artifact.
+Agents working under this playbook are expected to answer all ten before
+implementing. The note is short by design — it belongs in the Issue, the design
+comment, or the Technical Defense, and it is not a new governance artifact.
+
+**Authority.** This is a working expectation for agents, not a lifecycle gate.
+`docs/CANONICAL_ARCHITECTURE_MAP.md` makes only *accepted* ADRs binding and
+assigns development-process authority to `docs/DEVELOPMENT_GOVERNANCE.md`; this
+playbook is not in that hierarchy, and ADR 0029 — which defines HDM stage 2 — is
+still `Proposed`. This section therefore elaborates how agents should satisfy a
+stage they are already expected to perform. It does not add a required lifecycle
+stage, and it does not block a change that repository governance otherwise
+permits. Should the design note become a mandatory precondition, that must be
+established through `docs/DEVELOPMENT_GOVERNANCE.md`, and through acceptance of
+ADR 0029, by the governed amendment process — not here.
 
 ### Adversarial design review
 
 Before implementation, the proposed model must survive one focused adversarial
 review. The goal is to invalidate a bad model while it is still free to change.
 
-The reviewer attacks the design, not the code, using at least:
+The reviewer attacks the design, not the code, using every case below that
+applies to it. A case that cannot apply — a design with no deliveries, no
+provider, no external query, or no mutable execution state — is recorded as not
+applicable, with one line saying why. Recording non-applicability is part of the
+review; silently skipping a case is not.
 
 - the head or underlying subject changing during execution;
 - duplicate delivery;
@@ -180,27 +195,45 @@ A reviewer must not turn an unrelated future platform ambition into a blocker. A
 
 Every finding must answer one question explicitly before it is classified:
 
-> Does this violate a required invariant or acceptance criterion **today**?
+> Does this make the contribution **unsafe to merge today**?
 
-If yes, it is a Merge Blocker. If no, it is one of the other three categories and
-becomes a follow-up issue. "Could be more robust" is not a merge blocker, and
-must not become one by repetition.
+The test is safety, exactly as `docs/AI_REVIEW_PROTOCOL.md` defines it, and that
+document governs. A finding is a Merge Blocker whenever it makes the contribution
+unsafe — including a security defect, an evidence-integrity failure, a replay
+failure, a migration risk, an authority or implementation-contract violation, a
+deterministic-behavior failure, or a documentation contradiction — **whether or
+not** it appears in the PR's acceptance criteria, and whether or not it names an
+architectural invariant. An acceptance-criteria matrix is not an exhaustive
+safety specification, and a defect does not become safe by having been omitted
+from it.
+
+If the answer is no, the finding is one of the other three categories and becomes
+a follow-up issue. "Could be more robust" is not a merge blocker, and must not
+become one by repetition.
 
 ### Review stopping rule
 
 Independent review is mandatory and is not weakened by this rule. What it bounds
 is the number of *implementation* rounds a single PR absorbs.
 
-After an independent review returns clean on the exact final HEAD, and full
-validation passes on that same HEAD:
+After an independent review returns clean on the exact reviewed **source-head and
+target-commit pair**, and full validation passes on that same pair:
 
 - speculative hardening must not continue inside that PR;
 - non-blocking improvements are deferred to follow-up issues;
 - the PR is closed for merge authorization.
 
+The pair is the unit, never the source head alone. Per
+`docs/AI_REVIEW_PROTOCOL.md`, any subsequent change to the source branch, **or
+any advance of the target branch beyond the reviewed commit**, invalidates the
+review and requires a new independent review before the PR may leave Draft or be
+merged. A PR that was closed under this rule and whose base has since advanced is
+reopened for review by that fact alone — this stopping rule never converts a
+stale review into merge readiness.
+
 A reviewer identifying a possible future improvement is not sufficient reason to
-reopen implementation. Only a concrete violation of the PR's acceptance criteria
-or of an architectural invariant is release-blocking.
+reopen implementation. A finding that makes the contribution unsafe to merge
+always is, under the safety test above.
 
 When a PR has absorbed repeated rounds whose findings are defects in that PR's
 own earlier fixes, that is evidence the design was wrong rather than the code —

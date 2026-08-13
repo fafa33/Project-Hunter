@@ -164,7 +164,11 @@ double.
 
 A test double shall not:
 
-- silently ignore a query parameter the production code sends;
+- silently ignore a query parameter whose semantics the production path under
+  test relies on, such as a filter, scope, or selector that changes which
+  results are returned. A double may ignore a parameter the tested behavior does
+  not depend on — pagination, projection, or timeout — provided it does not
+  thereby answer more precisely than the real service would;
 - return results already filtered in a way the real service does not filter them;
 - provide stronger ordering guarantees than the real service provides;
 - provide cleaner association, identity, or uniqueness semantics than the real
