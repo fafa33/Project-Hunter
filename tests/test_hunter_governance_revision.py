@@ -45,6 +45,28 @@ def test_the_digest_is_stable_and_the_documented_length():
     assert set(governance_revision(BASE)) <= set("0123456789abcdef")
 
 
+def test_the_digest_is_wide_enough_to_resist_an_offline_collision_search():
+    """The width is a security parameter, not formatting.
+
+    A pull request author controls the title and body with unlimited entropy and
+    can grind variants offline against a public algorithm. At 48 bits a
+    cross-collision between a governance-valid body and a governance-invalid one
+    costs on the order of 2^24 candidates of each; the marker would then bind a
+    stale approval to a body that never passed governance. 128 bits puts the
+    same search at the 2^64 birthday bound.
+    """
+    assert REVISION_DIGEST_LENGTH * 4 >= 128
+
+
+def test_author_controlled_text_actually_moves_the_digest():
+    """The fields an attacker would grind must each be fingerprinted."""
+    digests = {governance_revision(replace(BASE, body=f"## Summary\n\nvariant {n}\n")) for n in range(256)}
+    assert len(digests) == 256
+
+    titles = {governance_revision(replace(BASE, title=f"fix: variant {n}")) for n in range(256)}
+    assert len(titles) == 256
+
+
 @pytest.mark.parametrize(
     "field,value",
     [
@@ -154,6 +176,21 @@ def _pair(number: int = 258) -> ReviewPair:
         workflow_run_id="12345",
         review_timestamp="2026-08-13T00:00:00Z",
     )
+
+
+def test_the_marker_fits_the_status_limit_alongside_the_approval_prose():
+    """Widening the digest must not push the approval prose out of the status.
+
+    The marker is written first, so truncation can only eat the reason -- but an
+    approval's own prose should still survive intact at the widest realistic
+    pull-request number.
+    """
+    revision = governance_revision(BASE)
+    for number in (1, 258, 999999):
+        description = build_status_description(Decision(Outcome.APPROVED, "ok"), _pair(number), revision)
+        assert len(description) <= 140
+        assert parse_marker(description) == (number, revision)
+        assert description.endswith("deterministic governance validation passed.")
 
 
 @pytest.mark.parametrize(

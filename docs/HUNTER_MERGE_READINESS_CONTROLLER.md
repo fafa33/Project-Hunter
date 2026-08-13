@@ -100,7 +100,21 @@ fails closed:
   superseded state can never satisfy current state.
 
 Selection is by identity, never by recency, so a re-run of an older evaluation
-landing after a newer one changes nothing.
+landing after a newer one changes nothing. Where two qualifying verdicts for one
+`(pull request, revision)` pair disagree, the conservative one wins: a terminal
+`failure` outranks a `success`. That direction is deliberate — preferring
+`success` would turn any weakness in the binding into a *permanent* bypass,
+since the stale approval would outrank every later failure for that revision.
+The liveness cost is bounded: any edit to the title, body, head, or base changes
+the revision and clears the block.
+
+The digest width is a security parameter. A pull request author controls the
+title and body with unlimited entropy and can grind variants offline against a
+public algorithm, so the marker must be wide enough that a cross-collision
+between a governance-valid body and a governance-invalid one is infeasible —
+`REVISION_DIGEST_LENGTH` is 32 hex characters (128 bits). The width is also part
+of the wire format: markers of any other length do not parse and are treated as
+unattributable evidence.
 
 The `REVISION_SCHEMA_VERSION` constant exists so that changing the fingerprinted
 input set invalidates every pre-existing stamp rather than silently

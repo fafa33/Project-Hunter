@@ -110,7 +110,7 @@ def test_head_ordering_between_statuses_never_substitutes_for_identity(gh):
     """Even the newest status on the head is ignored when it names another revision."""
     head = ready_pull_request(gh)
     gh.statuses[head] = []
-    gh.publish_governance(501, "success", revision="ffffffffffff")
+    gh.publish_governance(501, "success", revision="f" * 32)
 
     state = core.read_current_state(501)
 

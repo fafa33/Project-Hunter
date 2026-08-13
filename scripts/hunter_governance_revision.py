@@ -88,15 +88,30 @@ from dataclasses import dataclass
 # Bump whenever the fingerprinted input set or canonical encoding changes.
 REVISION_SCHEMA_VERSION = 1
 
-# 48 bits of digest. The digest never authorizes anything by itself -- it only
-# answers "was this verdict produced for the state I am looking at right now?"
-# for one pull request on one exact head SHA, and a mismatch fails closed.
-REVISION_DIGEST_LENGTH = 12
+# 128 bits of digest, and the length is a security parameter rather than a
+# formatting choice.
+#
+# A pull request author controls two fingerprinted inputs with unlimited
+# entropy -- the title and the body -- and can vary them freely without touching
+# the head or base SHA. The digest algorithm is public, so variants can be
+# ground out offline. At 48 bits a cross-collision between a governance-valid
+# body and a governance-invalid one needs on the order of 2^24 candidates of
+# each, which is seconds of work: obtain a `success` for the valid body, then
+# edit to the colliding invalid body and the old marker still matches. 128 bits
+# puts the same search at the 2^64 birthday bound.
+#
+# The length is also part of the wire format: MARKER_PATTERN matches this exact
+# width, so markers written at any other length do not parse and are treated as
+# unattributable evidence, which fails closed.
+REVISION_DIGEST_LENGTH = 32
 
-# Rendered into the Hunter Governance Review status description as, e.g.,
-# "[hgr:257:9f1c0a4b7d2e] Approved for head ...". The marker is written first so
+# Rendered into the Hunter Governance Review status description as
+# "[hgr:257:<32 hex>] Approved for head ...". The marker is written first so
 # GitHub's 140-character status-description limit can only ever truncate the
-# human-readable reason, never the machine-readable identity.
+# human-readable reason, never the machine-readable identity. The marker costs
+# 43 characters for a three-digit pull request, which leaves the approval prose
+# intact inside the limit; longer reasons are truncated, and that is the
+# intended trade.
 _MARKER_TEMPLATE = "[hgr:{pull_request}:{revision}]"
 MARKER_PATTERN = re.compile(rf"\[hgr:(?P<pull_request>\d+):(?P<revision>[0-9a-f]{{{REVISION_DIGEST_LENGTH}}})\]")
 
@@ -155,7 +170,12 @@ class GovernanceInputs:
 
 
 def governance_revision(inputs: GovernanceInputs) -> str:
-    """Deterministic digest of one pull request's governance-relevant state."""
+    """Deterministic digest of one pull request's governance-relevant state.
+
+    Truncated to :data:`REVISION_DIGEST_LENGTH` hex characters. See that
+    constant: the width is chosen for collision resistance against an author who
+    can grind title/body variants offline, not for readability.
+    """
     encoded = json.dumps(
         inputs.canonical_payload(),
         sort_keys=True,

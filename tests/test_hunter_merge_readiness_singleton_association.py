@@ -37,6 +37,11 @@ def gh(monkeypatch):
 
 SHARED_HEAD = "one_shared_head" * 2
 
+# Marker revisions are exactly REVISION_DIGEST_LENGTH hex characters; anything
+# else is not a well-formed marker and must not parse.
+REVISION = "0123456789abcdef" * 2
+OTHER_REVISION = "c" * 32
+
 
 def _two_pull_requests_on_one_head(gh: FakeGitHub) -> None:
     gh.add_pull_request(123, head_sha=SHARED_HEAD)
@@ -48,7 +53,7 @@ def _two_pull_requests_on_one_head(gh: FakeGitHub) -> None:
 
 
 def test_marker_round_trips():
-    assert parse_marker(render_marker(123, "0123456789ab") + " Approved for head abc.") == (123, "0123456789ab")
+    assert parse_marker(render_marker(123, REVISION) + " Approved for head abc.") == (123, REVISION)
 
 
 def test_unmarked_description_is_unattributable():
@@ -61,6 +66,7 @@ def test_malformed_marker_is_unattributable():
     assert parse_marker("[hgr:123:not-hex-at-all] Approved") is None
     assert parse_marker("[hgr::0123456789ab] Approved") is None
     assert parse_marker("[hgr:123:0123456789] Approved") is None
+    assert parse_marker(f"[hgr:123:{REVISION[:12]}] Approved") is None
 
 
 # --- evidence attribution ---------------------------------------------------
@@ -146,7 +152,7 @@ def test_legacy_unstamped_evidence_is_unusable_even_on_a_unique_head(gh):
 
 
 def test_resolution_rejects_every_unattributable_form(gh):
-    revision = "0123456789ab"
+    revision = REVISION
     statuses = [
         {"id": 1, "context": "Hunter Governance Review", "state": "success", "description": "no marker"},
         {
@@ -159,7 +165,7 @@ def test_resolution_rejects_every_unattributable_form(gh):
             "id": 3,
             "context": "Hunter Governance Review",
             "state": "success",
-            "description": render_marker(123, "cccccccccccc"),
+            "description": render_marker(123, OTHER_REVISION),
         },
         {"id": 4, "context": "Some Other Check", "state": "success", "description": render_marker(123, revision)},
     ]
@@ -171,7 +177,7 @@ def test_resolution_rejects_every_unattributable_form(gh):
 
 
 def test_resolution_accepts_only_the_exact_pair(gh):
-    revision = "0123456789ab"
+    revision = REVISION
     statuses = [
         {
             "id": 9,
@@ -188,14 +194,20 @@ def test_resolution_accepts_only_the_exact_pair(gh):
 
 
 @pytest.mark.parametrize("order", [("failure", "success"), ("success", "failure")])
-def test_disagreeing_verdicts_for_one_revision_are_settled_by_identity_not_recency(gh, order):
-    """A transient REVIEW_FAILED must never permanently outrank a real approval.
+def test_disagreeing_verdicts_for_one_revision_resolve_conservatively(gh, order):
+    """A `failure` for a revision outranks a `success` for the same revision.
 
-    Both statuses name the same (pull request, revision) pair, so both describe
-    the same deterministic evaluation. Whichever was written last is irrelevant:
-    the outcome is the same in either order.
+    Both statuses name the same (pull request, revision) pair, so they describe
+    the same deterministic evaluation and should agree. When they do not, the
+    conservative reading wins, and it wins in either write order -- recency
+    never enters into it.
+
+    This direction is deliberate. Preferring `success` would turn any weakness
+    in the binding -- a digest collision, or a future bug in what the revision
+    covers -- into a permanent governance bypass, because the stale approval
+    would outrank every later failure for that revision forever.
     """
-    revision = "0123456789ab"
+    revision = REVISION
     statuses = [
         {
             "id": index,
@@ -209,4 +221,4 @@ def test_disagreeing_verdicts_for_one_revision_are_settled_by_identity_not_recen
     evidence, _ = core.resolve_governance_evidence(statuses, 123, revision)
 
     assert evidence is not None
-    assert evidence.state == "success"
+    assert evidence.state == "failure"

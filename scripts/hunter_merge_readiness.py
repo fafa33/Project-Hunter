@@ -604,22 +604,39 @@ def resolve_governance_evidence(
         return None, tuple(sorted(set(reasons)))
 
     # Identity selection admits only verdicts for one (PR, revision) pair, so
-    # every qualifying status is a re-publication of the same evaluation. The
-    # Governance engine is deterministic over exactly these inputs, so two
-    # qualifying verdicts can only disagree when one of them is a REVIEW_FAILED
-    # produced by a transient GitHub failure rather than by a governance
-    # violation. An APPROVED for this exact revision therefore settles it: the
-    # inputs were genuinely evaluated and approved. Resolving the other way
-    # round would make a single transient error permanently sticky, since
-    # nothing but a state change can retire a verdict, and a state change is
-    # exactly what this pull request is waiting not to need.
+    # every qualifying status should be a re-publication of the same
+    # evaluation, and they should agree. When they do not, this resolves
+    # conservatively: any terminal `failure`/`error` outranks a `success` for
+    # the same revision.
+    #
+    # An earlier revision of this module resolved the other way, reasoning that
+    # the Governance engine is deterministic over exactly these inputs, so a
+    # disagreement could only be a transient REVIEW_FAILED, and that preferring
+    # `success` avoided making one transient GitHub error permanently sticky.
+    # That reasoning is now inverted deliberately, because it rested on the
+    # fingerprint being collision-free -- which is precisely the assumption an
+    # attacker would target. Preferring `success` turns any weakness in the
+    # binding (a digest collision, or a future bug in what the revision covers)
+    # into a *permanent* governance bypass: the stale approval outranks every
+    # subsequent failure for the same revision, forever. Preferring failure
+    # turns the same weakness into a block, which is the direction this gate is
+    # supposed to fail.
+    #
+    # The liveness cost is real and bounded: a transient REVIEW_FAILED blocks
+    # this revision until the revision changes. Any edit to the title, body,
+    # head, or base changes it -- which is what an author does to respond to a
+    # blocked pull request anyway -- so the state is escapable without operator
+    # intervention.
     #
     # This is identity-based, not recency-based: which status was written last
     # never enters into it.
-    for preferred in ("success", "failure", "error"):
+    for preferred in ("failure", "error"):
         for evidence in qualified:
             if evidence.state == preferred:
                 return evidence, tuple(sorted(set(reasons)))
+    for evidence in qualified:
+        if evidence.state != "success":
+            return evidence, tuple(sorted(set(reasons)))
     return qualified[0], tuple(sorted(set(reasons)))
 
 

@@ -303,7 +303,7 @@ def test_a_governance_failure_for_the_current_revision_still_blocks(gh):
     head = ready_pull_request(gh)
     gh.statuses[head] = [s for s in gh.statuses[head] if s["context"] != "Hunter Governance Review"]
     gh.publish_governance(501, "failure")
-    gh.publish_governance(501, "failure", revision="ffffffffffff")
+    gh.publish_governance(501, "failure", revision="f" * 32)
 
     decision = core.reconcile_pr(501)
 
