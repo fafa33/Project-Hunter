@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 import urllib.error
@@ -26,6 +27,7 @@ class MockGitHubServer:
         self.reactions = {}
         self.review_comments = {}
         self.refs = {}
+        self.workflow_runs = {}
         self.published = []
         self.gql_threads = 0
         self.api_calls = []  # Log order of all API calls to assert sequencing
@@ -51,7 +53,10 @@ class MockGitHubServer:
                         "context": payload["context"],
                         "state": payload["state"],
                         "description": payload["description"],
-                        "id": len(self.statuses[sha]) + 1,
+                        # Monotonic, like GitHub: a newly posted status always
+                        # outranks every status already on the SHA, including
+                        # seeded fixtures that start from a high id.
+                        "id": max((s.get("id", 0) for s in self.statuses[sha]), default=0) + 1,
                         "created_at": datetime.now(UTC).isoformat(),
                     }
                 )
@@ -81,6 +86,12 @@ class MockGitHubServer:
                     return self.review_comments.get(pr_num, [])
                 return []
             return self.pulls.get(pr_num, {})
+
+        if clean_path.startswith("actions/runs/"):
+            run_id = int(clean_path.split("/")[-1])
+            if run_id not in self.workflow_runs:
+                raise http_error(404)
+            return self.workflow_runs[run_id]
 
         if clean_path.startswith("commits/"):
             parts = clean_path.split("/")
@@ -1773,3 +1784,599 @@ def test_lock_ref_is_not_under_refs_heads():
     ref_name = hunter_merge_readiness.LOCK_REF_NAMESPACE + "123"
     assert not ref_name.startswith("refs/heads/")
     assert not ref_name.startswith("refs/tags/")
+
+
+# ====================================================================================
+# GOVERNANCE FRESHNESS AUTHORITY
+#
+# Regression coverage for a stuck-pending class observed live on PR #256.
+# Hunter Governance Review reaches an exact head by two delivery paths: the
+# pull_request-triggered run, which leaves a check run on that head, and the
+# "Hunter Governance Review Reconcile" sweep, which republishes the
+# authoritative commit status from a run whose own check run belongs to the
+# default branch. Freshness used to be read only from the exact-head check run,
+# so every reconcile-published verdict was invisible and the PR could never
+# leave "Waiting for a fresh Hunter Governance Review".
+# ====================================================================================
+
+
+RECONCILE_RUN_ID = 31662976298
+
+
+def _stuck_pending_pr(gh, *, governance_check_started, invalidated_at, reconcile_started, reconcile_published):
+    """A PR whose only exact-head Governance check run predates its invalidation.
+
+    The fresh Governance verdict exists solely as a commit status republished by
+    the reconcile sweep, exactly as observed live.
+    """
+    gh.pulls[123] = {
+        "number": 123,
+        "state": "open",
+        "head": {"sha": "sha_123"},
+        "body": "Acceptance-criteria matrix:\n| Acceptance criterion | Status |\n| Wire up | PASS |\n- [x] `READY FOR REVIEW`",
+        "draft": False,
+        "user": {"login": "human"},
+        "updated_at": invalidated_at,
+    }
+    gh.check_runs["sha_123"] = [
+        {
+            "name": "Hunter Governance Review",
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": governance_check_started,
+            "id": 100,
+        },
+        {"name": "Quality Gates", "status": "completed", "conclusion": "success", "id": 101},
+        {"name": "dependency-review", "status": "completed", "conclusion": "success", "id": 102},
+        {"name": "CodeQL", "status": "completed", "conclusion": "success", "id": 103},
+    ]
+    gh.statuses["sha_123"] = [
+        {
+            "context": "Hunter Governance Review",
+            "state": "success",
+            "created_at": reconcile_published,
+            "target_url": f"https://github.com/fafa33/Project-Hunter/actions/runs/{RECONCILE_RUN_ID}",
+            "id": 10,
+        },
+        {
+            "context": "Hunter Merge Readiness",
+            "state": "pending",
+            "description": "Waiting for a fresh Hunter Governance Review (last run was older than latest invalidation).",
+            "id": 11,
+        },
+    ]
+    gh.workflow_runs[RECONCILE_RUN_ID] = {
+        "id": RECONCILE_RUN_ID,
+        "name": "Hunter Governance Review Reconcile",
+        "run_started_at": reconcile_started,
+        "head_branch": "main",
+    }
+
+
+def test_reconcile_published_governance_clears_stale_pending(gh):
+    """The exact live failure: stale PENDING must converge to SUCCESS.
+
+    The only exact-head Governance check run started BEFORE the invalidation,
+    so the old freshness rule rejected it forever. The reconcile sweep's run
+    began well after the invalidation, so its verdict genuinely observed the
+    invalidating change and must satisfy freshness.
+    """
+    hunter_merge_readiness.event_name = "schedule"
+    _stuck_pending_pr(
+        gh,
+        governance_check_started="2026-08-12T22:36:14Z",
+        invalidated_at="2026-08-12T22:36:23Z",
+        reconcile_started="2026-08-13T03:08:00Z",
+        reconcile_published="2026-08-13T03:08:17Z",
+    )
+
+    hunter_merge_readiness.evaluate(123, poll=False)
+
+    assert gh.published[-1][1] == "success"
+    assert "Ready to merge" in gh.published[-1][2]
+
+
+def test_reconcile_run_starting_before_invalidation_still_fails_closed(gh):
+    """Fail-closed is preserved: publication time alone must never satisfy freshness.
+
+    A long-running review that began before the invalidating change cannot have
+    observed it, even though it published afterwards.
+    """
+    hunter_merge_readiness.event_name = "schedule"
+    _stuck_pending_pr(
+        gh,
+        governance_check_started="2026-08-12T22:36:14Z",
+        invalidated_at="2026-08-12T22:36:23Z",
+        reconcile_started="2026-08-12T22:36:00Z",
+        reconcile_published="2026-08-13T03:08:17Z",
+    )
+
+    hunter_merge_readiness.evaluate(123, poll=False)
+
+    assert gh.published[-1][1] == "pending"
+    assert "Waiting for a fresh Hunter Governance Review" in gh.published[-1][2]
+    assert all(state != "success" for _sha, state, _desc in gh.published)
+
+
+def test_newest_governance_evaluation_wins_across_both_delivery_paths(gh):
+    """When both paths have evidence, the one that evaluated latest decides."""
+    hunter_merge_readiness.event_name = "schedule"
+    _stuck_pending_pr(
+        gh,
+        governance_check_started="2026-08-13T04:00:00Z",
+        invalidated_at="2026-08-12T22:36:23Z",
+        reconcile_started="2026-08-13T03:08:00Z",
+        reconcile_published="2026-08-13T03:08:17Z",
+    )
+
+    evaluation = hunter_merge_readiness.resolve_governance_evaluation("sha_123", gh.check_runs["sha_123"])
+
+    assert evaluation is not None
+    assert evaluation.source == "check run"
+    assert evaluation.started_at == datetime(2026, 8, 13, 4, 0, tzinfo=UTC)
+
+
+def test_unresolvable_governance_status_is_ignored_not_trusted(gh):
+    """A status whose originating run cannot be resolved must not grant freshness."""
+    hunter_merge_readiness.event_name = "schedule"
+    _stuck_pending_pr(
+        gh,
+        governance_check_started="2026-08-12T22:36:14Z",
+        invalidated_at="2026-08-12T22:36:23Z",
+        reconcile_started="2026-08-13T03:08:00Z",
+        reconcile_published="2026-08-13T03:08:17Z",
+    )
+    # The run behind the status no longer exists (log retention, deleted run).
+    del gh.workflow_runs[RECONCILE_RUN_ID]
+
+    hunter_merge_readiness.evaluate(123, poll=False)
+
+    assert gh.published[-1][1] == "pending"
+    assert all(state != "success" for _sha, state, _desc in gh.published)
+
+
+def test_governance_status_without_target_url_is_ignored(gh):
+    """Legacy statuses carrying no run reference must not be treated as fresh."""
+    hunter_merge_readiness.event_name = "schedule"
+    _stuck_pending_pr(
+        gh,
+        governance_check_started="2026-08-12T22:36:14Z",
+        invalidated_at="2026-08-12T22:36:23Z",
+        reconcile_started="2026-08-13T03:08:00Z",
+        reconcile_published="2026-08-13T03:08:17Z",
+    )
+    gh.statuses["sha_123"][0].pop("target_url")
+
+    hunter_merge_readiness.evaluate(123, poll=False)
+
+    assert gh.published[-1][1] == "pending"
+    assert all(state != "success" for _sha, state, _desc in gh.published)
+
+
+def test_failed_reconcile_verdict_publishes_failure_not_success(gh):
+    """A fresh but failing reconcile verdict must fail, not linger pending."""
+    hunter_merge_readiness.event_name = "schedule"
+    _stuck_pending_pr(
+        gh,
+        governance_check_started="2026-08-12T22:36:14Z",
+        invalidated_at="2026-08-12T22:36:23Z",
+        reconcile_started="2026-08-13T03:08:00Z",
+        reconcile_published="2026-08-13T03:08:17Z",
+    )
+    gh.statuses["sha_123"][0]["state"] = "failure"
+
+    hunter_merge_readiness.evaluate(123, poll=False)
+
+    assert gh.published[-1][1] == "failure"
+
+
+def test_pending_reconcile_verdict_waits_rather_than_concluding(gh):
+    """An in-flight fresh evaluation must wait, never be read as a conclusion."""
+    hunter_merge_readiness.event_name = "schedule"
+    _stuck_pending_pr(
+        gh,
+        governance_check_started="2026-08-12T22:36:14Z",
+        invalidated_at="2026-08-12T22:36:23Z",
+        reconcile_started="2026-08-13T03:08:00Z",
+        reconcile_published="2026-08-13T03:08:17Z",
+    )
+    gh.statuses["sha_123"][0]["state"] = "pending"
+
+    hunter_merge_readiness.evaluate(123, poll=False)
+
+    assert gh.published[-1][1] == "pending"
+    assert gh.published[-1][2] == "Waiting for current Hunter Governance Review."
+
+
+# ====================================================================================
+# workflow_run pull-request identity recovery
+# ====================================================================================
+
+
+def test_workflow_run_without_pull_requests_recovers_pr_by_head_sha(gh, tmp_path, monkeypatch):
+    """An empty pull_requests payload must not silently reconcile nothing."""
+    event_path = tmp_path / "event.json"
+    event_path.write_text(
+        json.dumps(
+            {
+                "workflow_run": {
+                    "pull_requests": [],
+                    "head_sha": "sha_123",
+                    "head_branch": "feature/x",
+                    "run_started_at": "2026-08-13T03:08:00Z",
+                    "conclusion": "success",
+                }
+            }
+        )
+    )
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_path))
+    monkeypatch.setenv("GH_REPO", "fafa33/Project-Hunter")
+    monkeypatch.setenv("GH_TOKEN", "fake-token")
+    monkeypatch.setenv("EVENT_NAME", "workflow_run")
+    monkeypatch.setenv("RUN_URL", "https://example.invalid/run")
+
+    _stuck_pending_pr(
+        gh,
+        governance_check_started="2026-08-12T22:36:14Z",
+        invalidated_at="2026-08-12T22:36:23Z",
+        reconcile_started="2026-08-13T03:08:00Z",
+        reconcile_published="2026-08-13T03:08:17Z",
+    )
+
+    hunter_merge_readiness.main()
+
+    assert gh.published, "controller reconciled nothing despite a recoverable head SHA"
+    assert gh.published[-1][1] == "success"
+
+
+def test_workflow_run_without_any_matching_open_pr_exits_cleanly(gh, tmp_path, monkeypatch):
+    """Recovery must stay bounded: an unrelated head reconciles nothing."""
+    event_path = tmp_path / "event.json"
+    event_path.write_text(
+        json.dumps(
+            {
+                "workflow_run": {
+                    "pull_requests": [],
+                    "head_sha": "sha_unrelated",
+                    "run_started_at": "2026-08-13T03:08:00Z",
+                    "conclusion": "success",
+                }
+            }
+        )
+    )
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_path))
+    monkeypatch.setenv("GH_REPO", "fafa33/Project-Hunter")
+    monkeypatch.setenv("GH_TOKEN", "fake-token")
+    monkeypatch.setenv("EVENT_NAME", "workflow_run")
+    monkeypatch.setenv("RUN_URL", "https://example.invalid/run")
+
+    gh.pulls[123] = {"number": 123, "state": "open", "head": {"sha": "sha_123"}, "draft": False}
+
+    with pytest.raises(SystemExit):
+        hunter_merge_readiness.main()
+
+    assert gh.published == []
+
+
+def test_recovered_pr_is_bound_to_the_evaluated_head(gh, tmp_path, monkeypatch):
+    """Recovery must never publish against a head the triggering run did not evaluate."""
+    event_path = tmp_path / "event.json"
+    event_path.write_text(
+        json.dumps(
+            {
+                "workflow_run": {
+                    "pull_requests": [],
+                    "head_sha": "sha_stale",
+                    "run_started_at": "2026-08-13T03:08:00Z",
+                    "conclusion": "success",
+                }
+            }
+        )
+    )
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_path))
+    monkeypatch.setenv("GH_REPO", "fafa33/Project-Hunter")
+    monkeypatch.setenv("GH_TOKEN", "fake-token")
+    monkeypatch.setenv("EVENT_NAME", "workflow_run")
+    monkeypatch.setenv("RUN_URL", "https://example.invalid/run")
+
+    # The PR has already moved on to a newer head, so nothing may be published.
+    gh.pulls[123] = {"number": 123, "state": "open", "head": {"sha": "sha_new"}, "draft": False}
+
+    with pytest.raises(SystemExit):
+        hunter_merge_readiness.main()
+
+    assert gh.published == []
+
+
+def test_open_pull_requests_paginates_beyond_one_page(gh):
+    """PR discovery must not stop at the first hundred open pull requests."""
+    calls = []
+    first_page = [{"number": index, "head": {"sha": f"sha_{index}"}} for index in range(100)]
+    second_page = [{"number": 500, "head": {"sha": "sha_target"}}]
+
+    def paginated(method, path, payload=None):
+        calls.append(path)
+        if path.endswith("&page=1"):
+            return first_page
+        if path.endswith("&page=2"):
+            return second_page
+        raise AssertionError(f"unexpected page request: {path}")
+
+    with patch("hunter_merge_readiness.request_json", side_effect=paginated):
+        recovered = hunter_merge_readiness.open_pull_requests_for_head("sha_target")
+
+    assert len(calls) == 2
+    assert [pr["number"] for pr in recovered] == [500]
+
+
+def test_governance_status_beyond_the_first_status_page_is_still_found(gh):
+    """Exact-head Governance evidence must survive a head with >100 statuses.
+
+    A busy head pushes the authoritative Governance status onto a later page.
+    Reading only the first page would make a fresh verdict invisible and
+    reproduce the same permanent-pending failure through a different route.
+    """
+    hunter_merge_readiness.event_name = "schedule"
+    filler = [{"context": "Other Check", "state": "success", "id": index} for index in range(100)]
+    governance = {
+        "context": "Hunter Governance Review",
+        "state": "success",
+        "created_at": "2026-08-13T03:08:17Z",
+        "target_url": f"https://github.com/fafa33/Project-Hunter/actions/runs/{RECONCILE_RUN_ID}",
+        "id": 900,
+    }
+
+    def paginated(method, path, payload=None):
+        if method == "GET" and path.startswith("commits/sha_123/statuses"):
+            if path.endswith("&page=1"):
+                return filler
+            if path.endswith("&page=2"):
+                return [governance]
+            raise AssertionError(f"unexpected status page request: {path}")
+        return gh.request_json(method, path, payload)
+
+    _stuck_pending_pr(
+        gh,
+        governance_check_started="2026-08-12T22:36:14Z",
+        invalidated_at="2026-08-12T22:36:23Z",
+        reconcile_started="2026-08-13T03:08:00Z",
+        reconcile_published="2026-08-13T03:08:17Z",
+    )
+
+    with patch("hunter_merge_readiness.request_json", side_effect=paginated):
+        resolved = hunter_merge_readiness.latest_commit_status("sha_123", "Hunter Governance Review")
+        evaluation = hunter_merge_readiness.resolve_governance_evaluation("sha_123", gh.check_runs["sha_123"])
+
+    assert resolved is not None and resolved["id"] == 900
+    assert evaluation is not None
+    assert evaluation.source == "commit status"
+    assert evaluation.started_at == datetime(2026, 8, 13, 3, 8, tzinfo=UTC)
+
+
+def test_same_second_governance_and_invalidation_does_not_regress_freshness(gh):
+    """An evaluation beginning in the same second as the invalidation is fresh.
+
+    Freshness is `started_at >= invalidation`. GitHub timestamps are
+    second-granular, so treating an equal timestamp as stale would strand any
+    pull request whose review happened to start within the invalidating second.
+    """
+    hunter_merge_readiness.event_name = "schedule"
+    _stuck_pending_pr(
+        gh,
+        governance_check_started="2026-08-12T22:36:14Z",
+        invalidated_at="2026-08-13T03:08:00Z",
+        reconcile_started="2026-08-13T03:08:00Z",
+        reconcile_published="2026-08-13T03:08:17Z",
+    )
+
+    hunter_merge_readiness.evaluate(123, poll=False)
+
+    assert gh.published[-1][1] == "success"
+
+
+def test_manual_reconciliation_repairs_a_stuck_pr_without_touching_it(gh):
+    """workflow_dispatch must repair a stuck pull request the same way the sweep does.
+
+    The repair may not depend on editing the pull request, its head, or its
+    body: only on re-reading evidence that already exists.
+    """
+    hunter_merge_readiness.event_name = "workflow_dispatch"
+    _stuck_pending_pr(
+        gh,
+        governance_check_started="2026-08-12T22:36:14Z",
+        invalidated_at="2026-08-12T22:36:23Z",
+        reconcile_started="2026-08-13T03:08:00Z",
+        reconcile_published="2026-08-13T03:08:17Z",
+    )
+    before = json.dumps(gh.pulls[123], sort_keys=True)
+
+    hunter_merge_readiness.evaluate(123, poll=False)
+
+    assert gh.published[-1][1] == "success"
+    assert json.dumps(gh.pulls[123], sort_keys=True) == before
+    # The only writes a repair may perform are the readiness status itself and
+    # the reconciliation lock. Nothing may mutate the pull request or its
+    # conversation -- no body edit, no comment, no head change.
+    # "graphql" is the review-thread read; it is POST only by protocol.
+    writes = [(method, path) for method, path, _ in gh.api_calls if method != "GET" and path != "graphql"]
+    assert writes, "expected at least the status publication"
+    assert all(path.startswith("statuses/") or path.startswith("git/refs") for _method, path in writes)
+
+
+def test_readiness_is_only_ever_published_against_the_pull_request_head(gh):
+    """No reconciliation path may publish readiness against the default-branch SHA."""
+    hunter_merge_readiness.event_name = "schedule"
+    _stuck_pending_pr(
+        gh,
+        governance_check_started="2026-08-12T22:36:14Z",
+        invalidated_at="2026-08-12T22:36:23Z",
+        reconcile_started="2026-08-13T03:08:00Z",
+        reconcile_published="2026-08-13T03:08:17Z",
+    )
+    # The reconcile sweep's own run belongs to the default branch; its SHA must
+    # never become a publication target just because it produced the verdict.
+    gh.workflow_runs[RECONCILE_RUN_ID]["head_sha"] = "sha_main"
+
+    hunter_merge_readiness.evaluate(123, poll=False)
+
+    assert gh.published, "expected a publication"
+    assert {sha for sha, _state, _desc in gh.published} == {"sha_123"}
+
+
+def test_controller_status_writes_do_not_invalidate_the_controller(gh):
+    """The controller's own publications must not feed its invalidation boundary.
+
+    If they did, every reconciliation would invalidate the verdict it had just
+    accepted and the sweep would oscillate forever instead of converging.
+    """
+    hunter_merge_readiness.event_name = "schedule"
+    _stuck_pending_pr(
+        gh,
+        governance_check_started="2026-08-12T22:36:14Z",
+        invalidated_at="2026-08-12T22:36:23Z",
+        reconcile_started="2026-08-13T03:08:00Z",
+        reconcile_published="2026-08-13T03:08:17Z",
+    )
+
+    hunter_merge_readiness.evaluate(123, poll=False)
+    assert gh.published[-1][1] == "success"
+    publications_after_first_pass = len(gh.published)
+
+    # A second sweep observes the status the first sweep just wrote.
+    hunter_merge_readiness.latest_readiness = None
+    hunter_merge_readiness.evaluate(123, poll=False)
+
+    assert len(gh.published) == publications_after_first_pass, "converged state was republished"
+    assert gh.published[-1][1] == "success"
+
+
+# ====================================================================================
+# Event payloads are hints, never current truth
+# ====================================================================================
+
+
+def test_replayed_workflow_run_payload_does_not_override_newer_head_evidence(gh, tmp_path, monkeypatch):
+    """Re-running an old workflow_run replays its original payload verbatim.
+
+    That payload described a Governance evaluation the head has already moved
+    past. Current exact-head evidence that began later must decide, otherwise a
+    rerun would publish a terminal failure that contradicts the live verdict.
+    """
+    event_path = tmp_path / "event.json"
+    event_path.write_text(
+        json.dumps(
+            {
+                "workflow_run": {
+                    "pull_requests": [{"number": 123, "head": {"sha": "sha_123"}}],
+                    "head_sha": "sha_123",
+                    "run_started_at": "2026-08-12T22:36:14Z",
+                    "conclusion": "failure",
+                }
+            }
+        )
+    )
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_path))
+    monkeypatch.setenv("GH_REPO", "fafa33/Project-Hunter")
+    monkeypatch.setenv("GH_TOKEN", "fake-token")
+    monkeypatch.setenv("EVENT_NAME", "workflow_run")
+    monkeypatch.setenv("RUN_URL", "https://example.invalid/run")
+
+    _stuck_pending_pr(
+        gh,
+        governance_check_started="2026-08-12T22:36:14Z",
+        invalidated_at="2026-08-12T22:36:23Z",
+        reconcile_started="2026-08-13T03:08:00Z",
+        reconcile_published="2026-08-13T03:08:17Z",
+    )
+
+    hunter_merge_readiness.main()
+
+    assert gh.published[-1][1] == "success"
+    assert all(state != "failure" for _sha, state, _desc in gh.published)
+
+
+def test_older_head_evidence_never_displaces_a_newer_event_payload(gh, tmp_path, monkeypatch):
+    """Supersession is strictly one-directional.
+
+    The ordinary path -- Governance finishes and immediately triggers the
+    controller -- must keep using the payload it was handed, even while an older
+    evaluation of the same head is still the newest one visible through the API.
+    """
+    event_path = tmp_path / "event.json"
+    event_path.write_text(
+        json.dumps(
+            {
+                "workflow_run": {
+                    "pull_requests": [{"number": 123, "head": {"sha": "sha_123"}}],
+                    "head_sha": "sha_123",
+                    "run_started_at": "2026-08-13T05:00:00Z",
+                    "conclusion": "success",
+                }
+            }
+        )
+    )
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_path))
+    monkeypatch.setenv("GH_REPO", "fafa33/Project-Hunter")
+    monkeypatch.setenv("GH_TOKEN", "fake-token")
+    monkeypatch.setenv("EVENT_NAME", "workflow_run")
+    monkeypatch.setenv("RUN_URL", "https://example.invalid/run")
+
+    _stuck_pending_pr(
+        gh,
+        governance_check_started="2026-08-12T22:36:14Z",
+        invalidated_at="2026-08-13T04:00:00Z",
+        reconcile_started="2026-08-13T03:08:00Z",
+        reconcile_published="2026-08-13T05:00:30Z",
+    )
+
+    hunter_merge_readiness.main()
+
+    # Only the payload's 05:00 start clears the 04:00 invalidation; the older
+    # 03:08 evaluation visible on the head would have failed closed.
+    assert gh.published[-1][1] == "success"
+
+
+def test_superseded_pull_request_target_run_still_converges_via_successor(gh, tmp_path, monkeypatch):
+    """The cancellation race must not be able to strand a pull request.
+
+    A pull_request_target run publishes the immediate pending invalidation and
+    is then cancelled before it can publish anything terminal. The successor
+    workflow_run arrives without pull-request identity. Convergence must still
+    happen.
+    """
+    _stuck_pending_pr(
+        gh,
+        governance_check_started="2026-08-12T22:36:14Z",
+        invalidated_at="2026-08-12T22:36:23Z",
+        reconcile_started="2026-08-13T03:08:00Z",
+        reconcile_published="2026-08-13T03:08:17Z",
+    )
+
+    # The cancelled run got as far as invalidating the green status.
+    hunter_merge_readiness.event_name = "pull_request_target"
+    hunter_merge_readiness.latest_readiness = {"state": "success", "description": "Ready to merge"}
+    hunter_merge_readiness.publish("sha_123", "pending", "Validating current feedback and exact-head prerequisites.")
+    assert gh.published[-1][1] == "pending"
+
+    event_path = tmp_path / "event.json"
+    event_path.write_text(
+        json.dumps(
+            {
+                "workflow_run": {
+                    "pull_requests": [],
+                    "head_sha": "sha_123",
+                    "run_started_at": "2026-08-13T03:08:00Z",
+                    "conclusion": "success",
+                }
+            }
+        )
+    )
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_path))
+    monkeypatch.setenv("GH_REPO", "fafa33/Project-Hunter")
+    monkeypatch.setenv("GH_TOKEN", "fake-token")
+    monkeypatch.setenv("EVENT_NAME", "workflow_run")
+    monkeypatch.setenv("RUN_URL", "https://example.invalid/run")
+
+    hunter_merge_readiness.main()
+
+    assert gh.published[-1][1] == "success"
