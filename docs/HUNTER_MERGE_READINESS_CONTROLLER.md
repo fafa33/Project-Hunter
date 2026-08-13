@@ -76,9 +76,14 @@ represented differently by the two GitHub APIs involved) and changed-file
 status/additions/deletions (read by no validator).
 
 **Readiness semantic revision** — a digest of the complete readiness-relevant
-state: everything above, plus required check outcomes, resolved Governance
-evidence, unresolved review thread identifiers, CHANGES_REQUESTED reviewers, and
-unacknowledged comment identifiers.
+state: everything above, plus previous paths, other open pull requests sharing
+this head, required check outcomes, resolved Governance evidence, unresolved
+review thread identifiers, CHANGES_REQUESTED reviewers, and unacknowledged
+comment identifiers. Untruncated, and for the same reason the governance
+revision is 128 bits: this is the identity both green guards compare, so a
+collision between a ready snapshot and a blocked one would let an author flip
+between them across those reads. It is never written into a length-limited
+status, so there is no budget to trade against and no reason to truncate.
 
 Deliberately excluded from both, because none of them changes what readiness
 *is*: the controller's own published statuses, trusted repository-automation

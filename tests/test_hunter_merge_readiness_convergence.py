@@ -886,6 +886,54 @@ def _state_matrix(gh) -> list:
     return states
 
 
+def test_the_semantic_revision_is_not_truncated(gh):
+    """The identity guarding green publication must be collision-resistant.
+
+    It is compared immediately before and immediately after publishing
+    `success`, so a collision between a ready snapshot and a blocked one would
+    let an author flip between them across those reads and leave green standing
+    on a blocked state. The author controls title and body with unlimited
+    entropy and can grind candidates offline, and this digest is never written
+    into a length-limited status, so there is no reason to truncate it.
+    """
+    ready_pull_request(gh)
+    revision = core.read_current_state(501).semantic_revision()
+
+    assert len(revision) * 4 >= 256
+    assert set(revision) <= set("0123456789abcdef")
+
+
+def test_author_controlled_text_moves_the_semantic_revision(gh):
+    """The fields an attacker would grind must reach this digest too."""
+    ready_pull_request(gh)
+
+    revisions = set()
+    for n in range(64):
+        gh.pulls[501]["body"] = READY_BODY + f"\n\nvariant {n}\n"
+        revisions.add(core.read_current_state(501).semantic_revision())
+    assert len(revisions) == 64
+
+    titles = set()
+    for n in range(64):
+        gh.pulls[501]["title"] = f"fix: variant {n}"
+        titles.add(core.read_current_state(501).semantic_revision())
+    assert len(titles) == 64
+
+
+def test_a_blocked_snapshot_never_shares_a_revision_with_a_ready_one(gh):
+    """The two states the green guards must distinguish are actually distinct."""
+    ready_pull_request(gh)
+    ready = core.read_current_state(501)
+    assert core.decide(ready).state == "success"
+
+    # Same head, same checks; only the governance evidence stops matching.
+    gh.pulls[501]["body"] = READY_BODY + "\n\nEdited after approval.\n"
+    blocked = core.read_current_state(501)
+
+    assert core.decide(blocked).state == "pending"
+    assert blocked.semantic_revision() != ready.semantic_revision()
+
+
 def test_decide_is_a_function_of_the_semantic_revision_alone(gh):
     """Equal semantic revision implies equal decision; different decision implies different revision."""
     by_revision: dict[str, core.ReadinessDecision] = {}

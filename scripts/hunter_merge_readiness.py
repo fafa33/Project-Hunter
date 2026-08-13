@@ -287,7 +287,7 @@ class CurrentState:
         return admission.touches_trust_boundary(self.changed_paths + self.previous_paths)
 
     def semantic_revision(self) -> str:
-        """Fingerprint of the complete readiness-relevant current state.
+        """Full-width fingerprint of the complete readiness-relevant current state.
 
         Two snapshots with equal semantic revisions are the same state as far as
         readiness is concerned, so :func:`decide` must return the same result for
@@ -332,7 +332,17 @@ class CurrentState:
                     self.governance.revision,
                 ]
             )
-        return hashlib.sha256("\x1f".join(parts).encode("utf-8")).hexdigest()[:16]
+        # Deliberately untruncated. This digest is the identity both green
+        # guards compare -- once before publishing `success` and once after --
+        # so a collision between a ready snapshot and a blocked one lets an
+        # author flip between them across those reads and leave green standing
+        # on a blocked state. The author controls title and body with unlimited
+        # entropy and can grind candidates offline, so the width is a security
+        # parameter here exactly as it is for the governance revision. Unlike
+        # that one it is never written into a 140-character status description,
+        # so there is no budget to trade against and no reason to truncate at
+        # all.
+        return hashlib.sha256("\x1f".join(parts).encode("utf-8")).hexdigest()
 
 
 # --- Current-state readers --------------------------------------------------
