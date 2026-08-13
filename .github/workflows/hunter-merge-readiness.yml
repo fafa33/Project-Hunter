@@ -5,6 +5,19 @@ name: Hunter / Merge Readiness
 # Merge means merge: no stale governance result and no unresolved feedback may
 # coexist with a green readiness status.
 #
+# Architecture (see scripts/hunter_merge_readiness.py):
+#
+#   trigger -> identify PR -> read current canonical GitHub state -> compute
+#   semantic revision -> resolve matching Governance evidence -> evaluate
+#   blockers -> publish exactly one current readiness result
+#
+# Every trigger below is only an adapter that answers "which pull request
+# number(s) might need reconciling?". None of them carries decision authority:
+# the controller re-reads live state for each identified pull request and
+# decides purely from that. A duplicated, delayed, reordered, or replayed
+# delivery can therefore only cause a redundant reconciliation of current
+# state, never a different result.
+#
 # Feedback contract:
 # - every unresolved inline review thread blocks;
 # - every current CHANGES_REQUESTED review blocks;
@@ -16,25 +29,14 @@ name: Hunter / Merge Readiness
 #   repository automation are exempt from owner acknowledgement. Unknown bots
 #   remain fail-closed.
 #
-# workflow_dispatch lets an operator force an immediate, full reconciliation for a
-# single PR (the same check-runs-based evaluation the periodic schedule performs),
-# instead of waiting on the schedule's real-world cadence or re-running a webhook-
-# triggered run that only performs the lightweight invalidate-and-wait shortcut.
+# None of that feedback is an input to Hunter Governance Review, so none of it
+# invalidates Governance evidence; it is re-read live on every reconciliation
+# instead. Resolving a thread or applying an acknowledgement therefore converges
+# on the next reconciliation without requiring a Governance re-run.
 #
-# Per-PR mutual exclusion: the concurrency group below only covers runs that share
-# a single triggering context (e.g. two pull_request_target events for the same
-# PR). A schedule run evaluates every open PR in one job and has no PR-specific
-# concurrency key to give it, so it cannot be serialized against a same-PR
-# pull_request_target run at the workflow level. That race (a scheduled sweep
-# reading stale state while a real edit's invalidation is still being recorded)
-# is instead closed at the controller level via an atomic per-PR git-ref lock
-# (see acquire_pr_lock/release_pr_lock in hunter_merge_readiness.py), which is
-# why `contents: write` is granted below -- git ref creation is the only GitHub
-# REST primitive here with real compare-and-swap semantics. The lock ref lives
-# under refs/hunter-merge-readiness-locks/*, not refs/heads/*, specifically so
-# creating/deleting it is not a branch push and cannot recursively trigger
-# hunter-pre-pr-preflight.yml (push: branches-ignore: [main]) or any other
-# push/create-triggered workflow in this repository.
+# workflow_dispatch lets an operator force an immediate reconciliation for a
+# single PR. It has no special decision semantics whatsoever -- it runs the
+# identical reconcile_pr() path the schedule and every webhook run use.
 
 on:
   pull_request_target:
@@ -69,33 +71,46 @@ on:
       - Hunter Governance Review
     types:
       - completed
-  # GitHub Actions has no reaction event. Polling keeps acknowledgements of
-  # non-exempt comments observable without requiring a dummy PR edit/comment.
+  # GitHub Actions has no reaction event, and no event fires when a required
+  # check other than Governance Review completes. The sweep is the safety net
+  # that makes those observable; it has no special decision semantics either.
   schedule:
     - cron: "*/5 * * * *"
   workflow_dispatch:
     inputs:
       pr_number:
-        description: "Pull request number to force a full reconciliation for"
+        description: "Pull request number to force a reconciliation for"
         required: true
         type: number
 
+# Least privilege. `actions: read` and `contents: write` are both gone: the
+# controller no longer resolves workflow runs to attribute Governance evidence
+# (the evidence states its own owner), and no longer creates the per-PR git-ref
+# lock that the removed timestamp/invalidation machinery required.
 permissions:
-  actions: read
   checks: read
-  # write (not read) is required only for the per-PR reconciliation lock's
-  # atomic git-ref create/delete (refs/hunter-merge-readiness-locks/pr-*, a
-  # non-branch, non-tag ref namespace). The controller never creates,
-  # modifies, or deletes any other ref, tree, or blob; branch protection on
-  # `main` and every other ref is unaffected, and this ref namespace never
-  # fires a `push` or `create` webhook event.
-  contents: write
+  contents: read
   issues: read
   pull-requests: read
   statuses: write
 
+# Per-PR concurrency. Cancelling a predecessor is safe by construction: no
+# reconciliation depends on a predecessor completing, and the successor re-reads
+# current state from scratch. The schedule sweep evaluates many pull requests in
+# one job and so has no per-PR key; it shares a single sweep group instead, and a
+# sweep racing a PR-triggered run cannot publish a stale success because the
+# controller re-reads and re-compares the semantic revision immediately before
+# publishing green.
 concurrency:
-  group: hunter-merge-readiness-${{ github.event.pull_request.number || github.event.issue.number || github.event.workflow_run.pull_requests[0].number || github.event.inputs.pr_number || github.run_id }}
+  group: >-
+    hunter-merge-readiness-${{
+      github.event.pull_request.number
+      || github.event.issue.number
+      || github.event.workflow_run.pull_requests[0].number
+      || github.event.inputs.pr_number
+      || (github.event_name == 'schedule' && 'sweep')
+      || github.run_id
+    }}
   cancel-in-progress: true
 
 jobs:
@@ -122,4 +137,4 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          python scripts/hunter_merge_readiness_entrypoint.py
+          python scripts/hunter_merge_readiness.py

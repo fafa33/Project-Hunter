@@ -44,6 +44,13 @@ import argparse
 import os
 from collections.abc import Mapping
 
+from hunter_governance_revision import (
+    GovernanceInputs,
+    conflicting_from_graphql,
+    governance_revision,
+    render_marker,
+)
+
 from hunter_governance_review.context import ContextResolutionError, resolve_context
 from hunter_governance_review.contracts import (
     CHECK_CONTEXT,
@@ -98,8 +105,15 @@ def _protected_branches(raw: str | None) -> tuple[str, ...]:
     return tuple(branch.strip() for branch in value.split(",") if branch.strip())
 
 
-def build_status_description(decision: Decision, pair: ReviewPair) -> str:
-    """Build a <=140-character status description for the GitHub statuses API."""
+def build_status_description(decision: Decision, pair: ReviewPair, revision: str) -> str:
+    """Build a <=140-character status description for the GitHub statuses API.
+
+    The identity marker is written first so that GitHub's 140-character limit
+    can only truncate the human-readable reason. A consumer of this status
+    (Hunter Merge Readiness) needs the marker to prove *which* pull request this
+    verdict evaluated and *which* governance-relevant state it evaluated; it
+    needs no part of the prose, so the prose is what yields under truncation.
+    """
     head = pair.source_head_sha[:7]
     base = pair.target_base_sha[:7]
     if decision.outcome is Outcome.APPROVED:
@@ -108,7 +122,8 @@ def build_status_description(decision: Decision, pair: ReviewPair) -> str:
         text = f"Changes required (head {head} on base {base}): {decision.reason}"
     else:
         text = f"Review failed (head {head} on base {base}): {decision.reason} " "No verdict produced; merge blocked."
-    return text[:140]
+    marker = render_marker(pair.pull_request_number, revision) + " "
+    return (marker + text)[:140]
 
 
 def _write_summary(
@@ -272,7 +287,26 @@ def run_review(
 
     target_sha = current.head_oid if current is not None else pair.source_head_sha
     state = outcome_to_check_state(decision.outcome)
-    description = build_status_description(decision, pair)
+    # The stamped revision describes the state this run actually evaluated --
+    # `pair` plus the PR facts read alongside it -- never the state re-read
+    # afterwards. When the pull request advanced mid-review, the decision is
+    # already REVIEW_FAILED, and stamping the evaluated (now superseded)
+    # revision is what makes the consumer correctly disregard this verdict for
+    # the newer state instead of applying it.
+    revision = governance_revision(
+        GovernanceInputs(
+            pull_request_number=pr.number,
+            head_sha=pair.source_head_sha,
+            base_sha=pair.target_base_sha,
+            base_ref=pr.base_ref_name,
+            title=pr.title,
+            body=pr.body,
+            draft=pr.draft,
+            conflicting=conflicting_from_graphql(pr.mergeable),
+            changed_paths=tuple(f.filename for f in files),
+        )
+    )
+    description = build_status_description(decision, pair, revision)
     target_url = f"{env.get('GITHUB_SERVER_URL', 'https://github.com')}/{repository}/actions/runs/{run_id}"
 
     print(f"[Outcome] {decision.outcome.value}")
@@ -285,6 +319,7 @@ def run_review(
                 f"[Context] {entry.path}@{entry.ref[:12]} status={entry.status} "
                 f"provenance={entry.provenance} sha256={entry.sha256[:12] or 'n/a'}"
             )
+    print(f"[Revision] governance revision {revision} for PR #{pr.number}")
     print(f"[StatusCheck] context={CHECK_CONTEXT!r} state={state.value} on {target_sha[:12]}")
 
     if not args.dry_run:
