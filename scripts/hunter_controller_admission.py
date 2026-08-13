@@ -97,6 +97,13 @@ def evaluate_admission(state: CurrentState) -> AdmissionResult:
         return AdmissionResult(False, "pull request is no longer open.")
     if state.draft:
         return AdmissionResult(False, "pull request is a draft.")
+    if state.shared_head_pull_requests:
+        # The readiness status is keyed by (SHA, context), so a green published
+        # on a shared head asserts mergeability for every open pull request on
+        # that head. Refused here as well as in `decide`, because this kernel
+        # must never rely on the caller having already refused.
+        others = ", ".join(f"#{number}" for number in state.shared_head_pull_requests)
+        return AdmissionResult(False, f"head is shared with open PR {others}.")
 
     not_green = []
     for check in state.required:

@@ -73,11 +73,14 @@ def test_evidence_for_one_pull_request_never_satisfies_the_other(gh):
     owner_state = core.read_current_state(123)
     other_state = core.read_current_state(456)
 
+    # Attribution: only PR #123's own evidence is usable, and only by #123.
     assert owner_state.governance is not None
     assert owner_state.governance.pull_request_number == 123
-    assert core.decide(owner_state).state == "success"
-
     assert other_state.governance is None
+
+    # Publication: neither may go green, because the readiness status is keyed
+    # by (SHA, context) and both pull requests share that exact status object.
+    assert core.decide(owner_state).state == "pending"
     assert core.decide(other_state).state == "pending"
 
 
@@ -92,13 +95,42 @@ def test_forged_pull_request_number_in_the_marker_is_rejected_for_the_other_pr(g
     assert any("produced for PR #123" in reason for reason in state.unusable_governance_reasons)
 
 
-def test_each_pull_request_needs_its_own_evidence_on_a_shared_head(gh):
+def test_a_shared_head_withholds_green_even_when_both_are_fully_evidenced(gh):
+    """Evidence attribution succeeding is not sufficient to publish green.
+
+    Both pull requests have their own valid Governance evidence and would each
+    be ready in isolation. They still cannot go green: a commit status is keyed
+    by (SHA, context), so branch protection reads the *same status object* for
+    both, and a success would assert mergeability for a pull request whose own
+    blockers were never evaluated.
+    """
     _two_pull_requests_on_one_head(gh)
     gh.publish_governance(123, "success")
     gh.publish_governance(456, "success")
 
-    assert core.decide(core.read_current_state(123)).state == "success"
-    assert core.decide(core.read_current_state(456)).state == "success"
+    first = core.read_current_state(123)
+    second = core.read_current_state(456)
+
+    assert first.governance is not None and first.governance.pull_request_number == 123
+    assert second.governance is not None and second.governance.pull_request_number == 456
+    assert first.shared_head_pull_requests == (456,)
+    assert second.shared_head_pull_requests == (123,)
+    assert core.decide(first).state == "pending"
+    assert "shared with open PR #456" in core.decide(first).description
+    assert core.decide(second).state == "pending"
+
+
+def test_green_returns_once_the_head_is_no_longer_shared(gh):
+    """The withholding is a property of current state, not a permanent penalty."""
+    _two_pull_requests_on_one_head(gh)
+    gh.publish_governance(123, "success")
+    assert core.decide(core.read_current_state(123)).state == "pending"
+
+    gh.pulls[456]["state"] = "closed"
+
+    state = core.read_current_state(123)
+    assert state.shared_head_pull_requests == ()
+    assert core.decide(state).state == "success"
 
 
 def test_legacy_unstamped_evidence_is_unusable_even_on_a_unique_head(gh):

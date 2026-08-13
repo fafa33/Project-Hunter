@@ -238,6 +238,7 @@ class CurrentState:
     conflicting: bool
     changed_paths: tuple[str, ...]
     previous_paths: tuple[str, ...]
+    shared_head_pull_requests: tuple[int, ...]
     required: tuple[RequiredCheckState, ...]
     governance: GovernanceEvidence | None
     unusable_governance_reasons: tuple[str, ...]
@@ -309,6 +310,7 @@ class CurrentState:
             str(self.conflicting),
             "|".join(sorted(set(self.changed_paths))),
             "|".join(sorted(set(self.previous_paths))),
+            "|".join(str(number) for number in sorted(self.shared_head_pull_requests)),
             "|".join(sorted(self.unresolved_thread_ids)),
             "|".join(sorted(self.changes_requested)),
             "|".join(str(item) for item in sorted(self.unacknowledged_comments)),
@@ -622,6 +624,19 @@ def read_current_state(pr_number: int) -> CurrentState | None:
         # pull request pending forever. Fail loudly instead.
         raise RuntimeError(f"PR #{pr_number} base SHA unavailable; cannot compute a governance revision")
 
+    # Other open pull requests whose current head is this same commit. A commit
+    # status is keyed by (SHA, context), so those pull requests do not merely
+    # *display* this one's readiness -- branch protection evaluates the very
+    # same status object for them. Publishing green here would therefore assert
+    # mergeability for every one of them, so a shared head must fail closed.
+    shared_head_pull_requests = tuple(
+        sorted(
+            int(other["number"])
+            for other in open_pull_requests_for_head(head_sha)
+            if int(other["number"]) != int(pr_number)
+        )
+    )
+
     changed_files = [entry for entry in paged(f"pulls/{pr_number}/files") if isinstance(entry, dict)]
     changed_paths = tuple(str(entry.get("filename") or "") for entry in changed_files)
     # Renamed files carry their controller-owned source path here, never in
@@ -660,6 +675,7 @@ def read_current_state(pr_number: int) -> CurrentState | None:
         conflicting=conflicting_from_rest(pr.get("mergeable")),
         changed_paths=changed_paths,
         previous_paths=previous_paths,
+        shared_head_pull_requests=shared_head_pull_requests,
         required=tuple(required),
         governance=None,
         unusable_governance_reasons=(),
@@ -812,6 +828,21 @@ def decide(state: CurrentState) -> ReadinessDecision:
     if missing or pending:
         return ReadinessDecision("pending", "Waiting for exact-head checks: " + ", ".join(missing + pending))
 
+    if state.shared_head_pull_requests:
+        # Everything this pull request needs is satisfied, but green cannot be
+        # expressed. The readiness status lives at (head SHA, context), and that
+        # exact object is what branch protection reads for every open pull
+        # request on this head -- so a success published here would assert
+        # mergeability for pull requests whose own blockers were never
+        # evaluated. There is no per-pull-request status slot to publish into,
+        # so the only safe answer is to withhold green until the head is this
+        # pull request's alone.
+        others = ", ".join(f"#{number}" for number in state.shared_head_pull_requests)
+        return ReadinessDecision(
+            "pending",
+            f"Head is shared with open PR {others}; readiness cannot be attributed to one PR.",
+        )
+
     description = "Ready to merge: fresh checks passed and every PR comment is resolved/acknowledged."
     if state.controller_upgrade_candidate:
         description = "Ready to merge: controller-upgrade PR admitted by the current trusted generation. " + description
@@ -942,17 +973,22 @@ def _converge_after_publishing_success(
             return decision
 
     print(f"PR #{pr_number}: state is changing faster than readiness can be confirmed; withholding green.")
+    # The exhaustion status must land on the head that is current *now*, paired
+    # with that same head's published status. Taking the head from an earlier
+    # loop snapshot while reading the published status from a newer one can
+    # write `pending` to a SHA the pull request has already moved off, leaving a
+    # `success` from an earlier iteration standing on the head that actually
+    # counts -- which is the opposite of the guarantee this branch exists to
+    # provide.
+    final = read_current_state(pr_number)
+    if final is None:
+        print(f"PR #{pr_number} closed while withholding green; leaving the published status as is.")
+        return decision
     decision = ReadinessDecision(
         "pending",
         "Waiting: pull-request state is changing faster than readiness can be confirmed.",
     )
-    final = read_current_state(pr_number)
-    publish(
-        state.head_sha,
-        decision.state,
-        decision.description,
-        final.published_readiness if final is not None else None,
-    )
+    publish(final.head_sha, decision.state, decision.description, final.published_readiness)
     return decision
 
 

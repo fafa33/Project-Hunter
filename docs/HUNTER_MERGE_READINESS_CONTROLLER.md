@@ -135,6 +135,10 @@ neither guard is a lock.
 
 *Before* publishing `success`, current state is read again and the semantic
 revision compared, rejecting a green computed from an already-overtaken read.
+The exhaustion path below reads once more and writes to *that* snapshot's head
+paired with *that* snapshot's published status: taking a head from an earlier
+loop snapshot could write `pending` to a SHA the pull request has already left,
+leaving an earlier iteration's `success` standing on the head that counts.
 
 *After* publishing `success`, current state is read again and re-decided. A
 pre-publish check alone cannot close the window between the check and the write:
@@ -167,15 +171,25 @@ confirms. A write is skipped only when the already-published status is identical
 to the decided one. Successful execution never leaves a stale status behind
 unless pending or failure is the correct current result.
 
-## Known limitation: several open pull requests sharing one head SHA
+## Shared head SHAs fail closed
 
-Commit statuses are keyed by SHA, so two open pull requests with the same current
-head share one `Hunter Merge Readiness` status slot and will overwrite each
-other. This is a property of GitHub's status model, not of this controller, and
-it predates this design. Correctness is unaffected: each pull request is still
-evaluated only against evidence naming it, so no verdict crosses the boundary —
-only the displayed status is ambiguous. Give each pull request its own head
-commit to avoid it.
+A commit status is keyed by `(SHA, context)`, not by pull request. When several
+open pull requests have the same current head, branch protection evaluates the
+*same status object* for all of them. A green published for one would therefore
+assert mergeability for pull requests whose own blockers were never evaluated,
+so readiness **withholds green whenever the head is shared** and publishes
+`pending` naming the other pull requests instead. `hunter_controller_admission`
+refuses independently, so the kernel never relies on the caller having refused.
+
+This is the one piece of head-uniqueness logic that survives the redesign. #257
+used head uniqueness to *attribute evidence*; that job is now done by the
+identity marker. Head uniqueness is still required for a different reason —
+whether a readiness result can be *published* at all — and the two must not be
+confused.
+
+The withholding is derived from current state, so it lifts by itself as soon as
+the head is the pull request's alone again. Give each pull request its own head
+commit.
 
 ## Governance freeze
 

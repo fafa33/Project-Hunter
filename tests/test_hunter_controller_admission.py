@@ -203,15 +203,33 @@ def test_a_draft_candidate_is_not_admitted(gh):
     assert "draft" in result.reason
 
 
-def test_admission_rejects_evidence_belonging_to_another_pull_request(gh):
-    """Admission re-proves ownership; it never inherits the caller's conclusion."""
+def test_admission_refuses_a_shared_head(gh):
+    """A green on a shared head would assert mergeability for the other PR too."""
     shared = "shared_upgrade_head"
     gh.add_pull_request(601, head_sha=shared, files=["scripts/hunter_merge_readiness.py"])
     gh.add_pull_request(602, head_sha=shared, files=["scripts/hunter_merge_readiness.py"])
     gh.green_required_checks(shared)
     gh.publish_governance(601)
+    gh.publish_governance(602)
 
-    result = admission.evaluate_admission(core.read_current_state(602))
+    for number, other in ((601, 602), (602, 601)):
+        result = admission.evaluate_admission(core.read_current_state(number))
+        assert result.admitted is False
+        assert f"head is shared with open PR #{other}" in result.reason
+
+
+def test_admission_rejects_evidence_belonging_to_another_pull_request(gh):
+    """Admission re-proves ownership; it never inherits the caller's conclusion.
+
+    Uses an unshared head so the rejection can only come from the ownership
+    check, not from the shared-head rule.
+    """
+    head = "foreign_evidence_head"
+    gh.add_pull_request(603, head_sha=head, files=["scripts/hunter_merge_readiness.py"])
+    gh.green_required_checks(head)
+    gh.publish_governance(603, marked_pull_request=999)
+
+    result = admission.evaluate_admission(core.read_current_state(603))
 
     assert result.admitted is False
     assert "no Hunter Governance Review evidence" in result.reason

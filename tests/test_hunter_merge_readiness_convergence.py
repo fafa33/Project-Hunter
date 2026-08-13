@@ -258,6 +258,61 @@ def test_a_blocker_cleared_during_the_green_write_leaves_green_in_place(gh):
     assert gh.readiness_status(head)[0] == "success"
 
 
+def test_exhaustion_pending_lands_on_the_head_that_is_current_at_that_moment(gh):
+    """The exhaustion status must not be written to a head the PR has left.
+
+    Models a rapid force-push sequence that returns to a previously observed
+    SHA. Taking the head from an earlier loop snapshot while reading the
+    published status from a newer one writes `pending` to a stale SHA and leaves
+    a `success` from an earlier iteration standing on the head that actually
+    counts -- the opposite of what this branch guarantees.
+    """
+    head_a = "cycling_head_a"
+    head_b = "cycling_head_b"
+    gh.add_pull_request(501, head_sha=head_a)
+    original_publish = core.publish
+
+    def publishing_into_a_force_push_cycle(sha, state, description, published):
+        result = original_publish(sha, state, description, published)
+        current = gh.head_sha(501)
+        nxt = head_b if current == head_a else head_a
+        gh.pulls[501]["head"]["sha"] = nxt
+        gh.green_required_checks(nxt)
+        gh.statuses[nxt] = [s for s in gh.statuses.get(nxt, []) if s["context"] != "Hunter Governance Review"]
+        gh.publish_governance(501)
+        return result
+
+    # Observe (never alter) which head each read reported, so the guarantee can
+    # be stated exactly: the exhaustion status goes to the head that was current
+    # when it was decided, not to an earlier loop snapshot's head.
+    original_read = core.read_current_state
+    observed_heads: list[str] = []
+
+    def recording_read(pr_number):
+        state = original_read(pr_number)
+        if state is not None:
+            observed_heads.append(state.head_sha)
+        return state
+
+    gh.green_required_checks(head_a)
+    gh.publish_governance(501)
+    core.publish = publishing_into_a_force_push_cycle
+    core.read_current_state = recording_read
+    try:
+        decision = core.reconcile_pr(501)
+    finally:
+        core.publish = original_publish
+        core.read_current_state = original_read
+
+    assert decision.state == "pending"
+    last_sha, last_state, _ = gh.published[-1]
+    assert last_state == "pending"
+    assert last_sha == observed_heads[-1]
+    # The two heads alternate, so a stale-snapshot write would have targeted the
+    # other one -- this assertion is what fails without the fix.
+    assert observed_heads[-1] != observed_heads[-2]
+
+
 def test_state_changing_faster_than_it_can_be_confirmed_withholds_green(gh):
     """On exhaustion the run withholds green rather than leaving one unconfirmed."""
     head = ready_pull_request(gh)
@@ -453,9 +508,50 @@ def test_property_9_governance_evidence_never_crosses_a_shared_head(gh):
 
     assert first.governance is not None
     assert second.governance is None
-    assert core.decide(first).state == "success"
-    assert core.decide(second).state == "pending"
     assert any("produced for PR #601" in reason for reason in second.unusable_governance_reasons)
+    # And neither may publish green: see the publication rule below.
+    assert core.decide(first).state == "pending"
+    assert core.decide(second).state == "pending"
+
+
+def test_a_shared_head_withholds_green_because_the_status_slot_is_shared(gh):
+    """A readiness status is keyed by (SHA, context), not by pull request.
+
+    Branch protection evaluates that same status object for every open pull
+    request whose head is that commit. Publishing green for a ready pull request
+    would therefore assert mergeability for a pull request sharing the head whose
+    own blockers were never evaluated, so a shared head must fail closed.
+    """
+    shared = "shared_publication_head"
+    gh.add_pull_request(611, head_sha=shared)
+    gh.add_pull_request(612, head_sha=shared)
+    gh.green_required_checks(shared)
+    gh.publish_governance(611, "success")
+    gh.publish_governance(612, "success")
+    # PR #612 carries a blocker; PR #611 is fully ready.
+    gh.add_comment(612, 900)
+
+    ready = core.decide(core.read_current_state(611))
+    blocked = core.decide(core.read_current_state(612))
+
+    assert blocked.state == "failure"
+    assert ready.state == "pending"
+    assert "shared with open PR #612" in ready.description
+
+
+def test_a_shared_head_that_becomes_unique_converges_to_green(gh):
+    """The withholding is derived from current state, not a sticky penalty."""
+    shared = "shared_then_unique_head"
+    gh.add_pull_request(621, head_sha=shared)
+    gh.add_pull_request(622, head_sha=shared)
+    gh.green_required_checks(shared)
+    gh.publish_governance(621, "success")
+    assert core.reconcile_pr(621).state == "pending"
+
+    gh.pulls[622]["head"]["sha"] = "a_different_head"
+
+    assert core.reconcile_pr(621).state == "success"
+    assert gh.readiness_status(shared)[0] == "success"
 
 
 def test_property_10_ambiguous_trigger_identity_reconciles_each_pr_on_its_own_evidence(gh, monkeypatch, tmp_path):
@@ -475,9 +571,13 @@ def test_property_10_ambiguous_trigger_identity_reconciles_each_pr_on_its_own_ev
 
     drive(monkeypatch, tmp_path, gh, "workflow_run", _workflow_run_event(shared, [701, 702]))
 
-    published = {(sha, state) for sha, state, _ in gh.published}
-    assert (shared, "success") in published
-    assert (shared, "pending") in published
+    # Both candidates were identified and reconciled, each against evidence
+    # naming it -- and neither published green, because the shared status slot
+    # cannot express readiness for one pull request without asserting it for the
+    # other.
+    assert {state for _, state, _ in gh.published} == {"pending"}
+    assert core.read_current_state(701).governance is not None
+    assert core.read_current_state(702).governance is None
 
 
 def test_property_11_unique_exact_attribution_takes_the_normal_path(gh, monkeypatch, tmp_path):
@@ -681,13 +781,16 @@ def test_non_vacuousness_bypassing_revision_matching_breaks_convergence(gh):
     first, because it asserts that the weakened implementation is *detectably*
     different.
     """
-    shared = "shared_head" * 3
-    gh.add_pull_request(801, head_sha=shared)
-    gh.add_pull_request(802, head_sha=shared)
-    gh.green_required_checks(shared)
-    gh.publish_governance(801, "success")
+    # An unshared head carrying evidence stamped for a different pull request.
+    # Deliberately not a shared head, so the demonstration isolates the identity
+    # check rather than the shared-head publication rule.
+    head = "foreign_marker_head"
+    gh.add_pull_request(802, head_sha=head)
+    gh.green_required_checks(head)
+    gh.publish_governance(802, "success", marked_pull_request=801)
 
-    # Current behaviour: PR #802 cannot use PR #801's verdict.
+    # Current behaviour: PR #802 cannot use evidence stamped for PR #801.
+    assert core.read_current_state(802).governance is None
     assert core.decide(core.read_current_state(802)).state == "pending"
 
     def legacy_resolve(statuses, pr_number, revision):
