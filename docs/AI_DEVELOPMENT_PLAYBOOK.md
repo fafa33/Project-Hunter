@@ -75,8 +75,8 @@ The workflow must be scaled proportionately to risk. Authority, persistence, rep
 HDM stage 2 (Design) is not satisfied by starting to write code. For any change
 that involves concurrency, asynchronous external state, retries, reconciliation,
 persistence, replay, event ordering, distributed state, external API semantics,
-or a governance decision, the Implementer must first write a short design note
-answering these ten questions concretely:
+or a governance decision, the Implementer should write a short design note
+answering these ten questions concretely, before implementing:
 
 1. What is the authoritative state?
 2. What state is derived from it?
@@ -89,28 +89,32 @@ answering these ten questions concretely:
 9. How does the design converge?
 10. What simpler design would remove the race rather than shrink its window?
 
-Concrete answers are required. "Handled by retry" and "unlikely in practice" are
-not answers to questions 3, 4, or 7.
+Answers should be concrete. "Handled by retry" and "unlikely in practice" do not
+answer questions 3, 4, or 7. The note is short by design — it belongs in the
+Issue, the design comment, or the Technical Defense, and it is not a new
+governance artifact.
 
-Agents working under this playbook are expected to answer all ten before
-implementing. The note is short by design — it belongs in the Issue, the design
-comment, or the Technical Defense, and it is not a new governance artifact.
+**Authority of this section and the one that follows.** Both are working
+guidance for agents. Neither creates a lifecycle stage, a precondition on
+beginning implementation, a review requirement, or a merge condition.
+`docs/CANONICAL_ARCHITECTURE_MAP.md` makes only *accepted* ADRs binding, assigns
+development-process authority to `docs/DEVELOPMENT_GOVERNANCE.md`, and does not
+list this playbook in its hierarchy at all; ADR 0029 — which defines HDM stage 2
+— is still `Proposed`. So nothing here blocks a change that repository governance
+otherwise permits, and skipping a design note or a design review is not by itself
+a governance violation. Should either become a required precondition, that must
+be established in `docs/DEVELOPMENT_GOVERNANCE.md` through its amendment process,
+and through acceptance of ADR 0029 — not here.
 
-**Authority.** This is a working expectation for agents, not a lifecycle gate.
-`docs/CANONICAL_ARCHITECTURE_MAP.md` makes only *accepted* ADRs binding and
-assigns development-process authority to `docs/DEVELOPMENT_GOVERNANCE.md`; this
-playbook is not in that hierarchy, and ADR 0029 — which defines HDM stage 2 — is
-still `Proposed`. This section therefore elaborates how agents should satisfy a
-stage they are already expected to perform. It does not add a required lifecycle
-stage, and it does not block a change that repository governance otherwise
-permits. Should the design note become a mandatory precondition, that must be
-established through `docs/DEVELOPMENT_GOVERNANCE.md`, and through acceptance of
-ADR 0029, by the governed amendment process — not here.
+That limit is deliberate rather than reluctant: a subordinate document that
+quietly creates gates is the same defect class as an implementation that quietly
+creates authorities.
 
 ### Adversarial design review
 
-Before implementation, the proposed model must survive one focused adversarial
-review. The goal is to invalidate a bad model while it is still free to change.
+Before implementing, the proposed model is worth putting through one focused
+adversarial review. The goal is to invalidate a bad model while it is still free
+to change.
 
 The reviewer attacks the design, not the code, using every case below that
 applies to it. A case that cannot apply — a design with no deliveries, no
@@ -211,29 +215,33 @@ If the answer is no, the finding is one of the other three categories and become
 a follow-up issue. "Could be more robust" is not a merge blocker, and must not
 become one by repetition.
 
-### Review stopping rule
+### When to stop hardening
 
-Independent review is mandatory and is not weakened by this rule. What it bounds
-is the number of *implementation* rounds a single PR absorbs.
+Guidance for implementers on scope, not a lifecycle transition. Whether a PR is
+ready, whether it leaves Draft, and whether it merges are decided by
+`docs/DEVELOPMENT_GOVERNANCE.md` and `docs/AI_REVIEW_PROTOCOL.md`, and the
+repository owner may always choose to make further changes. Nothing here bounds
+review; independent review remains mandatory wherever those documents require it.
 
-After an independent review returns clean on the exact reviewed **source-head and
-target-commit pair**, and full validation passes on that same pair:
+Once an independent review has returned clean on the exact reviewed **source-head
+and target-commit pair**, and full validation passes on that same pair, the
+default should be to stop:
 
-- speculative hardening must not continue inside that PR;
-- non-blocking improvements are deferred to follow-up issues;
-- the PR is closed for merge authorization.
+- speculative hardening inside that PR has reached diminishing returns;
+- non-blocking improvements are better recorded as follow-up issues;
+- the PR is better presented for the merge decision than extended further.
 
 The pair is the unit, never the source head alone. Per
 `docs/AI_REVIEW_PROTOCOL.md`, any subsequent change to the source branch, **or
 any advance of the target branch beyond the reviewed commit**, invalidates the
 review and requires a new independent review before the PR may leave Draft or be
-merged. A PR that was closed under this rule and whose base has since advanced is
-reopened for review by that fact alone — this stopping rule never converts a
-stale review into merge readiness.
+merged. Stopping under this guidance therefore never survives a base advance, and
+never converts a stale review into merge readiness.
 
-A reviewer identifying a possible future improvement is not sufficient reason to
+A reviewer identifying a possible future improvement is not by itself a reason to
 reopen implementation. A finding that makes the contribution unsafe to merge
-always is, under the safety test above.
+always is, under the safety test above — and that obligation comes from
+`docs/AI_REVIEW_PROTOCOL.md`, not from this section.
 
 When a PR has absorbed repeated rounds whose findings are defects in that PR's
 own earlier fixes, that is evidence the design was wrong rather than the code —

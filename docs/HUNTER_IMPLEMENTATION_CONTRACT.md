@@ -184,15 +184,19 @@ the double against the real semantics being relied upon.
 
 A regression test is not evidence merely because it passes.
 
-For every release-blocking defect fix, the implementation shall answer:
+For every fix to a defect classified as a **blocking finding** under
+`docs/AI_REVIEW_PROTOCOL.md` — equivalently, a Merge Blocker — the implementation
+shall answer:
 
 > Would this test fail if the fix were removed?
 
-For release-blocking fixes this shall be demonstrated rather than assumed — by
-reverting or disabling the fix and observing the test fail, or by an equivalent
-demonstration of the failing counterfactual. A test that still passes without the
-fix does not prove the fix and shall be corrected before the fix is presented as
-verified.
+This applies whether the defect was found by review, by testing, or in
+production, and it shall be demonstrated rather than assumed — by reverting or
+disabling the fix and observing the test fail, or by an equivalent demonstration
+of the failing counterfactual. A test that still passes without the fix does not
+prove the fix and shall be corrected before the fix is presented as verified.
+
+For non-blocking fixes the demonstration is recommended but not required.
 
 Tests that pass because a mock reproduces the implementation's internals do not
 satisfy this contract.
