@@ -427,12 +427,12 @@ class GovernanceStatusEvidence(NamedTuple):
 
 
 def declared_pull_request_numbers(record: dict[str, Any] | None) -> set[int]:
-    """Pull-request numbers a workflow run or check run declares it belongs to.
+    """Pull-request numbers a workflow run or check run associates with.
 
     Governance Review runs on the plain `pull_request` event, so GitHub
     populates this for them. The `Hunter Governance Review Reconcile` sweep
     runs on `schedule` and evaluates many pull requests in one run, so it
-    declares none -- an empty result means "this record does not name its
+    associates none -- an empty result means "this record has no associated
     pull request", never "this record belongs to no pull request".
     """
     numbers: set[int] = set()
@@ -455,19 +455,18 @@ def evidence_belongs_to_pull_request(
 
     Two independent proofs are accepted, in order of strength:
 
-    1. The producing run names its pull requests. That is authoritative, so
-       evidence naming a different pull request is rejected outright even when
-       it sits on this exact head.
-    2. The producing run names none (the reconcile sweep). Then the only
-       remaining binding is the head itself, which is sufficient only when the
-       head belongs to exactly one open pull request.
+    1. A producing run associated with exactly one pull request identifies
+       that pull request authoritatively. An association with several pull
+       requests is not identity proof and falls back to the head check.
+    2. When the association is empty or ambiguous, the exact head is sufficient
+       only when it belongs to exactly one open pull request.
 
     When neither proof is available the answer is False, so a shared head
     fails closed rather than letting one pull request's verdict satisfy
     another's readiness.
     """
     declared = declared_pull_request_numbers(record)
-    if declared:
+    if len(declared) == 1:
         return pr_number in declared
     return head_is_unambiguous()
 
