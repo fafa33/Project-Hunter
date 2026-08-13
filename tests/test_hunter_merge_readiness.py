@@ -1853,6 +1853,18 @@ def _stuck_pending_pr(gh, *, governance_check_started, invalidated_at, reconcile
     }
 
 
+def _resolve_evaluation(gh, sha="sha_123", pr_number=123):
+    """Resolve Governance evidence exactly as evaluate() does, attribution included."""
+
+    def head_is_unambiguous():
+        return hunter_merge_readiness.head_uniquely_identifies_pull_request(sha, pr_number)
+
+    evidence = hunter_merge_readiness.governance_status_for_pull_request(sha, pr_number, head_is_unambiguous)
+    return hunter_merge_readiness.resolve_governance_evaluation(
+        gh.check_runs.get(sha, []), pr_number, evidence, head_is_unambiguous
+    )
+
+
 def test_reconcile_published_governance_clears_stale_pending(gh):
     """The exact live failure: stale PENDING must converge to SUCCESS.
 
@@ -1909,7 +1921,7 @@ def test_newest_governance_evaluation_wins_across_both_delivery_paths(gh):
         reconcile_published="2026-08-13T03:08:17Z",
     )
 
-    evaluation = hunter_merge_readiness.resolve_governance_evaluation("sha_123", gh.check_runs["sha_123"])
+    evaluation = _resolve_evaluation(gh)
 
     assert evaluation is not None
     assert evaluation.source == "check run"
@@ -2145,7 +2157,7 @@ def test_governance_status_beyond_the_first_status_page_is_still_found(gh):
 
     with patch("hunter_merge_readiness.request_json", side_effect=paginated):
         resolved = hunter_merge_readiness.latest_commit_status("sha_123", "Hunter Governance Review")
-        evaluation = hunter_merge_readiness.resolve_governance_evaluation("sha_123", gh.check_runs["sha_123"])
+        evaluation = _resolve_evaluation(gh)
 
     assert resolved is not None and resolved["id"] == 900
     assert evaluation is not None
@@ -2380,3 +2392,240 @@ def test_superseded_pull_request_target_run_still_converges_via_successor(gh, tm
     hunter_merge_readiness.main()
 
     assert gh.published[-1][1] == "success"
+
+
+# ====================================================================================
+# A commit SHA is not a pull-request identity
+#
+# Governance Review publishes its verdict as a commit status keyed only by SHA,
+# and two open pull requests can share a current head. Governance evidence must
+# therefore never satisfy readiness for a pull request it does not provably
+# belong to, and must fail closed when ownership cannot be proven.
+# ====================================================================================
+
+
+PR_SCOPED_RUN_ID = 94284791682
+
+
+def _shared_head_prs(gh, *, governance_run_owner=None, invalidated_at="2026-08-12T22:36:23Z"):
+    """Two open pull requests whose current head is the same commit.
+
+    `governance_run_owner` is the PR number the Governance run declares it
+    evaluated; None reproduces the reconcile sweep, which declares none.
+    """
+    body = (
+        "Acceptance-criteria matrix:\n| Acceptance criterion | Status |\n| Wire up | PASS |\n- [x] `READY FOR REVIEW`"
+    )
+    for number in (123, 124):
+        gh.pulls[number] = {
+            "number": number,
+            "state": "open",
+            "head": {"sha": "sha_shared"},
+            "body": body,
+            "draft": False,
+            "user": {"login": "human"},
+            "updated_at": invalidated_at,
+        }
+    gh.check_runs["sha_shared"] = [
+        {"name": "Quality Gates", "status": "completed", "conclusion": "success", "id": 101},
+        {"name": "dependency-review", "status": "completed", "conclusion": "success", "id": 102},
+        {"name": "CodeQL", "status": "completed", "conclusion": "success", "id": 103},
+    ]
+    gh.statuses["sha_shared"] = [
+        {
+            "context": "Hunter Governance Review",
+            "state": "success",
+            "created_at": "2026-08-13T03:08:17Z",
+            "target_url": f"https://github.com/fafa33/Project-Hunter/actions/runs/{PR_SCOPED_RUN_ID}",
+            "id": 10,
+        },
+    ]
+    run = {
+        "id": PR_SCOPED_RUN_ID,
+        "name": "Hunter Governance Review",
+        "run_started_at": "2026-08-13T03:08:00Z",
+    }
+    if governance_run_owner is not None:
+        run["pull_requests"] = [{"number": governance_run_owner, "head": {"sha": "sha_shared"}}]
+    gh.workflow_runs[PR_SCOPED_RUN_ID] = run
+
+
+def _workflow_run_event(tmp_path, monkeypatch, payload):
+    event_path = tmp_path / "event.json"
+    event_path.write_text(json.dumps({"workflow_run": payload}))
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_path))
+    monkeypatch.setenv("GH_REPO", "fafa33/Project-Hunter")
+    monkeypatch.setenv("GH_TOKEN", "fake-token")
+    monkeypatch.setenv("EVENT_NAME", "workflow_run")
+    monkeypatch.setenv("RUN_URL", "https://example.invalid/run")
+
+
+def test_shared_head_recovery_does_not_broadcast_one_verdict_to_every_pr(gh, tmp_path, monkeypatch, capsys):
+    """A run evaluated one PR; a shared head cannot say which, so none may consume it."""
+    _workflow_run_event(
+        tmp_path,
+        monkeypatch,
+        {
+            "pull_requests": [],
+            "head_sha": "sha_shared",
+            "run_started_at": "2026-08-13T03:08:00Z",
+            "conclusion": "success",
+        },
+    )
+    _shared_head_prs(gh)
+
+    with pytest.raises(SystemExit):
+        hunter_merge_readiness.main()
+
+    assert gh.published == [], "a shared head must not receive any recovered verdict"
+
+
+def test_shared_head_recovery_reports_why_it_reconciled_nothing(gh, tmp_path, monkeypatch, capsys):
+    """Failing closed silently would be indistinguishable from the bug this PR fixes."""
+    _workflow_run_event(
+        tmp_path,
+        monkeypatch,
+        {
+            "pull_requests": [],
+            "head_sha": "sha_shared",
+            "run_started_at": "2026-08-13T03:08:00Z",
+            "conclusion": "success",
+        },
+    )
+    _shared_head_prs(gh)
+
+    with pytest.raises(SystemExit):
+        hunter_merge_readiness.main()
+
+    output = capsys.readouterr().out
+    assert "#123" in output and "#124" in output
+    assert "cannot be identified" in output
+    assert "nothing is" in output
+
+
+def test_unique_head_recovery_still_reconciles_normally(gh, tmp_path, monkeypatch):
+    """Fail-closed on ambiguity must not disturb the ordinary single-PR recovery."""
+    _workflow_run_event(
+        tmp_path,
+        monkeypatch,
+        {
+            "pull_requests": [],
+            "head_sha": "sha_123",
+            "run_started_at": "2026-08-13T03:08:00Z",
+            "conclusion": "success",
+        },
+    )
+    _stuck_pending_pr(
+        gh,
+        governance_check_started="2026-08-12T22:36:14Z",
+        invalidated_at="2026-08-12T22:36:23Z",
+        reconcile_started="2026-08-13T03:08:00Z",
+        reconcile_published="2026-08-13T03:08:17Z",
+    )
+
+    hunter_merge_readiness.main()
+
+    assert gh.published[-1] == ("sha_123", "success", gh.published[-1][2])
+
+
+def test_other_prs_governance_success_does_not_supersede_this_prs_failing_payload(gh, tmp_path, monkeypatch):
+    """Finding 2: supersession must never cross a pull-request boundary.
+
+    The Governance run names PR #123. PR #124 shares the head and arrives with
+    an explicit failing payload, which must survive.
+    """
+    _workflow_run_event(
+        tmp_path,
+        monkeypatch,
+        {
+            "pull_requests": [{"number": 124, "head": {"sha": "sha_shared"}}],
+            "head_sha": "sha_shared",
+            "run_started_at": "2026-08-12T20:00:00Z",
+            "conclusion": "failure",
+        },
+    )
+    _shared_head_prs(gh, governance_run_owner=123)
+
+    hunter_merge_readiness.main()
+
+    assert gh.published[-1][1] == "failure"
+    assert all(state != "success" for _sha, state, _desc in gh.published)
+
+
+def test_other_prs_governance_success_does_not_satisfy_this_prs_freshness(gh):
+    """Finding 2: freshness may not be borrowed from another PR's evaluation."""
+    hunter_merge_readiness.event_name = "schedule"
+    _shared_head_prs(gh, governance_run_owner=123)
+
+    hunter_merge_readiness.evaluate(124, poll=False)
+
+    assert gh.published[-1][1] == "pending"
+    assert gh.published[-1][2] == "Waiting for current Hunter Governance Review."
+    assert all(state != "success" for _sha, state, _desc in gh.published)
+
+
+def test_only_the_pr_named_by_the_governance_run_may_consume_it(gh):
+    """Authoritative run metadata admits exactly one consumer, even on a shared head."""
+    hunter_merge_readiness.event_name = "schedule"
+    _shared_head_prs(gh, governance_run_owner=123)
+
+    hunter_merge_readiness.evaluate(123, poll=False)
+    owner_verdict = gh.published[-1]
+
+    hunter_merge_readiness.latest_readiness = None
+    hunter_merge_readiness.evaluate(124, poll=False)
+    other_verdict = gh.published[-1]
+
+    assert owner_verdict[1] == "success"
+    assert other_verdict[1] == "pending"
+
+
+def test_shared_head_without_run_metadata_fails_closed_for_both(gh):
+    """The reconcile sweep names no PR, so a shared head is unattributable to either."""
+    hunter_merge_readiness.event_name = "schedule"
+    _shared_head_prs(gh, governance_run_owner=None)
+
+    hunter_merge_readiness.evaluate(123, poll=False)
+    hunter_merge_readiness.latest_readiness = None
+    hunter_merge_readiness.evaluate(124, poll=False)
+
+    assert all(state != "success" for _sha, state, _desc in gh.published)
+
+
+def test_workflow_run_payload_naming_a_unique_pr_is_still_authoritative(gh, tmp_path, monkeypatch):
+    """GitHub-supplied identity needs no head-uniqueness proof."""
+    _workflow_run_event(
+        tmp_path,
+        monkeypatch,
+        {
+            "pull_requests": [{"number": 123, "head": {"sha": "sha_shared"}}],
+            "head_sha": "sha_shared",
+            "run_started_at": "2026-08-13T03:08:00Z",
+            "conclusion": "success",
+        },
+    )
+    _shared_head_prs(gh, governance_run_owner=123)
+
+    hunter_merge_readiness.main()
+
+    assert gh.published[-1][1] == "success"
+
+
+def test_check_run_naming_another_pr_is_not_borrowed(gh):
+    """Attribution covers the check-run path too, not only the commit status."""
+    hunter_merge_readiness.event_name = "schedule"
+    _shared_head_prs(gh, governance_run_owner=123)
+    gh.check_runs["sha_shared"].append(
+        {
+            "name": "Hunter Governance Review",
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-08-13T04:00:00Z",
+            "pull_requests": [{"number": 123}],
+            "id": 200,
+        }
+    )
+
+    evaluation = _resolve_evaluation(gh, sha="sha_shared", pr_number=124)
+
+    assert evaluation is None
