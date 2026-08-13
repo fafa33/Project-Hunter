@@ -1029,19 +1029,47 @@ def _converge_after_publishing_success(
 
 
 def _retract_greens(greened_heads: set[str]) -> None:
-    """Retract every ``success`` this run published, on every commit it wrote one to.
+    """Best-effort retraction of every ``success`` this run published.
 
-    Retraction is unconditional and does not depend on which commit is the head
-    right now. That is what makes the guarantee raceless rather than merely
-    bounded: a commit the pull request has moved off can become the head again
-    on the next force push, so "it is not the head at this instant" is not a
-    reason to leave a green standing on it. Once every commit this run greened
-    has been overwritten, no ordering of subsequent head movements can surface
-    one of this run's greens.
+    Scope, stated precisely because an earlier revision of this module claimed
+    more than the mechanism can deliver:
+
+    - This is **defence in depth, not a guarantee.** A job can be cancelled
+      between any two statements -- ``cancel-in-progress`` is part of the design
+      -- so no code here can make itself uninterruptible, and partial retraction
+      is always reachable.
+    - It covers only greens *this run* published and then decided against. A
+      green left by an earlier run that ended cleanly is not tracked by anything
+      and is not covered.
+    - Correctness does not depend on it. A stale green on a commit that later
+      becomes the head again is corrected by the next reconciliation, through
+      exactly the same convergence that corrects every other stale status: the
+      head change raises an event, and the sweep runs regardless. Retraction
+      narrows that window; it is not what closes it.
+
+    What it does buy is worth the few writes: the common shape of this hazard --
+    a run that greened a commit and then, seconds later, learned better -- is
+    removed immediately rather than left for the next reconciliation.
+
+    Every tracked head is attempted even when one write fails, and only heads
+    actually retracted are dropped, so a transient error degrades this to the
+    convergence behaviour above rather than silently skipping the rest.
     """
+    retracted: set[str] = set()
+    failures: list[str] = []
     for head in sorted(greened_heads):
-        publish(head, "pending", RETRACTED_DESCRIPTION, None)
-    greened_heads.clear()
+        try:
+            publish(head, "pending", RETRACTED_DESCRIPTION, None)
+            retracted.add(head)
+        except Exception as exc:
+            failures.append(f"{head[:10]} ({type(exc).__name__})")
+    greened_heads.difference_update(retracted)
+    if failures:
+        print(
+            "Could not retract this run's readiness success on: "
+            + ", ".join(failures)
+            + "; the next reconciliation of those commits will correct them."
+        )
 
 
 def _withhold_green(

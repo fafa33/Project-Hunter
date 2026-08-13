@@ -155,15 +155,27 @@ through the same `_confirm_success` gate, so a converged green is never reached
 by `decide` alone and a controller-upgrade candidate is held to the admission
 kernel on each one.
 
-The guarantee is about what a run leaves behind: **when a run decides against
-green, every `success` it published is retracted, on every commit it wrote one
-to.** Retraction is unconditional and does not consult which commit is the head
-at that moment, which is what makes it raceless rather than merely bounded — a
-commit the pull request has moved off can become the head again on the next
-force push, so "not the head right now" is no reason to leave a green standing.
-Once retraction has run, no ordering of subsequent head movements can surface
-one of that run's greens. Both exits take it: the withholding path, and any
+When a run decides against green, it retracts the `success` statuses it
+published, on every commit it wrote one to, without consulting which commit is
+the head at that moment. Both exits take it: the withholding path, and any
 convergence iteration that decides against green.
+
+This is **defence in depth, not a guarantee**, and the distinction matters:
+
+- a job can be cancelled between any two statements — `cancel-in-progress` is
+  part of the design — so partial retraction is always reachable;
+- it covers only greens the *same run* published and then decided against. A
+  green left by an earlier run that ended cleanly is tracked by nothing and is
+  not covered;
+- correctness does not rest on it. A stale green on a commit that later becomes
+  the head again is corrected by the next reconciliation, through exactly the
+  convergence that corrects every other stale status — the head change raises an
+  event, and the sweep runs regardless.
+
+What it buys is narrowing the most common shape of the hazard: a run that
+greened a commit and then, seconds later, learned better. Every tracked head is
+attempted even when one write fails, so a transient error degrades to the
+convergence behaviour above rather than skipping the rest silently.
 
 A per-PR lock would not have been sufficient for this on its own: the lock this
 design removes was released before the status write in the generation that had

@@ -428,6 +428,37 @@ def test_a_converged_success_is_still_held_to_admission(gh, monkeypatch):
     assert gh.readiness_status(head)[0] == "pending"
 
 
+def test_retraction_attempts_every_tracked_head_despite_a_failing_write(gh):
+    """One failing write must not abandon the remaining retractions.
+
+    Retraction is best-effort by nature -- a job can be cancelled between any two
+    statements -- but a transient error on one commit is no reason to skip the
+    others, and only commits actually retracted may be dropped from the tracked
+    set.
+    """
+    original_publish = core.publish
+    attempted: list[str] = []
+
+    def publishing_with_one_transient_failure(sha, state, description, published):
+        attempted.append(sha)
+        if sha == "green_b":
+            raise RuntimeError("transient GitHub failure")
+        return original_publish(sha, state, description, published)
+
+    tracked = {"green_a", "green_b", "green_c"}
+    core.publish = publishing_with_one_transient_failure
+    try:
+        core._retract_greens(tracked)
+    finally:
+        core.publish = original_publish
+
+    assert sorted(attempted) == ["green_a", "green_b", "green_c"]
+    # The failed head stays tracked; the successful ones are cleared.
+    assert tracked == {"green_b"}
+    assert gh.readiness_status("green_a")[0] == "pending"
+    assert gh.readiness_status("green_c")[0] == "pending"
+
+
 def test_state_changing_faster_than_it_can_be_confirmed_withholds_green(gh):
     """On exhaustion the run withholds green rather than leaving one unconfirmed."""
     head = ready_pull_request(gh)
