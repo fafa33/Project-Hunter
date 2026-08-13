@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from hashlib import sha256
 from typing import Any
 
 from hunter.evidence_intelligence.models import (
@@ -15,6 +14,7 @@ from hunter.evidence_intelligence.models import (
     SourceAuthorityVerificationEvent,
     VerificationMethod,
     VerifierType,
+    evidence_text_digest,
 )
 from hunter.evidence_intelligence.repository import EvidenceIntelligenceRepository
 from hunter.execution.identity import identity
@@ -350,4 +350,6 @@ def _document_event_span_links(
 
 
 def _digest(value: str) -> str:
-    return sha256(value.encode("utf-8")).hexdigest()
+    # Delegates to the canonical definition in models so there is exactly one
+    # content-digest convention across Evidence Intelligence.
+    return evidence_text_digest(value)

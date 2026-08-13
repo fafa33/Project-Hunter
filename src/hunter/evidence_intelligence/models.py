@@ -1,9 +1,23 @@
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from types import MappingProxyType
 from typing import Any, Literal
+
+
+def evidence_text_digest(value: str) -> str:
+    """Canonical content digest for Evidence Intelligence text.
+
+    This is the single definition behind `EvidenceDocument.content_hash`,
+    `normalized_content_hash`, and `EvidenceSpan.text_hash`. It lives beside the
+    types it describes so that consumers which must verify claimed hashes
+    (e.g. pre-model persistence provenance validation) can reuse the exact
+    convention rather than introducing a second, conflicting one.
+    """
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
 
 DocumentStatus = Literal[
     "active",
