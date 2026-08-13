@@ -3,8 +3,9 @@ import os
 import re
 import time
 import urllib.request
+from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, NamedTuple
 
 import hunter_controller_admission as admission
 
@@ -326,6 +327,42 @@ def review_feedback_error(pr_number: int) -> str | None:
     return None
 
 
+def open_pull_requests() -> list[dict[str, Any]]:
+    """Every open pull request targeting the protected base, fully paginated."""
+    pulls: list[dict[str, Any]] = []
+    page = 1
+    while True:
+        batch = request_json("GET", f"pulls?state=open&base=main&per_page=100&page={page}")
+        pulls.extend(batch)
+        if len(batch) < 100:
+            return pulls
+        page += 1
+
+
+def open_pull_requests_for_head(sha: str) -> list[dict[str, Any]]:
+    """Open pull requests whose exact current head is this SHA.
+
+    A commit SHA is not a pull-request identity: two open pull requests can
+    have the same current head. Callers must therefore treat a multi-element
+    result as ambiguous rather than picking one, so this returns every match
+    instead of collapsing to the first.
+    """
+    if not sha:
+        return []
+    return [pr for pr in open_pull_requests() if ((pr.get("head") or {}).get("sha") or "").strip() == sha]
+
+
+def head_uniquely_identifies_pull_request(sha: str, pr_number: int) -> bool:
+    """True when this head is the current head of exactly this one open pull request.
+
+    Governance Review publishes its verdict as a commit status keyed only by
+    SHA, so when a head is shared by several open pull requests, that evidence
+    cannot be attributed to any single one of them by SHA alone.
+    """
+    matches = open_pull_requests_for_head(sha)
+    return len(matches) == 1 and str(matches[0].get("number")) == str(pr_number)
+
+
 def all_check_runs(sha: str) -> list[dict[str, Any]]:
     runs = []
     page = 1
@@ -364,6 +401,169 @@ def latest_check(runs: list[dict[str, Any]], name: str) -> dict[str, Any] | None
     if not matches:
         return None
     return max(matches, key=lambda run: int(run.get("id", 0)))
+
+
+class GovernanceEvaluation(NamedTuple):
+    """One authoritative Hunter Governance Review evaluation of an exact head."""
+
+    started_at: datetime
+    completed: bool
+    conclusion: str | None
+    source: str
+
+
+def _run_id_from_target_url(target_url: str | None) -> int | None:
+    if not target_url:
+        return None
+    match = re.search(r"/actions/runs/(\d+)", str(target_url))
+    return int(match.group(1)) if match else None
+
+
+class GovernanceStatusEvidence(NamedTuple):
+    """A Governance Review commit status proven to belong to one pull request."""
+
+    status: dict[str, Any]
+    started_at: datetime | None
+
+
+def declared_pull_request_numbers(record: dict[str, Any] | None) -> set[int]:
+    """Pull-request numbers a workflow run or check run associates with.
+
+    Governance Review runs on the plain `pull_request` event, so GitHub
+    populates this for them. The `Hunter Governance Review Reconcile` sweep
+    runs on `schedule` and evaluates many pull requests in one run, so it
+    associates none -- an empty result means "this record has no associated
+    pull request", never "this record belongs to no pull request".
+    """
+    numbers: set[int] = set()
+    for entry in (record or {}).get("pull_requests") or []:
+        if not isinstance(entry, dict) or entry.get("number") is None:
+            continue
+        try:
+            numbers.add(int(entry["number"]))
+        except (TypeError, ValueError):
+            continue
+    return numbers
+
+
+def evidence_belongs_to_pull_request(
+    record: dict[str, Any] | None,
+    pr_number: int,
+    head_is_unambiguous: Callable[[], bool],
+) -> bool:
+    """Whether this Governance evidence is provably this pull request's.
+
+    Two independent proofs are accepted, in order of strength:
+
+    1. A producing run associated with exactly one pull request identifies
+       that pull request authoritatively. An association with several pull
+       requests is not identity proof and falls back to the head check.
+    2. When the association is empty or ambiguous, the exact head is sufficient
+       only when it belongs to exactly one open pull request.
+
+    When neither proof is available the answer is False, so a shared head
+    fails closed rather than letting one pull request's verdict satisfy
+    another's readiness.
+    """
+    declared = declared_pull_request_numbers(record)
+    if len(declared) == 1:
+        return pr_number in declared
+    return head_is_unambiguous()
+
+
+def governance_status_for_pull_request(
+    sha: str,
+    pr_number: int,
+    head_is_unambiguous: Callable[[], bool],
+) -> GovernanceStatusEvidence | None:
+    """The latest Governance Review status on this head, if it is this PR's.
+
+    Hunter Governance Review reaches an exact head by two delivery paths: the
+    `pull_request`-triggered run, which leaves a check run on that head, and the
+    `Hunter Governance Review Reconcile` sweep, which republishes the
+    authoritative commit status from a run whose own check run belongs to the
+    default branch. The commit status is the only evidence common to both, so
+    freshness has to be derivable from it -- but the status records no pull
+    request, only a SHA, so ownership has to be proven separately.
+
+    `started_at` is the originating run's *start* time, never the status
+    publication time. A run that started at S read repository state at some
+    point after S, so requiring S >= invalidation proves the evaluation
+    actually observed the invalidating change. Publication time would not: a
+    long-running review can publish after an edit it never saw. It is None when
+    the originating run cannot be resolved, which withholds freshness while
+    still allowing the verdict itself to be read.
+    """
+    status = latest_commit_status(sha, governance_context)
+    if not status:
+        return None
+
+    run_id = _run_id_from_target_url(status.get("target_url"))
+    if run_id is None:
+        # No run reference at all, so the run's own pull-request metadata is
+        # unreachable and the head is the only possible binding.
+        return GovernanceStatusEvidence(status, None) if head_is_unambiguous() else None
+
+    try:
+        run = request_json("GET", f"actions/runs/{run_id}")
+    except Exception as exc:
+        print(f"Could not resolve Governance Review run {run_id}: {type(exc).__name__}: {exc}")
+        return None
+
+    if not evidence_belongs_to_pull_request(run, pr_number, head_is_unambiguous):
+        print(
+            f"Ignoring Hunter Governance Review status from run {run_id} on {sha[:10]}: "
+            f"it is not attributable to PR #{pr_number}."
+        )
+        return None
+
+    return GovernanceStatusEvidence(status, parse_time((run or {}).get("run_started_at")))
+
+
+def resolve_governance_evaluation(
+    runs: list[dict[str, Any]],
+    pr_number: int,
+    status_evidence: GovernanceStatusEvidence | None,
+    head_is_unambiguous: Callable[[], bool],
+) -> GovernanceEvaluation | None:
+    """Return the most recent Governance evaluation proven to be this PR's.
+
+    Considers both delivery paths and prefers whichever *began evaluating*
+    latest, because that is the one whose verdict reflects the most recent
+    repository state. Using only the exact-head check run made every
+    reconcile-published verdict invisible, which could strand a pull request in
+    a permanent "waiting for a fresh Hunter Governance Review" state that no
+    amount of reconciliation could clear. Every candidate must still clear
+    ownership: a shared head must never let one pull request's Governance
+    evidence decide another's readiness.
+    """
+    candidates: list[GovernanceEvaluation] = []
+
+    check = latest_check(runs, governance_context)
+    if check is not None:
+        started_at = parse_time(check.get("started_at"))
+        if started_at is not None and evidence_belongs_to_pull_request(check, pr_number, head_is_unambiguous):
+            candidates.append(
+                GovernanceEvaluation(
+                    started_at,
+                    check.get("status") == "completed",
+                    check.get("conclusion"),
+                    "check run",
+                )
+            )
+
+    if status_evidence is not None and status_evidence.started_at is not None:
+        state = (status_evidence.status.get("state") or "").strip()
+        if state == "success":
+            candidates.append(GovernanceEvaluation(status_evidence.started_at, True, "success", "commit status"))
+        elif state in {"failure", "error"}:
+            candidates.append(GovernanceEvaluation(status_evidence.started_at, True, "failure", "commit status"))
+        else:
+            candidates.append(GovernanceEvaluation(status_evidence.started_at, False, None, "commit status"))
+
+    if not candidates:
+        return None
+    return max(candidates, key=lambda evaluation: evaluation.started_at)
 
 
 def get_latest_invalidation_time(pr_number: int, pr: dict[str, Any]) -> datetime:
@@ -618,16 +818,50 @@ def evaluate(
     attempts = 45 if poll else 1
     for attempt in range(1, attempts + 1):
         runs = all_check_runs(sha)
+
+        # Resolved at most once per attempt, and only when some Governance
+        # record fails to name its own pull request. A shared head is rare, so
+        # this normally costs nothing.
+        unique_head: bool | None = None
+
+        def head_is_unambiguous(sha: str = sha, pr_number: int = pr_number) -> bool:
+            nonlocal unique_head
+            if unique_head is None:
+                unique_head = head_uniquely_identifies_pull_request(sha, pr_number)
+                if not unique_head:
+                    print(
+                        f"Head {sha[:10]} is not uniquely owned by PR #{pr_number}; Governance evidence "
+                        "that does not name its own pull request cannot be attributed and is ignored."
+                    )
+            return unique_head
+
+        status_evidence = governance_status_for_pull_request(sha, pr_number, head_is_unambiguous)
+        observed = resolve_governance_evaluation(runs, pr_number, status_evidence, head_is_unambiguous)
         if event_name in RECONCILIATION_EVENT_NAMES:
-            governance_run = latest_check(runs, governance_context)
-            if governance_run is None:
+            if observed is None or not observed.completed:
                 publish(sha, "pending", "Waiting for current Hunter Governance Review.")
                 return
-            if governance_run.get("status") != "completed":
-                publish(sha, "pending", "Waiting for current Hunter Governance Review.")
-                return
-            governance_conclusion = governance_run.get("conclusion")
-            governance_started_at = parse_time(governance_run.get("started_at"))
+            governance_conclusion = observed.conclusion
+            governance_started_at = observed.started_at
+        elif (
+            observed is not None
+            and observed.completed
+            and (governance_started_at is None or observed.started_at > governance_started_at)
+        ):
+            # An event payload is a hint, never current truth. Re-running an old
+            # workflow_run replays its original payload verbatim, so a caller-
+            # supplied conclusion can describe a Governance evaluation that the
+            # exact head has already moved past. Whenever the repository holds a
+            # completed evaluation that began later than the payload's, that
+            # evaluation is the more recent reading of the same head and decides.
+            # Older repository evidence never displaces a newer payload, so the
+            # ordinary "Governance just finished" path is unaffected.
+            print(
+                f"Superseding event-payload Governance evaluation with a newer {observed.source} "
+                f"evaluation that began at {observed.started_at.isoformat()}."
+            )
+            governance_conclusion = observed.conclusion
+            governance_started_at = observed.started_at
 
         if governance_conclusion != "success":
             publish(
@@ -685,7 +919,10 @@ def evaluate(
             else:
                 pending.append(name)
 
-        governance = latest_commit_status(sha, governance_context)
+        # The same attributed evidence resolved above: the Governance status is
+        # keyed only by SHA, so an unattributable status must count as missing
+        # rather than as this pull request's verdict.
+        governance = status_evidence.status if status_evidence is not None else None
         governance_success = False
         if governance is None:
             missing.append(governance_context)
@@ -747,27 +984,60 @@ def main() -> None:
         if event_name == "workflow_run":
             workflow_run = event.get("workflow_run") or {}
             pulls = workflow_run.get("pull_requests") or []
-            if not pulls:
-                print("Governance workflow completion is not attached to a pull request; skipping.")
-                raise SystemExit(0)
-            evaluate(
-                int(pulls[0]["number"]),
-                governance_started_at=parse_time(workflow_run.get("run_started_at")),
-                governance_conclusion=workflow_run.get("conclusion"),
-                trigger_head_sha=((pulls[0].get("head") or {}).get("sha") or "").strip() or None,
-                poll=True,
-            )
+            if pulls:
+                evaluate(
+                    int(pulls[0]["number"]),
+                    governance_started_at=parse_time(workflow_run.get("run_started_at")),
+                    governance_conclusion=workflow_run.get("conclusion"),
+                    trigger_head_sha=((pulls[0].get("head") or {}).get("sha") or "").strip() or None,
+                    poll=True,
+                )
+            else:
+                # GitHub does not always attach pull requests to a workflow_run
+                # payload. Exiting here used to report job success while
+                # reconciling nothing, so the completed Governance Review never
+                # reached the pull request it belongs to. Recover the identity
+                # from the exact head the triggering run evaluated.
+                trigger_sha = (workflow_run.get("head_sha") or "").strip()
+                recovered = open_pull_requests_for_head(trigger_sha) if trigger_sha else []
+                if not recovered:
+                    print(
+                        "Governance workflow completion carried no pull request and no open pull request "
+                        f"matches head {trigger_sha[:10] or 'unknown'}; nothing to reconcile."
+                    )
+                    raise SystemExit(0)
+                if len(recovered) > 1:
+                    # The run evaluated exactly one pull request, and a shared
+                    # head cannot say which. Applying its verdict to every match
+                    # would let one pull request's Governance Review satisfy
+                    # another's readiness, so no verdict is applied to any of
+                    # them. Each still converges through the scheduled sweep,
+                    # which evaluates a pull request only against evidence
+                    # attributable to that pull request.
+                    numbers = ", ".join(f"#{pr['number']}" for pr in sorted(recovered, key=lambda p: int(p["number"])))
+                    print(
+                        f"::warning::Governance workflow completion carried no pull request and head "
+                        f"{trigger_sha[:10]} is the current head of {len(recovered)} open pull requests "
+                        f"({numbers}); the evaluated pull request cannot be identified, so nothing is "
+                        "reconciled from this payload."
+                    )
+                    raise SystemExit(0)
+                pr = recovered[0]
+                print(f"Recovered PR #{pr['number']} from Governance Review head {trigger_sha[:10]}.")
+                active_sha = None
+                evaluate(
+                    int(pr["number"]),
+                    governance_started_at=parse_time(workflow_run.get("run_started_at")),
+                    governance_conclusion=workflow_run.get("conclusion"),
+                    trigger_head_sha=trigger_sha,
+                    poll=True,
+                )
+                active_sha = None
         elif event_name == "schedule":
-            page = 1
-            while True:
-                prs = request_json("GET", f"pulls?state=open&base=main&per_page=100&page={page}")
-                for pr in prs:
-                    active_sha = None
-                    evaluate(int(pr["number"]), poll=False)
-                    active_sha = None
-                if len(prs) < 100:
-                    break
-                page += 1
+            for pr in open_pull_requests():
+                active_sha = None
+                evaluate(int(pr["number"]), poll=False)
+                active_sha = None
         elif event_name == "issue_comment":
             issue = event.get("issue") or {}
             if not issue.get("pull_request"):
