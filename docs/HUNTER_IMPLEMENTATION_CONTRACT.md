@@ -155,6 +155,44 @@ Verification may include:
 
 The required depth depends on the complexity and risk of the implementation.
 
+## Harness Fidelity
+
+Fakes, stubs, and in-memory doubles shall reproduce the external semantics the
+production logic under test actually depends on. A double that is more
+convenient than the real service does not verify the code; it verifies the
+double.
+
+A test double shall not:
+
+- silently ignore a query parameter the production code sends;
+- return results already filtered in a way the real service does not filter them;
+- provide stronger ordering guarantees than the real service provides;
+- provide cleaner association, identity, or uniqueness semantics than the real
+  service provides;
+- resolve an ambiguity the real service leaves ambiguous.
+
+For every external semantic the production code relies on, the double shall
+record which behavior it is simulating, so that a divergence is reviewable rather
+than invisible. Where practical, at least one contract-style test shall assert
+the double against the real semantics being relied upon.
+
+## Non-Vacuous Regression Tests
+
+A regression test is not evidence merely because it passes.
+
+For every release-blocking defect fix, the implementation shall answer:
+
+> Would this test fail if the fix were removed?
+
+For release-blocking fixes this shall be demonstrated rather than assumed — by
+reverting or disabling the fix and observing the test fail, or by an equivalent
+demonstration of the failing counterfactual. A test that still passes without the
+fix does not prove the fix and shall be corrected before the fix is presented as
+verified.
+
+Tests that pass because a mock reproduces the implementation's internals do not
+satisfy this contract.
+
 ---
 
 # Compatibility Contract
