@@ -240,3 +240,152 @@ def test_retention_policy_records_reconstruction_unavailable_without_changing_ha
     assert not_retained.prompt_artifact.content == ""
     assert not_retained.build_record.reconstruction_outcome == "UNAVAILABLE"
     assert "EXACT_PROMPT_RETENTION_PROHIBITED" in not_retained.build_record.reason_codes
+
+
+def test_f9_handling_classifications_and_retention_policy() -> None:
+    from hunter.evidence_intelligence.pre_model import EvidenceRetentionPolicy
+
+    policy = EvidenceRetentionPolicy(policy_id="test-ret-policy", version="1")
+
+    # RETAINABLE -> True, True
+    assert policy.derive_retention_decisions("RETAINABLE") == (True, True)
+
+    # LICENSED_RESTRICTED -> False, True (distinct Decisions!)
+    assert policy.derive_retention_decisions("LICENSED_RESTRICTED") == (False, True)
+
+    # SENSITIVE_PERSONAL -> False, False
+    assert policy.derive_retention_decisions("SENSITIVE_PERSONAL") == (False, False)
+
+    # EPHEMERAL_NON_RETAINABLE -> False, False
+    assert policy.derive_retention_decisions("EPHEMERAL_NON_RETAINABLE") == (False, False)
+
+    # CREDENTIALS_SECRET -> False, False
+    assert policy.derive_retention_decisions("CREDENTIALS_SECRET") == (False, False)
+
+    # UNCLASSIFIED -> False, False (fail closed)
+    assert policy.derive_retention_decisions("UNCLASSIFIED") == (False, False)
+
+    # Invalid -> False, False (fail closed)
+    assert policy.derive_retention_decisions("INVALID_CLASSIFICATION") == (False, False)
+
+
+def test_f9_unclassified_fails_closed() -> None:
+    # If no classifications are provided, it must default to UNCLASSIFIED and fail closed (no retention)
+    span = _span("span-1", "evidence")
+    result = build_evidence_pre_model(
+        execution_owner_id="run-1",
+        intent=_intent(),
+        policy=_policy(required=("span-1",)),
+        specification=_spec(),
+        capability=_cap(),
+        canonical_inventory=(span,),
+        candidate_span_ids=("span-1",),
+        span_classifications=None,  # Defaults to UNCLASSIFIED for all spans
+    )
+    assert result.build_record.reconstruction_outcome == "UNAVAILABLE"
+    assert result.prompt_artifact.content == ""
+
+
+def test_f9_separate_retention_decisions_licensed_restricted() -> None:
+    # LICENSED_RESTRICTED allows source retention but prohibits prompt retention
+    span = _span("span-1", "restricted content")
+    result = build_evidence_pre_model(
+        execution_owner_id="run-1",
+        intent=_intent(),
+        policy=_policy(required=("span-1",)),
+        specification=_spec(),
+        capability=_cap(),
+        canonical_inventory=(span,),
+        candidate_span_ids=("span-1",),
+        span_classifications={"span-1": "LICENSED_RESTRICTED"},
+    )
+    assert result.build_record.reconstruction_outcome == "UNAVAILABLE"
+    assert result.prompt_artifact.content == ""  # Prompt is not retained
+
+
+def test_f9_fail_closed_secret_detection() -> None:
+    # Should fail closed with PreModelInvariantError when credentials/secrets are present
+    span_with_key = _span("span-1", "My OpenAI key is sk-123456789012345678901234567890123456789012345678")
+    with pytest.raises(PreModelInvariantError, match="SECRET_DETECTION_TRIGGERED"):
+        build_evidence_pre_model(
+            execution_owner_id="run-1",
+            intent=_intent(),
+            policy=_policy(required=("span-1",)),
+            specification=_spec(),
+            capability=_cap(),
+            canonical_inventory=(span_with_key,),
+            candidate_span_ids=("span-1",),
+        )
+
+    # Should also fail closed with PreModelInvariantError when classification is CREDENTIALS_SECRET
+    span_normal = _span("span-2", "normal evidence")
+    with pytest.raises(PreModelInvariantError, match="SECRET_DETECTION_TRIGGERED"):
+        build_evidence_pre_model(
+            execution_owner_id="run-1",
+            intent=_intent(),
+            policy=_policy(required=("span-2",)),
+            specification=_spec(),
+            capability=_cap(),
+            canonical_inventory=(span_normal,),
+            candidate_span_ids=("span-2",),
+            span_classifications={"span-2": "CREDENTIALS_SECRET"},
+        )
+
+
+def test_f9_legacy_reconstruction_fails_closed(tmp_path) -> None:
+    from hunter.evidence_intelligence.pre_model_persistence import (
+        EvidencePreModelPersistenceRepository,
+        PersistedEvidencePreModelBundle,
+    )
+    from hunter.evidence_intelligence.repository import EvidenceIntelligenceRepository
+
+    repository = EvidenceIntelligenceRepository(tmp_path / "evidence-intelligence.sqlite")
+    persistence_repo = EvidencePreModelPersistenceRepository(repository)
+
+    # Save a legacy-like bundle (span_classifications and retention_policy are None)
+    span = _span("span-1", "evidence")
+    result = build_evidence_pre_model(
+        execution_owner_id="run-1",
+        intent=_intent(),
+        policy=_policy(required=("span-1",)),
+        specification=_spec(),
+        capability=_cap(),
+        canonical_inventory=(span,),
+        candidate_span_ids=("span-1",),
+        span_classifications={"span-1": "RETAINABLE"},
+    )
+
+    # We manually construct a bundle that mimics a legacy payload (missing policy/classifications)
+    bundle = PersistedEvidencePreModelBundle(
+        recorded_at=datetime(2026, 8, 9, tzinfo=UTC),
+        intent=_intent(),
+        policy=_policy(required=("span-1",)),
+        specification=_spec(),
+        capability=_cap(),
+        canonical_inventory=(span,),
+        build_result=result,
+        exact_source_bytes_retained=True,
+        span_classifications=None,  # Legacy
+        retention_policy=None,       # Legacy
+    )
+
+    persisted = persistence_repo.save(
+        intent=_intent(),
+        policy=_policy(required=("span-1",)),
+        specification=_spec(),
+        capability=_cap(),
+        canonical_inventory=(span,),
+        build_result=result,
+        recorded_at=datetime(2026, 8, 9, tzinfo=UTC),
+        span_classifications=None,
+        retention_policy=None,
+    )
+
+    reconstructed = persistence_repo.strict_known_reconstruction(
+        result.build_record.build_record_id,
+        datetime(2026, 8, 10, tzinfo=UTC),
+    )
+
+    # Must fail closed for legacy records
+    assert reconstructed.status == "UNAVAILABLE"
+    assert reconstructed.reason_code == "LEGACY_RECORD_RECONSTRUCTION_UNAVAILABLE"

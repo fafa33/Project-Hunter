@@ -2,11 +2,48 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import asdict, dataclass
+import re
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime
 from typing import Literal
 
 from hunter.evidence_intelligence.models import EvidenceSpan
+
+EvidenceSourceHandlingClassification = Literal[
+    "CREDENTIALS_SECRET",
+    "SENSITIVE_PERSONAL",
+    "LICENSED_RESTRICTED",
+    "EPHEMERAL_NON_RETAINABLE",
+    "RETAINABLE",
+    "UNCLASSIFIED",
+]
+
+@dataclass(frozen=True)
+class EvidenceRetentionPolicy:
+    policy_id: str
+    version: str
+    schema_version: str = "1"
+
+    @property
+    def policy_identity(self) -> str:
+        return _identity("evidence-retention-policy", asdict(self))
+
+    def derive_retention_decisions(
+        self,
+        classification: EvidenceSourceHandlingClassification,
+    ) -> tuple[bool, bool]:
+        """Derive (retain_prompt, retain_source) from classification.
+
+        Unclassified handling fails closed.
+        """
+        if classification == "RETAINABLE":
+            return True, True
+        elif classification == "LICENSED_RESTRICTED":
+            return False, True
+        elif classification in ("CREDENTIALS_SECRET", "SENSITIVE_PERSONAL", "EPHEMERAL_NON_RETAINABLE", "UNCLASSIFIED"):
+            return False, False
+        else:
+            return False, False
 
 ResolutionStatus = Literal[
     "RESOLVED",
@@ -241,6 +278,24 @@ class EvidencePreModelBuildResult:
     build_record: EvidencePreModelBuildRecord
 
 
+SECRET_PATTERN = re.compile(
+    r"(?i)("
+    r"api[_-]?key|"
+    r"bearer\s+[a-zA-Z0-9\-\._~\+\/]+=*|"
+    r"ghp_[a-zA-Z0-9]{36}|"
+    r"sk-[a-zA-Z0-9]{48}|"
+    r"secret[_-]key|"
+    r"private[_-]key|"
+    r"auth[_-]header|"
+    r"password\s*[:=]\s*[^\s]+"
+    r")"
+)
+
+
+def detect_secrets(text: str) -> bool:
+    return bool(SECRET_PATTERN.search(text))
+
+
 def _validate_candidate_set(
     canonical_inventory: tuple[EvidenceSpan, ...],
     candidate_span_ids: tuple[str, ...],
@@ -335,7 +390,8 @@ def build_evidence_pre_model(
     capability: EvidenceCapabilityConstraint,
     canonical_inventory: tuple[EvidenceSpan, ...],
     candidate_span_ids: tuple[str, ...],
-    retain_exact_prompt: bool = True,
+    span_classifications: dict[str, EvidenceSourceHandlingClassification] | None = None,
+    retention_policy: EvidenceRetentionPolicy | None = None,
     forced_final_size_delta: int = 0,
 ) -> EvidencePreModelBuildResult:
     """Build a deterministic provider-free Evidence Intelligence pre-model record.
@@ -345,6 +401,18 @@ def build_evidence_pre_model(
     """
 
     _validate_candidate_set(canonical_inventory, candidate_span_ids)
+
+    ret_policy = retention_policy or EvidenceRetentionPolicy(policy_id="default-retention", version="1")
+    classifications = span_classifications or {}
+
+    # Fail-closed secret detection and classification check
+    for span in canonical_inventory:
+        cls = classifications.get(span.span_id, "UNCLASSIFIED")
+        if cls not in ("CREDENTIALS_SECRET", "SENSITIVE_PERSONAL", "LICENSED_RESTRICTED", "EPHEMERAL_NON_RETAINABLE", "RETAINABLE", "UNCLASSIFIED"):
+            cls = "UNCLASSIFIED"
+        if cls == "CREDENTIALS_SECRET" or detect_secrets(span.excerpt):
+            raise PreModelInvariantError("SECRET_DETECTION_TRIGGERED")
+
     ledger = _build_ledger(intent=intent, policy=policy, canonical_inventory=canonical_inventory)
     spans_by_id = {span.span_id: span for span in canonical_inventory}
 
@@ -458,9 +526,23 @@ def build_evidence_pre_model(
         spans=tuple(spans_by_id[span_id] for span_id in included),
         missingness_reason_codes=prompt_plan.missingness_reason_codes,
     )
+    if detect_secrets(content):
+        raise PreModelInvariantError("SECRET_DETECTION_TRIGGERED")
+
     final_size = len(content.encode("utf-8")) + forced_final_size_delta
     if final_size != allocation.preflight_size_bytes:
         raise PreModelInvariantError("PROMPT_PREFLIGHT_SIZE_MISMATCH")
+
+    # Determine prompt retention decision
+    retain_exact_prompt = True
+    for span_id in included:
+        cls = classifications.get(span_id, "UNCLASSIFIED")
+        if cls not in ("CREDENTIALS_SECRET", "SENSITIVE_PERSONAL", "LICENSED_RESTRICTED", "EPHEMERAL_NON_RETAINABLE", "RETAINABLE", "UNCLASSIFIED"):
+            cls = "UNCLASSIFIED"
+        span_retain_prompt, _ = ret_policy.derive_retention_decisions(cls)
+        if not span_retain_prompt:
+            retain_exact_prompt = False
+            break
 
     artifact_content = content if retain_exact_prompt else ""
     artifact = EvidencePromptArtifact(

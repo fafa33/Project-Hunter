@@ -11,6 +11,8 @@ from hunter.evidence_intelligence.pre_model import (
     EvidencePromptSpecification,
     PreModelInvariantError,
     build_evidence_pre_model,
+    EvidenceSourceHandlingClassification,
+    EvidenceRetentionPolicy,
 )
 from hunter.evidence_intelligence.pre_model_persistence import (
     EvidencePreModelPersistenceRepository,
@@ -32,7 +34,8 @@ class EvidencePreModelOrchestrationRequest:
     required_span_ids: tuple[str, ...]
     specification: EvidencePromptSpecification
     capability: EvidenceCapabilityConstraint
-    retain_exact_prompt: bool = True
+    span_classifications: dict[str, EvidenceSourceHandlingClassification] | None = None
+    retention_policy: EvidenceRetentionPolicy | None = None
 
     def __post_init__(self) -> None:
         if not self.document_id:
@@ -111,7 +114,8 @@ def orchestrate_evidence_pre_model(
         capability=request.capability,
         canonical_inventory=inventory.spans,
         candidate_span_ids=inventory.span_ids,
-        retain_exact_prompt=request.retain_exact_prompt,
+        span_classifications=request.span_classifications,
+        retention_policy=request.retention_policy,
     )
     persisted = EvidencePreModelPersistenceRepository(repository).save(
         intent=request.intent,
@@ -121,7 +125,8 @@ def orchestrate_evidence_pre_model(
         canonical_inventory=inventory.spans,
         build_result=build_result,
         recorded_at=recorded_at,
-        retain_exact_source_bytes=request.retain_exact_prompt,
+        span_classifications=request.span_classifications,
+        retention_policy=request.retention_policy,
     )
     return EvidencePreModelOrchestrationResult(
         document_id=request.document_id,

@@ -22,6 +22,8 @@ from hunter.evidence_intelligence.pre_model import (
     EvidencePromptPlan,
     EvidencePromptSpecification,
     _render_prompt,
+    EvidenceSourceHandlingClassification,
+    EvidenceRetentionPolicy,
 )
 from hunter.evidence_intelligence.repository import EvidenceIntelligenceRepository
 
@@ -63,6 +65,8 @@ class PersistedEvidencePreModelBundle:
     canonical_inventory: tuple[EvidenceSpan, ...]
     build_result: EvidencePreModelBuildResult
     exact_source_bytes_retained: bool = True
+    span_classifications: dict[str, EvidenceSourceHandlingClassification] | None = None
+    retention_policy: EvidenceRetentionPolicy | None = None
 
     @property
     def build_record_id(self) -> str:
@@ -107,7 +111,8 @@ class EvidencePreModelPersistenceRepository:
         canonical_inventory: tuple[EvidenceSpan, ...],
         build_result: EvidencePreModelBuildResult,
         recorded_at: datetime,
-        retain_exact_source_bytes: bool | None = None,
+        span_classifications: dict[str, EvidenceSourceHandlingClassification] | None = None,
+        retention_policy: EvidenceRetentionPolicy | None = None,
     ) -> PersistedEvidencePreModelBundle:
         """Persist one immutable pre-model build bundle, append-only.
 
@@ -116,38 +121,62 @@ class EvidencePreModelPersistenceRepository:
         first write, so a mismatched combination would otherwise be recorded
         permanently under a build identity it did not produce.
 
-        ``retain_exact_source_bytes`` carries the governing retention decision.
-        When it is None the decision is derived from the build result, and
-        persistence is refused outright when it cannot be derived: ADR 0031
-        requires a handling classification to exist before durable persistence,
-        so guessing either way would be wrong.
+        Retention decisions are strictly derived from the retention policy and
+        handling classifications, never caller-asserted.
         """
         _aware("recorded_at", recorded_at)
-        inventory = tuple(canonical_inventory)
+        raw_inventory = tuple(canonical_inventory)
         _validate_bundle_lineage(
             intent=intent,
             policy=policy,
             specification=specification,
             capability=capability,
-            canonical_inventory=inventory,
+            canonical_inventory=raw_inventory,
             build_result=build_result,
         )
-        _validate_known_at_lower_bound(recorded_at.astimezone(UTC), inventory)
+        _validate_known_at_lower_bound(recorded_at.astimezone(UTC), raw_inventory)
 
-        if retain_exact_source_bytes is None:
-            retain_exact_source_bytes = _derive_source_retention(build_result)
-        if retain_exact_source_bytes is None:
-            raise PreModelPersistenceLineageError(
-                "source retention policy cannot be derived for a build that produced no prompt artifact; "
-                "pass retain_exact_source_bytes explicitly"
-            )
-        if not retain_exact_source_bytes:
-            artifact = build_result.prompt_artifact
+        effective_policy = retention_policy or EvidenceRetentionPolicy(policy_id="default-retention", version="1")
+        effective_classifications = span_classifications or {}
+
+        # Redact non-retainable spans from the inventory
+        redacted_inventory = []
+        for span in canonical_inventory:
+            cls = effective_classifications.get(span.span_id, "UNCLASSIFIED")
+            if cls not in ("CREDENTIALS_SECRET", "SENSITIVE_PERSONAL", "LICENSED_RESTRICTED", "EPHEMERAL_NON_RETAINABLE", "RETAINABLE", "UNCLASSIFIED"):
+                cls = "UNCLASSIFIED"
+            _, span_retain_source = effective_policy.derive_retention_decisions(cls)
+            if not span_retain_source:
+                redacted_inventory.append(_redacted_span(span))
+            else:
+                redacted_inventory.append(span)
+        inventory = tuple(redacted_inventory)
+
+        # exact_source_bytes_retained is True if all spans are retainable
+        exact_source_bytes_retained = all(
+            effective_policy.derive_retention_decisions(
+                effective_classifications.get(span.span_id, "UNCLASSIFIED")
+            )[1]
+            for span in canonical_inventory
+        )
+
+        # Validate that prompt content was redacted if required
+        exact_prompt_retained = True
+        artifact = build_result.prompt_artifact
+        if artifact is not None and build_result.package is not None:
+            for span_id in build_result.package.ordered_span_ids:
+                cls = effective_classifications.get(span_id, "UNCLASSIFIED")
+                if cls not in ("CREDENTIALS_SECRET", "SENSITIVE_PERSONAL", "LICENSED_RESTRICTED", "EPHEMERAL_NON_RETAINABLE", "RETAINABLE", "UNCLASSIFIED"):
+                    cls = "UNCLASSIFIED"
+                p_ret, _ = effective_policy.derive_retention_decisions(cls)
+                if not p_ret:
+                    exact_prompt_retained = False
+                    break
+        if not exact_prompt_retained:
             if artifact is not None and artifact.content:
                 raise PreModelPersistenceLineageError(
-                    "exact source byte retention is prohibited but the build still carries exact prompt content"
+                    "exact prompt byte retention is prohibited but the build still carries exact prompt content"
                 )
-            inventory = tuple(_redacted_span(span) for span in inventory)
 
         bundle = PersistedEvidencePreModelBundle(
             recorded_at=recorded_at.astimezone(UTC),
@@ -157,7 +186,9 @@ class EvidencePreModelPersistenceRepository:
             capability=capability,
             canonical_inventory=inventory,
             build_result=build_result,
-            exact_source_bytes_retained=retain_exact_source_bytes,
+            exact_source_bytes_retained=exact_source_bytes_retained,
+            span_classifications=span_classifications,
+            retention_policy=retention_policy,
         )
         payload = _bundle_payload(bundle)
         payload_json = _canonical_json(payload)
@@ -249,6 +280,14 @@ class EvidencePreModelPersistenceRepository:
                 bundle=None,
             )
 
+        # Fail closed on legacy/unclassified records lacking explicit handling/retention policy identity
+        if bundle.retention_policy is None or bundle.span_classifications is None:
+            return EvidencePreModelReconstruction(
+                status="UNAVAILABLE",
+                reason_code="LEGACY_RECORD_RECONSTRUCTION_UNAVAILABLE",
+                bundle=bundle,
+            )
+
         build = bundle.build_result.build_record
         artifact = bundle.build_result.prompt_artifact
         if build.reconstruction_outcome == "AVAILABLE":
@@ -305,6 +344,8 @@ def _bundle_payload(bundle: PersistedEvidencePreModelBundle) -> dict[str, Any]:
         "policy": _jsonable(asdict(bundle.policy)),
         "specification": _jsonable(asdict(bundle.specification)),
         "capability": _jsonable(asdict(bundle.capability)),
+        "span_classifications": bundle.span_classifications,
+        "retention_policy": (_jsonable(asdict(bundle.retention_policy)) if bundle.retention_policy else None),
         "source_retention": {
             "exact_source_bytes_retained": bundle.exact_source_bytes_retained,
             "reason_code": (None if bundle.exact_source_bytes_retained else RETENTION_PROHIBITED_REASON_CODE),
@@ -378,6 +419,12 @@ def _bundle_from_payload(payload: dict[str, Any], *, recorded_at: datetime) -> P
     # full inventory, so True is the factually correct reading for them.
     retained = bool(retention.get("exact_source_bytes_retained", True))
 
+    span_classifications = payload.get("span_classifications")
+    ret_policy_payload = payload.get("retention_policy")
+    retention_policy = None
+    if ret_policy_payload is not None:
+        retention_policy = EvidenceRetentionPolicy(**dict(ret_policy_payload))
+
     return PersistedEvidencePreModelBundle(
         recorded_at=recorded_at,
         intent=intent,
@@ -394,6 +441,8 @@ def _bundle_from_payload(payload: dict[str, Any], *, recorded_at: datetime) -> P
             build_record=build_record,
         ),
         exact_source_bytes_retained=retained,
+        span_classifications=span_classifications,
+        retention_policy=retention_policy,
     )
 
 
