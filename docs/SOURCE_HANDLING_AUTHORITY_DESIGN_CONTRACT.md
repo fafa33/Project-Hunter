@@ -84,7 +84,7 @@ A permissive genesis, restriction release, or less-restrictive correction is inv
 
 `AuthorizationRuleRecord` is the immutable canonical owner of the evidence-strength/method/verifier admissibility matrix and of publication/restriction-release authorization requirements.
 
-The V1 bootstrap is closed and singular: `AUTHORIZATION_RULE_V1` is the only genesis authorization rule. Its canonical body is exactly the minimum V1 admissibility invariants listed below plus the implementation's closed method-to-verifier matrix. The canonical serialization is versioned as `authorization-rule/v1`, domain-separated as `HUNTER_SOURCE_HANDLING_AUTHORIZATION_RULE`, UTF-8 encoded, and SHA-256 hashed. The implementation must ship one golden fixture containing that exact canonical body and one golden digest derived from it; migration recomputes the digest from the fixture and refuses to materialize the bootstrap record on mismatch. The fixture and digest are reviewed as part of the tests-before-implementation contribution before runtime code is accepted. There is no caller/provider input to this bootstrap path.
+The V1 bootstrap is closed and singular: `AUTHORIZATION_RULE_V1` is the only genesis authorization rule. Its immutable canonical body is established by the tests-before-implementation contribution from the minimum V1 invariants below plus one closed method-to-verifier matrix. That contribution must include a versioned/domain-separated canonical fixture and a reviewed SHA-256 golden digest. Runtime implementation may materialize the bootstrap record only when recomputation of the fixture exactly matches that reviewed digest. There is no caller/provider input to this bootstrap path, and no second genesis rule is permitted.
 
 Every successor `AuthorizationRuleRecord` requires a `PublicationAuthorization` evaluated under the exact strict-known predecessor authorization rule and bound to the successor rule payload as defined in §2.4. A successor may not authorize itself. There is no implicit current-code/configuration fallback.
 
@@ -96,7 +96,7 @@ Every successor `AuthorizationRuleRecord` requires a `PublicationAuthorization` 
 - policy, registry, and successor authorization-rule publication require Source Handling Authority authorization with immutable evidence/provenance and exact payload binding;
 - restriction release must identify each released restriction and prove admissible support for that release.
 
-The exact closed method-to-verifier matrix is a versioned body of `AUTHORIZATION_RULE_V1` and is covered by golden-vector tests; callers cannot choose or modify it.
+The exact closed method-to-verifier matrix is part of the reviewed `AUTHORIZATION_RULE_V1` canonical fixture and is covered by golden-vector tests; callers cannot choose or modify it.
 
 ## 3. Normalized fact model
 
@@ -221,7 +221,7 @@ Immutable authoritative authorization-rule version containing:
 - `supersedes_authorization_rule_id` when applicable
 - `record_status`
 
-Authorization-rule history follows the same immutable, versioned, strict-known rules. The only exception is the singular contract-pinned `AUTHORIZATION_RULE_V1` bootstrap described in §2.5. Current/latest rule state is never a historical fallback.
+Authorization-rule history follows the same immutable, versioned, strict-known rules. The only exception is the singular reviewed-fixture `AUTHORIZATION_RULE_V1` bootstrap described in §2.5. Current/latest rule state is never a historical fallback.
 
 ### 4.5 `SourceHandlingDecision`
 
@@ -411,13 +411,13 @@ Pre-authority rows gain no retroactive authority. Migration must preserve histor
 
 Migration must not use current facts, policy, current field-category registry, or current authorization rule as historical substitutes. Existing historical bytes are not proof that processing, retention, access, or reconstruction was governed. Missing historical authority remains unavailable/blocked. Migration is deterministic, repeatable, and idempotent where applicable.
 
-The only bootstrap exception is the singular contract-pinned `AUTHORIZATION_RULE_V1` genesis record described in §2.5; this does not confer authority on pre-existing source-handling rows.
+The only bootstrap exception is the singular reviewed-fixture `AUTHORIZATION_RULE_V1` genesis record described in §2.5; this does not confer authority on pre-existing source-handling rows.
 
 ## 14. Module/API boundaries
 
 Separate interfaces must exist for evidence submission, authoritative fact publication, authoritative policy publication, authoritative field-category-registry publication, authoritative authorization-rule publication, strict-known fact resolution, strict-known policy resolution, strict-known registry resolution, strict-known authorization-rule resolution, deterministic decision derivation, and persistence enforcement.
 
-Evidence-submission APIs accept non-authoritative evidence only. Fact/policy/registry/rule publication APIs require validated payload-bound `PublicationAuthorization`, except only the contract-pinned genesis materialization of `AUTHORIZATION_RULE_V1`. Repositories cannot mint an authorization. Repositories persist/query immutable records and atomically enforce the compare-and-append expected-head precondition only; they do not select authority. Providers acquire evidence only. Prompt/model-facing consumers receive only derived decisions after successful authority resolution.
+Evidence-submission APIs accept non-authoritative evidence only. Fact/policy/registry/rule publication APIs require validated payload-bound `PublicationAuthorization`, except only the reviewed-fixture genesis materialization of `AUTHORIZATION_RULE_V1`. Repositories cannot mint an authorization. Repositories persist/query immutable records and atomically enforce the compare-and-append expected-head precondition only; they do not select authority. Providers acquire evidence only. Prompt/model-facing consumers receive only derived decisions after successful authority resolution.
 
 ## 15. Failure semantics
 
@@ -451,7 +451,7 @@ Tests are written before runtime implementation and must cover all root semantic
 
 ### Authorization-rule history and bootstrap
 
-- the `AUTHORIZATION_RULE_V1` canonical fixture recomputes to its reviewed golden digest;
+- the reviewed `AUTHORIZATION_RULE_V1` canonical fixture recomputes to its reviewed golden digest;
 - migration refuses bootstrap materialization when fixture/digest mismatch;
 - no second genesis authorization rule can be created;
 - successor authorization rule cannot authorize itself;
@@ -507,7 +507,7 @@ Tests are written before runtime implementation and must cover all root semantic
 - blocked-audit representation leaks neither source secrets nor credentials;
 - detector hit can only add restriction; detector miss cannot grant permission;
 - pre-authority record remains historically unresolved;
-- migration cannot manufacture historical source-handling authority or registry/rule history beyond the singular contract-pinned rule bootstrap.
+- migration cannot manufacture historical source-handling authority or registry/rule history beyond the singular reviewed-fixture rule bootstrap.
 
 For every blocking regression class above, disable/remove the root rule and demonstrate that its regression test fails, per the Non-Vacuous Regression Tests and Harness Fidelity requirements in `docs/HUNTER_IMPLEMENTATION_CONTRACT.md`.
 
@@ -516,7 +516,7 @@ For every blocking regression class above, disable/remove the root rule and demo
 1. obtain final independent acceptance review of this contract;
 2. freeze the accepted contract;
 3. write the deterministic tests above first, including the canonical `AUTHORIZATION_RULE_V1` fixture and reviewed golden digest;
-4. materialize and golden-verify the contract-pinned `AUTHORIZATION_RULE_V1` bootstrap;
+4. materialize and golden-verify the reviewed-fixture `AUTHORIZATION_RULE_V1` bootstrap;
 5. implement record models/repositories and atomic compare-and-append mechanically;
 6. implement payload-bound publication authorization and strict-known resolution for facts, policy, registry, rules, authorizations, and provenance;
 7. implement policy derivation, operation-specific disposition joins, complete disposition map, and structural secret/credential exclusion;
