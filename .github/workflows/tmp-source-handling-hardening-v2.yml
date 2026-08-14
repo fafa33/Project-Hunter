@@ -32,8 +32,10 @@ jobs:
           python -m pip install black==24.10.0 ruff mypy pytest
       - name: Apply integrated correction
         run: python .github/tmp_apply_source_handling_hardening.py
-      - name: Format
-        run: black src/hunter/evidence_intelligence/source_handling.py tests/source_handling_runtime_harness.py tests/test_source_handling_authority_contract.py tests/test_source_handling_authority_enforcement.py
+      - name: Canonicalize imports and formatting
+        run: |
+          ruff check --fix src/hunter/evidence_intelligence/source_handling.py tests/source_handling_runtime_harness.py tests/test_source_handling_authority_contract.py tests/test_source_handling_authority_enforcement.py
+          black src/hunter/evidence_intelligence/source_handling.py tests/source_handling_runtime_harness.py tests/test_source_handling_authority_contract.py tests/test_source_handling_authority_enforcement.py
       - name: Focused quality gates
         run: |
           ruff check src/hunter/evidence_intelligence/source_handling.py tests/source_handling_runtime_harness.py tests/test_source_handling_authority_contract.py tests/test_source_handling_authority_enforcement.py
