@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed.
+Accepted.
 
 ## Date
 
@@ -14,7 +14,7 @@ Proposed.
 
 Independent architecture audit of that preparation returned audit verdict `PASS` and protocol verdict `READY_FOR_ADR` on exact head `8dcec18defacfce06599dd6b7f7547b0fa8d977c`, with no blocking findings. The mandatory preparation lifecycle required by `docs/ARCHITECTURE_DECISION_PREPARATION_GUIDE.md` and `docs/DEVELOPMENT_GOVERNANCE.md` is therefore complete.
 
-Per `docs/ARCHITECTURE_AUDIT_PROTOCOL.md`, an audit verdict establishes architecture readiness only; it does not approve an ADR. This ADR remains `Proposed` and is ready for owner acceptance.
+The repository owner explicitly accepted ADR 0033 on 2026-08-14. This lifecycle transition makes the decision binding architecture; it does not authorize runtime implementation, which remains governed separately.
 
 ## Context
 
