@@ -10,9 +10,11 @@ Proposed.
 
 ## Governing Preparation
 
-[ADPR-0008](../architecture-records/ADPR-0008-source-handling-classification-authority.md).
+[ADPR-0008](../architecture-records/ADPR-0008-source-handling-classification-authority.md) (`APPROVED`).
 
-Independent architecture audit of that preparation has not yet been performed. This ADR cannot advance to acceptance until the preparation lifecycle required by `docs/ARCHITECTURE_DECISION_PREPARATION_GUIDE.md` and `docs/DEVELOPMENT_GOVERNANCE.md` is complete.
+Independent architecture audit of that preparation returned audit verdict `PASS` and protocol verdict `READY_FOR_ADR` on exact head `8dcec18defacfce06599dd6b7f7547b0fa8d977c`, with no blocking findings. The mandatory preparation lifecycle required by `docs/ARCHITECTURE_DECISION_PREPARATION_GUIDE.md` and `docs/DEVELOPMENT_GOVERNANCE.md` is therefore complete.
+
+Per `docs/ARCHITECTURE_AUDIT_PROTOCOL.md`, an audit verdict establishes architecture readiness only; it does not approve an ADR. This ADR remains `Proposed` and is ready for owner acceptance.
 
 ## Context
 

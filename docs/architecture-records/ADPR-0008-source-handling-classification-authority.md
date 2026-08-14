@@ -3,12 +3,12 @@
 ## Metadata
 
 - ADPR ID: `ADPR-0008`
-- Status: `READY_FOR_REVIEW`
+- Status: `APPROVED`
 - Version: 1
 - Author: Claude Code / repository owner-directed architecture work
-- Reviewers: independent architecture audit not yet performed
+- Reviewers: Codex Independent Architecture Auditor — audit verdict `PASS`, protocol verdict `READY_FOR_ADR`, on exact head `8dcec18defacfce06599dd6b7f7547b0fa8d977c`
 - Created: 2026-08-14
-- Approved: not yet approved
+- Approved: 2026-08-14
 - Related Epic: not yet created
 - Related Issue: not yet created; owner-directed under PR #262
 - Planned or produced ADR: ADR 0033 — Source Handling Classification Authority
@@ -23,7 +23,7 @@ With no owner assigned, the only participant able to supply those inputs is the 
 
 Five materially distinct options were enumerated and compared. The recommendation is to assign exclusive canonical ownership of both source-handling facts and governed source-handling policy to an Evidence Intelligence consumer-side Source Handling Authority, with all other components as consumers only, fail-closed behaviour on unresolved authority, immutable and versioned historical authority, and independent rederivation and enforcement at persistence.
 
-Self-assessed ADR readiness is `READY_FOR_ADR`. Independent architecture audit has not yet been performed.
+Self-assessed ADR readiness is `READY_FOR_ADR`. Independent architecture audit by the Codex Independent Architecture Auditor confirmed that assessment on exact head `8dcec18defacfce06599dd6b7f7547b0fa8d977c` with audit verdict `PASS` and protocol verdict `READY_FOR_ADR`, and no blocking findings.
 
 ## Problem Statement
 
@@ -249,6 +249,7 @@ Applying `docs/ARCHITECTURE_DECISION_QUALITY_STANDARD.md`:
 ## ADR Readiness
 
 - Outcome: `READY_FOR_ADR`
+- Independent audit outcome: `PASS`; protocol verdict `READY_FOR_ADR`, issued by the Codex Independent Architecture Auditor on exact head `8dcec18defacfce06599dd6b7f7547b0fa8d977c`. No blocking findings remain. Per `docs/ARCHITECTURE_AUDIT_PROTOCOL.md`, this verdict establishes architecture readiness only; it does not approve ADR 0033, which remains an owner decision.
 - Proposed ADR title: Source Handling Classification Authority
 - Proposed ADR scope: canonical ownership of source-handling facts and of governed source-handling policy; the consumer boundary; fail-closed behaviour; historical immutability, versioning, and strict-known selection; independent persistence rederivation and enforcement.
 - Decisions the ADR must fix: who owns the facts; who owns the policy; that all other components are consumers only; that unresolved authority fails closed; that historical authority is immutable and cutoff-selected; that persistence rederives rather than trusts; that the governed policy decides processing, retention, reconstruction, access, and deletion rather than retention alone.
@@ -267,15 +268,17 @@ Option 2 is recommended because it is the only option that removes consumer auth
 | Date | State | Change | Author or reviewer |
 |---|---|---|---|
 | 2026-08-14 | `READY_FOR_REVIEW` | Record created to satisfy mandatory Stage 1 preparation for ADR 0033 | Claude Code / owner-directed |
+| 2026-08-14 | `APPROVED` | Independent architecture audit of exact head `8dcec18defacfce06599dd6b7f7547b0fa8d977c` returned audit verdict `PASS` and protocol verdict `READY_FOR_ADR`, with no blocking findings. Substantive reasoning is unchanged; this transition records the audit outcome only. | Codex Independent Architecture Auditor |
 
 ## Traceability
 
 - Epic: not yet created
 - Issue: not yet created; owner-directed under PR #262
 - Preparation working document: this record
-- Checklist review: `docs/checklists/ARCHITECTURE_DECISION_PREPARATION_CHECKLIST.md` applied by the author; independent audit not yet performed
-- ADPR: ADPR-0008
-- ADR: ADR 0033 (Proposed)
+- Checklist review: `docs/checklists/ARCHITECTURE_DECISION_PREPARATION_CHECKLIST.md` applied by the author
+- Independent architecture audit: Codex Independent Architecture Auditor, audit verdict `PASS`, protocol verdict `READY_FOR_ADR`, on exact head `8dcec18defacfce06599dd6b7f7547b0fa8d977c`
+- ADPR: ADPR-0008 (`APPROVED`)
+- ADR: ADR 0033 (Proposed; ready for owner acceptance)
 - Implementation plan: not authorized
 - PR: #262
 - Merge commit: not yet recorded
