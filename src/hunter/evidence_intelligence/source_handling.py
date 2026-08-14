@@ -2,11 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any
-
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Any
 
 
 AUTHORITY_COMPONENT_ID = "EVIDENCE_INTELLIGENCE_SOURCE_HANDLING_AUTHORITY"
