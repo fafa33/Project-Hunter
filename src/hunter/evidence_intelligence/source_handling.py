@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
+import threading
+import typing
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
-
 
 AUTHORITY_COMPONENT_ID = "EVIDENCE_INTELLIGENCE_SOURCE_HANDLING_AUTHORITY"
 GENESIS_RULE_ID = "AUTHORIZATION_RULE_V1"
@@ -27,22 +28,23 @@ class PublicationAuthorization:
     known_at: datetime
     authorization_id: str = ""
     authority_component_id: str = AUTHORITY_COMPONENT_ID
+    evidence_ids: tuple[str, ...] = ()
     evidence_strength: str | None = None
     evidence_method: str | None = None
+    verifier_ids: tuple[str, ...] = ()
     verifier_type: str | None = None
     released_restrictions: frozenset[str] = frozenset()
+    predecessor_ids: tuple[str, ...] = ()
 
 
 class AuthorityStore:
-    """Append-only store that separates physical append from canonical authority publication.
-
-    ``compare_and_append`` is deliberately only a concurrency primitive. Records written
-    through it are not canonical authority unless the Source Handling Authority publication
-    path has independently verified and stamped the exact publication authorization.
-    """
+    """Append-only storage plus non-forgeable canonical publication bookkeeping."""
 
     def __init__(self) -> None:
-        self._records: dict[tuple[str, str], list[dict[str, Any]]] = {}
+        self._records: dict[tuple[str, str], list[dict[str, typing.Any]]] = {}
+        self._canonical_keys: set[tuple[str, str, str]] = set()
+        self._issued_authorizations: dict[str, PublicationAuthorization] = {}
+        self._lock = threading.RLock()
 
     def publish(
         self,
@@ -50,49 +52,58 @@ class AuthorityStore:
         family: str,
         scope: str,
         expected_current_head_id: str | None,
-        record: Mapping[str, Any],
+        record: Mapping[str, typing.Any],
     ) -> None:
-        authorization = record.get("publication_authorization")
-        if not isinstance(authorization, PublicationAuthorization):
-            raise SourceHandlingBlockedError("governed publication authorization required")
+        with self._lock:
+            authorization = record.get("publication_authorization")
+            if not isinstance(authorization, PublicationAuthorization):
+                raise SourceHandlingBlockedError("governed publication authorization required")
+            self._require_issued_authorization(authorization)
 
-        payload = record.get("publication_payload")
-        if payload is None:
-            payload = _publication_payload_from_record(record)
+            actual_payload = _publication_payload_from_record(record)
+            supplied_payload = record.get("publication_payload")
+            if supplied_payload is not None and _canonical_comparable(supplied_payload) != _canonical_comparable(
+                actual_payload
+            ):
+                raise SourceHandlingBlockedError("publication payload does not equal exact candidate record body")
 
-        verify_publication(authorization, family, scope, payload)
-        if not strict_known_eligible(_authorization_times(authorization), authorization.known_at):
-            raise SourceHandlingBlockedError("publication authorization temporal state is invalid")
+            verify_publication(authorization, family, scope, actual_payload)
+            if not strict_known_eligible(_authorization_times(authorization), authorization.known_at):
+                raise SourceHandlingBlockedError("publication authorization temporal state is invalid")
 
-        rule = self._resolve_rule_for_authorization(authorization)
-        _validate_publication_authorization_evidence(
-            authorization=authorization,
-            authorization_rule=rule,
-            requested_change=str(record.get("requested_change", "PERMISSIVE_GENESIS")),
-        )
+            rule = self._resolve_rule_for_authorization(authorization)
+            _validate_publication_authorization_evidence(
+                authorization=authorization,
+                authorization_rule=rule,
+                requested_change=str(record.get("requested_change", "PERMISSIVE_GENESIS")),
+            )
 
-        current = self.current_canonical_head_id(family, scope)
-        if current != expected_current_head_id:
-            raise SourceHandlingBlockedError("canonical authority head changed; re-resolution required")
+            current = self.current_canonical_head_id(family, scope)
+            if current != expected_current_head_id:
+                raise SourceHandlingBlockedError("canonical authority head changed; re-resolution required")
 
-        supersedes = _supersedes_id(record)
-        if current is None:
-            if supersedes is not None:
-                raise SourceHandlingBlockedError("genesis publication cannot supersede a record")
-        elif supersedes != current:
-            raise SourceHandlingBlockedError("successor must supersede the exact canonical head")
+            supersedes = _supersedes_id(record)
+            if current is None:
+                if supersedes is not None:
+                    raise SourceHandlingBlockedError("genesis publication cannot supersede a record")
+            elif supersedes != current:
+                raise SourceHandlingBlockedError("successor must supersede the exact canonical head")
 
-        candidate = dict(record)
-        candidate["publication_payload"] = payload
-        candidate["_publication_verified"] = True
-        self.compare_and_append(
-            family=family,
-            scope=scope,
-            expected_current_head_id=self.current_head_id(family, scope),
-            record=candidate,
-        )
+            candidate = copy.deepcopy(dict(record))
+            candidate["publication_payload"] = copy.deepcopy(actual_payload)
+            candidate_id = _record_id(candidate)
+            if candidate_id is None:
+                raise SourceHandlingBlockedError("authority record identity is required")
 
-    def direct_write(self, *, family: str, scope: str, record: Mapping[str, Any]) -> None:
+            self.compare_and_append(
+                family=family,
+                scope=scope,
+                expected_current_head_id=self.current_head_id(family, scope),
+                record=candidate,
+            )
+            self._canonical_keys.add((family, scope, candidate_id))
+
+    def direct_write(self, *, family: str, scope: str, record: Mapping[str, typing.Any]) -> None:
         del family, scope, record
         raise SourceHandlingBlockedError("direct repository authority writes are forbidden")
 
@@ -102,54 +113,73 @@ class AuthorityStore:
         family: str,
         scope: str,
         expected_current_head_id: str | None,
-        record: Mapping[str, Any],
+        record: Mapping[str, typing.Any],
     ) -> None:
-        key = (family, scope)
-        records = self._records.setdefault(key, [])
-        current = _record_id(records[-1]) if records else None
-        if current != expected_current_head_id:
-            raise SourceHandlingBlockedError("authority head changed; re-resolution required")
-        candidate = dict(record)
-        candidate_id = _record_id(candidate)
-        if candidate_id is None:
-            raise SourceHandlingBlockedError("authority record identity is required")
-        if any(_record_id(existing) == candidate_id for existing in records):
-            raise SourceHandlingBlockedError("authority record identity must be immutable")
-        records.append(candidate)
+        with self._lock:
+            key = (family, scope)
+            records = self._records.setdefault(key, [])
+            current = _record_id(records[-1]) if records else None
+            if current != expected_current_head_id:
+                raise SourceHandlingBlockedError("authority head changed; re-resolution required")
+            candidate = copy.deepcopy(dict(record))
+            candidate_id = _record_id(candidate)
+            if candidate_id is None:
+                raise SourceHandlingBlockedError("authority record identity is required")
+            if any(_record_id(existing) == candidate_id for existing in records):
+                raise SourceHandlingBlockedError("authority record identity must be immutable")
+            records.append(candidate)
 
     def current_head_id(self, family: str, scope: str) -> str | None:
-        records = self._records.get((family, scope), [])
-        return _record_id(records[-1]) if records else None
+        with self._lock:
+            records = self._records.get((family, scope), [])
+            return _record_id(records[-1]) if records else None
 
     def current_canonical_head_id(self, family: str, scope: str) -> str | None:
         records = self.canonical_records(family, scope)
         return _record_id(records[-1]) if records else None
 
-    def records(self, family: str, scope: str) -> tuple[dict[str, Any], ...]:
-        return tuple(dict(record) for record in self._records.get((family, scope), []))
+    def records(self, family: str, scope: str) -> tuple[dict[str, typing.Any], ...]:
+        with self._lock:
+            return tuple(copy.deepcopy(record) for record in self._records.get((family, scope), []))
 
-    def canonical_records(self, family: str, scope: str) -> tuple[dict[str, Any], ...]:
-        return tuple(
-            dict(record)
-            for record in self._records.get((family, scope), [])
-            if record.get("_publication_verified") is True
-        )
-
-    def canonical_record_by_id(self, family: str, record_id: str) -> dict[str, Any] | None:
-        matches: list[dict[str, Any]] = []
-        for (stored_family, _scope), records in self._records.items():
-            if stored_family != family:
-                continue
-            matches.extend(
-                dict(record)
-                for record in records
-                if record.get("_publication_verified") is True and _record_id(record) == record_id
+    def canonical_records(self, family: str, scope: str) -> tuple[dict[str, typing.Any], ...]:
+        with self._lock:
+            return tuple(
+                copy.deepcopy(record)
+                for record in self._records.get((family, scope), [])
+                if (_record_id(record) is not None and (family, scope, typing.cast(str, _record_id(record))) in self._canonical_keys)
             )
-        if len(matches) > 1:
-            raise SourceHandlingBlockedError("canonical authority identity is ambiguous")
-        return matches[0] if matches else None
 
-    def _resolve_rule_for_authorization(self, authorization: PublicationAuthorization) -> Mapping[str, Any]:
+    def canonical_record_by_id(self, family: str, record_id: str) -> dict[str, typing.Any] | None:
+        with self._lock:
+            matches: list[dict[str, typing.Any]] = []
+            for (stored_family, scope), records in self._records.items():
+                if stored_family != family:
+                    continue
+                for record in records:
+                    if _record_id(record) != record_id:
+                        continue
+                    if (family, scope, record_id) in self._canonical_keys:
+                        matches.append(copy.deepcopy(record))
+            if len(matches) > 1:
+                raise SourceHandlingBlockedError("canonical authority identity is ambiguous")
+            return matches[0] if matches else None
+
+    def _register_authorization(self, authorization: PublicationAuthorization) -> None:
+        with self._lock:
+            if not authorization.authorization_id:
+                raise SourceHandlingBlockedError("publication authorization identity is required")
+            existing = self._issued_authorizations.get(authorization.authorization_id)
+            if existing is not None and existing != authorization:
+                raise SourceHandlingBlockedError("publication authorization identity is immutable")
+            self._issued_authorizations[authorization.authorization_id] = authorization
+
+    def _require_issued_authorization(self, authorization: PublicationAuthorization) -> None:
+        issued = self._issued_authorizations.get(authorization.authorization_id)
+        if not authorization.authorization_id or issued != authorization:
+            raise SourceHandlingBlockedError("publication authorization was not issued by source handling authority")
+
+    def _resolve_rule_for_authorization(self, authorization: PublicationAuthorization) -> Mapping[str, typing.Any]:
         rule = self.canonical_record_by_id("AUTHORIZATION_RULE", authorization.authorization_rule_id)
         if rule is None:
             raise SourceHandlingBlockedError("authorization rule is not canonical")
@@ -186,10 +216,13 @@ def publication_authorization(
     known_at: datetime,
     authorization_id: str = "",
     authority_component_id: str = AUTHORITY_COMPONENT_ID,
+    evidence_ids: Sequence[str] = (),
     evidence_strength: str | None = None,
     evidence_method: str | None = None,
+    verifier_ids: Sequence[str] = (),
     verifier_type: str | None = None,
     released_restrictions: set[str] | frozenset[str] | None = None,
+    predecessor_ids: Sequence[str] = (),
 ) -> PublicationAuthorization:
     return PublicationAuthorization(
         publication_kind=publication_kind,
@@ -201,11 +234,67 @@ def publication_authorization(
         known_at=known_at,
         authorization_id=authorization_id,
         authority_component_id=authority_component_id,
+        evidence_ids=tuple(evidence_ids),
         evidence_strength=evidence_strength,
         evidence_method=evidence_method,
+        verifier_ids=tuple(verifier_ids),
         verifier_type=verifier_type,
         released_restrictions=frozenset(released_restrictions or ()),
+        predecessor_ids=tuple(predecessor_ids),
     )
+
+
+def issue_publication_authorization(
+    store: AuthorityStore,
+    *,
+    authorization_id: str,
+    publication_kind: str,
+    governed_subject_scope: str,
+    payload: object,
+    authorization_rule_id: str,
+    evidence_ids: Sequence[str],
+    evidence_strength: str,
+    evidence_method: str,
+    verifier_ids: Sequence[str],
+    verifier_type: str,
+    effective_from: datetime,
+    recorded_at: datetime,
+    known_at: datetime,
+    requested_change: str = "PERMISSIVE_GENESIS",
+    released_restrictions: set[str] | frozenset[str] | None = None,
+    predecessor_ids: Sequence[str] = (),
+) -> PublicationAuthorization:
+    if not authorization_id or not evidence_ids or not verifier_ids:
+        raise SourceHandlingBlockedError("authorization requires immutable evidence and verifier identities")
+    rule = store.canonical_record_by_id("AUTHORIZATION_RULE", authorization_rule_id)
+    if rule is None or not strict_known_eligible(rule, known_at):
+        raise SourceHandlingBlockedError("exact historical authorization rule is unavailable")
+
+    authorization = publication_authorization(
+        authorization_id=authorization_id,
+        publication_kind=publication_kind,
+        governed_subject_scope=governed_subject_scope,
+        authorized_payload_sha256=canonical_publication_digest(publication_kind, governed_subject_scope, payload),
+        authorization_rule_id=authorization_rule_id,
+        evidence_ids=evidence_ids,
+        evidence_strength=evidence_strength,
+        evidence_method=evidence_method,
+        verifier_ids=verifier_ids,
+        verifier_type=verifier_type,
+        effective_from=effective_from,
+        recorded_at=recorded_at,
+        known_at=known_at,
+        released_restrictions=released_restrictions,
+        predecessor_ids=predecessor_ids,
+    )
+    verify_publication(authorization, publication_kind, governed_subject_scope, payload)
+    _validate_publication_authorization_evidence(
+        authorization=authorization,
+        authorization_rule=rule,
+        requested_change=requested_change,
+    )
+    store._register_authorization(authorization)
+    return authorization
 
 
 def verify_publication(
@@ -227,33 +316,33 @@ def verify_publication(
 
 def publish_genesis_rule(
     store: AuthorityStore,
-    rule: Mapping[str, Any],
+    rule: Mapping[str, typing.Any],
     *,
     expected_golden_sha256: str,
 ) -> None:
-    if _canonical_object_sha256(rule) != expected_golden_sha256:
-        raise SourceHandlingBlockedError("authorization-rule bootstrap digest mismatch")
-    if rule.get("authorization_rule_id") != GENESIS_RULE_ID:
-        raise SourceHandlingBlockedError("unexpected authorization-rule bootstrap identity")
-    if store.current_canonical_head_id("AUTHORIZATION_RULE", "SOURCE_HANDLING") is not None:
-        raise SourceHandlingBlockedError("a second authorization-rule genesis is forbidden")
+    with store._lock:
+        if _canonical_object_sha256(rule) != expected_golden_sha256:
+            raise SourceHandlingBlockedError("authorization-rule bootstrap digest mismatch")
+        if rule.get("authorization_rule_id") != GENESIS_RULE_ID:
+            raise SourceHandlingBlockedError("unexpected authorization-rule bootstrap identity")
+        if store.current_head_id("AUTHORIZATION_RULE", "SOURCE_HANDLING") is not None:
+            raise SourceHandlingBlockedError("authorization-rule bootstrap requires empty history")
 
-    record = dict(rule)
-    record["id"] = str(rule["authorization_rule_id"])
-    record["scope"] = "SOURCE_HANDLING"
-    record["_publication_verified"] = True
-    record["_bootstrap_verified"] = True
-    store.compare_and_append(
-        family="AUTHORIZATION_RULE",
-        scope="SOURCE_HANDLING",
-        expected_current_head_id=store.current_head_id("AUTHORIZATION_RULE", "SOURCE_HANDLING"),
-        record=record,
-    )
+        record = copy.deepcopy(dict(rule))
+        record["id"] = str(rule["authorization_rule_id"])
+        record["scope"] = "SOURCE_HANDLING"
+        store.compare_and_append(
+            family="AUTHORIZATION_RULE",
+            scope="SOURCE_HANDLING",
+            expected_current_head_id=None,
+            record=record,
+        )
+        store._canonical_keys.add(("AUTHORIZATION_RULE", "SOURCE_HANDLING", GENESIS_RULE_ID))
 
 
 def publish_successor_rule(
     store: AuthorityStore,
-    successor: Mapping[str, Any],
+    successor: Mapping[str, typing.Any],
     *,
     authorizing_rule_id: str,
     historical_cutoff: datetime | None = None,
@@ -293,7 +382,7 @@ def validate_permission_evidence(
     evidence_method: str,
     verifier_type: str,
     requested_change: str,
-    authorization_rule: Mapping[str, Any],
+    authorization_rule: Mapping[str, typing.Any],
     released_restrictions: set[str] | frozenset[str] | None = None,
 ) -> None:
     body = authorization_rule.get("rule_body")
@@ -333,7 +422,7 @@ def validate_permission_evidence(
         raise SourceHandlingBlockedError("released restrictions must be enumerated")
 
 
-def strict_known_eligible(record: Mapping[str, Any], cutoff: datetime) -> bool:
+def strict_known_eligible(record: Mapping[str, typing.Any], cutoff: datetime) -> bool:
     for field in ("effective_from", "recorded_at", "known_at"):
         value = _as_datetime(record.get(field))
         if value is None or value > cutoff:
@@ -342,19 +431,46 @@ def strict_known_eligible(record: Mapping[str, Any], cutoff: datetime) -> bool:
 
 
 def strict_known_head(
-    records: Sequence[Mapping[str, Any]],
+    records: Sequence[Mapping[str, typing.Any]],
     *,
     cutoff: datetime,
     scope: str,
-) -> Mapping[str, Any]:
+) -> Mapping[str, typing.Any]:
     eligible = [record for record in records if record.get("scope") == scope and strict_known_eligible(record, cutoff)]
     if not eligible:
         raise SourceHandlingBlockedError("no strict-known authority head")
-    superseded = {predecessor for record in eligible if (predecessor := _supersedes_id(record)) is not None}
-    heads = [record for record in eligible if _record_id(record) not in superseded]
+
+    by_id: dict[str, Mapping[str, typing.Any]] = {}
+    for record in eligible:
+        record_id = _record_id(record)
+        if record_id is None or record_id in by_id:
+            raise SourceHandlingBlockedError("strict-known authority identity is missing or duplicated")
+        by_id[record_id] = record
+
+    predecessor_by_id: dict[str, str | None] = {}
+    superseded: set[str] = set()
+    for record_id, record in by_id.items():
+        predecessor = _supersedes_id(record)
+        predecessor_by_id[record_id] = predecessor
+        if predecessor is not None:
+            if predecessor not in by_id:
+                raise SourceHandlingBlockedError("strict-known authority predecessor is missing")
+            superseded.add(predecessor)
+
+    heads = [record_id for record_id in by_id if record_id not in superseded]
     if len(heads) != 1:
         raise SourceHandlingBlockedError("strict-known authority history has divergent heads")
-    return heads[0]
+
+    visited: set[str] = set()
+    cursor: str | None = heads[0]
+    while cursor is not None:
+        if cursor in visited:
+            raise SourceHandlingBlockedError("strict-known authority history contains a cycle")
+        visited.add(cursor)
+        cursor = predecessor_by_id[cursor]
+    if visited != set(by_id):
+        raise SourceHandlingBlockedError("strict-known authority history is not one complete chain")
+    return by_id[heads[0]]
 
 
 def resolve_canonical_head(
@@ -363,7 +479,7 @@ def resolve_canonical_head(
     family: str,
     scope: str,
     cutoff: datetime,
-) -> Mapping[str, Any]:
+) -> Mapping[str, typing.Any]:
     records = store.canonical_records(family, scope)
     if not records:
         raise SourceHandlingBlockedError("canonical historical authority is absent")
@@ -376,7 +492,7 @@ def authority_store() -> AuthorityStore:
     return AuthorityStore()
 
 
-def restrictive_fact_join(facts: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+def restrictive_fact_join(facts: Sequence[Mapping[str, typing.Any]]) -> dict[str, typing.Any]:
     if not facts:
         raise SourceHandlingBlockedError("at least one handling fact is required")
 
@@ -440,11 +556,11 @@ def lifecycle_join(values: Sequence[str]) -> str:
 
 def derive_source_handling_decision(
     *,
-    fact_record: Mapping[str, Any],
-    policy_record: Mapping[str, Any],
-    registry_record: Mapping[str, Any],
-    authorization_rule: Mapping[str, Any],
-) -> dict[str, Any]:
+    fact_record: Mapping[str, typing.Any],
+    policy_record: Mapping[str, typing.Any],
+    registry_record: Mapping[str, typing.Any],
+    authorization_rule: Mapping[str, typing.Any],
+) -> dict[str, typing.Any]:
     fact = fact_record.get("fact")
     policy = policy_record.get("policy_body")
     if not isinstance(fact, Mapping) or not isinstance(policy, Mapping):
@@ -455,15 +571,15 @@ def derive_source_handling_decision(
     if registry_id != policy_record.get("field_category_registry_id"):
         raise SourceHandlingBlockedError("policy is not bound to the resolved registry")
 
-    required_decisions = (
-        "processing_decision",
-        "retention_decision",
-        "reconstruction_decision",
-        "access_decision",
-        "deletion_lifecycle_decision",
-    )
-    for key in required_decisions:
-        if policy.get(key) not in {"ALLOW", "DENY", "BLOCKED", "EXPIRE", "DELETE"}:
+    top_level_allowed = {
+        "processing_decision": {"ALLOW", "DENY", "BLOCKED"},
+        "retention_decision": {"ALLOW", "DENY", "BLOCKED"},
+        "reconstruction_decision": {"ALLOW", "DENY", "BLOCKED"},
+        "access_decision": {"ALLOW", "DENY", "BLOCKED"},
+        "deletion_lifecycle_decision": {"ALLOW", "EXPIRE", "DELETE", "BLOCKED"},
+    }
+    for key, allowed in top_level_allowed.items():
+        if policy.get(key) not in allowed:
             raise SourceHandlingBlockedError(f"policy decision is missing or invalid: {key}")
 
     operation_restrictions = set(_string_sequence(normalized_fact.get("operation_restrictions")))
@@ -479,6 +595,7 @@ def derive_source_handling_decision(
     dispositions = policy.get("durable_dispositions")
     if not isinstance(dispositions, Mapping):
         raise SourceHandlingBlockedError("durable dispositions are missing")
+    _validate_complete_disposition_map(dispositions, registry_record)
 
     return {
         "fact_record_id": _record_id(fact_record),
@@ -496,9 +613,9 @@ def derive_source_handling_decision(
 
 def validate_durable_payload(
     *,
-    decision: Mapping[str, Any],
-    registry: Mapping[str, Any],
-    payload: Mapping[str, Any],
+    decision: Mapping[str, typing.Any],
+    registry: Mapping[str, typing.Any],
+    payload: Mapping[str, typing.Any],
     secret_presence: set[str],
 ) -> None:
     decision_registry_id = decision.get("field_category_registry_id")
@@ -514,6 +631,19 @@ def validate_durable_payload(
         raise SourceHandlingBlockedError("durable field authority is incomplete")
 
     protected = bool(secret_presence & {"SECRET_PRESENT", "CREDENTIAL_PRESENT"})
+    protected_risky_categories = {
+        "SOURCE_BYTES",
+        "SOURCE_DERIVED_TEXT",
+        "CONTENT_DERIVED_ID",
+        "LOCATOR_URL",
+        "COORDINATE",
+        "OPERATIONAL_METADATA",
+        "DIAGNOSTIC",
+        "PROVENANCE_ID",
+        "AUDIT_FIELD",
+        "RECONSTRUCTION_METADATA",
+        "ACCESS_CONTROLLED_REPRESENTATION",
+    }
     for field, value in payload.items():
         categories = _string_sequence(field_map.get(field))
         if not categories:
@@ -524,6 +654,8 @@ def validate_durable_payload(
                 raise SourceHandlingBlockedError("durable category disposition unavailable")
             if category_dispositions.get("PERSIST") != "ALLOW":
                 raise SourceHandlingBlockedError("durable field persistence is not allowed")
+            if protected and category in protected_risky_categories:
+                raise SourceHandlingBlockedError("protected source cannot persist through a risky secondary category")
         if protected and _derived_from_protected_content(value):
             raise SourceHandlingBlockedError("secret/credential-derived secondary representation cannot persist")
 
@@ -534,9 +666,9 @@ def enforce_persistence(
     fact_scope: str,
     policy_scope: str,
     cutoff: datetime,
-    payload: Mapping[str, Any],
-    supplied_decision: Mapping[str, Any] | None = None,
-) -> dict[str, Any]:
+    payload: Mapping[str, typing.Any],
+    supplied_decision: Mapping[str, typing.Any] | None = None,
+) -> dict[str, typing.Any]:
     fact_record = resolve_canonical_head(store, family="FACT", scope=fact_scope, cutoff=cutoff)
     policy_record = resolve_canonical_head(store, family="POLICY", scope=policy_scope, cutoff=cutoff)
 
@@ -585,8 +717,8 @@ def enforce_persistence(
     return decision
 
 
-def migrate_legacy(record: Mapping[str, Any]) -> dict[str, Any]:
-    migrated = dict(record)
+def migrate_legacy(record: Mapping[str, typing.Any]) -> dict[str, typing.Any]:
+    migrated = copy.deepcopy(dict(record))
     migrated.setdefault("publication_authorization", None)
     migrated.setdefault("field_category_registry_id", None)
     migrated.setdefault("authorization_rule_id", None)
@@ -596,9 +728,11 @@ def migrate_legacy(record: Mapping[str, Any]) -> dict[str, Any]:
 def _validate_publication_authorization_evidence(
     *,
     authorization: PublicationAuthorization,
-    authorization_rule: Mapping[str, Any],
+    authorization_rule: Mapping[str, typing.Any],
     requested_change: str,
 ) -> None:
+    if not authorization.evidence_ids or not authorization.verifier_ids:
+        raise SourceHandlingBlockedError("publication authorization provenance identities are incomplete")
     if authorization.evidence_strength is None or authorization.evidence_method is None or authorization.verifier_type is None:
         raise SourceHandlingBlockedError("publication authorization evidence provenance is incomplete")
     validate_permission_evidence(
@@ -616,26 +750,27 @@ def _reverify_canonical_record(
     *,
     family: str,
     scope: str,
-    record: Mapping[str, Any],
+    record: Mapping[str, typing.Any],
     cutoff: datetime,
 ) -> None:
-    if record.get("_publication_verified") is not True:
+    record_id = _record_id(record)
+    if record_id is None or (family, scope, record_id) not in store._canonical_keys:
         raise SourceHandlingBlockedError("record was not published through canonical authority")
-    if family == "AUTHORIZATION_RULE" and record.get("_bootstrap_verified") is True:
-        if _record_id(record) != GENESIS_RULE_ID:
-            raise SourceHandlingBlockedError("invalid authorization-rule bootstrap identity")
+    if family == "AUTHORIZATION_RULE" and record_id == GENESIS_RULE_ID:
         return
 
     authorization = record.get("publication_authorization")
     if not isinstance(authorization, PublicationAuthorization):
         raise SourceHandlingBlockedError("canonical publication authorization is missing")
+    store._require_issued_authorization(authorization)
     if not strict_known_eligible(_authorization_times(authorization), cutoff):
         raise SourceHandlingBlockedError("publication authorization was not strict-known at cutoff")
 
-    payload = record.get("publication_payload")
-    if payload is None:
-        payload = _publication_payload_from_record(record)
-    verify_publication(authorization, family, scope, payload)
+    actual_payload = _publication_payload_from_record(record)
+    supplied_payload = record.get("publication_payload")
+    if supplied_payload is not None and _canonical_comparable(supplied_payload) != _canonical_comparable(actual_payload):
+        raise SourceHandlingBlockedError("persisted publication payload does not match canonical record body")
+    verify_publication(authorization, family, scope, actual_payload)
 
     rule = store.canonical_record_by_id("AUTHORIZATION_RULE", authorization.authorization_rule_id)
     if rule is None or not strict_known_eligible(rule, cutoff):
@@ -647,7 +782,7 @@ def _reverify_canonical_record(
     )
 
 
-def _record_authorization_rule_ids(*records: Mapping[str, Any]) -> set[str]:
+def _record_authorization_rule_ids(*records: Mapping[str, typing.Any]) -> set[str]:
     rule_ids: set[str] = set()
     for record in records:
         authorization = record.get("publication_authorization")
@@ -657,7 +792,31 @@ def _record_authorization_rule_ids(*records: Mapping[str, Any]) -> set[str]:
     return rule_ids
 
 
-def _publication_payload_from_record(record: Mapping[str, Any]) -> dict[str, Any]:
+def _validate_complete_disposition_map(
+    dispositions: Mapping[str, typing.Any],
+    registry: Mapping[str, typing.Any],
+) -> None:
+    field_map = registry.get("field_map")
+    if not isinstance(field_map, Mapping):
+        raise SourceHandlingBlockedError("field-category registry mapping is unavailable")
+    categories = {category for mapped in field_map.values() for category in _string_sequence(mapped)}
+    if not categories:
+        raise SourceHandlingBlockedError("field-category registry has no governed categories")
+
+    content_values = {"ALLOW", "REDACT", "OMIT", "DENY", "BLOCKED"}
+    lifecycle_values = {"ALLOW", "EXPIRE", "DELETE", "BLOCKED"}
+    for category in categories:
+        category_dispositions = dispositions.get(category)
+        if not isinstance(category_dispositions, Mapping):
+            raise SourceHandlingBlockedError("durable category disposition unavailable")
+        for operation in ("PERSIST", "READ_ACCESS", "RECONSTRUCT"):
+            if category_dispositions.get(operation) not in content_values:
+                raise SourceHandlingBlockedError("durable content disposition is missing or invalid")
+        if category_dispositions.get("DELETE_OR_EXPIRE") not in lifecycle_values:
+            raise SourceHandlingBlockedError("durable lifecycle disposition is missing or invalid")
+
+
+def _publication_payload_from_record(record: Mapping[str, typing.Any]) -> dict[str, typing.Any]:
     excluded = {
         "id",
         "fact_record_id",
@@ -666,10 +825,8 @@ def _publication_payload_from_record(record: Mapping[str, Any]) -> dict[str, Any
         "source_handling_policy_id",
         "publication_authorization",
         "publication_payload",
-        "_publication_verified",
-        "_bootstrap_verified",
     }
-    return {key: value for key, value in record.items() if key not in excluded}
+    return {key: copy.deepcopy(value) for key, value in record.items() if key not in excluded and not key.startswith("_")}
 
 
 def _authorization_times(authorization: PublicationAuthorization) -> dict[str, datetime]:
@@ -701,8 +858,8 @@ def _canonical_comparable(value: object) -> str:
     )
 
 
-def _deep_plain_mapping(value: Mapping[str, Any]) -> dict[str, Any]:
-    return json.loads(_canonical_comparable(value))
+def _deep_plain_mapping(value: Mapping[str, typing.Any]) -> dict[str, typing.Any]:
+    return typing.cast(dict[str, typing.Any], json.loads(_canonical_comparable(value)))
 
 
 def _json_default(value: object) -> object:
@@ -721,10 +878,13 @@ def _json_default(value: object) -> object:
             "known_at": value.known_at,
             "authorization_id": value.authorization_id,
             "authority_component_id": value.authority_component_id,
+            "evidence_ids": value.evidence_ids,
             "evidence_strength": value.evidence_strength,
             "evidence_method": value.evidence_method,
+            "verifier_ids": value.verifier_ids,
             "verifier_type": value.verifier_type,
             "released_restrictions": value.released_restrictions,
+            "predecessor_ids": value.predecessor_ids,
         }
     raise TypeError(f"value is not JSON serializable: {type(value).__name__}")
 
@@ -740,7 +900,7 @@ def _as_datetime(value: object) -> datetime | None:
     return None
 
 
-def _record_id(record: Mapping[str, Any]) -> str | None:
+def _record_id(record: Mapping[str, typing.Any]) -> str | None:
     for field in (
         "id",
         "fact_record_id",
@@ -756,7 +916,7 @@ def _record_id(record: Mapping[str, Any]) -> str | None:
     return None
 
 
-def _supersedes_id(record: Mapping[str, Any]) -> str | None:
+def _supersedes_id(record: Mapping[str, typing.Any]) -> str | None:
     for field in (
         "supersedes",
         "supersedes_record_id",
