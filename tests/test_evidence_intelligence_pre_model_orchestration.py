@@ -20,6 +20,10 @@ from hunter.evidence_intelligence.pre_model_persistence import (
     EvidencePreModelPersistenceRepository,
 )
 from hunter.evidence_intelligence.repository import EvidenceIntelligenceRepository
+from hunter.evidence_intelligence.retention import (
+    EvidenceRetentionPolicy,
+    EvidenceSourceHandlingClassification,
+)
 
 NOW = datetime(2026, 8, 9, tzinfo=UTC)
 RECORDED_AT = datetime(2026, 8, 9, 12, 0, tzinfo=UTC)
@@ -108,16 +112,7 @@ def test_orchestration_rejects_identity_mismatch(
         replay_mode="current",
         historical_cutoff=None,
     )
-    request = EvidencePreModelOrchestrationRequest(
-        document_id=document_id,
-        execution_owner_id="run-1",
-        intent=intent,
-        policy_id="policy-1",
-        policy_version="1",
-        required_span_ids=("span-a",),
-        specification=_spec(),
-        capability=_capability(),
-    )
+    request = _request(intent=intent, document_id=document_id)
 
     with pytest.raises(PreModelInvariantError, match=reason):
         orchestrate_evidence_pre_model(repository=repository, request=request, recorded_at=RECORDED_AT)
@@ -191,14 +186,14 @@ def test_orchestration_fails_closed_when_durability_fails(tmp_path, monkeypatch)
 
 
 def test_orchestration_propagates_retention_prohibition_to_durable_state(tmp_path) -> None:
-    """retain_exact_prompt=False must also strip source bytes from durable state."""
+    """A non-retainable governed classification must strip source bytes from durable state."""
     repository = EvidenceIntelligenceRepository(tmp_path / "evidence.sqlite")
     repository.save_document(_document())
     repository.save_span(_span("span-a", "confidential source text", 0))
 
     result = orchestrate_evidence_pre_model(
         repository=repository,
-        request=_request(retain_exact_prompt=False),
+        request=_request(classification="EPHEMERAL"),
         recorded_at=RECORDED_AT,
     )
 
@@ -218,10 +213,15 @@ def _request(
     *,
     required_span_ids: tuple[str, ...] = ("span-a",),
     intent: EvidenceExtractionIntent | None = None,
-    retain_exact_prompt: bool = True,
+    classification: str = "RETAINABLE",
+    document_id: str = "document-1",
+    # The governed classification covers the whole canonical inventory, not only
+    # the required spans: an unclassified optional span is non-retainable and
+    # would (correctly) suppress prompt retention.
+    classified_span_ids: tuple[str, ...] = ("span-a", "span-b", "span-c"),
 ) -> EvidencePreModelOrchestrationRequest:
     return EvidencePreModelOrchestrationRequest(
-        document_id="document-1",
+        document_id=document_id,
         execution_owner_id="run-1",
         intent=intent or _intent(),
         policy_id="policy-1",
@@ -229,7 +229,19 @@ def _request(
         required_span_ids=required_span_ids,
         specification=_spec(),
         capability=_capability(),
-        retain_exact_prompt=retain_exact_prompt,
+        retention_policy=EvidenceRetentionPolicy(
+            policy_id="retention-1",
+            version="1",
+            retainable_classifications=("RETAINABLE",),
+        ),
+        handling_classifications=tuple(
+            EvidenceSourceHandlingClassification(
+                span_id=span_id,
+                classification=classification,  # type: ignore[arg-type]
+                classification_source="test-governed-source-policy",
+            )
+            for span_id in classified_span_ids
+        ),
     )
 
 

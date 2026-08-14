@@ -7,6 +7,14 @@ from datetime import datetime
 from typing import Literal
 
 from hunter.evidence_intelligence.models import EvidenceSpan
+from hunter.evidence_intelligence.retention import (
+    PROMPT_RETENTION_PROHIBITED_REASON_CODE,
+    EvidenceRetentionDecision,
+    EvidenceRetentionPolicy,
+    EvidenceSourceHandlingClassification,
+    derive_retention_decision,
+    screen_source_handling,
+)
 
 ResolutionStatus = Literal[
     "RESOLVED",
@@ -224,7 +232,12 @@ class EvidencePreModelBuildRecord:
     prompt_artifact_id: str | None
     reconstruction_outcome: ReconstructionOutcome
     reason_codes: tuple[str, ...]
-    schema_version: str = "1"
+    retention_policy_identity: str
+    retention_decision_identity: str
+    # Schema 2 adds the governed retention identities. Retention was previously
+    # a caller boolean that left no replayable trace, so a build record written
+    # under schema 1 cannot prove which policy produced its retention outcome.
+    schema_version: str = "2"
 
     @property
     def build_record_id(self) -> str:
@@ -239,6 +252,7 @@ class EvidencePreModelBuildResult:
     prompt_plan: EvidencePromptPlan | None
     prompt_artifact: EvidencePromptArtifact | None
     build_record: EvidencePreModelBuildRecord
+    retention: EvidenceRetentionDecision
 
 
 def _validate_candidate_set(
@@ -335,10 +349,17 @@ def build_evidence_pre_model(
     capability: EvidenceCapabilityConstraint,
     canonical_inventory: tuple[EvidenceSpan, ...],
     candidate_span_ids: tuple[str, ...],
-    retain_exact_prompt: bool = True,
+    retention_policy: EvidenceRetentionPolicy,
+    handling_classifications: tuple[EvidenceSourceHandlingClassification, ...] = (),
     forced_final_size_delta: int = 0,
 ) -> EvidencePreModelBuildResult:
     """Build a deterministic provider-free Evidence Intelligence pre-model record.
+
+    Retention is derived from `retention_policy` and the governed per-span
+    handling classifications. There is deliberately no caller-supplied retention
+    flag: ADR 0031 requires the handling classification to come from governed
+    source policy, and a caller boolean records no policy identity and cannot be
+    replayed.
 
     `forced_final_size_delta` exists only as an invariant-test seam. Production callers
     must leave it at zero.
@@ -347,6 +368,15 @@ def build_evidence_pre_model(
     _validate_candidate_set(canonical_inventory, candidate_span_ids)
     ledger = _build_ledger(intent=intent, policy=policy, canonical_inventory=canonical_inventory)
     spans_by_id = {span.span_id: span for span in canonical_inventory}
+
+    # Screening precedes rendering so prohibited material never reaches an
+    # artifact, a hash, or a persisted payload.
+    resolved_classifications = screen_source_handling(
+        policy=retention_policy,
+        classifications=handling_classifications,
+        inventory_span_ids=tuple(sorted(spans_by_id)),
+        span_texts=tuple((span.span_id, span.excerpt) for span in canonical_inventory),
+    )
 
     required_unresolved = tuple(
         decision.reason_code for decision in ledger.decisions if decision.resolution_status == "UNRESOLVED_REQUIRED"
@@ -358,6 +388,15 @@ def build_evidence_pre_model(
     selected_optional = [
         decision.span_id for decision in ledger.decisions if decision.selected and not decision.required
     ]
+
+    # A failed build still records its governed retention decision. Under the
+    # previous caller-boolean model this case was undecidable at persistence
+    # time and forced the caller to assert an answer.
+    failed_retention = derive_retention_decision(
+        policy=retention_policy,
+        resolved_classifications=resolved_classifications,
+        included_span_ids=(),
+    )
 
     if required_unresolved:
         allocation = EvidenceContextAllocationResult(
@@ -381,8 +420,10 @@ def build_evidence_pre_model(
             prompt_artifact_id=None,
             reconstruction_outcome="UNAVAILABLE",
             reason_codes=allocation.reason_codes,
+            retention_policy_identity=failed_retention.policy_identity,
+            retention_decision_identity=failed_retention.decision_identity,
         )
-        return EvidencePreModelBuildResult(ledger, allocation, None, None, None, build)
+        return EvidencePreModelBuildResult(ledger, allocation, None, None, None, build, failed_retention)
 
     included = selected_required + selected_optional
     excluded: list[str] = []
@@ -426,8 +467,10 @@ def build_evidence_pre_model(
             prompt_artifact_id=None,
             reconstruction_outcome="UNAVAILABLE",
             reason_codes=allocation.reason_codes,
+            retention_policy_identity=failed_retention.policy_identity,
+            retention_decision_identity=failed_retention.decision_identity,
         )
-        return EvidencePreModelBuildResult(ledger, allocation, None, None, None, build)
+        return EvidencePreModelBuildResult(ledger, allocation, None, None, None, build, failed_retention)
 
     allocation_reasons = tuple(["BUDGET_EXCLUDED"] if excluded else [])
     allocation = EvidenceContextAllocationResult(
@@ -462,7 +505,13 @@ def build_evidence_pre_model(
     if final_size != allocation.preflight_size_bytes:
         raise PreModelInvariantError("PROMPT_PREFLIGHT_SIZE_MISMATCH")
 
-    artifact_content = content if retain_exact_prompt else ""
+    retention = derive_retention_decision(
+        policy=retention_policy,
+        resolved_classifications=resolved_classifications,
+        included_span_ids=tuple(included),
+    )
+
+    artifact_content = content if retention.retain_prompt_bytes else ""
     artifact = EvidencePromptArtifact(
         plan_id=prompt_plan.plan_id,
         ledger_id=ledger.ledger_id,
@@ -476,13 +525,13 @@ def build_evidence_pre_model(
         content_hash=hashlib.sha256(content.encode("utf-8")).hexdigest(),
         measured_size_bytes=final_size,
     )
-    reconstruction: ReconstructionOutcome = "AVAILABLE" if retain_exact_prompt else "UNAVAILABLE"
+    reconstruction: ReconstructionOutcome = "AVAILABLE" if retention.retain_prompt_bytes else "UNAVAILABLE"
     reasons = tuple(
         sorted(
             set(
                 allocation.reason_codes
                 + optional_unresolved
-                + (() if retain_exact_prompt else ("EXACT_PROMPT_RETENTION_PROHIBITED",))
+                + (() if retention.retain_prompt_bytes else (PROMPT_RETENTION_PROHIBITED_REASON_CODE,))
             )
         )
     )
@@ -496,5 +545,7 @@ def build_evidence_pre_model(
         prompt_artifact_id=artifact.artifact_id,
         reconstruction_outcome=reconstruction,
         reason_codes=reasons,
+        retention_policy_identity=retention.policy_identity,
+        retention_decision_identity=retention.decision_identity,
     )
-    return EvidencePreModelBuildResult(ledger, allocation, package, prompt_plan, artifact, build)
+    return EvidencePreModelBuildResult(ledger, allocation, package, prompt_plan, artifact, build, retention)

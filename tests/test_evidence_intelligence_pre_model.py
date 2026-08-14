@@ -13,6 +13,29 @@ from hunter.evidence_intelligence.pre_model import (
     PreModelInvariantError,
     build_evidence_pre_model,
 )
+from hunter.evidence_intelligence.retention import (
+    EvidenceRetentionPolicy,
+    EvidenceSourceHandlingClassification,
+)
+
+
+def _retention_policy() -> EvidenceRetentionPolicy:
+    return EvidenceRetentionPolicy(
+        policy_id="retention-1",
+        version="1",
+        retainable_classifications=("RETAINABLE",),
+    )
+
+
+def _classify(*span_ids: str, classification: str = "RETAINABLE") -> tuple[EvidenceSourceHandlingClassification, ...]:
+    return tuple(
+        EvidenceSourceHandlingClassification(
+            span_id=span_id,
+            classification=classification,  # type: ignore[arg-type]
+            classification_source="test-governed-source-policy",
+        )
+        for span_id in span_ids
+    )
 
 
 def _span(span_id: str, excerpt: str, *, status: str = "active") -> EvidenceSpan:
@@ -94,6 +117,8 @@ def test_candidate_set_mismatch_fails_closed() -> None:
             capability=_cap(),
             canonical_inventory=(span,),
             candidate_span_ids=(),
+            retention_policy=_retention_policy(),
+            handling_classifications=_classify("span-1"),
         )
 
 
@@ -107,6 +132,8 @@ def test_required_unresolved_span_blocks_ready() -> None:
         capability=_cap(),
         canonical_inventory=(span,),
         candidate_span_ids=("span-1",),
+        retention_policy=_retention_policy(),
+        handling_classifications=_classify("span-1"),
     )
 
     assert result.allocation.outcome == "REPLAN_REQUIRED"
@@ -126,6 +153,8 @@ def test_optional_unresolved_span_remains_explicit() -> None:
         capability=_cap(),
         canonical_inventory=(optional, required),
         candidate_span_ids=("span-2", "span-1"),
+        retention_policy=_retention_policy(),
+        handling_classifications=_classify("span-1", "span-2"),
     )
 
     assert result.allocation.outcome == "READY"
@@ -144,6 +173,8 @@ def test_identical_inputs_produce_stable_identities_and_prompt_bytes() -> None:
         capability=_cap(),
         canonical_inventory=spans,
         candidate_span_ids=("span-1", "span-2"),
+        retention_policy=_retention_policy(),
+        handling_classifications=_classify("span-1", "span-2"),
     )
 
     first = build_evidence_pre_model(**kwargs)
@@ -171,6 +202,8 @@ def test_budget_exclusion_is_explicit_and_not_silent_truncation() -> None:
         capability=_cap(1000),
         canonical_inventory=(required, optional),
         candidate_span_ids=("span-1", "span-2"),
+        retention_policy=_retention_policy(),
+        handling_classifications=_classify("span-1", "span-2"),
     )
 
     assert result.allocation.outcome == "READY"
@@ -190,6 +223,8 @@ def test_required_context_that_cannot_fit_is_insufficient_budget() -> None:
         capability=_cap(900),
         canonical_inventory=(required,),
         candidate_span_ids=("span-1",),
+        retention_policy=_retention_policy(),
+        handling_classifications=_classify("span-1"),
     )
 
     assert result.allocation.outcome == "INSUFFICIENT_BUDGET"
@@ -208,6 +243,8 @@ def test_final_compile_must_equal_preflight_size() -> None:
             capability=_cap(),
             canonical_inventory=(span,),
             candidate_span_ids=("span-1",),
+            retention_policy=_retention_policy(),
+            handling_classifications=_classify("span-1"),
             forced_final_size_delta=1,
         )
 
@@ -222,6 +259,8 @@ def test_retention_policy_records_reconstruction_unavailable_without_changing_ha
         capability=_cap(),
         canonical_inventory=(span,),
         candidate_span_ids=("span-1",),
+        retention_policy=_retention_policy(),
+        handling_classifications=_classify("span-1"),
     )
     not_retained = build_evidence_pre_model(
         execution_owner_id="run-1",
@@ -231,7 +270,8 @@ def test_retention_policy_records_reconstruction_unavailable_without_changing_ha
         capability=_cap(),
         canonical_inventory=(span,),
         candidate_span_ids=("span-1",),
-        retain_exact_prompt=False,
+        retention_policy=_retention_policy(),
+        handling_classifications=_classify("span-1", classification="EPHEMERAL"),
     )
 
     assert retained.prompt_artifact is not None

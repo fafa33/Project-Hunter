@@ -24,6 +24,29 @@ from hunter.evidence_intelligence.pre_model_persistence import (
     PreModelPersistenceLineageError,
 )
 from hunter.evidence_intelligence.repository import EvidenceIntelligenceRepository
+from hunter.evidence_intelligence.retention import (
+    EvidenceRetentionPolicy,
+    EvidenceSourceHandlingClassification,
+)
+
+
+def _retention_policy() -> EvidenceRetentionPolicy:
+    return EvidenceRetentionPolicy(
+        policy_id="retention-1",
+        version="1",
+        retainable_classifications=("RETAINABLE",),
+    )
+
+
+def _classify(*span_ids: str, classification: str = "RETAINABLE") -> tuple[EvidenceSourceHandlingClassification, ...]:
+    return tuple(
+        EvidenceSourceHandlingClassification(
+            span_id=span_id,
+            classification=classification,  # type: ignore[arg-type]
+            classification_source="test-governed-source-policy",
+        )
+        for span_id in span_ids
+    )
 
 
 def _span(
@@ -100,7 +123,7 @@ def _cap(maximum: int = 4096) -> EvidenceCapabilityConstraint:
     )
 
 
-def _ready_build(*, retain_exact_prompt: bool = True):
+def _ready_build(*, classification: str = "RETAINABLE"):
     inventory = (_span("span-1", "durable evidence"),)
     intent = _intent()
     policy = _policy(required=("span-1",))
@@ -114,7 +137,8 @@ def _ready_build(*, retain_exact_prompt: bool = True):
         capability=capability,
         canonical_inventory=inventory,
         candidate_span_ids=("span-1",),
-        retain_exact_prompt=retain_exact_prompt,
+        retention_policy=_retention_policy(),
+        handling_classifications=_classify("span-1", classification=classification),
     )
     return intent, policy, specification, capability, inventory, result
 
@@ -297,7 +321,7 @@ def test_reconstruction_ignores_later_current_span_content(tmp_path) -> None:
 def test_retention_prohibited_prompt_remains_explicitly_unavailable(tmp_path) -> None:
     repository = EvidenceIntelligenceRepository(tmp_path / "evidence.sqlite")
     persistence = EvidencePreModelPersistenceRepository(repository)
-    intent, policy, specification, capability, inventory, result = _ready_build(retain_exact_prompt=False)
+    intent, policy, specification, capability, inventory, result = _ready_build(classification="EPHEMERAL")
     recorded_at = datetime(2026, 8, 12, 18, 30, tzinfo=UTC)
     saved = persistence.save(
         intent=intent,
@@ -335,6 +359,8 @@ def test_replan_build_persists_exact_failure_lineage(tmp_path) -> None:
         capability=capability,
         canonical_inventory=inventory,
         candidate_span_ids=("span-1",),
+        retention_policy=_retention_policy(),
+        handling_classifications=_classify("span-1"),
     )
     recorded_at = datetime(2026, 8, 12, 18, 30, tzinfo=UTC)
     saved = persistence.save(
@@ -345,9 +371,6 @@ def test_replan_build_persists_exact_failure_lineage(tmp_path) -> None:
         canonical_inventory=inventory,
         build_result=result,
         recorded_at=recorded_at,
-        # A build that produced no prompt carries no derivable retention
-        # signal, so the governing policy must be stated explicitly.
-        retain_exact_source_bytes=True,
     )
 
     reconstructed = persistence.strict_known_reconstruction(saved.build_record_id, recorded_at)
@@ -397,7 +420,8 @@ def test_retention_prohibited_build_does_not_persist_source_bytes(tmp_path) -> N
         capability=capability,
         canonical_inventory=inventory,
         candidate_span_ids=("span-1",),
-        retain_exact_prompt=False,
+        retention_policy=_retention_policy(),
+        handling_classifications=_classify("span-1", classification="EPHEMERAL"),
     )
 
     repository = EvidenceIntelligenceRepository(tmp_path / "evidence.sqlite")
@@ -472,7 +496,8 @@ def test_explicit_retention_prohibition_covers_builds_without_a_prompt(tmp_path)
         capability=capability,
         canonical_inventory=inventory,
         candidate_span_ids=("span-1",),
-        retain_exact_prompt=False,
+        retention_policy=_retention_policy(),
+        handling_classifications=_classify("span-1", classification="EPHEMERAL"),
     )
     assert result.allocation.outcome == "REPLAN_REQUIRED"
     # The REPLAN path never reaches the retention reason code, so derivation
@@ -489,30 +514,36 @@ def test_explicit_retention_prohibition_covers_builds_without_a_prompt(tmp_path)
         canonical_inventory=inventory,
         build_result=result,
         recorded_at=datetime(2026, 8, 12, 18, 30, tzinfo=UTC),
-        retain_exact_source_bytes=False,
     )
 
     assert secret not in _persisted_payload_json(repository, saved.build_record_id)
 
 
 def test_retention_prohibition_rejects_a_build_that_still_carries_prompt_bytes(tmp_path) -> None:
-    """Fail closed rather than persist a prompt the policy forbids retaining."""
+    """Fail closed rather than persist a prompt the policy forbids retaining.
+
+    A caller can no longer express this contradiction through the save() API,
+    so it is forged directly on the build result. The durability boundary must
+    still refuse it: a decision saying "do not retain" alongside retained bytes
+    means one of the two is wrong, and persisting either would be a lie.
+    """
     intent, policy, specification, capability, inventory, result = _ready_build()
     assert result.prompt_artifact is not None
     assert result.prompt_artifact.content
 
+    tampered = replace(result, retention=replace(result.retention, retain_prompt_bytes=False))
+
     repository = EvidenceIntelligenceRepository(tmp_path / "evidence.sqlite")
     persistence = EvidencePreModelPersistenceRepository(repository)
-    with pytest.raises(PreModelPersistenceLineageError):
+    with pytest.raises(PreModelPersistenceLineageError, match="still carries exact prompt content"):
         persistence.save(
             intent=intent,
             policy=policy,
             specification=specification,
             capability=capability,
             canonical_inventory=inventory,
-            build_result=result,
+            build_result=tampered,
             recorded_at=datetime(2026, 8, 12, 18, 30, tzinfo=UTC),
-            retain_exact_source_bytes=False,
         )
 
 
@@ -563,6 +594,8 @@ def _other_build():
         capability=capability,
         canonical_inventory=inventory,
         candidate_span_ids=("span-9",),
+        retention_policy=_retention_policy(),
+        handling_classifications=_classify("span-9"),
     )
     return intent, policy, specification, capability, inventory, result
 
@@ -741,7 +774,7 @@ def test_retention_prohibited_unavailability_is_not_treated_as_corruption(tmp_pa
     """(b) The legitimate retention-prohibited path stays an explicit UNAVAILABLE."""
     repository = EvidenceIntelligenceRepository(tmp_path / "evidence.sqlite")
     persistence = EvidencePreModelPersistenceRepository(repository)
-    intent, policy, specification, capability, inventory, result = _ready_build(retain_exact_prompt=False)
+    intent, policy, specification, capability, inventory, result = _ready_build(classification="EPHEMERAL")
     recorded_at = datetime(2026, 8, 12, 18, 30, tzinfo=UTC)
     saved = persistence.save(
         intent=intent,
@@ -763,7 +796,7 @@ def test_retention_prohibited_unavailability_is_not_treated_as_corruption(tmp_pa
 # ====================================================================================
 
 
-def _replan_build(*, retain_exact_prompt: bool = True):
+def _replan_build(*, classification: str = "RETAINABLE"):
     inventory = (_span("span-1", "confidential-unresolved-source", status="source_changed"),)
     intent = _intent()
     policy = _policy(required=("span-1",))
@@ -777,40 +810,38 @@ def _replan_build(*, retain_exact_prompt: bool = True):
         capability=capability,
         canonical_inventory=inventory,
         candidate_span_ids=("span-1",),
-        retain_exact_prompt=retain_exact_prompt,
+        retention_policy=_retention_policy(),
+        handling_classifications=_classify("span-1", classification=classification),
     )
     return intent, policy, specification, capability, inventory, result
 
 
-def test_build_without_prompt_requires_explicit_retention_decision(tmp_path) -> None:
-    """A pre-prompt failure carries no retention signal, so it must not be guessed.
+def test_build_without_prompt_carries_its_own_governed_retention_decision(tmp_path) -> None:
+    """A pre-prompt failure now derives retention instead of asking the caller.
 
-    `retain_exact_prompt=False` never reaches the reason code on the
-    REPLAN_REQUIRED path, so defaulting to "retain" would silently persist
-    prohibited source bytes for any caller that forgot to repeat the policy.
-    ADR 0031 requires a handling classification to exist before durable
-    persistence, so refusing is the only correct behavior.
+    Under the caller-boolean model this state was undecidable at persistence
+    time, so the caller had to restate the policy. Deriving the decision from
+    governed classification at build time removes that hole entirely: the
+    REPLAN_REQUIRED build already knows its span is non-retainable.
     """
-    intent, policy, specification, capability, inventory, result = _replan_build(retain_exact_prompt=False)
+    intent, policy, specification, capability, inventory, result = _replan_build(classification="EPHEMERAL")
     assert result.allocation.outcome == "REPLAN_REQUIRED"
-    assert "EXACT_PROMPT_RETENTION_PROHIBITED" not in result.build_record.reason_codes
+    assert result.retention.retain_source_bytes is False
 
     repository = EvidenceIntelligenceRepository(tmp_path / "evidence.sqlite")
     persistence = EvidencePreModelPersistenceRepository(repository)
-    with pytest.raises(PreModelPersistenceLineageError, match="retain_exact_source_bytes"):
-        persistence.save(
-            intent=intent,
-            policy=policy,
-            specification=specification,
-            capability=capability,
-            canonical_inventory=inventory,
-            build_result=result,
-            recorded_at=datetime(2026, 8, 12, 18, 30, tzinfo=UTC),
-        )
+    saved = persistence.save(
+        intent=intent,
+        policy=policy,
+        specification=specification,
+        capability=capability,
+        canonical_inventory=inventory,
+        build_result=result,
+        recorded_at=datetime(2026, 8, 12, 18, 30, tzinfo=UTC),
+    )
 
-    with sqlite3.connect(repository.path) as connection:
-        rows = connection.execute("SELECT COUNT(*) FROM evidence_pre_model_build_bundles").fetchone()
-    assert rows[0] == 0
+    assert saved.exact_source_bytes_retained is False
+    assert "durable evidence" not in _persisted_payload_json(repository, saved.build_record_id)
 
 
 def test_derivable_retention_states_still_need_no_explicit_decision(tmp_path) -> None:
@@ -831,7 +862,7 @@ def test_derivable_retention_states_still_need_no_explicit_decision(tmp_path) ->
     )
     assert saved_retained.exact_source_bytes_retained is True
 
-    intent, policy, specification, capability, inventory, prohibited = _ready_build(retain_exact_prompt=False)
+    intent, policy, specification, capability, inventory, prohibited = _ready_build(classification="EPHEMERAL")
     saved_prohibited = persistence.save(
         intent=intent,
         policy=policy,
@@ -936,7 +967,7 @@ def test_tampered_excerpt_with_intact_hash_is_rejected(tmp_path) -> None:
 
 def test_tampered_excerpt_is_rejected_even_when_retention_is_prohibited(tmp_path) -> None:
     """content_hash is the full prompt digest even when bytes are not retained."""
-    intent, policy, specification, capability, inventory, result = _ready_build(retain_exact_prompt=False)
+    intent, policy, specification, capability, inventory, result = _ready_build(classification="EPHEMERAL")
     assert result.prompt_artifact is not None
     assert result.prompt_artifact.content == ""
     tampered = (replace(inventory[0], excerpt="entirely different source text"),)
@@ -1033,7 +1064,7 @@ def test_forged_package_ordering_fails_closed(tmp_path) -> None:
         )
 
 
-def _insufficient_budget_build(*, retain_exact_prompt: bool):
+def _insufficient_budget_build(*, classification: str = "RETAINABLE"):
     inventory = (_span("span-1", "confidential source material that will not fit"),)
     intent = _intent()
     policy = _policy(required=("span-1",))
@@ -1047,31 +1078,25 @@ def _insufficient_budget_build(*, retain_exact_prompt: bool):
         capability=capability,
         canonical_inventory=inventory,
         candidate_span_ids=("span-1",),
-        retain_exact_prompt=retain_exact_prompt,
+        retention_policy=_retention_policy(),
+        handling_classifications=_classify("span-1", classification=classification),
     )
     return intent, policy, specification, capability, inventory, result
 
 
 def test_insufficient_budget_with_prohibited_retention_cannot_persist_source_bytes(tmp_path) -> None:
     """The other pre-prompt exit must honour the retention policy identically."""
-    intent, policy, specification, capability, inventory, result = _insufficient_budget_build(retain_exact_prompt=False)
+    intent, policy, specification, capability, inventory, result = _insufficient_budget_build(
+        classification="EPHEMERAL"
+    )
     assert result.allocation.outcome == "INSUFFICIENT_BUDGET"
     assert "EXACT_PROMPT_RETENTION_PROHIBITED" not in result.build_record.reason_codes
 
     repository = EvidenceIntelligenceRepository(tmp_path / "evidence.sqlite")
     persistence = EvidencePreModelPersistenceRepository(repository)
 
-    # Undecidable without an explicit policy, exactly like REPLAN_REQUIRED.
-    with pytest.raises(PreModelPersistenceLineageError, match="retain_exact_source_bytes"):
-        persistence.save(
-            intent=intent,
-            policy=policy,
-            specification=specification,
-            capability=capability,
-            canonical_inventory=inventory,
-            build_result=result,
-            recorded_at=datetime(2026, 8, 12, 18, 30, tzinfo=UTC),
-        )
+    # Derived identically to REPLAN_REQUIRED: no caller input, no guess.
+    assert result.retention.retain_source_bytes is False
 
     saved = persistence.save(
         intent=intent,
@@ -1081,7 +1106,6 @@ def test_insufficient_budget_with_prohibited_retention_cannot_persist_source_byt
         canonical_inventory=inventory,
         build_result=result,
         recorded_at=datetime(2026, 8, 12, 18, 30, tzinfo=UTC),
-        retain_exact_source_bytes=False,
     )
     assert "confidential source material" not in _persisted_payload_json(repository, saved.build_record_id)
 
@@ -1130,6 +1154,8 @@ def test_mixed_spans_use_the_maximum_known_at_lower_bound(tmp_path) -> None:
         capability=capability,
         canonical_inventory=inventory,
         candidate_span_ids=("span-1", "span-2"),
+        retention_policy=_retention_policy(),
+        handling_classifications=_classify("span-1", "span-2"),
     )
 
     repository = EvidenceIntelligenceRepository(tmp_path / "evidence.sqlite")

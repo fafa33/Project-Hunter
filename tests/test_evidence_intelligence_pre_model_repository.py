@@ -18,6 +18,30 @@ from hunter.evidence_intelligence.pre_model_repository import (
     load_canonical_evidence_span_inventory,
 )
 from hunter.evidence_intelligence.repository import EvidenceIntelligenceRepository
+from hunter.evidence_intelligence.retention import (
+    EvidenceRetentionPolicy,
+    EvidenceSourceHandlingClassification,
+)
+
+
+def _retention_policy() -> EvidenceRetentionPolicy:
+    return EvidenceRetentionPolicy(
+        policy_id="retention-1",
+        version="1",
+        retainable_classifications=("RETAINABLE",),
+    )
+
+
+def _classify(*span_ids: str) -> tuple[EvidenceSourceHandlingClassification, ...]:
+    return tuple(
+        EvidenceSourceHandlingClassification(
+            span_id=span_id,
+            classification="RETAINABLE",
+            classification_source="test-governed-source-policy",
+        )
+        for span_id in span_ids
+    )
+
 
 NOW = datetime(2026, 8, 9, tzinfo=UTC)
 
@@ -68,6 +92,8 @@ def test_repository_backed_build_uses_exact_canonical_inventory(tmp_path) -> Non
         policy=_policy(),
         specification=_spec(),
         capability=_capability(),
+        retention_policy=_retention_policy(),
+        handling_classifications=_classify("span-a", "span-b"),
     )
 
     assert result.allocation.outcome == "READY"
@@ -111,6 +137,8 @@ def test_repository_backed_build_refuses_fake_historical_inventory(tmp_path) -> 
             ),
             specification=_spec(),
             capability=_capability(),
+            retention_policy=_retention_policy(),
+            handling_classifications=_classify("span-a", "span-b"),
         )
 
 

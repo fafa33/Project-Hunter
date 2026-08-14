@@ -15,6 +15,10 @@ from hunter.evidence_intelligence.pre_model import (
     build_evidence_pre_model,
 )
 from hunter.evidence_intelligence.repository import EvidenceIntelligenceRepository
+from hunter.evidence_intelligence.retention import (
+    EvidenceRetentionPolicy,
+    EvidenceSourceHandlingClassification,
+)
 
 
 class CanonicalEvidenceSpanInventoryError(RuntimeError):
@@ -93,7 +97,8 @@ def build_evidence_pre_model_from_repository(
     policy: EvidenceContextSelectionPolicy,
     specification: EvidencePromptSpecification,
     capability: EvidenceCapabilityConstraint,
-    retain_exact_prompt: bool = True,
+    retention_policy: EvidenceRetentionPolicy,
+    handling_classifications: tuple[EvidenceSourceHandlingClassification, ...] = (),
 ) -> EvidencePreModelBuildResult:
     """Build from the repository-owned canonical EvidenceSpan inventory.
 
@@ -118,7 +123,8 @@ def build_evidence_pre_model_from_repository(
         capability=capability,
         canonical_inventory=inventory.spans,
         candidate_span_ids=inventory.span_ids,
-        retain_exact_prompt=retain_exact_prompt,
+        retention_policy=retention_policy,
+        handling_classifications=handling_classifications,
     )
 
 
