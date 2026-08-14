@@ -1,506 +1,312 @@
-import os
-import sys
-from datetime import UTC, datetime
-from unittest.mock import patch
+"""Trusted admission for pull requests that change the controller's trust boundary.
 
-import pytest
+Admission is a pure function of a ``CurrentState`` snapshot. It never reads the
+network, never imports or executes the candidate pull request's code, and never
+consults the pull-request number, body, or labels to decide whether a pull
+request is a candidate -- only changed file paths from the GitHub API.
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "scripts")))
+Under the current-state reconciler the ordinary success path already re-reads
+live state once and requires the semantic revision to be unchanged. A
+controller-upgrade candidate additionally requires that second live reading to
+satisfy an independent re-derivation of every gate -- code that shares no logic
+with ``hunter_merge_readiness.decide``. That divergence check is what makes the
+kernel a real superset rather than a restatement, and it is exercised directly
+below by weakening ``decide`` and observing that a candidate is still held.
+"""
+
+from __future__ import annotations
 
 import hunter_controller_admission as admission
-import hunter_merge_readiness
-
-
-class MockGitHubServer:
-    """Minimal GitHub API mock covering everything the admission kernel and
-    evaluate() need: pulls, changed files, check-runs, statuses, comments,
-    reviews, review comments, and unresolved-thread GraphQL.
-    """
-
-    def __init__(self):
-        self.pulls = {}
-        self.pr_files = {}
-        self.check_runs = {}
-        self.statuses = {}
-        self.comments = {}
-        self.reviews = {}
-        self.review_comments = {}
-        self.refs = {}
-        self.published = []
-        self.gql_threads = 0
-        self.api_calls = []
-
-    def request_json(self, method, path, payload=None):
-        clean_path = path.split("?")[0]
-        self.api_calls.append((method, clean_path, payload))
-
-        if method == "POST":
-            if clean_path == "git/refs":
-                ref = payload["ref"]
-                if ref in self.refs:
-                    from urllib.error import HTTPError
-
-                    raise HTTPError("https://api.github.com", 422, "mock", {}, None)
-                self.refs[ref] = payload["sha"]
-                return {}
-            if clean_path.startswith("statuses/"):
-                sha = clean_path.split("/")[-1]
-                self.published.append((sha, payload["state"], payload["description"]))
-                self.statuses.setdefault(sha, []).append(
-                    {
-                        "context": payload["context"],
-                        "state": payload["state"],
-                        "description": payload["description"],
-                        "id": len(self.statuses[sha]) + 1,
-                        "created_at": datetime.now(UTC).isoformat(),
-                    }
-                )
-                return {}
-            return {}
-
-        if method == "DELETE":
-            if clean_path.startswith("git/refs/"):
-                ref = "refs/" + clean_path[len("git/refs/") :]
-                if ref in self.refs:
-                    del self.refs[ref]
-                return {}
-            return {}
-
-        if clean_path.startswith("pulls/"):
-            parts = clean_path.split("/")
-            pr_num = int(parts[1])
-            if len(parts) > 2:
-                sub_resource = parts[2]
-                if sub_resource == "files":
-                    return self.pr_files.get(pr_num, [])
-                if sub_resource == "reviews":
-                    return self.reviews.get(pr_num, [])
-                if sub_resource == "comments":
-                    return self.review_comments.get(pr_num, [])
-                return []
-            return self.pulls.get(pr_num, {})
-
-        if clean_path.startswith("commits/"):
-            parts = clean_path.split("/")
-            sha = parts[1]
-            sub_resource = parts[2]
-            if sub_resource == "statuses":
-                return self.statuses.get(sha, [])
-            if sub_resource == "check-runs":
-                return {"check_runs": self.check_runs.get(sha, [])}
-
-        if clean_path.startswith("issues/"):
-            parts = clean_path.split("/")
-            if parts[1] == "comments" and len(parts) > 3 and parts[3] == "reactions":
-                return []
-            if len(parts) > 2 and parts[2] == "comments":
-                pr_num = int(parts[1])
-                return self.comments.get(pr_num, [])
-
-        if clean_path == "pulls":
-            return list(self.pulls.values())
-
-        return {}
-
-    def graphql_json(self, query, variables):
-        self.api_calls.append(("POST", "graphql", variables))
-        return {
-            "repository": {
-                "pullRequest": {
-                    "reviewThreads": {
-                        "nodes": [{"isResolved": False}] * self.gql_threads,
-                        "pageInfo": {"hasNextPage": False, "endCursor": None},
-                    }
-                }
-            }
-        }
+import hunter_merge_readiness as core
+import pytest
+from hunter_readiness_harness import FakeGitHub, install, ready_pull_request
 
 
 @pytest.fixture
-def gh():
-    server = MockGitHubServer()
-    hunter_merge_readiness.repo = "fafa33/Project-Hunter"
-    hunter_merge_readiness.repo_owner = "fafa33"
-    hunter_merge_readiness.token = "fake-token"
-    hunter_merge_readiness.event_name = "schedule"
-    hunter_merge_readiness.run_url = "https://github.com/fafa33/Project-Hunter/actions/runs/1"
-    hunter_merge_readiness.active_sha = None
-    hunter_merge_readiness.latest_readiness = None
-
-    with (
-        patch("hunter_merge_readiness.request_json", side_effect=server.request_json),
-        patch("hunter_merge_readiness.graphql_json", side_effect=server.graphql_json),
-    ):
-        yield server
+def gh(monkeypatch):
+    server = FakeGitHub()
+    install(monkeypatch, server)
+    return server
 
 
-def green_check_runs(sha, governance_started_at="2026-08-12T10:00:00Z"):
-    return [
+def _candidate(gh: FakeGitHub, paths: list[str], number: int = 501) -> str:
+    head = "upgrade_head" * 3
+    gh.add_pull_request(number, head_sha=head, files=paths)
+    gh.green_required_checks(head)
+    gh.publish_governance(number)
+    return head
+
+
+# --- candidate detection ----------------------------------------------------
+
+
+def test_every_controller_owned_path_is_a_candidate():
+    for path in admission.CONTROLLER_OWNED_PATHS:
+        assert admission.touches_trust_boundary([path]) is True
+
+
+def test_the_trust_boundary_covers_the_controller_the_kernel_and_the_revision_definition():
+    assert admission.CONTROLLER_OWNED_PATHS == frozenset(
         {
-            "name": "Hunter Governance Review",
-            "status": "completed",
-            "conclusion": "success",
-            "started_at": governance_started_at,
-            "id": 100,
-        },
-        {"name": "Quality Gates", "status": "completed", "conclusion": "success", "id": 101},
-        {"name": "dependency-review", "status": "completed", "conclusion": "success", "id": 102},
-        {"name": "CodeQL", "status": "completed", "conclusion": "success", "id": 103},
-    ]
-
-
-def candidate_pr(sha="sha_upgrade", updated_at="2026-08-12T09:00:00Z"):
-    return {
-        "number": 251,
-        "state": "open",
-        "head": {"sha": sha},
-        "body": "Acceptance-criteria matrix:\n| Acceptance criterion | Status |\n| Wire up | PASS |\n- [x] `READY FOR REVIEW`",
-        "draft": False,
-        "user": {"login": "human"},
-        "created_at": "2026-08-12T06:00:00Z",
-        "updated_at": updated_at,
-    }
-
-
-# ====================================================================================
-# 11-12: candidate detection is deterministic and evidence-only
-# ====================================================================================
-
-
-def test_ordinary_pr_is_not_a_controller_upgrade_candidate(gh):
-    gh.pr_files[251] = [{"filename": "src/hunter/some_engine.py"}]
-    assert admission.is_controller_upgrade_candidate(251) is False
-
-
-@pytest.mark.parametrize(
-    "path",
-    [
-        "scripts/hunter_merge_readiness.py",
-        "scripts/hunter_merge_readiness_entrypoint.py",
-        "scripts/hunter_controller_admission.py",
-        ".github/workflows/hunter-merge-readiness.yml",
-    ],
-)
-def test_controller_upgrade_candidate_detected_for_each_owned_path(gh, path):
-    gh.pr_files[251] = [{"filename": "README.md"}, {"filename": path}]
-    assert admission.is_controller_upgrade_candidate(251) is True
-
-
-def test_candidate_detection_ignores_pr_body_and_number(gh):
-    """Detection must be evidence-only: a PR whose body/title claims to be a
-    controller upgrade, but whose changed files don't touch owned paths, is
-    NOT a candidate -- and vice versa. No PR-number-specific exception.
-    """
-    gh.pulls[999] = candidate_pr()
-    gh.pulls[999]["body"] = "This PR upgrades the Merge Readiness controller!!!"
-    gh.pr_files[999] = [{"filename": "src/hunter/unrelated.py"}]
-    assert admission.is_controller_upgrade_candidate(999) is False
-
-
-def test_candidate_detection_catches_rename_of_an_owned_path(gh):
-    """A PR that renames a controller-owned file away from its current name
-    must still be detected as a candidate via previous_filename, not just
-    the new filename.
-    """
-    gh.pr_files[251] = [
-        {
-            "filename": "scripts/hunter_merge_readiness_core.py",
-            "previous_filename": "scripts/hunter_merge_readiness.py",
+            "scripts/hunter_merge_readiness.py",
+            "scripts/hunter_controller_admission.py",
+            "scripts/hunter_governance_revision.py",
+            ".github/workflows/hunter-merge-readiness.yml",
         }
-    ]
-    assert admission.is_controller_upgrade_candidate(251) is True
-
-
-# ====================================================================================
-# 13/24: exact-head binding, replay rejection
-# ====================================================================================
-
-
-def test_admission_rejects_when_head_changed_since_evaluation_started(gh):
-    gh.pulls[251] = candidate_pr(sha="sha_new")
-    result = admission.evaluate_admission(
-        251,
-        candidate_pr(sha="sha_old"),
-        "sha_old",
-        green_check_runs("sha_old"),
-        datetime(2026, 8, 12, 10, 0, tzinfo=UTC),
     )
-    assert result.admitted is False
-    assert "head changed" in result.reason
 
 
-def test_admission_rejects_replay_of_evidence_bound_to_an_old_head(gh):
-    """Evidence (check-runs) gathered for an old head must not be usable to
-    admit a newer head, even if that evidence looks perfectly green -- the
-    fresh re-fetch inside evaluate_admission is what prevents this replay.
+def test_renaming_a_controller_owned_path_away_is_still_a_candidate():
+    """GitHub puts the owned source in `previous_filename`, not `filename`.
+
+    A pull request that renames a controller-owned file to a new path must not be
+    able to escape admission by making the owned path appear only on the "before"
+    side of the rename.
     """
-    gh.pulls[251] = candidate_pr(sha="sha_current")
-    stale_runs = green_check_runs("sha_replayed")
-    result = admission.evaluate_admission(
-        251,
-        candidate_pr(sha="sha_replayed"),
-        "sha_replayed",
-        stale_runs,
-        datetime(2026, 8, 12, 10, 0, tzinfo=UTC),
+    assert admission.touches_trust_boundary(["scripts/renamed_controller.py"]) is False
+    assert (
+        admission.touches_trust_boundary(["scripts/renamed_controller.py", "scripts/hunter_merge_readiness.py"]) is True
     )
+
+
+def test_ordinary_paths_are_not_candidates():
+    assert admission.touches_trust_boundary(["src/hunter/engine.py", "docs/README.md"]) is False
+    assert admission.touches_trust_boundary([]) is False
+
+
+def test_a_mixed_pull_request_is_still_a_candidate():
+    assert admission.touches_trust_boundary(["src/hunter/engine.py", "scripts/hunter_merge_readiness.py"]) is True
+
+
+def test_a_rename_of_a_controller_owned_file_is_detected_from_current_state(gh):
+    """End to end: the state reader must carry both sides of a rename."""
+    head = "rename_head" * 3
+    gh.add_pull_request(503, head_sha=head, files=["scripts/renamed_controller.py"])
+    gh.renames[503] = {"scripts/renamed_controller.py": "scripts/hunter_merge_readiness.py"}
+    gh.green_required_checks(head)
+    gh.publish_governance(503)
+
+    state = core.read_current_state(503)
+
+    assert state.changed_paths == ("scripts/renamed_controller.py",)
+    assert state.previous_paths == ("scripts/hunter_merge_readiness.py",)
+    assert state.controller_upgrade_candidate is True
+    # The governance fingerprint must still cover only what the evaluator reads,
+    # so the previous filename must not leak into it.
+    assert state.governance is not None
+    assert core.decide(state).state == "success"
+
+
+def test_candidacy_is_derived_only_from_changed_paths(gh):
+    head = _candidate(gh, ["scripts/hunter_merge_readiness.py"])
+    state = core.read_current_state(501)
+    assert state.controller_upgrade_candidate is True
+
+    gh.files[501] = ["src/hunter/engine.py"]
+    gh.statuses[head] = [s for s in gh.statuses[head] if s["context"] != "Hunter Governance Review"]
+    gh.publish_governance(501)
+
+    assert core.read_current_state(501).controller_upgrade_candidate is False
+
+
+# --- admission decisions ----------------------------------------------------
+
+
+def test_a_fully_green_candidate_is_admitted(gh):
+    _candidate(gh, ["scripts/hunter_merge_readiness.py"])
+
+    result = admission.evaluate_admission(core.read_current_state(501))
+
+    assert result.admitted is True
+    assert "controller-upgrade candidate admitted" in result.reason
+
+
+def test_a_candidate_with_an_incomplete_required_check_is_not_admitted(gh):
+    head = _candidate(gh, ["scripts/hunter_merge_readiness.py"])
+    gh.check_runs[head] = [run for run in gh.check_runs[head] if run["name"] != "CodeQL"]
+
+    result = admission.evaluate_admission(core.read_current_state(501))
+
     assert result.admitted is False
-    assert "head changed" in result.reason
+    assert "CodeQL=missing" in result.reason
 
 
-# ====================================================================================
-# 14-19: each required gate independently blocks admission
-# ====================================================================================
+def test_a_candidate_with_a_failing_required_check_is_not_admitted(gh):
+    head = _candidate(gh, ["scripts/hunter_controller_admission.py"])
+    gh.check_runs[head] = [run for run in gh.check_runs[head] if run["name"] != "Quality Gates"]
+    gh.set_check(head, "Quality Gates", status="completed", conclusion="failure")
 
+    result = admission.evaluate_admission(core.read_current_state(501))
 
-def test_ci_failure_blocks_admission(gh):
-    gh.pulls[251] = candidate_pr()
-    runs = green_check_runs("sha_upgrade")
-    runs[1]["conclusion"] = "failure"  # Quality Gates
-    result = admission.evaluate_admission(
-        251, gh.pulls[251], "sha_upgrade", runs, datetime(2026, 8, 12, 10, 0, tzinfo=UTC)
-    )
     assert result.admitted is False
     assert "Quality Gates=failure" in result.reason
 
 
-def test_codeql_failure_blocks_admission(gh):
-    gh.pulls[251] = candidate_pr()
-    runs = green_check_runs("sha_upgrade")
-    runs[3]["conclusion"] = "failure"  # CodeQL
-    result = admission.evaluate_admission(
-        251, gh.pulls[251], "sha_upgrade", runs, datetime(2026, 8, 12, 10, 0, tzinfo=UTC)
-    )
+def test_a_candidate_without_matching_governance_evidence_is_not_admitted(gh):
+    head = _candidate(gh, ["scripts/hunter_governance_revision.py"])
+    gh.statuses[head] = []
+
+    result = admission.evaluate_admission(core.read_current_state(501))
+
     assert result.admitted is False
-    assert "CodeQL=failure" in result.reason
+    assert "no Hunter Governance Review evidence" in result.reason
 
 
-def test_dependency_review_failure_blocks_admission(gh):
-    gh.pulls[251] = candidate_pr()
-    runs = green_check_runs("sha_upgrade")
-    runs[2]["conclusion"] = "failure"  # dependency-review
-    result = admission.evaluate_admission(
-        251, gh.pulls[251], "sha_upgrade", runs, datetime(2026, 8, 12, 10, 0, tzinfo=UTC)
-    )
-    assert result.admitted is False
-    assert "dependency-review=failure" in result.reason
+def test_a_candidate_with_failing_governance_is_not_admitted(gh):
+    head = _candidate(gh, ["scripts/hunter_merge_readiness.py"])
+    gh.statuses[head] = [s for s in gh.statuses[head] if s["context"] != "Hunter Governance Review"]
+    gh.publish_governance(501, "failure")
 
+    result = admission.evaluate_admission(core.read_current_state(501))
 
-def test_governance_failure_blocks_admission(gh):
-    gh.pulls[251] = candidate_pr()
-    runs = green_check_runs("sha_upgrade")
-    runs[0]["conclusion"] = "failure"  # Hunter Governance Review
-    result = admission.evaluate_admission(
-        251, gh.pulls[251], "sha_upgrade", runs, datetime(2026, 8, 12, 10, 0, tzinfo=UTC)
-    )
     assert result.admitted is False
     assert "Hunter Governance Review=failure" in result.reason
 
 
-def test_changes_requested_blocks_admission(gh):
-    gh.pulls[251] = candidate_pr()
-    gh.reviews[251] = [{"id": 1, "user": {"login": "reviewer"}, "state": "CHANGES_REQUESTED"}]
-    result = admission.evaluate_admission(
-        251,
-        gh.pulls[251],
-        "sha_upgrade",
-        green_check_runs("sha_upgrade"),
-        datetime(2026, 8, 12, 10, 0, tzinfo=UTC),
-    )
+def test_a_candidate_with_unresolved_threads_is_not_admitted(gh):
+    _candidate(gh, ["scripts/hunter_merge_readiness.py"])
+    gh.add_unresolved_thread(501, "THREAD_1")
+
+    result = admission.evaluate_admission(core.read_current_state(501))
+
     assert result.admitted is False
-    assert "reviewer" in result.reason
+    assert "unresolved review threads remain: 1" in result.reason
 
 
-def test_unresolved_review_thread_blocks_admission(gh):
-    gh.pulls[251] = candidate_pr()
-    gh.gql_threads = 1
-    result = admission.evaluate_admission(
-        251,
-        gh.pulls[251],
-        "sha_upgrade",
-        green_check_runs("sha_upgrade"),
-        datetime(2026, 8, 12, 10, 0, tzinfo=UTC),
-    )
+def test_a_candidate_with_changes_requested_is_not_admitted(gh):
+    _candidate(gh, ["scripts/hunter_merge_readiness.py"])
+    gh.request_changes(501, "reviewer")
+
+    result = admission.evaluate_admission(core.read_current_state(501))
+
     assert result.admitted is False
-    assert "unresolved review threads" in result.reason
+    assert "changes requested by: reviewer" in result.reason
 
 
-def test_stale_governance_for_real_semantic_change_blocks_admission(gh):
-    """A real edit (reflected here in updated_at, exactly like the raw core
-    invalidation primitive already tracks) that postdates Governance's start
-    must block admission, identically to how it blocks ordinary readiness.
-    """
-    gh.pulls[251] = candidate_pr(updated_at="2026-08-12T10:30:00Z")
-    result = admission.evaluate_admission(
-        251,
-        gh.pulls[251],
-        "sha_upgrade",
-        green_check_runs("sha_upgrade", governance_started_at="2026-08-12T10:00:00Z"),
-        datetime(2026, 8, 12, 10, 0, tzinfo=UTC),
-    )
+def test_a_candidate_with_unacknowledged_comments_is_not_admitted(gh):
+    _candidate(gh, ["scripts/hunter_merge_readiness.py"])
+    gh.add_comment(501, 900)
+
+    result = admission.evaluate_admission(core.read_current_state(501))
+
     assert result.admitted is False
-    assert "older than latest invalidation" in result.reason
+    assert "unacknowledged PR comments remain: 1" in result.reason
 
 
-# ====================================================================================
-# 20/21/22: full green candidate is admitted
-# ====================================================================================
+def test_a_draft_candidate_is_not_admitted(gh):
+    _candidate(gh, ["scripts/hunter_merge_readiness.py"])
+    gh.pulls[501]["draft"] = True
 
+    result = admission.evaluate_admission(core.read_current_state(501))
 
-def test_valid_exact_head_candidate_with_all_evidence_is_admitted(gh):
-    gh.pulls[251] = candidate_pr()
-    result = admission.evaluate_admission(
-        251,
-        gh.pulls[251],
-        "sha_upgrade",
-        green_check_runs("sha_upgrade"),
-        datetime(2026, 8, 12, 10, 0, tzinfo=UTC),
-    )
-    assert result.admitted is True
-    assert "admitted" in result.reason
-
-
-def test_current_generation_admits_next_generation_via_evaluate(gh):
-    """End-to-end: evaluate() itself, using only the currently-resident
-    module (representing 'the previous generation'), routes a controller-
-    upgrade candidate through admission and reaches success -- without
-    importing, executing, or reading the content of any candidate file.
-    """
-    hunter_merge_readiness.event_name = "schedule"
-    gh.pulls[251] = candidate_pr(sha="sha_upgrade")
-    gh.pr_files[251] = [{"filename": "scripts/hunter_merge_readiness.py"}]
-    gh.check_runs["sha_upgrade"] = green_check_runs("sha_upgrade")
-    gh.statuses["sha_upgrade"] = [
-        {"context": "Hunter Governance Review", "state": "success", "created_at": "2026-08-12T10:05:00Z", "id": 1},
-    ]
-
-    hunter_merge_readiness.evaluate(251, poll=False)
-
-    assert gh.published[-1][1] == "success"
-    assert "controller-upgrade PR admitted" in gh.published[-1][2]
-
-
-# ====================================================================================
-# 23: no privileged execution of candidate code (structural/static guarantee)
-# ====================================================================================
-
-
-def test_admission_kernel_never_imports_or_execs_dynamic_code():
-    """Static guarantee: the admission kernel source contains no dynamic
-    execution primitive that could run candidate-supplied code.
-    """
-    import pathlib
-
-    source = pathlib.Path(admission.__file__).read_text()
-    for forbidden in ("exec(", "eval(", "importlib", "subprocess", "__import__"):
-        assert forbidden not in source, f"admission kernel must never contain {forbidden!r}"
-
-
-def test_workflow_checkout_is_pinned_to_default_branch():
-    """Static guarantee: the controller workflow always checks out the
-    default branch, never the PR's own branch -- the security property this
-    entire admission design depends on.
-    """
-    import pathlib
-
-    workflow_path = pathlib.Path(__file__).resolve().parents[1] / ".github" / "workflows" / "hunter-merge-readiness.yml"
-    text = workflow_path.read_text()
-    assert "ref: ${{ github.event.repository.default_branch }}" in text
-
-
-# ====================================================================================
-# 25: no fabricated downgrade/version registry
-# ====================================================================================
-
-
-def test_admission_has_no_version_or_generation_registry(gh):
-    """This design deliberately has no persisted controller version/generation
-    number to compare against -- 'generation' is simply whatever is resident
-    on the default branch. A candidate whose diff conceptually reverts prior
-    controller behavior is evaluated through the exact same evidence gates
-    as any other candidate; there is no separate 'reject downgrades' rule to
-    test, and this test asserts that absence rather than fabricating one.
-    """
-    import inspect
-
-    signature = inspect.signature(admission.evaluate_admission)
-    for name in signature.parameters:
-        assert "version" not in name.lower()
-        assert "generation" not in name.lower()
-
-
-# ====================================================================================
-# 26: migration semantics are inherited from whatever is resident, not reinvented
-# ====================================================================================
-
-
-def test_admission_inherits_resident_freshness_primitive(gh, monkeypatch):
-    """evaluate_admission must call whatever get_latest_invalidation_time is
-    currently bound on the core module (e.g. a migration-aware, bot-exemption
-    -aware version installed by the entrypoint), not a private copy -- so a
-    legitimately stale candidate is still correctly rejected under whatever
-    policy is resident, without evaluate_admission needing its own migration
-    logic.
-    """
-    seen = {}
-
-    def fake_freshness(pr_number, pr):
-        seen["called_with_pr_number"] = pr_number
-        return datetime(2026, 8, 12, 10, 30, tzinfo=UTC)
-
-    monkeypatch.setattr(hunter_merge_readiness, "get_latest_invalidation_time", fake_freshness)
-    gh.pulls[251] = candidate_pr()
-
-    result = admission.evaluate_admission(
-        251,
-        gh.pulls[251],
-        "sha_upgrade",
-        green_check_runs("sha_upgrade", governance_started_at="2026-08-12T10:00:00Z"),
-        datetime(2026, 8, 12, 10, 0, tzinfo=UTC),
-    )
-
-    assert seen["called_with_pr_number"] == 251
     assert result.admitted is False
-    assert "older than latest invalidation" in result.reason
+    assert "draft" in result.reason
 
 
-# ====================================================================================
-# 27: post-upgrade / concurrent ordinary PRs are unaffected
-# ====================================================================================
+def test_admission_refuses_a_shared_head(gh):
+    """A green on a shared head would assert mergeability for the other PR too."""
+    shared = "shared_upgrade_head"
+    gh.add_pull_request(601, head_sha=shared, files=["scripts/hunter_merge_readiness.py"])
+    gh.add_pull_request(602, head_sha=shared, files=["scripts/hunter_merge_readiness.py"])
+    gh.green_required_checks(shared)
+    gh.publish_governance(601)
+    gh.publish_governance(602)
+
+    for number, other in ((601, 602), (602, 601)):
+        result = admission.evaluate_admission(core.read_current_state(number))
+        assert result.admitted is False
+        assert f"head is shared with open PR #{other}" in result.reason
 
 
-def test_ordinary_pr_evaluated_after_upgrade_candidate_uses_normal_policy(gh):
-    """Processing a controller-upgrade candidate must not leak any state into
-    the evaluation of an ordinary PR reconciled in the same sweep.
+def test_admission_rejects_evidence_belonging_to_another_pull_request(gh):
+    """Admission re-proves ownership; it never inherits the caller's conclusion.
+
+    Uses an unshared head so the rejection can only come from the ownership
+    check, not from the shared-head rule.
     """
-    hunter_merge_readiness.event_name = "schedule"
+    head = "foreign_evidence_head"
+    gh.add_pull_request(603, head_sha=head, files=["scripts/hunter_merge_readiness.py"])
+    gh.green_required_checks(head)
+    gh.publish_governance(603, marked_pull_request=999)
 
-    gh.pulls[251] = candidate_pr(sha="sha_upgrade")
-    gh.pr_files[251] = [{"filename": "scripts/hunter_merge_readiness.py"}]
-    gh.check_runs["sha_upgrade"] = green_check_runs("sha_upgrade")
-    gh.statuses["sha_upgrade"] = [
-        {"context": "Hunter Governance Review", "state": "success", "created_at": "2026-08-12T10:05:00Z", "id": 1},
-    ]
-    hunter_merge_readiness.evaluate(251, poll=False)
-    assert gh.published[-1][1] == "success"
-    assert "controller-upgrade" in gh.published[-1][2]
+    result = admission.evaluate_admission(core.read_current_state(603))
 
-    gh.published.clear()
-    gh.pulls[300] = {
-        "number": 300,
-        "state": "open",
-        "head": {"sha": "sha_ordinary"},
-        "body": "Acceptance-criteria matrix:\n| Acceptance criterion | Status |\n| Wire up | PASS |\n- [x] `READY FOR REVIEW`",
-        "draft": False,
-        "user": {"login": "human"},
-        "updated_at": "2026-08-12T09:00:00Z",
-    }
-    gh.pr_files[300] = [{"filename": "src/hunter/unrelated.py"}]
-    gh.check_runs["sha_ordinary"] = green_check_runs("sha_ordinary", governance_started_at="2026-08-12T09:30:00Z")
-    gh.statuses["sha_ordinary"] = [
-        {"context": "Hunter Governance Review", "state": "success", "created_at": "2026-08-12T09:35:00Z", "id": 1},
-    ]
+    assert result.admitted is False
+    assert "no Hunter Governance Review evidence" in result.reason
 
-    hunter_merge_readiness.evaluate(300, poll=False)
 
-    assert gh.published[-1][1] == "success"
-    assert "controller-upgrade" not in gh.published[-1][2]
+# --- integration with the reconciler ---------------------------------------
+
+
+def test_the_success_description_records_that_admission_applied(gh):
+    _candidate(gh, ["scripts/hunter_merge_readiness.py"])
+
+    decision = core.reconcile_pr(501)
+
+    assert decision.state == "success"
+    assert "controller-upgrade PR admitted by the current trusted generation" in decision.description
+
+
+def test_a_non_candidate_success_description_does_not_claim_admission(gh):
+    ready_pull_request(gh, number=777, head="ordinary_head" * 2)
+
+    decision = core.reconcile_pr(777)
+
+    assert decision.state == "success"
+    assert "controller-upgrade" not in decision.description
+
+
+def test_admission_catches_a_weakened_readiness_decision_for_a_candidate(gh, monkeypatch):
+    """The independent re-derivation is what makes admission a real superset.
+
+    ``evaluate_admission`` deliberately re-derives every gate instead of reusing
+    ``decide``. This test weakens ``decide`` so that it green-lights a pull
+    request with an unresolved review thread, and shows that a pull request
+    touching the trust boundary is still held pending -- while an ordinary pull
+    request under the same weakened rule is not. That difference is the entire
+    value of the kernel; without it this test would fail.
+    """
+    _candidate(gh, ["scripts/hunter_merge_readiness.py"], number=501)
+    gh.add_unresolved_thread(501, "THREAD_1")
+
+    ordinary_head = "ordinary_head" * 2
+    gh.add_pull_request(502, head_sha=ordinary_head, files=["src/hunter/engine.py"])
+    gh.green_required_checks(ordinary_head)
+    gh.publish_governance(502)
+    gh.add_unresolved_thread(502, "THREAD_2")
+
+    monkeypatch.setattr(
+        core,
+        "decide",
+        lambda state: core.ReadinessDecision("success", "weakened rule says ready"),
+    )
+
+    candidate_decision = core.reconcile_pr(501)
+    ordinary_decision = core.reconcile_pr(502)
+
+    assert ordinary_decision.state == "success"
+    assert candidate_decision.state == "pending"
+    assert "Controller-upgrade admission pending" in candidate_decision.description
+    assert "unresolved review threads remain: 1" in candidate_decision.description
+
+
+def test_a_candidate_is_held_pending_when_state_moves_during_confirmation(gh):
+    """A success decision is never published against state that moved underneath it."""
+    _candidate(gh, ["scripts/hunter_merge_readiness.py"])
+    original_read = core.read_current_state
+    reads = {"n": 0}
+
+    def racing_read(pr_number):
+        reads["n"] += 1
+        if reads["n"] == 2:
+            gh.add_unresolved_thread(pr_number, "THREAD_RACE")
+        return original_read(pr_number)
+
+    core.read_current_state = racing_read
+    try:
+        decision = core.reconcile_pr(501)
+    finally:
+        core.read_current_state = original_read
+
+    assert decision.state == "pending"
+    assert "changed while readiness was being confirmed" in decision.description
