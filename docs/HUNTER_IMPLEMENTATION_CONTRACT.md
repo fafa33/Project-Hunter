@@ -184,17 +184,22 @@ the double against the real semantics being relied upon.
 
 A regression test is not evidence merely because it passes.
 
-For every fix to a defect classified as a **blocking finding** under
-`docs/AI_REVIEW_PROTOCOL.md` — equivalently, a Merge Blocker — the implementation
-shall answer:
+Where a fix to a defect classified as a **blocking finding** under
+`docs/AI_REVIEW_PROTOCOL.md` — equivalently, a Merge Blocker — is presented as
+verified by a regression test, the implementation shall answer:
 
 > Would this test fail if the fix were removed?
 
 This applies whether the defect was found by review, by testing, or in
 production, and it shall be demonstrated rather than assumed — by reverting or
-disabling the fix and observing the test fail, or by an equivalent demonstration
-of the failing counterfactual. A test that still passes without the fix does not
-prove the fix and shall be corrected before the fix is presented as verified.
+disabling the fix and observing the test fail. A test that still passes without
+the fix does not prove the fix and shall be corrected before the fix is presented
+as verified.
+
+A blocking finding with no behavioural surface — a documentation contradiction,
+an absent migration strategy — is verified by the evidence appropriate to it.
+This clause requires no test where none would be meaningful; it governs the
+tests that are offered, not whether a test must exist.
 
 For non-blocking fixes the demonstration is recommended but not required.
 
