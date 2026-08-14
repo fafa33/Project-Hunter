@@ -14,7 +14,9 @@ GOLDEN = "41119071db0f5c2a2eacfe2848ab6696355195e1ac9c671ee33c4128793aa70a"
 
 
 def _harness() -> ModuleType:
-    spec = importlib.util.spec_from_file_location("source_handling_runtime_harness_enforcement", HARNESS)
+    spec = importlib.util.spec_from_file_location(
+        "source_handling_runtime_harness_enforcement", HARNESS
+    )
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -71,7 +73,9 @@ def _publish(
     record_id: str,
     payload: dict[str, object],
 ) -> None:
-    authorization = _authorization(h, store, family=family, scope=scope, payload=payload)
+    authorization = _authorization(
+        h, store, family=family, scope=scope, payload=payload
+    )
     store.publish(
         family=family,
         scope=scope,
@@ -121,7 +125,14 @@ def _ready_store(
         "requested_change": "PERMISSIVE_GENESIS",
         **_times(),
     }
-    _publish(h, store, family="FACT", scope="doc-1", record_id="fact-v1", payload=fact_payload)
+    _publish(
+        h,
+        store,
+        family="FACT",
+        scope="doc-1",
+        record_id="fact-v1",
+        payload=fact_payload,
+    )
 
     registry_payload = {
         "scope": "registry:source-handling:v1",
@@ -148,7 +159,9 @@ def _ready_store(
             "reconstruction_decision": "ALLOW",
             "access_decision": "ALLOW",
             "deletion_lifecycle_decision": "ALLOW",
-            "durable_dispositions": {field_category: _complete_disposition(persist)},
+            "durable_dispositions": {
+                field_category: _complete_disposition(persist)
+            },
         },
         "requested_change": "PERMISSIVE_GENESIS",
         **_times(),
@@ -174,7 +187,10 @@ def test_repository_publication_rejects_non_authoritative_non_null_token() -> No
             family="FACT",
             scope="doc-1",
             expected_current_head_id=None,
-            record={"id": "forged", "publication_authorization": {"looks": "non-null"}},
+            record={
+                "id": "forged",
+                "publication_authorization": {"looks": "non-null"},
+            },
         )
 
 
@@ -186,7 +202,9 @@ def test_caller_constructed_but_unissued_authorization_cannot_publish() -> None:
     forged = h.publication_authorization(
         publication_kind="FACT",
         governed_subject_scope="doc-1",
-        authorized_payload_sha256=h.canonical_publication_digest("FACT", "doc-1", payload),
+        authorized_payload_sha256=h.canonical_publication_digest(
+            "FACT", "doc-1", payload
+        ),
         authorization_rule_id="AUTHORIZATION_RULE_V1",
         authorization_id="forged-auth",
         evidence_ids=("forged-evidence",),
@@ -212,7 +230,13 @@ def test_repository_publication_recomputes_exact_candidate_body_not_supplied_pay
     h.publish_genesis_rule(store, _rule_fixture(), expected_golden_sha256=GOLDEN)
 
     authorized_payload = {"scope": "doc-1", "value": "authorized", **_times()}
-    authorization = _authorization(h, store, family="FACT", scope="doc-1", payload=authorized_payload)
+    authorization = _authorization(
+        h,
+        store,
+        family="FACT",
+        scope="doc-1",
+        payload=authorized_payload,
+    )
 
     with pytest.raises(h.blocked_error):
         store.publish(
@@ -297,7 +321,12 @@ def test_persistence_independently_resolves_rederives_and_accepts_matching_autho
         fact_scope="doc-1",
         policy_scope="policy:source-handling:v1",
         cutoff=_utc("2026-08-14T12:00:00Z"),
-        payload={"audit": {"value": "safe", "derived_from_protected_content": False}},
+        payload={
+            "audit": {
+                "value": "safe",
+                "derived_from_protected_content": False,
+            }
+        },
     )
 
     assert decision["fact_record_id"] == "fact-v1"
@@ -320,7 +349,9 @@ def test_persistence_rejects_caller_decision_even_when_payload_itself_would_be_a
         "reconstruction_decision": "ALLOW",
         "access_decision": "ALLOW",
         "deletion_lifecycle_decision": "ALLOW",
-        "durable_dispositions": {"SAFE_CONTROL_ID": _complete_disposition()},
+        "durable_dispositions": {
+            "SAFE_CONTROL_ID": _complete_disposition()
+        },
     }
 
     with pytest.raises(h.blocked_error):
@@ -329,14 +360,23 @@ def test_persistence_rejects_caller_decision_even_when_payload_itself_would_be_a
             fact_scope="doc-1",
             policy_scope="policy:source-handling:v1",
             cutoff=_utc("2026-08-14T12:00:00Z"),
-            payload={"audit": {"value": "safe", "derived_from_protected_content": False}},
+            payload={
+                "audit": {
+                    "value": "safe",
+                    "derived_from_protected_content": False,
+                }
+            },
             supplied_decision=forged,
         )
 
 
 def test_persistence_enforces_rederived_durable_disposition_not_caller_payload_preference() -> None:
     h = _harness()
-    store = _ready_store(h, persist="DENY", field_category="SAFE_CONTROL_ID")
+    store = _ready_store(
+        h,
+        persist="DENY",
+        field_category="SAFE_CONTROL_ID",
+    )
 
     with pytest.raises(h.blocked_error):
         h.enforce_persistence(
@@ -344,7 +384,12 @@ def test_persistence_enforces_rederived_durable_disposition_not_caller_payload_p
             fact_scope="doc-1",
             policy_scope="policy:source-handling:v1",
             cutoff=_utc("2026-08-14T12:00:00Z"),
-            payload={"audit": {"value": "safe", "derived_from_protected_content": False}},
+            payload={
+                "audit": {
+                    "value": "safe",
+                    "derived_from_protected_content": False,
+                }
+            },
         )
 
 
@@ -392,7 +437,11 @@ def test_complete_durable_operation_map_is_required_before_persistence() -> None
 
 def test_secret_source_cannot_use_risky_secondary_category_even_with_plain_scalar() -> None:
     h = _harness()
-    store = _ready_store(h, secret_presence=["SECRET_PRESENT"], field_category="AUDIT_FIELD")
+    store = _ready_store(
+        h,
+        secret_presence=["SECRET_PRESENT"],
+        field_category="AUDIT_FIELD",
+    )
 
     with pytest.raises(h.blocked_error):
         h.enforce_persistence(
@@ -404,14 +453,26 @@ def test_secret_source_cannot_use_risky_secondary_category_even_with_plain_scala
         )
 
 
-def test_counterfactual_payload_binding_mutation_is_non_vacuous(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_counterfactual_payload_binding_mutation_is_non_vacuous(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     h = _harness()
     store = h.authority_store()
     h.publish_genesis_rule(store, _rule_fixture(), expected_golden_sha256=GOLDEN)
 
     payload = {"scope": "doc-1", "value": "authorized", **_times()}
-    authorization = _authorization(h, store, family="FACT", scope="doc-1", payload=payload)
-    monkeypatch.setattr(h.runtime_module, "verify_publication", lambda *_args, **_kwargs: None)
+    authorization = _authorization(
+        h,
+        store,
+        family="FACT",
+        scope="doc-1",
+        payload=payload,
+    )
+    monkeypatch.setattr(
+        h.runtime_module,
+        "verify_publication",
+        lambda *_args, **_kwargs: None,
+    )
 
     store.publish(
         family="FACT",
@@ -430,14 +491,27 @@ def test_counterfactual_persistence_field_enforcement_mutation_is_non_vacuous(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     h = _harness()
-    store = _ready_store(h, persist="DENY", field_category="SAFE_CONTROL_ID")
+    store = _ready_store(
+        h,
+        persist="DENY",
+        field_category="SAFE_CONTROL_ID",
+    )
 
-    monkeypatch.setattr(h.runtime_module, "validate_durable_payload", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        h.runtime_module,
+        "validate_durable_payload",
+        lambda **_kwargs: None,
+    )
     decision = h.enforce_persistence(
         store,
         fact_scope="doc-1",
         policy_scope="policy:source-handling:v1",
         cutoff=_utc("2026-08-14T12:00:00Z"),
-        payload={"audit": {"value": "would-have-been-denied", "derived_from_protected_content": False}},
+        payload={
+            "audit": {
+                "value": "would-have-been-denied",
+                "derived_from_protected_content": False,
+            }
+        },
     )
     assert decision["durable_dispositions"]["SAFE_CONTROL_ID"]["PERSIST"] == "DENY"
