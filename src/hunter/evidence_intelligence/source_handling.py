@@ -44,6 +44,7 @@ class AuthorityStore:
         self._records: dict[tuple[str, str], list[dict[str, typing.Any]]] = {}
         self._canonical_keys: set[tuple[str, str, str]] = set()
         self._issued_authorizations: dict[str, PublicationAuthorization] = {}
+        self._provenance_resolver: typing.Callable[[str, str, datetime], Mapping[str, typing.Any] | None] | None = None
         self._lock = threading.RLock()
 
     def publish(
@@ -59,6 +60,7 @@ class AuthorityStore:
             if not isinstance(authorization, PublicationAuthorization):
                 raise SourceHandlingBlockedError("governed publication authorization required")
             self._require_issued_authorization(authorization)
+            self._validate_authorization_provenance(authorization, cutoff=authorization.known_at)
 
             actual_payload = _publication_payload_from_record(record)
             supplied_payload = record.get("publication_payload")
@@ -72,16 +74,20 @@ class AuthorityStore:
                 raise SourceHandlingBlockedError("publication authorization temporal state is invalid")
 
             rule = self._resolve_rule_for_authorization(authorization)
+            derived_change, derived_releases = _derive_publication_change(
+                self, family=family, scope=scope, candidate=actual_payload
+            )
+            if frozenset(authorization.released_restrictions) != derived_releases:
+                raise SourceHandlingBlockedError("released restrictions do not match the candidate history")
             _validate_publication_authorization_evidence(
                 authorization=authorization,
                 authorization_rule=rule,
-                requested_change=str(record.get("requested_change", "PERMISSIVE_GENESIS")),
+                requested_change=derived_change,
             )
 
             current = self.current_canonical_head_id(family, scope)
             if current != expected_current_head_id:
                 raise SourceHandlingBlockedError("canonical authority head changed; re-resolution required")
-
             supersedes = _supersedes_id(record)
             if current is None:
                 if supersedes is not None:
@@ -94,7 +100,6 @@ class AuthorityStore:
             candidate_id = _record_id(candidate)
             if candidate_id is None:
                 raise SourceHandlingBlockedError("authority record identity is required")
-
             self.compare_and_append(
                 family=family,
                 scope=scope,
@@ -182,12 +187,67 @@ class AuthorityStore:
         if not authorization.authorization_id or issued != authorization:
             raise SourceHandlingBlockedError("publication authorization was not issued by source handling authority")
 
+    def _install_provenance_resolver(
+        self,
+        resolver: typing.Callable[[str, str, datetime], Mapping[str, typing.Any] | None],
+    ) -> None:
+        with self._lock:
+            if self._provenance_resolver is not None and self._provenance_resolver is not resolver:
+                raise SourceHandlingBlockedError("canonical provenance resolver is immutable once installed")
+            self._provenance_resolver = resolver
+
+    def _resolve_provenance_record(
+        self,
+        provenance_id: str,
+        provenance_kind: str,
+        cutoff: datetime,
+    ) -> Mapping[str, typing.Any]:
+        resolver = self._provenance_resolver
+        if resolver is None:
+            raise SourceHandlingBlockedError("canonical provenance resolver is unavailable")
+        record = resolver(provenance_id, provenance_kind, cutoff)
+        if not isinstance(record, Mapping):
+            raise SourceHandlingBlockedError("canonical provenance record is unavailable")
+        if record.get("provenance_id") != provenance_id or record.get("provenance_kind") != provenance_kind:
+            raise SourceHandlingBlockedError("canonical provenance identity or kind mismatch")
+        if not strict_known_eligible(record, cutoff):
+            raise SourceHandlingBlockedError("canonical provenance was not strict-known at cutoff")
+        return record
+
+    def _validate_authorization_provenance(
+        self,
+        authorization: PublicationAuthorization,
+        *,
+        cutoff: datetime,
+    ) -> None:
+        evidence_records = [
+            self._resolve_provenance_record(evidence_id, "EVIDENCE", cutoff)
+            for evidence_id in authorization.evidence_ids
+        ]
+        verifier_records = [
+            self._resolve_provenance_record(verifier_id, "VERIFIER", cutoff)
+            for verifier_id in authorization.verifier_ids
+        ]
+        if not evidence_records or not verifier_records:
+            raise SourceHandlingBlockedError("canonical publication provenance is incomplete")
+        if any(record.get("evidence_strength") != authorization.evidence_strength for record in evidence_records):
+            raise SourceHandlingBlockedError(
+                "caller evidence-strength classification does not match canonical provenance"
+            )
+        if any(record.get("evidence_method") != authorization.evidence_method for record in evidence_records):
+            raise SourceHandlingBlockedError(
+                "caller evidence-method classification does not match canonical provenance"
+            )
+        if any(record.get("verifier_type") != authorization.verifier_type for record in verifier_records):
+            raise SourceHandlingBlockedError("caller verifier classification does not match canonical provenance")
+
     def _resolve_rule_for_authorization(self, authorization: PublicationAuthorization) -> Mapping[str, typing.Any]:
-        rule = self.canonical_record_by_id("AUTHORIZATION_RULE", authorization.authorization_rule_id)
-        if rule is None:
-            raise SourceHandlingBlockedError("authorization rule is not canonical")
-        if not strict_known_eligible(rule, authorization.known_at):
-            raise SourceHandlingBlockedError("authorization rule was not strict-known for publication")
+        records = self.canonical_records("AUTHORIZATION_RULE", "SOURCE_HANDLING")
+        if not records:
+            raise SourceHandlingBlockedError("authorization-rule history is unavailable")
+        rule = strict_known_head(records, cutoff=authorization.known_at, scope="SOURCE_HANDLING")
+        if _record_id(rule) != authorization.authorization_rule_id:
+            raise SourceHandlingBlockedError("authorization names a stale or non-applicable authorization rule")
         return rule
 
 
@@ -267,12 +327,14 @@ def issue_publication_authorization(
     released_restrictions: set[str] | frozenset[str] | None = None,
     predecessor_ids: Sequence[str] = (),
 ) -> PublicationAuthorization:
+    del requested_change
     if not authorization_id or not evidence_ids or not verifier_ids:
         raise SourceHandlingBlockedError("authorization requires immutable evidence and verifier identities")
-    rule = store.canonical_record_by_id("AUTHORIZATION_RULE", authorization_rule_id)
-    if rule is None or not strict_known_eligible(rule, known_at):
-        raise SourceHandlingBlockedError("exact historical authorization rule is unavailable")
-
+    derived_change, derived_releases = _derive_publication_change(
+        store, family=publication_kind, scope=governed_subject_scope, candidate=payload
+    )
+    if frozenset(released_restrictions or ()) != derived_releases:
+        raise SourceHandlingBlockedError("released restrictions must be derived exactly from candidate history")
     digest = canonical_publication_digest(publication_kind, governed_subject_scope, payload)
     authorization = publication_authorization(
         authorization_id=authorization_id,
@@ -288,14 +350,14 @@ def issue_publication_authorization(
         effective_from=effective_from,
         recorded_at=recorded_at,
         known_at=known_at,
-        released_restrictions=released_restrictions,
+        released_restrictions=derived_releases,
         predecessor_ids=predecessor_ids,
     )
+    store._validate_authorization_provenance(authorization, cutoff=known_at)
+    rule = store._resolve_rule_for_authorization(authorization)
     verify_publication(authorization, publication_kind, governed_subject_scope, payload)
     _validate_publication_authorization_evidence(
-        authorization=authorization,
-        authorization_rule=rule,
-        requested_change=requested_change,
+        authorization=authorization, authorization_rule=rule, requested_change=derived_change
     )
     store._register_authorization(authorization)
     return authorization
@@ -492,8 +554,14 @@ def resolve_canonical_head(
     return head
 
 
-def authority_store() -> AuthorityStore:
-    return AuthorityStore()
+def authority_store(
+    *,
+    provenance_resolver: typing.Callable[[str, str, datetime], Mapping[str, typing.Any] | None] | None = None,
+) -> AuthorityStore:
+    store = AuthorityStore()
+    if provenance_resolver is not None:
+        store._install_provenance_resolver(provenance_resolver)
+    return store
 
 
 def restrictive_fact_join(facts: Sequence[Mapping[str, typing.Any]]) -> dict[str, typing.Any]:
@@ -547,6 +615,99 @@ def restrictive_fact_join(facts: Sequence[Mapping[str, typing.Any]]) -> dict[str
         "historically_unavailable": historically_unavailable,
         "availability_known": True,
     }
+
+
+def _derive_publication_change(
+    store: AuthorityStore,
+    *,
+    family: str,
+    scope: str,
+    candidate: object,
+) -> tuple[str, frozenset[str]]:
+    if family != "FACT":
+        return "PERMISSIVE_GENESIS", frozenset()
+    if not isinstance(candidate, Mapping) or not isinstance(candidate.get("fact"), Mapping):
+        raise SourceHandlingBlockedError("fact publication payload lacks normalized fact")
+    candidate_fact = typing.cast(Mapping[str, typing.Any], candidate["fact"])
+    current_id = store.current_canonical_head_id("FACT", scope)
+    if current_id is None:
+        return ("MORE_RESTRICTIVE" if _fact_has_restriction(candidate_fact) else "PERMISSIVE_GENESIS"), frozenset()
+    current = store.canonical_record_by_id("FACT", current_id)
+    if current is None or not isinstance(current.get("fact"), Mapping):
+        raise SourceHandlingBlockedError("canonical predecessor fact is unavailable")
+    releases = _released_fact_restrictions(typing.cast(Mapping[str, typing.Any], current["fact"]), candidate_fact)
+    return ("LESS_RESTRICTIVE", releases) if releases else ("MORE_RESTRICTIVE", frozenset())
+
+
+def _fact_has_restriction(fact: Mapping[str, typing.Any]) -> bool:
+    return bool(
+        fact.get("sensitivity") not in {None, "PUBLIC"}
+        or _string_sequence(fact.get("operation_restrictions"))
+        or fact.get("persistence_restriction") not in {None, "FULL_CONTENT_ALLOWED"}
+        or _string_sequence(fact.get("secret_presence"))
+        or fact.get("withdrawn") is True
+        or fact.get("deleted_at_source") is True
+        or fact.get("historically_unavailable") is True
+    )
+
+
+def _released_fact_restrictions(
+    predecessor: Mapping[str, typing.Any],
+    candidate: Mapping[str, typing.Any],
+) -> frozenset[str]:
+    sensitivity_order = {"PUBLIC": 0, "INTERNAL": 1, "CONFIDENTIAL": 2, "RESTRICTED": 3, "UNKNOWN": 4}
+    persistence_order = {
+        "FULL_CONTENT_ALLOWED": 0,
+        "DERIVED_ONLY": 1,
+        "METADATA_ONLY": 2,
+        "NO_PERSISTENCE": 3,
+        "UNKNOWN": 4,
+    }
+    releases: set[str] = set()
+    old_sensitivity, new_sensitivity = str(predecessor.get("sensitivity")), str(candidate.get("sensitivity"))
+    if old_sensitivity not in sensitivity_order or new_sensitivity not in sensitivity_order:
+        raise SourceHandlingBlockedError("fact sensitivity is not comparable")
+    if sensitivity_order[new_sensitivity] < sensitivity_order[old_sensitivity]:
+        releases.add(f"SENSITIVITY:{old_sensitivity}")
+    old_persistence, new_persistence = str(predecessor.get("persistence_restriction")), str(
+        candidate.get("persistence_restriction")
+    )
+    if old_persistence not in persistence_order or new_persistence not in persistence_order:
+        raise SourceHandlingBlockedError("fact persistence restriction is not comparable")
+    if persistence_order[new_persistence] < persistence_order[old_persistence]:
+        releases.add(f"PERSISTENCE:{old_persistence}")
+    old_ops = set(_string_sequence(predecessor.get("operation_restrictions")))
+    new_ops = set(_string_sequence(candidate.get("operation_restrictions")))
+    releases.update(old_ops - new_ops)
+    old_secrets = set(_string_sequence(predecessor.get("secret_presence")))
+    new_secrets = set(_string_sequence(candidate.get("secret_presence")))
+    releases.update(f"SECRET_PRESENCE:{value}" for value in old_secrets - new_secrets)
+    for field, label in (
+        ("withdrawn", "WITHDRAWN"),
+        ("deleted_at_source", "DELETED_AT_SOURCE"),
+        ("historically_unavailable", "HISTORICALLY_UNAVAILABLE"),
+    ):
+        if predecessor.get(field) is True and candidate.get(field) is not True:
+            releases.add(label)
+    return frozenset(releases)
+
+
+def _validate_safe_control_proof(*, registry: Mapping[str, typing.Any], field: str, value: object) -> None:
+    proofs = registry.get("safe_control_proofs")
+    if not isinstance(proofs, Mapping):
+        raise SourceHandlingBlockedError("SAFE_CONTROL_ID construction proof is unavailable")
+    proof = proofs.get(field)
+    if not isinstance(proof, Mapping):
+        raise SourceHandlingBlockedError("SAFE_CONTROL_ID field lacks governed construction proof")
+    proof_id = proof.get("proof_id")
+    allowed_values = proof.get("allowed_values")
+    if not isinstance(proof_id, str) or not proof_id or not isinstance(allowed_values, (list, tuple, set, frozenset)):
+        raise SourceHandlingBlockedError("SAFE_CONTROL_ID construction proof is incomplete")
+    actual_value = value.get("value") if isinstance(value, Mapping) else value
+    if actual_value not in allowed_values:
+        raise SourceHandlingBlockedError("SAFE_CONTROL_ID value is not proven by the historical registry")
+    if isinstance(value, Mapping) and value.get("proof_id") not in {None, proof_id}:
+        raise SourceHandlingBlockedError("SAFE_CONTROL_ID proof identity mismatch")
 
 
 def lifecycle_join(values: Sequence[str]) -> str:
@@ -661,6 +822,8 @@ def validate_durable_payload(
                 raise SourceHandlingBlockedError("durable category disposition unavailable")
             if category_dispositions.get("PERSIST") != "ALLOW":
                 raise SourceHandlingBlockedError("durable field persistence is not allowed")
+            if category == "SAFE_CONTROL_ID":
+                _validate_safe_control_proof(registry=registry, field=field, value=value)
             if protected and category in protected_risky_categories:
                 raise SourceHandlingBlockedError("protected source cannot persist through a risky secondary category")
         if protected and _derived_from_protected_content(value):
@@ -714,6 +877,11 @@ def enforce_persistence(
     fact = fact_record.get("fact")
     if not isinstance(fact, Mapping):
         raise SourceHandlingBlockedError("resolved fact product is missing")
+    if decision.get("retention_decision") != "ALLOW":
+        raise SourceHandlingBlockedError("top-level retention decision forbids persistence")
+    if decision.get("deletion_lifecycle_decision") in {"DELETE", "BLOCKED"}:
+        raise SourceHandlingBlockedError("top-level lifecycle decision forbids a durable write")
+
     secret_presence = set(_string_sequence(fact.get("secret_presence")))
     validate_durable_payload(
         decision=decision,
@@ -785,9 +953,8 @@ def _reverify_canonical_record(
         raise SourceHandlingBlockedError("persisted publication payload does not match canonical record body")
     verify_publication(authorization, family, scope, actual_payload)
 
-    rule = store.canonical_record_by_id("AUTHORIZATION_RULE", authorization.authorization_rule_id)
-    if rule is None or not strict_known_eligible(rule, cutoff):
-        raise SourceHandlingBlockedError("publication authorization rule was not strict-known at cutoff")
+    store._validate_authorization_provenance(authorization, cutoff=cutoff)
+    rule = store._resolve_rule_for_authorization(authorization)
     _validate_publication_authorization_evidence(
         authorization=authorization,
         authorization_rule=rule,

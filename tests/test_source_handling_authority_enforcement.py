@@ -98,6 +98,7 @@ def _ready_store(
     h: ModuleType,
     *,
     persist: str = "ALLOW",
+    retention: str = "ALLOW",
     secret_presence: list[str] | None = None,
     field_category: str = "AUDIT_FIELD",
 ):
@@ -134,6 +135,11 @@ def _ready_store(
         "scope": "registry:source-handling:v1",
         "field_category_registry_id": "registry-v1",
         "field_map": {"audit": [field_category]},
+        "safe_control_proofs": (
+            {"audit": {"proof_id": "proof:audit-control:v1", "allowed_values": ["safe"]}}
+            if field_category == "SAFE_CONTROL_ID"
+            else {}
+        ),
         "requested_change": "PERMISSIVE_GENESIS",
         **_times(),
     }
@@ -151,7 +157,7 @@ def _ready_store(
         "field_category_registry_id": "registry-v1",
         "policy_body": {
             "processing_decision": "ALLOW",
-            "retention_decision": "ALLOW",
+            "retention_decision": retention,
             "reconstruction_decision": "ALLOW",
             "access_decision": "ALLOW",
             "deletion_lifecycle_decision": "ALLOW",
@@ -221,7 +227,22 @@ def test_repository_publication_recomputes_exact_candidate_body_not_supplied_pay
     store = h.authority_store()
     h.publish_genesis_rule(store, _rule_fixture(), expected_golden_sha256=GOLDEN)
 
-    authorized_payload = {"scope": "doc-1", "value": "authorized", **_times()}
+    authorized_payload = {
+        "scope": "doc-1",
+        "fact": {
+            "sensitivity": "PUBLIC",
+            "operation_restrictions": [],
+            "persistence_restriction": "FULL_CONTENT_ALLOWED",
+            "secret_presence": [],
+            "operation_restrictions_known": True,
+            "secret_presence_known": True,
+            "withdrawn": False,
+            "deleted_at_source": False,
+            "historically_unavailable": False,
+            "availability_known": True,
+        },
+        **_times(),
+    }
     authorization = _authorization(
         h,
         store,
@@ -238,7 +259,10 @@ def test_repository_publication_recomputes_exact_candidate_body_not_supplied_pay
             record={
                 "id": "fact-v1",
                 "scope": "doc-1",
-                "value": "tampered",
+                "fact": {
+                    **authorized_payload["fact"],
+                    "sensitivity": "INTERNAL",
+                },
                 **_times(),
                 "publication_payload": authorized_payload,
                 "publication_authorization": authorization,
@@ -450,7 +474,22 @@ def test_counterfactual_payload_binding_mutation_is_non_vacuous(
     store = h.authority_store()
     h.publish_genesis_rule(store, _rule_fixture(), expected_golden_sha256=GOLDEN)
 
-    payload = {"scope": "doc-1", "value": "authorized", **_times()}
+    payload = {
+        "scope": "doc-1",
+        "fact": {
+            "sensitivity": "PUBLIC",
+            "operation_restrictions": [],
+            "persistence_restriction": "FULL_CONTENT_ALLOWED",
+            "secret_presence": [],
+            "operation_restrictions_known": True,
+            "secret_presence_known": True,
+            "withdrawn": False,
+            "deleted_at_source": False,
+            "historically_unavailable": False,
+            "availability_known": True,
+        },
+        **_times(),
+    }
     authorization = _authorization(
         h,
         store,
@@ -505,3 +544,162 @@ def test_counterfactual_persistence_field_enforcement_mutation_is_non_vacuous(
         },
     )
     assert decision["durable_dispositions"]["SAFE_CONTROL_ID"]["PERSIST"] == "DENY"
+
+
+def test_codex_p1_caller_cannot_launder_provenance_classification() -> None:
+    h = _harness()
+    store = h.authority_store()
+    h.publish_genesis_rule(store, _rule_fixture(), expected_golden_sha256=GOLDEN)
+    payload = {
+        "scope": "doc-x",
+        "fact": {
+            "sensitivity": "PUBLIC",
+            "operation_restrictions": [],
+            "persistence_restriction": "FULL_CONTENT_ALLOWED",
+            "secret_presence": [],
+            "operation_restrictions_known": True,
+            "secret_presence_known": True,
+            "withdrawn": False,
+            "deleted_at_source": False,
+            "historically_unavailable": False,
+            "availability_known": True,
+        },
+        **_times(),
+    }
+    with pytest.raises(h.blocked_error):
+        h.issue_publication_authorization(
+            store,
+            authorization_id="auth:launder",
+            publication_kind="FACT",
+            governed_subject_scope="doc-x",
+            payload=payload,
+            authorization_rule_id="AUTHORIZATION_RULE_V1",
+            evidence_ids=("not-canonical-evidence",),
+            evidence_strength="AUTHORITATIVE_SOURCE_EVIDENCE",
+            evidence_method="SOURCE_TERMS_VERIFIED",
+            verifier_ids=("not-canonical-verifier",),
+            verifier_type="SOURCE_VERIFIER",
+            **_times(),
+        )
+
+
+def test_codex_p1_restrictive_label_cannot_hide_permissive_genesis() -> None:
+    h = _harness()
+    store = h.authority_store()
+    h.publish_genesis_rule(store, _rule_fixture(), expected_golden_sha256=GOLDEN)
+    payload = {
+        "scope": "doc-permissive",
+        "fact": {
+            "sensitivity": "PUBLIC",
+            "operation_restrictions": [],
+            "persistence_restriction": "FULL_CONTENT_ALLOWED",
+            "secret_presence": [],
+            "operation_restrictions_known": True,
+            "secret_presence_known": True,
+            "withdrawn": False,
+            "deleted_at_source": False,
+            "historically_unavailable": False,
+            "availability_known": True,
+        },
+        **_times(),
+    }
+    with pytest.raises(h.blocked_error):
+        h.issue_publication_authorization(
+            store,
+            authorization_id="auth:detector-launder",
+            publication_kind="FACT",
+            governed_subject_scope="doc-permissive",
+            payload=payload,
+            authorization_rule_id="AUTHORIZATION_RULE_V1",
+            evidence_ids=("evidence:detector-launder",),
+            evidence_strength="OBSERVED_RESTRICTIVE_SIGNAL",
+            evidence_method="AUTOMATED_RESTRICTIVE_DETECTOR",
+            verifier_ids=("verifier:detector-launder",),
+            verifier_type="DETECTOR",
+            requested_change="MORE_RESTRICTIVE",
+            **_times(),
+        )
+
+
+def test_codex_p1_top_level_retention_denial_blocks_persistence() -> None:
+    h = _harness()
+    store = _ready_store(h, retention="DENY", field_category="AUDIT_FIELD")
+    with pytest.raises(h.blocked_error):
+        h.enforce_persistence(
+            store,
+            fact_scope="doc-1",
+            policy_scope="policy:source-handling:v1",
+            cutoff=_utc("2026-08-14T12:00:00Z"),
+            payload={"audit": "safe-audit"},
+        )
+
+
+def test_codex_p1_safe_control_requires_canonical_registry_proof() -> None:
+    h = _harness()
+    decision = {
+        "field_category_registry_id": "registry-v1",
+        "durable_dispositions": {"SAFE_CONTROL_ID": _complete_disposition()},
+    }
+    registry = {"field_category_registry_id": "registry-v1", "field_map": {"audit": ["SAFE_CONTROL_ID"]}}
+    with pytest.raises(h.blocked_error):
+        h.validate_durable_payload(
+            decision=decision,
+            registry=registry,
+            payload={"audit": {"value": "secret", "derived_from_protected_content": False}},
+            secret_presence={"SECRET_PRESENT"},
+        )
+
+
+def test_codex_p1_stale_authorization_rule_cannot_issue_after_successor_is_applicable() -> None:
+    h = _harness()
+    store = h.authority_store()
+    h.publish_genesis_rule(store, _rule_fixture(), expected_golden_sha256=GOLDEN)
+    v2 = {
+        "id": "AUTHORIZATION_RULE_V2",
+        "authorization_rule_id": "AUTHORIZATION_RULE_V2",
+        "scope": "SOURCE_HANDLING",
+        "rule_schema_version": 1,
+        "rule_body": _rule_fixture()["rule_body"],
+        "effective_from": _utc("2026-08-14T03:00:00Z"),
+        "recorded_at": _utc("2026-08-14T04:00:00Z"),
+        "known_at": _utc("2026-08-14T05:00:00Z"),
+        "supersedes_authorization_rule_id": "AUTHORIZATION_RULE_V1",
+    }
+    store.compare_and_append(
+        family="AUTHORIZATION_RULE",
+        scope="SOURCE_HANDLING",
+        expected_current_head_id="AUTHORIZATION_RULE_V1",
+        record=v2,
+    )
+    store._canonical_keys.add(("AUTHORIZATION_RULE", "SOURCE_HANDLING", "AUTHORIZATION_RULE_V2"))
+    payload = {
+        "scope": "doc-stale",
+        "fact": {
+            "sensitivity": "PUBLIC",
+            "operation_restrictions": [],
+            "persistence_restriction": "FULL_CONTENT_ALLOWED",
+            "secret_presence": [],
+            "operation_restrictions_known": True,
+            "secret_presence_known": True,
+            "withdrawn": False,
+            "deleted_at_source": False,
+            "historically_unavailable": False,
+            "availability_known": True,
+        },
+        **_times(),
+    }
+    with pytest.raises(h.blocked_error):
+        h.issue_publication_authorization(
+            store,
+            authorization_id="auth:stale-rule",
+            publication_kind="FACT",
+            governed_subject_scope="doc-stale",
+            payload=payload,
+            authorization_rule_id="AUTHORIZATION_RULE_V1",
+            evidence_ids=("evidence:stale-rule",),
+            evidence_strength="AUTHORITATIVE_SOURCE_EVIDENCE",
+            evidence_method="SOURCE_TERMS_VERIFIED",
+            verifier_ids=("verifier:stale-rule",),
+            verifier_type="SOURCE_VERIFIER",
+            **_times(),
+        )

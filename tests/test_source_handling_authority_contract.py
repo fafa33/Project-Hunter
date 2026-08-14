@@ -744,6 +744,12 @@ def test_safe_control_metadata_is_not_banned_merely_because_source_contains_secr
         "field_map": {
             "run_id": ["SAFE_CONTROL_ID"],
         },
+        "safe_control_proofs": {
+            "run_id": {
+                "proof_id": "proof:run-id:v1",
+                "allowed_values": ["run-123"],
+            }
+        },
     }
     decision = {
         "field_category_registry_id": "registry-v1",
@@ -761,6 +767,7 @@ def test_safe_control_metadata_is_not_banned_merely_because_source_contains_secr
             "run_id": {
                 "value": "run-123",
                 "derived_from_protected_content": False,
+                "proof_id": "proof:run-id:v1",
             }
         },
         secret_presence={"SECRET_PRESENT"},
