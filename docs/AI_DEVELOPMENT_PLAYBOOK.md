@@ -97,14 +97,19 @@ governance artifact.
 **Authority of this section and the one that follows.** Both are working
 guidance for agents. Neither creates a lifecycle stage, a precondition on
 beginning implementation, a review requirement, or a merge condition.
-`docs/CANONICAL_ARCHITECTURE_MAP.md` makes only *accepted* ADRs binding, assigns
-development-process authority to `docs/DEVELOPMENT_GOVERNANCE.md`, and does not
-list this playbook in its hierarchy at all; ADR 0029 — which defines HDM stage 2
-— is still `Proposed`. So nothing here blocks a change that repository governance
-otherwise permits, and skipping a design note or a design review is not by itself
-a governance violation. Should either become a required precondition, that must
-be established in `docs/DEVELOPMENT_GOVERNANCE.md` through its amendment process,
-and through acceptance of ADR 0029 — not here.
+`docs/CANONICAL_ARCHITECTURE_MAP.md` assigns development-process authority to
+`docs/DEVELOPMENT_GOVERNANCE.md` and does not list this playbook in its hierarchy
+at all. So nothing here blocks a change that repository governance otherwise
+permits, and skipping a design note or a design review is not by itself a
+governance violation.
+
+Should either become a required precondition, that is for
+`docs/DEVELOPMENT_GOVERNANCE.md` to establish through its own amendment process,
+which is sufficient on its own and imposes no ADR condition. ADR 0029 is relevant
+only to the design note, and only indirectly: the note elaborates that ADR's
+stage 2, and only *accepted* ADRs are binding, so while ADR 0029 remains
+`Proposed` the stage it defines is not binding either. The adversarial design
+review below appears in no ADR and depends on none.
 
 That limit is deliberate rather than reluctant: a subordinate document that
 quietly creates gates is the same defect class as an implementation that quietly
@@ -304,9 +309,10 @@ PR #200 is the founding case study: the governance capability was reviewed by th
 
 > No implementation is exempt from the governance it introduces.
 
-PR #258 is the second case study, and the reason the design-note and stopping
-rules above exist. It took eight independent review rounds and fourteen findings
-to reach a clean result. The distribution is the lesson, not the total:
+PR #258 is the second case study, and the reason the design-note guidance and the
+stop-hardening guidance above exist. It took eight independent review rounds and
+fourteen findings to reach a clean result. The distribution is the lesson, not the
+total:
 
 - rounds 1–5 were almost entirely defects in the PR's *own preceding fixes*,
   concentrated in one mechanism added during round 1 to close a race;
