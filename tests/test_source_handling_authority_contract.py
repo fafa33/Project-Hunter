@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from types import ModuleType
 
@@ -15,7 +15,7 @@ GOLDEN_AUTH_RULE_V1_SHA256 = "41119071db0f5c2a2eacfe2848ab6696355195e1ac9c671ee3
 
 
 def _utc(value: str) -> datetime:
-    return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
+    return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(UTC)
 
 
 def _canonical_sha256(value: object) -> str:
