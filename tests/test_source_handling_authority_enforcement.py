@@ -703,3 +703,95 @@ def test_codex_p1_stale_authorization_rule_cannot_issue_after_successor_is_appli
             verifier_type="SOURCE_VERIFIER",
             **_times(),
         )
+
+
+def test_replay_rederives_change_type_instead_of_trusting_persisted_label() -> None:
+    h = _harness()
+    store = h.authority_store()
+    h.publish_genesis_rule(store, _rule_fixture(), expected_golden_sha256=GOLDEN)
+    payload = {
+        "scope": "doc-replay-derived-change",
+        "fact": {
+            "sensitivity": "INTERNAL",
+            "operation_restrictions": [],
+            "persistence_restriction": "FULL_CONTENT_ALLOWED",
+            "secret_presence": [],
+            "operation_restrictions_known": True,
+            "secret_presence_known": True,
+            "withdrawn": False,
+            "deleted_at_source": False,
+            "historically_unavailable": False,
+            "availability_known": True,
+        },
+        "requested_change": "PERMISSIVE_GENESIS",
+        **_times(),
+    }
+    authorization = h.issue_publication_authorization(
+        store,
+        authorization_id="auth:replay-derived-change",
+        publication_kind="FACT",
+        governed_subject_scope="doc-replay-derived-change",
+        payload=payload,
+        authorization_rule_id="AUTHORIZATION_RULE_V1",
+        evidence_ids=("evidence:detector:replay-derived-change",),
+        evidence_strength="OBSERVED_RESTRICTIVE_SIGNAL",
+        evidence_method="AUTOMATED_RESTRICTIVE_DETECTOR",
+        verifier_ids=("verifier:detector:replay-derived-change",),
+        verifier_type="DETECTOR",
+        requested_change="PERMISSIVE_GENESIS",
+        **_times(),
+    )
+    store.publish(
+        family="FACT",
+        scope="doc-replay-derived-change",
+        expected_current_head_id=None,
+        record={
+            "id": "fact-replay-derived-change",
+            **payload,
+            "publication_authorization": authorization,
+        },
+    )
+    resolved = h.resolve_canonical_head(
+        store,
+        family="FACT",
+        scope="doc-replay-derived-change",
+        cutoff=_utc("2026-08-14T12:00:00Z"),
+    )
+    assert resolved["id"] == "fact-replay-derived-change"
+
+
+def test_default_authority_store_cannot_authorize_without_canonical_provenance() -> None:
+    h = _harness()
+    store = h.runtime_module.authority_store()
+    h.publish_genesis_rule(store, _rule_fixture(), expected_golden_sha256=GOLDEN)
+    payload = {
+        "scope": "doc-no-provenance",
+        "fact": {
+            "sensitivity": "PUBLIC",
+            "operation_restrictions": [],
+            "persistence_restriction": "FULL_CONTENT_ALLOWED",
+            "secret_presence": [],
+            "operation_restrictions_known": True,
+            "secret_presence_known": True,
+            "withdrawn": False,
+            "deleted_at_source": False,
+            "historically_unavailable": False,
+            "availability_known": True,
+        },
+        **_times(),
+    }
+    with pytest.raises(h.blocked_error):
+        h.issue_publication_authorization(
+            store,
+            authorization_id="auth:no-provenance",
+            publication_kind="FACT",
+            governed_subject_scope="doc-no-provenance",
+            payload=payload,
+            authorization_rule_id="AUTHORIZATION_RULE_V1",
+            evidence_ids=("evidence:invented",),
+            evidence_strength="AUTHORITATIVE_SOURCE_EVIDENCE",
+            evidence_method="SOURCE_TERMS_VERIFIED",
+            verifier_ids=("verifier:invented",),
+            verifier_type="SOURCE_VERIFIER",
+            **_times(),
+        )

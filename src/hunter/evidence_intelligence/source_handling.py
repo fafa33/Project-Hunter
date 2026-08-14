@@ -639,6 +639,34 @@ def _derive_publication_change(
     return ("LESS_RESTRICTIVE", releases) if releases else ("MORE_RESTRICTIVE", frozenset())
 
 
+def _derive_persisted_publication_change(
+    store: AuthorityStore,
+    *,
+    family: str,
+    scope: str,
+    record: Mapping[str, typing.Any],
+) -> tuple[str, frozenset[str]]:
+    if family != "FACT":
+        return "PERMISSIVE_GENESIS", frozenset()
+    candidate_fact = record.get("fact")
+    if not isinstance(candidate_fact, Mapping):
+        raise SourceHandlingBlockedError("persisted fact publication lacks normalized fact")
+    predecessor_id = _supersedes_id(record)
+    if predecessor_id is None:
+        return (
+            "MORE_RESTRICTIVE" if _fact_has_restriction(candidate_fact) else "PERMISSIVE_GENESIS",
+            frozenset(),
+        )
+    predecessor = store.canonical_record_by_id("FACT", predecessor_id)
+    if predecessor is None or predecessor.get("scope") != scope:
+        raise SourceHandlingBlockedError("persisted fact predecessor is unavailable or out of scope")
+    predecessor_fact = predecessor.get("fact")
+    if not isinstance(predecessor_fact, Mapping):
+        raise SourceHandlingBlockedError("persisted fact predecessor body is unavailable")
+    releases = _released_fact_restrictions(predecessor_fact, candidate_fact)
+    return ("LESS_RESTRICTIVE", releases) if releases else ("MORE_RESTRICTIVE", frozenset())
+
+
 def _fact_has_restriction(fact: Mapping[str, typing.Any]) -> bool:
     return bool(
         fact.get("sensitivity") not in {None, "PUBLIC"}
@@ -955,10 +983,18 @@ def _reverify_canonical_record(
 
     store._validate_authorization_provenance(authorization, cutoff=cutoff)
     rule = store._resolve_rule_for_authorization(authorization)
+    derived_change, derived_releases = _derive_persisted_publication_change(
+        store,
+        family=family,
+        scope=scope,
+        record=record,
+    )
+    if frozenset(authorization.released_restrictions) != derived_releases:
+        raise SourceHandlingBlockedError("persisted released restrictions do not match historical authority")
     _validate_publication_authorization_evidence(
         authorization=authorization,
         authorization_rule=rule,
-        requested_change=str(record.get("requested_change", "PERMISSIVE_GENESIS")),
+        requested_change=derived_change,
     )
 
 
