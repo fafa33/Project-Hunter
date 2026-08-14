@@ -31,7 +31,9 @@ jobs:
           python -m pip install -e .
           python -m pip install black==24.10.0 ruff mypy pytest types-PyYAML
       - name: Apply integrated correction
-        run: python .github/tmp_apply_source_handling_hardening.py
+        run: |
+          python .github/tmp_apply_source_handling_hardening.py
+          python .github/tmp_fix_source_handling_test_payloads.py
       - name: Canonicalize imports and formatting
         run: |
           ruff check --fix src/hunter/evidence_intelligence/source_handling.py tests/source_handling_runtime_harness.py tests/test_source_handling_authority_contract.py tests/test_source_handling_authority_enforcement.py
@@ -46,7 +48,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git rm .github/tmp_apply_source_handling_hardening.py .github/workflows/tmp-source-handling-hardening-v2.yml
+          git rm .github/tmp_apply_source_handling_hardening.py .github/tmp_fix_source_handling_test_payloads.py .github/workflows/tmp-source-handling-hardening-v2.yml
           git add src/hunter/evidence_intelligence/source_handling.py tests/source_handling_runtime_harness.py tests/test_source_handling_authority_contract.py tests/test_source_handling_authority_enforcement.py
           git commit -m "fix: close Codex source handling authority gaps [hardening-v2-applied]"
           git push origin HEAD:ava/source-handling-tests-first
