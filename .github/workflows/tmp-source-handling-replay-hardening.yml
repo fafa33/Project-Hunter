@@ -1,0 +1,52 @@
+name: Temporary Source Handling Replay Hardening
+
+on:
+  push:
+    branches:
+      - ava/source-handling-tests-first
+
+permissions:
+  contents: write
+
+concurrency:
+  group: tmp-source-handling-replay-hardening
+  cancel-in-progress: true
+
+jobs:
+  apply:
+    if: ${{ !contains(github.event.head_commit.message, '[replay-hardening-applied]') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ava/source-handling-tests-first
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11.13'
+      - name: Install exact tools
+        run: |
+          python -m pip install -U pip
+          python -m pip install -e .
+          python -m pip install black==24.10.0 ruff mypy pytest types-PyYAML
+      - name: Apply replay derivation correction
+        run: python .github/tmp_fix_source_handling_replay_derivation.py
+      - name: Canonicalize
+        run: |
+          ruff check --fix src/hunter/evidence_intelligence/source_handling.py tests/test_source_handling_authority_enforcement.py
+          black src/hunter/evidence_intelligence/source_handling.py tests/test_source_handling_authority_enforcement.py
+      - name: Focused gates
+        run: |
+          ruff check src/hunter/evidence_intelligence/source_handling.py tests/source_handling_runtime_harness.py tests/test_source_handling_authority_contract.py tests/test_source_handling_authority_enforcement.py
+          black --check src/hunter/evidence_intelligence/source_handling.py tests/source_handling_runtime_harness.py tests/test_source_handling_authority_contract.py tests/test_source_handling_authority_enforcement.py
+          mypy src/hunter/evidence_intelligence/source_handling.py
+          pytest -q tests/test_source_handling_authority_contract.py tests/test_source_handling_authority_enforcement.py
+      - name: Commit correction and cleanup
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/tmp_fix_source_handling_replay_derivation.py .github/workflows/tmp-source-handling-replay-hardening.yml
+          git add src/hunter/evidence_intelligence/source_handling.py tests/test_source_handling_authority_enforcement.py
+          git commit -m "fix: rederive source handling change class during replay [replay-hardening-applied]"
+          git push origin HEAD:ava/source-handling-tests-first
