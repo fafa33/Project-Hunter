@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+from typing import Any
+
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
 
 
 AUTHORITY_COMPONENT_ID = "EVIDENCE_INTELLIGENCE_SOURCE_HANDLING_AUTHORITY"
@@ -505,6 +506,8 @@ def validate_durable_payload(
     registry_id = registry.get("field_category_registry_id")
     if not decision_registry_id or decision_registry_id != registry_id:
         raise SourceHandlingBlockedError("exact historical field-category registry required")
+    if decision.get("publication_authorization") is not None:
+        raise SourceHandlingBlockedError("caller-supplied publication authorization cannot satisfy persistence")
 
     field_map = registry.get("field_map")
     dispositions = decision.get("durable_dispositions")
