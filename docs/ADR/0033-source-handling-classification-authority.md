@@ -8,9 +8,15 @@ Proposed.
 
 2026-08-14.
 
+## Governing Preparation
+
+[ADPR-0008](../architecture-records/ADPR-0008-source-handling-classification-authority.md).
+
+Independent architecture audit of that preparation has not yet been performed. This ADR cannot advance to acceptance until the preparation lifecycle required by `docs/ARCHITECTURE_DECISION_PREPARATION_GUIDE.md` and `docs/DEVELOPMENT_GOVERNANCE.md` is complete.
+
 ## Context
 
-ADR 0031 requires that, before inclusion or durable persistence, every source reference must carry, or deterministically derive from governed source policy, a handling classification sufficient to decide whether its exact bytes may be processed, retained, and reconstructed.
+ADR 0031 requires that, before inclusion or durable persistence, every source reference must carry, or deterministically derive from governed source policy, a handling classification sufficient to decide whether its exact bytes may be processed, retained, and reconstructed. ADR 0031 further requires that artifact access controls and retention or deletion behaviour be at least as restrictive as the governing source classification and policy.
 
 ADR 0031 imposes that obligation but does not assign the canonical owner of the handling facts or of the policy that governs them. No accepted decision names a producer, and the repository has no implementation of one. Without a named owner, the only participant able to supply the facts is the consumer that wants to use them, which makes the consumer the effective authority over its own permissions.
 
@@ -20,22 +26,30 @@ ADR 0033 closes that authority gap and nothing else.
 
 ### Canonical ownership
 
-The Evidence Intelligence consumer-side Source Handling Authority exclusively owns authoritative source-handling facts.
+The Evidence Intelligence consumer-side Source Handling Authority is the sole canonical owner of:
 
-The same Evidence Intelligence consumer-side authority exclusively owns governed retention-policy authority.
+1. authoritative source-handling facts; and
+2. governed source-handling policy, used to decide
+   - whether source material may be processed,
+   - whether it may be retained,
+   - whether it may be reconstructed,
+   - what access restrictions apply, and
+   - what deletion and lifecycle restrictions apply.
 
-Callers, providers, orchestrators, prompt construction, persistence adapters, repositories, generic cores, Prompt Intelligence, Context Intelligence, and any future Model Adapter component are consumers only. Persistence enforces this authority but does not acquire it.
+Retention is one derived outcome of that policy. It is not the extent of the authority.
+
+Callers, providers, orchestrators, prompt construction, persistence adapters, repositories, generic cores, Prompt Intelligence, Context Intelligence, and any future Model Adapter component are consumers only. They may not create, select, override, or substitute canonical source-handling policy authority. Persistence enforces this authority but does not acquire it.
 
 ### Binding safety invariants
 
 - Caller and provider inputs are evidence or expectations only. They are never authority.
-- Caller and provider inputs may never independently establish a less-restrictive handling state, and may never grant processing, retention, or reconstruction permission.
-- Retainability is derived. It is not a source fact and is not assertable.
+- Caller and provider inputs may never independently establish a less-restrictive handling state, and may never grant processing, retention, reconstruction, access, or deletion permission.
+- Retainability is derived. It is not a source fact and is not assertable. The same holds for every other handling permission.
 - Simultaneous restrictions must not be collapsed into a single mutually exclusive handling value.
-- Any unknown, missing, unavailable, conflicting, or ambiguous required handling or policy authority yields `BLOCKED`, and no model-facing processing occurs.
+- Any unknown, missing, unavailable, conflicting, or ambiguous required source-handling fact or policy authority yields `BLOCKED`, and no model-facing processing occurs.
 - Partial or unclassified handling can never become permissive or processing-capable.
 - No default, current state, caller reference, provider assertion, or permissive fallback may substitute for unresolved authority.
-- A retention decision derives only from authoritative historical handling facts together with the exact governed historical policy.
+- Every handling decision — processing, retention, reconstruction, access, and deletion — derives only from authoritative historical handling facts together with the exact governed historical source-handling policy.
 
 ### Historical and replay invariants
 
@@ -44,13 +58,13 @@ Callers, providers, orchestrators, prompt construction, persistence adapters, re
 - Replay uses only the authority applicable and knowable at the requested historical cutoff.
 - Current, latest, or later-recorded state never substitutes for historical facts, historical policy, or historical absence.
 - Historical absence remains explicit absence.
-- The existence of bytes does not retroactively prove governed retention or reconstruction authority.
+- The existence of bytes does not retroactively prove governed processing, retention, or reconstruction authority.
 
 ### Persistence invariant
 
-Persistence must independently resolve the authoritative historical handling facts, resolve the exact governed historical policy, rederive the retention decision, verify every durable payload element against that decision, and reject missing authority, mismatched inputs, mismatched decisions, or contradictory payload state.
+Persistence must independently resolve the authoritative historical handling facts, resolve the exact governed historical source-handling policy, rederive every relevant handling decision rather than retention alone, verify every durable payload element against those decisions, and reject missing authority, mismatched inputs, mismatched decisions, or contradictory payload state.
 
-Persistence must never trust a caller-created classification, policy object, policy selection, retention decision, or claimed decision identity.
+Persistence must never trust a caller-created classification, policy object, policy selection, handling or retention decision, or claimed decision identity.
 
 ## Design / Implementation Contract — Deferred
 
