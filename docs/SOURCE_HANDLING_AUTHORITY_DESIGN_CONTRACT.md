@@ -84,7 +84,7 @@ A permissive genesis, restriction release, or less-restrictive correction is inv
 
 `AuthorizationRuleRecord` is the immutable canonical owner of the evidence-strength/method/verifier admissibility matrix and of publication/restriction-release authorization requirements.
 
-The V1 bootstrap is closed and singular: `AUTHORIZATION_RULE_V1` is the only genesis authorization rule. Its exact canonical body and SHA-256 digest are fixed by this reviewed contract and materialized by the implementation migration as a repository-canonical bootstrap record. The migration must verify the implementation constant against the contract fixture/golden digest before persistence. The genesis record is not caller/provider supplied and is not authorized by a later/current rule.
+The V1 bootstrap is closed and singular: `AUTHORIZATION_RULE_V1` is the only genesis authorization rule. Its canonical body is exactly the minimum V1 admissibility invariants listed below plus the implementation's closed method-to-verifier matrix. The canonical serialization is versioned as `authorization-rule/v1`, domain-separated as `HUNTER_SOURCE_HANDLING_AUTHORIZATION_RULE`, UTF-8 encoded, and SHA-256 hashed. The implementation must ship one golden fixture containing that exact canonical body and one golden digest derived from it; migration recomputes the digest from the fixture and refuses to materialize the bootstrap record on mismatch. The fixture and digest are reviewed as part of the tests-before-implementation contribution before runtime code is accepted. There is no caller/provider input to this bootstrap path.
 
 Every successor `AuthorizationRuleRecord` requires a `PublicationAuthorization` evaluated under the exact strict-known predecessor authorization rule and bound to the successor rule payload as defined in §2.4. A successor may not authorize itself. There is no implicit current-code/configuration fallback.
 
@@ -451,7 +451,8 @@ Tests are written before runtime implementation and must cover all root semantic
 
 ### Authorization-rule history and bootstrap
 
-- the `AUTHORIZATION_RULE_V1` fixture/body matches its contract-pinned golden digest;
+- the `AUTHORIZATION_RULE_V1` canonical fixture recomputes to its reviewed golden digest;
+- migration refuses bootstrap materialization when fixture/digest mismatch;
 - no second genesis authorization rule can be created;
 - successor authorization rule cannot authorize itself;
 - successor rule publication is evaluated under the exact strict-known predecessor rule;
@@ -514,7 +515,7 @@ For every blocking regression class above, disable/remove the root rule and demo
 
 1. obtain final independent acceptance review of this contract;
 2. freeze the accepted contract;
-3. write the deterministic tests above first;
+3. write the deterministic tests above first, including the canonical `AUTHORIZATION_RULE_V1` fixture and reviewed golden digest;
 4. materialize and golden-verify the contract-pinned `AUTHORIZATION_RULE_V1` bootstrap;
 5. implement record models/repositories and atomic compare-and-append mechanically;
 6. implement payload-bound publication authorization and strict-known resolution for facts, policy, registry, rules, authorizations, and provenance;
