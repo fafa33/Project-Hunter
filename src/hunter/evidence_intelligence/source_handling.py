@@ -593,7 +593,10 @@ def derive_source_handling_decision(
         raise SourceHandlingBlockedError("policy cannot override reconstruction prohibition")
     if "ACCESS_RESTRICTED" in operation_restrictions and policy.get("access_decision") == "ALLOW":
         raise SourceHandlingBlockedError("policy cannot override access restriction")
-    if normalized_fact.get("persistence_restriction") == "NO_PERSISTENCE" and policy.get("retention_decision") == "ALLOW":
+    if (
+        normalized_fact.get("persistence_restriction") == "NO_PERSISTENCE"
+        and policy.get("retention_decision") == "ALLOW"
+    ):
         raise SourceHandlingBlockedError("policy cannot override no-persistence restriction")
 
     dispositions = policy.get("durable_dispositions")
@@ -737,7 +740,11 @@ def _validate_publication_authorization_evidence(
 ) -> None:
     if not authorization.evidence_ids or not authorization.verifier_ids:
         raise SourceHandlingBlockedError("publication authorization provenance identities are incomplete")
-    if authorization.evidence_strength is None or authorization.evidence_method is None or authorization.verifier_type is None:
+    if (
+        authorization.evidence_strength is None
+        or authorization.evidence_method is None
+        or authorization.verifier_type is None
+    ):
         raise SourceHandlingBlockedError("publication authorization evidence provenance is incomplete")
     validate_permission_evidence(
         evidence_strength=authorization.evidence_strength,
@@ -772,7 +779,9 @@ def _reverify_canonical_record(
 
     actual_payload = _publication_payload_from_record(record)
     supplied_payload = record.get("publication_payload")
-    if supplied_payload is not None and _canonical_comparable(supplied_payload) != _canonical_comparable(actual_payload):
+    if supplied_payload is not None and _canonical_comparable(supplied_payload) != _canonical_comparable(
+        actual_payload
+    ):
         raise SourceHandlingBlockedError("persisted publication payload does not match canonical record body")
     verify_publication(authorization, family, scope, actual_payload)
 
@@ -831,9 +840,7 @@ def _publication_payload_from_record(record: Mapping[str, typing.Any]) -> dict[s
         "publication_payload",
     }
     return {
-        key: copy.deepcopy(value)
-        for key, value in record.items()
-        if key not in excluded and not key.startswith("_")
+        key: copy.deepcopy(value) for key, value in record.items() if key not in excluded and not key.startswith("_")
     }
 
 

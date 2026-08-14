@@ -14,9 +14,7 @@ GOLDEN = "41119071db0f5c2a2eacfe2848ab6696355195e1ac9c671ee33c4128793aa70a"
 
 
 def _harness() -> ModuleType:
-    spec = importlib.util.spec_from_file_location(
-        "source_handling_runtime_harness_enforcement", HARNESS
-    )
+    spec = importlib.util.spec_from_file_location("source_handling_runtime_harness_enforcement", HARNESS)
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -73,9 +71,7 @@ def _publish(
     record_id: str,
     payload: dict[str, object],
 ) -> None:
-    authorization = _authorization(
-        h, store, family=family, scope=scope, payload=payload
-    )
+    authorization = _authorization(h, store, family=family, scope=scope, payload=payload)
     store.publish(
         family=family,
         scope=scope,
@@ -159,9 +155,7 @@ def _ready_store(
             "reconstruction_decision": "ALLOW",
             "access_decision": "ALLOW",
             "deletion_lifecycle_decision": "ALLOW",
-            "durable_dispositions": {
-                field_category: _complete_disposition(persist)
-            },
+            "durable_dispositions": {field_category: _complete_disposition(persist)},
         },
         "requested_change": "PERMISSIVE_GENESIS",
         **_times(),
@@ -202,9 +196,7 @@ def test_caller_constructed_but_unissued_authorization_cannot_publish() -> None:
     forged = h.publication_authorization(
         publication_kind="FACT",
         governed_subject_scope="doc-1",
-        authorized_payload_sha256=h.canonical_publication_digest(
-            "FACT", "doc-1", payload
-        ),
+        authorized_payload_sha256=h.canonical_publication_digest("FACT", "doc-1", payload),
         authorization_rule_id="AUTHORIZATION_RULE_V1",
         authorization_id="forged-auth",
         evidence_ids=("forged-evidence",),
@@ -349,9 +341,7 @@ def test_persistence_rejects_caller_decision_even_when_payload_itself_would_be_a
         "reconstruction_decision": "ALLOW",
         "access_decision": "ALLOW",
         "deletion_lifecycle_decision": "ALLOW",
-        "durable_dispositions": {
-            "SAFE_CONTROL_ID": _complete_disposition()
-        },
+        "durable_dispositions": {"SAFE_CONTROL_ID": _complete_disposition()},
     }
 
     with pytest.raises(h.blocked_error):
