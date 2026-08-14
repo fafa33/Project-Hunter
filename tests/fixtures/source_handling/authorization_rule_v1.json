@@ -12,8 +12,39 @@
       "AUTOMATED_RESTRICTIVE_DETECTOR",
       "UNKNOWN"
     ],
+    "method_to_verifier_types": {
+      "SOURCE_DECLARATION_VERIFIED": [
+        "SOURCE_VERIFIER"
+      ],
+      "SOURCE_TERMS_VERIFIED": [
+        "SOURCE_VERIFIER",
+        "INDEPENDENT_REVIEWER"
+      ],
+      "SOURCE_ACCESS_POLICY_VERIFIED": [
+        "SOURCE_VERIFIER",
+        "INDEPENDENT_REVIEWER"
+      ],
+      "SECURITY_CLASSIFICATION_VERIFIED": [
+        "SECURITY_VERIFIER",
+        "INDEPENDENT_REVIEWER"
+      ],
+      "REMOVAL_OR_WITHDRAWAL_VERIFIED": [
+        "SOURCE_VERIFIER",
+        "INDEPENDENT_REVIEWER"
+      ],
+      "INDEPENDENT_DOCUMENT_REVIEW": [
+        "INDEPENDENT_REVIEWER"
+      ],
+      "PROVIDER_OBSERVATION": [],
+      "CALLER_ASSERTION": [],
+      "AUTOMATED_RESTRICTIVE_DETECTOR": [],
+      "UNKNOWN": []
+    },
     "require_payload_binding": true,
-    "require_authority_component": "EVIDENCE_INTELLIGENCE_SOURCE_HANDLING_AUTHORITY"
+    "require_authority_component": "EVIDENCE_INTELLIGENCE_SOURCE_HANDLING_AUTHORITY",
+    "require_release_restriction_enumeration": true,
+    "allow_second_genesis": false,
+    "allow_self_authorizing_successor": false
   },
   "effective_from": "2026-08-14T00:00:00Z",
   "recorded_at": "2026-08-14T00:00:00Z",
