@@ -1,0 +1,40 @@
+name: Temporary Source Handling Mypy V2
+
+on:
+  push:
+    branches:
+      - ava/source-handling-tests-first
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ava/source-handling-tests-first
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11.13"
+      - name: Install project
+        run: python -m pip install -c requirements/ci-constraints.txt -e ".[dev]"
+      - name: Apply correction
+        run: python .github/tmp_fix_source_handling_mypy.py
+      - name: Canonicalize
+        run: |
+          ruff check --fix tests/test_source_handling_authority_enforcement.py
+          black tests/test_source_handling_authority_enforcement.py
+      - name: Full preflight
+        run: python scripts/hunter_pr_preflight.py
+      - name: Commit and clean temporary files
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/tmp_fix_source_handling_mypy.py .github/workflows/tmp-source-handling-mypy-v2.yml .github/workflows/tmp-source-handling-mypy-fix.yml
+          git add tests/test_source_handling_authority_enforcement.py
+          git commit -m "test: keep source handling tamper fixture statically typed"
+          git push origin HEAD:ava/source-handling-tests-first
