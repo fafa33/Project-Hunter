@@ -158,10 +158,15 @@ Before adding another reconciliation loop, retry layer, cache, state machine,
 fallback, or synchronization mechanism, answer: can an existing mechanism
 already satisfy this invariant?
 
-If yes, reuse or simplify rather than add. New machinery must have a unique
-responsibility. Where two mechanisms enforce the same invariant, prefer deleting
-one over maintaining both, unless the redundancy is deliberate and its purpose
-is documented at the mechanism.
+If yes, prefer reusing or simplifying over adding. New machinery is worth having
+only when its responsibility is one no existing mechanism already carries. Where
+two mechanisms enforce the same invariant, prefer deleting one over maintaining
+both, unless the redundancy is deliberate and its purpose is documented at the
+mechanism.
+
+Like the design guidance above, this is a preference for agents working under
+this playbook. `docs/HUNTER_IMPLEMENTATION_CONTRACT.md` owns implementation
+obligations; nothing here adds one.
 
 ## Technical Defense Artifact
 
@@ -202,13 +207,16 @@ Every review finding must be classified as one of:
 
 A reviewer must not turn an unrelated future platform ambition into a blocker. An implementer must not relabel a false-approval or authority defect as future work merely to obtain merge.
 
-Every finding must answer one question explicitly before it is classified:
+The question that decides the classification is:
 
 > Does this make the contribution **unsafe to merge today**?
 
 The test is safety, exactly as `docs/AI_REVIEW_PROTOCOL.md` defines it, and that
-document governs. A finding is a Merge Blocker whenever it makes the contribution
-unsafe — including a security defect, an evidence-integrity failure, a replay
+document governs — including what a review report must record. Nothing here adds
+a reporting obligation to it; answering this question explicitly is a habit worth
+having, not a required report field. A finding is a Merge Blocker whenever it
+makes the contribution unsafe — including a security defect, an
+evidence-integrity failure, a replay
 failure, a migration risk, an authority or implementation-contract violation, a
 deterministic-behavior failure, or a documentation contradiction — **whether or
 not** it appears in the PR's acceptance criteria, and whether or not it names an
@@ -217,7 +225,7 @@ safety specification, and a defect does not become safe by having been omitted
 from it.
 
 If the answer is no, the finding is one of the other three categories and becomes
-a follow-up issue. "Could be more robust" is not a merge blocker, and must not
+a follow-up issue. "Could be more robust" is not a merge blocker, and does not
 become one by repetition.
 
 ### When to stop hardening
