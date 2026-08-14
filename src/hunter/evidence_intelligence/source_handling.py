@@ -26,9 +26,9 @@ class PublicationAuthorization:
 class AuthorityStore:
     """Small deterministic authority store used by the V1 authority surface.
 
-    Publication is append-only per (family, scope).  The compare-and-append
+    Publication is append-only per (family, scope). The compare-and-append
     primitive prevents two canonical successors from being created from the
-    same head.  Higher-level publication paths remain responsible for governed
+    same head. Higher-level publication paths remain responsible for governed
     authorization checks before calling the primitive.
     """
 
@@ -44,7 +44,9 @@ class AuthorityStore:
         record: Mapping[str, Any],
     ) -> None:
         if record.get("publication_authorization") is None:
-            raise SourceHandlingBlockedError("governed publication authorization required")
+            raise SourceHandlingBlockedError(
+                "governed publication authorization required"
+            )
         self.compare_and_append(
             family=family,
             scope=scope,
@@ -60,7 +62,9 @@ class AuthorityStore:
         record: Mapping[str, Any],
     ) -> None:
         del family, scope, record
-        raise SourceHandlingBlockedError("direct repository authority writes are forbidden")
+        raise SourceHandlingBlockedError(
+            "direct repository authority writes are forbidden"
+        )
 
     def compare_and_append(
         self,
@@ -74,21 +78,37 @@ class AuthorityStore:
         records = self._records.setdefault(key, [])
         current = _record_id(records[-1]) if records else None
         if current != expected_current_head_id:
-            raise SourceHandlingBlockedError("authority head changed; re-resolution required")
+            raise SourceHandlingBlockedError(
+                "authority head changed; re-resolution required"
+            )
         candidate = dict(record)
         candidate_id = _record_id(candidate)
         if candidate_id is None:
-            raise SourceHandlingBlockedError("authority record identity is required")
-        if any(_record_id(existing) == candidate_id for existing in records):
-            raise SourceHandlingBlockedError("authority record identity must be immutable")
+            raise SourceHandlingBlockedError(
+                "authority record identity is required"
+            )
+        if any(
+            _record_id(existing) == candidate_id
+            for existing in records
+        ):
+            raise SourceHandlingBlockedError(
+                "authority record identity must be immutable"
+            )
         records.append(candidate)
 
     def current_head_id(self, family: str, scope: str) -> str | None:
         records = self._records.get((family, scope), [])
         return _record_id(records[-1]) if records else None
 
-    def records(self, family: str, scope: str) -> tuple[dict[str, Any], ...]:
-        return tuple(dict(record) for record in self._records.get((family, scope), []))
+    def records(
+        self,
+        family: str,
+        scope: str,
+    ) -> tuple[dict[str, Any], ...]:
+        return tuple(
+            dict(record)
+            for record in self._records.get((family, scope), [])
+        )
 
 
 def canonical_publication_digest(
@@ -145,11 +165,17 @@ def verify_publication(
         payload,
     )
     if authorization.publication_kind != publication_kind:
-        raise SourceHandlingBlockedError("publication kind does not match authorization")
+        raise SourceHandlingBlockedError(
+            "publication kind does not match authorization"
+        )
     if authorization.governed_subject_scope != governed_subject_scope:
-        raise SourceHandlingBlockedError("publication scope does not match authorization")
+        raise SourceHandlingBlockedError(
+            "publication scope does not match authorization"
+        )
     if authorization.authorized_payload_sha256 != expected:
-        raise SourceHandlingBlockedError("publication payload does not match authorization")
+        raise SourceHandlingBlockedError(
+            "publication payload does not match authorization"
+        )
 
 
 def publish_genesis_rule(
@@ -160,11 +186,23 @@ def publish_genesis_rule(
 ) -> None:
     digest = _canonical_object_sha256(rule)
     if digest != expected_golden_sha256:
-        raise SourceHandlingBlockedError("authorization-rule bootstrap digest mismatch")
+        raise SourceHandlingBlockedError(
+            "authorization-rule bootstrap digest mismatch"
+        )
     if rule.get("authorization_rule_id") != "AUTHORIZATION_RULE_V1":
-        raise SourceHandlingBlockedError("unexpected authorization-rule bootstrap identity")
-    if store.current_head_id("AUTHORIZATION_RULE", "SOURCE_HANDLING") is not None:
-        raise SourceHandlingBlockedError("a second authorization-rule genesis is forbidden")
+        raise SourceHandlingBlockedError(
+            "unexpected authorization-rule bootstrap identity"
+        )
+    if (
+        store.current_head_id(
+            "AUTHORIZATION_RULE",
+            "SOURCE_HANDLING",
+        )
+        is not None
+    ):
+        raise SourceHandlingBlockedError(
+            "a second authorization-rule genesis is forbidden"
+        )
     record = dict(rule)
     record["id"] = str(rule["authorization_rule_id"])
     store.compare_and_append(
@@ -184,28 +222,44 @@ def publish_successor_rule(
 ) -> None:
     successor_id = str(successor.get("authorization_rule_id", ""))
     if not successor_id:
-        raise SourceHandlingBlockedError("successor authorization-rule identity required")
+        raise SourceHandlingBlockedError(
+            "successor authorization-rule identity required"
+        )
     if successor_id == authorizing_rule_id:
-        raise SourceHandlingBlockedError("an authorization rule cannot authorize itself")
+        raise SourceHandlingBlockedError(
+            "an authorization rule cannot authorize itself"
+        )
 
-    current_id = store.current_head_id("AUTHORIZATION_RULE", "SOURCE_HANDLING")
+    current_id = store.current_head_id(
+        "AUTHORIZATION_RULE",
+        "SOURCE_HANDLING",
+    )
     if current_id is None or current_id != authorizing_rule_id:
-        raise SourceHandlingBlockedError("successor must be authorized by the exact current rule")
+        raise SourceHandlingBlockedError(
+            "successor must be authorized by the exact current rule"
+        )
 
-    current_records = store.records("AUTHORIZATION_RULE", "SOURCE_HANDLING")
+    current_records = store.records(
+        "AUTHORIZATION_RULE",
+        "SOURCE_HANDLING",
+    )
     current = current_records[-1]
     if historical_cutoff is not None and not strict_known_eligible(
         current,
         historical_cutoff,
     ):
-        raise SourceHandlingBlockedError("authorizing rule was not strict-known at cutoff")
+        raise SourceHandlingBlockedError(
+            "authorizing rule was not strict-known at cutoff"
+        )
 
     supersedes = successor.get(
         "supersedes_authorization_rule_id",
         successor.get("supersedes_rule_record_id"),
     )
     if supersedes != current_id:
-        raise SourceHandlingBlockedError("successor must supersede the exact current rule")
+        raise SourceHandlingBlockedError(
+            "successor must supersede the exact current rule"
+        )
 
     record = dict(successor)
     record["id"] = successor_id
@@ -228,7 +282,9 @@ def validate_permission_evidence(
 ) -> None:
     body = authorization_rule.get("rule_body")
     if not isinstance(body, Mapping):
-        raise SourceHandlingBlockedError("authorization-rule body unavailable")
+        raise SourceHandlingBlockedError(
+            "authorization-rule body unavailable"
+        )
 
     if requested_change == "MORE_RESTRICTIVE":
         if (
@@ -242,7 +298,9 @@ def validate_permission_evidence(
             "INDEPENDENT_VERIFIED_EVIDENCE",
         }:
             return
-        raise SourceHandlingBlockedError("restrictive change lacks admissible evidence")
+        raise SourceHandlingBlockedError(
+            "restrictive change lacks admissible evidence"
+        )
 
     if requested_change not in {
         "PERMISSIVE_GENESIS",
@@ -251,23 +309,46 @@ def validate_permission_evidence(
     }:
         raise SourceHandlingBlockedError("unknown permission change")
 
-    strengths = set(_string_sequence(body.get("permissive_evidence_strengths")))
-    forbidden_methods = set(_string_sequence(body.get("forbidden_permission_methods")))
+    strengths = set(
+        _string_sequence(body.get("permissive_evidence_strengths"))
+    )
+    forbidden_methods = set(
+        _string_sequence(body.get("forbidden_permission_methods"))
+    )
     matrix = body.get("method_to_verifier_types")
     if not isinstance(matrix, Mapping):
-        raise SourceHandlingBlockedError("authorization-rule verifier matrix unavailable")
-    allowed_verifiers = set(_string_sequence(matrix.get(evidence_method)))
+        raise SourceHandlingBlockedError(
+            "authorization-rule verifier matrix unavailable"
+        )
+    allowed_verifiers = set(
+        _string_sequence(matrix.get(evidence_method))
+    )
 
     if evidence_strength not in strengths:
-        raise SourceHandlingBlockedError("evidence strength cannot grant permission")
-    if evidence_method in forbidden_methods or verifier_type not in allowed_verifiers:
-        raise SourceHandlingBlockedError("method/verifier pair cannot grant permission")
+        raise SourceHandlingBlockedError(
+            "evidence strength cannot grant permission"
+        )
+    if (
+        evidence_method in forbidden_methods
+        or verifier_type not in allowed_verifiers
+    ):
+        raise SourceHandlingBlockedError(
+            "method/verifier pair cannot grant permission"
+        )
     if requested_change in {"LESS_RESTRICTIVE", "RESTRICTION_RELEASE"}:
-        if body.get("require_release_restriction_enumeration") is True and not released_restrictions:
-            raise SourceHandlingBlockedError("released restrictions must be enumerated")
+        if (
+            body.get("require_release_restriction_enumeration") is True
+            and not released_restrictions
+        ):
+            raise SourceHandlingBlockedError(
+                "released restrictions must be enumerated"
+            )
 
 
-def strict_known_eligible(record: Mapping[str, Any], cutoff: datetime) -> bool:
+def strict_known_eligible(
+    record: Mapping[str, Any],
+    cutoff: datetime,
+) -> bool:
     for field in ("effective_from", "recorded_at", "known_at"):
         value = _as_datetime(record.get(field))
         if value is None or value > cutoff:
@@ -284,19 +365,28 @@ def strict_known_head(
     eligible = [
         record
         for record in records
-        if record.get("scope") == scope and strict_known_eligible(record, cutoff)
+        if record.get("scope") == scope
+        and strict_known_eligible(record, cutoff)
     ]
     if not eligible:
-        raise SourceHandlingBlockedError("no strict-known authority head")
+        raise SourceHandlingBlockedError(
+            "no strict-known authority head"
+        )
 
     superseded: set[str] = set()
     for record in eligible:
         predecessor = _supersedes_id(record)
         if predecessor is not None:
             superseded.add(predecessor)
-    heads = [record for record in eligible if _record_id(record) not in superseded]
+    heads = [
+        record
+        for record in eligible
+        if _record_id(record) not in superseded
+    ]
     if len(heads) != 1:
-        raise SourceHandlingBlockedError("strict-known authority history has divergent heads")
+        raise SourceHandlingBlockedError(
+            "strict-known authority history has divergent heads"
+        )
     return heads[0]
 
 
@@ -304,9 +394,13 @@ def authority_store() -> AuthorityStore:
     return AuthorityStore()
 
 
-def restrictive_fact_join(facts: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+def restrictive_fact_join(
+    facts: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
     if not facts:
-        raise SourceHandlingBlockedError("at least one handling fact is required")
+        raise SourceHandlingBlockedError(
+            "at least one handling fact is required"
+        )
 
     sensitivity_order = {
         "PUBLIC": 0,
@@ -331,28 +425,52 @@ def restrictive_fact_join(facts: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
 
     for fact in facts:
         if fact.get("operation_restrictions_known") is not True:
-            raise SourceHandlingBlockedError("operation restrictions are not known")
+            raise SourceHandlingBlockedError(
+                "operation restrictions are not known"
+            )
         if fact.get("secret_presence_known") is not True:
-            raise SourceHandlingBlockedError("secret presence is not known")
+            raise SourceHandlingBlockedError(
+                "secret presence is not known"
+            )
         if fact.get("availability_known") is not True:
-            raise SourceHandlingBlockedError("source availability is not known")
+            raise SourceHandlingBlockedError(
+                "source availability is not known"
+            )
 
         candidate_sensitivity = str(fact.get("sensitivity"))
-        candidate_persistence = str(fact.get("persistence_restriction"))
+        candidate_persistence = str(
+            fact.get("persistence_restriction")
+        )
         if candidate_sensitivity not in sensitivity_order:
-            raise SourceHandlingBlockedError("sensitivity is unknown or unsupported")
+            raise SourceHandlingBlockedError(
+                "sensitivity is unknown or unsupported"
+            )
         if candidate_persistence not in persistence_order:
-            raise SourceHandlingBlockedError("persistence restriction is unknown or unsupported")
+            raise SourceHandlingBlockedError(
+                "persistence restriction is unknown or unsupported"
+            )
 
-        if sensitivity_order[candidate_sensitivity] > sensitivity_order[sensitivity]:
+        if (
+            sensitivity_order[candidate_sensitivity]
+            > sensitivity_order[sensitivity]
+        ):
             sensitivity = candidate_sensitivity
-        if persistence_order[candidate_persistence] > persistence_order[persistence]:
+        if (
+            persistence_order[candidate_persistence]
+            > persistence_order[persistence]
+        ):
             persistence = candidate_persistence
 
-        restrictions.update(_string_sequence(fact.get("operation_restrictions")))
-        secret_presence.update(_string_sequence(fact.get("secret_presence")))
+        restrictions.update(
+            _string_sequence(fact.get("operation_restrictions"))
+        )
+        secret_presence.update(
+            _string_sequence(fact.get("secret_presence"))
+        )
         withdrawn = withdrawn or bool(fact.get("withdrawn"))
-        deleted_at_source = deleted_at_source or bool(fact.get("deleted_at_source"))
+        deleted_at_source = deleted_at_source or bool(
+            fact.get("deleted_at_source")
+        )
         historically_unavailable = historically_unavailable or bool(
             fact.get("historically_unavailable")
         )
@@ -372,11 +490,20 @@ def restrictive_fact_join(facts: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
 
 
 def lifecycle_join(values: Sequence[str]) -> str:
-    order = {"ALLOW": 0, "EXPIRE": 1, "DELETE": 2, "BLOCKED": 3}
+    order = {
+        "ALLOW": 0,
+        "EXPIRE": 1,
+        "DELETE": 2,
+        "BLOCKED": 3,
+    }
     if not values:
-        raise SourceHandlingBlockedError("at least one lifecycle disposition is required")
+        raise SourceHandlingBlockedError(
+            "at least one lifecycle disposition is required"
+        )
     if any(value not in order for value in values):
-        raise SourceHandlingBlockedError("unknown lifecycle disposition")
+        raise SourceHandlingBlockedError(
+            "unknown lifecycle disposition"
+        )
     return max(values, key=order.__getitem__)
 
 
@@ -390,35 +517,52 @@ def validate_durable_payload(
     decision_registry_id = decision.get("field_category_registry_id")
     registry_id = registry.get("field_category_registry_id")
     if not decision_registry_id or decision_registry_id != registry_id:
-        raise SourceHandlingBlockedError("exact historical field-category registry required")
+        raise SourceHandlingBlockedError(
+            "exact historical field-category registry required"
+        )
 
     if decision.get("publication_authorization") is not None:
         raise SourceHandlingBlockedError(
-            "persistence cannot reverify a publication authorization without its exact subject payload"
+            "persistence cannot reverify a publication authorization "
+            "without its exact subject payload"
         )
 
     field_map = registry.get("field_map")
     dispositions = decision.get("durable_dispositions")
-    if not isinstance(field_map, Mapping) or not isinstance(dispositions, Mapping):
-        raise SourceHandlingBlockedError("durable field authority is incomplete")
+    if not isinstance(field_map, Mapping) or not isinstance(
+        dispositions,
+        Mapping,
+    ):
+        raise SourceHandlingBlockedError(
+            "durable field authority is incomplete"
+        )
 
-    protected = bool(secret_presence & {"SECRET_PRESENT", "CREDENTIAL_PRESENT"})
+    protected = bool(
+        secret_presence & {"SECRET_PRESENT", "CREDENTIAL_PRESENT"}
+    )
     for field, value in payload.items():
         categories_raw = field_map.get(field)
         categories = _string_sequence(categories_raw)
         if not categories:
-            raise SourceHandlingBlockedError("durable field category is unknown or ambiguous")
+            raise SourceHandlingBlockedError(
+                "durable field category is unknown or ambiguous"
+            )
 
         for category in categories:
             category_dispositions = dispositions.get(category)
             if not isinstance(category_dispositions, Mapping):
-                raise SourceHandlingBlockedError("durable category disposition unavailable")
+                raise SourceHandlingBlockedError(
+                    "durable category disposition unavailable"
+                )
             if category_dispositions.get("PERSIST") != "ALLOW":
-                raise SourceHandlingBlockedError("durable field persistence is not allowed")
+                raise SourceHandlingBlockedError(
+                    "durable field persistence is not allowed"
+                )
 
         if protected and _derived_from_protected_content(value):
             raise SourceHandlingBlockedError(
-                "secret/credential-derived secondary representation cannot persist"
+                "secret/credential-derived secondary representation "
+                "cannot persist"
             )
 
 
@@ -446,7 +590,9 @@ def _json_default(value: object) -> object:
         return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
     if isinstance(value, (set, frozenset)):
         return sorted(value)
-    raise TypeError(f"value is not JSON serializable: {type(value).__name__}")
+    raise TypeError(
+        f"value is not JSON serializable: {type(value).__name__}"
+    )
 
 
 def _as_datetime(value: object) -> datetime | None:
@@ -454,7 +600,9 @@ def _as_datetime(value: object) -> datetime | None:
         return value.astimezone(UTC)
     if isinstance(value, str):
         try:
-            return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(UTC)
+            return datetime.fromisoformat(
+                value.replace("Z", "+00:00")
+            ).astimezone(UTC)
         except ValueError:
             return None
     return None
@@ -491,9 +639,16 @@ def _string_sequence(value: object) -> tuple[str, ...]:
     if isinstance(value, str):
         return (value,)
     if isinstance(value, (set, frozenset, list, tuple)):
-        return tuple(item for item in value if isinstance(item, str))
+        return tuple(
+            item
+            for item in value
+            if isinstance(item, str)
+        )
     return ()
 
 
 def _derived_from_protected_content(value: object) -> bool:
-    return isinstance(value, Mapping) and value.get("derived_from_protected_content") is True
+    return (
+        isinstance(value, Mapping)
+        and value.get("derived_from_protected_content") is True
+    )
