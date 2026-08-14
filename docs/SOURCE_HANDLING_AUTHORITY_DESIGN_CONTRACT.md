@@ -2,7 +2,7 @@
 
 ## Status
 
-Draft for final independent acceptance review under Issue #264.
+Ready for review under Issue #264.
 
 ## Governing authority
 
@@ -16,11 +16,11 @@ V1 is document-version scoped. A handling state applies to one immutable source 
 
 ## 2. Canonical authority and anti-laundering rule
 
-The Evidence Intelligence Source Handling Authority is the only component allowed to publish authoritative source-handling facts, governed source-handling policy, or governed field-category registry versions.
+The Evidence Intelligence Source Handling Authority is the only component allowed to publish authoritative source-handling facts, governed source-handling policy, governed field-category registry versions, or governed authorization-rule versions.
 
 Callers, providers, orchestrators, prompt construction, repositories, persistence adapters, generic cores, and future model-facing components are evidence suppliers or consumers only. Routing their assertions through an authority method does not make those assertions authoritative.
 
-Caller/provider evidence may, by itself, only preserve restriction, increase restriction, or leave authority unresolved. It may never, by itself, create a permissive genesis fact, release a restriction, publish a less-restrictive correction, publish canonical policy, publish a canonical field-category registry, or grant processing, retention, reconstruction, access, or deletion/lifecycle permission.
+Caller/provider evidence may, by itself, only preserve restriction, increase restriction, or leave authority unresolved. It may never, by itself, create a permissive genesis fact, release a restriction, publish a less-restrictive correction, publish canonical policy, publish a canonical field-category registry, publish a successor authorization rule, or grant processing, retention, reconstruction, access, or deletion/lifecycle permission.
 
 ### 2.1 Closed evidence-strength classes
 
@@ -53,26 +53,50 @@ Only `AUTHORITATIVE_SOURCE_EVIDENCE` or `INDEPENDENT_VERIFIED_EVIDENCE` may supp
 
 ### 2.3 Verifier types
 
-The contract reuses the accepted verifier-type semantics already present in Hunter. A verifier is admissible only when the exact verifier type is explicitly permitted for the selected evidence method by the exact historically governed authorization rule. No caller-selected verifier is authoritative merely because its identifier is syntactically valid.
+The contract reuses the accepted verifier-type semantics already present in Hunter. A verifier is admissible only when the exact verifier type is explicitly permitted for the selected evidence method by the exact strict-known `AuthorizationRuleRecord`. No caller-selected verifier is authoritative merely because its identifier is syntactically valid.
 
-### 2.4 Publication authorization
+### 2.4 Publication authorization and exact payload binding
 
-Every authoritative fact publication, policy publication, and field-category-registry publication must carry immutable `PublicationAuthorization` provenance containing:
+Every authoritative fact publication, policy publication, field-category-registry publication, and successor authorization-rule publication must carry immutable `PublicationAuthorization` provenance containing:
 
 - `authorization_id`
 - `authority_component_id`
-- `publication_kind` (`FACT`, `POLICY`, or `FIELD_CATEGORY_REGISTRY`)
+- `publication_kind` (`FACT`, `POLICY`, `FIELD_CATEGORY_REGISTRY`, or `AUTHORIZATION_RULE`)
+- exact governed scope/subject identity
+- `authorized_payload_sha256`
 - exact evidence identities
 - evidence strengths
 - evidence methods
 - verifier identities/types
+- exact `authorization_rule_id`
 - `effective_from`
 - `recorded_at`
 - `known_at`
-- authorizing policy/rule version
-- predecessor/supersession identity where applicable
+- predecessor/supersession identity or identities where applicable
 
-A permissive genesis, restriction release, or less-restrictive correction is invalid unless the authorization proves that every released restriction is supported by admissible evidence under the exact historical authorization rule. Policy and field-category-registry publication likewise require Source Handling Authority authorization and immutable provenance; caller-supplied bodies or mappings cannot become canonical merely by passing through publication APIs.
+`authorized_payload_sha256` is SHA-256 over the versioned canonical serialization of the exact publication payload, excluding only the publication record's own generated record ID and the `PublicationAuthorization` envelope/ID. The canonical payload includes the publication kind, governed scope, full fact/policy/registry/rule body, temporal fields that define the publication, and predecessor/supersession linkage. Canonicalization is schema-versioned and domain-separated by publication kind.
+
+At publication, the Source Handling Authority must recompute the payload digest from the exact candidate record and require equality with `authorized_payload_sha256`, exact subject/scope equality, and exact publication-kind equality. At persistence and replay, the same binding is recomputed and reverified. An authorization valid for one payload, scope, or publication kind is invalid for every other payload, scope, or kind; it cannot be reused to launder a different canonical record.
+
+A permissive genesis, restriction release, or less-restrictive correction is invalid unless the authorization proves that every released restriction is supported by admissible evidence under the exact historical authorization rule. Policy, field-category-registry, and successor authorization-rule publication likewise require Source Handling Authority authorization and immutable provenance; caller-supplied bodies or mappings cannot become canonical merely by passing through publication APIs.
+
+### 2.5 Authorization-rule authority and bootstrap
+
+`AuthorizationRuleRecord` is the immutable canonical owner of the evidence-strength/method/verifier admissibility matrix and of publication/restriction-release authorization requirements.
+
+The V1 bootstrap is closed and singular: `AUTHORIZATION_RULE_V1` is the only genesis authorization rule. Its exact canonical body and SHA-256 digest are fixed by this reviewed contract and materialized by the implementation migration as a repository-canonical bootstrap record. The migration must verify the implementation constant against the contract fixture/golden digest before persistence. The genesis record is not caller/provider supplied and is not authorized by a later/current rule.
+
+Every successor `AuthorizationRuleRecord` requires a `PublicationAuthorization` evaluated under the exact strict-known predecessor authorization rule and bound to the successor rule payload as defined in §2.4. A successor may not authorize itself. There is no implicit current-code/configuration fallback.
+
+`AUTHORIZATION_RULE_V1` defines these minimum V1 admissibility invariants, which successors may strengthen but may not weaken without a separately accepted architecture change:
+
+- `ASSERTION_ONLY`, `OBSERVED_RESTRICTIVE_SIGNAL`, and `UNKNOWN` never authorize a permission-increasing publication;
+- `PROVIDER_OBSERVATION`, `CALLER_ASSERTION`, `AUTOMATED_RESTRICTIVE_DETECTOR`, and `UNKNOWN` never authorize a permission-increasing publication;
+- permission-increasing fact publication requires `AUTHORITATIVE_SOURCE_EVIDENCE` or `INDEPENDENT_VERIFIED_EVIDENCE`, an allowed governed evidence method, and an allowed verifier type;
+- policy, registry, and successor authorization-rule publication require Source Handling Authority authorization with immutable evidence/provenance and exact payload binding;
+- restriction release must identify each released restriction and prove admissible support for that release.
+
+The exact closed method-to-verifier matrix is a versioned body of `AUTHORIZATION_RULE_V1` and is covered by golden-vector tests; callers cannot choose or modify it.
 
 ## 3. Normalized fact model
 
@@ -182,13 +206,31 @@ Immutable authoritative registry version containing:
 
 Registry history follows the same immutable, versioned, superseding, strict-known rules as facts and policy. Current/latest registry state is never a historical fallback.
 
-### 4.4 `SourceHandlingDecision`
+### 4.4 `AuthorizationRuleRecord`
+
+Immutable authoritative authorization-rule version containing:
+
+- `authorization_rule_id`
+- rule schema/version
+- exact evidence-strength/method/verifier admissibility matrix
+- exact publication and restriction-release rules
+- `publication_authorization_id` for non-genesis successors
+- `effective_from`
+- `recorded_at`
+- `known_at`
+- `supersedes_authorization_rule_id` when applicable
+- `record_status`
+
+Authorization-rule history follows the same immutable, versioned, strict-known rules. The only exception is the singular contract-pinned `AUTHORIZATION_RULE_V1` bootstrap described in §2.5. Current/latest rule state is never a historical fallback.
+
+### 4.5 `SourceHandlingDecision`
 
 Derived, non-authoritative output containing:
 
 - resolved fact identity
 - resolved policy identity
 - resolved `field_category_registry_id`
+- resolved `authorization_rule_id`
 - `processing_decision`
 - `retention_decision`
 - `reconstruction_decision`
@@ -203,7 +245,7 @@ No omission implies permission.
 
 Historical resolution receives a document/version identity, target effective context, and replay cutoff.
 
-A fact, policy, field-category registry, authorization, or required provenance record is eligible only when all are true:
+A fact, policy, field-category registry, authorization rule, publication authorization, or required provenance record is eligible only when all are true:
 
 - it is effective for the target context;
 - `recorded_at <= cutoff`;
@@ -212,11 +254,22 @@ A fact, policy, field-category registry, authorization, or required provenance r
 
 Missing or unknown `known_at` yields `BLOCKED`. Backdated effective time does not make later-known information historically eligible.
 
-### 5.1 Successor selection
+Every `PublicationAuthorization` is valid at replay only if its exact referenced `authorization_rule_id` is strict-known eligible at the cutoff and the authorization's payload/subject/kind binding re-verifies against the exact historical candidate record. Current code/configuration cannot substitute for a missing historical authorization rule.
 
-For each authority family, build the eligible supersession graph using only eligible records. Resolution succeeds only when there is exactly one eligible authoritative head and that head unambiguously descends from/supersedes every other eligible record in the same scope.
+### 5.1 Successor selection and branch prevention
 
-Multiple eligible heads, divergent branches, overlapping policies or registries with no single dominating successor, cycles, missing predecessor linkage, or scope ambiguity yield `BLOCKED`.
+Each authority family is append-only per governed scope. Publication is an atomic compare-and-append operation:
+
+- genesis publication supplies `expected_current_head_id = null` and succeeds only when the governed scope has no canonical head;
+- successor publication supplies exactly one `expected_current_head_id`, which must equal the repository's exact current canonical head for that scope at commit time;
+- the candidate successor must name that same head in its supersession field;
+- the repository atomically rejects the write if the expected head no longer matches.
+
+The compare-and-append precondition is persistence concurrency control, not authority selection: the repository cannot choose a different head, relax evidence requirements, or mint authorization. A publication that loses the race must re-resolve the new head and obtain a new payload-bound authorization before retrying. This prevents new divergent canonical heads in V1.
+
+For historical resolution, build the eligible supersession chain using only strict-known eligible records. Resolution succeeds only when there is exactly one eligible authoritative head and every earlier eligible record in that scope is its unambiguous ancestor.
+
+Legacy/imported multiple heads, divergent branches, overlapping policies/registries/rules with no single dominating chain, cycles, missing predecessor linkage, or scope ambiguity yield `BLOCKED`; V1 does not silently reconcile pre-existing contradictory history.
 
 Never resolve ambiguity by current/latest state, greatest timestamp, sequence number, insertion order, lexical ID, repository order, or provider preference.
 
@@ -224,7 +277,7 @@ Historical absence remains absence and may not be backfilled from present-day au
 
 ## 6. Policy derivation
 
-The policy engine consumes only the exact strict-known fact record, exact strict-known policy record, exact strict-known field-category registry identified by that policy, and non-authoritative operation context that may narrow the requested action but may not relax authority.
+The policy engine consumes only the exact strict-known fact record, exact strict-known policy record, exact strict-known field-category registry identified by that policy, exact strict-known authorization rule required by their authorizations, and non-authoritative operation context that may narrow the requested action but may not relax authority.
 
 A permissive outcome requires explicit support in resolved facts and exact governed policy. Absence of a prohibition is not permission. Any unresolved required input yields `BLOCKED` before model-facing processing.
 
@@ -260,23 +313,34 @@ For each governed category, `SourceHandlingDecision.durable_dispositions` explic
 - `RECONSTRUCT`
 - `DELETE_OR_EXPIRE`
 
-Closed disposition values:
+Closed disposition values are operation-constrained.
+
+For `PERSIST`, `READ_ACCESS`, and `RECONSTRUCT`, the only valid values are:
 
 - `ALLOW`
-- `OMIT`
 - `REDACT`
+- `OMIT`
 - `DENY`
-- `DELETE`
-- `EXPIRE`
 - `BLOCKED`
 
-There is no implicit default to `ALLOW`. Missing or ambiguous disposition is `BLOCKED`.
-
-Restriction order for persistence/access/reconstruction is:
+with exact restrictive order:
 
 `ALLOW < REDACT < OMIT < DENY < BLOCKED`
 
-For lifecycle operations, `DELETE` and `EXPIRE` are mandatory when selected and cannot be weakened to retention. When several dispositions apply, choose the most restrictive applicable result; mandatory deletion/expiry obligations remain independent and cannot be erased by an `ALLOW` on another axis.
+For `DELETE_OR_EXPIRE`, the only valid values are:
+
+- `ALLOW` — no deletion/expiry obligation is established by this category;
+- `EXPIRE` — a deterministic governed expiry obligation applies;
+- `DELETE` — deletion is required and dominates expiry;
+- `BLOCKED` — lifecycle authority is unresolved or contradictory.
+
+with exact restrictive order:
+
+`ALLOW < EXPIRE < DELETE < BLOCKED`
+
+Therefore, when one applicable category yields `DELETE` and another yields `EXPIRE`, the lifecycle join is deterministically `DELETE`. Any disposition value that is invalid for the operation is treated as `BLOCKED`. Missing or ambiguous disposition is `BLOCKED`.
+
+When a field maps to multiple categories, the operation-specific join above is applied across every applicable category. Mandatory deletion/expiry obligations cannot be erased by an `ALLOW` on another category or axis.
 
 The complete disposition map covers source bytes, excerpts/source-derived text, content-derived IDs/hashes, locators/URLs, coordinates, metadata, diagnostics, provenance identifiers, audit fields, access-controlled representations, reconstruction metadata, and lifecycle state.
 
@@ -284,14 +348,15 @@ The complete disposition map covers source bytes, excerpts/source-derived text, 
 
 Persistence is enforcement, never authority. Before any durable write, it must independently:
 
-1. strict-known resolve facts, policy, and the policy-bound field-category registry;
-2. verify publication authorizations and provenance eligibility for all three authority families;
-3. rederive the complete `SourceHandlingDecision` including exact registry identity;
-4. remap every actual field using that exact historical registry version;
-5. compute the effective disposition for the exact representation;
-6. reject caller/provider identity, classification, policy, registry, decision, disposition, or lineage mismatch;
-7. reject current/latest-registry substitution for a historical decision;
-8. write only representations explicitly permitted by the complete map and structural exclusions below.
+1. strict-known resolve facts, policy, the policy-bound field-category registry, and every authorization rule referenced by their publication authorizations;
+2. verify publication authorizations and provenance eligibility for all authority families;
+3. recompute and verify exact publication kind, subject/scope, and `authorized_payload_sha256` bindings;
+4. rederive the complete `SourceHandlingDecision` including exact registry and authorization-rule identities;
+5. remap every actual field using that exact historical registry version;
+6. compute the operation-specific effective disposition for the exact representation;
+7. reject caller/provider identity, classification, policy, registry, authorization-rule, decision, disposition, or lineage mismatch;
+8. reject current/latest policy, registry, or authorization-rule substitution for a historical decision;
+9. write only representations explicitly permitted by the complete map and structural exclusions below.
 
 No prohibited data may be written first and cleaned up later.
 
@@ -342,22 +407,24 @@ State records outcome only; it never creates permission. `PRESENT` requires `ALL
 
 ## 13. Legacy and migration
 
-Pre-authority rows gain no retroactive authority. Migration must preserve historical absence and must not fabricate `known_at`, `recorded_at`, verifier, provenance, policy, field-category registry, publication authorization, or classification.
+Pre-authority rows gain no retroactive authority. Migration must preserve historical absence and must not fabricate `known_at`, `recorded_at`, verifier, provenance, policy, field-category registry, authorization rule, publication authorization, or classification.
 
-Migration must not use current facts, policy, or current field-category registry as historical substitutes. Existing historical bytes are not proof that processing, retention, access, or reconstruction was governed. Missing historical authority remains unavailable/blocked. Migration is deterministic, repeatable, and idempotent where applicable.
+Migration must not use current facts, policy, current field-category registry, or current authorization rule as historical substitutes. Existing historical bytes are not proof that processing, retention, access, or reconstruction was governed. Missing historical authority remains unavailable/blocked. Migration is deterministic, repeatable, and idempotent where applicable.
+
+The only bootstrap exception is the singular contract-pinned `AUTHORIZATION_RULE_V1` genesis record described in §2.5; this does not confer authority on pre-existing source-handling rows.
 
 ## 14. Module/API boundaries
 
-Separate interfaces must exist for evidence submission, authoritative fact publication, authoritative policy publication, authoritative field-category-registry publication, strict-known fact resolution, strict-known policy resolution, strict-known registry resolution, deterministic decision derivation, and persistence enforcement.
+Separate interfaces must exist for evidence submission, authoritative fact publication, authoritative policy publication, authoritative field-category-registry publication, authoritative authorization-rule publication, strict-known fact resolution, strict-known policy resolution, strict-known registry resolution, strict-known authorization-rule resolution, deterministic decision derivation, and persistence enforcement.
 
-Evidence-submission APIs accept non-authoritative evidence only. Fact/policy/registry publication APIs require validated `PublicationAuthorization`; repositories cannot mint one. Repositories persist/query immutable records only. Providers acquire evidence only. Prompt/model-facing consumers receive only derived decisions after successful authority resolution.
+Evidence-submission APIs accept non-authoritative evidence only. Fact/policy/registry/rule publication APIs require validated payload-bound `PublicationAuthorization`, except only the contract-pinned genesis materialization of `AUTHORIZATION_RULE_V1`. Repositories cannot mint an authorization. Repositories persist/query immutable records and atomically enforce the compare-and-append expected-head precondition only; they do not select authority. Providers acquire evidence only. Prompt/model-facing consumers receive only derived decisions after successful authority resolution.
 
 ## 15. Failure semantics
 
 V1 terminal outcome is either:
 
 - `READY`: all required authority resolved and requested operation explicitly permitted; or
-- `BLOCKED`: any required authority/fact/policy/registry/provenance/category/disposition is missing, unknown, unavailable, conflicting, partial, ambiguous, or prohibitive.
+- `BLOCKED`: any required authority/fact/policy/registry/authorization-rule/provenance/category/disposition is missing, unknown, unavailable, conflicting, partial, ambiguous, or prohibitive.
 
 There is no permission-bearing `DEGRADED` state.
 
@@ -372,9 +439,25 @@ Tests are written before runtime implementation and must cover all root semantic
 - source/source-type derivation cannot turn assertion-only evidence into permission;
 - unauthorized policy publication rejects;
 - unauthorized field-category-registry publication rejects;
-- repository/API direct write cannot create canonical fact/policy/registry without publication authorization;
+- unauthorized authorization-rule successor publication rejects;
+- repository/API direct write cannot create canonical fact/policy/registry/rule without required publication authorization;
 - admissible restrictive evidence can add restriction;
-- permissive publication requires admissible strength, method, verifier, authorization, and immutable provenance.
+- permissive publication requires admissible strength, method, verifier, authorization, and immutable provenance;
+- a valid authorization for one fact payload rejects when reused for a different fact payload;
+- a valid authorization for one policy body rejects when reused for a different body or scope;
+- a valid authorization for one registry mapping rejects when reused for a different mapping;
+- publication-kind mismatch rejects;
+- tampered `authorized_payload_sha256` rejects at publication and persistence.
+
+### Authorization-rule history and bootstrap
+
+- the `AUTHORIZATION_RULE_V1` fixture/body matches its contract-pinned golden digest;
+- no second genesis authorization rule can be created;
+- successor authorization rule cannot authorize itself;
+- successor rule publication is evaluated under the exact strict-known predecessor rule;
+- later/current authorization rule cannot validate an earlier historical publication;
+- missing/unknown historical authorization rule blocks replay and persistence;
+- caller-selected rule ID cannot substitute for canonical strict-known resolution.
 
 ### Fact product and joins
 
@@ -386,30 +469,34 @@ Tests are written before runtime implementation and must cover all root semantic
 - product join is associative, commutative, idempotent;
 - every unknown knowledge marker blocks.
 
-### Strict-known replay and registry binding
+### Strict-known replay, registry binding, and publication concurrency
 
 - unknown/missing `known_at` blocks;
 - backdated but later-known evidence is invisible before `known_at`;
-- later-recorded or later-known fact/policy/authorization/registry is invisible before cutoff;
+- later-recorded or later-known fact/policy/authorization/registry/rule is invisible before cutoff;
 - current state cannot satisfy historical absence;
-- overlapping policies or registries with multiple heads block;
-- divergent successors block;
-- one eligible successor that unambiguously supersedes all earlier eligible records resolves;
+- legacy/imported overlapping authority heads block;
 - timestamp/sequence/lexical/insertion-order tie-breakers are not used;
 - later registry version cannot change historical field classification;
 - tampered registry identity in a supplied decision rejects;
-- persistence rejects current-registry substitution when replay requires an older registry.
+- persistence rejects current-registry substitution when replay requires an older registry;
+- two concurrent successor publications with the same expected head cannot both commit;
+- losing compare-and-append publication must re-resolve and obtain a new payload-bound authorization;
+- expected-head mismatch rejects without creating a divergent head.
 
 ### Persistence and complete dispositions
 
 - every durable category has explicit operation dispositions;
 - source bytes, excerpts, hashes, IDs, locators, URLs, coordinates, metadata, diagnostics, provenance IDs, audit fields, reconstruction metadata, and access-controlled representations are enforced individually;
-- multi-category field receives the most restrictive result;
+- multi-category field receives the most restrictive operation-specific result;
 - unknown/ambiguous field category is non-persistable and blocks when required;
-- tampered caller decision/disposition/policy/registry identity rejects before write;
+- tampered caller decision/disposition/policy/registry/rule identity rejects before write;
 - access restrictions are enforced independently of persistence;
 - reconstruction restrictions are enforced independently of retention;
-- deletion/expiry obligations cannot be weakened by another allow.
+- deletion/expiry obligations cannot be weakened by another allow;
+- `DELETE` joined with `EXPIRE` yields `DELETE` regardless of category order;
+- lifecycle join is associative, commutative, and idempotent;
+- a disposition value invalid for its operation yields `BLOCKED`.
 
 ### Secrets, credentials, audit, legacy, and counterfactual proof
 
@@ -419,7 +506,7 @@ Tests are written before runtime implementation and must cover all root semantic
 - blocked-audit representation leaks neither source secrets nor credentials;
 - detector hit can only add restriction; detector miss cannot grant permission;
 - pre-authority record remains historically unresolved;
-- migration cannot manufacture historical authority or registry history.
+- migration cannot manufacture historical source-handling authority or registry/rule history beyond the singular contract-pinned rule bootstrap.
 
 For every blocking regression class above, disable/remove the root rule and demonstrate that its regression test fails, per the Non-Vacuous Regression Tests and Harness Fidelity requirements in `docs/HUNTER_IMPLEMENTATION_CONTRACT.md`.
 
@@ -428,14 +515,15 @@ For every blocking regression class above, disable/remove the root rule and demo
 1. obtain final independent acceptance review of this contract;
 2. freeze the accepted contract;
 3. write the deterministic tests above first;
-4. implement record models/repositories mechanically;
-5. implement publication authorization and strict-known resolution for facts, policy, and registry;
-6. implement policy derivation, complete disposition map, and structural secret/credential exclusion;
-7. implement persistence enforcement and migration behavior;
-8. integrate with the existing pre-model pipeline;
-9. run repository-wide verification and counterfactual tests;
-10. independent Codex implementation review against the frozen contract/tests;
-11. only then resume or replace PR #260 as appropriate.
+4. materialize and golden-verify the contract-pinned `AUTHORIZATION_RULE_V1` bootstrap;
+5. implement record models/repositories and atomic compare-and-append mechanically;
+6. implement payload-bound publication authorization and strict-known resolution for facts, policy, registry, rules, authorizations, and provenance;
+7. implement policy derivation, operation-specific disposition joins, complete disposition map, and structural secret/credential exclusion;
+8. implement persistence enforcement and migration behavior;
+9. integrate with the existing pre-model pipeline;
+10. run repository-wide verification and counterfactual tests;
+11. independent Codex implementation review against the frozen contract/tests;
+12. only then resume or replace PR #260 as appropriate.
 
 No implementation step may weaken ADR 0033 or invent authority to preserve existing code.
 
