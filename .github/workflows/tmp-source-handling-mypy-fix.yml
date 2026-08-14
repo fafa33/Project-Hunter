@@ -1,0 +1,70 @@
+name: Temporary Source Handling Mypy Fix
+
+on:
+  push:
+    branches:
+      - ava/source-handling-tests-first
+
+permissions:
+  contents: write
+
+concurrency:
+  group: tmp-source-handling-mypy-fix
+  cancel-in-progress: true
+
+jobs:
+  fix:
+    if: ${{ !contains(github.event.head_commit.message, '[mypy-fix-applied]') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ava/source-handling-tests-first
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11.13'
+      - name: Install project
+        run: python -m pip install -c requirements/ci-constraints.txt -e '.[dev]'
+      - name: Fix typed tampered payload fixture
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('tests/test_source_handling_authority_enforcement.py')
+          text = path.read_text()
+          old = '''                "fact": {
+                    **authorized_payload["fact"],
+                    "sensitivity": "INTERNAL",
+                },
+'''
+          new = '''                "fact": {
+                    "sensitivity": "INTERNAL",
+                    "operation_restrictions": [],
+                    "persistence_restriction": "FULL_CONTENT_ALLOWED",
+                    "secret_presence": [],
+                    "operation_restrictions_known": True,
+                    "secret_presence_known": True,
+                    "withdrawn": False,
+                    "deleted_at_source": False,
+                    "historically_unavailable": False,
+                    "availability_known": True,
+                },
+'''
+          if old not in text:
+              raise SystemExit('typed fixture anchor missing')
+          path.write_text(text.replace(old, new, 1))
+          PY
+      - name: Canonicalize and run full preflight
+        run: |
+          ruff check --fix tests/test_source_handling_authority_enforcement.py
+          black tests/test_source_handling_authority_enforcement.py
+          python scripts/hunter_pr_preflight.py
+      - name: Commit and clean temporary workflow
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/tmp-source-handling-mypy-fix.yml
+          git add tests/test_source_handling_authority_enforcement.py
+          git commit -m "test: keep source handling tamper fixture statically typed [mypy-fix-applied]"
+          git push origin HEAD:ava/source-handling-tests-first
