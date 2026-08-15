@@ -12,9 +12,7 @@ HYGIENE_GATES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Black", ("black", "--check", "--diff", ".")),
     ("Mypy", ("mypy",)),
 )
-NORMAL_QUALITY_GATES: tuple[tuple[str, tuple[str, ...]], ...] = HYGIENE_GATES + (
-    ("Pytest", ("pytest",)),
-)
+NORMAL_QUALITY_GATES: tuple[tuple[str, tuple[str, ...]], ...] = HYGIENE_GATES + (("Pytest", ("pytest",)),)
 TESTS_FIRST_RED_GATES = HYGIENE_GATES
 QUALITY_GATES = NORMAL_QUALITY_GATES
 
