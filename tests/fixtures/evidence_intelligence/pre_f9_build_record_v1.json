@@ -1,0 +1,20 @@
+{
+  "record": {
+    "execution_owner_id": "legacy-run-1",
+    "intent_id": "evidence-intent:legacy",
+    "ledger_id": "evidence-context-ledger:legacy",
+    "allocation_id": "evidence-context-allocation:legacy",
+    "package_id": "evidence-context-package:legacy",
+    "prompt_plan_id": "evidence-prompt-plan:legacy",
+    "prompt_artifact_id": "evidence-prompt-artifact:legacy",
+    "reconstruction_outcome": "AVAILABLE",
+    "reason_codes": [],
+    "schema_version": "1"
+  },
+  "expected_build_record_id": "evidence-pre-model-build:729c3b393055c1af96c3073e9683822b5c33f9f5d4f05b4fbee9627cf18b5b06",
+  "provenance": {
+    "producer": "pre-F9 EvidencePreModelBuildRecord schema v1",
+    "base_commit": "a02e1ccd1b0aa4450a5fa6867d7524f93f6784c9",
+    "note": "Frozen before ADR 0031 F9 integration; fields are the complete schema-v1 build-record payload and must never be rewritten with later authority fields before identity verification."
+  }
+}
