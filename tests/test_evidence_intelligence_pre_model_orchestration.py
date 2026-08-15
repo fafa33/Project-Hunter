@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from evidence_pre_model_source_handling_fixture import source_handling_authority
 
 from hunter.evidence_intelligence.models import EvidenceDocument, EvidenceSpan, evidence_text_digest
 from hunter.evidence_intelligence.pre_model import (
@@ -20,8 +21,6 @@ from hunter.evidence_intelligence.pre_model_persistence import (
     EvidencePreModelPersistenceRepository,
 )
 from hunter.evidence_intelligence.repository import EvidenceIntelligenceRepository
-
-from evidence_pre_model_source_handling_fixture import source_handling_authority
 
 NOW = datetime(2026, 8, 9, tzinfo=UTC)
 RECORDED_AT = datetime(2026, 8, 9, 12, 0, tzinfo=UTC)
