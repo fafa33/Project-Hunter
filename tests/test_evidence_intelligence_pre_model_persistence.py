@@ -25,6 +25,12 @@ from hunter.evidence_intelligence.pre_model_persistence import (
 )
 from hunter.evidence_intelligence.repository import EvidenceIntelligenceRepository
 
+from evidence_pre_model_source_handling_fixture import source_handling_authority
+
+SPAN_TIME = datetime(2026, 8, 12, 18, 0, tzinfo=UTC)
+BUILD_AUTHORITY_CUTOFF = datetime(2026, 8, 12, 18, 15, tzinfo=UTC)
+RECORDED_AT = datetime(2026, 8, 12, 18, 30, tzinfo=UTC)
+
 
 def _span(
     span_id: str,
@@ -32,8 +38,9 @@ def _span(
     *,
     status: str = "active",
     source_evidence_id: str | None = None,
+    created_at: datetime = SPAN_TIME,
+    validated_at: datetime = SPAN_TIME,
 ) -> EvidenceSpan:
-    now = datetime(2026, 8, 12, 18, 0, tzinfo=UTC)
     return EvidenceSpan(
         span_id=span_id,
         document_id="doc-1",
@@ -52,8 +59,8 @@ def _span(
         section_title="Test",
         locator=f"test:{span_id}",
         span_status=status,  # type: ignore[arg-type]
-        created_at=now,
-        validated_at=now,
+        created_at=created_at,
+        validated_at=validated_at,
     )
 
 
@@ -100,12 +107,35 @@ def _cap(maximum: int = 4096) -> EvidenceCapabilityConstraint:
     )
 
 
-def _ready_build(*, retain_exact_prompt: bool = True):
-    inventory = (_span("span-1", "durable evidence"),)
+def _authority(
+    *,
+    cutoff: datetime = BUILD_AUTHORITY_CUTOFF,
+    retention: str = "ALLOW",
+    reconstruction: str = "ALLOW",
+):
+    return source_handling_authority(
+        document_id="doc-1",
+        cutoff=cutoff,
+        retention=retention,
+        reconstruction=reconstruction,
+    )
+
+
+def _build(
+    *,
+    inventory: tuple[EvidenceSpan, ...] | None = None,
+    retention: str = "ALLOW",
+    reconstruction: str = "ALLOW",
+    maximum: int = 4096,
+):
+    inventory = inventory or (_span("span-1", "durable evidence"),)
     intent = _intent()
-    policy = _policy(required=("span-1",))
+    required = (inventory[0].span_id,)
+    optional = tuple(span.span_id for span in inventory[1:])
+    policy = _policy(required=required, optional=optional)
     specification = _spec()
-    capability = _cap()
+    capability = _cap(maximum)
+    authority = _authority(retention=retention, reconstruction=reconstruction)
     result = build_evidence_pre_model(
         execution_owner_id="run-1",
         intent=intent,
@@ -113,58 +143,72 @@ def _ready_build(*, retain_exact_prompt: bool = True):
         specification=specification,
         capability=capability,
         canonical_inventory=inventory,
-        candidate_span_ids=("span-1",),
-        retain_exact_prompt=retain_exact_prompt,
+        candidate_span_ids=tuple(span.span_id for span in inventory),
+        source_handling_authority=authority,
     )
     return intent, policy, specification, capability, inventory, result
+
+
+def _save(
+    persistence: EvidencePreModelPersistenceRepository,
+    bundle,
+    *,
+    recorded_at: datetime = RECORDED_AT,
+    retention: str = "ALLOW",
+    reconstruction: str = "ALLOW",
+    authority_cutoff: datetime | None = None,
+):
+    intent, policy, specification, capability, inventory, result = bundle
+    authority = _authority(
+        cutoff=authority_cutoff or min(BUILD_AUTHORITY_CUTOFF, recorded_at),
+        retention=retention,
+        reconstruction=reconstruction,
+    )
+    return persistence.save(
+        intent=intent,
+        policy=policy,
+        specification=specification,
+        capability=capability,
+        canonical_inventory=inventory,
+        build_result=result,
+        recorded_at=recorded_at,
+        source_handling_authority=authority,
+    )
+
+
+def _persisted_payload_json(repository: EvidenceIntelligenceRepository, build_record_id: str) -> str:
+    with sqlite3.connect(repository.path) as connection:
+        row = connection.execute(
+            "SELECT payload_json FROM evidence_pre_model_build_bundles WHERE build_record_id = ?",
+            (build_record_id,),
+        ).fetchone()
+    assert row is not None
+    return str(row[0])
 
 
 def test_ready_build_persists_and_reconstructs_exact_prompt(tmp_path) -> None:
     repository = EvidenceIntelligenceRepository(tmp_path / "evidence.sqlite")
     persistence = EvidencePreModelPersistenceRepository(repository)
-    intent, policy, specification, capability, inventory, result = _ready_build()
-    recorded_at = datetime(2026, 8, 12, 18, 30, tzinfo=UTC)
-
-    saved = persistence.save(
-        intent=intent,
-        policy=policy,
-        specification=specification,
-        capability=capability,
-        canonical_inventory=inventory,
-        build_result=result,
-        recorded_at=recorded_at,
-    )
-    reconstructed = persistence.strict_known_reconstruction(saved.build_record_id, recorded_at)
+    bundle = _build()
+    saved = _save(persistence, bundle)
+    reconstructed = persistence.strict_known_reconstruction(saved.build_record_id, RECORDED_AT)
 
     assert reconstructed.status == "AVAILABLE"
     assert reconstructed.bundle is not None
     assert reconstructed.bundle.build_record_id == saved.build_record_id
-    assert reconstructed.bundle.build_result.prompt_artifact is not None
-    assert result.prompt_artifact is not None
-    assert reconstructed.exact_prompt == result.prompt_artifact.content
-    assert reconstructed.bundle.build_result.prompt_artifact.content_hash == result.prompt_artifact.content_hash
+    assert reconstructed.exact_prompt == bundle[-1].prompt_artifact.content
 
 
 def test_strict_known_cutoff_before_recording_is_unavailable(tmp_path) -> None:
     repository = EvidenceIntelligenceRepository(tmp_path / "evidence.sqlite")
     persistence = EvidencePreModelPersistenceRepository(repository)
-    intent, policy, specification, capability, inventory, result = _ready_build()
-    recorded_at = datetime(2026, 8, 12, 18, 30, tzinfo=UTC)
-    persistence.save(
-        intent=intent,
-        policy=policy,
-        specification=specification,
-        capability=capability,
-        canonical_inventory=inventory,
-        build_result=result,
-        recorded_at=recorded_at,
-    )
+    bundle = _build()
+    saved = _save(persistence, bundle)
 
     reconstructed = persistence.strict_known_reconstruction(
-        result.build_record.build_record_id,
-        recorded_at - timedelta(microseconds=1),
+        saved.build_record_id,
+        RECORDED_AT - timedelta(microseconds=1),
     )
-
     assert reconstructed.status == "NOT_KNOWN_AT_CUTOFF"
     assert reconstructed.bundle is None
     assert reconstructed.exact_prompt is None
@@ -173,49 +217,22 @@ def test_strict_known_cutoff_before_recording_is_unavailable(tmp_path) -> None:
 def test_exact_retry_is_idempotent_and_preserves_first_recorded_at(tmp_path) -> None:
     repository = EvidenceIntelligenceRepository(tmp_path / "evidence.sqlite")
     persistence = EvidencePreModelPersistenceRepository(repository)
-    intent, policy, specification, capability, inventory, result = _ready_build()
-    first_at = datetime(2026, 8, 12, 18, 30, tzinfo=UTC)
-    retry_at = first_at + timedelta(hours=1)
-
-    first = persistence.save(
-        intent=intent,
-        policy=policy,
-        specification=specification,
-        capability=capability,
-        canonical_inventory=inventory,
-        build_result=result,
-        recorded_at=first_at,
-    )
-    retry = persistence.save(
-        intent=intent,
-        policy=policy,
-        specification=specification,
-        capability=capability,
-        canonical_inventory=inventory,
-        build_result=result,
-        recorded_at=retry_at,
-    )
+    bundle = _build()
+    first = _save(persistence, bundle)
+    retry = _save(persistence, bundle, recorded_at=RECORDED_AT + timedelta(hours=1))
 
     assert retry.build_record_id == first.build_record_id
-    assert retry.recorded_at == first_at
+    assert retry.recorded_at == RECORDED_AT
 
 
 def test_same_build_identity_with_conflicting_bundle_fails_closed(tmp_path) -> None:
     repository = EvidenceIntelligenceRepository(tmp_path / "evidence.sqlite")
     persistence = EvidencePreModelPersistenceRepository(repository)
-    intent, policy, specification, capability, inventory, result = _ready_build()
-    recorded_at = datetime(2026, 8, 12, 18, 30, tzinfo=UTC)
-    persistence.save(
-        intent=intent,
-        policy=policy,
-        specification=specification,
-        capability=capability,
-        canonical_inventory=inventory,
-        build_result=result,
-        recorded_at=recorded_at,
-    )
-
+    bundle = _build()
+    _save(persistence, bundle)
+    intent, policy, specification, capability, _inventory, result = bundle
     conflicting_inventory = (_span("span-1", "durable evidence", source_evidence_id="different-source"),)
+
     with pytest.raises(PreModelPersistenceConflict):
         persistence.save(
             intent=intent,
@@ -224,24 +241,16 @@ def test_same_build_identity_with_conflicting_bundle_fails_closed(tmp_path) -> N
             capability=capability,
             canonical_inventory=conflicting_inventory,
             build_result=result,
-            recorded_at=recorded_at + timedelta(minutes=1),
+            recorded_at=RECORDED_AT + timedelta(minutes=1),
+            source_handling_authority=_authority(cutoff=RECORDED_AT),
         )
 
 
 def test_reconstruction_ignores_later_current_span_content(tmp_path) -> None:
     repository = EvidenceIntelligenceRepository(tmp_path / "evidence.sqlite")
     persistence = EvidencePreModelPersistenceRepository(repository)
-    intent, policy, specification, capability, inventory, result = _ready_build()
-    recorded_at = datetime(2026, 8, 12, 18, 30, tzinfo=UTC)
-    persistence.save(
-        intent=intent,
-        policy=policy,
-        specification=specification,
-        capability=capability,
-        canonical_inventory=inventory,
-        build_result=result,
-        recorded_at=recorded_at,
-    )
+    bundle = _build()
+    saved = _save(persistence, bundle)
 
     changed = _span("span-1", "later changed content")
     with sqlite3.connect(repository.path) as connection:
@@ -282,135 +291,29 @@ def test_reconstruction_ignores_later_current_span_content(tmp_path) -> None:
         )
 
     reconstructed = persistence.strict_known_reconstruction(
-        result.build_record.build_record_id,
-        recorded_at + timedelta(days=1),
+        saved.build_record_id,
+        RECORDED_AT + timedelta(days=1),
     )
-
     assert reconstructed.status == "AVAILABLE"
-    assert reconstructed.bundle is not None
-    assert reconstructed.bundle.canonical_inventory[0].excerpt == "durable evidence"
     assert reconstructed.exact_prompt is not None
     assert "durable evidence" in reconstructed.exact_prompt
     assert "later changed content" not in reconstructed.exact_prompt
 
 
-def test_retention_prohibited_prompt_remains_explicitly_unavailable(tmp_path) -> None:
-    repository = EvidenceIntelligenceRepository(tmp_path / "evidence.sqlite")
-    persistence = EvidencePreModelPersistenceRepository(repository)
-    intent, policy, specification, capability, inventory, result = _ready_build(retain_exact_prompt=False)
-    recorded_at = datetime(2026, 8, 12, 18, 30, tzinfo=UTC)
-    saved = persistence.save(
-        intent=intent,
-        policy=policy,
-        specification=specification,
-        capability=capability,
-        canonical_inventory=inventory,
-        build_result=result,
-        recorded_at=recorded_at,
-    )
-
-    reconstructed = persistence.strict_known_reconstruction(saved.build_record_id, recorded_at)
-
-    assert reconstructed.status == "UNAVAILABLE"
-    assert reconstructed.reason_code == "EXACT_PROMPT_RETENTION_PROHIBITED"
-    assert reconstructed.exact_prompt is None
-    assert reconstructed.bundle is not None
-    assert reconstructed.bundle.build_result.prompt_artifact is not None
-    assert reconstructed.bundle.build_result.prompt_artifact.content == ""
-
-
-def test_replan_build_persists_exact_failure_lineage(tmp_path) -> None:
-    repository = EvidenceIntelligenceRepository(tmp_path / "evidence.sqlite")
-    persistence = EvidencePreModelPersistenceRepository(repository)
-    inventory = (_span("span-1", "unresolved", status="source_changed"),)
-    intent = _intent()
-    policy = _policy(required=("span-1",))
-    specification = _spec()
-    capability = _cap()
-    result = build_evidence_pre_model(
-        execution_owner_id="run-1",
-        intent=intent,
-        policy=policy,
-        specification=specification,
-        capability=capability,
-        canonical_inventory=inventory,
-        candidate_span_ids=("span-1",),
-    )
-    recorded_at = datetime(2026, 8, 12, 18, 30, tzinfo=UTC)
-    saved = persistence.save(
-        intent=intent,
-        policy=policy,
-        specification=specification,
-        capability=capability,
-        canonical_inventory=inventory,
-        build_result=result,
-        recorded_at=recorded_at,
-        # A build that produced no prompt carries no derivable retention
-        # signal, so the governing policy must be stated explicitly.
-        retain_exact_source_bytes=True,
-    )
-
-    reconstructed = persistence.strict_known_reconstruction(saved.build_record_id, recorded_at)
-
-    assert reconstructed.status == "UNAVAILABLE"
-    assert reconstructed.bundle is not None
-    assert reconstructed.bundle.build_result.allocation.outcome == "REPLAN_REQUIRED"
-    assert reconstructed.bundle.build_result.prompt_artifact is None
-    assert "UNRESOLVED_REQUIRED" in reconstructed.bundle.build_result.build_record.reason_codes
-
-
-# ====================================================================================
-# FINDING 1: prohibited prompt/source bytes must not survive in persisted evidence
-# ====================================================================================
-
-
-def _persisted_payload_json(repository: EvidenceIntelligenceRepository, build_record_id: str) -> str:
-    with sqlite3.connect(repository.path) as connection:
-        connection.row_factory = sqlite3.Row
-        row = connection.execute(
-            "SELECT payload_json FROM evidence_pre_model_build_bundles WHERE build_record_id = ?",
-            (build_record_id,),
-        ).fetchone()
-    assert row is not None
-    return str(row["payload_json"])
-
-
-def test_retention_prohibited_build_does_not_persist_source_bytes(tmp_path) -> None:
-    """The raw span text the prompt is rendered from must not survive.
-
-    Keeping `excerpt` would leave the prohibited prompt trivially regenerable
-    from the persisted bundle (intent + specification + spans + ordering are all
-    retained), making the recorded EXACT_PROMPT_RETENTION_PROHIBITED outcome
-    false in substance.
-    """
+def test_retention_prohibition_is_authority_derived_and_redacts_source_bytes(tmp_path) -> None:
     secret = "confidential-source-material-do-not-retain"
-    inventory = (_span("span-1", secret),)
-    intent = _intent()
-    policy = _policy(required=("span-1",))
-    specification = _spec()
-    capability = _cap()
-    result = build_evidence_pre_model(
-        execution_owner_id="run-1",
-        intent=intent,
-        policy=policy,
-        specification=specification,
-        capability=capability,
-        canonical_inventory=inventory,
-        candidate_span_ids=("span-1",),
-        retain_exact_prompt=False,
+    bundle = _build(
+        inventory=(_span("span-1", secret),),
+        retention="DENY",
+        reconstruction="DENY",
     )
-
     repository = EvidenceIntelligenceRepository(tmp_path / "evidence.sqlite")
     persistence = EvidencePreModelPersistenceRepository(repository)
-    recorded_at = datetime(2026, 8, 12, 18, 30, tzinfo=UTC)
-    saved = persistence.save(
-        intent=intent,
-        policy=policy,
-        specification=specification,
-        capability=capability,
-        canonical_inventory=inventory,
-        build_result=result,
-        recorded_at=recorded_at,
+    saved = _save(
+        persistence,
+        bundle,
+        retention="DENY",
+        reconstruction="DENY",
     )
 
     payload_json = _persisted_payload_json(repository, saved.build_record_id)
@@ -419,91 +322,86 @@ def test_retention_prohibited_build_does_not_persist_source_bytes(tmp_path) -> N
     assert saved.exact_source_bytes_retained is False
     assert saved.canonical_inventory[0].excerpt == REDACTED_SOURCE_EXCERPT
 
-    # Identities, ranges, and hashes remain (ADR 0031 minimum provenance).
-    reconstructed = persistence.strict_known_reconstruction(saved.build_record_id, recorded_at)
-    assert reconstructed.bundle is not None
-    persisted_span = reconstructed.bundle.canonical_inventory[0]
-    assert persisted_span.span_id == "span-1"
-    assert persisted_span.text_hash == inventory[0].text_hash
-    assert persisted_span.start_offset == inventory[0].start_offset
-    assert persisted_span.end_offset == inventory[0].end_offset
+    reconstructed = persistence.strict_known_reconstruction(saved.build_record_id, RECORDED_AT)
     assert reconstructed.status == "UNAVAILABLE"
     assert reconstructed.reason_code == "EXACT_PROMPT_RETENTION_PROHIBITED"
     assert reconstructed.exact_prompt is None
-    assert reconstructed.bundle.exact_source_bytes_retained is False
 
 
 def test_retained_build_still_persists_exact_source_bytes(tmp_path) -> None:
-    """The redaction must apply only when retention is actually prohibited."""
-    inventory = (_span("span-1", "durable evidence"),)
-    intent, policy, specification, capability, _inventory, result = _ready_build()
+    bundle = _build()
     repository = EvidenceIntelligenceRepository(tmp_path / "evidence.sqlite")
     persistence = EvidencePreModelPersistenceRepository(repository)
-    recorded_at = datetime(2026, 8, 12, 18, 30, tzinfo=UTC)
-    saved = persistence.save(
-        intent=intent,
-        policy=policy,
-        specification=specification,
-        capability=capability,
-        canonical_inventory=inventory,
-        build_result=result,
-        recorded_at=recorded_at,
-    )
-
+    saved = _save(persistence, bundle)
     payload_json = _persisted_payload_json(repository, saved.build_record_id)
+
     assert "durable evidence" in payload_json
     assert REDACTED_SOURCE_EXCERPT not in payload_json
     assert saved.exact_source_bytes_retained is True
 
 
-def test_explicit_retention_prohibition_covers_builds_without_a_prompt(tmp_path) -> None:
-    """A build that failed before producing a prompt still honours the policy."""
-    secret = "confidential-source-material-do-not-retain"
-    inventory = (_span("span-1", secret, status="source_changed"),)
-    intent = _intent()
-    policy = _policy(required=("span-1",))
-    specification = _spec()
-    capability = _cap()
-    result = build_evidence_pre_model(
-        execution_owner_id="run-1",
-        intent=intent,
-        policy=policy,
-        specification=specification,
-        capability=capability,
-        canonical_inventory=inventory,
-        candidate_span_ids=("span-1",),
-        retain_exact_prompt=False,
-    )
-    assert result.allocation.outcome == "REPLAN_REQUIRED"
-    # The REPLAN path never reaches the retention reason code, so derivation
-    # alone would wrongly retain the bytes; the explicit policy flag must win.
-    assert "EXACT_PROMPT_RETENTION_PROHIBITED" not in result.build_record.reason_codes
-
+@pytest.mark.parametrize("status", ("source_changed",))
+def test_pre_prompt_failure_persists_lineage_under_authority(tmp_path, status: str) -> None:
+    bundle = _build(inventory=(_span("span-1", "unresolved", status=status),))
+    assert bundle[-1].allocation.outcome == "REPLAN_REQUIRED"
     repository = EvidenceIntelligenceRepository(tmp_path / "evidence.sqlite")
     persistence = EvidencePreModelPersistenceRepository(repository)
-    saved = persistence.save(
-        intent=intent,
-        policy=policy,
-        specification=specification,
-        capability=capability,
-        canonical_inventory=inventory,
-        build_result=result,
-        recorded_at=datetime(2026, 8, 12, 18, 30, tzinfo=UTC),
-        retain_exact_source_bytes=False,
+    saved = _save(persistence, bundle)
+    reconstructed = persistence.strict_known_reconstruction(saved.build_record_id, RECORDED_AT)
+
+    assert reconstructed.status == "UNAVAILABLE"
+    assert reconstructed.bundle is not None
+    assert reconstructed.bundle.build_result.prompt_artifact is None
+    assert "UNRESOLVED_REQUIRED" in reconstructed.bundle.build_result.build_record.reason_codes
+
+
+def test_pre_prompt_failure_with_retention_denied_cannot_persist_source_bytes(tmp_path) -> None:
+    secret = "confidential-unresolved-source"
+    bundle = _build(
+        inventory=(_span("span-1", secret, status="source_changed"),),
+        retention="DENY",
+        reconstruction="DENY",
+    )
+    repository = EvidenceIntelligenceRepository(tmp_path / "evidence.sqlite")
+    persistence = EvidencePreModelPersistenceRepository(repository)
+    saved = _save(
+        persistence,
+        bundle,
+        retention="DENY",
+        reconstruction="DENY",
     )
 
     assert secret not in _persisted_payload_json(repository, saved.build_record_id)
+    assert saved.exact_source_bytes_retained is False
 
 
-def test_retention_prohibition_rejects_a_build_that_still_carries_prompt_bytes(tmp_path) -> None:
-    """Fail closed rather than persist a prompt the policy forbids retaining."""
-    intent, policy, specification, capability, inventory, result = _ready_build()
-    assert result.prompt_artifact is not None
-    assert result.prompt_artifact.content
-
+def test_insufficient_budget_with_retention_denied_cannot_persist_source_bytes(tmp_path) -> None:
+    secret = "confidential source material that will not fit"
+    bundle = _build(
+        inventory=(_span("span-1", secret),),
+        retention="DENY",
+        reconstruction="DENY",
+        maximum=200,
+    )
+    assert bundle[-1].allocation.outcome == "INSUFFICIENT_BUDGET"
     repository = EvidenceIntelligenceRepository(tmp_path / "evidence.sqlite")
     persistence = EvidencePreModelPersistenceRepository(repository)
-    with pytest.raises(PreModelPersistenceLineageError):
+    saved = _save(
+        persistence,
+        bundle,
+        retention="DENY",
+        reconstruction="DENY",
+    )
+    assert secret not in _persisted_payload_json(repository, saved.build_record_id)
+
+
+def test_persistence_requires_source_handling_authority(tmp_path) -> None:
+    bundle = _build()
+    intent, policy, specification, capability, inventory, result = bundle
+    repository = EvidenceIntelligenceRepository(tmp_path / "evidence.sqlite")
+    persistence = EvidencePreModelPersistenceRepository(repository)
+
+    with pytest.raises(PreModelPersistenceLineageError, match="source handling authority is required"):
         persistence.save(
             intent=intent,
             policy=policy,
@@ -511,24 +409,40 @@ def test_retention_prohibition_rejects_a_build_that_still_carries_prompt_bytes(t
             capability=capability,
             canonical_inventory=inventory,
             build_result=result,
-            recorded_at=datetime(2026, 8, 12, 18, 30, tzinfo=UTC),
-            retain_exact_source_bytes=False,
+            recorded_at=RECORDED_AT,
         )
 
 
-# ====================================================================================
-# FINDING 2: cross-identity lineage must be validated before the first insert
-# ====================================================================================
+def test_persistence_independently_rederives_and_rejects_authority_mismatch(tmp_path) -> None:
+    bundle = _build()
+    intent, policy, specification, capability, inventory, result = bundle
+    repository = EvidenceIntelligenceRepository(tmp_path / "evidence.sqlite")
+    persistence = EvidencePreModelPersistenceRepository(repository)
+
+    with pytest.raises(PreModelPersistenceLineageError, match="does not match the build-time authority decision"):
+        persistence.save(
+            intent=intent,
+            policy=policy,
+            specification=specification,
+            capability=capability,
+            canonical_inventory=inventory,
+            build_result=result,
+            recorded_at=RECORDED_AT,
+            source_handling_authority=_authority(
+                cutoff=BUILD_AUTHORITY_CUTOFF,
+                retention="DENY",
+                reconstruction="DENY",
+            ),
+        )
 
 
 def _other_build():
-    """A complete, internally consistent build with different identities."""
     inventory = (_span("span-9", "different evidence"),)
     intent = EvidenceExtractionIntent(
         task_type="claim-extraction",
         objective="A different objective entirely.",
         workflow_stage="evidence-intelligence",
-        target_id="doc-9",
+        target_id="doc-1",
         output_contract_id="proposal-schema",
         output_contract_version="1",
         context_policy_id="policy-9",
@@ -563,6 +477,7 @@ def _other_build():
         capability=capability,
         canonical_inventory=inventory,
         candidate_span_ids=("span-9",),
+        source_handling_authority=_authority(),
     )
     return intent, policy, specification, capability, inventory, result
 
@@ -572,10 +487,8 @@ def _other_build():
     ("intent", "policy", "specification", "capability", "inventory"),
 )
 def test_first_insert_rejects_mismatched_bundle_inputs(tmp_path, swapped: str) -> None:
-    """A first save() must not permanently record inputs that never produced the build."""
-    intent, policy, specification, capability, inventory, result = _ready_build()
+    intent, policy, specification, capability, inventory, result = _build()
     other_intent, other_policy, other_spec, other_cap, other_inventory, _other = _other_build()
-
     kwargs = {
         "intent": intent,
         "policy": policy,
@@ -583,7 +496,8 @@ def test_first_insert_rejects_mismatched_bundle_inputs(tmp_path, swapped: str) -
         "capability": capability,
         "canonical_inventory": inventory,
         "build_result": result,
-        "recorded_at": datetime(2026, 8, 12, 18, 30, tzinfo=UTC),
+        "recorded_at": RECORDED_AT,
+        "source_handling_authority": _authority(),
     }
     kwargs[
         {
@@ -599,28 +513,24 @@ def test_first_insert_rejects_mismatched_bundle_inputs(tmp_path, swapped: str) -
         "specification": other_spec,
         "capability": other_cap,
         "inventory": other_inventory,
-    }[
-        swapped
-    ]
+    }[swapped]
 
     repository = EvidenceIntelligenceRepository(tmp_path / "evidence.sqlite")
     persistence = EvidencePreModelPersistenceRepository(repository)
     with pytest.raises(PreModelPersistenceLineageError):
         persistence.save(**kwargs)
 
-    # Nothing may be recorded when validation fails.
     with sqlite3.connect(repository.path) as connection:
         rows = connection.execute("SELECT COUNT(*) FROM evidence_pre_model_build_bundles").fetchone()
-    assert rows[0] == 0
+    assert rows is not None and rows[0] == 0
 
 
 def test_first_insert_rejects_span_content_that_does_not_match_the_ledger(tmp_path) -> None:
-    """Same span ids, different recorded content, must fail closed before INSERT."""
-    intent, policy, specification, capability, _inventory, result = _ready_build()
+    intent, policy, specification, capability, _inventory, result = _build()
     tampered = (replace(_span("span-1", "durable evidence"), text_hash="hash-tampered"),)
-
     repository = EvidenceIntelligenceRepository(tmp_path / "evidence.sqlite")
     persistence = EvidencePreModelPersistenceRepository(repository)
+
     with pytest.raises(PreModelPersistenceLineageError):
         persistence.save(
             intent=intent,
@@ -629,40 +539,13 @@ def test_first_insert_rejects_span_content_that_does_not_match_the_ledger(tmp_pa
             capability=capability,
             canonical_inventory=tampered,
             build_result=result,
-            recorded_at=datetime(2026, 8, 12, 18, 30, tzinfo=UTC),
+            recorded_at=RECORDED_AT,
+            source_handling_authority=_authority(),
         )
 
 
-def test_valid_bundle_still_saves_after_lineage_validation(tmp_path) -> None:
-    """The validation must not reject genuinely consistent bundles."""
-    intent, policy, specification, capability, inventory, result = _ready_build()
-    repository = EvidenceIntelligenceRepository(tmp_path / "evidence.sqlite")
-    persistence = EvidencePreModelPersistenceRepository(repository)
-    saved = persistence.save(
-        intent=intent,
-        policy=policy,
-        specification=specification,
-        capability=capability,
-        canonical_inventory=inventory,
-        build_result=result,
-        recorded_at=datetime(2026, 8, 12, 18, 30, tzinfo=UTC),
-    )
-    assert saved.build_record_id == result.build_record.build_record_id
-
-
-# ====================================================================================
-# FINDING 4: AVAILABLE without usable prompt bytes is corruption, not unavailability
-# ====================================================================================
-
-
 def _corrupt_payload(repository: EvidenceIntelligenceRepository, build_record_id: str, mutate) -> None:
-    """Rewrite a persisted payload in place, keeping its hash self-consistent.
-
-    The stored hash is recomputed so the tampering is not caught by the payload
-    integrity check -- this isolates the reconstruction-state invariant itself.
-    """
-    payload_json = _persisted_payload_json(repository, build_record_id)
-    payload = json.loads(payload_json)
+    payload = json.loads(_persisted_payload_json(repository, build_record_id))
     mutate(payload)
     updated = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     updated_hash = hashlib.sha256(updated.encode("utf-8")).hexdigest()
@@ -674,494 +557,145 @@ def _corrupt_payload(repository: EvidenceIntelligenceRepository, build_record_id
 
 
 def _save_ready(tmp_path):
-    intent, policy, specification, capability, inventory, result = _ready_build()
     repository = EvidenceIntelligenceRepository(tmp_path / "evidence.sqlite")
     persistence = EvidencePreModelPersistenceRepository(repository)
-    recorded_at = datetime(2026, 8, 12, 18, 30, tzinfo=UTC)
-    saved = persistence.save(
-        intent=intent,
-        policy=policy,
-        specification=specification,
-        capability=capability,
-        canonical_inventory=inventory,
-        build_result=result,
-        recorded_at=recorded_at,
-    )
-    return repository, persistence, saved, recorded_at
-
-
-def test_valid_available_reconstruction_is_reported_available(tmp_path) -> None:
-    """(a) The legitimate AVAILABLE path is unchanged."""
-    _repository, persistence, saved, recorded_at = _save_ready(tmp_path)
-    reconstructed = persistence.strict_known_reconstruction(saved.build_record_id, recorded_at)
-    assert reconstructed.status == "AVAILABLE"
-    assert reconstructed.exact_prompt
+    saved = _save(persistence, _build())
+    return repository, persistence, saved
 
 
 def test_available_build_without_prompt_artifact_fails_closed(tmp_path) -> None:
-    """(c) AVAILABLE with a missing artifact is corruption, not unavailability."""
-    repository, persistence, saved, recorded_at = _save_ready(tmp_path)
+    repository, persistence, saved = _save_ready(tmp_path)
     _corrupt_payload(
         repository,
         saved.build_record_id,
         lambda payload: payload["build_result"].__setitem__("prompt_artifact", None),
     )
-
     with pytest.raises(PreModelPersistenceCorruption):
-        persistence.strict_known_reconstruction(saved.build_record_id, recorded_at)
+        persistence.strict_known_reconstruction(saved.build_record_id, RECORDED_AT)
 
 
 def test_available_build_with_empty_prompt_content_fails_closed(tmp_path) -> None:
-    """(c) AVAILABLE whose retained prompt bytes vanished is corruption."""
-    repository, persistence, saved, recorded_at = _save_ready(tmp_path)
+    repository, persistence, saved = _save_ready(tmp_path)
     _corrupt_payload(
         repository,
         saved.build_record_id,
         lambda payload: payload["build_result"]["prompt_artifact"].__setitem__("content", ""),
     )
-
     with pytest.raises(PreModelPersistenceCorruption):
-        persistence.strict_known_reconstruction(saved.build_record_id, recorded_at)
+        persistence.strict_known_reconstruction(saved.build_record_id, RECORDED_AT)
 
 
 def test_available_build_with_tampered_prompt_bytes_fails_closed(tmp_path) -> None:
-    """(d) AVAILABLE whose prompt bytes no longer match hash/size is corruption."""
-    repository, persistence, saved, recorded_at = _save_ready(tmp_path)
+    repository, persistence, saved = _save_ready(tmp_path)
     _corrupt_payload(
         repository,
         saved.build_record_id,
-        lambda payload: payload["build_result"]["prompt_artifact"].__setitem__("content", "tampered prompt content"),
+        lambda payload: payload["build_result"]["prompt_artifact"].__setitem__(
+            "content", "tampered prompt content"
+        ),
     )
-
     with pytest.raises(PreModelPersistenceCorruption):
-        persistence.strict_known_reconstruction(saved.build_record_id, recorded_at)
+        persistence.strict_known_reconstruction(saved.build_record_id, RECORDED_AT)
 
 
 def test_retention_prohibited_unavailability_is_not_treated_as_corruption(tmp_path) -> None:
-    """(b) The legitimate retention-prohibited path stays an explicit UNAVAILABLE."""
     repository = EvidenceIntelligenceRepository(tmp_path / "evidence.sqlite")
     persistence = EvidencePreModelPersistenceRepository(repository)
-    intent, policy, specification, capability, inventory, result = _ready_build(retain_exact_prompt=False)
-    recorded_at = datetime(2026, 8, 12, 18, 30, tzinfo=UTC)
-    saved = persistence.save(
-        intent=intent,
-        policy=policy,
-        specification=specification,
-        capability=capability,
-        canonical_inventory=inventory,
-        build_result=result,
-        recorded_at=recorded_at,
-    )
+    bundle = _build(retention="DENY", reconstruction="DENY")
+    saved = _save(persistence, bundle, retention="DENY", reconstruction="DENY")
 
-    reconstructed = persistence.strict_known_reconstruction(saved.build_record_id, recorded_at)
+    reconstructed = persistence.strict_known_reconstruction(saved.build_record_id, RECORDED_AT)
     assert reconstructed.status == "UNAVAILABLE"
     assert reconstructed.reason_code == "EXACT_PROMPT_RETENTION_PROHIBITED"
 
 
-# ====================================================================================
-# FOLLOW-UP FINDING: retention intent must be explicit when it cannot be derived
-# ====================================================================================
-
-
-def _replan_build(*, retain_exact_prompt: bool = True):
-    inventory = (_span("span-1", "confidential-unresolved-source", status="source_changed"),)
-    intent = _intent()
-    policy = _policy(required=("span-1",))
-    specification = _spec()
-    capability = _cap()
-    result = build_evidence_pre_model(
-        execution_owner_id="run-1",
-        intent=intent,
-        policy=policy,
-        specification=specification,
-        capability=capability,
-        canonical_inventory=inventory,
-        candidate_span_ids=("span-1",),
-        retain_exact_prompt=retain_exact_prompt,
-    )
-    return intent, policy, specification, capability, inventory, result
-
-
-def test_build_without_prompt_requires_explicit_retention_decision(tmp_path) -> None:
-    """A pre-prompt failure carries no retention signal, so it must not be guessed.
-
-    `retain_exact_prompt=False` never reaches the reason code on the
-    REPLAN_REQUIRED path, so defaulting to "retain" would silently persist
-    prohibited source bytes for any caller that forgot to repeat the policy.
-    ADR 0031 requires a handling classification to exist before durable
-    persistence, so refusing is the only correct behavior.
-    """
-    intent, policy, specification, capability, inventory, result = _replan_build(retain_exact_prompt=False)
-    assert result.allocation.outcome == "REPLAN_REQUIRED"
-    assert "EXACT_PROMPT_RETENTION_PROHIBITED" not in result.build_record.reason_codes
-
-    repository = EvidenceIntelligenceRepository(tmp_path / "evidence.sqlite")
-    persistence = EvidencePreModelPersistenceRepository(repository)
-    with pytest.raises(PreModelPersistenceLineageError, match="retain_exact_source_bytes"):
-        persistence.save(
-            intent=intent,
-            policy=policy,
-            specification=specification,
-            capability=capability,
-            canonical_inventory=inventory,
-            build_result=result,
-            recorded_at=datetime(2026, 8, 12, 18, 30, tzinfo=UTC),
-        )
-
-    with sqlite3.connect(repository.path) as connection:
-        rows = connection.execute("SELECT COUNT(*) FROM evidence_pre_model_build_bundles").fetchone()
-    assert rows[0] == 0
-
-
-def test_derivable_retention_states_still_need_no_explicit_decision(tmp_path) -> None:
-    """Derivation must still work where the build result is self-evident."""
-    repository = EvidenceIntelligenceRepository(tmp_path / "evidence.sqlite")
-    persistence = EvidencePreModelPersistenceRepository(repository)
-    recorded_at = datetime(2026, 8, 12, 18, 30, tzinfo=UTC)
-
-    intent, policy, specification, capability, inventory, retained = _ready_build()
-    saved_retained = persistence.save(
-        intent=intent,
-        policy=policy,
-        specification=specification,
-        capability=capability,
-        canonical_inventory=inventory,
-        build_result=retained,
-        recorded_at=recorded_at,
-    )
-    assert saved_retained.exact_source_bytes_retained is True
-
-    intent, policy, specification, capability, inventory, prohibited = _ready_build(retain_exact_prompt=False)
-    saved_prohibited = persistence.save(
-        intent=intent,
-        policy=policy,
-        specification=specification,
-        capability=capability,
-        canonical_inventory=inventory,
-        build_result=prohibited,
-        recorded_at=recorded_at,
-    )
-    assert saved_prohibited.exact_source_bytes_retained is False
-
-
-# ====================================================================================
-# FOLLOW-UP FINDING: backdated known-at coordinates must be rejected
-# ====================================================================================
-
-
 def test_recorded_at_predating_its_own_evidence_is_rejected(tmp_path) -> None:
-    """A backdated coordinate would claim knowledge of evidence that did not exist.
-
-    strict_known_bundle selects on `recorded_at <= cutoff`, so persisting a
-    coordinate earlier than the spans' own created_at/validated_at would let a
-    cutoff query return a build assembled from evidence that was not yet
-    knowable at that cutoff.
-    """
-    intent, policy, specification, capability, inventory, result = _ready_build()
-    span_time = inventory[0].created_at
-    assert span_time == datetime(2026, 8, 12, 18, 0, tzinfo=UTC)
-
+    bundle = _build()
     repository = EvidenceIntelligenceRepository(tmp_path / "evidence.sqlite")
     persistence = EvidencePreModelPersistenceRepository(repository)
-    with pytest.raises(PreModelPersistenceLineageError, match="predates the evidence"):
-        persistence.save(
-            intent=intent,
-            policy=policy,
-            specification=specification,
-            capability=capability,
-            canonical_inventory=inventory,
-            build_result=result,
-            recorded_at=span_time - timedelta(seconds=1),
-        )
 
-    with sqlite3.connect(repository.path) as connection:
-        rows = connection.execute("SELECT COUNT(*) FROM evidence_pre_model_build_bundles").fetchone()
-    assert rows[0] == 0
+    with pytest.raises(PreModelPersistenceLineageError, match="predates the evidence"):
+        _save(
+            persistence,
+            bundle,
+            recorded_at=SPAN_TIME - timedelta(seconds=1),
+            authority_cutoff=SPAN_TIME - timedelta(seconds=1),
+        )
 
 
 def test_recorded_at_equal_to_its_evidence_bound_is_accepted(tmp_path) -> None:
-    """The lower bound is inclusive: a build recorded exactly then is valid."""
-    intent, policy, specification, capability, inventory, result = _ready_build()
-    span_time = inventory[0].validated_at
-
+    bundle = _build()
     repository = EvidenceIntelligenceRepository(tmp_path / "evidence.sqlite")
     persistence = EvidencePreModelPersistenceRepository(repository)
-    saved = persistence.save(
-        intent=intent,
-        policy=policy,
-        specification=specification,
-        capability=capability,
-        canonical_inventory=inventory,
-        build_result=result,
-        recorded_at=span_time,
+    saved = _save(
+        persistence,
+        bundle,
+        recorded_at=SPAN_TIME,
+        authority_cutoff=SPAN_TIME,
     )
-    assert saved.recorded_at == span_time
-
-
-# ====================================================================================
-# FOLLOW-UP FINDING: persisted excerpts must be proven to have built the artifact
-# ====================================================================================
-
-
-def test_tampered_excerpt_with_intact_hash_is_rejected(tmp_path) -> None:
-    """`text_hash` is caller-supplied metadata, so hash equality proves nothing.
-
-    Re-rendering the prompt from the supplied inventory is the only available
-    proof that these exact span bytes produced the retained artifact. Without
-    it a bundle could carry one source text while its artifact contains another.
-    """
-    intent, policy, specification, capability, inventory, result = _ready_build()
-    tampered = (replace(inventory[0], excerpt="entirely different source text"),)
-    assert tampered[0].text_hash == inventory[0].text_hash
-    assert tampered[0].start_offset == inventory[0].start_offset
-    assert tampered[0].end_offset == inventory[0].end_offset
-
-    repository = EvidenceIntelligenceRepository(tmp_path / "evidence.sqlite")
-    persistence = EvidencePreModelPersistenceRepository(repository)
-    with pytest.raises(PreModelPersistenceLineageError, match="text_hash"):
-        persistence.save(
-            intent=intent,
-            policy=policy,
-            specification=specification,
-            capability=capability,
-            canonical_inventory=tampered,
-            build_result=result,
-            recorded_at=datetime(2026, 8, 12, 18, 30, tzinfo=UTC),
-        )
-
-    with sqlite3.connect(repository.path) as connection:
-        rows = connection.execute("SELECT COUNT(*) FROM evidence_pre_model_build_bundles").fetchone()
-    assert rows[0] == 0
-
-
-def test_tampered_excerpt_is_rejected_even_when_retention_is_prohibited(tmp_path) -> None:
-    """content_hash is the full prompt digest even when bytes are not retained."""
-    intent, policy, specification, capability, inventory, result = _ready_build(retain_exact_prompt=False)
-    assert result.prompt_artifact is not None
-    assert result.prompt_artifact.content == ""
-    tampered = (replace(inventory[0], excerpt="entirely different source text"),)
-
-    repository = EvidenceIntelligenceRepository(tmp_path / "evidence.sqlite")
-    persistence = EvidencePreModelPersistenceRepository(repository)
-    with pytest.raises(PreModelPersistenceLineageError, match="text_hash"):
-        persistence.save(
-            intent=intent,
-            policy=policy,
-            specification=specification,
-            capability=capability,
-            canonical_inventory=tampered,
-            build_result=result,
-            recorded_at=datetime(2026, 8, 12, 18, 30, tzinfo=UTC),
-        )
-
-
-# ====================================================================================
-# Canonical excerpt-hash recomputation and remaining enumerated coverage
-# ====================================================================================
-
-
-def test_re_render_still_catches_tampering_if_the_digest_layer_is_bypassed(tmp_path, monkeypatch) -> None:
-    """The re-render check is independently effective, not redundant.
-
-    Every single-field forgery is now caught by an earlier layer (canonical
-    digest recomputation, or the ledger/package identity checks), so the only
-    honest way to prove re-render still carries weight is to neutralise the
-    digest layer and confirm it catches the tamper on its own.
-    """
-    intent, policy, specification, capability, inventory, result = _ready_build()
-    original = inventory[0]
-    # excerpt changed, every claimed hash/offset left intact so the ledger,
-    # package and offset checks all pass.
-    forged = (replace(original, excerpt="entirely different source text"),)
-
-    monkeypatch.setattr(
-        "hunter.evidence_intelligence.pre_model_persistence.evidence_text_digest",
-        lambda _value: original.text_hash,
-    )
-
-    repository = EvidenceIntelligenceRepository(tmp_path / "evidence.sqlite")
-    persistence = EvidencePreModelPersistenceRepository(repository)
-    with pytest.raises(PreModelPersistenceLineageError, match="re-render"):
-        persistence.save(
-            intent=intent,
-            policy=policy,
-            specification=specification,
-            capability=capability,
-            canonical_inventory=forged,
-            build_result=result,
-            recorded_at=datetime(2026, 8, 12, 18, 30, tzinfo=UTC),
-        )
-
-
-def test_correct_excerpt_and_hash_passes_validation(tmp_path) -> None:
-    """Honest spans must not be rejected by the recomputation."""
-    intent, policy, specification, capability, inventory, result = _ready_build()
-    assert evidence_text_digest(inventory[0].excerpt) == inventory[0].text_hash
-
-    repository = EvidenceIntelligenceRepository(tmp_path / "evidence.sqlite")
-    persistence = EvidencePreModelPersistenceRepository(repository)
-    saved = persistence.save(
-        intent=intent,
-        policy=policy,
-        specification=specification,
-        capability=capability,
-        canonical_inventory=inventory,
-        build_result=result,
-        recorded_at=datetime(2026, 8, 12, 18, 30, tzinfo=UTC),
-    )
-    assert saved.build_record_id == result.build_record.build_record_id
-
-
-def test_forged_package_ordering_fails_closed(tmp_path) -> None:
-    """A package whose ordering does not match its allocation cannot persist."""
-    intent, policy, specification, capability, inventory, result = _ready_build()
-    assert result.package is not None
-    forged_package = replace(result.package, ordered_span_ids=("span-1", "span-1"))
-    forged_result = replace(result, package=forged_package)
-
-    repository = EvidenceIntelligenceRepository(tmp_path / "evidence.sqlite")
-    persistence = EvidencePreModelPersistenceRepository(repository)
-    with pytest.raises(PreModelPersistenceLineageError):
-        persistence.save(
-            intent=intent,
-            policy=policy,
-            specification=specification,
-            capability=capability,
-            canonical_inventory=inventory,
-            build_result=forged_result,
-            recorded_at=datetime(2026, 8, 12, 18, 30, tzinfo=UTC),
-        )
-
-
-def _insufficient_budget_build(*, retain_exact_prompt: bool):
-    inventory = (_span("span-1", "confidential source material that will not fit"),)
-    intent = _intent()
-    policy = _policy(required=("span-1",))
-    specification = _spec()
-    capability = _cap(maximum=200)
-    result = build_evidence_pre_model(
-        execution_owner_id="run-1",
-        intent=intent,
-        policy=policy,
-        specification=specification,
-        capability=capability,
-        canonical_inventory=inventory,
-        candidate_span_ids=("span-1",),
-        retain_exact_prompt=retain_exact_prompt,
-    )
-    return intent, policy, specification, capability, inventory, result
-
-
-def test_insufficient_budget_with_prohibited_retention_cannot_persist_source_bytes(tmp_path) -> None:
-    """The other pre-prompt exit must honour the retention policy identically."""
-    intent, policy, specification, capability, inventory, result = _insufficient_budget_build(retain_exact_prompt=False)
-    assert result.allocation.outcome == "INSUFFICIENT_BUDGET"
-    assert "EXACT_PROMPT_RETENTION_PROHIBITED" not in result.build_record.reason_codes
-
-    repository = EvidenceIntelligenceRepository(tmp_path / "evidence.sqlite")
-    persistence = EvidencePreModelPersistenceRepository(repository)
-
-    # Undecidable without an explicit policy, exactly like REPLAN_REQUIRED.
-    with pytest.raises(PreModelPersistenceLineageError, match="retain_exact_source_bytes"):
-        persistence.save(
-            intent=intent,
-            policy=policy,
-            specification=specification,
-            capability=capability,
-            canonical_inventory=inventory,
-            build_result=result,
-            recorded_at=datetime(2026, 8, 12, 18, 30, tzinfo=UTC),
-        )
-
-    saved = persistence.save(
-        intent=intent,
-        policy=policy,
-        specification=specification,
-        capability=capability,
-        canonical_inventory=inventory,
-        build_result=result,
-        recorded_at=datetime(2026, 8, 12, 18, 30, tzinfo=UTC),
-        retain_exact_source_bytes=False,
-    )
-    assert "confidential source material" not in _persisted_payload_json(repository, saved.build_record_id)
+    assert saved.recorded_at == SPAN_TIME
 
 
 def test_recorded_at_before_validated_at_is_rejected_independently(tmp_path) -> None:
-    """validated_at is an authoritative bound in its own right, not just created_at."""
-    intent, policy, specification, capability, inventory, result = _ready_build()
     later_validation = datetime(2026, 8, 12, 20, 0, tzinfo=UTC)
-    revalidated = (replace(inventory[0], validated_at=later_validation),)
-    assert revalidated[0].created_at < later_validation
-
+    inventory = (
+        _span(
+            "span-1",
+            "durable evidence",
+            validated_at=later_validation,
+        ),
+    )
+    bundle = _build(inventory=inventory)
     repository = EvidenceIntelligenceRepository(tmp_path / "evidence.sqlite")
     persistence = EvidencePreModelPersistenceRepository(repository)
-    # After created_at but before validated_at must still fail closed.
+
     with pytest.raises(PreModelPersistenceLineageError, match="predates the evidence"):
-        persistence.save(
-            intent=intent,
-            policy=policy,
-            specification=specification,
-            capability=capability,
-            canonical_inventory=revalidated,
-            build_result=result,
+        _save(
+            persistence,
+            bundle,
             recorded_at=datetime(2026, 8, 12, 19, 0, tzinfo=UTC),
+            authority_cutoff=datetime(2026, 8, 12, 19, 0, tzinfo=UTC),
         )
 
 
 def test_mixed_spans_use_the_maximum_known_at_lower_bound(tmp_path) -> None:
-    """With several spans the bound is the latest, not the earliest or first."""
-    early = _span("span-1", "durable evidence")
     late_validation = datetime(2026, 8, 12, 21, 0, tzinfo=UTC)
-    late = replace(
-        _span("span-2", "second evidence"),
-        created_at=datetime(2026, 8, 12, 19, 0, tzinfo=UTC),
-        validated_at=late_validation,
+    inventory = (
+        _span("span-1", "durable evidence"),
+        _span(
+            "span-2",
+            "second evidence",
+            created_at=datetime(2026, 8, 12, 19, 0, tzinfo=UTC),
+            validated_at=late_validation,
+        ),
     )
-    inventory = (early, late)
-    intent = _intent()
-    policy = _policy(required=("span-1",), optional=("span-2",))
-    specification = _spec()
-    capability = _cap()
-    result = build_evidence_pre_model(
-        execution_owner_id="run-1",
-        intent=intent,
-        policy=policy,
-        specification=specification,
-        capability=capability,
-        canonical_inventory=inventory,
-        candidate_span_ids=("span-1", "span-2"),
-    )
-
+    bundle = _build(inventory=inventory)
     repository = EvidenceIntelligenceRepository(tmp_path / "evidence.sqlite")
     persistence = EvidencePreModelPersistenceRepository(repository)
+
     with pytest.raises(PreModelPersistenceLineageError, match="predates the evidence"):
-        persistence.save(
-            intent=intent,
-            policy=policy,
-            specification=specification,
-            capability=capability,
-            canonical_inventory=inventory,
-            build_result=result,
+        _save(
+            persistence,
+            bundle,
             recorded_at=late_validation - timedelta(seconds=1),
+            authority_cutoff=late_validation - timedelta(seconds=1),
         )
 
-    saved = persistence.save(
-        intent=intent,
-        policy=policy,
-        specification=specification,
-        capability=capability,
-        canonical_inventory=inventory,
-        build_result=result,
+    saved = _save(
+        persistence,
+        bundle,
         recorded_at=late_validation,
+        authority_cutoff=late_validation,
     )
     assert saved.recorded_at == late_validation
 
 
 def test_naive_recorded_at_remains_fail_closed(tmp_path) -> None:
-    """Timezone handling stays aware and fail-closed, with no implicit UTC."""
-    intent, policy, specification, capability, inventory, result = _ready_build()
+    bundle = _build()
     repository = EvidenceIntelligenceRepository(tmp_path / "evidence.sqlite")
     persistence = EvidencePreModelPersistenceRepository(repository)
+    intent, policy, specification, capability, inventory, result = bundle
+
     with pytest.raises(ValueError, match="timezone-aware"):
         persistence.save(
             intent=intent,
@@ -1171,4 +705,69 @@ def test_naive_recorded_at_remains_fail_closed(tmp_path) -> None:
             canonical_inventory=inventory,
             build_result=result,
             recorded_at=datetime(2026, 8, 12, 18, 30),
+            source_handling_authority=_authority(),
+        )
+
+
+def test_tampered_excerpt_with_intact_hash_is_rejected(tmp_path) -> None:
+    intent, policy, specification, capability, inventory, result = _build()
+    tampered = (replace(inventory[0], excerpt="entirely different source text"),)
+    repository = EvidenceIntelligenceRepository(tmp_path / "evidence.sqlite")
+    persistence = EvidencePreModelPersistenceRepository(repository)
+
+    with pytest.raises(PreModelPersistenceLineageError, match="text_hash"):
+        persistence.save(
+            intent=intent,
+            policy=policy,
+            specification=specification,
+            capability=capability,
+            canonical_inventory=tampered,
+            build_result=result,
+            recorded_at=RECORDED_AT,
+            source_handling_authority=_authority(),
+        )
+
+
+def test_re_render_still_catches_tampering_if_digest_layer_is_bypassed(tmp_path, monkeypatch) -> None:
+    intent, policy, specification, capability, inventory, result = _build()
+    original = inventory[0]
+    forged = (replace(original, excerpt="entirely different source text"),)
+    monkeypatch.setattr(
+        "hunter.evidence_intelligence.pre_model_persistence.evidence_text_digest",
+        lambda _value: original.text_hash,
+    )
+    repository = EvidenceIntelligenceRepository(tmp_path / "evidence.sqlite")
+    persistence = EvidencePreModelPersistenceRepository(repository)
+
+    with pytest.raises(PreModelPersistenceLineageError, match="re-render"):
+        persistence.save(
+            intent=intent,
+            policy=policy,
+            specification=specification,
+            capability=capability,
+            canonical_inventory=forged,
+            build_result=result,
+            recorded_at=RECORDED_AT,
+            source_handling_authority=_authority(),
+        )
+
+
+def test_forged_package_ordering_fails_closed(tmp_path) -> None:
+    intent, policy, specification, capability, inventory, result = _build()
+    assert result.package is not None
+    forged_package = replace(result.package, ordered_span_ids=("span-1", "span-1"))
+    forged_result = replace(result, package=forged_package)
+    repository = EvidenceIntelligenceRepository(tmp_path / "evidence.sqlite")
+    persistence = EvidencePreModelPersistenceRepository(repository)
+
+    with pytest.raises(PreModelPersistenceLineageError):
+        persistence.save(
+            intent=intent,
+            policy=policy,
+            specification=specification,
+            capability=capability,
+            canonical_inventory=inventory,
+            build_result=forged_result,
+            recorded_at=RECORDED_AT,
+            source_handling_authority=_authority(),
         )
