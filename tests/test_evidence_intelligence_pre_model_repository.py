@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import pytest
+from evidence_pre_model_source_handling_fixture import source_handling_authority
 
 from hunter.evidence_intelligence.models import EvidenceDocument, EvidenceSpan
 from hunter.evidence_intelligence.pre_model import (
@@ -18,8 +19,6 @@ from hunter.evidence_intelligence.pre_model_repository import (
     load_canonical_evidence_span_inventory,
 )
 from hunter.evidence_intelligence.repository import EvidenceIntelligenceRepository
-
-from evidence_pre_model_source_handling_fixture import source_handling_authority
 
 NOW = datetime(2026, 8, 9, tzinfo=UTC)
 AUTHORITY_CUTOFF = datetime(2026, 8, 9, 1, tzinfo=UTC)
