@@ -206,6 +206,36 @@ For non-blocking fixes the demonstration is recommended but not required.
 Tests that pass because a mock reproduces the implementation's internals do not
 satisfy this contract.
 
+## Root-Cause Hardening and Cross-PR Regression Prevention
+
+A confirmed blocking finding shall be assessed for reusable or systemic root cause before its resolution is considered complete.
+
+The assessment shall classify the finding as either:
+
+- **isolated** — the failure is genuinely specific to the current change and does not expose a reusable weakness in product behavior, implementation conventions, tests, metadata/evidence generation, Pull Request construction, preflight validation, templates, generators, agent instructions, governance tooling, or architectural understanding; or
+- **systemic** — the same defect class could reasonably recur in a later contribution because a reusable boundary allowed it.
+
+When a finding is systemic, correcting only the current Pull Request does not satisfy this contract. The implementation shall add a durable guard at the earliest reliable reusable boundary appropriate to the failure mode.
+
+Such a guard may include, where appropriate:
+
+- a non-vacuous regression test;
+- a deterministic validator or preflight check;
+- a schema or type constraint;
+- a safer public interface;
+- a repository template or generator correction;
+- a CI enforcement rule;
+- a canonical agent instruction;
+- another deterministic mechanism that prevents or reliably detects recurrence before the same defect reaches independent review again.
+
+The selected guard shall address the defect class rather than only the specific instance that triggered the finding.
+
+A later Pull Request that reintroduces a previously understood and preventable blocking defect class is evidence that the prior root-cause hardening was incomplete. The new contribution shall not treat the recurrence as a fresh isolated mistake; it shall revisit and strengthen the reusable guard.
+
+This requirement does not mandate a new automated check for every finding. The guard must be proportionate, deterministic where practical, and placed at the earliest reliable boundary. Documentation-only or truly one-off findings may be resolved with evidence appropriate to their nature.
+
+The lifecycle, finding classification, review outcome, and merge-readiness semantics remain governed by `docs/DEVELOPMENT_GOVERNANCE.md` and `docs/AI_REVIEW_PROTOCOL.md`. This section governs the implementation obligation created once a blocking finding has exposed a reusable or systemic failure mode.
+
 ---
 
 # Compatibility Contract
