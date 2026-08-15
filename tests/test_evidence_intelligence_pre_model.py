@@ -11,15 +11,16 @@ from hunter.evidence_intelligence.pre_model import (
     EvidenceExtractionIntent,
     EvidencePromptSpecification,
     PreModelInvariantError,
-    build_evidence_pre_model,
+    build_evidence_pre_model as _build_evidence_pre_model,
 )
+from evidence_pre_model_source_handling_fixture import source_handling_authority
 
 
 def _span(span_id: str, excerpt: str, *, status: str = "active") -> EvidenceSpan:
     now = datetime(2026, 8, 9, tzinfo=UTC)
     return EvidenceSpan(
         span_id=span_id,
-        document_id=f"doc-{span_id}",
+        document_id="doc-1",
         source_evidence_id=f"source-{span_id}",
         normalized_content_hash=f"normalized-{span_id}",
         normalization_version="1",
@@ -50,7 +51,7 @@ def _intent() -> EvidenceExtractionIntent:
         output_contract_version="1",
         context_policy_id="policy-1",
         replay_mode="strict-known",
-        historical_cutoff=datetime(2026, 8, 1, tzinfo=UTC),
+        historical_cutoff=datetime(2026, 8, 10, tzinfo=UTC),
     )
 
 
@@ -83,10 +84,33 @@ def _cap(maximum: int = 4096) -> EvidenceCapabilityConstraint:
     )
 
 
+def _authorized_build(
+    *,
+    authority_retention: str = "ALLOW",
+    authority_reconstruction: str = "ALLOW",
+    **kwargs,
+):
+    intent = kwargs["intent"]
+    inventory = kwargs["canonical_inventory"]
+    cutoff = intent.historical_cutoff or datetime(2026, 8, 10, tzinfo=UTC)
+    document_ids = {span.document_id for span in inventory}
+    assert len(document_ids) == 1
+    authority = source_handling_authority(
+        document_id=next(iter(document_ids)),
+        cutoff=cutoff,
+        retention=authority_retention,
+        reconstruction=authority_reconstruction,
+    )
+    return _build_evidence_pre_model(
+        **kwargs,
+        source_handling_authority=authority,
+    )
+
+
 def test_candidate_set_mismatch_fails_closed() -> None:
     span = _span("span-1", "evidence")
     with pytest.raises(PreModelInvariantError, match="CANDIDATE_SET_MISMATCH"):
-        build_evidence_pre_model(
+        _authorized_build(
             execution_owner_id="run-1",
             intent=_intent(),
             policy=_policy(required=("span-1",)),
@@ -99,7 +123,7 @@ def test_candidate_set_mismatch_fails_closed() -> None:
 
 def test_required_unresolved_span_blocks_ready() -> None:
     span = _span("span-1", "evidence", status="source_changed")
-    result = build_evidence_pre_model(
+    result = _authorized_build(
         execution_owner_id="run-1",
         intent=_intent(),
         policy=_policy(required=("span-1",)),
@@ -118,7 +142,7 @@ def test_required_unresolved_span_blocks_ready() -> None:
 def test_optional_unresolved_span_remains_explicit() -> None:
     required = _span("span-1", "required evidence")
     optional = _span("span-2", "optional evidence", status="source_changed")
-    result = build_evidence_pre_model(
+    result = _authorized_build(
         execution_owner_id="run-1",
         intent=_intent(),
         policy=_policy(required=("span-1",), optional=("span-2",)),
@@ -146,8 +170,8 @@ def test_identical_inputs_produce_stable_identities_and_prompt_bytes() -> None:
         candidate_span_ids=("span-1", "span-2"),
     )
 
-    first = build_evidence_pre_model(**kwargs)
-    second = build_evidence_pre_model(**kwargs)
+    first = _authorized_build(**kwargs)
+    second = _authorized_build(**kwargs)
 
     assert first.ledger.ledger_id == second.ledger.ledger_id
     assert first.allocation.allocation_id == second.allocation.allocation_id
@@ -163,7 +187,7 @@ def test_identical_inputs_produce_stable_identities_and_prompt_bytes() -> None:
 def test_budget_exclusion_is_explicit_and_not_silent_truncation() -> None:
     required = _span("span-1", "required")
     optional = _span("span-2", "x" * 2000)
-    result = build_evidence_pre_model(
+    result = _authorized_build(
         execution_owner_id="run-1",
         intent=_intent(),
         policy=_policy(required=("span-1",), optional=("span-2",)),
@@ -182,7 +206,7 @@ def test_budget_exclusion_is_explicit_and_not_silent_truncation() -> None:
 
 def test_required_context_that_cannot_fit_is_insufficient_budget() -> None:
     required = _span("span-1", "x" * 2000)
-    result = build_evidence_pre_model(
+    result = _authorized_build(
         execution_owner_id="run-1",
         intent=_intent(),
         policy=_policy(required=("span-1",)),
@@ -200,7 +224,7 @@ def test_required_context_that_cannot_fit_is_insufficient_budget() -> None:
 def test_final_compile_must_equal_preflight_size() -> None:
     span = _span("span-1", "evidence")
     with pytest.raises(PreModelInvariantError, match="PROMPT_PREFLIGHT_SIZE_MISMATCH"):
-        build_evidence_pre_model(
+        _authorized_build(
             execution_owner_id="run-1",
             intent=_intent(),
             policy=_policy(required=("span-1",)),
@@ -214,7 +238,7 @@ def test_final_compile_must_equal_preflight_size() -> None:
 
 def test_retention_policy_records_reconstruction_unavailable_without_changing_hash() -> None:
     span = _span("span-1", "evidence")
-    retained = build_evidence_pre_model(
+    kwargs = dict(
         execution_owner_id="run-1",
         intent=_intent(),
         policy=_policy(required=("span-1",)),
@@ -223,15 +247,11 @@ def test_retention_policy_records_reconstruction_unavailable_without_changing_ha
         canonical_inventory=(span,),
         candidate_span_ids=("span-1",),
     )
-    not_retained = build_evidence_pre_model(
-        execution_owner_id="run-1",
-        intent=_intent(),
-        policy=_policy(required=("span-1",)),
-        specification=_spec(),
-        capability=_cap(),
-        canonical_inventory=(span,),
-        candidate_span_ids=("span-1",),
-        retain_exact_prompt=False,
+    retained = _authorized_build(**kwargs)
+    not_retained = _authorized_build(
+        **kwargs,
+        authority_retention="DENY",
+        authority_reconstruction="DENY",
     )
 
     assert retained.prompt_artifact is not None
