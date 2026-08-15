@@ -8,6 +8,7 @@ from hunter.evidence_intelligence.pre_model import (
     EvidenceContextSelectionPolicy,
     EvidenceExtractionIntent,
     EvidencePreModelBuildResult,
+    EvidencePreModelSourceHandlingAuthority,
     EvidencePromptSpecification,
     PreModelInvariantError,
     build_evidence_pre_model,
@@ -32,7 +33,7 @@ class EvidencePreModelOrchestrationRequest:
     required_span_ids: tuple[str, ...]
     specification: EvidencePromptSpecification
     capability: EvidenceCapabilityConstraint
-    retain_exact_prompt: bool = True
+    source_handling_authority: EvidencePreModelSourceHandlingAuthority | None = None
 
     def __post_init__(self) -> None:
         if not self.document_id:
@@ -65,27 +66,15 @@ def orchestrate_evidence_pre_model(
     request: EvidencePreModelOrchestrationRequest,
     recorded_at: datetime,
 ) -> EvidencePreModelOrchestrationResult:
-    """Build and durably record one provider-free Evidence pre-model runtime slice.
-
-    Repository-backed EvidenceSpan inventory is the candidate-set authority. The
-    caller may identify spans that are required, but cannot prefilter or silently
-    omit canonical spans: every remaining canonical span is deterministically
-    represented as optional policy coverage.
-
-    Durability is part of this operation, not an optional follow-up: a build that
-    is reported as successful here has been persisted and is strict-known
-    reconstructable. Persistence failures propagate, so this never reports a
-    successful build whose evidence was silently lost. ``recorded_at`` is an
-    explicit known-at coordinate rather than a hidden clock read, keeping the
-    lifecycle deterministic and replayable.
-    """
-
+    """Build and durably record one provider-free Evidence pre-model runtime slice."""
     if request.intent.target_id != request.document_id:
         raise PreModelInvariantError("TARGET_DOCUMENT_MISMATCH")
     if request.intent.context_policy_id != request.policy_id:
         raise PreModelInvariantError("CONTEXT_POLICY_ID_MISMATCH")
     if request.intent.historical_cutoff is not None:
         raise PreModelInvariantError("HISTORICAL_REPOSITORY_SPAN_INVENTORY_UNSUPPORTED")
+    if request.source_handling_authority is None:
+        raise PreModelInvariantError("SOURCE_HANDLING_AUTHORITY_REQUIRED")
 
     inventory = load_canonical_evidence_span_inventory(
         repository,
@@ -111,7 +100,7 @@ def orchestrate_evidence_pre_model(
         capability=request.capability,
         canonical_inventory=inventory.spans,
         candidate_span_ids=inventory.span_ids,
-        retain_exact_prompt=request.retain_exact_prompt,
+        source_handling_authority=request.source_handling_authority,
     )
     persisted = EvidencePreModelPersistenceRepository(repository).save(
         intent=request.intent,
@@ -121,7 +110,7 @@ def orchestrate_evidence_pre_model(
         canonical_inventory=inventory.spans,
         build_result=build_result,
         recorded_at=recorded_at,
-        retain_exact_source_bytes=request.retain_exact_prompt,
+        source_handling_authority=request.source_handling_authority,
     )
     return EvidencePreModelOrchestrationResult(
         document_id=request.document_id,
