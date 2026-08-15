@@ -227,20 +227,21 @@ def test_repository_publication_recomputes_exact_candidate_body_not_supplied_pay
     store = h.authority_store()
     h.publish_genesis_rule(store, _rule_fixture(), expected_golden_sha256=GOLDEN)
 
+    authorized_fact: dict[str, object] = {
+        "sensitivity": "PUBLIC",
+        "operation_restrictions": [],
+        "persistence_restriction": "FULL_CONTENT_ALLOWED",
+        "secret_presence": [],
+        "operation_restrictions_known": True,
+        "secret_presence_known": True,
+        "withdrawn": False,
+        "deleted_at_source": False,
+        "historically_unavailable": False,
+        "availability_known": True,
+    }
     authorized_payload = {
         "scope": "doc-1",
-        "fact": {
-            "sensitivity": "PUBLIC",
-            "operation_restrictions": [],
-            "persistence_restriction": "FULL_CONTENT_ALLOWED",
-            "secret_presence": [],
-            "operation_restrictions_known": True,
-            "secret_presence_known": True,
-            "withdrawn": False,
-            "deleted_at_source": False,
-            "historically_unavailable": False,
-            "availability_known": True,
-        },
+        "fact": authorized_fact,
         **_times(),
     }
     authorization = _authorization(
@@ -260,7 +261,7 @@ def test_repository_publication_recomputes_exact_candidate_body_not_supplied_pay
                 "id": "fact-v1",
                 "scope": "doc-1",
                 "fact": {
-                    **authorized_payload["fact"],
+                    **authorized_fact,
                     "sensitivity": "INTERNAL",
                 },
                 **_times(),
