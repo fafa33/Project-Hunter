@@ -337,3 +337,42 @@ Those documents are the exclusive canonical owners of lifecycle stages, review r
 This rule adds no independent lifecycle, reviewer, verdict, approval, or merge semantics.
 
 Violation of the canonical governance documents is a governance failure.
+
+---
+
+# Rule 23 — No Repeat Governance Failure
+
+A confirmed blocking finding must not be treated as an isolated Pull Request defect when its root cause is reusable or systemic.
+
+For every confirmed blocking finding, the agent must determine whether the root cause is isolated or systemic. The assessment must consider, where applicable:
+
+- product or runtime behavior;
+- test coverage;
+- implementation conventions;
+- Pull Request generation;
+- metadata or evidence generation;
+- preflight validation;
+- repository templates;
+- agent instructions;
+- governance tooling;
+- architectural misunderstanding.
+
+If the root cause can affect future contributions, correcting only the current Pull Request is insufficient. The fix must harden the earliest reliable reusable boundary so the same preventable defect class is not reintroduced in later Pull Requests.
+
+Appropriate permanent guards include, where applicable:
+
+- non-vacuous regression tests;
+- deterministic validators;
+- preflight checks;
+- schema constraints;
+- typed interfaces;
+- templates;
+- generators;
+- CI gates;
+- canonical agent instructions.
+
+A later Pull Request that reintroduces a previously understood and preventable blocking defect class is evidence that the earlier root-cause fix was incomplete and is itself a governance failure.
+
+This rule does not require a new automated gate for every finding. Findings that are genuinely one-off may be classified as isolated. Reusable or systemic findings must receive a durable guard appropriate to their failure mode.
+
+The implementation obligations for regression evidence and durable root-cause hardening are defined by `docs/HUNTER_IMPLEMENTATION_CONTRACT.md`. Review and merge semantics remain exclusively governed by `docs/DEVELOPMENT_GOVERNANCE.md` and `docs/AI_REVIEW_PROTOCOL.md`.
