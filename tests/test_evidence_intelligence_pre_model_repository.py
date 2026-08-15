@@ -19,7 +19,10 @@ from hunter.evidence_intelligence.pre_model_repository import (
 )
 from hunter.evidence_intelligence.repository import EvidenceIntelligenceRepository
 
+from evidence_pre_model_source_handling_fixture import source_handling_authority
+
 NOW = datetime(2026, 8, 9, tzinfo=UTC)
+AUTHORITY_CUTOFF = datetime(2026, 8, 9, 1, tzinfo=UTC)
 
 
 def test_repository_inventory_is_canonical_typed_and_stably_ordered(tmp_path) -> None:
@@ -68,6 +71,10 @@ def test_repository_backed_build_uses_exact_canonical_inventory(tmp_path) -> Non
         policy=_policy(),
         specification=_spec(),
         capability=_capability(),
+        source_handling_authority=source_handling_authority(
+            document_id="document-1",
+            cutoff=AUTHORITY_CUTOFF,
+        ),
     )
 
     assert result.allocation.outcome == "READY"
