@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from datetime import datetime
-from typing import Any, Literal, Mapping
+from typing import Any, Literal
 
 from hunter.evidence_intelligence.models import EvidenceSpan
 from hunter.evidence_intelligence.source_handling import (
@@ -482,7 +483,13 @@ def build_evidence_pre_model(
             reason_codes=allocation.reason_codes,
         )
         return EvidencePreModelBuildResult(
-            ledger, allocation, None, None, None, build, source_handling_decision
+            ledger,
+            allocation,
+            None,
+            None,
+            None,
+            build,
+            source_handling_decision,
         )
 
     included = selected_required + selected_optional
@@ -529,7 +536,13 @@ def build_evidence_pre_model(
             reason_codes=allocation.reason_codes,
         )
         return EvidencePreModelBuildResult(
-            ledger, allocation, None, None, None, build, source_handling_decision
+            ledger,
+            allocation,
+            None,
+            None,
+            None,
+            build,
+            source_handling_decision,
         )
 
     allocation_reasons = tuple(["BUDGET_EXCLUDED"] if excluded else [])
