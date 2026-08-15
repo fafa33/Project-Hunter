@@ -22,7 +22,7 @@ def run_quality_gates(gates: Sequence[tuple[str, Sequence[str]]] = QUALITY_GATES
             print(f"[Hunter Pre-PR] FAIL: {name} exited {completed.returncode}", flush=True)
             return completed.returncode
         print(f"[Hunter Pre-PR] PASS: {name}", flush=True)
-    print(f"[Hunter Pre-PR] PASS: all deterministic repository-local gates", flush=True)
+    print("[Hunter Pre-PR] PASS: all deterministic repository-local gates", flush=True)
     return 0
 
 
