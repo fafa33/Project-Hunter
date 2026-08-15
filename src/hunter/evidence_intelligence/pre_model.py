@@ -4,9 +4,17 @@ import hashlib
 import json
 from dataclasses import asdict, dataclass
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal, Mapping
 
 from hunter.evidence_intelligence.models import EvidenceSpan
+from hunter.evidence_intelligence.source_handling import (
+    AuthorityStore,
+    PublicationAuthorization,
+    SourceHandlingBlockedError,
+    derive_source_handling_decision,
+    resolve_canonical_head,
+    strict_known_eligible,
+)
 
 ResolutionStatus = Literal[
     "RESOLVED",
@@ -232,6 +240,14 @@ class EvidencePreModelBuildRecord:
 
 
 @dataclass(frozen=True)
+class EvidencePreModelSourceHandlingAuthority:
+    store: AuthorityStore
+    fact_scope: str
+    policy_scope: str
+    cutoff: datetime
+
+
+@dataclass(frozen=True)
 class EvidencePreModelBuildResult:
     ledger: EvidenceContextSelectionLedger
     allocation: EvidenceContextAllocationResult
@@ -239,6 +255,75 @@ class EvidencePreModelBuildResult:
     prompt_plan: EvidencePromptPlan | None
     prompt_artifact: EvidencePromptArtifact | None
     build_record: EvidencePreModelBuildRecord
+    source_handling_decision: Mapping[str, Any] | None = None
+
+
+def _publication_rule_id(record: Mapping[str, Any]) -> str:
+    authorization = record.get("publication_authorization")
+    if not isinstance(authorization, PublicationAuthorization):
+        raise SourceHandlingBlockedError("authority record lacks publication authorization")
+    if not authorization.authorization_rule_id:
+        raise SourceHandlingBlockedError("authority record lacks authorization rule identity")
+    return authorization.authorization_rule_id
+
+
+def resolve_pre_model_source_handling(
+    authority: EvidencePreModelSourceHandlingAuthority,
+) -> dict[str, Any]:
+    fact_record = resolve_canonical_head(
+        authority.store,
+        family="FACT",
+        scope=authority.fact_scope,
+        cutoff=authority.cutoff,
+    )
+    policy_record = resolve_canonical_head(
+        authority.store,
+        family="POLICY",
+        scope=authority.policy_scope,
+        cutoff=authority.cutoff,
+    )
+    registry_id = policy_record.get("field_category_registry_id")
+    if not isinstance(registry_id, str) or not registry_id:
+        raise SourceHandlingBlockedError("policy-bound registry identity is missing")
+    registry_record = authority.store.canonical_record_by_id("FIELD_CATEGORY_REGISTRY", registry_id)
+    if registry_record is None or not strict_known_eligible(registry_record, authority.cutoff):
+        raise SourceHandlingBlockedError("exact historical field-category registry is unavailable")
+    registry_scope = str(registry_record.get("scope", ""))
+    resolved_registry = resolve_canonical_head(
+        authority.store,
+        family="FIELD_CATEGORY_REGISTRY",
+        scope=registry_scope,
+        cutoff=authority.cutoff,
+    )
+    if resolved_registry.get("field_category_registry_id") != registry_id:
+        raise SourceHandlingBlockedError("policy-bound registry is not the strict-known canonical head")
+
+    rule_ids = {
+        _publication_rule_id(fact_record),
+        _publication_rule_id(policy_record),
+        _publication_rule_id(registry_record),
+    }
+    if len(rule_ids) != 1:
+        raise SourceHandlingBlockedError("authority families do not resolve to one authorization rule")
+    rule_id = next(iter(rule_ids))
+    rule = authority.store.canonical_record_by_id("AUTHORIZATION_RULE", rule_id)
+    if rule is None or not strict_known_eligible(rule, authority.cutoff):
+        raise SourceHandlingBlockedError("exact historical authorization rule is unavailable")
+    resolved_rule = resolve_canonical_head(
+        authority.store,
+        family="AUTHORIZATION_RULE",
+        scope="SOURCE_HANDLING",
+        cutoff=authority.cutoff,
+    )
+    if resolved_rule.get("authorization_rule_id") != rule_id:
+        raise SourceHandlingBlockedError("authorization rule is stale or non-applicable")
+
+    return derive_source_handling_decision(
+        fact_record=fact_record,
+        policy_record=policy_record,
+        registry_record=registry_record,
+        authorization_rule=rule,
+    )
 
 
 def _validate_candidate_set(
@@ -335,14 +420,28 @@ def build_evidence_pre_model(
     capability: EvidenceCapabilityConstraint,
     canonical_inventory: tuple[EvidenceSpan, ...],
     candidate_span_ids: tuple[str, ...],
-    retain_exact_prompt: bool = True,
+    source_handling_authority: EvidencePreModelSourceHandlingAuthority | None = None,
     forced_final_size_delta: int = 0,
 ) -> EvidencePreModelBuildResult:
-    """Build a deterministic provider-free Evidence Intelligence pre-model record.
+    """Build a deterministic provider-free Evidence Intelligence pre-model record."""
+    if source_handling_authority is None:
+        raise PreModelInvariantError("SOURCE_HANDLING_AUTHORITY_REQUIRED")
+    if intent.historical_cutoff is not None and intent.historical_cutoff != source_handling_authority.cutoff:
+        raise PreModelInvariantError("SOURCE_HANDLING_CUTOFF_MISMATCH")
+    document_ids = {span.document_id for span in canonical_inventory}
+    if len(document_ids) != 1 or source_handling_authority.fact_scope not in document_ids:
+        raise PreModelInvariantError("SOURCE_HANDLING_SCOPE_AMBIGUOUS")
+    try:
+        source_handling_decision = resolve_pre_model_source_handling(source_handling_authority)
+    except SourceHandlingBlockedError as error:
+        raise PreModelInvariantError(f"SOURCE_HANDLING:{error}") from error
+    if source_handling_decision.get("processing_decision") != "ALLOW":
+        raise PreModelInvariantError("SOURCE_HANDLING:MODEL_PROCESSING_NOT_ALLOWED")
 
-    `forced_final_size_delta` exists only as an invariant-test seam. Production callers
-    must leave it at zero.
-    """
+    retain_exact_prompt = (
+        source_handling_decision.get("retention_decision") == "ALLOW"
+        and source_handling_decision.get("reconstruction_decision") == "ALLOW"
+    )
 
     _validate_candidate_set(canonical_inventory, candidate_span_ids)
     ledger = _build_ledger(intent=intent, policy=policy, canonical_inventory=canonical_inventory)
@@ -382,7 +481,9 @@ def build_evidence_pre_model(
             reconstruction_outcome="UNAVAILABLE",
             reason_codes=allocation.reason_codes,
         )
-        return EvidencePreModelBuildResult(ledger, allocation, None, None, None, build)
+        return EvidencePreModelBuildResult(
+            ledger, allocation, None, None, None, build, source_handling_decision
+        )
 
     included = selected_required + selected_optional
     excluded: list[str] = []
@@ -427,7 +528,9 @@ def build_evidence_pre_model(
             reconstruction_outcome="UNAVAILABLE",
             reason_codes=allocation.reason_codes,
         )
-        return EvidencePreModelBuildResult(ledger, allocation, None, None, None, build)
+        return EvidencePreModelBuildResult(
+            ledger, allocation, None, None, None, build, source_handling_decision
+        )
 
     allocation_reasons = tuple(["BUDGET_EXCLUDED"] if excluded else [])
     allocation = EvidenceContextAllocationResult(
@@ -497,4 +600,12 @@ def build_evidence_pre_model(
         reconstruction_outcome=reconstruction,
         reason_codes=reasons,
     )
-    return EvidencePreModelBuildResult(ledger, allocation, package, prompt_plan, artifact, build)
+    return EvidencePreModelBuildResult(
+        ledger,
+        allocation,
+        package,
+        prompt_plan,
+        artifact,
+        build,
+        source_handling_decision,
+    )
