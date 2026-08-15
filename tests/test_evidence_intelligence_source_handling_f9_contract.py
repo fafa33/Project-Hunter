@@ -18,7 +18,9 @@ from hunter.evidence_intelligence.pre_model import (
     PreModelInvariantError,
     build_evidence_pre_model,
 )
-from hunter.evidence_intelligence.pre_model_persistence import EvidencePreModelPersistenceRepository
+from hunter.evidence_intelligence.pre_model_persistence import (
+    EvidencePreModelPersistenceRepository,
+)
 
 FIXTURE = (
     Path(__file__).parent
@@ -58,7 +60,9 @@ def _span(
     )
 
 
-def _intent(*, objective: str = "Extract supported fields only.") -> EvidenceExtractionIntent:
+def _intent(
+    *, objective: str = "Extract supported fields only."
+) -> EvidenceExtractionIntent:
     return EvidenceExtractionIntent(
         task_type="claim-extraction",
         objective=objective,
@@ -220,7 +224,8 @@ def test_schema_v1_build_record_fixture_preserves_original_identity() -> None:
     )
 
 
-def test_schema_v1_identity_must_be_verified_before_new_authority_fields_exist() -> None:
+def test_schema_v1_identity_must_be_verified_before_new_authority_fields_exist(
+) -> None:
     fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
     payload = dict(fixture["record"])
 
@@ -238,7 +243,9 @@ def test_schema_v1_identity_must_be_verified_before_new_authority_fields_exist()
 
 def test_f9_integration_contract_has_no_permissive_retention_default() -> None:
     build_signature = inspect.signature(build_evidence_pre_model)
-    persistence_signature = inspect.signature(EvidencePreModelPersistenceRepository.save)
+    persistence_signature = inspect.signature(
+        EvidencePreModelPersistenceRepository.save
+    )
 
     forbidden = {"retain_exact_prompt", "retain_exact_source_bytes"}
     assert forbidden.isdisjoint(build_signature.parameters)
