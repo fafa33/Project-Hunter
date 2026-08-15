@@ -4,7 +4,6 @@ from datetime import UTC, datetime
 
 import pytest
 
-from evidence_pre_model_source_handling_fixture import source_handling_authority
 from hunter.evidence_intelligence.models import EvidenceSpan
 from hunter.evidence_intelligence.pre_model import (
     EvidenceCapabilityConstraint,
@@ -14,6 +13,8 @@ from hunter.evidence_intelligence.pre_model import (
     PreModelInvariantError,
     build_evidence_pre_model as _build_evidence_pre_model,
 )
+
+from evidence_pre_model_source_handling_fixture import source_handling_authority
 
 
 def _span(span_id: str, excerpt: str, *, status: str = "active") -> EvidenceSpan:
