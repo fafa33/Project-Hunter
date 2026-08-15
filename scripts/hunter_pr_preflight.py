@@ -6,7 +6,7 @@ from collections.abc import Sequence
 
 QUALITY_GATES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Ruff", ("ruff", "check", ".")),
-    ("Black", ("black", "--check", ".")),
+    ("Black", ("black", "--check", "--diff", ".")),
     ("Mypy", ("mypy",)),
     ("Pytest", ("pytest",)),
 )
@@ -22,7 +22,7 @@ def run_quality_gates(gates: Sequence[tuple[str, Sequence[str]]] = QUALITY_GATES
             print(f"[Hunter Pre-PR] FAIL: {name} exited {completed.returncode}", flush=True)
             return completed.returncode
         print(f"[Hunter Pre-PR] PASS: {name}", flush=True)
-    print("[Hunter Pre-PR] PASS: all deterministic repository-local gates", flush=True)
+    print(f"[Hunter Pre-PR] PASS: all deterministic repository-local gates", flush=True)
     return 0
 
 
