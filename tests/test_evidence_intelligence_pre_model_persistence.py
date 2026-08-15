@@ -7,6 +7,7 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from evidence_pre_model_source_handling_fixture import source_handling_authority
 
 from hunter.evidence_intelligence.models import EvidenceSpan, evidence_text_digest
 from hunter.evidence_intelligence.pre_model import (
@@ -24,8 +25,6 @@ from hunter.evidence_intelligence.pre_model_persistence import (
     PreModelPersistenceLineageError,
 )
 from hunter.evidence_intelligence.repository import EvidenceIntelligenceRepository
-
-from evidence_pre_model_source_handling_fixture import source_handling_authority
 
 SPAN_TIME = datetime(2026, 8, 12, 18, 0, tzinfo=UTC)
 BUILD_AUTHORITY_CUTOFF = datetime(2026, 8, 12, 18, 15, tzinfo=UTC)
@@ -513,7 +512,9 @@ def test_first_insert_rejects_mismatched_bundle_inputs(tmp_path, swapped: str) -
         "specification": other_spec,
         "capability": other_cap,
         "inventory": other_inventory,
-    }[swapped]
+    }[
+        swapped
+    ]
 
     repository = EvidenceIntelligenceRepository(tmp_path / "evidence.sqlite")
     persistence = EvidencePreModelPersistenceRepository(repository)
