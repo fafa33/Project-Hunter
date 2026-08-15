@@ -62,6 +62,8 @@ If the same defect class is discovered a second time during the same implementat
 
 Repeated findings are process failures: a previously known defect class reaching a later PR or independent audit means the prevention mechanism is incomplete and must itself be corrected.
 
+Independent review is not a substitute for implementer diligence. An implementation is not review-ready merely because automated gates are green; the implementer must first prove that known defect classes have been searched for and prevented across all relevant sibling paths.
+
 The required development flow is:
 
 `Finding -> Defect Class -> Sibling Search -> Root Correction -> Regression Protection -> Counterfactual Validation (where required) -> Preflight -> Adversarial Self-Review -> PR -> Independent Review`
