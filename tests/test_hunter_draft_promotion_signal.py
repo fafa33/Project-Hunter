@@ -308,6 +308,52 @@ def test_review_feedback_blockers_include_unacknowledged_top_level_comments():
     assert blockers == ["unacknowledged top-level comments=2"]
 
 
+@pytest.mark.parametrize(
+    ("unresolved", "changes_requested", "unacknowledged", "expected"),
+    [
+        (("THREAD-1",), (), (), "unresolved review threads=1"),
+        ((), ("reviewer",), (), "changes requested by reviewer"),
+        ((), (), (101,), "unacknowledged top-level comments=1"),
+    ],
+)
+def test_canonical_merge_readiness_feedback_blocker_cannot_promote_draft(
+    gh, unresolved, changes_requested, unacknowledged, expected
+):
+    pr_number = 278
+    sha = f"sha_parity_{expected.split('=')[0].replace(' ', '_')}"
+    body = "- [ ] `READY FOR REVIEW` — pending review.\n- [x] `CHANGES REQUIRED` — waiting.\n"
+    gh.pulls[pr_number] = green_pr(pr_number, sha, body)
+    green_checks(gh, sha)
+
+    with (
+        patch.object(
+            hunter_draft_promotion_signal.merge_readiness,
+            "unresolved_review_thread_ids",
+            return_value=unresolved,
+        ),
+        patch.object(
+            hunter_draft_promotion_signal.merge_readiness,
+            "current_changes_requested_reviewers",
+            return_value=changes_requested,
+        ),
+        patch.object(
+            hunter_draft_promotion_signal.merge_readiness,
+            "unacknowledged_top_level_comments",
+            return_value=unacknowledged,
+        ),
+    ):
+        blockers = hunter_draft_promotion_signal.review_feedback_blockers(pr_number)
+
+    assert expected in blockers
+    with patch("hunter_draft_promotion_signal.review_feedback_blockers", return_value=blockers):
+        hunter_draft_promotion_signal.evaluate(gh.pulls[pr_number])
+
+    assert gh.published[-1][1] == "pending"
+    assert expected in gh.published[-1][2]
+    assert pr_number not in gh.patched_bodies
+    assert not gh.comments.get(pr_number)
+
+
 def test_reconcile_open_draft_prs_rechecks_every_current_draft():
     drafts = [
         green_pr(275, "sha_a", "- [x] `READY FOR REVIEW` — a.\n"),
