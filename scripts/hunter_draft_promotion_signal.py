@@ -121,6 +121,10 @@ def review_feedback_blockers(pr_number: int) -> list[str]:
     if changes_requested:
         waiting.append("changes requested by " + ", ".join(changes_requested))
 
+    unacknowledged = merge_readiness.unacknowledged_top_level_comments(pr_number)
+    if unacknowledged:
+        waiting.append(f"unacknowledged top-level comments={len(unacknowledged)}")
+
     return waiting
 
 
@@ -249,8 +253,8 @@ def evaluate(pr: dict[str, Any]) -> None:
         return
 
     # Re-read review feedback immediately before mutating metadata. This closes
-    # the practical race where a review thread is opened after the initial
-    # prerequisite read but before READY FOR REVIEW is synchronized.
+    # the practical race where any canonical feedback blocker is introduced
+    # after the initial prerequisite read but before READY FOR REVIEW is synchronized.
     feedback_waiting = review_feedback_blockers(pr_number)
     if feedback_waiting:
         publish(
@@ -274,6 +278,19 @@ def main() -> None:
 
     if "pull_request" in event:
         evaluate(event["pull_request"])
+        raise SystemExit(0)
+
+    if event_name == "issue_comment":
+        issue = event.get("issue") or {}
+        if "pull_request" not in issue:
+            print("issue_comment event is not for a pull request; nothing to evaluate.")
+            raise SystemExit(0)
+        pr_number = int(issue.get("number") or 0)
+        if not pr_number:
+            print("issue_comment event has no pull request number; nothing to evaluate.")
+            raise SystemExit(0)
+        current = request_json("GET", f"pulls/{pr_number}")
+        evaluate(current)
         raise SystemExit(0)
 
     if event_name == "push":
