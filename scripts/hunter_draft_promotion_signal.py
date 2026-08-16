@@ -4,6 +4,8 @@ import re
 import urllib.request
 from typing import Any
 
+import hunter_merge_readiness as merge_readiness
+
 # Configuration
 context = "Hunter Draft Promotion"
 required_checks = ("Quality Gates", "dependency-review", "CodeQL")
@@ -98,6 +100,30 @@ def latest_commit_status(sha: str, status_context: str) -> dict[str, Any] | None
     return max(matches, key=lambda status: int(status.get("id", 0)))
 
 
+def review_feedback_blockers(pr_number: int) -> list[str]:
+    """Read the same canonical review blockers used by Hunter Merge Readiness.
+
+    Draft promotion is advisory, but it must never claim a PR is ready for
+    review while the authoritative merge-readiness reader can already see
+    unresolved review feedback. Reuse the canonical readers rather than
+    maintaining a second interpretation of review state here.
+    """
+    merge_readiness.repo = repo
+    merge_readiness.repo_owner = repo.split("/", 1)[0] if "/" in repo else ""
+    merge_readiness.token = token
+
+    waiting: list[str] = []
+    unresolved = merge_readiness.unresolved_review_thread_ids(pr_number)
+    if unresolved:
+        waiting.append(f"unresolved review threads={len(unresolved)}")
+
+    changes_requested = merge_readiness.current_changes_requested_reviewers(pr_number)
+    if changes_requested:
+        waiting.append("changes requested by " + ", ".join(changes_requested))
+
+    return waiting
+
+
 def parse_readiness_declaration(body: str) -> tuple[list[re.Match], str]:
     """Parses the Implementer Readiness Declaration checkboxes in a PR body.
 
@@ -168,12 +194,12 @@ def post_once(pr_number: int, sha: str) -> None:
             "body": (
                 f"{marker}\n"
                 "✅ **Hunter Draft Promotion:** all exact-head prerequisites "
-                "have passed and implementer readiness metadata is synchronized "
-                "to **READY FOR REVIEW**. The operator may now manually mark this "
-                "Draft PR **Ready for Review**.\n\n"
+                "and current review-feedback gates have passed, and implementer "
+                "readiness metadata is synchronized to **READY FOR REVIEW**. "
+                "The operator may now manually mark this Draft PR **Ready for Review**.\n\n"
                 "Hunter Governance Review and Hunter Merge Readiness remain the "
-                "merge authorities; review feedback must still be resolved or "
-                "explicitly acknowledged under the repository merge policy."
+                "merge authorities; any newly opened review feedback invalidates "
+                "this advisory signal until reconciled."
             )
         },
     )
@@ -211,8 +237,10 @@ def evaluate(pr: dict[str, Any]) -> None:
     elif governance.get("state") != "success":
         waiting.append(f"{governance_context}={governance.get('state') or 'pending'}")
 
+    waiting.extend(review_feedback_blockers(pr_number))
+
     if waiting:
-        publish(sha, "pending", "Waiting for exact-head checks: " + ", ".join(waiting))
+        publish(sha, "pending", "Waiting for Draft promotion prerequisites: " + ", ".join(waiting))
         return
 
     current = request_json("GET", f"pulls/{pr_number}")
@@ -220,8 +248,20 @@ def evaluate(pr: dict[str, Any]) -> None:
         print("PR state/head changed during evaluation; refusing metadata mutation.")
         return
 
+    # Re-read review feedback immediately before mutating metadata. This closes
+    # the practical race where a review thread is opened after the initial
+    # prerequisite read but before READY FOR REVIEW is synchronized.
+    feedback_waiting = review_feedback_blockers(pr_number)
+    if feedback_waiting:
+        publish(
+            sha,
+            "pending",
+            "Waiting for Draft promotion prerequisites: " + ", ".join(feedback_waiting),
+        )
+        return
+
     synchronize_ready_metadata(pr_number, current.get("body") or "")
-    publish(sha, "success", "Ready to promote from Draft; metadata synchronized.")
+    publish(sha, "success", "Ready to promote from Draft; checks and review feedback are clear.")
     post_once(pr_number, sha)
 
 
