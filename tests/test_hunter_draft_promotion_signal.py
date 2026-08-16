@@ -275,9 +275,35 @@ def test_review_feedback_is_rechecked_before_metadata_mutation(gh):
     assert not gh.comments.get(277)
 
 
+def test_review_feedback_blockers_include_unacknowledged_top_level_comments():
+    hunter_draft_promotion_signal.repo = "fafa33/Project-Hunter"
+    hunter_draft_promotion_signal.token = "fake-token"
+    with (
+        patch.object(
+            hunter_draft_promotion_signal.merge_readiness,
+            "unresolved_review_thread_ids",
+            return_value=(),
+        ),
+        patch.object(
+            hunter_draft_promotion_signal.merge_readiness,
+            "current_changes_requested_reviewers",
+            return_value=(),
+        ),
+        patch.object(
+            hunter_draft_promotion_signal.merge_readiness,
+            "unacknowledged_top_level_comments",
+            return_value=(101, 102),
+        ),
+    ):
+        blockers = hunter_draft_promotion_signal.review_feedback_blockers(275)
+
+    assert blockers == ["unacknowledged top-level comments=2"]
+
+
 def test_workflow_reconciles_when_review_feedback_changes():
     workflow = (
         Path(__file__).resolve().parents[1] / ".github" / "workflows" / "hunter-draft-promotion-signal.yml"
     ).read_text(encoding="utf-8")
     assert "pull_request_review:" in workflow
     assert "pull_request_review_comment:" in workflow
+    assert "issue_comment:" in workflow
