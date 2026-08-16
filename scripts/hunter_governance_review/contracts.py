@@ -156,7 +156,7 @@ class Finding:
             f"reusable_boundary={boundary}; metadata={completeness}]"
         )
 
-    def to_dict(self) -> dict[str, str | None]:
+    def to_dict(self) -> dict[str, str | bool | None]:
         return {
             "validator_id": self.validator_id,
             "title": self.title,
@@ -165,7 +165,7 @@ class Finding:
             "classification": self.classification.value if self.classification is not None else None,
             "classification_evidence": self.classification_evidence,
             "reusable_boundary": self.reusable_boundary,
-            "classification_complete": "true" if self.classification_complete else "false",
+            "classification_complete": self.classification_complete,
         }
 
 
