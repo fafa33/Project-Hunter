@@ -3,8 +3,9 @@
 The policy is fail-closed by default: external top-level PR Conversation
 comments block readiness until the repository owner acknowledges that exact
 comment version with a 👍 reaction. Trusted status/advisory automation comments
-are structurally exempt, and an owner-authored statement never requires the
-owner to react to their own statement.
+are structurally exempt. A demonstrably non-blocking owner status note does not
+require self-acknowledgement, while explicit owner blocking feedback remains in
+the canonical feedback state.
 """
 
 from __future__ import annotations
@@ -88,6 +89,26 @@ def test_owner_authored_comment_does_not_require_self_acknowledgement(gh):
     assert decision.state == "success"
     assert core.unacknowledged_top_level_comments(501) == ()
     assert not gh.reactions.get(907)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "ACCEPTED AS BLOCKING. Do not resolve until the root cause is fixed.",
+        "Do not merge; this blocker remains unresolved.",
+        "CHANGES REQUIRED: must fix the identity bypass.",
+    ],
+)
+def test_explicit_owner_blocking_comment_remains_a_feedback_blocker(gh, body: str):
+    ready_pull_request(gh)
+    gh.add_comment(501, 908, login="fafa33", body=body)
+
+    decision = core.reconcile_pr(501)
+
+    assert decision.state == "failure"
+    assert core.unacknowledged_top_level_comments(501) == (908,)
+    gh.acknowledge(908)
+    assert core.reconcile_pr(501).state == "failure"
 
 
 def test_non_exempt_bot_comment_blocks_until_acknowledged(gh):

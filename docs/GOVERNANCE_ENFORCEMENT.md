@@ -74,9 +74,10 @@ python scripts/hunter_governance_preflight.py generate-pr-body \
   --repo fafa33/Project-Hunter \
   --issue 276 \
   --objective "Governance enforcement: mandatory agent preflight and PR generator" \
-  --head-sha "$HEAD_SHA" \
-  --base-sha "$BASE_SHA" \
+  --base-ref origin/main \
   --evidence-json /tmp/hunter-pr-evidence.json \
+  --verification-evidence "ruff check .: PASS" \
+  --operational-evidence "Governance-only operational validation: PASS" \
   --output /tmp/hunter-pr-body.md
 ```
 
@@ -87,6 +88,8 @@ Every governing Issue acceptance criterion is represented exactly once. Unproven
 ```
 
 Changing the source head or target revision makes that evidence stale until the body is regenerated or re-synchronized with current evidence.
+
+The generator resolves the source head and target revision from the current Git checkout. Callers cannot supply alternate SHA values. It emits `READY FOR REVIEW` only when every criterion is complete and explicit verification and operational evidence were supplied; otherwise it emits `CHANGES REQUIRED`. The live validator also rejects a `READY FOR REVIEW` body with unchecked verification/operational items or placeholder evidence.
 
 The parser accepts the matrix only inside the canonical `## Acceptance-criteria matrix` section. A matching table elsewhere in the body cannot satisfy the governed metadata contract.
 
@@ -114,10 +117,12 @@ Before a blocking finding is treated as resolved, a machine-readable resolution 
 
 ```bash
 python scripts/hunter_governance_preflight.py resolve-finding \
+  --repo fafa33/Project-Hunter \
+  --pr 277 \
   --finding-json /tmp/finding-resolution.json
 ```
 
-A systemic resolved finding requires classification evidence, the reusable boundary, durable guard evidence, and verifier evidence. This is the executable enforcement of the implementation obligation already owned by `docs/HUNTER_IMPLEMENTATION_CONTRACT.md`.
+The resolution record references live `finding_url` and `verifier_url` comments. The independent finding comment must carry an exact-pair `hunter-review-finding:v1` marker plus classification evidence and, when systemic, a reusable boundary. The independent verifier comment must carry the matching exact-pair `hunter-review-verification:v1` marker. Caller-supplied severity, classification, reviewer identity, or verifier identity is not authority. A systemic resolved finding additionally requires durable guard evidence. This is the executable enforcement of the implementation obligation already owned by `docs/HUNTER_IMPLEMENTATION_CONTRACT.md`.
 
 ## Canonical ownership guard
 
@@ -134,7 +139,7 @@ Some actions can be prevented before mutation only when the contributing agent c
 
 The standalone `Hunter Governance Agent Preflight` workflow also uses `pull_request_target` and the trusted default-branch checkout. It is an additional rejection surface, not a separate approval or merge authority.
 
-Top-level PR Conversation comments authored by the repository owner do not require the owner to 👍 their own statement. External human comments and unknown-bot comments retain the existing acknowledgement requirement; trusted structurally identifiable status/advisory automation comments retain their narrow exemption.
+Top-level PR Conversation comments authored by the repository owner do not require self-acknowledgement only when they are demonstrably non-blocking status notes. Explicit owner blocking feedback remains a canonical feedback blocker until it is edited or removed after resolution. External human comments and unknown-bot comments retain the existing acknowledgement requirement; trusted structurally identifiable status/advisory automation comments retain their narrow exemption.
 
 `Hunter Governance Review` and `Hunter Merge Readiness` remain the canonical merge-control path. The enforcement layer cannot approve itself or grant merge authority. No agent-generated metadata is approval. No automation may merge merely because preflight passes. Human approval remains required.
 

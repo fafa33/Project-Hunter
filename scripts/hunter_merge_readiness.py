@@ -98,6 +98,11 @@ RETRACTED_DESCRIPTION = "Waiting: this readiness result was superseded while it 
 TRUSTED_BOT_LOGIN = "github-actions[bot]"
 DEPENDENCY_REVIEW_MARKER = "<!-- dependency-review-pr-comment-marker -->"
 DRAFT_PROMOTION_MARKER_PREFIX = "<!-- hunter-draft-promotion:"
+OWNER_BLOCKING_COMMENT_RE = re.compile(
+    r"\b(?:accepted\s+as\s+blocking|block(?:ed|er|ing)?|changes\s+required|do\s+not\s+merge|"
+    r"must\s+(?:fix|resolve)|not\s+ready|unresolved)\b",
+    re.IGNORECASE,
+)
 GOVERNANCE_PREFLIGHT_PATH = Path(__file__).with_name("hunter_governance_preflight.py")
 GOVERNANCE_PREFLIGHT_TIMEOUT_SECONDS = 120
 GOVERNANCE_PREFLIGHT_FAILURE_DESCRIPTION = "trusted governance preflight failed; see workflow logs"
@@ -447,9 +452,14 @@ def owner_acknowledged_comment(comment: dict[str, Any]) -> bool:
 
 
 def owner_authored_comment(comment: dict[str, Any]) -> bool:
-    """Owner-authored top-level speech never needs a vacuous owner self-ack."""
+    """Return whether the repository owner authored this top-level comment."""
     login = ((comment.get("user") or {}).get("login") or "").strip()
     return bool(repo_owner) and login == repo_owner
+
+
+def owner_blocking_comment(comment: dict[str, Any]) -> bool:
+    body = str(comment.get("body") or "")
+    return owner_authored_comment(comment) and OWNER_BLOCKING_COMMENT_RE.search(body) is not None
 
 
 def unacknowledged_top_level_comments(pr_number: int) -> tuple[int, ...]:
@@ -458,8 +468,10 @@ def unacknowledged_top_level_comments(pr_number: int) -> tuple[int, ...]:
         int(comment["id"])
         for comment in comments
         if not is_exempt_status_comment(comment)
-        and not owner_authored_comment(comment)
-        and not owner_acknowledged_comment(comment)
+        and (
+            owner_blocking_comment(comment)
+            or (not owner_authored_comment(comment) and not owner_acknowledged_comment(comment))
+        )
     )
 
 

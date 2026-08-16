@@ -4,6 +4,7 @@ import json
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import hunter_governance_preflight as preflight
 import pytest
@@ -32,14 +33,17 @@ def canonical_template() -> str:
 
 def generated_body(*, ready: bool = True, template_text: str | None = None) -> str:
     issue = fixture_issue()
-    return preflight.generate_pr_body(
-        issue,
-        template_text=template_text or canonical_template(),
-        changed_files=("scripts/hunter_governance_preflight.py", "tests/test_hunter_governance_preflight.py"),
-        head_sha=HEAD,
-        base_sha=BASE,
-        evidence=evidence_for(issue) if ready else {},
-    )
+    with patch.object(preflight, "_git_exact_pair", return_value=(HEAD, BASE)):
+        return preflight.generate_pr_body(
+            issue,
+            repo_root=ROOT,
+            base_ref="main",
+            template_text=template_text or canonical_template(),
+            changed_files=("scripts/hunter_governance_preflight.py", "tests/test_hunter_governance_preflight.py"),
+            evidence=evidence_for(issue) if ready else {},
+            verification=("ruff check .: PASS",) if ready else (),
+            operational_evidence=("Governance-only validation: PASS",) if ready else (),
+        )
 
 
 def test_canonical_governance_loader_resolves_current_repository() -> None:
@@ -86,6 +90,38 @@ def test_generator_fails_closed_for_unproven_criteria() -> None:
 
     assert {row.status for row in preflight.parse_acceptance_matrix(body)} == {"blocked"}
     assert preflight.checked_readiness(body) == "changes required"
+
+
+def test_generator_does_not_declare_ready_when_verification_or_operational_evidence_is_missing() -> None:
+    issue = fixture_issue()
+    with patch.object(preflight, "_git_exact_pair", return_value=(HEAD, BASE)):
+        body = preflight.generate_pr_body(
+            issue,
+            repo_root=ROOT,
+            base_ref="main",
+            template_text=canonical_template(),
+            changed_files=("scripts/hunter_governance_preflight.py",),
+            evidence=evidence_for(issue),
+        )
+
+    assert preflight.checked_readiness(body) == "changes required"
+    assert "Pending exact command/result evidence." in body
+
+
+def test_ready_body_rejects_unchecked_or_placeholder_evidence() -> None:
+    issue = fixture_issue()
+    body = generated_body()
+    unchecked = body.replace("- [x] `ruff check .`", "- [ ] `ruff check .`", 1)
+    placeholder = body.replace("ruff check .: PASS", "Pending exact command/result evidence.", 1)
+
+    with pytest.raises(preflight.PreflightError, match="every Verification item complete"):
+        preflight.validate_pr_body(unchecked, issue, head_sha=HEAD, base_sha=BASE, promotion=False)
+    with pytest.raises(preflight.PreflightError, match="complete evidence"):
+        preflight.validate_pr_body(placeholder, issue, head_sha=HEAD, base_sha=BASE, promotion=False)
+
+    missing_item = body.replace("- [x] `mypy`\n", "", 1)
+    with pytest.raises(preflight.PreflightError, match="complete canonical Verification checklist"):
+        preflight.validate_pr_body(missing_item, issue, head_sha=HEAD, base_sha=BASE, promotion=False)
 
 
 def test_pr_body_rejects_missing_matrix() -> None:
@@ -244,14 +280,75 @@ def test_rule_21_rejects_branch_commit_title_and_body_mismatch() -> None:
         )
 
 
-def test_rule_21_rejects_closed_issue(tmp_path: Path) -> None:
+def test_rule_21_rejects_closed_issue(monkeypatch) -> None:
     payload = json.loads(FIXTURE.read_text(encoding="utf-8"))
     payload["state"] = "closed"
-    temporary = tmp_path / "closed_issue.json"
-    temporary.write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.setattr(preflight, "_gh_json", lambda _args: payload)
 
     with pytest.raises(preflight.PreflightError, match="not open"):
-        preflight.load_issue("fafa33/Project-Hunter", 276, temporary)
+        preflight.load_issue("fafa33/Project-Hunter", 276)
+
+
+def test_production_cli_rejects_caller_supplied_issue_identity() -> None:
+    with pytest.raises(SystemExit):
+        preflight._parser().parse_args(
+            [
+                "branch",
+                "--repo",
+                "fafa33/Project-Hunter",
+                "--issue",
+                "276",
+                "--objective",
+                "Governance enforcement: mandatory agent preflight and PR generator",
+                "--issue-json",
+                str(FIXTURE),
+            ]
+        )
+
+
+@pytest.mark.parametrize("action", ["pr-create", "pr-update"])
+def test_pr_mutation_actions_require_canonical_title_and_body(action: str) -> None:
+    argv = [
+        action,
+        "--repo",
+        "fafa33/Project-Hunter",
+        "--issue",
+        "276",
+        "--objective",
+        "Governance enforcement: mandatory agent preflight and PR generator",
+    ]
+    if action == "pr-update":
+        argv.extend(("--pr", "277"))
+    with pytest.raises(SystemExit):
+        preflight._parser().parse_args(argv)
+
+
+def test_generator_trace_is_derived_from_git_and_head_sha_override_is_rejected() -> None:
+    issue = fixture_issue()
+    with patch.object(preflight, "_git_exact_pair", return_value=(HEAD, BASE)) as exact_pair:
+        body = preflight.generate_pr_body(
+            issue,
+            repo_root=ROOT,
+            base_ref="origin/main",
+            template_text=canonical_template(),
+            changed_files=(),
+        )
+    assert preflight.trace_identity(body) == (276, HEAD, BASE)
+    exact_pair.assert_called_once_with(ROOT, "origin/main")
+    with pytest.raises(SystemExit):
+        preflight._parser().parse_args(
+            [
+                "generate-pr-body",
+                "--repo",
+                "fafa33/Project-Hunter",
+                "--issue",
+                "276",
+                "--objective",
+                issue.title,
+                "--head-sha",
+                "c" * 40,
+            ]
+        )
 
 
 def test_ownership_guard_rejects_review_semantics_in_implementation_owner() -> None:
@@ -301,6 +398,63 @@ def test_systemic_finding_requires_durable_guard_and_verifier() -> None:
         resolved=True,
     )
     preflight.validate_finding_resolution(complete)
+
+
+def _live_review_evidence(*, author: str, body: str, suffix: str) -> preflight.LiveReviewEvidence:
+    return preflight.LiveReviewEvidence(
+        url=f"https://github.com/fafa33/Project-Hunter/pull/277#{suffix}",
+        author=author,
+        body=body,
+        pull_request_number=277,
+    )
+
+
+def test_finding_resolution_is_bound_to_live_independent_exact_pair_evidence() -> None:
+    finding = _live_review_evidence(
+        author="independent-reviewer",
+        suffix="discussion_r1",
+        body=(
+            f"<!-- hunter-review-finding:v1 id=F-004 severity=blocking classification=systemic "
+            f"head={HEAD} base={BASE} -->\n"
+            "Classification evidence: Caller-controlled classification can recur across every finding.\n"
+            "Reusable boundary: live review finding resolver"
+        ),
+    )
+    verifier = _live_review_evidence(
+        author="independent-verifier",
+        suffix="issuecomment-2",
+        body=(f"<!-- hunter-review-verification:v1 finding=F-004 head={HEAD} base={BASE} outcome=resolved -->"),
+    )
+
+    resolution = preflight.finding_resolution_from_live_review(
+        finding_comment=finding,
+        verifier_comment=verifier,
+        pr_author="implementer",
+        head_sha=HEAD,
+        base_sha=BASE,
+        durable_guard_evidence="counterfactual regression",
+    )
+
+    assert resolution.classification == "systemic"
+    assert resolution.severity == "blocking"
+    with pytest.raises(preflight.PreflightError, match="independent"):
+        preflight.finding_resolution_from_live_review(
+            finding_comment=preflight.LiveReviewEvidence(finding.url, "implementer", finding.body),
+            verifier_comment=verifier,
+            pr_author="implementer",
+            head_sha=HEAD,
+            base_sha=BASE,
+            durable_guard_evidence="counterfactual regression",
+        )
+    with pytest.raises(preflight.PreflightError, match="stale"):
+        preflight.finding_resolution_from_live_review(
+            finding_comment=finding,
+            verifier_comment=verifier,
+            pr_author="implementer",
+            head_sha="c" * 40,
+            base_sha=BASE,
+            durable_guard_evidence="counterfactual regression",
+        )
 
 
 def test_live_ready_rejects_unresolved_review_thread(monkeypatch) -> None:

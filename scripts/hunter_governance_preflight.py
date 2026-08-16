@@ -84,8 +84,44 @@ PASS_EVIDENCE_PLACEHOLDERS = {
     "tbd",
     "n/a",
 }
+INCOMPLETE_EVIDENCE_MARKERS = (
+    "pending exact command/result evidence",
+    "replace with verification output summary",
+    "replace with commands, record ids, query/replay results, and environment details",
+)
+REQUIRED_READY_CHECKLISTS: dict[str, tuple[str, ...]] = {
+    "## Verification": (
+        "`ruff check .`",
+        "`black --check .` or the repository-approved equivalent",
+        "`mypy`",
+        "Full `pytest` suite",
+        "Required migrations/configuration checks",
+    ),
+    "## Operational validation": (
+        "All required runbooks were executed in a suitable environment.",
+        "Required live providers/APIs were exercised.",
+        "Required records were persisted and independently queried/replayed.",
+        "Evidence identifiers, provenance, and logical history were verified.",
+        "No fixture, fabricated response, or current-state substitution was used where live or point-in-time evidence was required.",
+        "Environment/network limitations are disclosed below.",
+    ),
+}
 BRANCH_ISSUE_RE_TEMPLATE = r"(?:^|[-_/])issue[-_/]?{number}(?:[-_/]|$)"
-
+FINDING_MARKER_RE = re.compile(
+    r"<!--\s*hunter-review-finding:v1\s+id=(?P<id>[A-Za-z0-9._-]+)\s+"
+    r"severity=(?P<severity>blocking|nonblocking)\s+"
+    r"classification=(?P<classification>isolated|systemic)\s+"
+    r"head=(?P<head>[0-9a-f]{40})\s+base=(?P<base>[0-9a-f]{40})\s*-->",
+    re.IGNORECASE,
+)
+VERIFICATION_MARKER_RE = re.compile(
+    r"<!--\s*hunter-review-verification:v1\s+finding=(?P<id>[A-Za-z0-9._-]+)\s+"
+    r"head=(?P<head>[0-9a-f]{40})\s+base=(?P<base>[0-9a-f]{40})\s+"
+    r"outcome=(?P<outcome>resolved|unresolved)\s*-->",
+    re.IGNORECASE,
+)
+CLASSIFICATION_EVIDENCE_RE = re.compile(r"(?im)^Classification evidence:\s*(?P<value>\S.+?)\s*$")
+REUSABLE_BOUNDARY_RE = re.compile(r"(?im)^Reusable boundary:\s*(?P<value>\S.+?)\s*$")
 SEMANTIC_MARKERS: dict[str, tuple[re.Pattern[str], ...]] = {
     "lifecycle": tuple(
         re.compile(pattern, re.IGNORECASE)
@@ -176,6 +212,14 @@ class FindingResolution:
     resolved: bool
 
 
+@dataclass(frozen=True)
+class LiveReviewEvidence:
+    url: str
+    author: str
+    body: str
+    pull_request_number: int = 0
+
+
 def _normalize(value: str) -> str:
     value = value.replace("`", "").replace("*", "")
     return re.sub(r"\s+", " ", value.strip().lower()).rstrip(".")
@@ -240,12 +284,9 @@ def _gh_pr_oids(repository: str, pr_number: int) -> tuple[str, str]:
     return head, base
 
 
-def load_issue(repository: str, issue_number: int, issue_json: Path | None = None) -> IssueIdentity:
-    payload = (
-        json.loads(issue_json.read_text(encoding="utf-8"))
-        if issue_json is not None
-        else _gh_json((f"repos/{repository}/issues/{issue_number}",))
-    )
+def load_issue(repository: str, issue_number: int) -> IssueIdentity:
+    """Resolve production Issue identity exclusively from live GitHub state."""
+    payload = _gh_json((f"repos/{repository}/issues/{issue_number}",))
     issue = IssueIdentity.from_payload(repository, payload)
     if issue.number != int(issue_number):
         raise PreflightError(f"Issue identity mismatch: requested #{issue_number}, resolved #{issue.number}.")
@@ -284,7 +325,12 @@ def validate_canonical_governance(repo_root: Path) -> None:
         failures.append(f"missing {TEMPLATE_PATH}")
     else:
         try:
-            validate_canonical_pr_sections(template.read_text(encoding="utf-8"), source=TEMPLATE_PATH)
+            template_text = template.read_text(encoding="utf-8")
+            validate_canonical_pr_sections(template_text, source=TEMPLATE_PATH)
+            for heading, expected in REQUIRED_READY_CHECKLISTS.items():
+                actual = tuple(item for _mark, item in _checklist_items(_canonical_section(template_text, heading)))
+                if tuple(map(_normalize, actual)) != tuple(map(_normalize, expected)):
+                    failures.append(f"{TEMPLATE_PATH} {heading} checklist diverges from executable projection")
         except PreflightError as exc:
             failures.append(str(exc))
     if failures:
@@ -408,6 +454,54 @@ def checked_readiness(body: str) -> str:
     return checked[0]
 
 
+def _canonical_section(text: str, heading: str) -> str:
+    start = re.search(rf"(?mi)^{re.escape(heading)}\s*$", text)
+    if start is None:
+        raise PreflightError(f"PR body is missing canonical section {heading!r}.")
+    following = re.search(r"(?m)^##\s+", text[start.end() :])
+    end = start.end() + following.start() if following is not None else len(text)
+    return text[start.end() : end]
+
+
+def _checklist_items(section: str) -> tuple[tuple[str, str], ...]:
+    return tuple(
+        (match.group("mark").lower(), match.group("text").strip())
+        for match in re.finditer(
+            r"(?im)^\s*[-*+]\s*\[(?P<mark>[ xX])\]\s*(?P<text>.+?)\s*$",
+            section,
+        )
+    )
+
+
+def _has_substantive_evidence(section: str) -> bool:
+    ignored_prefixes = ("record exact commands and results:", "operational evidence:")
+    for raw_line in section.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith(("- [", "```")) or line.lower().startswith(ignored_prefixes):
+            continue
+        normalized = _normalize(line)
+        if normalized and not any(marker in normalized for marker in INCOMPLETE_EVIDENCE_MARKERS):
+            return True
+    return False
+
+
+def validate_ready_evidence(body: str) -> None:
+    for heading, expected in REQUIRED_READY_CHECKLISTS.items():
+        section = _canonical_section(body, heading)
+        checklist = _checklist_items(section)
+        actual = tuple(item for _mark, item in checklist)
+        if tuple(map(_normalize, actual)) != tuple(map(_normalize, expected)):
+            raise PreflightError(f"READY FOR REVIEW requires the complete canonical {heading[3:]} checklist.")
+        unchecked = tuple(item for mark, item in checklist if mark != "x")
+        if unchecked:
+            raise PreflightError(f"READY FOR REVIEW requires every {heading[3:]} item complete: {unchecked[0]}")
+        normalized = _normalize(section)
+        if any(marker in normalized for marker in INCOMPLETE_EVIDENCE_MARKERS) or not _has_substantive_evidence(
+            section
+        ):
+            raise PreflightError(f"READY FOR REVIEW lacks complete evidence in {heading}.")
+
+
 def trace_identity(body: str) -> tuple[int, str, str]:
     matches = list(TRACE_RE.finditer(body))
     if len(matches) != 1:
@@ -453,6 +547,8 @@ def validate_pr_body(
             )
 
     readiness = checked_readiness(body)
+    if readiness == "ready for review":
+        validate_ready_evidence(body)
     marker_issue, marker_head, marker_base = trace_identity(body)
     if marker_issue != issue.number:
         raise PreflightError("PR body preflight marker names a different Issue.")
@@ -501,25 +597,36 @@ def _insert_after_heading(text: str, heading: str, content: str) -> str:
     return _replace_once(text, marker, f"{marker}{content}\n\n", label=f"{heading} insertion point")
 
 
+def _mark_section_checkboxes(text: str, heading: str) -> str:
+    section = _canonical_section(text, heading)
+    checked = re.sub(r"(?m)^(\s*[-*+]\s*)\[[ xX]\]", r"\1[x]", section)
+    return text.replace(section, checked, 1)
+
+
 def generate_pr_body(
     issue: IssueIdentity,
     *,
+    repo_root: Path,
+    base_ref: str,
     template_text: str,
     changed_files: Sequence[str],
-    head_sha: str,
-    base_sha: str,
     evidence: Mapping[str, Mapping[str, str]] | None = None,
     verification: Sequence[str] = (),
     operational_evidence: Sequence[str] = (),
     limitations: Sequence[str] = (),
 ) -> str:
     validate_canonical_pr_sections(template_text, source="Canonical PR template")
+    head_sha, base_sha = _git_exact_pair(repo_root, base_ref)
 
     rows = [
         (criterion, *_criterion_evidence(criterion, evidence or {}))
         for criterion in issue_acceptance_criteria(issue.body)
     ]
-    ready = all(status in {"PASS", "NOT APPLICABLE"} for _, status, _ in rows)
+    ready = (
+        all(status in {"PASS", "NOT APPLICABLE"} for _, status, _ in rows)
+        and bool(verification)
+        and bool(operational_evidence)
+    )
     readiness = "READY FOR REVIEW" if ready else "CHANGES REQUIRED"
     scope = "\n".join(f"- `{path}`" for path in sorted(set(changed_files))) or "- No changed files resolved."
     matrix = "\n".join(
@@ -583,6 +690,10 @@ def generate_pr_body(
         limitations_text,
         label="limitations placeholder",
     )
+    if verification:
+        body = _mark_section_checkboxes(body, "## Verification")
+    if operational_evidence:
+        body = _mark_section_checkboxes(body, "## Operational validation")
 
     for label in ("READY FOR REVIEW", "CHANGES REQUIRED", "BLOCKED"):
         pattern = re.compile(rf"(?m)^- \[[ xX]\] `{re.escape(label)}`")
@@ -653,6 +764,82 @@ def validate_finding_resolution(finding: FindingResolution) -> None:
         raise PreflightError(f"Systemic finding {finding.finding_id} lacks durable reusable hardening evidence.")
     if not (finding.verifier_evidence or "").strip():
         raise PreflightError(f"Systemic finding {finding.finding_id} lacks verifier evidence for the durable guard.")
+
+
+def _review_evidence_from_url(repository: str, pr_number: int, url: str) -> LiveReviewEvidence:
+    review_match = re.search(r"#discussion_r(?P<id>\d+)$", url)
+    issue_match = re.search(r"#issuecomment-(?P<id>\d+)$", url)
+    if review_match is not None:
+        payload = _gh_json((f"repos/{repository}/pulls/comments/{review_match.group('id')}",))
+    elif issue_match is not None:
+        payload = _gh_json((f"repos/{repository}/issues/comments/{issue_match.group('id')}",))
+    else:
+        raise PreflightError("Review evidence URL must identify a live PR review or Conversation comment.")
+    live_url = str(payload.get("html_url") or "").strip()
+    author = str((payload.get("user") or {}).get("login") or "").strip()
+    body = str(payload.get("body") or "")
+    parent_url = str(payload.get("pull_request_url") or payload.get("issue_url") or "").rstrip("/")
+    parent_number_match = re.search(r"/(?:pulls|issues)/(?P<number>\d+)$", parent_url)
+    parent_number = int(parent_number_match.group("number")) if parent_number_match else 0
+    if live_url != url or not author or not body or parent_number != int(pr_number):
+        raise PreflightError("Live review evidence is incomplete or does not match the requested URL.")
+    return LiveReviewEvidence(url=live_url, author=author, body=body, pull_request_number=parent_number)
+
+
+def finding_resolution_from_live_review(
+    *,
+    finding_comment: LiveReviewEvidence,
+    verifier_comment: LiveReviewEvidence,
+    pr_author: str,
+    head_sha: str,
+    base_sha: str,
+    durable_guard_evidence: str | None,
+) -> FindingResolution:
+    if not pr_author:
+        raise PreflightError("Live PR author identity is required for independent finding resolution.")
+    if finding_comment.url == verifier_comment.url:
+        raise PreflightError("Finding classification and post-fix verification must be separate live evidence.")
+    if finding_comment.author.lower() == pr_author.lower() or verifier_comment.author.lower() == pr_author.lower():
+        raise PreflightError("Finding classification and verification must be independent from the PR author.")
+    finding_matches = list(FINDING_MARKER_RE.finditer(finding_comment.body))
+    if len(finding_matches) != 1:
+        raise PreflightError("Canonical live finding must contain exactly one machine-readable finding marker.")
+    finding_marker = finding_matches[0]
+    finding_id = finding_marker.group("id")
+    if (
+        finding_marker.group("head").lower() != head_sha.lower()
+        or finding_marker.group("base").lower() != base_sha.lower()
+    ):
+        raise PreflightError("Canonical finding classification is stale for the current exact pair.")
+    classification_evidence = CLASSIFICATION_EVIDENCE_RE.search(finding_comment.body)
+    if classification_evidence is None:
+        raise PreflightError("Canonical finding lacks independent classification evidence.")
+    reusable_boundary_match = REUSABLE_BOUNDARY_RE.search(finding_comment.body)
+
+    verifier_matches = list(VERIFICATION_MARKER_RE.finditer(verifier_comment.body))
+    if len(verifier_matches) != 1:
+        raise PreflightError("Live verifier evidence must contain exactly one machine-readable verification marker.")
+    verifier_marker = verifier_matches[0]
+    if verifier_marker.group("id") != finding_id or verifier_marker.group("outcome").lower() != "resolved":
+        raise PreflightError("Verifier evidence does not resolve the canonical finding.")
+    if (
+        verifier_marker.group("head").lower() != head_sha.lower()
+        or verifier_marker.group("base").lower() != base_sha.lower()
+    ):
+        raise PreflightError("Verifier evidence is stale for the current exact pair.")
+
+    finding = FindingResolution(
+        finding_id=finding_id,
+        severity=finding_marker.group("severity"),
+        classification=finding_marker.group("classification"),
+        classification_evidence=classification_evidence.group("value"),
+        reusable_boundary=(reusable_boundary_match.group("value") if reusable_boundary_match else None),
+        durable_guard_evidence=durable_guard_evidence,
+        verifier_evidence=verifier_comment.url,
+        resolved=True,
+    )
+    validate_finding_resolution(finding)
+    return finding
 
 
 def _require_current_state_ready(pr_number: int, issue: IssueIdentity) -> None:
@@ -731,6 +918,14 @@ def _git_changed_files(root: Path, base_ref: str) -> tuple[str, ...]:
     return tuple(line.strip() for line in output.splitlines() if line.strip())
 
 
+def _git_exact_pair(root: Path, base_ref: str) -> tuple[str, str]:
+    head = _run(("git", "rev-parse", "HEAD"), cwd=root).strip()
+    base = _run(("git", "rev-parse", base_ref), cwd=root).strip()
+    if not re.fullmatch(r"[0-9a-f]{40}", head) or not re.fullmatch(r"[0-9a-f]{40}", base):
+        raise PreflightError("Git did not resolve a complete source-head/target exact pair.")
+    return head, base
+
+
 def _git_added_lines(root: Path, base_ref: str) -> dict[str, list[str]]:
     return added_lines_from_diff(_run(("git", "diff", "--unified=0", f"{base_ref}...HEAD"), cwd=root))
 
@@ -739,7 +934,6 @@ def _identity_args(parser: argparse.ArgumentParser, *, body: bool = True) -> Non
     parser.add_argument("--repo", required=True)
     parser.add_argument("--issue", type=int, required=True)
     parser.add_argument("--objective", required=True)
-    parser.add_argument("--issue-json")
     if body:
         parser.add_argument("--allow-governance-diff-check", action="store_true")
 
@@ -755,10 +949,11 @@ def _parser() -> argparse.ArgumentParser:
     generate = sub.add_parser("generate-pr-body")
     _identity_args(generate, body=False)
     generate.add_argument("--template", default=TEMPLATE_PATH)
-    generate.add_argument("--head-sha", required=True)
-    generate.add_argument("--base-sha", required=True)
     generate.add_argument("--base-ref", default="main")
     generate.add_argument("--evidence-json")
+    generate.add_argument("--verification-evidence", action="append", default=[])
+    generate.add_argument("--operational-evidence", action="append", default=[])
+    generate.add_argument("--limitation", action="append", default=[])
     generate.add_argument("--output")
     generate.set_defaults(handler=_cmd_generate)
 
@@ -768,8 +963,10 @@ def _parser() -> argparse.ArgumentParser:
         action.add_argument("--base-ref", default="main")
         action.add_argument("--branch")
         action.add_argument("--commit-message")
-        action.add_argument("--pr-title")
-        action.add_argument("--pr-body-file")
+        action.add_argument("--pr-title", required=name in {"pr-create", "pr-update"})
+        action.add_argument("--pr-body-file", required=name in {"pr-create", "pr-update"})
+        if name == "pr-update":
+            action.add_argument("--pr", type=int, required=True)
         action.set_defaults(handler=_cmd_identity_action, action=name)
 
     ready = sub.add_parser("ready")
@@ -782,6 +979,8 @@ def _parser() -> argparse.ArgumentParser:
     merge.set_defaults(handler=_cmd_merge_readiness)
 
     finding = sub.add_parser("resolve-finding")
+    finding.add_argument("--repo", required=True)
+    finding.add_argument("--pr", type=int, required=True)
     finding.add_argument("--finding-json", required=True)
     finding.set_defaults(handler=_cmd_finding)
 
@@ -793,8 +992,7 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _load_issue_from_args(args: argparse.Namespace) -> IssueIdentity:
-    path = Path(args.issue_json) if getattr(args, "issue_json", None) else None
-    return load_issue(args.repo, args.issue, path)
+    return load_issue(args.repo, args.issue)
 
 
 def _cmd_self_check(args: argparse.Namespace) -> int:
@@ -811,11 +1009,14 @@ def _cmd_generate(args: argparse.Namespace) -> int:
     evidence = _read_json(Path(args.evidence_json)) if args.evidence_json else {}
     body = generate_pr_body(
         issue,
+        repo_root=root,
+        base_ref=args.base_ref,
         template_text=(root / args.template).read_text(encoding="utf-8"),
         changed_files=_git_changed_files(root, args.base_ref),
-        head_sha=args.head_sha,
-        base_sha=args.base_sha,
         evidence=evidence,
+        verification=args.verification_evidence,
+        operational_evidence=args.operational_evidence,
+        limitations=args.limitation,
     )
     if args.output:
         Path(args.output).write_text(body, encoding="utf-8")
@@ -842,6 +1043,14 @@ def _cmd_identity_action(args: argparse.Namespace) -> int:
         pr_title=args.pr_title,
         pr_body=pr_body,
     )
+    if args.action in {"pr-create", "pr-update"}:
+        if pr_body is None:
+            raise PreflightError(f"{args.action} requires canonical PR body metadata.")
+        if args.action == "pr-update":
+            head_sha, base_sha = _gh_pr_oids(args.repo, args.pr)
+        else:
+            head_sha, base_sha = _git_exact_pair(root, args.base_ref)
+        validate_pr_body(pr_body, issue, head_sha=head_sha, base_sha=base_sha, promotion=False)
     if args.allow_governance_diff_check:
         validate_ownership_added_lines(_git_added_lines(root, args.base_ref))
     print(f"[Hunter Governance Preflight] PASS: {args.action} authorized by verified Issue #{issue.number}.")
@@ -879,19 +1088,20 @@ def _cmd_merge_readiness(args: argparse.Namespace) -> int:
 
 def _cmd_finding(args: argparse.Namespace) -> int:
     payload = _read_json(Path(args.finding_json))
-    finding = FindingResolution(
-        finding_id=str(payload.get("finding_id") or payload.get("validator_id") or ""),
-        severity=str(payload.get("severity") or ""),
-        classification=payload.get("classification"),
-        classification_evidence=payload.get("classification_evidence"),
-        reusable_boundary=payload.get("reusable_boundary"),
+    finding_url = str(payload.get("finding_url") or "").strip()
+    verifier_url = str(payload.get("verifier_url") or "").strip()
+    if not finding_url or not verifier_url:
+        raise PreflightError("Finding resolution requires live finding_url and verifier_url evidence.")
+    pr = _gh_json((f"repos/{args.repo}/pulls/{args.pr}",))
+    head_sha, base_sha = _gh_pr_oids(args.repo, args.pr)
+    finding = finding_resolution_from_live_review(
+        finding_comment=_review_evidence_from_url(args.repo, args.pr, finding_url),
+        verifier_comment=_review_evidence_from_url(args.repo, args.pr, verifier_url),
+        pr_author=str((pr.get("user") or {}).get("login") or ""),
+        head_sha=head_sha,
+        base_sha=base_sha,
         durable_guard_evidence=payload.get("durable_guard_evidence"),
-        verifier_evidence=payload.get("verifier_evidence"),
-        resolved=bool(payload.get("resolved")),
     )
-    if not finding.finding_id:
-        raise PreflightError("Finding evidence has no finding identifier.")
-    validate_finding_resolution(finding)
     print(f"[Hunter Governance Preflight] PASS: finding {finding.finding_id} resolution evidence is complete.")
     return 0
 
