@@ -89,8 +89,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument(
         "--protected-branches",
         default=None,
-        help="Comma-separated protected target branches. Defaults to main or "
-        "HUNTER_GOVERNANCE_PROTECTED_BRANCHES.",
+        help="Comma-separated protected target branches. Defaults to main or " "HUNTER_GOVERNANCE_PROTECTED_BRANCHES.",
     )
     parser.add_argument(
         "--dry-run",
@@ -123,10 +122,7 @@ def build_status_description(decision: Decision, pair: ReviewPair, revision: str
     elif decision.outcome is Outcome.CHANGES_REQUIRED:
         text = f"Changes required (head {head} on base {base}): {decision.reason}"
     else:
-        text = (
-            f"Review failed (head {head} on base {base}): {decision.reason} "
-            "No verdict produced; merge blocked."
-        )
+        text = f"Review failed (head {head} on base {base}): {decision.reason} " "No verdict produced; merge blocked."
     marker = render_marker(pair.pull_request_number, revision) + " "
     return (marker + text)[:140]
 
@@ -179,10 +175,7 @@ def _write_summary(
                 f"sha256={entry.sha256[:12] or 'n/a'} bytes={entry.byte_length}"
             )
         if context.missing_references:
-            lines.append(
-                "- **Missing referenced records**: "
-                + ", ".join(context.missing_references)
-            )
+            lines.append("- **Missing referenced records**: " + ", ".join(context.missing_references))
     body = "\n".join(lines) + "\n"
     with open(summary_path, "a", encoding="utf-8") as handle:
         handle.write(body)
@@ -219,10 +212,7 @@ def run_review(
     if not repository:
         print("::error::no repository: pass --repository or set GITHUB_REPOSITORY.")
         return 2
-    protected = _protected_branches(
-        args.protected_branches
-        or env.get("HUNTER_GOVERNANCE_PROTECTED_BRANCHES")
-    )
+    protected = _protected_branches(args.protected_branches or env.get("HUNTER_GOVERNANCE_PROTECTED_BRANCHES"))
     run_id = env.get("GITHUB_RUN_ID") or "local"
 
     try:
@@ -289,9 +279,7 @@ def run_review(
         except Exception as exc:  # internal validator exception -> REVIEW_FAILED
             validator_error = f"internal validator exception: {exc!r}"
 
-    current, pair_fresh, pair_fresh_error = _resolve_pair_freshness(
-        gh, pr.number, pair
-    )
+    current, pair_fresh, pair_fresh_error = _resolve_pair_freshness(gh, pr.number, pair)
 
     if evidence_error is not None:
         decision = Decision(Outcome.REVIEW_FAILED, evidence_error)
@@ -322,10 +310,7 @@ def run_review(
         )
     )
     description = build_status_description(decision, pair, revision)
-    target_url = (
-        f"{env.get('GITHUB_SERVER_URL', 'https://github.com')}/"
-        f"{repository}/actions/runs/{run_id}"
-    )
+    target_url = f"{env.get('GITHUB_SERVER_URL', 'https://github.com')}/" f"{repository}/actions/runs/{run_id}"
 
     print(f"[Outcome] {decision.outcome.value}")
     print(f"[Reason] {decision.reason}")
@@ -333,8 +318,7 @@ def run_review(
         print(f"[Finding] {finding.render()}")
     if deterministic.classification_errors:
         print(
-            "[FindingMetadata] incomplete blocking classifications: "
-            + ", ".join(deterministic.classification_errors)
+            "[FindingMetadata] incomplete blocking classifications: " + ", ".join(deterministic.classification_errors)
         )
     if context_manifest is not None:
         for entry in context_manifest.entries:
@@ -343,10 +327,7 @@ def run_review(
                 f"provenance={entry.provenance} sha256={entry.sha256[:12] or 'n/a'}"
             )
     print(f"[Revision] governance revision {revision} for PR #{pr.number}")
-    print(
-        f"[StatusCheck] context={CHECK_CONTEXT!r} state={state.value} "
-        f"on {target_sha[:12]}"
-    )
+    print(f"[StatusCheck] context={CHECK_CONTEXT!r} state={state.value} " f"on {target_sha[:12]}")
 
     if not args.dry_run:
         try:

@@ -59,9 +59,7 @@ def test_isolated_finding_serialization_is_supported() -> None:
         severity=Severity.BLOCKING,
         detail="specific instance",
         classification=FindingClassification.ISOLATED,
-        classification_evidence=(
-            "Independent review determined the defect is contribution-specific."
-        ),
+        classification_evidence=("Independent review determined the defect is contribution-specific."),
     )
     assert finding.classification_complete
     assert finding.to_dict()["classification"] == "isolated"
@@ -98,16 +96,9 @@ def test_deterministic_blocker_is_systemic_at_reusable_boundary() -> None:
             files=[ChangedFile("docs/test.md", "modified", 1, 1)],
         )
     )
-    blockers = [
-        finding
-        for finding in result.findings
-        if finding.severity is Severity.BLOCKING
-    ]
+    blockers = [finding for finding in result.findings if finding.severity is Severity.BLOCKING]
     assert blockers
-    assert all(
-        finding.classification is FindingClassification.SYSTEMIC
-        for finding in blockers
-    )
+    assert all(finding.classification is FindingClassification.SYSTEMIC for finding in blockers)
     assert all(finding.classification_complete for finding in blockers)
     assert all(finding.reusable_boundary for finding in blockers)
 
@@ -120,9 +111,7 @@ def test_summary_contains_human_and_structured_classification(tmp_path: Path) ->
         severity=Severity.BLOCKING,
         detail="missing declaration",
         classification=FindingClassification.SYSTEMIC,
-        classification_evidence=(
-            "Deterministic readiness validator exposed a reusable contract failure."
-        ),
+        classification_evidence=("Deterministic readiness validator exposed a reusable contract failure."),
         reusable_boundary="CanonicalPRContract readiness validation",
     )
     result = DeterministicResult(findings=[finding])

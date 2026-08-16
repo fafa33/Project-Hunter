@@ -133,10 +133,7 @@ def _parse_acceptance_matrix(body: str) -> tuple[list[tuple[str, str, str]], boo
         if status in CanonicalPRContract.ALLOWED_ACCEPTANCE_STATUSES:
             evidence = cells[2] if len(cells) > 2 else ""
             rows.append((cells[0], status, evidence))
-    placeholder = any(
-        "replace with" in row[0].lower() or "replace with" in row[2].lower()
-        for row in rows
-    )
+    placeholder = any("replace with" in row[0].lower() or "replace with" in row[2].lower() for row in rows)
     return rows, placeholder
 
 
@@ -200,11 +197,7 @@ def _body_validator(ctx: ValidationContext) -> Finding | None:
 
 
 def _sections_validator(ctx: ValidationContext) -> Finding | None:
-    required = (
-        CanonicalPRContract.REQUIRED_SECTIONS
-        if ctx.code_change
-        else CanonicalPRContract.MINIMAL_SECTIONS
-    )
+    required = CanonicalPRContract.REQUIRED_SECTIONS if ctx.code_change else CanonicalPRContract.MINIMAL_SECTIONS
     missing = [section for section in required if not _has_section(ctx.body, section)]
     if missing:
         return _finding(
@@ -284,8 +277,7 @@ def _adr_references_validator(ctx: ValidationContext) -> Finding | None:
             "V-070",
             "PR references architecture records that do not exist",
             Severity.BLOCKING,
-            "missing required repository evidence: "
-            + ", ".join(ctx.missing_references),
+            "missing required repository evidence: " + ", ".join(ctx.missing_references),
         )
     return None
 
@@ -302,18 +294,13 @@ def _mergeable_validator(ctx: ValidationContext) -> Finding | None:
 
 
 def _gate_self_modification_validator(ctx: ValidationContext) -> Finding | None:
-    touched = [
-        f.filename
-        for f in ctx.files
-        if any(marker in f.filename for marker in GATE_PATH_MARKERS)
-    ]
+    touched = [f.filename for f in ctx.files if any(marker in f.filename for marker in GATE_PATH_MARKERS)]
     if touched:
         return Finding(
             "V-090",
             "PR modifies the merge gate itself",
             Severity.INFO,
-            "gate self-modification is flagged for hostile audit: "
-            + ", ".join(touched),
+            "gate self-modification is flagged for hostile audit: " + ", ".join(touched),
         )
     return None
 
@@ -350,10 +337,7 @@ def is_trusted_dependency_pr(ctx: ValidationContext) -> bool:
             "package-lock.json",
             "pnpm-lock.yaml",
         )
-        if not (
-            any(filename.startswith(directory) for directory in allowed_dirs)
-            or filename in allowed_root_files
-        ):
+        if not (any(filename.startswith(directory) for directory in allowed_dirs) or filename in allowed_root_files):
             return False
     return True
 
@@ -385,6 +369,4 @@ def run_deterministic_engine(ctx: ValidationContext) -> DeterministicResult:
         findings = [validator(ctx) for validator in dependency_validators]
     else:
         findings = [validator(ctx) for validator in _VALIDATORS]
-    return DeterministicResult(
-        findings=[finding for finding in findings if finding is not None]
-    )
+    return DeterministicResult(findings=[finding for finding in findings if finding is not None])
