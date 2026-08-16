@@ -48,6 +48,8 @@ def test_systemic_finding_serialization_preserves_required_metadata() -> None:
     assert payload["classification"] == "systemic"
     assert payload["classification_evidence"]
     assert payload["reusable_boundary"]
+    assert payload["classification_complete"] is True
+    assert isinstance(payload["classification_complete"], bool)
     assert finding.classification_complete
     assert "classification=systemic" in finding.render()
 
@@ -69,10 +71,12 @@ def test_isolated_finding_serialization_is_supported() -> None:
 def test_incomplete_blocking_classification_fails_closed() -> None:
     finding = Finding("V-020", "body invalid", Severity.BLOCKING, "detail")
     result = DeterministicResult(findings=[finding])
+    payload = result.to_dict()
     assert result.blocking
     assert not finding.classification_complete
     assert result.classification_errors
-    assert result.to_dict()["classification_errors"]
+    assert payload["classification_errors"]
+    assert payload["findings"][0]["classification_complete"] is False
 
 
 def test_deterministic_blocker_is_systemic_at_reusable_boundary() -> None:
@@ -129,3 +133,4 @@ def test_summary_contains_human_and_structured_classification(tmp_path: Path) ->
     fenced = text.split("```json\n", 1)[1].split("\n```", 1)[0]
     payload = json.loads(fenced)
     assert payload["findings"][0]["classification"] == "systemic"
+    assert payload["findings"][0]["classification_complete"] is True
