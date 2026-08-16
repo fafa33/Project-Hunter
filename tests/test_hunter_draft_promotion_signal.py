@@ -108,11 +108,6 @@ def green_checks(gh, sha):
 
 
 def test_single_declaration_line_does_not_crash():
-    """Regression: a PR body carrying only the one checked declaration line (no
-    unchecked CHANGES REQUIRED/BLOCKED lines) must parse successfully instead of
-    raising RuntimeError. This is the exact shape that previously crashed the
-    workflow silently (no status update, no comment, no error surfaced to the PR).
-    """
     body = "## Implementer readiness declaration\n\n- [x] `READY FOR REVIEW` — all good.\n"
     matches, checked_label = hunter_draft_promotion_signal.parse_readiness_declaration(body)
     assert len(matches) == 1
@@ -120,9 +115,6 @@ def test_single_declaration_line_does_not_crash():
 
 
 def test_all_three_lines_one_checked_still_works():
-    """The original, template-shaped body (all three labels present, one checked)
-    must continue to work exactly as before.
-    """
     body = "- [ ] `READY FOR REVIEW` — a\n" "- [x] `CHANGES REQUIRED` — b\n" "- [ ] `BLOCKED` — c\n"
     matches, checked_label = hunter_draft_promotion_signal.parse_readiness_declaration(body)
     assert len(matches) == 3
@@ -158,9 +150,6 @@ def test_duplicated_label_fails_closed():
 
 
 def test_synchronize_single_line_ready_is_a_noop(gh):
-    """The crash-case body is already synchronized (READY FOR REVIEW is checked),
-    so no PATCH should be issued.
-    """
     body = "- [x] `READY FOR REVIEW` — all good.\n"
     hunter_draft_promotion_signal.synchronize_ready_metadata(123, body)
     assert 123 not in gh.patched_bodies
@@ -194,12 +183,6 @@ def test_synchronize_ambiguous_body_raises_and_does_not_patch(gh):
 
 
 def test_evaluate_with_single_declaration_line_reaches_success_and_comments(gh):
-    """End-to-end regression for the exact scenario observed on PR #243: a Draft
-    PR with every exact-head check green and a body carrying only the single
-    checked READY FOR REVIEW line must reach a published success status and post
-    the promotion comment, instead of the job crashing with an unhandled
-    RuntimeError and leaving the PR with no signal at all.
-    """
     sha = "sha_123"
     body = "## Implementer readiness declaration\n\n- [x] `READY FOR REVIEW` — all good.\n"
     gh.pulls[123] = green_pr(123, sha, body)
@@ -253,11 +236,6 @@ def test_live_scope_is_reread_instead_of_trusting_event_payload(gh):
 
 
 def test_evaluate_with_ambiguous_declaration_does_not_silently_disappear(gh):
-    """When the declaration is genuinely unparseable, evaluate() must still raise
-    rather than silently doing nothing — the caller (main()) is responsible for
-    surfacing this as a failed run, which is at least visible in Actions, unlike
-    a successful-looking no-op.
-    """
     sha = "sha_123"
     body = "- [ ] `READY FOR REVIEW` — a\n- [ ] `CHANGES REQUIRED` — b\n"
     gh.pulls[123] = green_pr(123, sha, body)
@@ -356,6 +334,24 @@ def test_reconcile_open_draft_prs_rechecks_every_current_draft():
         patch("hunter_draft_promotion_signal.evaluate") as evaluate,
     ):
         hunter_draft_promotion_signal.reconcile_open_draft_prs()
+
+    assert [call.args[0]["number"] for call in evaluate.call_args_list] == [275, 276]
+
+
+def test_reconcile_open_draft_prs_isolates_failure_and_continues():
+    drafts = [
+        green_pr(275, "sha_a", "- [x] `READY FOR REVIEW` — a.\n"),
+        green_pr(276, "sha_b", "- [x] `READY FOR REVIEW` — b.\n"),
+    ]
+    with (
+        patch("hunter_draft_promotion_signal.open_draft_prs", return_value=drafts),
+        patch(
+            "hunter_draft_promotion_signal.evaluate",
+            side_effect=[RuntimeError("invalid readiness declaration"), None],
+        ) as evaluate,
+    ):
+        with pytest.raises(RuntimeError, match="PR #275: RuntimeError: invalid readiness declaration"):
+            hunter_draft_promotion_signal.reconcile_open_draft_prs()
 
     assert [call.args[0]["number"] for call in evaluate.call_args_list] == [275, 276]
 
