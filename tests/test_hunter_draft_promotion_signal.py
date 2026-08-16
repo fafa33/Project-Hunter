@@ -82,8 +82,15 @@ def gh():
         yield server
 
 
-def green_pr(number, sha, body, draft=True):
-    return {"number": number, "draft": draft, "head": {"sha": sha}, "body": body}
+def green_pr(number, sha, body, draft=True, state="open", base="main"):
+    return {
+        "number": number,
+        "state": state,
+        "draft": draft,
+        "base": {"ref": base},
+        "head": {"sha": sha},
+        "body": body,
+    }
 
 
 def green_checks(gh, sha):
@@ -204,6 +211,45 @@ def test_evaluate_with_single_declaration_line_reaches_success_and_comments(gh):
     assert "Ready to promote from Draft" in gh.published[-1][2]
     assert len(gh.comments.get(123, [])) == 1
     assert "Hunter Draft Promotion" in gh.comments[123][0]["body"]
+
+
+def test_closed_draft_pr_is_outside_promotion_scope(gh):
+    sha = "sha_closed"
+    body = "- [x] `READY FOR REVIEW` — stale.\n"
+    gh.pulls[280] = green_pr(280, sha, body, state="closed")
+    green_checks(gh, sha)
+
+    hunter_draft_promotion_signal.evaluate({"number": 280, "draft": True})
+
+    assert gh.published == []
+    assert 280 not in gh.patched_bodies
+    assert not gh.comments.get(280)
+
+
+def test_non_main_draft_pr_is_outside_promotion_scope(gh):
+    sha = "sha_other_base"
+    body = "- [x] `READY FOR REVIEW` — stale.\n"
+    gh.pulls[281] = green_pr(281, sha, body, base="release")
+    green_checks(gh, sha)
+
+    hunter_draft_promotion_signal.evaluate({"number": 281, "draft": True})
+
+    assert gh.published == []
+    assert 281 not in gh.patched_bodies
+    assert not gh.comments.get(281)
+
+
+def test_live_scope_is_reread_instead_of_trusting_event_payload(gh):
+    sha = "sha_live_scope"
+    body = "- [x] `READY FOR REVIEW` — valid.\n"
+    gh.pulls[282] = green_pr(282, sha, body)
+    green_checks(gh, sha)
+
+    hunter_draft_promotion_signal.evaluate(
+        {"number": 282, "state": "closed", "draft": False, "base": {"ref": "release"}}
+    )
+
+    assert gh.published[-1][1] == "success"
 
 
 def test_evaluate_with_ambiguous_declaration_does_not_silently_disappear(gh):
