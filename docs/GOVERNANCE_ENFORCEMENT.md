@@ -89,7 +89,7 @@ Every governing Issue acceptance criterion is represented exactly once. Unproven
 
 Changing the source head or target revision makes that evidence stale until the body is regenerated or re-synchronized with current evidence.
 
-The generator resolves the source head and target revision from the current Git checkout. Callers cannot supply alternate SHA values. Generation always emits `CHANGES REQUIRED`: caller-supplied criterion, verification, and operational prose is trace material, not promotion authority. A later live-state action may set `READY FOR REVIEW` only after hosted exact-head gates and independent hostile review exist. The live validator also rejects a `READY FOR REVIEW` body with unchecked verification/operational items or placeholder evidence.
+The generator resolves the source head and target revision from the current Git checkout. Callers cannot supply alternate SHA values. Generation always emits `CHANGES REQUIRED`: caller-supplied criterion, verification, and operational prose is trace material, not promotion authority. A later live-state action may set `READY FOR REVIEW` only after hosted exact-head gates and independent hostile review exist. The live validator also rejects a `READY FOR REVIEW` body with unchecked verification/operational items, placeholder prose, or missing canonical structured verification/operational result markers.
 
 The parser accepts the matrix only inside the canonical `## Acceptance-criteria matrix` section. A matching table elsewhere in the body cannot satisfy the governed metadata contract.
 
@@ -107,7 +107,7 @@ python scripts/hunter_governance_preflight.py ready \
 
 The command re-reads current GitHub state. It requires the canonical Issue identity, complete matrix, current exact-pair trace, `READY FOR REVIEW`, no `FAIL`/`BLOCKED` criterion, current exact-head required checks, current Governance Review evidence, no live review-feedback blocker, and the latest independent exact-pair PR review report to be active and report `no-blocking-findings`. Hostile-review lookup paginates the complete review history, rejects dismissed/marker-only artifacts, and requires substantive evidence, scope, limitations, and a report-consistent explicit blocker count. Event payloads are hints; current GitHub state is authority. Draft Promotion, the trusted live-PR path for non-Draft PRs, and merge-readiness preflight all consume the same hostile-review artifact before success.
 
-For `pr-update`, the target PR is re-read live. Its head branch, live Issue identity metadata, and exact head/base pair must match the governed checkout before the supplied resulting title/body can authorize mutation. A different PR number cannot borrow identity from the local checkout.
+For `pr-create`, the target base branch is mandatory and its `origin/<branch>` tracking ref is the only base revision accepted for exact-pair validation; an arbitrary caller ref cannot authorize a different mutation target. For `pr-update`, the target PR is re-read live. Its head repository/branch, live Issue identity metadata, and exact head/base pair must match the governed checkout before the supplied resulting title/body can authorize mutation. A different PR number cannot borrow identity from the local checkout.
 
 Draft Promotion consumes the same canonical current-state feedback readers as Merge Readiness. An unresolved thread, a current `CHANGES_REQUESTED` review, or an unacknowledged external top-level comment therefore cannot produce a successful promotion signal.
 
@@ -128,7 +128,7 @@ The resolution record references only live `finding_url` and `verifier_url` comm
 
 ## Canonical ownership guard
 
-When governance documents change, preflight scans added semantics at the canonical document boundaries. It rejects known lifecycle, contribution-review, architecture-audit, or implementation semantics added to a non-owning canonical document unless the added text explicitly consumes the owning document rather than redefining it.
+When governance prose changes, preflight scans added semantics in canonical owners and non-owner Markdown/instruction documents. It rejects known lifecycle, contribution-review, architecture-audit, or implementation semantics outside the owning canonical document unless the changed document explicitly consumes that owner rather than silently introducing competing authority.
 
 This guard is deliberately conservative and deterministic. It is not a natural-language policy engine and does not transfer authority to itself.
 

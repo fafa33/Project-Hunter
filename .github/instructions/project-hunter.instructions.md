@@ -37,4 +37,4 @@ Rules:
 - Before opening a normal pull request, push the final candidate head and require `Hunter Pre-PR Preflight` to succeed on that exact head.
 - Do not use GitHub PR CI as the first execution of Ruff, Black, Mypy, or Pytest; the shared `python scripts/hunter_pr_preflight.py` command is the repository-local source of truth for those quality gates.
 - If the exact-head quality preflight or governance preflight fails, correct the branch and rerun the applicable preflight before the governed mutation. GitHub-only checks remain independent and may still run after PR creation.
-- Passing preflight is never review approval and never merge authority. Independent review and human merge approval remain governed by their canonical owners.
+- Passing preflight is never review approval and never merge authority. Independent review and human merge approval remain governed by `docs/AI_REVIEW_PROTOCOL.md` and `docs/DEVELOPMENT_GOVERNANCE.md`.

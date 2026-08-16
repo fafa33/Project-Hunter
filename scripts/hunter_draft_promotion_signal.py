@@ -290,13 +290,18 @@ def evaluate(pr: dict[str, Any]) -> None:
         )
         return
 
-    governance_preflight.require_independent_hostile_review(
-        repository=repo,
-        pr_number=pr_number,
-        pr_author=str((current.get("user") or {}).get("login") or ""),
-        head_sha=sha,
-        base_sha=str((current.get("base") or {}).get("sha") or ""),
-    )
+    try:
+        governance_preflight.validate_ready_evidence(current.get("body") or "")
+        governance_preflight.require_independent_hostile_review(
+            repository=repo,
+            pr_number=pr_number,
+            pr_author=str((current.get("user") or {}).get("login") or ""),
+            head_sha=sha,
+            base_sha=str((current.get("base") or {}).get("sha") or ""),
+        )
+    except governance_preflight.PreflightError as exc:
+        publish(sha, "pending", f"Waiting for Draft promotion prerequisites: {exc}")
+        return
 
     synchronize_ready_metadata(pr_number, current.get("body") or "")
     publish(sha, "success", "Ready to promote from Draft; checks and review feedback are clear.")

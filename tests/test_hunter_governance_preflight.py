@@ -48,6 +48,16 @@ def generated_body(*, ready: bool = True, template_text: str | None = None) -> s
         return body
     body = body.replace("- [ ] `READY FOR REVIEW`", "- [x] `READY FOR REVIEW`", 1)
     body = body.replace("- [x] `CHANGES REQUIRED`", "- [ ] `CHANGES REQUIRED`", 1)
+    body = body.replace(
+        "## Verification\n\n",
+        "## Verification\n\n<!-- hunter-verification:v1 ruff=pass black=pass mypy=pass pytest=pass -->\n\n",
+        1,
+    )
+    body = body.replace(
+        "## Operational validation\n\n",
+        "## Operational validation\n\n<!-- hunter-operational-validation:v1 outcome=not-applicable -->\n\n",
+        1,
+    )
     return body
 
 
@@ -148,6 +158,13 @@ def test_ready_body_rejects_unchecked_or_placeholder_evidence() -> None:
     missing_item = body.replace("- [x] `mypy`\n", "", 1)
     with pytest.raises(preflight.PreflightError, match="complete canonical Verification checklist"):
         preflight.validate_pr_body(missing_item, issue, head_sha=HEAD, base_sha=BASE, promotion=False)
+
+    negative = body.replace(
+        "<!-- hunter-verification:v1 ruff=pass black=pass mypy=pass pytest=pass -->",
+        "No commands were run.",
+    )
+    with pytest.raises(preflight.PreflightError, match="structured result marker"):
+        preflight.validate_pr_body(negative, issue, head_sha=HEAD, base_sha=BASE, promotion=True)
 
 
 def test_pr_body_rejects_missing_matrix() -> None:
@@ -349,6 +366,45 @@ def test_pr_mutation_actions_require_canonical_title_and_body(action: str) -> No
         preflight._parser().parse_args(argv)
 
 
+def test_pr_create_requires_canonical_target_base_branch() -> None:
+    with pytest.raises(SystemExit):
+        preflight._parser().parse_args(
+            [
+                "pr-create",
+                "--repo",
+                "fafa33/Project-Hunter",
+                "--issue",
+                "276",
+                "--objective",
+                "Governance enforcement: mandatory agent preflight and PR generator",
+                "--pr-title",
+                "Governance enforcement: mandatory agent preflight and PR generator",
+                "--pr-body-file",
+                "body.md",
+            ]
+        )
+
+
+def test_post_commit_actions_reject_caller_git_identity_overrides() -> None:
+    for action in ("push", "pr-create", "pr-update"):
+        with pytest.raises(SystemExit):
+            preflight._parser().parse_args(
+                [
+                    action,
+                    "--repo",
+                    "fafa33/Project-Hunter",
+                    "--issue",
+                    "276",
+                    "--objective",
+                    "Governance enforcement: mandatory agent preflight and PR generator",
+                    "--branch",
+                    "governance/issue-276-spoofed",
+                    "--commit-message",
+                    "fix: spoofed #276",
+                ]
+            )
+
+
 def test_pr_update_binds_authorization_to_live_target_pr_metadata(tmp_path, monkeypatch) -> None:
     issue = fixture_issue()
     body_file = tmp_path / "body.md"
@@ -431,6 +487,13 @@ def test_ownership_guard_allows_explicit_canonical_owner_consumption() -> None:
             ]
         }
     )
+
+
+def test_ownership_guard_inspects_non_owner_governance_documents() -> None:
+    with pytest.raises(preflight.PreflightError, match="outside canonical owner"):
+        preflight.validate_ownership_added_lines(
+            {"docs/COMPETING_GOVERNANCE.md": ["All changes are ready for review without independent review."]}
+        )
 
 
 def test_systemic_finding_requires_durable_guard_and_verifier() -> None:
@@ -610,6 +673,44 @@ def test_hostile_review_rejects_dismissed_marker_only_and_reads_later_pages(monk
     monkeypatch.setattr(preflight, "_gh_json", lambda args: [adverse] if "page=2" in args[0] else first_page)
 
     with pytest.raises(preflight.PreflightError, match="CHANGES-REQUIRED"):
+        preflight.require_independent_hostile_review(
+            repository="fafa33/Project-Hunter",
+            pr_number=277,
+            pr_author="implementer",
+            head_sha=HEAD,
+            base_sha=BASE,
+        )
+
+
+def test_newer_malformed_adverse_hostile_review_invalidates_older_pass(monkeypatch) -> None:
+    older_pass = {
+        "id": 10,
+        "user": {"login": "independent-reviewer"},
+        "commit_id": HEAD,
+        "state": "COMMENTED",
+        "submitted_at": "2026-08-16T20:00:00Z",
+        "body": (
+            f"<!-- hunter-hostile-review:v1 head={HEAD} base={BASE} outcome=no-blocking-findings -->\n"
+            "Hostile review evidence: Required counterexamples fail closed.\n"
+            "Scope probed: All governed mutation and readiness boundaries.\n"
+            "Limitations: External human approval remains separate.\n"
+            "Unresolved blocking findings: 0"
+        ),
+    }
+    newer_malformed = {
+        "id": 11,
+        "user": {"login": "independent-reviewer"},
+        "commit_id": HEAD,
+        "state": "CHANGES_REQUESTED",
+        "submitted_at": "2026-08-16T21:00:00Z",
+        "body": (
+            f"<!-- hunter-hostile-review:v1 head={HEAD} base={BASE} outcome=changes-required -->\n"
+            "Unresolved blocking findings: 1"
+        ),
+    }
+    monkeypatch.setattr(preflight, "_gh_json", lambda _args: [older_pass, newer_malformed])
+
+    with pytest.raises(preflight.PreflightError, match="report is incomplete"):
         preflight.require_independent_hostile_review(
             repository="fafa33/Project-Hunter",
             pr_number=277,

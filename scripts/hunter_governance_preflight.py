@@ -106,6 +106,14 @@ REQUIRED_READY_CHECKLISTS: dict[str, tuple[str, ...]] = {
         "Environment/network limitations are disclosed below.",
     ),
 }
+VERIFICATION_RESULT_MARKER_RE = re.compile(
+    r"<!--\s*hunter-verification:v1\s+ruff=pass\s+black=pass\s+mypy=pass\s+pytest=pass\s*-->",
+    re.IGNORECASE,
+)
+OPERATIONAL_RESULT_MARKER_RE = re.compile(
+    r"<!--\s*hunter-operational-validation:v1\s+outcome=(?:pass|not-applicable)\s*-->",
+    re.IGNORECASE,
+)
 BRANCH_ISSUE_RE_TEMPLATE = r"(?:^|[-_/])issue[-_/]?{number}(?:[-_/]|$)"
 FINDING_MARKER_RE = re.compile(
     r"<!--\s*hunter-review-finding:v1\s+id=(?P<id>[A-Za-z0-9._-]+)\s+"
@@ -516,6 +524,9 @@ def validate_ready_evidence(body: str) -> None:
             section
         ):
             raise PreflightError(f"READY FOR REVIEW lacks complete evidence in {heading}.")
+        result_marker = VERIFICATION_RESULT_MARKER_RE if heading == "## Verification" else OPERATIONAL_RESULT_MARKER_RE
+        if len(result_marker.findall(section)) != 1:
+            raise PreflightError(f"READY FOR REVIEW requires one canonical structured result marker in {heading}.")
 
 
 def trace_identity(body: str) -> tuple[int, str, str]:
@@ -731,8 +742,12 @@ def validate_ownership_added_lines(added_lines: Mapping[str, Sequence[str]]) -> 
     canonical_paths = set(CANONICAL_OWNERS.values())
     failures: list[str] = []
     for path, lines in added_lines.items():
-        if path not in canonical_paths:
+        is_governance_prose = path.endswith(".md") or path.startswith(".github/instructions/")
+        if path not in canonical_paths and not is_governance_prose:
             continue
+        document_owner_references = {
+            owner for owner in canonical_paths if any(_owner_reference_present(line, owner) for line in lines)
+        }
         for line in lines:
             text = line.strip()
             if not text:
@@ -741,7 +756,7 @@ def validate_ownership_added_lines(added_lines: Mapping[str, Sequence[str]]) -> 
                 if not any(marker.search(text) for marker in markers):
                     continue
                 owner = CANONICAL_OWNERS[domain]
-                if path == owner or _owner_reference_present(text, owner):
+                if path == owner or _owner_reference_present(text, owner) or owner in document_owner_references:
                     continue
                 failures.append(f"{path}: added {domain} semantics outside canonical owner {owner}: {text[:120]!r}")
     if failures:
@@ -905,7 +920,7 @@ def require_independent_hostile_review(
         if len(payload) < 100:
             break
         page += 1
-    candidates: list[tuple[str, int, str]] = []
+    candidates: list[tuple[str, int, Mapping[str, Any], re.Match[str]]] = []
     for review in reviews:
         author = str((review.get("user") or {}).get("login") or "").strip()
         if not author or author.lower() == pr_author.lower():
@@ -925,26 +940,26 @@ def require_independent_hostile_review(
         marker = matches[0]
         if marker.group("head").lower() != head_sha.lower() or marker.group("base").lower() != base_sha.lower():
             continue
-        evidence = HOSTILE_REVIEW_EVIDENCE_RE.search(body)
-        scope = HOSTILE_REVIEW_SCOPE_RE.search(body)
-        limitations = HOSTILE_REVIEW_LIMITATIONS_RE.search(body)
-        blocker_count = HOSTILE_REVIEW_BLOCKER_COUNT_RE.search(body)
-        if evidence is None or scope is None or limitations is None or blocker_count is None:
-            continue
-        if any(
-            _normalize(match.group("value")) in HOSTILE_REPORT_PLACEHOLDERS for match in (evidence, scope, limitations)
-        ):
-            continue
-        outcome = marker.group("outcome").lower()
-        count = int(blocker_count.group("count"))
-        if outcome == "no-blocking-findings" and (state != "commented" or count != 0):
-            continue
-        if outcome != "no-blocking-findings" and count == 0:
-            continue
-        candidates.append((submitted_at, int(review.get("id") or 0), outcome))
+        candidates.append((submitted_at, int(review.get("id") or 0), review, marker))
     if not candidates:
         raise PreflightError("Ready preflight lacks independent exact-pair hostile-review evidence.")
-    _submitted_at, _review_id, outcome = max(candidates)
+    _submitted_at, _review_id, latest_review, latest_marker = max(candidates, key=lambda item: item[:2])
+    latest_body = str(latest_review.get("body") or "")
+    evidence = HOSTILE_REVIEW_EVIDENCE_RE.search(latest_body)
+    scope = HOSTILE_REVIEW_SCOPE_RE.search(latest_body)
+    limitations = HOSTILE_REVIEW_LIMITATIONS_RE.search(latest_body)
+    blocker_count = HOSTILE_REVIEW_BLOCKER_COUNT_RE.search(latest_body)
+    if evidence is None or scope is None or limitations is None or blocker_count is None:
+        raise PreflightError("Latest independent exact-pair hostile review report is incomplete.")
+    if any(_normalize(match.group("value")) in HOSTILE_REPORT_PLACEHOLDERS for match in (evidence, scope, limitations)):
+        raise PreflightError("Latest independent exact-pair hostile review report contains placeholder evidence.")
+    outcome = latest_marker.group("outcome").lower()
+    count = int(blocker_count.group("count"))
+    latest_state = str(latest_review.get("state") or "").strip().lower()
+    if outcome == "no-blocking-findings" and (latest_state != "commented" or count != 0):
+        raise PreflightError("Latest independent exact-pair hostile review pass report is internally inconsistent.")
+    if outcome != "no-blocking-findings" and count == 0:
+        raise PreflightError("Latest independent exact-pair hostile review adverse report is internally inconsistent.")
     if outcome != "no-blocking-findings":
         raise PreflightError(f"Latest independent exact-pair hostile review reports {outcome.upper()}.")
 
@@ -1041,7 +1056,10 @@ def _git_exact_pair(root: Path, base_ref: str) -> tuple[str, str]:
 
 
 def _git_added_lines(root: Path, base_ref: str) -> dict[str, list[str]]:
-    return added_lines_from_diff(_run(("git", "diff", "--unified=0", f"{base_ref}...HEAD"), cwd=root))
+    # Include the working tree for pre-commit authorization; checking only HEAD
+    # would validate the previous commit while omitting the mutation about to be
+    # committed.
+    return added_lines_from_diff(_run(("git", "diff", "--unified=0", base_ref), cwd=root))
 
 
 def _identity_args(parser: argparse.ArgumentParser, *, body: bool = True) -> None:
@@ -1075,8 +1093,12 @@ def _parser() -> argparse.ArgumentParser:
         action = sub.add_parser(name)
         _identity_args(action)
         action.add_argument("--base-ref", default="main")
-        action.add_argument("--branch")
-        action.add_argument("--commit-message")
+        if name == "branch":
+            action.add_argument("--branch", required=True)
+        if name == "commit":
+            action.add_argument("--commit-message", required=True)
+        if name == "pr-create":
+            action.add_argument("--base-branch", required=True)
         action.add_argument("--pr-title", required=name in {"pr-create", "pr-update"})
         action.add_argument("--pr-body-file", required=name in {"pr-create", "pr-update"})
         if name == "pr-update":
@@ -1143,10 +1165,10 @@ def _cmd_identity_action(args: argparse.Namespace) -> int:
     root = Path(args.repo_root).resolve()
     validate_canonical_governance(root)
     issue = _load_issue_from_args(args)
-    branch = args.branch or _git_branch(root)
-    commit_message = args.commit_message
-    if args.action in {"commit", "push", "pr-create", "pr-update"}:
-        commit_message = commit_message or _git_commit_message(root)
+    branch = args.branch if args.action == "branch" else _git_branch(root)
+    commit_message = args.commit_message if args.action == "commit" else None
+    if args.action in {"push", "pr-create", "pr-update"}:
+        commit_message = _git_commit_message(root)
     pr_body = Path(args.pr_body_file).read_text(encoding="utf-8") if args.pr_body_file else None
     validate_issue_identity(
         issue,
@@ -1190,7 +1212,7 @@ def _cmd_identity_action(args: argparse.Namespace) -> int:
             ):
                 raise PreflightError("pr-update target PR exact pair does not match the governed checkout.")
         else:
-            head_sha, base_sha = _git_exact_pair(root, args.base_ref)
+            head_sha, base_sha = _git_exact_pair(root, f"refs/remotes/origin/{args.base_branch}")
         validate_pr_body(pr_body, issue, head_sha=head_sha, base_sha=base_sha, promotion=False)
     if args.allow_governance_diff_check:
         validate_ownership_added_lines(_git_added_lines(root, args.base_ref))

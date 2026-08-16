@@ -96,6 +96,11 @@ def gh():
             "require_independent_hostile_review",
             return_value=None,
         ),
+        patch.object(
+            hunter_draft_promotion_signal.governance_preflight,
+            "validate_ready_evidence",
+            return_value=None,
+        ),
     ):
         yield server
 
@@ -209,13 +214,34 @@ def test_draft_promotion_requires_positive_hostile_review_before_mutation(gh):
     with patch.object(
         hunter_draft_promotion_signal.governance_preflight,
         "require_independent_hostile_review",
-        side_effect=RuntimeError("hostile evidence missing"),
+        side_effect=hunter_draft_promotion_signal.governance_preflight.PreflightError("hostile evidence missing"),
     ):
-        with pytest.raises(RuntimeError, match="hostile evidence missing"):
-            hunter_draft_promotion_signal.evaluate(gh.pulls[124])
+        hunter_draft_promotion_signal.evaluate(gh.pulls[124])
 
     assert 124 not in gh.patched_bodies
     assert not any(state == "success" for _sha, state, _description in gh.published)
+    assert gh.published[-1][1] == "pending"
+    assert "hostile evidence missing" in gh.published[-1][2]
+
+
+def test_draft_promotion_retracts_success_for_invalid_ready_evidence(gh):
+    sha = "sha_negative_evidence"
+    body = "- [ ] `READY FOR REVIEW`\n- [x] `CHANGES REQUIRED`\n- [ ] `BLOCKED`\nNo commands were run.\n"
+    gh.pulls[125] = green_pr(125, sha, body)
+    green_checks(gh, sha)
+
+    with patch.object(
+        hunter_draft_promotion_signal.governance_preflight,
+        "validate_ready_evidence",
+        side_effect=hunter_draft_promotion_signal.governance_preflight.PreflightError(
+            "structured result marker missing"
+        ),
+    ):
+        hunter_draft_promotion_signal.evaluate(gh.pulls[125])
+
+    assert 125 not in gh.patched_bodies
+    assert gh.published[-1][1] == "pending"
+    assert "structured result marker missing" in gh.published[-1][2]
 
 
 def test_closed_draft_pr_is_outside_promotion_scope(gh):
