@@ -146,7 +146,7 @@ def test_trusted_preflight_failure_prevents_canonical_success(gh, monkeypatch):
     assert gh.readiness_status(gh.head_sha(501))[0] == "failure"
 
 
-def test_issue_276_bootstrap_is_only_missing-file_exception(monkeypatch):
+def test_issue_276_bootstrap_is_only_missing_file_exception(monkeypatch):
     monkeypatch.setenv(core.PREFLIGHT_ENFORCEMENT_ENV, "1")
     monkeypatch.setattr(core, "GOVERNANCE_PREFLIGHT_PATH", Path("/definitely/missing/hunter_governance_preflight.py"))
 
