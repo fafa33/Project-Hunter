@@ -88,6 +88,8 @@ Every governing Issue acceptance criterion is represented exactly once. Unproven
 
 Changing the source head or target revision makes that evidence stale until the body is regenerated or re-synchronized with current evidence.
 
+The parser accepts the matrix only inside the canonical `## Acceptance-criteria matrix` section. A matching table elsewhere in the body cannot satisfy the governed metadata contract.
+
 ## Ready-for-review preflight
 
 Before an agent promotes a Draft PR, run:
@@ -101,6 +103,8 @@ python scripts/hunter_governance_preflight.py ready \
 ```
 
 The command re-reads current GitHub state. It requires the canonical Issue identity, complete matrix, current exact-pair trace, `READY FOR REVIEW`, no `FAIL`/`BLOCKED` criterion, current exact-head required checks, current Governance Review evidence, and no live review-feedback blocker. Event payloads are hints; current GitHub state is authority.
+
+Draft Promotion consumes the same canonical current-state feedback readers as Merge Readiness. An unresolved thread, a current `CHANGES_REQUESTED` review, or an unacknowledged external top-level comment therefore cannot produce a successful promotion signal.
 
 ## Blocking-finding resolution
 
@@ -126,16 +130,22 @@ This guard is deliberately conservative and deterministic. It is not a natural-l
 Some actions can be prevented before mutation only when the contributing agent cooperates with the repository command. GitHub does not allow repository code to intercept every manual owner action before GitHub accepts it. Hunter therefore uses two layers:
 
 1. **Pre-action prevention** — agents run the deterministic preflight before branch/commit/push/PR/body/Ready/finding-resolution operations.
-2. **Repository rejection** — trusted default-branch workflows re-read live GitHub state and reject a bypass before merge readiness. `Hunter Governance Review` and `Hunter Merge Readiness` remain the canonical merge-control path; the enforcement layer cannot approve itself or grant merge authority.
+2. **Repository rejection** — the trusted default-branch Merge Readiness workflow runs the resident governance preflight before it may publish canonical success. Any preflight execution error or validation failure becomes a canonical readiness failure. The workflow uses `pull_request_target` and explicitly checks out the repository default branch, so PR-controlled enforcement code is never executed with `statuses: write` authority.
 
-No agent-generated metadata is approval. No automation may merge merely because preflight passes. Human approval remains required.
+The standalone `Hunter Governance Agent Preflight` workflow also uses `pull_request_target` and the trusted default-branch checkout. It is an additional rejection surface, not a separate approval or merge authority.
+
+Top-level PR Conversation comments authored by the repository owner do not require the owner to 👍 their own statement. External human comments and unknown-bot comments retain the existing acknowledgement requirement; trusted structurally identifiable status/advisory automation comments retain their narrow exemption.
+
+`Hunter Governance Review` and `Hunter Merge Readiness` remain the canonical merge-control path. The enforcement layer cannot approve itself or grant merge authority. No agent-generated metadata is approval. No automation may merge merely because preflight passes. Human approval remains required.
 
 ## Bootstrap of Issue #276
 
 GitHub Actions workflow definitions and scheduled enforcement become trusted repository behavior only after they exist on the default branch. Therefore the Issue #276 installation PR distinguishes:
 
 - **pre-merge verified enforcement** — deterministic unit/integration/counterfactual tests, the existing trusted Governance Review, existing Merge Readiness, and independent hostile review verify the new enforcement code without executing PR-controlled enforcement code as authority;
-- **post-merge active enforcement** — future PRs execute the preflight from the trusted default branch. The bootstrap path must never treat the installing PR's own preflight implementation as already-trusted enforcement.
+- **post-merge active enforcement** — future PRs execute the preflight from the trusted default branch before canonical Merge Readiness can publish success.
+
+The canonical Merge Readiness integration has one narrow bootstrap condition: PR #277 may proceed while `scripts/hunter_governance_preflight.py` is genuinely absent from the trusted default-branch checkout. The exception is keyed to the installing PR and the missing trusted file; once Issue #276 is merged, future PRs receive no exception. The standalone trusted workflow likewise fails closed if its resident preflight is missing.
 
 This bootstrap distinction is a platform constraint, not a waiver of governance.
 
