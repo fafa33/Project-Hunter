@@ -269,6 +269,12 @@ def evaluate(pr: dict[str, Any]) -> None:
     post_once(pr_number, sha)
 
 
+def reconcile_open_draft_prs() -> None:
+    """Re-read and evaluate every open Draft PR from current GitHub state."""
+    for pr in open_draft_prs():
+        evaluate(pr)
+
+
 def main() -> None:
     init_globals()
     event_name = os.environ.get("GITHUB_EVENT_NAME", "")
@@ -293,6 +299,10 @@ def main() -> None:
         evaluate(current)
         raise SystemExit(0)
 
+    if event_name == "schedule":
+        reconcile_open_draft_prs()
+        raise SystemExit(0)
+
     if event_name == "push":
         for pr in open_draft_prs():
             publish(pr["head"]["sha"], "pending", "Target base advanced; waiting for refreshed governance.")
@@ -301,8 +311,7 @@ def main() -> None:
     workflow_run = event.get("workflow_run", {})
     workflow_name = workflow_run.get("name")
     if workflow_name == "Hunter Governance Review Reconcile":
-        for pr in open_draft_prs():
-            evaluate(pr)
+        reconcile_open_draft_prs()
         raise SystemExit(0)
 
     sha = workflow_run.get("head_sha")
