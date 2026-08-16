@@ -349,6 +349,41 @@ def test_pr_mutation_actions_require_canonical_title_and_body(action: str) -> No
         preflight._parser().parse_args(argv)
 
 
+def test_pr_update_binds_authorization_to_live_target_pr_metadata(tmp_path, monkeypatch) -> None:
+    issue = fixture_issue()
+    body_file = tmp_path / "body.md"
+    body_file.write_text(generated_body(), encoding="utf-8")
+    monkeypatch.setattr(preflight, "validate_canonical_governance", lambda _root: None)
+    monkeypatch.setattr(preflight, "load_issue", lambda _repo, _number: issue)
+    monkeypatch.setattr(preflight, "_git_exact_pair", lambda _root, _base: (HEAD, BASE))
+    monkeypatch.setattr(
+        preflight,
+        "_gh_json",
+        lambda _args: {
+            "title": issue.title,
+            "body": generated_body(),
+            "head": {"ref": "governance/issue-999-unrelated"},
+        },
+    )
+    args = SimpleNamespace(
+        action="pr-update",
+        repo_root=str(ROOT),
+        repo=issue.repository,
+        issue=issue.number,
+        objective=issue.title,
+        branch="governance/issue-276-agent-preflight",
+        commit_message="fix: govern update #276",
+        pr_title=issue.title,
+        pr_body_file=str(body_file),
+        pr=999,
+        base_ref="origin/main",
+        allow_governance_diff_check=False,
+    )
+
+    with pytest.raises(preflight.PreflightError, match="target PR head branch"):
+        preflight._cmd_identity_action(args)
+
+
 def test_generator_trace_is_derived_from_git_and_head_sha_override_is_rejected() -> None:
     issue = fixture_issue()
     with patch.object(preflight, "_git_exact_pair", return_value=(HEAD, BASE)) as exact_pair:
@@ -518,7 +553,15 @@ def test_hostile_review_requires_independent_exact_pair_positive_evidence(monkey
         "id": 9,
         "user": {"login": "independent-reviewer"},
         "commit_id": HEAD,
-        "body": (f"<!-- hunter-hostile-review:v1 head={HEAD} base={BASE} " "outcome=no-blocking-findings -->"),
+        "state": "COMMENTED",
+        "submitted_at": "2026-08-16T20:00:00Z",
+        "body": (
+            f"<!-- hunter-hostile-review:v1 head={HEAD} base={BASE} outcome=no-blocking-findings -->\n"
+            "Hostile review evidence: Reproduced all required counterexamples against the exact pair.\n"
+            "Scope probed: All original blocker classes and newly changed enforcement boundaries.\n"
+            "Limitations: GitHub branch protection remains external human authority.\n"
+            "Unresolved blocking findings: 0"
+        ),
     }
     monkeypatch.setattr(preflight, "_gh_json", lambda _args: [review])
     preflight.require_independent_hostile_review(
@@ -538,6 +581,67 @@ def test_hostile_review_requires_independent_exact_pair_positive_evidence(monkey
             head_sha=HEAD,
             base_sha=BASE,
         )
+
+
+def test_hostile_review_rejects_dismissed_marker_only_and_reads_later_pages(monkeypatch) -> None:
+    dismissed = {
+        "id": 1,
+        "user": {"login": "independent-reviewer"},
+        "commit_id": HEAD,
+        "state": "DISMISSED",
+        "submitted_at": "2026-08-16T19:00:00Z",
+        "body": f"<!-- hunter-hostile-review:v1 head={HEAD} base={BASE} outcome=no-blocking-findings -->",
+    }
+    adverse = {
+        "id": 101,
+        "user": {"login": "independent-reviewer"},
+        "commit_id": HEAD,
+        "state": "CHANGES_REQUESTED",
+        "submitted_at": "2026-08-16T21:00:00Z",
+        "body": (
+            f"<!-- hunter-hostile-review:v1 head={HEAD} base={BASE} outcome=changes-required -->\n"
+            "Hostile review evidence: A later page contains a reproducible authorization bypass.\n"
+            "Scope probed: Complete hostile-review evidence resolver across pagination.\n"
+            "Limitations: No repository mutation was attempted.\n"
+            "Unresolved blocking findings: 1"
+        ),
+    }
+    first_page = [dismissed, *({"id": index} for index in range(2, 101))]
+    monkeypatch.setattr(preflight, "_gh_json", lambda args: [adverse] if "page=2" in args[0] else first_page)
+
+    with pytest.raises(preflight.PreflightError, match="CHANGES-REQUIRED"):
+        preflight.require_independent_hostile_review(
+            repository="fafa33/Project-Hunter",
+            pr_number=277,
+            pr_author="implementer",
+            head_sha=HEAD,
+            base_sha=BASE,
+        )
+
+
+def test_live_ready_path_composes_hostile_review_authority(monkeypatch) -> None:
+    issue = fixture_issue()
+    body = generated_body()
+    pr = {
+        "draft": False,
+        "title": issue.title,
+        "body": body,
+        "user": {"login": "implementer"},
+        "head": {"ref": "governance/issue-276-agent-preflight"},
+    }
+    monkeypatch.setattr(preflight, "validate_canonical_governance", lambda _root: None)
+    monkeypatch.setattr(preflight, "_gh_json", lambda _args: pr)
+    monkeypatch.setattr(preflight, "load_issue", lambda _repo, _number: issue)
+    monkeypatch.setattr(preflight, "_gh_pr_oids", lambda _repo, _pr: (HEAD, BASE))
+    monkeypatch.setattr(preflight, "_run", lambda _args: "")
+    monkeypatch.setattr(
+        preflight,
+        "require_independent_hostile_review",
+        lambda **_kwargs: (_ for _ in ()).throw(preflight.PreflightError("hostile evidence missing")),
+    )
+
+    with pytest.raises(preflight.PreflightError, match="hostile evidence missing"):
+        preflight._cmd_live_pr(SimpleNamespace(repo_root=str(ROOT), repo=issue.repository, pr=277))
 
 
 def test_live_ready_rejects_missing_positive_hostile_review(monkeypatch) -> None:
@@ -567,7 +671,7 @@ def test_live_ready_rejects_missing_positive_hostile_review(monkeypatch) -> None
     monkeypatch.setattr(readiness, "feedback_error", lambda _state: None)
 
     def gh_json(args):
-        if args[0].endswith("/reviews?per_page=100"):
+        if "/reviews?" in args[0]:
             return []
         return {
             "user": {"login": "implementer"},

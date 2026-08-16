@@ -91,6 +91,11 @@ def gh():
             "unacknowledged_top_level_comments",
             return_value=(),
         ),
+        patch.object(
+            hunter_draft_promotion_signal.governance_preflight,
+            "require_independent_hostile_review",
+            return_value=None,
+        ),
     ):
         yield server
 
@@ -100,8 +105,9 @@ def green_pr(number, sha, body, draft=True, state="open", base="main"):
         "number": number,
         "state": state,
         "draft": draft,
-        "base": {"ref": base},
+        "base": {"ref": base, "sha": "b" * 40},
         "head": {"sha": sha},
+        "user": {"login": "implementer"},
         "body": body,
     }
 
@@ -192,6 +198,24 @@ def test_evaluate_with_single_declaration_line_reaches_success_and_comments(gh):
     assert "Ready to promote from Draft" in gh.published[-1][2]
     assert len(gh.comments.get(123, [])) == 1
     assert "Hunter Draft Promotion" in gh.comments[123][0]["body"]
+
+
+def test_draft_promotion_requires_positive_hostile_review_before_mutation(gh):
+    sha = "sha_hostile_missing"
+    body = "- [ ] `READY FOR REVIEW`\n- [x] `CHANGES REQUIRED`\n- [ ] `BLOCKED`\n"
+    gh.pulls[124] = green_pr(124, sha, body)
+    green_checks(gh, sha)
+
+    with patch.object(
+        hunter_draft_promotion_signal.governance_preflight,
+        "require_independent_hostile_review",
+        side_effect=RuntimeError("hostile evidence missing"),
+    ):
+        with pytest.raises(RuntimeError, match="hostile evidence missing"):
+            hunter_draft_promotion_signal.evaluate(gh.pulls[124])
+
+    assert 124 not in gh.patched_bodies
+    assert not any(state == "success" for _sha, state, _description in gh.published)
 
 
 def test_closed_draft_pr_is_outside_promotion_scope(gh):

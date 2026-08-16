@@ -4,6 +4,7 @@ import re
 import urllib.request
 from typing import Any
 
+import hunter_governance_preflight as governance_preflight
 import hunter_merge_readiness as merge_readiness
 
 # Configuration
@@ -288,6 +289,14 @@ def evaluate(pr: dict[str, Any]) -> None:
             "Waiting for Draft promotion prerequisites: " + ", ".join(feedback_waiting),
         )
         return
+
+    governance_preflight.require_independent_hostile_review(
+        repository=repo,
+        pr_number=pr_number,
+        pr_author=str((current.get("user") or {}).get("login") or ""),
+        head_sha=sha,
+        base_sha=str((current.get("base") or {}).get("sha") or ""),
+    )
 
     synchronize_ready_metadata(pr_number, current.get("body") or "")
     publish(sha, "success", "Ready to promote from Draft; checks and review feedback are clear.")

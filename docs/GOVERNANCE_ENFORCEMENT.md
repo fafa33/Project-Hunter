@@ -105,7 +105,9 @@ python scripts/hunter_governance_preflight.py ready \
   --pr <PR_NUMBER>
 ```
 
-The command re-reads current GitHub state. It requires the canonical Issue identity, complete matrix, current exact-pair trace, `READY FOR REVIEW`, no `FAIL`/`BLOCKED` criterion, current exact-head required checks, current Governance Review evidence, no live review-feedback blocker, and the latest independent exact-pair PR review marker to report `no-blocking-findings`. Event payloads are hints; current GitHub state is authority. Merge-readiness preflight consumes the same hostile-review artifact.
+The command re-reads current GitHub state. It requires the canonical Issue identity, complete matrix, current exact-pair trace, `READY FOR REVIEW`, no `FAIL`/`BLOCKED` criterion, current exact-head required checks, current Governance Review evidence, no live review-feedback blocker, and the latest independent exact-pair PR review report to be active and report `no-blocking-findings`. Hostile-review lookup paginates the complete review history, rejects dismissed/marker-only artifacts, and requires substantive evidence, scope, limitations, and a report-consistent explicit blocker count. Event payloads are hints; current GitHub state is authority. Draft Promotion, the trusted live-PR path for non-Draft PRs, and merge-readiness preflight all consume the same hostile-review artifact before success.
+
+For `pr-update`, the target PR is re-read live. Its head branch, live Issue identity metadata, and exact head/base pair must match the governed checkout before the supplied resulting title/body can authorize mutation. A different PR number cannot borrow identity from the local checkout.
 
 Draft Promotion consumes the same canonical current-state feedback readers as Merge Readiness. An unresolved thread, a current `CHANGES_REQUESTED` review, or an unacknowledged external top-level comment therefore cannot produce a successful promotion signal.
 

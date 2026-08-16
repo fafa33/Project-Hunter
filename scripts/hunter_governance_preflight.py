@@ -126,6 +126,11 @@ HOSTILE_REVIEW_MARKER_RE = re.compile(
     r"outcome=(?P<outcome>no-blocking-findings|changes-required|blocked)\s*-->",
     re.IGNORECASE,
 )
+HOSTILE_REVIEW_EVIDENCE_RE = re.compile(r"(?im)^Hostile review evidence:\s*(?P<value>\S.+?)\s*$")
+HOSTILE_REVIEW_SCOPE_RE = re.compile(r"(?im)^Scope probed:\s*(?P<value>\S.+?)\s*$")
+HOSTILE_REVIEW_LIMITATIONS_RE = re.compile(r"(?im)^Limitations:\s*(?P<value>\S.+?)\s*$")
+HOSTILE_REVIEW_BLOCKER_COUNT_RE = re.compile(r"(?im)^Unresolved blocking findings:\s*(?P<count>\d+)\s*$")
+HOSTILE_REPORT_PLACEHOLDERS = {"fabricated", "none", "n/a", "pending", "tbd"}
 CLASSIFICATION_EVIDENCE_RE = re.compile(r"(?im)^Classification evidence:\s*(?P<value>\S.+?)\s*$")
 REUSABLE_BOUNDARY_RE = re.compile(r"(?im)^Reusable boundary:\s*(?P<value>\S.+?)\s*$")
 VERIFICATION_EVIDENCE_RE = re.compile(r"(?im)^Verification evidence:\s*(?P<value>\S.+?)\s*$")
@@ -890,26 +895,56 @@ def require_independent_hostile_review(
 ) -> None:
     if not pr_author:
         raise PreflightError("Live PR author identity is required for independent hostile review.")
-    payload = _gh_json((f"repos/{repository}/pulls/{pr_number}/reviews?per_page=100",))
-    if not isinstance(payload, list):
-        raise PreflightError("Live hostile-review evidence is unavailable.")
-    candidates: list[tuple[int, str]] = []
-    for review in payload:
+    reviews: list[Mapping[str, Any]] = []
+    page = 1
+    while True:
+        payload = _gh_json((f"repos/{repository}/pulls/{pr_number}/reviews?per_page=100&page={page}",))
+        if not isinstance(payload, list):
+            raise PreflightError("Live hostile-review evidence is unavailable.")
+        reviews.extend(review for review in payload if isinstance(review, Mapping))
+        if len(payload) < 100:
+            break
+        page += 1
+    candidates: list[tuple[str, int, str]] = []
+    for review in reviews:
         author = str((review.get("user") or {}).get("login") or "").strip()
         if not author or author.lower() == pr_author.lower():
             continue
         if str(review.get("commit_id") or "").lower() != head_sha.lower():
             continue
-        matches = list(HOSTILE_REVIEW_MARKER_RE.finditer(str(review.get("body") or "")))
+        state = str(review.get("state") or "").strip().lower()
+        if state not in {"commented", "changes_requested"}:
+            continue
+        submitted_at = str(review.get("submitted_at") or "").strip()
+        if not submitted_at:
+            continue
+        body = str(review.get("body") or "")
+        matches = list(HOSTILE_REVIEW_MARKER_RE.finditer(body))
         if len(matches) != 1:
             continue
         marker = matches[0]
         if marker.group("head").lower() != head_sha.lower() or marker.group("base").lower() != base_sha.lower():
             continue
-        candidates.append((int(review.get("id") or 0), marker.group("outcome").lower()))
+        evidence = HOSTILE_REVIEW_EVIDENCE_RE.search(body)
+        scope = HOSTILE_REVIEW_SCOPE_RE.search(body)
+        limitations = HOSTILE_REVIEW_LIMITATIONS_RE.search(body)
+        blocker_count = HOSTILE_REVIEW_BLOCKER_COUNT_RE.search(body)
+        if evidence is None or scope is None or limitations is None or blocker_count is None:
+            continue
+        if any(
+            _normalize(match.group("value")) in HOSTILE_REPORT_PLACEHOLDERS for match in (evidence, scope, limitations)
+        ):
+            continue
+        outcome = marker.group("outcome").lower()
+        count = int(blocker_count.group("count"))
+        if outcome == "no-blocking-findings" and (state != "commented" or count != 0):
+            continue
+        if outcome != "no-blocking-findings" and count == 0:
+            continue
+        candidates.append((submitted_at, int(review.get("id") or 0), outcome))
     if not candidates:
         raise PreflightError("Ready preflight lacks independent exact-pair hostile-review evidence.")
-    _review_id, outcome = max(candidates)
+    _submitted_at, _review_id, outcome = max(candidates)
     if outcome != "no-blocking-findings":
         raise PreflightError(f"Latest independent exact-pair hostile review reports {outcome.upper()}.")
 
@@ -1126,7 +1161,34 @@ def _cmd_identity_action(args: argparse.Namespace) -> int:
         if pr_body is None:
             raise PreflightError(f"{args.action} requires canonical PR body metadata.")
         if args.action == "pr-update":
+            live_pr = _gh_json((f"repos/{args.repo}/pulls/{args.pr}",))
+            live_head = live_pr.get("head") or {}
+            live_base = live_pr.get("base") or {}
+            live_branch = str(live_head.get("ref") or "")
+            live_head_repository = str((live_head.get("repo") or {}).get("full_name") or "")
+            live_title = str(live_pr.get("title") or "")
+            live_body = str(live_pr.get("body") or "")
+            if live_branch != branch:
+                raise PreflightError("pr-update target PR head branch does not match the governed branch.")
+            if live_head_repository.lower() != args.repo.lower():
+                raise PreflightError("pr-update target PR head repository does not match the governed repository.")
+            validate_issue_identity(
+                issue,
+                repository=args.repo,
+                objective=args.objective,
+                branch=live_branch,
+                pr_title=live_title,
+                pr_body=live_body,
+            )
             head_sha, base_sha = _gh_pr_oids(args.repo, args.pr)
+            local_head, local_base = _git_exact_pair(root, args.base_ref)
+            if (
+                head_sha != local_head
+                or base_sha != local_base
+                or str(live_head.get("sha") or "").lower() != local_head
+                or str(live_base.get("sha") or "").lower() != local_base
+            ):
+                raise PreflightError("pr-update target PR exact pair does not match the governed checkout.")
         else:
             head_sha, base_sha = _git_exact_pair(root, args.base_ref)
         validate_pr_body(pr_body, issue, head_sha=head_sha, base_sha=base_sha, promotion=False)
@@ -1211,6 +1273,14 @@ def _cmd_live_pr(args: argparse.Namespace) -> int:
     )
     head_sha, base_sha = _gh_pr_oids(args.repo, args.pr)
     validate_pr_body(body, issue, head_sha=head_sha, base_sha=base_sha, promotion=not bool(pr.get("draft")))
+    if not bool(pr.get("draft")):
+        require_independent_hostile_review(
+            repository=args.repo,
+            pr_number=args.pr,
+            pr_author=str((pr.get("user") or {}).get("login") or ""),
+            head_sha=head_sha,
+            base_sha=base_sha,
+        )
     diff = _run(
         (
             "gh",
