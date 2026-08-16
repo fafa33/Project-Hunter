@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -25,11 +26,15 @@ def evidence_for(issue: preflight.IssueIdentity) -> dict[str, dict[str, str]]:
     }
 
 
-def generated_body(*, ready: bool = True) -> str:
+def canonical_template() -> str:
+    return (ROOT / ".github" / "pull_request_template.md").read_text(encoding="utf-8")
+
+
+def generated_body(*, ready: bool = True, template_text: str | None = None) -> str:
     issue = fixture_issue()
     return preflight.generate_pr_body(
         issue,
-        template_text=(ROOT / ".github" / "pull_request_template.md").read_text(encoding="utf-8"),
+        template_text=template_text or canonical_template(),
         changed_files=("scripts/hunter_governance_preflight.py", "tests/test_hunter_governance_preflight.py"),
         head_sha=HEAD,
         base_sha=BASE,
@@ -51,7 +56,29 @@ def test_generator_uses_verified_issue_template_scope_and_complete_matrix() -> N
     assert [row.criterion for row in rows] == list(preflight.issue_acceptance_criteria(issue.body))
     assert {row.status for row in rows} == {"pass"}
     assert preflight.checked_readiness(body) == "ready for review"
-    assert "APPROVED" not in body
+    assert "- [x] `APPROVED`" not in body
+
+
+def test_generator_preserves_canonical_template_checklists_and_instructions() -> None:
+    body = generated_body()
+
+    assert "The governing Issue and acceptance criteria are linked." in body
+    assert "Required migrations/configuration checks" in body
+    assert "Green CI and the absence of unresolved blocking review comments" in body
+    assert "Replace with criterion" not in body
+    assert "Describe the exact issue/milestone scope" not in body
+
+
+def test_generator_preserves_future_template_content_instead_of_hard_coding_body() -> None:
+    template = canonical_template().replace(
+        "## Verification\n\n",
+        "## Verification\n\nCanonical future template sentinel.\n\n",
+        1,
+    )
+
+    body = generated_body(template_text=template)
+
+    assert "Canonical future template sentinel." in body
 
 
 def test_generator_fails_closed_for_unproven_criteria() -> None:
@@ -65,7 +92,23 @@ def test_pr_body_rejects_missing_matrix() -> None:
     issue = fixture_issue()
     body = generated_body().replace("## Acceptance-criteria matrix", "## Acceptance evidence")
 
-    with pytest.raises(preflight.PreflightError, match="matrix"):
+    with pytest.raises(preflight.PreflightError, match="canonical section"):
+        preflight.validate_pr_body(body, issue, head_sha=HEAD, base_sha=BASE, promotion=False)
+
+
+def test_pr_body_rejects_missing_canonical_non_matrix_section() -> None:
+    issue = fixture_issue()
+    body = generated_body().replace("## Operational validation", "## Runtime notes")
+
+    with pytest.raises(preflight.PreflightError, match="Operational validation"):
+        preflight.validate_pr_body(body, issue, head_sha=HEAD, base_sha=BASE, promotion=False)
+
+
+def test_pr_body_rejects_duplicate_canonical_section() -> None:
+    issue = fixture_issue()
+    body = generated_body() + "\n## Verification\n\nduplicate\n"
+
+    with pytest.raises(preflight.PreflightError, match="exactly one canonical section"):
         preflight.validate_pr_body(body, issue, head_sha=HEAD, base_sha=BASE, promotion=False)
 
 
@@ -98,6 +141,34 @@ def test_pass_cannot_be_inferred_from_green_ci() -> None:
 
     with pytest.raises(preflight.PreflightError, match="explicit evidence"):
         preflight.validate_pr_body(body, issue, head_sha=HEAD, base_sha=BASE, promotion=False)
+
+
+def test_external_command_timeout_is_bounded_and_status_safe(monkeypatch) -> None:
+    def timeout(*_args, **_kwargs):
+        raise subprocess.TimeoutExpired(cmd=("gh", "api"), timeout=preflight.COMMAND_TIMEOUT_SECONDS)
+
+    monkeypatch.setattr(preflight.subprocess, "run", timeout)
+
+    with pytest.raises(preflight.PreflightError, match=r"timed out after 30s: gh") as exc_info:
+        preflight._run(("gh", "api", "repos/fafa33/Project-Hunter"))
+
+    assert "token" not in str(exc_info.value).lower()
+
+
+def test_external_command_failure_does_not_embed_raw_diagnostics_in_public_error(monkeypatch, capsys) -> None:
+    completed = SimpleNamespace(
+        returncode=1,
+        stdout="",
+        stderr="Authorization: Bearer super-secret-token",
+    )
+    monkeypatch.setattr(preflight.subprocess, "run", lambda *_args, **_kwargs: completed)
+
+    with pytest.raises(preflight.PreflightError) as exc_info:
+        preflight._run(("gh", "api", "repos/fafa33/Project-Hunter"))
+
+    assert "super-secret-token" not in str(exc_info.value)
+    assert str(exc_info.value) == "external command failed (1): gh"
+    assert "super-secret-token" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize(
