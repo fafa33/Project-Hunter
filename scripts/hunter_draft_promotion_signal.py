@@ -295,9 +295,26 @@ def evaluate(pr: dict[str, Any]) -> None:
 
 
 def reconcile_open_draft_prs() -> None:
-    """Re-read and evaluate every open Draft PR from current GitHub state."""
+    """Reconcile every open Draft independently, then fail if any evaluation failed.
+
+    A scheduled sweep is a repository-wide reconciliation pass. One malformed PR
+    must fail closed for itself without starving later Draft PRs in the same
+    sweep. We therefore isolate each evaluation, continue through the full live
+    candidate set, and raise one aggregate error only after every Draft had a
+    chance to reconcile.
+    """
+    failures: list[str] = []
     for pr in open_draft_prs():
-        evaluate(pr)
+        pr_number = int(pr.get("number") or 0)
+        try:
+            evaluate(pr)
+        except Exception as exc:
+            label = f"PR #{pr_number}" if pr_number else "Draft PR with missing number"
+            failures.append(f"{label}: {type(exc).__name__}: {exc}")
+            print(f"Draft promotion reconciliation failed for {label}: {type(exc).__name__}: {exc}")
+
+    if failures:
+        raise RuntimeError("Draft promotion sweep completed with isolated failures: " + " | ".join(failures))
 
 
 def main() -> None:
