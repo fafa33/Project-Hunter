@@ -1,11 +1,11 @@
 name: Hunter Governance Agent Preflight
 
-# Post-merge enforcement adapter for Issue #276. The executable policy is
-# always loaded from the trusted default branch; pull-request code is never
-# checked out or executed by this workflow.
+# Post-merge enforcement adapter for Issue #276. The workflow definition and
+# executable policy are both loaded from the trusted default branch; pull-request
+# code is never checked out or executed by this workflow.
 
 on:
-  pull_request:
+  pull_request_target:
     branches:
       - main
     types:
@@ -45,9 +45,8 @@ jobs:
         run: |
           set -euo pipefail
           if [ ! -f scripts/hunter_governance_preflight.py ]; then
-            echo "::warning::Issue #276 bootstrap: governance preflight is not yet installed on the default branch."
-            echo "::warning::The installing PR remains governed by the existing Governance Review and Merge Readiness gates."
-            exit 0
+            echo "::error::Trusted governance preflight is missing from the default branch."
+            exit 1
           fi
           python scripts/hunter_governance_preflight.py live-pr \
             --repo "${GH_REPO}" \
