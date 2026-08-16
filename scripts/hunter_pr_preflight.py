@@ -6,7 +6,7 @@ from collections.abc import Sequence
 
 QUALITY_GATES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Ruff", ("ruff", "check", ".")),
-    ("Black", ("black", "--check", "--diff", ".")),
+    ("Black", ("black", "--check", ".")),
     ("Mypy", ("mypy",)),
     ("Pytest", ("pytest",)),
 )
