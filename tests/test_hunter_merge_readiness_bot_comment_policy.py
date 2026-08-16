@@ -9,7 +9,9 @@ owner to react to their own statement.
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
 import hunter_merge_readiness as core
 import pytest
@@ -150,3 +152,65 @@ def test_issue_276_bootstrap_is_only_missing_file_exception(monkeypatch):
 
     assert core.trusted_governance_preflight_error(277) is None
     assert "not installed" in (core.trusted_governance_preflight_error(278) or "")
+
+
+def test_trusted_preflight_failure_logs_diagnostics_but_returns_status_safe_error(
+    monkeypatch, tmp_path: Path, capsys
+):
+    script = tmp_path / "hunter_governance_preflight.py"
+    script.write_text("# test preflight\n", encoding="utf-8")
+    monkeypatch.setenv(core.PREFLIGHT_ENFORCEMENT_ENV, "1")
+    monkeypatch.setattr(core, "GOVERNANCE_PREFLIGHT_PATH", script)
+    core.repo = "fafa33/Project-Hunter"
+    core.token = "controller-token"
+    observed: dict[str, object] = {}
+
+    def failed_run(*_args, **kwargs):
+        observed.update(kwargs)
+        return SimpleNamespace(
+            returncode=2,
+            stdout="API diagnostic super-secret-token",
+            stderr="Authorization: Bearer sensitive-header",
+        )
+
+    monkeypatch.setattr(core.subprocess, "run", failed_run)
+
+    error = core.trusted_governance_preflight_error(278)
+
+    assert error == core.GOVERNANCE_PREFLIGHT_FAILURE_DESCRIPTION
+    assert "secret" not in error
+    assert "sensitive" not in error
+    assert observed["timeout"] == core.GOVERNANCE_PREFLIGHT_TIMEOUT_SECONDS
+    logs = capsys.readouterr().out
+    assert "super-secret-token" in logs
+    assert "sensitive-header" in logs
+
+
+def test_trusted_preflight_timeout_is_bounded_and_status_safe(monkeypatch, tmp_path: Path, capsys):
+    script = tmp_path / "hunter_governance_preflight.py"
+    script.write_text("# test preflight\n", encoding="utf-8")
+    monkeypatch.setenv(core.PREFLIGHT_ENFORCEMENT_ENV, "1")
+    monkeypatch.setattr(core, "GOVERNANCE_PREFLIGHT_PATH", script)
+    core.repo = "fafa33/Project-Hunter"
+    core.token = "controller-token"
+    observed: dict[str, object] = {}
+
+    def timed_out_run(*_args, **kwargs):
+        observed.update(kwargs)
+        raise subprocess.TimeoutExpired(
+            cmd=("python", "hunter_governance_preflight.py"),
+            timeout=core.GOVERNANCE_PREFLIGHT_TIMEOUT_SECONDS,
+            output="partial stdout",
+            stderr="partial stderr",
+        )
+
+    monkeypatch.setattr(core.subprocess, "run", timed_out_run)
+
+    error = core.trusted_governance_preflight_error(278)
+
+    assert error == core.GOVERNANCE_PREFLIGHT_TIMEOUT_DESCRIPTION
+    assert observed["timeout"] == core.GOVERNANCE_PREFLIGHT_TIMEOUT_SECONDS
+    logs = capsys.readouterr().out
+    assert "partial stdout" in logs
+    assert "partial stderr" in logs
+    assert "timed out after" in logs
