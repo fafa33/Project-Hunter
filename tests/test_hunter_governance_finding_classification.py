@@ -5,16 +5,17 @@ from pathlib import Path
 
 from hunter_governance_review.__main__ import _write_summary
 from hunter_governance_review.contracts import (
+    ChangedFile,
     DeterministicResult,
     Finding,
     FindingClassification,
     Outcome,
+    PullRequest,
     ReviewPair,
     Severity,
 )
 from hunter_governance_review.decision import Decision
 from hunter_governance_review.deterministic import ValidationContext, run_deterministic_engine
-from hunter_governance_review.contracts import PullRequest, ChangedFile
 
 
 def _pair() -> ReviewPair:
