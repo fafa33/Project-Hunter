@@ -21,6 +21,7 @@ from hunter_governance_review.contracts import (
     ChangedFile,
     DeterministicResult,
     Finding,
+    FindingClassification,
     PullRequest,
     Severity,
 )
@@ -31,22 +32,22 @@ GATE_PATH_MARKERS = (
     "HUNTER_GOVERNANCE_REVIEW",
 )
 
-
-def _structural_severity(ctx: ValidationContext) -> Severity:
-    """Returns Severity.INFO for draft PRs to prevent premature blocking failures, and Severity.BLOCKING for non-draft PRs."""
-    return Severity.INFO if ctx.pr.draft else Severity.BLOCKING
+_SYSTEMIC_BOUNDARIES: dict[str, str] = {
+    "V-010": "CanonicalPRContract title validation",
+    "V-020": "CanonicalPRContract PR-body evidence validation",
+    "V-021": "CanonicalPRContract placeholder validation",
+    "V-030": "CanonicalPRContract required-section validation",
+    "V-040": "CanonicalPRContract acceptance-matrix validation",
+    "V-050": "CanonicalPRContract readiness-declaration validation",
+    "V-060": "CanonicalPRContract verification-evidence validation",
+    "V-070": "authoritative ADR/ADPR reference validation",
+    "V-080": "mergeability preflight validation",
+}
 
 
 @dataclass(frozen=True)
 class ValidationContext:
-    """Everything the deterministic engine needs to evaluate a PR.
-
-    ``missing_references`` is precomputed by
-    ``context.resolve_referenced_records`` against the exact base commit via
-    the GitHub API -- this engine never reads the local filesystem, so a
-    checkout that happens to differ from the recorded review pair's exact
-    base SHA cannot produce a wrong answer here.
-    """
+    """Everything the deterministic engine needs to evaluate a PR."""
 
     pr: PullRequest
     files: list[ChangedFile]
@@ -68,6 +69,43 @@ class ValidationContext:
         )
 
 
+def _structural_severity(ctx: ValidationContext) -> Severity:
+    """Return INFO for draft structural failures and BLOCKING otherwise."""
+    return Severity.INFO if ctx.pr.draft else Severity.BLOCKING
+
+
+def _finding(
+    validator_id: str,
+    title: str,
+    severity: Severity,
+    detail: str,
+) -> Finding:
+    """Build a typed deterministic finding.
+
+    ``docs/AI_REVIEW_PROTOCOL.md`` owns isolated/systemic semantics. The gate
+    only emits the canonical classification for deterministic reusable
+    validator failures so downstream verification has complete metadata.
+    """
+    if severity is not Severity.BLOCKING:
+        return Finding(validator_id, title, severity, detail)
+    boundary = _SYSTEMIC_BOUNDARIES.get(validator_id)
+    if boundary is None:
+        return Finding(validator_id, title, severity, detail)
+    return Finding(
+        validator_id=validator_id,
+        title=title,
+        severity=severity,
+        detail=detail,
+        classification=FindingClassification.SYSTEMIC,
+        classification_evidence=(
+            f"{validator_id} is a deterministic repository-wide governance validator; "
+            "the same defect class can recur in later contributions unless its "
+            "reusable boundary is enforced."
+        ),
+        reusable_boundary=boundary,
+    )
+
+
 Validator = Callable[[ValidationContext], Finding | None]
 
 
@@ -76,11 +114,6 @@ def _has_section(body: str, name: str) -> bool:
 
 
 def _parse_acceptance_matrix(body: str) -> tuple[list[tuple[str, str, str]], bool]:
-    """Extract (criterion, status, evidence) rows from the acceptance matrix.
-
-    Returns ``(rows, has_template_placeholder)``. Only rows whose status token
-    is an allowed acceptance status are counted.
-    """
     rows: list[tuple[str, str, str]] = []
     in_table = False
     for line in body.splitlines():
@@ -105,18 +138,11 @@ def _parse_acceptance_matrix(body: str) -> tuple[list[tuple[str, str, str]], boo
 
 
 def _parse_readiness(body: str) -> tuple[str | None, str | None]:
-    """Return ``(declared, problem)`` for the implementer readiness declaration.
-
-    ``declared`` is one of the allowed declarations, or ``None`` when no
-    unambiguous checked declaration exists (``problem`` explains why).
-    """
     checked: list[str] = []
     for match in re.finditer(r"(?im)^\s*[-*+]\s*\[([ xX])\]\s*(.+)", body):
         marker, text = match.group(1), match.group(2).strip().lower()
         if marker not in ("x", "X"):
             continue
-        # Strip markdown decoration (the template wraps declarations in
-        # backticks and/or bold markers) before matching the declaration name.
         text = text.replace("`", "").replace("*", "")
         for declaration in CanonicalPRContract.ALLOWED_READINESS_DECLARATIONS:
             if text.startswith(declaration):
@@ -129,13 +155,10 @@ def _parse_readiness(body: str) -> tuple[str | None, str | None]:
     return checked[0], None
 
 
-# --- Validators -------------------------------------------------------------------
-
-
 def _title_validator(ctx: ValidationContext) -> Finding | None:
     title = ctx.pr.title.strip()
     if not title or title.lower() in CanonicalPRContract.PROHIBITED_TITLES:
-        return Finding(
+        return _finding(
             "V-010",
             "PR title is missing or a placeholder",
             Severity.BLOCKING,
@@ -148,14 +171,14 @@ def _body_validator(ctx: ValidationContext) -> Finding | None:
     body = ctx.body.strip()
     severity = _structural_severity(ctx)
     if not body:
-        return Finding(
+        return _finding(
             "V-020",
             "PR body is empty",
             severity,
             "the governance evidence package must be recorded in the PR description.",
         )
     if len(body) < 80:
-        return Finding(
+        return _finding(
             "V-020",
             "PR body lacks the governance evidence package",
             severity,
@@ -164,7 +187,7 @@ def _body_validator(ctx: ValidationContext) -> Finding | None:
     lowered = body.lower()
     for marker in CanonicalPRContract.PROHIBITED_PLACEHOLDERS:
         if marker in lowered:
-            return Finding(
+            return _finding(
                 "V-021",
                 "PR body contains template placeholders",
                 severity,
@@ -177,7 +200,7 @@ def _sections_validator(ctx: ValidationContext) -> Finding | None:
     required = CanonicalPRContract.REQUIRED_SECTIONS if ctx.code_change else CanonicalPRContract.MINIMAL_SECTIONS
     missing = [section for section in required if not _has_section(ctx.body, section)]
     if missing:
-        return Finding(
+        return _finding(
             "V-030",
             "PR body is missing required template sections",
             _structural_severity(ctx),
@@ -190,14 +213,14 @@ def _matrix_validator(ctx: ValidationContext) -> Finding | None:
     rows, placeholder = _parse_acceptance_matrix(ctx.body)
     severity = _structural_severity(ctx)
     if placeholder:
-        return Finding(
+        return _finding(
             "V-040",
             "acceptance-criteria matrix contains the template placeholder row",
             severity,
             "replace the placeholder row with real criteria and evidence.",
         )
     if not rows:
-        return Finding(
+        return _finding(
             "V-040",
             "acceptance-criteria matrix is missing",
             severity,
@@ -206,7 +229,7 @@ def _matrix_validator(ctx: ValidationContext) -> Finding | None:
     if not ctx.pr.draft:
         bad = [row for row in rows if row[1] in ("fail", "blocked")]
         if bad:
-            return Finding(
+            return _finding(
                 "V-040",
                 "merge-ready PR has FAIL or BLOCKED acceptance criteria",
                 Severity.BLOCKING,
@@ -219,14 +242,14 @@ def _readiness_validator(ctx: ValidationContext) -> Finding | None:
     declared, problem = _parse_readiness(ctx.body)
     severity = _structural_severity(ctx)
     if declared is None:
-        return Finding(
+        return _finding(
             "V-050",
             "implementer readiness declaration is missing or ambiguous",
             severity,
             problem or "exactly one checked declaration is required.",
         )
     if declared != "ready for review" and not ctx.pr.draft:
-        return Finding(
+        return _finding(
             "V-050",
             "PR is not declared READY FOR REVIEW",
             Severity.BLOCKING,
@@ -239,7 +262,7 @@ def _verification_validator(ctx: ValidationContext) -> Finding | None:
     if not ctx.code_change:
         return None
     if "replace with verification output" in ctx.body.lower():
-        return Finding(
+        return _finding(
             "V-060",
             "verification evidence is a template placeholder",
             _structural_severity(ctx),
@@ -250,7 +273,7 @@ def _verification_validator(ctx: ValidationContext) -> Finding | None:
 
 def _adr_references_validator(ctx: ValidationContext) -> Finding | None:
     if ctx.missing_references:
-        return Finding(
+        return _finding(
             "V-070",
             "PR references architecture records that do not exist",
             Severity.BLOCKING,
@@ -261,7 +284,7 @@ def _adr_references_validator(ctx: ValidationContext) -> Finding | None:
 
 def _mergeable_validator(ctx: ValidationContext) -> Finding | None:
     if ctx.pr.mergeable == "CONFLICTING":
-        return Finding(
+        return _finding(
             "V-080",
             "pull request has merge conflicts",
             Severity.BLOCKING,
@@ -271,7 +294,7 @@ def _mergeable_validator(ctx: ValidationContext) -> Finding | None:
 
 
 def _gate_self_modification_validator(ctx: ValidationContext) -> Finding | None:
-    touched = [f.filename for f in ctx.files if any(m in f.filename for m in GATE_PATH_MARKERS)]
+    touched = [f.filename for f in ctx.files if any(marker in f.filename for marker in GATE_PATH_MARKERS)]
     if touched:
         return Finding(
             "V-090",
@@ -294,22 +317,11 @@ def _draft_validator(ctx: ValidationContext) -> Finding | None:
 
 
 def is_trusted_dependency_pr(ctx: ValidationContext) -> bool:
-    """Returns True if the PR is verified to be a trusted automated dependency update.
-
-    A PR is classified as an automated dependency update only if:
-    1. The PR author is a verified bot account (e.g. dependabot[bot] or renovate[bot]).
-    2. The changed files ONLY modify strict dependency constraint, configuration, or lock files.
-    """
-    # 1. Author check: must be a trusted automated bot login.
     trusted_bots = {"dependabot[bot]", "renovate[bot]"}
     if ctx.pr.author_login not in trusted_bots:
         return False
-
-    # 2. Changed files check: must exclusively touch dependency configuration or lock files.
-    # Must NEVER allow modifications to source, scripts, tests, docs, or CI workflows.
     for f in ctx.files:
         filename = f.filename
-        # Check directories/paths that are strictly human-owned code or documentation
         if (
             filename.startswith("src/")
             or filename.startswith("scripts/")
@@ -318,16 +330,15 @@ def is_trusted_dependency_pr(ctx: ValidationContext) -> bool:
             or filename.startswith(".github/")
         ):
             return False
-        # Must only touch requirements/ or specific lockfiles in the repository root
         allowed_dirs = ("requirements/",)
-        allowed_root_files = ("pyproject.toml", "poetry.lock", "package-lock.json", "pnpm-lock.yaml")
-
-        is_allowed_dir = any(filename.startswith(d) for d in allowed_dirs)
-        is_allowed_file = filename in allowed_root_files
-
-        if not (is_allowed_dir or is_allowed_file):
+        allowed_root_files = (
+            "pyproject.toml",
+            "poetry.lock",
+            "package-lock.json",
+            "pnpm-lock.yaml",
+        )
+        if not (any(filename.startswith(directory) for directory in allowed_dirs) or filename in allowed_root_files):
             return False
-
     return True
 
 
@@ -348,7 +359,6 @@ _VALIDATORS: tuple[Validator, ...] = (
 def run_deterministic_engine(ctx: ValidationContext) -> DeterministicResult:
     """Run every deterministic validator against the PR context."""
     if is_trusted_dependency_pr(ctx):
-        # Automated Dependency Path: run a safe, streamlined subset of validators
         dependency_validators = (
             _title_validator,
             _adr_references_validator,
@@ -358,6 +368,5 @@ def run_deterministic_engine(ctx: ValidationContext) -> DeterministicResult:
         )
         findings = [validator(ctx) for validator in dependency_validators]
     else:
-        # Standard Manual Path for human PRs
         findings = [validator(ctx) for validator in _VALIDATORS]
     return DeterministicResult(findings=[finding for finding in findings if finding is not None])

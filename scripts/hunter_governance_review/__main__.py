@@ -41,6 +41,7 @@ Exit codes:
 from __future__ import annotations
 
 import argparse
+import json
 import os
 from collections.abc import Mapping
 
@@ -153,6 +154,16 @@ def _write_summary(
         lines.append("")
         lines.append("### Deterministic findings")
         lines.extend(f"- {finding.render()}" for finding in deterministic.findings)
+        lines.extend(
+            [
+                "",
+                "### Deterministic finding metadata",
+                "",
+                "```json",
+                json.dumps(deterministic.to_dict(), sort_keys=True, indent=2),
+                "```",
+            ]
+        )
     if context is not None:
         lines.append("")
         lines.append("### Authoritative context coverage manifest")
@@ -241,12 +252,6 @@ def run_review(
     context_error: str | None = None
     if evidence_error is None:
         try:
-            # head_sha/changed_paths let a PR that genuinely introduces a new
-            # canonical record (a new ADR/ADPR, or another referenced
-            # governed document) resolve it as a proposed record rather than
-            # deadlocking on "it can't exist yet because this is the PR that
-            # adds it" -- see context.py's module docstring for the full
-            # base-trusted-authority vs. head-proposed-evidence boundary.
             context_manifest = resolve_context(
                 gh,
                 base_sha=pair.target_base_sha,
@@ -265,15 +270,15 @@ def run_review(
         assert context_manifest is not None
         try:
             deterministic = run_deterministic_engine(
-                ValidationContext(pr=pr, files=files, missing_references=context_manifest.missing_references)
+                ValidationContext(
+                    pr=pr,
+                    files=files,
+                    missing_references=context_manifest.missing_references,
+                )
             )
         except Exception as exc:  # internal validator exception -> REVIEW_FAILED
             validator_error = f"internal validator exception: {exc!r}"
 
-    # Re-verify the review pair immediately before publishing: an approval
-    # must apply to the exact pair actually reviewed above -- if either SHA
-    # advanced while resolving evidence/context/deterministic findings,
-    # publish no approval regardless of what was found.
     current, pair_fresh, pair_fresh_error = _resolve_pair_freshness(gh, pr.number, pair)
 
     if evidence_error is not None:
@@ -283,16 +288,14 @@ def run_review(
     elif validator_error is not None:
         decision = Decision(Outcome.REVIEW_FAILED, validator_error)
     else:
-        decision = decide(deterministic=deterministic, pair_fresh=pair_fresh, pair_fresh_error=pair_fresh_error)
+        decision = decide(
+            deterministic=deterministic,
+            pair_fresh=pair_fresh,
+            pair_fresh_error=pair_fresh_error,
+        )
 
     target_sha = current.head_oid if current is not None else pair.source_head_sha
     state = outcome_to_check_state(decision.outcome)
-    # The stamped revision describes the state this run actually evaluated --
-    # `pair` plus the PR facts read alongside it -- never the state re-read
-    # afterwards. When the pull request advanced mid-review, the decision is
-    # already REVIEW_FAILED, and stamping the evaluated (now superseded)
-    # revision is what makes the consumer correctly disregard this verdict for
-    # the newer state instead of applying it.
     revision = governance_revision(
         GovernanceInputs(
             pull_request_number=pr.number,
@@ -307,12 +310,16 @@ def run_review(
         )
     )
     description = build_status_description(decision, pair, revision)
-    target_url = f"{env.get('GITHUB_SERVER_URL', 'https://github.com')}/{repository}/actions/runs/{run_id}"
+    target_url = f"{env.get('GITHUB_SERVER_URL', 'https://github.com')}/" f"{repository}/actions/runs/{run_id}"
 
     print(f"[Outcome] {decision.outcome.value}")
     print(f"[Reason] {decision.reason}")
     for finding in deterministic.findings:
         print(f"[Finding] {finding.render()}")
+    if deterministic.classification_errors:
+        print(
+            "[FindingMetadata] incomplete blocking classifications: " + ", ".join(deterministic.classification_errors)
+        )
     if context_manifest is not None:
         for entry in context_manifest.entries:
             print(
@@ -320,7 +327,7 @@ def run_review(
                 f"provenance={entry.provenance} sha256={entry.sha256[:12] or 'n/a'}"
             )
     print(f"[Revision] governance revision {revision} for PR #{pr.number}")
-    print(f"[StatusCheck] context={CHECK_CONTEXT!r} state={state.value} on {target_sha[:12]}")
+    print(f"[StatusCheck] context={CHECK_CONTEXT!r} state={state.value} " f"on {target_sha[:12]}")
 
     if not args.dry_run:
         try:

@@ -1,5 +1,6 @@
 import os
 import sys
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -43,7 +44,6 @@ class MockGitHubServer:
                     self.pulls[pr_num]["body"] = payload["body"]
                 return {}
 
-        # GET requests
         if clean_path.startswith("pulls/"):
             pr_num = int(clean_path.split("/")[1])
             return self.pulls.get(pr_num, {})
@@ -74,12 +74,22 @@ def gh():
     hunter_draft_promotion_signal.token = "fake-token"
     hunter_draft_promotion_signal.run_url = "https://github.com/fafa33/Project-Hunter/actions/runs/1"
 
-    with patch("hunter_draft_promotion_signal.request_json", side_effect=server.request_json):
+    with (
+        patch("hunter_draft_promotion_signal.request_json", side_effect=server.request_json),
+        patch("hunter_draft_promotion_signal.review_feedback_blockers", return_value=[]),
+    ):
         yield server
 
 
-def green_pr(number, sha, body, draft=True):
-    return {"number": number, "draft": draft, "head": {"sha": sha}, "body": body}
+def green_pr(number, sha, body, draft=True, state="open", base="main"):
+    return {
+        "number": number,
+        "state": state,
+        "draft": draft,
+        "base": {"ref": base},
+        "head": {"sha": sha},
+        "body": body,
+    }
 
 
 def green_checks(gh, sha):
@@ -91,17 +101,7 @@ def green_checks(gh, sha):
     gh.statuses[sha] = [{"context": "Hunter Governance Review", "state": "success", "id": 1}]
 
 
-# ====================================================================================
-# parse_readiness_declaration: the silent-crash regression case and fail-closed guards
-# ====================================================================================
-
-
 def test_single_declaration_line_does_not_crash():
-    """Regression: a PR body carrying only the one checked declaration line (no
-    unchecked CHANGES REQUIRED/BLOCKED lines) must parse successfully instead of
-    raising RuntimeError. This is the exact shape that previously crashed the
-    workflow silently (no status update, no comment, no error surfaced to the PR).
-    """
     body = "## Implementer readiness declaration\n\n- [x] `READY FOR REVIEW` — all good.\n"
     matches, checked_label = hunter_draft_promotion_signal.parse_readiness_declaration(body)
     assert len(matches) == 1
@@ -109,9 +109,6 @@ def test_single_declaration_line_does_not_crash():
 
 
 def test_all_three_lines_one_checked_still_works():
-    """The original, template-shaped body (all three labels present, one checked)
-    must continue to work exactly as before.
-    """
     body = "- [ ] `READY FOR REVIEW` — a\n" "- [x] `CHANGES REQUIRED` — b\n" "- [ ] `BLOCKED` — c\n"
     matches, checked_label = hunter_draft_promotion_signal.parse_readiness_declaration(body)
     assert len(matches) == 3
@@ -141,15 +138,7 @@ def test_duplicated_label_fails_closed():
         hunter_draft_promotion_signal.parse_readiness_declaration(body)
 
 
-# ====================================================================================
-# synchronize_ready_metadata: no-op vs. rewrite vs. fail-closed (no partial mutation)
-# ====================================================================================
-
-
 def test_synchronize_single_line_ready_is_a_noop(gh):
-    """The crash-case body is already synchronized (READY FOR REVIEW is checked),
-    so no PATCH should be issued.
-    """
     body = "- [x] `READY FOR REVIEW` — all good.\n"
     hunter_draft_promotion_signal.synchronize_ready_metadata(123, body)
     assert 123 not in gh.patched_bodies
@@ -177,18 +166,7 @@ def test_synchronize_ambiguous_body_raises_and_does_not_patch(gh):
     assert 123 not in gh.patched_bodies
 
 
-# ====================================================================================
-# evaluate(): end-to-end regression — the crash case must reach success + comment
-# ====================================================================================
-
-
 def test_evaluate_with_single_declaration_line_reaches_success_and_comments(gh):
-    """End-to-end regression for the exact scenario observed on PR #243: a Draft
-    PR with every exact-head check green and a body carrying only the single
-    checked READY FOR REVIEW line must reach a published success status and post
-    the promotion comment, instead of the job crashing with an unhandled
-    RuntimeError and leaving the PR with no signal at all.
-    """
     sha = "sha_123"
     body = "## Implementer readiness declaration\n\n- [x] `READY FOR REVIEW` — all good.\n"
     gh.pulls[123] = green_pr(123, sha, body)
@@ -202,12 +180,46 @@ def test_evaluate_with_single_declaration_line_reaches_success_and_comments(gh):
     assert "Hunter Draft Promotion" in gh.comments[123][0]["body"]
 
 
+def test_closed_draft_pr_is_outside_promotion_scope(gh):
+    sha = "sha_closed"
+    body = "- [x] `READY FOR REVIEW` — stale.\n"
+    gh.pulls[280] = green_pr(280, sha, body, state="closed")
+    green_checks(gh, sha)
+
+    hunter_draft_promotion_signal.evaluate({"number": 280, "draft": True})
+
+    assert gh.published == []
+    assert 280 not in gh.patched_bodies
+    assert not gh.comments.get(280)
+
+
+def test_non_main_draft_pr_is_outside_promotion_scope(gh):
+    sha = "sha_other_base"
+    body = "- [x] `READY FOR REVIEW` — stale.\n"
+    gh.pulls[281] = green_pr(281, sha, body, base="release")
+    green_checks(gh, sha)
+
+    hunter_draft_promotion_signal.evaluate({"number": 281, "draft": True})
+
+    assert gh.published == []
+    assert 281 not in gh.patched_bodies
+    assert not gh.comments.get(281)
+
+
+def test_live_scope_is_reread_instead_of_trusting_event_payload(gh):
+    sha = "sha_live_scope"
+    body = "- [x] `READY FOR REVIEW` — valid.\n"
+    gh.pulls[282] = green_pr(282, sha, body)
+    green_checks(gh, sha)
+
+    hunter_draft_promotion_signal.evaluate(
+        {"number": 282, "state": "closed", "draft": False, "base": {"ref": "release"}}
+    )
+
+    assert gh.published[-1][1] == "success"
+
+
 def test_evaluate_with_ambiguous_declaration_does_not_silently_disappear(gh):
-    """When the declaration is genuinely unparseable, evaluate() must still raise
-    rather than silently doing nothing — the caller (main()) is responsible for
-    surfacing this as a failed run, which is at least visible in Actions, unlike
-    a successful-looking no-op.
-    """
     sha = "sha_123"
     body = "- [ ] `READY FOR REVIEW` — a\n- [ ] `CHANGES REQUIRED` — b\n"
     gh.pulls[123] = green_pr(123, sha, body)
@@ -217,3 +229,127 @@ def test_evaluate_with_ambiguous_declaration_does_not_silently_disappear(gh):
         hunter_draft_promotion_signal.evaluate(gh.pulls[123])
 
     assert not any(state == "success" for _sha, state, _desc in gh.published)
+
+
+def test_unresolved_review_thread_blocks_promotion_and_metadata_mutation(gh):
+    sha = "sha_review_blocked"
+    body = "- [ ] `READY FOR REVIEW` — pending review.\n- [x] `CHANGES REQUIRED` — review feedback open.\n"
+    gh.pulls[275] = green_pr(275, sha, body)
+    green_checks(gh, sha)
+
+    with patch(
+        "hunter_draft_promotion_signal.review_feedback_blockers",
+        return_value=["unresolved review threads=1"],
+    ):
+        hunter_draft_promotion_signal.evaluate(gh.pulls[275])
+
+    assert gh.published[-1][1] == "pending"
+    assert "unresolved review threads=1" in gh.published[-1][2]
+    assert 275 not in gh.patched_bodies
+    assert not gh.comments.get(275)
+
+
+def test_changes_requested_review_blocks_promotion(gh):
+    sha = "sha_changes_requested"
+    body = "- [ ] `READY FOR REVIEW` — pending review.\n- [x] `CHANGES REQUIRED` — review feedback open.\n"
+    gh.pulls[276] = green_pr(276, sha, body)
+    green_checks(gh, sha)
+
+    with patch(
+        "hunter_draft_promotion_signal.review_feedback_blockers",
+        return_value=["changes requested by reviewer"],
+    ):
+        hunter_draft_promotion_signal.evaluate(gh.pulls[276])
+
+    assert gh.published[-1][1] == "pending"
+    assert "changes requested by reviewer" in gh.published[-1][2]
+    assert 276 not in gh.patched_bodies
+
+
+def test_review_feedback_is_rechecked_before_metadata_mutation(gh):
+    sha = "sha_review_race"
+    body = "- [ ] `READY FOR REVIEW` — pending review.\n- [x] `CHANGES REQUIRED` — waiting.\n"
+    gh.pulls[277] = green_pr(277, sha, body)
+    green_checks(gh, sha)
+
+    with patch(
+        "hunter_draft_promotion_signal.review_feedback_blockers",
+        side_effect=[[], ["unresolved review threads=1"]],
+    ):
+        hunter_draft_promotion_signal.evaluate(gh.pulls[277])
+
+    assert gh.published[-1][1] == "pending"
+    assert 277 not in gh.patched_bodies
+    assert not gh.comments.get(277)
+
+
+def test_review_feedback_blockers_include_unacknowledged_top_level_comments():
+    hunter_draft_promotion_signal.repo = "fafa33/Project-Hunter"
+    hunter_draft_promotion_signal.token = "fake-token"
+    with (
+        patch.object(
+            hunter_draft_promotion_signal.merge_readiness,
+            "unresolved_review_thread_ids",
+            return_value=(),
+        ),
+        patch.object(
+            hunter_draft_promotion_signal.merge_readiness,
+            "current_changes_requested_reviewers",
+            return_value=(),
+        ),
+        patch.object(
+            hunter_draft_promotion_signal.merge_readiness,
+            "unacknowledged_top_level_comments",
+            return_value=(101, 102),
+        ),
+    ):
+        blockers = hunter_draft_promotion_signal.review_feedback_blockers(275)
+
+    assert blockers == ["unacknowledged top-level comments=2"]
+
+
+def test_reconcile_open_draft_prs_rechecks_every_current_draft():
+    drafts = [
+        green_pr(275, "sha_a", "- [x] `READY FOR REVIEW` — a.\n"),
+        green_pr(276, "sha_b", "- [x] `READY FOR REVIEW` — b.\n"),
+    ]
+    with (
+        patch("hunter_draft_promotion_signal.open_draft_prs", return_value=drafts),
+        patch("hunter_draft_promotion_signal.evaluate") as evaluate,
+    ):
+        hunter_draft_promotion_signal.reconcile_open_draft_prs()
+
+    assert [call.args[0]["number"] for call in evaluate.call_args_list] == [275, 276]
+
+
+def test_reconcile_open_draft_prs_isolates_failure_and_continues():
+    drafts = [
+        green_pr(275, "sha_a", "- [x] `READY FOR REVIEW` — a.\n"),
+        green_pr(276, "sha_b", "- [x] `READY FOR REVIEW` — b.\n"),
+    ]
+    visited: list[int] = []
+
+    def evaluate(pr):
+        visited.append(pr["number"])
+        if pr["number"] == 275:
+            raise RuntimeError("invalid readiness declaration")
+
+    with (
+        patch("hunter_draft_promotion_signal.open_draft_prs", return_value=drafts),
+        patch("hunter_draft_promotion_signal.evaluate", side_effect=evaluate),
+    ):
+        with pytest.raises(RuntimeError, match="PR #275: RuntimeError: invalid readiness declaration"):
+            hunter_draft_promotion_signal.reconcile_open_draft_prs()
+
+    assert visited == [275, 276]
+
+
+def test_workflow_reconciles_when_review_feedback_changes():
+    workflow = (
+        Path(__file__).resolve().parents[1] / ".github" / "workflows" / "hunter-draft-promotion-signal.yml"
+    ).read_text(encoding="utf-8")
+    assert "pull_request_review:" in workflow
+    assert "pull_request_review_comment:" in workflow
+    assert "issue_comment:" in workflow
+    assert "schedule:" in workflow
+    assert 'cron: "*/5 * * * *"' in workflow

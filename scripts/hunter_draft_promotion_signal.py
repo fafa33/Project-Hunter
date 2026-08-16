@@ -4,6 +4,8 @@ import re
 import urllib.request
 from typing import Any
 
+import hunter_merge_readiness as merge_readiness
+
 # Configuration
 context = "Hunter Draft Promotion"
 required_checks = ("Quality Gates", "dependency-review", "CodeQL")
@@ -98,6 +100,34 @@ def latest_commit_status(sha: str, status_context: str) -> dict[str, Any] | None
     return max(matches, key=lambda status: int(status.get("id", 0)))
 
 
+def review_feedback_blockers(pr_number: int) -> list[str]:
+    """Read the same canonical review blockers used by Hunter Merge Readiness.
+
+    Draft promotion is advisory, but it must never claim a PR is ready for
+    review while the authoritative merge-readiness reader can already see
+    unresolved review feedback. Reuse the canonical readers rather than
+    maintaining a second interpretation of review state here.
+    """
+    merge_readiness.repo = repo
+    merge_readiness.repo_owner = repo.split("/", 1)[0] if "/" in repo else ""
+    merge_readiness.token = token
+
+    waiting: list[str] = []
+    unresolved = merge_readiness.unresolved_review_thread_ids(pr_number)
+    if unresolved:
+        waiting.append(f"unresolved review threads={len(unresolved)}")
+
+    changes_requested = merge_readiness.current_changes_requested_reviewers(pr_number)
+    if changes_requested:
+        waiting.append("changes requested by " + ", ".join(changes_requested))
+
+    unacknowledged = merge_readiness.unacknowledged_top_level_comments(pr_number)
+    if unacknowledged:
+        waiting.append(f"unacknowledged top-level comments={len(unacknowledged)}")
+
+    return waiting
+
+
 def parse_readiness_declaration(body: str) -> tuple[list[re.Match], str]:
     """Parses the Implementer Readiness Declaration checkboxes in a PR body.
 
@@ -168,24 +198,49 @@ def post_once(pr_number: int, sha: str) -> None:
             "body": (
                 f"{marker}\n"
                 "✅ **Hunter Draft Promotion:** all exact-head prerequisites "
-                "have passed and implementer readiness metadata is synchronized "
-                "to **READY FOR REVIEW**. The operator may now manually mark this "
-                "Draft PR **Ready for Review**.\n\n"
+                "and current review-feedback gates have passed, and implementer "
+                "readiness metadata is synchronized to **READY FOR REVIEW**. "
+                "The operator may now manually mark this Draft PR **Ready for Review**.\n\n"
                 "Hunter Governance Review and Hunter Merge Readiness remain the "
-                "merge authorities; review feedback must still be resolved or "
-                "explicitly acknowledged under the repository merge policy."
+                "merge authorities; any newly opened review feedback invalidates "
+                "this advisory signal until reconciled."
             )
         },
     )
 
 
+def current_promotion_scope(pr_number: int) -> dict[str, Any] | None:
+    """Return the live PR only when it is inside Draft-promotion authority.
+
+    Event payloads are hints, never authority. In particular, ``issue_comment``
+    cannot be branch-filtered by GitHub, so every path must re-read current PR
+    state and reject closed PRs, non-main targets, and non-Draft PRs before any
+    readiness status or PR metadata can be mutated.
+    """
+    current = request_json("GET", f"pulls/{pr_number}")
+    if (current.get("state") or "").lower() != "open":
+        print(f"PR #{pr_number} is not open; skipping Draft promotion evaluation.")
+        return None
+    if ((current.get("base") or {}).get("ref") or "") != "main":
+        print(f"PR #{pr_number} does not target main; skipping Draft promotion evaluation.")
+        return None
+    if not current.get("draft"):
+        print(f"PR #{pr_number} is not Draft; skipping.")
+        return None
+    return current
+
+
 def evaluate(pr: dict[str, Any]) -> None:
-    if not pr.get("draft"):
-        print(f"PR #{pr.get('number')} is not Draft; skipping.")
+    pr_number = int(pr.get("number") or 0)
+    if not pr_number:
+        print("PR payload has no number; refusing Draft promotion evaluation.")
         return
 
-    sha = pr["head"]["sha"]
-    pr_number = pr["number"]
+    current = current_promotion_scope(pr_number)
+    if current is None:
+        return
+
+    sha = current["head"]["sha"]
     latest: dict[str, dict[str, Any]] = {}
     for run in exact_head_check_runs(sha):
         name = run.get("name")
@@ -211,18 +266,55 @@ def evaluate(pr: dict[str, Any]) -> None:
     elif governance.get("state") != "success":
         waiting.append(f"{governance_context}={governance.get('state') or 'pending'}")
 
+    waiting.extend(review_feedback_blockers(pr_number))
+
     if waiting:
-        publish(sha, "pending", "Waiting for exact-head checks: " + ", ".join(waiting))
+        publish(sha, "pending", "Waiting for Draft promotion prerequisites: " + ", ".join(waiting))
         return
 
-    current = request_json("GET", f"pulls/{pr_number}")
-    if not current.get("draft") or current.get("head", {}).get("sha") != sha:
+    current = current_promotion_scope(pr_number)
+    if current is None or current.get("head", {}).get("sha") != sha:
         print("PR state/head changed during evaluation; refusing metadata mutation.")
         return
 
+    # Re-read review feedback immediately before mutating metadata. This closes
+    # the practical race where any canonical feedback blocker is introduced
+    # after the initial prerequisite read but before READY FOR REVIEW is synchronized.
+    feedback_waiting = review_feedback_blockers(pr_number)
+    if feedback_waiting:
+        publish(
+            sha,
+            "pending",
+            "Waiting for Draft promotion prerequisites: " + ", ".join(feedback_waiting),
+        )
+        return
+
     synchronize_ready_metadata(pr_number, current.get("body") or "")
-    publish(sha, "success", "Ready to promote from Draft; metadata synchronized.")
+    publish(sha, "success", "Ready to promote from Draft; checks and review feedback are clear.")
     post_once(pr_number, sha)
+
+
+def reconcile_open_draft_prs() -> None:
+    """Reconcile every open Draft independently, then fail if any evaluation failed.
+
+    A scheduled sweep is a repository-wide reconciliation pass. One malformed PR
+    must fail closed for itself without starving later Draft PRs in the same
+    sweep. We therefore isolate each evaluation, continue through the full live
+    candidate set, and raise one aggregate error only after every Draft had a
+    chance to reconcile.
+    """
+    failures: list[str] = []
+    for pr in open_draft_prs():
+        pr_number = int(pr.get("number") or 0)
+        try:
+            evaluate(pr)
+        except Exception as exc:
+            label = f"PR #{pr_number}" if pr_number else "Draft PR with missing number"
+            failures.append(f"{label}: {type(exc).__name__}: {exc}")
+            print(f"Draft promotion reconciliation failed for {label}: {type(exc).__name__}: {exc}")
+
+    if failures:
+        raise RuntimeError("Draft promotion sweep completed with isolated failures: " + " | ".join(failures))
 
 
 def main() -> None:
@@ -236,6 +328,22 @@ def main() -> None:
         evaluate(event["pull_request"])
         raise SystemExit(0)
 
+    if event_name == "issue_comment":
+        issue = event.get("issue") or {}
+        if "pull_request" not in issue:
+            print("issue_comment event is not for a pull request; nothing to evaluate.")
+            raise SystemExit(0)
+        pr_number = int(issue.get("number") or 0)
+        if not pr_number:
+            print("issue_comment event has no pull request number; nothing to evaluate.")
+            raise SystemExit(0)
+        evaluate({"number": pr_number})
+        raise SystemExit(0)
+
+    if event_name == "schedule":
+        reconcile_open_draft_prs()
+        raise SystemExit(0)
+
     if event_name == "push":
         for pr in open_draft_prs():
             publish(pr["head"]["sha"], "pending", "Target base advanced; waiting for refreshed governance.")
@@ -244,8 +352,7 @@ def main() -> None:
     workflow_run = event.get("workflow_run", {})
     workflow_name = workflow_run.get("name")
     if workflow_name == "Hunter Governance Review Reconcile":
-        for pr in open_draft_prs():
-            evaluate(pr)
+        reconcile_open_draft_prs()
         raise SystemExit(0)
 
     sha = workflow_run.get("head_sha")

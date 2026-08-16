@@ -14,6 +14,27 @@ on:
       - reopened
       - synchronize
       - converted_to_draft
+  pull_request_review:
+    types:
+      - submitted
+      - edited
+      - dismissed
+  pull_request_review_comment:
+    types:
+      - created
+      - edited
+      - deleted
+  issue_comment:
+    types:
+      - created
+      - edited
+      - deleted
+  # GitHub exposes no webhook for review-thread resolve/reopen or reaction
+  # add/remove. Periodic reconciliation is therefore the deterministic safety
+  # net that prevents a stale green/pending Draft Promotion signal from surviving
+  # those state changes indefinitely.
+  schedule:
+    - cron: "*/5 * * * *"
   push:
     branches:
       - main

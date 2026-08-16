@@ -206,6 +206,33 @@ For non-blocking fixes the demonstration is recommended but not required.
 Tests that pass because a mock reproduces the implementation's internals do not
 satisfy this contract.
 
+## Root-Cause Hardening and Cross-PR Regression Prevention
+
+Blocking-finding classification and reporting are owned by `docs/AI_REVIEW_PROTOCOL.md`. This contract consumes that review result; it does not redefine review workflow or classification semantics.
+
+When an independent contribution review classifies a confirmed blocking finding as **systemic**, correcting only the current Pull Request does not satisfy this contract. The implementation shall add a durable guard at the earliest reliable reusable boundary identified by the review or verifier and appropriate to the failure mode.
+
+Such a guard may include, where appropriate:
+
+- a non-vacuous regression test;
+- a deterministic validator or preflight check;
+- a schema or type constraint;
+- a safer public interface;
+- a repository template or generator correction;
+- a CI enforcement rule;
+- a canonical agent instruction;
+- another deterministic mechanism that prevents or reliably detects recurrence before the same defect reaches independent review again.
+
+The selected guard shall address the defect class rather than only the specific instance that triggered the finding.
+
+When a blocking finding is classified as **isolated** by the independent review protocol, resolution requires evidence appropriate to the specific defect but does not by itself create a mandatory reusable guard.
+
+A later Pull Request that reintroduces a previously understood and preventable blocking defect class is evidence, under `docs/AI_REVIEW_PROTOCOL.md`, that the prior systemic hardening was incomplete. The implementation shall revisit and strengthen the reusable guard rather than treating recurrence as a new one-off correction.
+
+This requirement does not mandate a new automated check for every finding. The guard must be proportionate, deterministic where practical, and placed at the earliest reliable boundary. Documentation-only or truly one-off findings may be resolved with evidence appropriate to their nature.
+
+The lifecycle, finding classification, review outcome, verification, and merge-readiness semantics remain governed by `docs/DEVELOPMENT_GOVERNANCE.md` and `docs/AI_REVIEW_PROTOCOL.md`. This section owns only the implementation obligation created after the canonical review classification.
+
 ---
 
 # Compatibility Contract
@@ -245,6 +272,7 @@ Project readiness and repository acceptance remain governed by `DEVELOPMENT_GOVE
 | Architecture documents | System architecture |
 | ADRs | Architectural decisions |
 | DEVELOPMENT_GOVERNANCE | Development lifecycle |
+| AI_REVIEW_PROTOCOL | Contribution-review finding classification and review reporting |
 | This document | Implementation obligations |
 
 ---
@@ -257,7 +285,8 @@ This document owns:
 - implementation boundaries;
 - implementation consistency;
 - implementation compatibility;
-- implementation verification requirements.
+- implementation verification requirements;
+- durable implementation hardening required after canonical review classification.
 
 This document does not own:
 
@@ -265,6 +294,7 @@ This document does not own:
 - engineering principles;
 - architecture;
 - runtime design;
+- contribution-review finding classification or reporting;
 - development workflow;
 - Sprint management;
 - operational procedures.

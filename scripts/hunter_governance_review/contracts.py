@@ -105,24 +105,67 @@ class Severity(Enum):
     BLOCKING = "blocking"
 
 
+class FindingClassification(Enum):
+    """Canonical contribution-review root-cause classifications.
+
+    ``docs/AI_REVIEW_PROTOCOL.md`` owns the semantics. This enum is only the
+    typed transport representation used by the deterministic governance gate.
+    """
+
+    ISOLATED = "isolated"
+    SYSTEMIC = "systemic"
+
+
 @dataclass(frozen=True)
 class Finding:
-    """A deterministic validator finding."""
+    """A deterministic validator finding with review-protocol metadata.
+
+    Blocking findings are fail-closed when canonical classification metadata
+    is incomplete: they remain blocking and ``classification_complete`` is
+    false, so a verifier can never treat an unclassified blocker as resolved.
+    """
 
     validator_id: str
     title: str
     severity: Severity
     detail: str
+    classification: FindingClassification | None = None
+    classification_evidence: str | None = None
+    reusable_boundary: str | None = None
+
+    @property
+    def classification_complete(self) -> bool:
+        if self.severity is not Severity.BLOCKING:
+            return True
+        if self.classification is None or not (self.classification_evidence or "").strip():
+            return False
+        if self.classification is FindingClassification.SYSTEMIC:
+            return bool((self.reusable_boundary or "").strip())
+        return self.reusable_boundary is None
 
     def render(self) -> str:
-        return f"[{self.validator_id}] {self.title}: {self.detail}"
+        base = f"[{self.validator_id}] {self.title}: {self.detail}"
+        if self.severity is not Severity.BLOCKING:
+            return base
+        classification = self.classification.value if self.classification is not None else "MISSING"
+        evidence = self.classification_evidence or "MISSING"
+        boundary = self.reusable_boundary or "n/a"
+        completeness = "complete" if self.classification_complete else "INCOMPLETE"
+        return (
+            f"{base} [classification={classification}; evidence={evidence}; "
+            f"reusable_boundary={boundary}; metadata={completeness}]"
+        )
 
-    def to_dict(self) -> dict[str, str]:
+    def to_dict(self) -> dict[str, str | bool | None]:
         return {
             "validator_id": self.validator_id,
             "title": self.title,
             "severity": self.severity.value,
             "detail": self.detail,
+            "classification": self.classification.value if self.classification is not None else None,
+            "classification_evidence": self.classification_evidence,
+            "reusable_boundary": self.reusable_boundary,
+            "classification_complete": self.classification_complete,
         }
 
 
@@ -136,6 +179,22 @@ class DeterministicResult:
     def blocking(self) -> bool:
         """True when at least one blocking finding exists."""
         return any(f.severity is Severity.BLOCKING for f in self.findings)
+
+    @property
+    def classification_errors(self) -> tuple[str, ...]:
+        """Blocking findings whose required review metadata is incomplete."""
+        return tuple(
+            finding.validator_id
+            for finding in self.findings
+            if finding.severity is Severity.BLOCKING and not finding.classification_complete
+        )
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "findings": [finding.to_dict() for finding in self.findings],
+            "blocking": self.blocking,
+            "classification_errors": list(self.classification_errors),
+        }
 
 
 @dataclass(frozen=True)
@@ -183,7 +242,7 @@ class ContextEntry:
     and structurally validated before being trusted even provisionally --
     never fabricated authority from a canonical-looking filename alone.
     ``ref`` records the exact commit this entry's content was fetched from,
-    consistent with ``provenance`` (``base_sha`` for ``"base"``, ``head_sha``
+    consistent with ``provenance`` (``base_sha`` for ``"base"`` or ``head_sha``
     for ``"head"``).
     """
 
