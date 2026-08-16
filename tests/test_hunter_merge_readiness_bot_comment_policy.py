@@ -129,9 +129,7 @@ def test_acknowledgement_without_a_reaction_time_fails_closed(gh):
 def test_a_non_thumbsup_reaction_is_not_an_acknowledgement(gh):
     ready_pull_request(gh)
     gh.add_comment(501, 906)
-    gh.reactions[906] = [
-        {"user": {"login": "fafa33"}, "content": "eyes", "created_at": "2026-08-13T00:00:00Z"}
-    ]
+    gh.reactions[906] = [{"user": {"login": "fafa33"}, "content": "eyes", "created_at": "2026-08-13T00:00:00Z"}]
     assert core.reconcile_pr(501).state == "failure"
 
 
