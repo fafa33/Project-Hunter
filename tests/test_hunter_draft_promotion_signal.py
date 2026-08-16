@@ -1,5 +1,6 @@
 import os
 import sys
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -74,7 +75,10 @@ def gh():
     hunter_draft_promotion_signal.token = "fake-token"
     hunter_draft_promotion_signal.run_url = "https://github.com/fafa33/Project-Hunter/actions/runs/1"
 
-    with patch("hunter_draft_promotion_signal.request_json", side_effect=server.request_json):
+    with (
+        patch("hunter_draft_promotion_signal.request_json", side_effect=server.request_json),
+        patch("hunter_draft_promotion_signal.review_feedback_blockers", return_value=[]),
+    ):
         yield server
 
 
@@ -178,7 +182,7 @@ def test_synchronize_ambiguous_body_raises_and_does_not_patch(gh):
 
 
 # ====================================================================================
-# evaluate(): end-to-end regression — the crash case must reach success + comment
+# evaluate(): end-to-end regression — promotion must include live review feedback
 # ====================================================================================
 
 
@@ -217,3 +221,63 @@ def test_evaluate_with_ambiguous_declaration_does_not_silently_disappear(gh):
         hunter_draft_promotion_signal.evaluate(gh.pulls[123])
 
     assert not any(state == "success" for _sha, state, _desc in gh.published)
+
+
+def test_unresolved_review_thread_blocks_promotion_and_metadata_mutation(gh):
+    sha = "sha_review_blocked"
+    body = "- [ ] `READY FOR REVIEW` — pending review.\n- [x] `CHANGES REQUIRED` — review feedback open.\n"
+    gh.pulls[275] = green_pr(275, sha, body)
+    green_checks(gh, sha)
+
+    with patch(
+        "hunter_draft_promotion_signal.review_feedback_blockers",
+        return_value=["unresolved review threads=1"],
+    ):
+        hunter_draft_promotion_signal.evaluate(gh.pulls[275])
+
+    assert gh.published[-1][1] == "pending"
+    assert "unresolved review threads=1" in gh.published[-1][2]
+    assert 275 not in gh.patched_bodies
+    assert not gh.comments.get(275)
+
+
+def test_changes_requested_review_blocks_promotion(gh):
+    sha = "sha_changes_requested"
+    body = "- [ ] `READY FOR REVIEW` — pending review.\n- [x] `CHANGES REQUIRED` — review feedback open.\n"
+    gh.pulls[276] = green_pr(276, sha, body)
+    green_checks(gh, sha)
+
+    with patch(
+        "hunter_draft_promotion_signal.review_feedback_blockers",
+        return_value=["changes requested by reviewer"],
+    ):
+        hunter_draft_promotion_signal.evaluate(gh.pulls[276])
+
+    assert gh.published[-1][1] == "pending"
+    assert "changes requested by reviewer" in gh.published[-1][2]
+    assert 276 not in gh.patched_bodies
+
+
+def test_review_feedback_is_rechecked_before_metadata_mutation(gh):
+    sha = "sha_review_race"
+    body = "- [ ] `READY FOR REVIEW` — pending review.\n- [x] `CHANGES REQUIRED` — waiting.\n"
+    gh.pulls[277] = green_pr(277, sha, body)
+    green_checks(gh, sha)
+
+    with patch(
+        "hunter_draft_promotion_signal.review_feedback_blockers",
+        side_effect=[[], ["unresolved review threads=1"]],
+    ):
+        hunter_draft_promotion_signal.evaluate(gh.pulls[277])
+
+    assert gh.published[-1][1] == "pending"
+    assert 277 not in gh.patched_bodies
+    assert not gh.comments.get(277)
+
+
+def test_workflow_reconciles_when_review_feedback_changes():
+    workflow = (
+        Path(__file__).resolve().parents[1] / ".github" / "workflows" / "hunter-draft-promotion-signal.yml"
+    ).read_text(encoding="utf-8")
+    assert "pull_request_review:" in workflow
+    assert "pull_request_review_comment:" in workflow
