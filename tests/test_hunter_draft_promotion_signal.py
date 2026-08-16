@@ -44,7 +44,6 @@ class MockGitHubServer:
                     self.pulls[pr_num]["body"] = payload["body"]
                 return {}
 
-        # GET requests
         if clean_path.startswith("pulls/"):
             pr_num = int(clean_path.split("/")[1])
             return self.pulls.get(pr_num, {})
@@ -102,11 +101,6 @@ def green_checks(gh, sha):
     gh.statuses[sha] = [{"context": "Hunter Governance Review", "state": "success", "id": 1}]
 
 
-# ====================================================================================
-# parse_readiness_declaration: the silent-crash regression case and fail-closed guards
-# ====================================================================================
-
-
 def test_single_declaration_line_does_not_crash():
     body = "## Implementer readiness declaration\n\n- [x] `READY FOR REVIEW` — all good.\n"
     matches, checked_label = hunter_draft_promotion_signal.parse_readiness_declaration(body)
@@ -144,11 +138,6 @@ def test_duplicated_label_fails_closed():
         hunter_draft_promotion_signal.parse_readiness_declaration(body)
 
 
-# ====================================================================================
-# synchronize_ready_metadata: no-op vs. rewrite vs. fail-closed (no partial mutation)
-# ====================================================================================
-
-
 def test_synchronize_single_line_ready_is_a_noop(gh):
     body = "- [x] `READY FOR REVIEW` — all good.\n"
     hunter_draft_promotion_signal.synchronize_ready_metadata(123, body)
@@ -175,11 +164,6 @@ def test_synchronize_ambiguous_body_raises_and_does_not_patch(gh):
     with pytest.raises(RuntimeError):
         hunter_draft_promotion_signal.synchronize_ready_metadata(123, body)
     assert 123 not in gh.patched_bodies
-
-
-# ====================================================================================
-# evaluate(): end-to-end regression — promotion must include live review feedback
-# ====================================================================================
 
 
 def test_evaluate_with_single_declaration_line_reaches_success_and_comments(gh):
