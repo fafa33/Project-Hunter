@@ -411,6 +411,8 @@ def test_pr_update_binds_authorization_to_live_target_pr_metadata(tmp_path, monk
     body_file.write_text(generated_body(), encoding="utf-8")
     monkeypatch.setattr(preflight, "validate_canonical_governance", lambda _root: None)
     monkeypatch.setattr(preflight, "load_issue", lambda _repo, _number: issue)
+    monkeypatch.setattr(preflight, "_git_branch", lambda _root: "governance/issue-276-agent-preflight")
+    monkeypatch.setattr(preflight, "_git_commit_message", lambda _root: "fix: govern update #276")
     monkeypatch.setattr(preflight, "_git_exact_pair", lambda _root, _base: (HEAD, BASE))
     monkeypatch.setattr(
         preflight,
