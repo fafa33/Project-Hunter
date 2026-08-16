@@ -300,6 +300,20 @@ def test_review_feedback_blockers_include_unacknowledged_top_level_comments():
     assert blockers == ["unacknowledged top-level comments=2"]
 
 
+def test_reconcile_open_draft_prs_rechecks_every_current_draft():
+    drafts = [
+        green_pr(275, "sha_a", "- [x] `READY FOR REVIEW` — a.\n"),
+        green_pr(276, "sha_b", "- [x] `READY FOR REVIEW` — b.\n"),
+    ]
+    with (
+        patch("hunter_draft_promotion_signal.open_draft_prs", return_value=drafts),
+        patch("hunter_draft_promotion_signal.evaluate") as evaluate,
+    ):
+        hunter_draft_promotion_signal.reconcile_open_draft_prs()
+
+    assert [call.args[0]["number"] for call in evaluate.call_args_list] == [275, 276]
+
+
 def test_workflow_reconciles_when_review_feedback_changes():
     workflow = (
         Path(__file__).resolve().parents[1] / ".github" / "workflows" / "hunter-draft-promotion-signal.yml"
@@ -307,3 +321,5 @@ def test_workflow_reconciles_when_review_feedback_changes():
     assert "pull_request_review:" in workflow
     assert "pull_request_review_comment:" in workflow
     assert "issue_comment:" in workflow
+    assert "schedule:" in workflow
+    assert 'cron: "*/5 * * * *"' in workflow
