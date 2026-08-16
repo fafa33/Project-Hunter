@@ -342,22 +342,9 @@ Violation of the canonical governance documents is a governance failure.
 
 # Rule 23 — No Repeat Governance Failure
 
-A confirmed blocking finding must not be treated as an isolated Pull Request defect when its root cause is reusable or systemic.
+Agents must consume the canonical blocking-finding classification produced under `docs/AI_REVIEW_PROTOCOL.md`; this rule does not define, infer, or override `isolated` / `systemic` review semantics.
 
-For every confirmed blocking finding, the agent must determine whether the root cause is isolated or systemic. The assessment must consider, where applicable:
-
-- product or runtime behavior;
-- test coverage;
-- implementation conventions;
-- Pull Request generation;
-- metadata or evidence generation;
-- preflight validation;
-- repository templates;
-- agent instructions;
-- governance tooling;
-- architectural misunderstanding.
-
-If the root cause can affect future contributions, correcting only the current Pull Request is insufficient. The fix must harden the earliest reliable reusable boundary so the same preventable defect class is not reintroduced in later Pull Requests.
+When the canonical review classifies a blocking finding as `systemic`, correcting only the current Pull Request is insufficient. The agent must satisfy the durable root-cause-hardening obligation in `docs/HUNTER_IMPLEMENTATION_CONTRACT.md` at the earliest reliable reusable boundary identified by the review or verifier.
 
 Appropriate permanent guards include, where applicable:
 
@@ -371,8 +358,8 @@ Appropriate permanent guards include, where applicable:
 - CI gates;
 - canonical agent instructions.
 
-A later Pull Request that reintroduces a previously understood and preventable blocking defect class is evidence that the earlier root-cause fix was incomplete and is itself a governance failure.
+A later Pull Request that reintroduces the same previously understood and preventable defect class must be treated according to the recurrence semantics owned by `docs/AI_REVIEW_PROTOCOL.md` and must trigger strengthening of the reusable guard rather than a one-off patch.
 
-This rule does not require a new automated gate for every finding. Findings that are genuinely one-off may be classified as isolated. Reusable or systemic findings must receive a durable guard appropriate to their failure mode.
+When the canonical review classifies a blocking finding as `isolated`, the agent must provide the resolution evidence required by that review; this rule does not create a systemic guard requirement by itself.
 
-The implementation obligations for regression evidence and durable root-cause hardening are defined by `docs/HUNTER_IMPLEMENTATION_CONTRACT.md`. Review and merge semantics remain exclusively governed by `docs/DEVELOPMENT_GOVERNANCE.md` and `docs/AI_REVIEW_PROTOCOL.md`.
+The implementation obligations for regression evidence and durable root-cause hardening are defined by `docs/HUNTER_IMPLEMENTATION_CONTRACT.md`. Lifecycle, classification, review, approval, and merge semantics remain exclusively governed by `docs/DEVELOPMENT_GOVERNANCE.md` and `docs/AI_REVIEW_PROTOCOL.md`.
