@@ -86,7 +86,7 @@ def test_owner_authored_comment_does_not_require_self_acknowledgement(gh):
         501,
         907,
         login="fafa33",
-        body="<!-- hunter-owner-status:nonblocking -->\nowner implementation status note",
+        body="<!-- hunter-owner-status:nonblocking -->\nStatus: nonblocking\nDetail: owner implementation status note",
     )
 
     decision = core.reconcile_pr(501)
@@ -128,6 +128,19 @@ def test_non_owner_cannot_claim_owner_nonblocking_status_exemption(gh):
 
     assert core.reconcile_pr(501).state == "failure"
     assert core.unacknowledged_top_level_comments(501) == (909,)
+
+
+def test_owner_cannot_quote_nonblocking_marker_to_exempt_blocking_feedback(gh):
+    ready_pull_request(gh)
+    gh.add_comment(
+        501,
+        910,
+        login="fafa33",
+        body="BLOCKING: do not merge. Quoted marker: <!-- hunter-owner-status:nonblocking -->",
+    )
+
+    assert core.reconcile_pr(501).state == "failure"
+    assert core.unacknowledged_top_level_comments(501) == (910,)
 
 
 def test_non_exempt_bot_comment_blocks_until_acknowledged(gh):

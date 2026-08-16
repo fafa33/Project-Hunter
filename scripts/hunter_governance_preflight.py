@@ -89,6 +89,12 @@ INCOMPLETE_EVIDENCE_MARKERS = (
     "replace with verification output summary",
     "replace with commands, record ids, query/replay results, and environment details",
 )
+EVIDENCE_CONTRADICTION_RE = re.compile(
+    r"\b(?:fail(?:ed|ure)?|fabricat(?:ed|ion)|not\s+(?:performed|run|executed|verified)|"
+    r"no\s+commands?\s+(?:were\s+)?run|skipped|incomplete|unverified|missing|unavailable)\b",
+    re.IGNORECASE,
+)
+EVIDENCE_VALUE_PLACEHOLDERS = {"", "fabricated", "placeholder", "none", "n/a", "pending", "tbd"}
 REQUIRED_READY_CHECKLISTS: dict[str, tuple[str, ...]] = {
     "## Verification": (
         "`ruff check .`",
@@ -509,6 +515,17 @@ def _has_substantive_evidence(section: str) -> bool:
     return False
 
 
+def _contains_contradictory_evidence(section: str) -> bool:
+    """Inspect supplied evidence prose without treating checklist policy as evidence."""
+    for raw_line in section.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith(("- [", "<!--", "```")):
+            continue
+        if EVIDENCE_CONTRADICTION_RE.search(line):
+            return True
+    return False
+
+
 def validate_ready_evidence(body: str) -> None:
     for heading, expected in REQUIRED_READY_CHECKLISTS.items():
         section = _canonical_section(body, heading)
@@ -527,6 +544,8 @@ def validate_ready_evidence(body: str) -> None:
         result_marker = VERIFICATION_RESULT_MARKER_RE if heading == "## Verification" else OPERATIONAL_RESULT_MARKER_RE
         if len(result_marker.findall(section)) != 1:
             raise PreflightError(f"READY FOR REVIEW requires one canonical structured result marker in {heading}.")
+        if _contains_contradictory_evidence(section):
+            raise PreflightError(f"READY FOR REVIEW contains contradictory failure evidence in {heading}.")
 
 
 def trace_identity(body: str) -> tuple[int, str, str]:
@@ -783,15 +802,15 @@ def validate_finding_resolution(finding: FindingResolution) -> None:
         raise PreflightError(
             f"Blocking finding {finding.finding_id} cannot be resolved without canonical isolated/systemic classification."
         )
-    if not (finding.classification_evidence or "").strip():
+    if _normalize(finding.classification_evidence or "") in EVIDENCE_VALUE_PLACEHOLDERS:
         raise PreflightError(f"Blocking finding {finding.finding_id} lacks classification evidence.")
     if classification != "systemic":
         return
-    if not (finding.reusable_boundary or "").strip():
+    if _normalize(finding.reusable_boundary or "") in EVIDENCE_VALUE_PLACEHOLDERS:
         raise PreflightError(f"Systemic finding {finding.finding_id} lacks the reusable boundary.")
-    if not (finding.durable_guard_evidence or "").strip():
+    if _normalize(finding.durable_guard_evidence or "") in EVIDENCE_VALUE_PLACEHOLDERS:
         raise PreflightError(f"Systemic finding {finding.finding_id} lacks durable reusable hardening evidence.")
-    if not (finding.verifier_evidence or "").strip():
+    if _normalize(finding.verifier_evidence or "") in EVIDENCE_VALUE_PLACEHOLDERS:
         raise PreflightError(f"Systemic finding {finding.finding_id} lacks verifier evidence for the durable guard.")
 
 
@@ -920,7 +939,7 @@ def require_independent_hostile_review(
         if len(payload) < 100:
             break
         page += 1
-    candidates: list[tuple[str, int, Mapping[str, Any], re.Match[str]]] = []
+    candidates: list[tuple[str, int, Mapping[str, Any], tuple[re.Match[str], ...]]] = []
     for review in reviews:
         author = str((review.get("user") or {}).get("login") or "").strip()
         if not author or author.lower() == pr_author.lower():
@@ -935,15 +954,20 @@ def require_independent_hostile_review(
             continue
         body = str(review.get("body") or "")
         matches = list(HOSTILE_REVIEW_MARKER_RE.finditer(body))
-        if len(matches) != 1:
+        exact_matches = tuple(
+            marker
+            for marker in matches
+            if marker.group("head").lower() == head_sha.lower() and marker.group("base").lower() == base_sha.lower()
+        )
+        if not exact_matches:
             continue
-        marker = matches[0]
-        if marker.group("head").lower() != head_sha.lower() or marker.group("base").lower() != base_sha.lower():
-            continue
-        candidates.append((submitted_at, int(review.get("id") or 0), review, marker))
+        candidates.append((submitted_at, int(review.get("id") or 0), review, exact_matches))
     if not candidates:
         raise PreflightError("Ready preflight lacks independent exact-pair hostile-review evidence.")
-    _submitted_at, _review_id, latest_review, latest_marker = max(candidates, key=lambda item: item[:2])
+    _submitted_at, _review_id, latest_review, latest_markers = max(candidates, key=lambda item: item[:2])
+    if len(latest_markers) != 1:
+        raise PreflightError("Latest independent exact-pair hostile review must contain exactly one outcome marker.")
+    latest_marker = latest_markers[0]
     latest_body = str(latest_review.get("body") or "")
     evidence = HOSTILE_REVIEW_EVIDENCE_RE.search(latest_body)
     scope = HOSTILE_REVIEW_SCOPE_RE.search(latest_body)

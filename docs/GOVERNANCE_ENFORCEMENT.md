@@ -141,7 +141,7 @@ Some actions can be prevented before mutation only when the contributing agent c
 
 The standalone `Hunter Governance Agent Preflight` workflow also uses `pull_request_target` and the trusted default-branch checkout. It is an additional rejection surface, not a separate approval or merge authority.
 
-Top-level PR Conversation comments authored by the repository owner do not require self-acknowledgement only when they carry the narrow structural marker `<!-- hunter-owner-status:nonblocking -->`. Every other owner comment fails closed as canonical feedback until it is edited or removed after resolution. External human comments and unknown-bot comments retain the existing acknowledgement requirement; trusted structurally identifiable status/advisory automation comments retain their narrow exemption.
+Top-level PR Conversation comments authored by the repository owner do not require self-acknowledgement only when the entire comment matches the narrow status schema: the first line is `<!-- hunter-owner-status:nonblocking -->`, followed by `Status: nonblocking` and one substantive `Detail:` line. Quoted or embedded markers do not exempt feedback. Every other owner comment fails closed as canonical feedback until it is edited or removed after resolution. External human comments and unknown-bot comments retain the existing acknowledgement requirement; trusted structurally identifiable status/advisory automation comments retain their narrow exemption.
 
 `Hunter Governance Review` and `Hunter Merge Readiness` remain the canonical merge-control path. The enforcement layer cannot approve itself or grant merge authority. No agent-generated metadata is approval. No automation may merge merely because preflight passes. Human approval remains required.
 

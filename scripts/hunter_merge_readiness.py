@@ -99,6 +99,10 @@ TRUSTED_BOT_LOGIN = "github-actions[bot]"
 DEPENDENCY_REVIEW_MARKER = "<!-- dependency-review-pr-comment-marker -->"
 DRAFT_PROMOTION_MARKER_PREFIX = "<!-- hunter-draft-promotion:"
 OWNER_NONBLOCKING_STATUS_MARKER = "<!-- hunter-owner-status:nonblocking -->"
+OWNER_NONBLOCKING_STATUS_RE = re.compile(
+    rf"\A\s*{re.escape(OWNER_NONBLOCKING_STATUS_MARKER)}\s*\n" r"\s*Status:\s*nonblocking\s*\n\s*Detail:\s*\S.+?\s*\Z",
+    re.IGNORECASE | re.DOTALL,
+)
 GOVERNANCE_PREFLIGHT_PATH = Path(__file__).with_name("hunter_governance_preflight.py")
 GOVERNANCE_PREFLIGHT_TIMEOUT_SECONDS = 120
 GOVERNANCE_PREFLIGHT_FAILURE_DESCRIPTION = "trusted governance preflight failed; see workflow logs"
@@ -455,7 +459,7 @@ def owner_authored_comment(comment: dict[str, Any]) -> bool:
 
 def owner_nonblocking_status_comment(comment: dict[str, Any]) -> bool:
     body = str(comment.get("body") or "")
-    return owner_authored_comment(comment) and OWNER_NONBLOCKING_STATUS_MARKER in body
+    return owner_authored_comment(comment) and OWNER_NONBLOCKING_STATUS_RE.fullmatch(body) is not None
 
 
 def unacknowledged_top_level_comments(pr_number: int) -> tuple[int, ...]:

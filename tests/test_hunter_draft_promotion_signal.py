@@ -43,6 +43,13 @@ class MockGitHubServer:
                 if pr_num in self.pulls:
                     self.pulls[pr_num]["body"] = payload["body"]
                 return {}
+            if clean_path.startswith("issues/comments/"):
+                comment_id = int(clean_path.split("/")[-1])
+                for comments in self.comments.values():
+                    for comment in comments:
+                        if int(comment["id"]) == comment_id:
+                            comment["body"] = payload["body"]
+                            return {}
 
         if clean_path.startswith("pulls/"):
             pr_num = int(clean_path.split("/")[1])
@@ -242,6 +249,34 @@ def test_draft_promotion_retracts_success_for_invalid_ready_evidence(gh):
     assert 125 not in gh.patched_bodies
     assert gh.published[-1][1] == "pending"
     assert "structured result marker missing" in gh.published[-1][2]
+
+
+def test_draft_promotion_retracts_stale_ready_body_and_success_comment(gh):
+    sha = "sha_stale_success"
+    body = "- [x] `READY FOR REVIEW`\n- [ ] `CHANGES REQUIRED`\n- [ ] `BLOCKED`\n"
+    gh.pulls[126] = green_pr(126, sha, body)
+    green_checks(gh, sha)
+    gh.comments[126] = [
+        {
+            "id": 77,
+            "body": f"<!-- hunter-draft-promotion:{sha} -->\n✅ **Hunter Draft Promotion:** stale success",
+        }
+    ]
+
+    with patch.object(
+        hunter_draft_promotion_signal.governance_preflight,
+        "validate_ready_evidence",
+        side_effect=hunter_draft_promotion_signal.governance_preflight.PreflightError(
+            "structured result marker missing"
+        ),
+    ):
+        hunter_draft_promotion_signal.evaluate(gh.pulls[126])
+
+    assert "- [ ] `READY FOR REVIEW`" in gh.patched_bodies[126]
+    assert "- [x] `CHANGES REQUIRED`" in gh.patched_bodies[126]
+    assert "invalidated" in gh.comments[126][0]["body"]
+    assert "stale success" not in gh.comments[126][0]["body"]
+    assert gh.published[-1][1] == "pending"
 
 
 def test_closed_draft_pr_is_outside_promotion_scope(gh):

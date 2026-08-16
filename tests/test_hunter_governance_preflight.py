@@ -166,6 +166,18 @@ def test_ready_body_rejects_unchecked_or_placeholder_evidence() -> None:
     with pytest.raises(preflight.PreflightError, match="structured result marker"):
         preflight.validate_pr_body(negative, issue, head_sha=HEAD, base_sha=BASE, promotion=True)
 
+    contradictory = body.replace(
+        "<!-- hunter-verification:v1",
+        "Ruff: FAIL; Black: FAIL; Mypy: FAIL; full Pytest: FAIL\n<!-- hunter-verification:v1",
+        1,
+    ).replace(
+        "<!-- hunter-operational-validation:v1",
+        "Operational validation: FAILED; live evidence fabricated.\n<!-- hunter-operational-validation:v1",
+        1,
+    )
+    with pytest.raises(preflight.PreflightError, match="contradictory failure evidence"):
+        preflight.validate_pr_body(contradictory, issue, head_sha=HEAD, base_sha=BASE, promotion=True)
+
 
 def test_pr_body_rejects_missing_matrix() -> None:
     issue = fixture_issue()
@@ -525,6 +537,19 @@ def test_systemic_finding_requires_durable_guard_and_verifier() -> None:
     )
     preflight.validate_finding_resolution(complete)
 
+    fabricated = preflight.FindingResolution(
+        finding_id="P2-fabricated",
+        severity="blocking",
+        classification="systemic",
+        classification_evidence="fabricated",
+        reusable_boundary="fabricated",
+        durable_guard_evidence="fabricated",
+        verifier_evidence="fabricated",
+        resolved=True,
+    )
+    with pytest.raises(preflight.PreflightError, match="classification evidence"):
+        preflight.validate_finding_resolution(fabricated)
+
 
 def _live_review_evidence(*, author: str, body: str, suffix: str) -> preflight.LiveReviewEvidence:
     return preflight.LiveReviewEvidence(
@@ -713,6 +738,42 @@ def test_newer_malformed_adverse_hostile_review_invalidates_older_pass(monkeypat
     monkeypatch.setattr(preflight, "_gh_json", lambda _args: [older_pass, newer_malformed])
 
     with pytest.raises(preflight.PreflightError, match="report is incomplete"):
+        preflight.require_independent_hostile_review(
+            repository="fafa33/Project-Hunter",
+            pr_number=277,
+            pr_author="implementer",
+            head_sha=HEAD,
+            base_sha=BASE,
+        )
+
+
+def test_newer_duplicate_adverse_markers_invalidate_older_hostile_pass(monkeypatch) -> None:
+    older = {
+        "id": 20,
+        "user": {"login": "reviewer"},
+        "commit_id": HEAD,
+        "state": "COMMENTED",
+        "submitted_at": "2026-08-16T20:00:00Z",
+        "body": (
+            f"<!-- hunter-hostile-review:v1 head={HEAD} base={BASE} outcome=no-blocking-findings -->\n"
+            "Hostile review evidence: Counterexamples fail closed.\n"
+            "Scope probed: All changed governance boundaries.\n"
+            "Limitations: Human approval remains external.\n"
+            "Unresolved blocking findings: 0"
+        ),
+    }
+    marker = f"<!-- hunter-hostile-review:v1 head={HEAD} base={BASE} outcome=changes-required -->"
+    newer = {
+        "id": 21,
+        "user": {"login": "reviewer"},
+        "commit_id": HEAD,
+        "state": "CHANGES_REQUESTED",
+        "submitted_at": "2026-08-16T21:00:00Z",
+        "body": f"{marker}\n{marker}\nUnresolved blocking findings: 1",
+    }
+    monkeypatch.setattr(preflight, "_gh_json", lambda _args: [older, newer])
+
+    with pytest.raises(preflight.PreflightError, match="exactly one outcome marker"):
         preflight.require_independent_hostile_review(
             repository="fafa33/Project-Hunter",
             pr_number=277,

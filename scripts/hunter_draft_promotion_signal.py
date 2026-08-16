@@ -180,14 +180,74 @@ def synchronize_ready_metadata(pr_number: int, body: str) -> None:
     print("Synchronized implementer readiness metadata to READY FOR REVIEW while PR remains Draft.")
 
 
+def retract_ready_metadata(pr_number: int, body: str) -> None:
+    matches, checked_label = parse_readiness_declaration(body)
+    if checked_label != "READY FOR REVIEW":
+        return
+    if not any(match.group("label").upper() == "CHANGES REQUIRED" for match in matches):
+        raise RuntimeError("CHANGES REQUIRED declaration is missing; refusing READY retraction.")
+
+    def replace(match: re.Match) -> str:
+        label = match.group("label").upper()
+        mark = "x" if label == "CHANGES REQUIRED" else " "
+        return f"{match.group('prefix')}[{mark}]{match.group('space')}{match.group('label')}{match.group('suffix')}"
+
+    updated = DECLARATION_PATTERN.sub(replace, body)
+    request_json("PATCH", f"pulls/{pr_number}", {"body": updated})
+    print("Retracted stale READY FOR REVIEW metadata while PR remains Draft.")
+
+
+def _promotion_comment(marker: str, *, success: bool, reason: str = "") -> str:
+    if not success:
+        return f"{marker}\n⚠️ **Hunter Draft Promotion invalidated:** {reason}"
+    return (
+        f"{marker}\n"
+        "✅ **Hunter Draft Promotion:** all exact-head prerequisites "
+        "and current review-feedback gates have passed, and implementer "
+        "readiness metadata is synchronized to **READY FOR REVIEW**. "
+        "The operator may now manually mark this Draft PR **Ready for Review**.\n\n"
+        "Hunter Governance Review and Hunter Merge Readiness remain the "
+        "merge authorities; any newly opened review feedback invalidates "
+        "this advisory signal until reconciled."
+    )
+
+
+def invalidate_promotion(pr_number: int, sha: str, body: str, reason: str) -> None:
+    try:
+        retract_ready_metadata(pr_number, body)
+    except RuntimeError as exc:
+        print(f"Could not retract malformed readiness metadata for PR #{pr_number}: {exc}")
+    marker = f"<!-- hunter-draft-promotion:{sha} -->"
+    page = 1
+    while True:
+        comments = request_json("GET", f"issues/{pr_number}/comments?per_page=100&page={page}")
+        for comment in comments:
+            if marker in comment.get("body", ""):
+                request_json(
+                    "PATCH",
+                    f"issues/comments/{int(comment['id'])}",
+                    {"body": _promotion_comment(marker, success=False, reason=reason)},
+                )
+                return
+        if len(comments) < 100:
+            return
+        page += 1
+
+
 def post_once(pr_number: int, sha: str) -> None:
     marker = f"<!-- hunter-draft-promotion:{sha} -->"
     page = 1
     while True:
         comments = request_json("GET", f"issues/{pr_number}/comments?per_page=100&page={page}")
-        if any(marker in comment.get("body", "") for comment in comments):
-            print("Promotion comment already exists for this exact head.")
-            return
+        for comment in comments:
+            if marker in comment.get("body", ""):
+                request_json(
+                    "PATCH",
+                    f"issues/comments/{int(comment['id'])}",
+                    {"body": _promotion_comment(marker, success=True)},
+                )
+                print("Promotion comment refreshed for this exact head.")
+                return
         if len(comments) < 100:
             break
         page += 1
@@ -195,18 +255,7 @@ def post_once(pr_number: int, sha: str) -> None:
     request_json(
         "POST",
         f"issues/{pr_number}/comments",
-        {
-            "body": (
-                f"{marker}\n"
-                "✅ **Hunter Draft Promotion:** all exact-head prerequisites "
-                "and current review-feedback gates have passed, and implementer "
-                "readiness metadata is synchronized to **READY FOR REVIEW**. "
-                "The operator may now manually mark this Draft PR **Ready for Review**.\n\n"
-                "Hunter Governance Review and Hunter Merge Readiness remain the "
-                "merge authorities; any newly opened review feedback invalidates "
-                "this advisory signal until reconciled."
-            )
-        },
+        {"body": _promotion_comment(marker, success=True)},
     )
 
 
@@ -270,7 +319,9 @@ def evaluate(pr: dict[str, Any]) -> None:
     waiting.extend(review_feedback_blockers(pr_number))
 
     if waiting:
-        publish(sha, "pending", "Waiting for Draft promotion prerequisites: " + ", ".join(waiting))
+        reason = "Waiting for Draft promotion prerequisites: " + ", ".join(waiting)
+        invalidate_promotion(pr_number, sha, current.get("body") or "", reason)
+        publish(sha, "pending", reason)
         return
 
     current = current_promotion_scope(pr_number)
@@ -283,10 +334,12 @@ def evaluate(pr: dict[str, Any]) -> None:
     # after the initial prerequisite read but before READY FOR REVIEW is synchronized.
     feedback_waiting = review_feedback_blockers(pr_number)
     if feedback_waiting:
+        reason = "Waiting for Draft promotion prerequisites: " + ", ".join(feedback_waiting)
+        invalidate_promotion(pr_number, sha, current.get("body") or "", reason)
         publish(
             sha,
             "pending",
-            "Waiting for Draft promotion prerequisites: " + ", ".join(feedback_waiting),
+            reason,
         )
         return
 
@@ -300,10 +353,34 @@ def evaluate(pr: dict[str, Any]) -> None:
             base_sha=str((current.get("base") or {}).get("sha") or ""),
         )
     except governance_preflight.PreflightError as exc:
-        publish(sha, "pending", f"Waiting for Draft promotion prerequisites: {exc}")
+        reason = f"Waiting for Draft promotion prerequisites: {exc}"
+        invalidate_promotion(pr_number, sha, current.get("body") or "", reason)
+        publish(sha, "pending", reason)
         return
 
-    synchronize_ready_metadata(pr_number, current.get("body") or "")
+    final_current = current_promotion_scope(pr_number)
+    if final_current is None or final_current.get("head", {}).get("sha") != sha:
+        print("PR state/head changed after hostile review; refusing metadata mutation.")
+        return
+    final_feedback = review_feedback_blockers(pr_number)
+    try:
+        governance_preflight.validate_ready_evidence(final_current.get("body") or "")
+        governance_preflight.require_independent_hostile_review(
+            repository=repo,
+            pr_number=pr_number,
+            pr_author=str((final_current.get("user") or {}).get("login") or ""),
+            head_sha=sha,
+            base_sha=str((final_current.get("base") or {}).get("sha") or ""),
+        )
+    except governance_preflight.PreflightError as exc:
+        final_feedback.append(str(exc))
+    if final_feedback:
+        reason = "Waiting for Draft promotion prerequisites: " + ", ".join(final_feedback)
+        invalidate_promotion(pr_number, sha, final_current.get("body") or "", reason)
+        publish(sha, "pending", reason)
+        return
+
+    synchronize_ready_metadata(pr_number, final_current.get("body") or "")
     publish(sha, "success", "Ready to promote from Draft; checks and review feedback are clear.")
     post_once(pr_number, sha)
 
