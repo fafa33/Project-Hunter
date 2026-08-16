@@ -343,17 +343,21 @@ def test_reconcile_open_draft_prs_isolates_failure_and_continues():
         green_pr(275, "sha_a", "- [x] `READY FOR REVIEW` — a.\n"),
         green_pr(276, "sha_b", "- [x] `READY FOR REVIEW` — b.\n"),
     ]
+    visited: list[int] = []
+
+    def evaluate(pr):
+        visited.append(pr["number"])
+        if pr["number"] == 275:
+            raise RuntimeError("invalid readiness declaration")
+
     with (
         patch("hunter_draft_promotion_signal.open_draft_prs", return_value=drafts),
-        patch(
-            "hunter_draft_promotion_signal.evaluate",
-            side_effect=[RuntimeError("invalid readiness declaration"), None],
-        ) as evaluate,
+        patch("hunter_draft_promotion_signal.evaluate", side_effect=evaluate),
     ):
         with pytest.raises(RuntimeError, match="PR #275: RuntimeError: invalid readiness declaration"):
             hunter_draft_promotion_signal.reconcile_open_draft_prs()
 
-    assert [call.args[0]["number"] for call in evaluate.call_args_list] == [275, 276]
+    assert visited == [275, 276]
 
 
 def test_workflow_reconciles_when_review_feedback_changes():
