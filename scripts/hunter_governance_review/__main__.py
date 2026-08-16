@@ -17,6 +17,25 @@ verdict. The only two outcomes that ever block a merge are a genuine
 deterministic governance violation, or required repository evidence
 (canonical documents, referenced ADR/ADPR records) that could not be
 confirmed to exist at the exact base commit.
+
+Usage::
+
+    python -m hunter_governance_review --pr <number> [--repository owner/repo]
+        [--root <repository-path>] [--dry-run]
+
+Environment:
+    GITHUB_TOKEN               required; repository-scoped token used by ``gh``
+    GITHUB_REPOSITORY          owner/repo (used when ``--repository`` is omitted)
+    GITHUB_RUN_ID               workflow run id recorded in the review pair
+    GITHUB_SERVER_URL          server base used for the status target URL
+    GITHUB_STEP_SUMMARY        path to append a summary to (GitHub Actions)
+    HUNTER_GOVERNANCE_PROTECTED_BRANCHES  comma-separated protected branches (default: main)
+
+Exit codes:
+    0  review completed and status published (or the gate is not required for
+       a PR targeting a non-protected branch)
+    2  could not resolve the PR, or a required environment value is missing
+    3  the status check could not be published
 """
 
 from __future__ import annotations
@@ -56,18 +75,28 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         description="Run the Hunter Governance Review merge gate for a pull request.",
     )
     parser.add_argument("--pr", required=True, type=int, help="Pull request number to review.")
-    parser.add_argument("--repository", default=None, help="owner/repo. Defaults to GITHUB_REPOSITORY.")
+    parser.add_argument(
+        "--repository",
+        default=None,
+        help="owner/repo. Defaults to GITHUB_REPOSITORY.",
+    )
     parser.add_argument(
         "--root",
         default=None,
-        help="Unused by the review pipeline itself (context/ADR resolution is exact-SHA, API-based); accepted for backward-compatible invocation only.",
+        help="Unused by the review pipeline itself (context/ADR resolution is exact-SHA, API-based); "
+        "accepted for backward-compatible invocation only.",
     )
     parser.add_argument(
         "--protected-branches",
         default=None,
-        help="Comma-separated protected target branches. Defaults to main or HUNTER_GOVERNANCE_PROTECTED_BRANCHES.",
+        help="Comma-separated protected target branches. Defaults to main or "
+        "HUNTER_GOVERNANCE_PROTECTED_BRANCHES.",
     )
-    parser.add_argument("--dry-run", action="store_true", help="Resolve and decide without publishing a status check.")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Resolve and decide without publishing a status check.",
+    )
     return parser.parse_args(argv)
 
 
@@ -79,6 +108,14 @@ def _protected_branches(raw: str | None) -> tuple[str, ...]:
 
 
 def build_status_description(decision: Decision, pair: ReviewPair, revision: str) -> str:
+    """Build a <=140-character status description for the GitHub statuses API.
+
+    The identity marker is written first so that GitHub's 140-character limit
+    can only truncate the human-readable reason. A consumer of this status
+    (Hunter Merge Readiness) needs the marker to prove *which* pull request this
+    verdict evaluated and *which* governance-relevant state it evaluated; it
+    needs no part of the prose, so the prose is what yields under truncation.
+    """
     head = pair.source_head_sha[:7]
     base = pair.target_base_sha[:7]
     if decision.outcome is Outcome.APPROVED:
@@ -86,7 +123,10 @@ def build_status_description(decision: Decision, pair: ReviewPair, revision: str
     elif decision.outcome is Outcome.CHANGES_REQUIRED:
         text = f"Changes required (head {head} on base {base}): {decision.reason}"
     else:
-        text = f"Review failed (head {head} on base {base}): {decision.reason} No verdict produced; merge blocked."
+        text = (
+            f"Review failed (head {head} on base {base}): {decision.reason} "
+            "No verdict produced; merge blocked."
+        )
     marker = render_marker(pair.pull_request_number, revision) + " "
     return (marker + text)[:140]
 
@@ -115,7 +155,8 @@ def _write_summary(
         f"**Reason**: {decision.reason}",
     ]
     if deterministic.findings:
-        lines.extend(["", "### Deterministic findings"])
+        lines.append("")
+        lines.append("### Deterministic findings")
         lines.extend(f"- {finding.render()}" for finding in deterministic.findings)
         lines.extend(
             [
@@ -128,7 +169,8 @@ def _write_summary(
             ]
         )
     if context is not None:
-        lines.extend(["", "### Authoritative context coverage manifest"])
+        lines.append("")
+        lines.append("### Authoritative context coverage manifest")
         for entry in context.entries:
             mark = "mandatory" if entry.mandatory else "referenced"
             provenance = " proposed-by-PR-HEAD" if entry.provenance == "head" else ""
@@ -137,14 +179,19 @@ def _write_summary(
                 f"sha256={entry.sha256[:12] or 'n/a'} bytes={entry.byte_length}"
             )
         if context.missing_references:
-            lines.append("- **Missing referenced records**: " + ", ".join(context.missing_references))
+            lines.append(
+                "- **Missing referenced records**: "
+                + ", ".join(context.missing_references)
+            )
+    body = "\n".join(lines) + "\n"
     with open(summary_path, "a", encoding="utf-8") as handle:
-        handle.write("\n".join(lines) + "\n")
+        handle.write(body)
 
 
 def _resolve_pair_freshness(
     gh: GitHubRunner, pr_number: int, pair: ReviewPair
 ) -> tuple[PullRequest | None, bool, str | None]:
+    """Re-resolve the PR and compare against ``pair``. Returns (current, fresh, error)."""
     try:
         current = gh.get_pull_request(pr_number)
     except GitHubError as exc:
@@ -161,12 +208,21 @@ def _resolve_pair_freshness(
     return current, True, None
 
 
-def run_review(*, args: argparse.Namespace, env: Mapping[str, str], gh: GitHubRunner) -> int:
+def run_review(
+    *,
+    args: argparse.Namespace,
+    env: Mapping[str, str],
+    gh: GitHubRunner,
+) -> int:
+    """Execute the full gate for one pull request and publish the status check."""
     repository = args.repository or env.get("GITHUB_REPOSITORY") or gh.repository
     if not repository:
         print("::error::no repository: pass --repository or set GITHUB_REPOSITORY.")
         return 2
-    protected = _protected_branches(args.protected_branches or env.get("HUNTER_GOVERNANCE_PROTECTED_BRANCHES"))
+    protected = _protected_branches(
+        args.protected_branches
+        or env.get("HUNTER_GOVERNANCE_PROTECTED_BRANCHES")
+    )
     run_id = env.get("GITHUB_RUN_ID") or "local"
 
     try:
@@ -224,12 +280,18 @@ def run_review(*, args: argparse.Namespace, env: Mapping[str, str], gh: GitHubRu
         assert context_manifest is not None
         try:
             deterministic = run_deterministic_engine(
-                ValidationContext(pr=pr, files=files, missing_references=context_manifest.missing_references)
+                ValidationContext(
+                    pr=pr,
+                    files=files,
+                    missing_references=context_manifest.missing_references,
+                )
             )
-        except Exception as exc:
+        except Exception as exc:  # internal validator exception -> REVIEW_FAILED
             validator_error = f"internal validator exception: {exc!r}"
 
-    current, pair_fresh, pair_fresh_error = _resolve_pair_freshness(gh, pr.number, pair)
+    current, pair_fresh, pair_fresh_error = _resolve_pair_freshness(
+        gh, pr.number, pair
+    )
 
     if evidence_error is not None:
         decision = Decision(Outcome.REVIEW_FAILED, evidence_error)
@@ -238,7 +300,11 @@ def run_review(*, args: argparse.Namespace, env: Mapping[str, str], gh: GitHubRu
     elif validator_error is not None:
         decision = Decision(Outcome.REVIEW_FAILED, validator_error)
     else:
-        decision = decide(deterministic=deterministic, pair_fresh=pair_fresh, pair_fresh_error=pair_fresh_error)
+        decision = decide(
+            deterministic=deterministic,
+            pair_fresh=pair_fresh,
+            pair_fresh_error=pair_fresh_error,
+        )
 
     target_sha = current.head_oid if current is not None else pair.source_head_sha
     state = outcome_to_check_state(decision.outcome)
@@ -256,14 +322,20 @@ def run_review(*, args: argparse.Namespace, env: Mapping[str, str], gh: GitHubRu
         )
     )
     description = build_status_description(decision, pair, revision)
-    target_url = f"{env.get('GITHUB_SERVER_URL', 'https://github.com')}/{repository}/actions/runs/{run_id}"
+    target_url = (
+        f"{env.get('GITHUB_SERVER_URL', 'https://github.com')}/"
+        f"{repository}/actions/runs/{run_id}"
+    )
 
     print(f"[Outcome] {decision.outcome.value}")
     print(f"[Reason] {decision.reason}")
     for finding in deterministic.findings:
         print(f"[Finding] {finding.render()}")
     if deterministic.classification_errors:
-        print("[FindingMetadata] incomplete blocking classifications: " + ", ".join(deterministic.classification_errors))
+        print(
+            "[FindingMetadata] incomplete blocking classifications: "
+            + ", ".join(deterministic.classification_errors)
+        )
     if context_manifest is not None:
         for entry in context_manifest.entries:
             print(
@@ -271,7 +343,10 @@ def run_review(*, args: argparse.Namespace, env: Mapping[str, str], gh: GitHubRu
                 f"provenance={entry.provenance} sha256={entry.sha256[:12] or 'n/a'}"
             )
     print(f"[Revision] governance revision {revision} for PR #{pr.number}")
-    print(f"[StatusCheck] context={CHECK_CONTEXT!r} state={state.value} on {target_sha[:12]}")
+    print(
+        f"[StatusCheck] context={CHECK_CONTEXT!r} state={state.value} "
+        f"on {target_sha[:12]}"
+    )
 
     if not args.dry_run:
         try:
