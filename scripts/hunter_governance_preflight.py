@@ -327,9 +327,25 @@ def validate_issue_identity(
 
 def parse_acceptance_matrix(body: str) -> tuple[MatrixRow, ...]:
     rows: list[MatrixRow] = []
+    in_section = False
     in_table = False
+    section_level: int | None = None
     for line in body.splitlines():
         stripped = line.strip()
+        heading = re.match(r"^(#{1,6})\s+(.+?)\s*$", stripped)
+        if heading:
+            level = len(heading.group(1))
+            title = _normalize(heading.group(2))
+            if title == "acceptance-criteria matrix":
+                in_section = True
+                in_table = False
+                section_level = level
+                continue
+            if in_section and section_level is not None and level <= section_level:
+                break
+            continue
+        if not in_section:
+            continue
         if stripped.startswith("|"):
             cells = [cell.strip() for cell in stripped.strip("|").split("|")]
             lowered = tuple(cell.lower() for cell in cells[:3])
@@ -396,7 +412,9 @@ def validate_pr_body(
         raise PreflightError("PR body omits governing Issue acceptance criteria: " + "; ".join(missing))
     extras = [row.criterion for key, row in by_key.items() if key not in required_keys]
     if extras:
-        raise PreflightError("PR body contains acceptance criteria not present in governing Issue: " + "; ".join(extras))
+        raise PreflightError(
+            "PR body contains acceptance criteria not present in governing Issue: " + "; ".join(extras)
+        )
 
     for row in rows:
         if row.status == "pass" and _normalize(row.evidence) in PASS_EVIDENCE_PLACEHOLDERS:
@@ -420,9 +438,7 @@ def validate_pr_body(
                 "Ready-for-review promotion is blocked by FAIL/BLOCKED criteria: " + "; ".join(blocked)
             )
         if readiness != "ready for review":
-            raise PreflightError(
-                f"Ready-for-review promotion requires READY FOR REVIEW, found {readiness.upper()}."
-            )
+            raise PreflightError(f"Ready-for-review promotion requires READY FOR REVIEW, found {readiness.upper()}.")
 
 
 def _criterion_evidence(
@@ -484,7 +500,9 @@ def generate_pr_body(
         "\n".join(f"- {item}" for item in operational_evidence)
         or "- NOT APPLICABLE unless the governing Issue requires operational/runtime validation."
     )
-    limitations_text = "\n".join(f"- {item}" for item in limitations) or "- Exact-head CI and independent review remain pending."
+    limitations_text = (
+        "\n".join(f"- {item}" for item in limitations) or "- Exact-head CI and independent review remain pending."
+    )
     declarations = "\n".join(
         f"- [{'x' if label == readiness else ' '}] `{label}`"
         for label in ("READY FOR REVIEW", "CHANGES REQUIRED", "BLOCKED")
@@ -540,9 +558,7 @@ def validate_ownership_added_lines(added_lines: Mapping[str, Sequence[str]]) -> 
                 owner = CANONICAL_OWNERS[domain]
                 if path == owner or _owner_reference_present(text, owner):
                     continue
-                failures.append(
-                    f"{path}: added {domain} semantics outside canonical owner {owner}: {text[:120]!r}"
-                )
+                failures.append(f"{path}: added {domain} semantics outside canonical owner {owner}: {text[:120]!r}")
     if failures:
         raise PreflightError("Canonical ownership violation: " + "; ".join(failures))
 
