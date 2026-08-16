@@ -209,13 +209,38 @@ def post_once(pr_number: int, sha: str) -> None:
     )
 
 
+def current_promotion_scope(pr_number: int) -> dict[str, Any] | None:
+    """Return the live PR only when it is inside Draft-promotion authority.
+
+    Event payloads are hints, never authority. In particular, ``issue_comment``
+    cannot be branch-filtered by GitHub, so every path must re-read current PR
+    state and reject closed PRs, non-main targets, and non-Draft PRs before any
+    readiness status or PR metadata can be mutated.
+    """
+    current = request_json("GET", f"pulls/{pr_number}")
+    if (current.get("state") or "").lower() != "open":
+        print(f"PR #{pr_number} is not open; skipping Draft promotion evaluation.")
+        return None
+    if ((current.get("base") or {}).get("ref") or "") != "main":
+        print(f"PR #{pr_number} does not target main; skipping Draft promotion evaluation.")
+        return None
+    if not current.get("draft"):
+        print(f"PR #{pr_number} is not Draft; skipping.")
+        return None
+    return current
+
+
 def evaluate(pr: dict[str, Any]) -> None:
-    if not pr.get("draft"):
-        print(f"PR #{pr.get('number')} is not Draft; skipping.")
+    pr_number = int(pr.get("number") or 0)
+    if not pr_number:
+        print("PR payload has no number; refusing Draft promotion evaluation.")
         return
 
-    sha = pr["head"]["sha"]
-    pr_number = pr["number"]
+    current = current_promotion_scope(pr_number)
+    if current is None:
+        return
+
+    sha = current["head"]["sha"]
     latest: dict[str, dict[str, Any]] = {}
     for run in exact_head_check_runs(sha):
         name = run.get("name")
@@ -247,8 +272,8 @@ def evaluate(pr: dict[str, Any]) -> None:
         publish(sha, "pending", "Waiting for Draft promotion prerequisites: " + ", ".join(waiting))
         return
 
-    current = request_json("GET", f"pulls/{pr_number}")
-    if not current.get("draft") or current.get("head", {}).get("sha") != sha:
+    current = current_promotion_scope(pr_number)
+    if current is None or current.get("head", {}).get("sha") != sha:
         print("PR state/head changed during evaluation; refusing metadata mutation.")
         return
 
@@ -295,8 +320,7 @@ def main() -> None:
         if not pr_number:
             print("issue_comment event has no pull request number; nothing to evaluate.")
             raise SystemExit(0)
-        current = request_json("GET", f"pulls/{pr_number}")
-        evaluate(current)
+        evaluate({"number": pr_number})
         raise SystemExit(0)
 
     if event_name == "schedule":
