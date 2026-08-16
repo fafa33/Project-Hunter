@@ -24,6 +24,11 @@ on:
       - created
       - edited
       - deleted
+  issue_comment:
+    types:
+      - created
+      - edited
+      - deleted
   push:
     branches:
       - main
