@@ -154,9 +154,7 @@ def test_issue_276_bootstrap_is_only_missing_file_exception(monkeypatch):
     assert "not installed" in (core.trusted_governance_preflight_error(278) or "")
 
 
-def test_trusted_preflight_failure_logs_diagnostics_but_returns_status_safe_error(
-    monkeypatch, tmp_path: Path, capsys
-):
+def test_trusted_preflight_failure_logs_diagnostics_but_returns_status_safe_error(monkeypatch, tmp_path: Path, capsys):
     script = tmp_path / "hunter_governance_preflight.py"
     script.write_text("# test preflight\n", encoding="utf-8")
     monkeypatch.setenv(core.PREFLIGHT_ENFORCEMENT_ENV, "1")
