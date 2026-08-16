@@ -1,62 +1,8 @@
 """Hunter Merge Readiness: a current-state reconciler.
 
-Architecture
-------------
-
-Readiness is a deterministic function of the *current canonical GitHub state*
-of one pull request::
-
-    trigger -> identify PR -> read current canonical state -> compute semantic
-    revision -> resolve matching Governance evidence -> evaluate blockers ->
-    publish exactly one current readiness result
-
-The core invariant is::
-
-    same current canonical state  =>  same readiness result
-
-regardless of which event triggered reconciliation, event delivery order,
-duplicate delivery, delayed delivery, cancelled predecessor runs, replayed
-``workflow_run`` payloads, prior published readiness states, or scheduler
-timing.
-
-Events are hints. Events are not authority. A trigger adapter's only job is to
-answer "which pull request number(s) might need reconciling?"; every decision
-input is then re-read live from GitHub inside :func:`reconcile_pr`. No payload
-field ever reaches :func:`decide`.
-
-The module is split into three strictly separated layers:
-
-1. **I/O** -- :func:`read_current_state` performs every GitHub read and returns
-   an immutable :class:`CurrentState` snapshot.
-2. **Decision** -- :func:`decide` is a pure function of that snapshot. It has no
-   access to the event name, to timestamps, to run identifiers, or to the
-   network. This is what makes convergence testable rather than merely asserted:
-   the same snapshot cannot produce two different results.
-3. **Reconciliation** -- :func:`reconcile_pr` composes the two and publishes or
-   confirms exactly one readiness status.
-
-Why timestamps are gone
------------------------
-
-Earlier generations of this controller derived freshness from a comparison
-between "when did Governance Review start" and "when did the pull request last
-semantically change", reconstructed from event payloads, run start times, status
-publication times, and durable invalidation markers. Every one of those inputs is
-a property of *delivery history*, not of current state, so readiness depended on
-how events happened to arrive. Freshness is now an *identity* comparison instead:
-Hunter Governance Review stamps the pull request number and a digest of exactly
-the state it evaluated into its status description (see
-``hunter_governance_revision``), and this controller recomputes that digest from
-current state. Equal digest means the verdict describes the pull request as it is
-now; anything else -- missing marker, different pull request, different revision
--- is unusable evidence and fails closed.
-
-Feedback (unresolved review threads, CHANGES_REQUESTED reviews, unacknowledged
-comments) is not part of the Governance authority boundary and never was:
-Governance Review does not read it. It is therefore evaluated *live* here on
-every reconciliation. That is why resolving a thread or applying an owner
-acknowledgement converges on the very next reconciliation without requiring a
-Governance re-run, and why no acknowledgement bookkeeping is needed at all.
+Readiness is derived from current canonical GitHub state. Trigger payloads only
+identify candidate pull requests; every decision input is re-read live before a
+canonical readiness status is published.
 """
 
 from __future__ import annotations
@@ -81,27 +27,19 @@ from hunter_governance_revision import (
     parse_marker,
 )
 
-# Configuration
 context = "Hunter Merge Readiness"
 governance_context = "Hunter Governance Review"
 required_checks = ("Quality Gates", "dependency-review", "CodeQL")
 hard_failures = {"failure", "timed_out", "action_required", "startup_failure"}
-
-# How many times a run will re-read and re-publish after writing green before it
-# gives up and withholds green instead. See reconcile_pr().
 SUCCESS_CONVERGENCE_ATTEMPTS = 3
-
-# Written over a `success` this run published when the run goes on to decide
-# against green. See _retract_greens().
 RETRACTED_DESCRIPTION = "Waiting: this readiness result was superseded while it was being published."
-
 TRUSTED_BOT_LOGIN = "github-actions[bot]"
 DEPENDENCY_REVIEW_MARKER = "<!-- dependency-review-pr-comment-marker -->"
 DRAFT_PROMOTION_MARKER_PREFIX = "<!-- hunter-draft-promotion:"
 GOVERNANCE_PREFLIGHT_PATH = Path(__file__).with_name("hunter_governance_preflight.py")
 ISSUE_276_BOOTSTRAP_PR = 277
+PREFLIGHT_ENFORCEMENT_ENV = "HUNTER_ENFORCE_GOVERNANCE_PREFLIGHT"
 
-# Global configuration, populated from the environment by init_globals().
 repo: str = ""
 repo_owner: str = ""
 token: str = ""
@@ -111,16 +49,11 @@ run_url: str = ""
 
 def init_globals() -> None:
     global repo, repo_owner, token, event_name, run_url
-    repo = os.environ.get("GH_REPO", "")
-    if not repo:
-        repo = os.environ.get("GITHUB_REPOSITORY", "")
+    repo = os.environ.get("GH_REPO", "") or os.environ.get("GITHUB_REPOSITORY", "")
     repo_owner = repo.split("/", 1)[0] if "/" in repo else ""
     token = os.environ.get("GH_TOKEN", "")
     event_name = os.environ.get("EVENT_NAME", "")
     run_url = os.environ.get("RUN_URL", "")
-
-
-# --- GitHub transport -------------------------------------------------------
 
 
 def request_json(method: str, path: str, payload: dict[str, Any] | None = None) -> Any:
@@ -139,9 +72,7 @@ def request_json(method: str, path: str, payload: dict[str, Any] | None = None) 
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
             raw_body = response.read().decode("utf-8")
-            if not raw_body:
-                return None
-            return json.loads(raw_body)
+            return None if not raw_body else json.loads(raw_body)
     except urllib.error.HTTPError as exc:
         try:
             body = exc.read().decode("utf-8")
@@ -191,13 +122,8 @@ def paged(path: str) -> list[Any]:
         page += 1
 
 
-# --- Canonical current state ------------------------------------------------
-
-
 @dataclass(frozen=True)
 class RequiredCheckState:
-    """The current state of one required check run on the exact head SHA."""
-
     name: str
     present: bool
     completed: bool
@@ -209,15 +135,6 @@ class RequiredCheckState:
 
 @dataclass(frozen=True)
 class GovernanceEvidence:
-    """A Hunter Governance Review verdict proven to describe this exact state.
-
-    An instance only ever exists when the published status carried an identity
-    marker naming *this* pull request and *this* governance revision. Evidence
-    that fails either proof is never represented here; it is recorded as
-    :attr:`CurrentState.unusable_governance_reasons` instead, so the controller
-    can explain why it is waiting without ever treating the verdict as current.
-    """
-
     state: str
     pull_request_number: int
     revision: str
@@ -225,16 +142,6 @@ class GovernanceEvidence:
 
 @dataclass(frozen=True)
 class CurrentState:
-    """An immutable snapshot of everything readiness depends on, read live.
-
-    Deliberately absent: the triggering event name, event payload fields, run
-    identifiers, wall-clock times, and any record of previously published
-    readiness *history*. The single readiness field present,
-    :attr:`published_readiness`, is the controller's own most recent write; it
-    is excluded from :meth:`semantic_revision` so that publishing can never
-    change the state that decides what to publish.
-    """
-
     pull_request_number: int
     open: bool
     draft: bool
@@ -272,39 +179,13 @@ class CurrentState:
 
     @property
     def governance_revision(self) -> str:
-        """The revision Governance evidence must name to be usable here."""
         return governance_revision(self.governance_inputs)
 
     @property
     def controller_upgrade_candidate(self) -> bool:
-        """Whether this pull request changes the files defining the trust boundary.
-
-        Renames are included from both sides. GitHub reports a renamed file with
-        the destination in ``filename`` and the controller-owned source in
-        ``previous_filename``, so a pull request that renames a controller-owned
-        path *away* from itself would otherwise escape admission entirely.
-        ``previous_paths`` is deliberately kept out of
-        :attr:`governance_inputs`: the Governance Review engine resolves changed
-        paths as ``frozenset(f.filename ...)``, so adding previous filenames
-        there would fingerprint state no validator reads and no evaluator could
-        reproduce.
-        """
         return admission.touches_trust_boundary(self.changed_paths + self.previous_paths)
 
     def semantic_revision(self) -> str:
-        """Full-width fingerprint of the complete readiness-relevant current state.
-
-        Two snapshots with equal semantic revisions are the same state as far as
-        readiness is concerned, so :func:`decide` must return the same result for
-        both. This is the identity used to detect that state moved underneath a
-        reconciliation, and the identity convergence tests assert against.
-
-        Excluded on purpose, because none of them changes what readiness *is*:
-        :attr:`published_readiness` (the controller's own writes), trusted
-        repository-automation advisory comments (filtered out upstream in
-        :func:`unacknowledged_top_level_comments`), every timestamp, and every
-        run/status/check identifier.
-        """
         parts: list[str] = [
             "hunter-merge-readiness-semantic-revision/v1",
             str(self.pull_request_number),
@@ -337,28 +218,13 @@ class CurrentState:
                     self.governance.revision,
                 ]
             )
-        # Deliberately untruncated. This digest is the identity both green
-        # guards compare -- once before publishing `success` and once after --
-        # so a collision between a ready snapshot and a blocked one lets an
-        # author flip between them across those reads and leave green standing
-        # on a blocked state. The author controls title and body with unlimited
-        # entropy and can grind candidates offline, so the width is a security
-        # parameter here exactly as it is for the governance revision. Unlike
-        # that one it is never written into a 140-character status description,
-        # so there is no budget to trade against and no reason to truncate at
-        # all.
         return hashlib.sha256("\x1f".join(parts).encode("utf-8")).hexdigest()
 
-
-# --- Current-state readers --------------------------------------------------
 
 _PULL_REQUEST_FACTS_QUERY = """
 query($owner: String!, $name: String!, $number: Int!) {
   repository(owner: $owner, name: $name) {
-    pullRequest(number: $number) {
-      baseRefOid
-      headRefOid
-    }
+    pullRequest(number: $number) { baseRefOid headRefOid }
   }
 }
 """
@@ -378,14 +244,6 @@ query($owner: String!, $name: String!, $number: Int!, $after: String) {
 
 
 def base_head_oids(pr_number: int) -> tuple[str, str]:
-    """Current ``(base_sha, head_sha)`` for a pull request, read via GraphQL.
-
-    Hunter Governance Review resolves its review pair from ``gh pr view --json
-    baseRefOid,headRefOid``, which is this same GraphQL field pair. The
-    governance revision is only comparable if both sides read the base SHA from
-    the same authority, so this controller reads ``baseRefOid`` rather than the
-    REST payload's ``base.sha``, whose freshness semantics differ.
-    """
     owner, name = repo.split("/", 1)
     data = graphql_json(_PULL_REQUEST_FACTS_QUERY, {"owner": owner, "name": name, "number": int(pr_number)})
     pull = ((data.get("repository") or {}).get("pullRequest")) or {}
@@ -393,12 +251,6 @@ def base_head_oids(pr_number: int) -> tuple[str, str]:
 
 
 def unresolved_review_thread_ids(pr_number: int) -> tuple[str, ...]:
-    """Identifiers of every currently unresolved review thread.
-
-    Identifiers rather than a count: resolving one thread while another opens
-    leaves the count unchanged but is a different state, and the semantic
-    revision must distinguish them.
-    """
     owner, name = repo.split("/", 1)
     ids: list[str] = []
     cursor = None
@@ -410,9 +262,8 @@ def unresolved_review_thread_ids(pr_number: int) -> tuple[str, ...]:
         pull = (data.get("repository") or {}).get("pullRequest") or {}
         threads = pull.get("reviewThreads") or {}
         for index, node in enumerate(threads.get("nodes") or []):
-            if node.get("isResolved"):
-                continue
-            ids.append(str(node.get("id") or f"thread:{len(ids)}:{index}"))
+            if not node.get("isResolved"):
+                ids.append(str(node.get("id") or f"thread:{len(ids)}:{index}"))
         page_info = threads.get("pageInfo") or {}
         if not page_info.get("hasNextPage"):
             return tuple(ids)
@@ -420,7 +271,6 @@ def unresolved_review_thread_ids(pr_number: int) -> tuple[str, ...]:
 
 
 def current_changes_requested_reviewers(pr_number: int) -> tuple[str, ...]:
-    """Reviewers whose latest terminal review on this pull request blocks it."""
     reviews = paged(f"pulls/{pr_number}/reviews")
     latest_terminal: dict[str, dict[str, Any]] = {}
     for review in reviews:
@@ -441,33 +291,14 @@ def current_changes_requested_reviewers(pr_number: int) -> tuple[str, ...]:
 
 
 def is_exempt_status_comment(comment: dict[str, Any]) -> bool:
-    """True only for structurally identifiable repository-automation comments.
-
-    Trusted repository automation posts advisory/status comments that carry no
-    human decision. They are exempt from the owner-acknowledgement requirement,
-    and because they are filtered out before the snapshot is built they also
-    cannot move the semantic revision. Unknown bots are not exempt: they stay
-    fail-closed and block until the owner acknowledges them.
-    """
     login = ((comment.get("user") or {}).get("login") or "").strip()
     if login != TRUSTED_BOT_LOGIN:
         return False
     body = comment.get("body") or ""
-    if DEPENDENCY_REVIEW_MARKER in body:
-        return True
-    return DRAFT_PROMOTION_MARKER_PREFIX in body
+    return DEPENDENCY_REVIEW_MARKER in body or DRAFT_PROMOTION_MARKER_PREFIX in body
 
 
 def owner_acknowledged_comment(comment: dict[str, Any]) -> bool:
-    """Whether the repository owner has acknowledged this exact comment version.
-
-    A 👍 reaction acknowledges the comment as it stood when the reaction was
-    applied. Editing the comment afterwards is a new statement that has not been
-    acknowledged, so the reaction must not survive the edit. This is the one
-    place a time value is still compared, and it is not delivery choreography:
-    both values describe the same object's own content history, and the
-    comparison fails closed when either is unavailable.
-    """
     comment_id = int(comment["id"])
     updated_at = (comment.get("updated_at") or comment.get("created_at") or "").strip()
     if not updated_at:
@@ -484,12 +315,6 @@ def owner_acknowledged_comment(comment: dict[str, Any]) -> bool:
 
 
 def owner_authored_comment(comment: dict[str, Any]) -> bool:
-    """Whether the repository owner authored this top-level statement.
-
-    Owner-authored statements are already the owner's own action and therefore
-    do not require a vacuous self-reaction. This exemption is identity-based;
-    external humans and unknown bots still require explicit owner acknowledgement.
-    """
     login = ((comment.get("user") or {}).get("login") or "").strip()
     return bool(repo_owner) and login == repo_owner
 
@@ -506,14 +331,9 @@ def unacknowledged_top_level_comments(pr_number: int) -> tuple[int, ...]:
 
 
 def trusted_governance_preflight_error(pr_number: int) -> str | None:
-    """Run the resident default-branch governance preflight before any green.
-
-    Merge Readiness is executed from the trusted default-branch checkout, so the
-    referenced preflight file is trusted repository code rather than PR-controlled
-    code. The only bootstrap exception is the installing PR while that trusted file
-    genuinely does not exist yet; once Issue #276 is resident on the default branch,
-    no future PR can use that exception.
-    """
+    """Run trusted default-branch preflight only in the canonical workflow path."""
+    if os.environ.get(PREFLIGHT_ENFORCEMENT_ENV) != "1":
+        return None
     if not GOVERNANCE_PREFLIGHT_PATH.is_file():
         if int(pr_number) == ISSUE_276_BOOTSTRAP_PR:
             return None
@@ -542,13 +362,10 @@ def trusted_governance_preflight_error(pr_number: int) -> str | None:
     if completed.returncode == 0:
         return None
     detail = (completed.stdout or completed.stderr or "governance preflight failed").strip()
-    if not detail:
-        detail = "governance preflight failed without diagnostic output"
-    return detail.splitlines()[-1][:240]
+    return (detail.splitlines()[-1] if detail else "governance preflight failed without diagnostic output")[:240]
 
 
 def open_pull_requests() -> list[dict[str, Any]]:
-    """Every open pull request targeting the protected base, fully paginated."""
     pulls: list[dict[str, Any]] = []
     page = 1
     while True:
@@ -560,25 +377,6 @@ def open_pull_requests() -> list[dict[str, Any]]:
 
 
 def open_pull_requests_for_head(sha: str) -> list[dict[str, Any]]:
-    """Every open pull request whose exact current head is this SHA, any base.
-
-    Deliberately a head-targeted lookup rather than a scan of
-    :func:`open_pull_requests`, for two independent reasons:
-
-    - **Cost.** This is called once per :func:`read_current_state`, and a green
-      reconciliation reads state three times. Scanning every open pull request
-      would make a scheduled sweep quadratic in the number of open pull requests
-      and could exhaust the job's time or API budget before it converged.
-    - **Correctness.** :func:`open_pull_requests` is scoped to ``base=main``,
-      because that is the sweep's candidate list. Sibling detection must not be:
-      a pull request targeting a different protected branch shares the very
-      ``(SHA, context)`` status slot this controller writes, so missing it would
-      let green be published on a slot another pull request is judged by.
-
-    The endpoint returns pull requests *associated with* the commit, which is a
-    superset, so the result is filtered back to open pull requests whose current
-    head is exactly this commit.
-    """
     if not sha:
         return []
     return [
@@ -608,16 +406,12 @@ def all_commit_statuses(sha: str) -> list[dict[str, Any]]:
 
 def latest_check(runs: list[dict[str, Any]], name: str) -> dict[str, Any] | None:
     matches = [run for run in runs if run.get("name") == name]
-    if not matches:
-        return None
-    return max(matches, key=lambda run: int(run.get("id", 0)))
+    return None if not matches else max(matches, key=lambda run: int(run.get("id", 0)))
 
 
 def latest_commit_status(statuses: list[dict[str, Any]], status_context: str) -> dict[str, Any] | None:
     matches = [status for status in statuses if status.get("context") == status_context]
-    if not matches:
-        return None
-    return max(matches, key=lambda status: int(status.get("id", 0)))
+    return None if not matches else max(matches, key=lambda status: int(status.get("id", 0)))
 
 
 def resolve_governance_evidence(
@@ -625,27 +419,6 @@ def resolve_governance_evidence(
     pr_number: int,
     revision: str,
 ) -> tuple[GovernanceEvidence | None, tuple[str, ...]]:
-    """Select the Governance verdict that provably describes this exact state.
-
-    Every ``Hunter Governance Review`` status on the head is considered, not just
-    the most recently persisted one: persistence order is not semantic order, and
-    a re-run of an older evaluation can land after a newer one. Selection is by
-    *identity*, not recency -- a status qualifies if and only if its marker names
-    this pull request and this governance revision -- so at most one distinct
-    verdict can qualify and ordering is irrelevant.
-
-    Returns ``(evidence, reasons)``. ``reasons`` explains every rejection so the
-    published pending description can say what is actually being waited for.
-    Preserved fail-closed rules:
-
-    - a status with no identity marker is unattributable and unusable; a shared
-      head SHA can never let one pull request's verdict satisfy another's;
-    - a marker naming a different pull request is rejected outright, so
-      ``GovernanceEvidence(PR=A, HEAD=H)`` can never satisfy
-      ``MergeReadiness(PR=B, HEAD=H)`` when ``A != B``;
-    - a marker naming a different revision is rejected, so a verdict produced for
-      superseded state can never satisfy current state.
-    """
     reasons: list[str] = []
     qualified: list[GovernanceEvidence] = []
     for status in statuses:
@@ -669,10 +442,8 @@ def resolve_governance_evidence(
                 revision=marked_revision,
             )
         )
-
     if not qualified:
         return None, tuple(sorted(set(reasons)))
-
     for preferred in ("failure", "error"):
         for evidence in qualified:
             if evidence.state == preferred:
@@ -684,11 +455,9 @@ def resolve_governance_evidence(
 
 
 def read_current_state(pr_number: int) -> CurrentState | None:
-    """Read every readiness input live from GitHub for one pull request."""
     pr = request_json("GET", f"pulls/{pr_number}")
     if not pr or pr.get("state") != "open":
         return None
-
     base_sha, head_sha = base_head_oids(pr_number)
     if not head_sha:
         head_sha = ((pr.get("head") or {}).get("sha") or "").strip()
@@ -704,7 +473,6 @@ def read_current_state(pr_number: int) -> CurrentState | None:
             if int(other["number"]) != int(pr_number)
         )
     )
-
     changed_files = [entry for entry in paged(f"pulls/{pr_number}/files") if isinstance(entry, dict)]
     changed_paths = tuple(str(entry.get("filename") or "") for entry in changed_files)
     previous_paths = tuple(str(entry["previous_filename"]) for entry in changed_files if entry.get("previous_filename"))
@@ -748,7 +516,6 @@ def read_current_state(pr_number: int) -> CurrentState | None:
         unacknowledged_comments=unacknowledged_top_level_comments(pr_number),
         published_readiness=_published_readiness(statuses),
     )
-
     evidence, reasons = resolve_governance_evidence(statuses, int(pr_number), partial.governance_revision)
     return replace(partial, governance=evidence, unusable_governance_reasons=reasons)
 
@@ -760,9 +527,6 @@ def _published_readiness(statuses: list[dict[str, Any]]) -> tuple[str, str] | No
     return (status.get("state") or "").strip(), (status.get("description") or "").strip()
 
 
-# --- Pure decision ----------------------------------------------------------
-
-
 @dataclass(frozen=True)
 class ReadinessDecision:
     state: str
@@ -770,22 +534,18 @@ class ReadinessDecision:
 
 
 def dependency_only_pull_request(state: CurrentState) -> bool:
-    if state.author not in {"dependabot[bot]", "renovate[bot]"}:
-        return False
-    if not state.changed_paths:
+    if state.author not in {"dependabot[bot]", "renovate[bot]"} or not state.changed_paths:
         return False
     allowed_root = {"pyproject.toml", "poetry.lock", "package-lock.json", "pnpm-lock.yaml"}
     return all(path.startswith("requirements/") or path in allowed_root for path in state.changed_paths)
 
 
 def metadata_error(state: CurrentState) -> str | None:
-    """Validate the pull request's own readiness declarations."""
     if dependency_only_pull_request(state):
         return None
-    body = state.body
     rows = []
     in_table = False
-    for line in body.splitlines():
+    for line in state.body.splitlines():
         stripped = line.strip()
         if stripped.startswith("|") and "Acceptance criterion" in stripped:
             in_table = True
@@ -806,7 +566,7 @@ def metadata_error(state: CurrentState) -> str | None:
 
     checked = []
     allowed = ("ready for review", "changes required", "blocked")
-    for match in re.finditer(r"(?im)^\s*[-*+]\s*\[([ xX])\]\s*(.+)", body):
+    for match in re.finditer(r"(?im)^\s*[-*+]\s*\[([ xX])\]\s*(.+)", state.body):
         marker, text = match.group(1), match.group(2).strip().lower()
         if marker.lower() != "x":
             continue
@@ -823,7 +583,6 @@ def metadata_error(state: CurrentState) -> str | None:
 
 
 def feedback_error(state: CurrentState) -> str | None:
-    """Blocking human feedback, evaluated entirely from current state."""
     if state.unresolved_thread_ids:
         return f"Unresolved review threads remain: {len(state.unresolved_thread_ids)}."
     if state.changes_requested:
@@ -836,14 +595,11 @@ def feedback_error(state: CurrentState) -> str | None:
 
 
 def decide(state: CurrentState) -> ReadinessDecision:
-    """Compute the readiness result for a snapshot. Pure and total."""
     if state.draft:
         return ReadinessDecision("pending", "Waiting for Ready for Review (PR is Draft).")
-
     problem = metadata_error(state)
     if problem:
         return ReadinessDecision("failure", problem)
-
     problem = feedback_error(state)
     if problem:
         return ReadinessDecision("failure", problem)
@@ -863,22 +619,18 @@ def decide(state: CurrentState) -> ReadinessDecision:
         else:
             pending.append(check.name)
 
-    revision = state.governance_revision
     evidence = state.governance
     if evidence is None:
-        missing.append(f"{governance_context} (revision {revision})")
-    elif evidence.state == "success":
-        pass
+        missing.append(f"{governance_context} (revision {state.governance_revision})")
     elif evidence.state in {"failure", "error"}:
         failed.append(f"{governance_context}={evidence.state}")
-    else:
+    elif evidence.state != "success":
         pending.append(f"{governance_context} ({evidence.state})")
 
     if failed:
         return ReadinessDecision("failure", "Exact-head prerequisite failed: " + ", ".join(failed))
     if missing or pending:
         return ReadinessDecision("pending", "Waiting for exact-head checks: " + ", ".join(missing + pending))
-
     if state.shared_head_pull_requests:
         others = ", ".join(f"#{number}" for number in state.shared_head_pull_requests)
         return ReadinessDecision(
@@ -892,19 +644,12 @@ def decide(state: CurrentState) -> ReadinessDecision:
     return ReadinessDecision("success", description)
 
 
-# --- Publication ------------------------------------------------------------
-
-
 def publish(sha: str, state: str, description: str, published: tuple[str, str] | None) -> None:
-    """Publish the decided readiness status, or confirm the current one."""
     description = description.replace("👍", "+1")
-    description = "".join(character for character in description if ord(character) <= 0xFFFF)
-    description = description[:140]
-
+    description = "".join(character for character in description if ord(character) <= 0xFFFF)[:140]
     if published is not None and published[0] == state and published[1].strip() == description.strip():
         print(f"{sha[:10]} {context}: confirmed already-current {state} — {description}")
         return
-
     request_json(
         "POST",
         f"statuses/{sha}",
@@ -913,23 +658,16 @@ def publish(sha: str, state: str, description: str, published: tuple[str, str] |
     print(f"{sha[:10]} {context}: {state} — {description}")
 
 
-# --- Canonical reconciliation entry point -----------------------------------
-
-
 def reconcile_pr(pr_number: int) -> ReadinessDecision | None:
-    """The one entry point every trigger delegates to."""
     state = read_current_state(pr_number)
     if state is None:
         print(f"PR #{pr_number} is not open; nothing to reconcile.")
         return None
-
     decision = decide(state)
     if decision.state == "success":
         decision = _confirm_success(pr_number, state, decision)
-
     if state.unusable_governance_reasons and decision.state != "success":
         print(f"PR #{pr_number} unusable Governance evidence: " + "; ".join(state.unusable_governance_reasons))
-
     publish(state.head_sha, decision.state, decision.description, state.published_readiness)
     if decision.state != "success":
         return decision
@@ -937,7 +675,6 @@ def reconcile_pr(pr_number: int) -> ReadinessDecision | None:
 
 
 def _confirm_success(pr_number: int, state: CurrentState, decision: ReadinessDecision) -> ReadinessDecision:
-    """Gate every ``success`` on live state, admission, and trusted preflight."""
     confirmation = read_current_state(pr_number)
     if confirmation is None:
         return ReadinessDecision("pending", "Waiting: pull request closed while readiness was being confirmed.")
@@ -959,7 +696,6 @@ def _converge_after_publishing_success(
     decision: ReadinessDecision,
     greened_heads: set[str],
 ) -> ReadinessDecision:
-    """Re-read after a green write and correct it if state moved during the write."""
     for _ in range(SUCCESS_CONVERGENCE_ATTEMPTS):
         observed = read_current_state(pr_number)
         if observed is None:
@@ -967,10 +703,6 @@ def _converge_after_publishing_success(
             return decision
         if observed.semantic_revision() == state.semantic_revision():
             return decision
-        print(
-            f"PR #{pr_number}: state changed while readiness was being published; "
-            "re-deciding from the observed current state."
-        )
         state = observed
         decision = decide(observed)
         if decision.state == "success":
@@ -982,13 +714,10 @@ def _converge_after_publishing_success(
         greened_heads.discard(observed.head_sha)
         _retract_greens(greened_heads)
         return decision
-
-    print(f"PR #{pr_number}: state is changing faster than readiness can be confirmed; withholding green.")
     return _withhold_green(pr_number, greened_heads, decision)
 
 
 def _retract_greens(greened_heads: set[str]) -> None:
-    """Best-effort retraction of every ``success`` this run published."""
     retracted: set[str] = set()
     failures: list[str] = []
     for head in sorted(greened_heads):
@@ -1011,7 +740,6 @@ def _withhold_green(
     greened_heads: set[str],
     decision: ReadinessDecision,
 ) -> ReadinessDecision:
-    """Withhold green and leave none of this run's own greens behind."""
     exhausted = ReadinessDecision(
         "pending",
         "Waiting: pull-request state is changing faster than readiness can be confirmed.",
@@ -1019,17 +747,12 @@ def _withhold_green(
     _retract_greens(greened_heads)
     final = read_current_state(pr_number)
     if final is None:
-        print(f"PR #{pr_number} closed while withholding green; this run's greens were retracted.")
         return exhausted
     publish(final.head_sha, exhausted.state, exhausted.description, final.published_readiness)
     return exhausted
 
 
-# --- Trigger adapters -------------------------------------------------------
-
-
 def candidate_pull_requests(name: str, event: dict[str, Any]) -> list[int]:
-    """Identify which pull requests a trigger asks us to reconcile."""
     if name == "workflow_run":
         workflow_run = event.get("workflow_run") or {}
         numbers = [
@@ -1040,48 +763,27 @@ def candidate_pull_requests(name: str, event: dict[str, Any]) -> list[int]:
         if numbers:
             return sorted(set(numbers))
         head_sha = (workflow_run.get("head_sha") or "").strip()
-        recovered = sorted(int(pr["number"]) for pr in open_pull_requests_for_head(head_sha))
-        if not recovered:
-            print(
-                "Governance workflow completion carried no pull request and no open pull request "
-                f"matches head {head_sha[:10] or 'unknown'}; nothing to reconcile."
-            )
-        return recovered
-
+        return sorted(int(pr["number"]) for pr in open_pull_requests_for_head(head_sha))
     if name == "schedule":
         return sorted(int(pr["number"]) for pr in open_pull_requests())
-
     if name == "workflow_dispatch":
         raw = (event.get("inputs") or {}).get("pr_number")
         if not raw:
-            print("workflow_dispatch requires a pr_number input; skipping.")
             raise SystemExit(1)
         return [int(raw)]
-
     if name == "issue_comment":
         issue = event.get("issue") or {}
-        if not issue.get("pull_request"):
-            print("Issue comment is not on a pull request; skipping.")
-            return []
-        return [int(issue["number"])]
-
+        return [int(issue["number"])] if issue.get("pull_request") else []
     pull_request = event.get("pull_request") or {}
     number = pull_request.get("number") or ((event.get("issue") or {}).get("number"))
-    if not number:
-        print("Event has no pull request number; skipping.")
-        return []
-    return [int(number)]
+    return [int(number)] if number else []
 
 
 def main() -> None:
     init_globals()
-
     with open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8") as handle:
         event = json.load(handle)
-
     candidates = candidate_pull_requests(event_name, event)
-    print(f"Trigger '{event_name}' identified {len(candidates)} pull request(s) to reconcile: {candidates}")
-
     failures: list[int] = []
     for pr_number in candidates:
         try:
@@ -1090,19 +792,16 @@ def main() -> None:
             failures.append(pr_number)
             print(f"Readiness reconciliation failed for PR #{pr_number}: {type(exc).__name__}: {exc}")
             _publish_controller_failure(pr_number, exc)
-
     if failures:
         raise SystemExit(1)
 
 
 def _publish_controller_failure(pr_number: int, exc: BaseException) -> None:
-    """Best-effort terminal failure status so a broken run never looks green."""
     try:
         pr = request_json("GET", f"pulls/{pr_number}")
         sha = ((pr.get("head") or {}).get("sha") or "").strip()
-        if not sha:
-            return
-        publish(sha, "failure", f"Readiness controller error: {type(exc).__name__}.", None)
+        if sha:
+            publish(sha, "failure", f"Readiness controller error: {type(exc).__name__}.", None)
     except Exception as publish_exc:
         print(f"Could not publish terminal controller failure: {type(publish_exc).__name__}: {publish_exc}")
 
