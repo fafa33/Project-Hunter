@@ -5,6 +5,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -52,6 +53,16 @@ OWNER_SENTINELS: dict[str, tuple[str, ...]] = {
 }
 
 TEMPLATE_PATH = ".github/pull_request_template.md"
+CANONICAL_PR_HEADINGS = (
+    "## Summary",
+    "## Scope and architecture",
+    "## Acceptance-criteria matrix",
+    "## Verification",
+    "## Operational validation",
+    "## Remaining limitations and risks",
+    "## Implementer readiness declaration",
+)
+COMMAND_TIMEOUT_SECONDS = 30
 TRACE_RE = re.compile(
     r"<!--\s*hunter-governance-preflight:v1\s+issue=(?P<issue>\d+)\s+"
     r"head=(?P<head>[0-9a-f]{7,64})\s+base=(?P<base>[0-9a-f]{7,64})\s*-->",
@@ -171,16 +182,31 @@ def _normalize(value: str) -> str:
 
 
 def _run(command: Sequence[str], *, cwd: Path | None = None) -> str:
-    completed = subprocess.run(
-        tuple(command),
-        cwd=str(cwd) if cwd is not None else None,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    """Run an external command with bounded time and status-safe failures.
+
+    Raw command diagnostics are never embedded in PreflightError because that
+    exception can cross the Merge Readiness status boundary. Diagnostics are
+    written to stderr for workflow logs; the raised message is deterministic
+    and safe for a public commit-status description.
+    """
+    try:
+        completed = subprocess.run(
+            tuple(command),
+            cwd=str(cwd) if cwd is not None else None,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=COMMAND_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise PreflightError(
+            f"external command timed out after {COMMAND_TIMEOUT_SECONDS}s: {command[0]}"
+        ) from exc
     if completed.returncode != 0:
         detail = (completed.stderr or completed.stdout or "").strip()
-        raise PreflightError(f"{' '.join(command)} failed ({completed.returncode}): {detail}")
+        if detail:
+            print(f"[Hunter Governance Preflight] external command diagnostic:\n{detail}", file=sys.stderr)
+        raise PreflightError(f"external command failed ({completed.returncode}): {command[0]}")
     return completed.stdout
 
 
@@ -230,6 +256,19 @@ def load_issue(repository: str, issue_number: int, issue_json: Path | None = Non
     return issue
 
 
+def validate_canonical_pr_sections(text: str, *, source: str = "PR body") -> None:
+    positions: list[int] = []
+    for heading in CANONICAL_PR_HEADINGS:
+        matches = list(re.finditer(rf"(?mi)^{re.escape(heading)}\s*$", text))
+        if len(matches) != 1:
+            raise PreflightError(
+                f"{source} must contain exactly one canonical section {heading!r}; found {len(matches)}."
+            )
+        positions.append(matches[0].start())
+    if positions != sorted(positions):
+        raise PreflightError(f"{source} canonical sections are out of order.")
+
+
 def validate_canonical_governance(repo_root: Path) -> None:
     failures: list[str] = []
     for path, sentinels in OWNER_SENTINELS.items():
@@ -246,18 +285,12 @@ def validate_canonical_governance(repo_root: Path) -> None:
     if not template.is_file():
         failures.append(f"missing {TEMPLATE_PATH}")
     else:
-        template_text = template.read_text(encoding="utf-8").lower()
-        for heading in (
-            "## Summary",
-            "## Scope and architecture",
-            "## Acceptance-criteria matrix",
-            "## Verification",
-            "## Operational validation",
-            "## Remaining limitations and risks",
-            "## Implementer readiness declaration",
-        ):
-            if heading.lower() not in template_text:
-                failures.append(f"{TEMPLATE_PATH} missing canonical section {heading!r}")
+        try:
+            validate_canonical_pr_sections(
+                template.read_text(encoding="utf-8"), source=TEMPLATE_PATH
+            )
+        except PreflightError as exc:
+            failures.append(str(exc))
     if failures:
         raise PreflightError("Canonical governance cannot be resolved: " + "; ".join(failures))
 
@@ -395,6 +428,7 @@ def validate_pr_body(
     base_sha: str,
     promotion: bool,
 ) -> None:
+    validate_canonical_pr_sections(body)
     validate_issue_identity(issue, repository=issue.repository, objective=issue.title, pr_body=body)
     required = issue_acceptance_criteria(issue.body)
     rows = parse_acceptance_matrix(body)
@@ -459,6 +493,18 @@ def _criterion_evidence(
     return "BLOCKED", "Pending explicit criterion-specific evidence."
 
 
+def _replace_once(text: str, old: str, new: str, *, label: str) -> str:
+    count = text.count(old)
+    if count != 1:
+        raise PreflightError(f"Canonical PR template must contain exactly one {label}; found {count}.")
+    return text.replace(old, new, 1)
+
+
+def _insert_after_heading(text: str, heading: str, content: str) -> str:
+    marker = f"{heading}\n\n"
+    return _replace_once(text, marker, f"{marker}{content}\n\n", label=f"{heading} insertion point")
+
+
 def generate_pr_body(
     issue: IssueIdentity,
     *,
@@ -471,18 +517,7 @@ def generate_pr_body(
     operational_evidence: Sequence[str] = (),
     limitations: Sequence[str] = (),
 ) -> str:
-    required_headings = (
-        "## Summary",
-        "## Scope and architecture",
-        "## Acceptance-criteria matrix",
-        "## Verification",
-        "## Operational validation",
-        "## Remaining limitations and risks",
-        "## Implementer readiness declaration",
-    )
-    for heading in required_headings:
-        if heading.lower() not in template_text.lower():
-            raise PreflightError(f"Canonical PR template is missing {heading!r}.")
+    validate_canonical_pr_sections(template_text, source="Canonical PR template")
 
     rows = [
         (criterion, *_criterion_evidence(criterion, evidence or {}))
@@ -495,47 +530,74 @@ def generate_pr_body(
         f"| {criterion.replace('|', '/')} | {status} | {detail.replace('|', '/')} |"
         for criterion, status, detail in rows
     )
-    verification_text = "\n".join(f"- {item}" for item in verification) or "- Pending exact command/result evidence."
+    verification_text = "\n".join(verification) or "Pending exact command/result evidence."
     operational_text = (
-        "\n".join(f"- {item}" for item in operational_evidence)
-        or "- NOT APPLICABLE unless the governing Issue requires operational/runtime validation."
+        "\n".join(operational_evidence)
+        or "NOT APPLICABLE unless the governing Issue requires operational/runtime validation."
     )
-    limitations_text = (
-        "\n".join(f"- {item}" for item in limitations) or "- Exact-head CI and independent review remain pending."
-    )
-    declarations = "\n".join(
-        f"- [{'x' if label == readiness else ' '}] `{label}`"
-        for label in ("READY FOR REVIEW", "CHANGES REQUIRED", "BLOCKED")
-    )
+    limitations_text = "\n".join(f"- {item}" for item in limitations) or "- Exact-head CI and independent review remain pending."
     marker = (
         f"<!-- hunter-governance-preflight:v1 issue={issue.number} "
         f"head={head_sha.lower()} base={base_sha.lower()} -->"
     )
-    return (
-        f"{marker}\nCloses #{issue.number}\n\n"
-        "## Summary\n\n"
-        f"Implements verified Issue **#{issue.number} — {issue.title}** through the mandatory Hunter governance "
-        "enforcement path. Metadata is generated from canonical inputs and explicit evidence.\n\n"
-        "## Scope and architecture\n\n"
-        f"{scope}\n\n"
-        "- Governing Issue identity is resolved from GitHub; sequence-inferred identity is rejected.\n"
-        "- Canonical governance ownership remains with the existing owner documents.\n"
-        "- Generated metadata grants no review approval or merge authority.\n\n"
-        "## Acceptance-criteria matrix\n\n"
-        "| Acceptance criterion | Status | Evidence |\n|---|---|---|\n"
-        f"{matrix}\n\n"
-        "- No criterion is omitted or inferred from green CI.\n"
-        "- PASS requires criterion-specific evidence.\n\n"
-        "## Verification\n\n"
-        f"{verification_text}\n\n"
-        "## Operational validation\n\n"
-        f"{operational_text}\n\n"
-        "## Remaining limitations and risks\n\n"
-        f"{limitations_text}\n\n"
-        "## Implementer readiness declaration\n\n"
-        f"{declarations}\n\n"
-        "> This is the implementer's self-assessment only. Independent review and human merge approval remain required.\n"
+
+    body = template_text
+    body = _replace_once(
+        body,
+        "Describe the exact issue/milestone scope implemented by this PR.",
+        (
+            f"Implements verified Issue **#{issue.number} — {issue.title}** through the mandatory Hunter governance "
+            "enforcement path. Metadata is generated from canonical inputs and explicit evidence."
+        ),
+        label="Summary placeholder",
     )
+    body = _insert_after_heading(
+        body,
+        "## Scope and architecture",
+        (
+            f"{scope}\n\n"
+            "- Governing Issue identity is resolved from GitHub; sequence-inferred identity is rejected.\n"
+            "- Canonical governance ownership remains with the existing owner documents.\n"
+            "- Generated metadata grants no review approval or merge authority."
+        ),
+    )
+    body = _replace_once(
+        body,
+        "| Replace with criterion | BLOCKED | Replace with test, runtime record, query result, or explanation |",
+        matrix,
+        label="acceptance-matrix placeholder row",
+    )
+    body = _replace_once(
+        body,
+        "Replace with verification output summary.",
+        verification_text,
+        label="verification placeholder",
+    )
+    body = _replace_once(
+        body,
+        "Replace with commands, record IDs, query/replay results, and environment details.",
+        operational_text,
+        label="operational-evidence placeholder",
+    )
+    body = _replace_once(
+        body,
+        "List every known incomplete item, environmental blocker, deferred requirement, and residual risk. Write `None` only after explicit verification.",
+        limitations_text,
+        label="limitations placeholder",
+    )
+
+    for label in ("READY FOR REVIEW", "CHANGES REQUIRED", "BLOCKED"):
+        pattern = re.compile(rf"(?m)^- \[[ xX]\] `{re.escape(label)}`")
+        matches = list(pattern.finditer(body))
+        if len(matches) != 1:
+            raise PreflightError(
+                f"Canonical PR template must contain exactly one readiness declaration {label!r}; found {len(matches)}."
+            )
+        mark = "x" if label == readiness else " "
+        body = pattern.sub(f"- [{mark}] `{label}`", body, count=1)
+
+    validate_canonical_pr_sections(body)
+    return f"{marker}\nCloses #{issue.number}\n\n{body.rstrip()}\n"
 
 
 def _owner_reference_present(line: str, owner_path: str) -> bool:
