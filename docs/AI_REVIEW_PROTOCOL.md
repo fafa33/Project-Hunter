@@ -166,6 +166,7 @@ The review report must record:
 - commands and checks used;
 - environment limitations;
 - blocking findings and non-blocking recommendations;
+- for every blocking finding, its root-cause classification as `isolated` or `systemic`, the evidence supporting that classification, and the reusable boundary implicated when systemic;
 - final review outcome.
 
 The canonical passing outcome is:
@@ -198,7 +199,16 @@ Examples include:
 
 Blocking findings must be resolved before approval.
 
-For architecture-preparation audits, blocking classification is determined only by `docs/ARCHITECTURE_AUDIT_PROTOCOL.md`. A documentation defect does not become architecture-decision-blocking merely because it is listed here as a possible implementation-review concern.
+Every confirmed blocking finding in contribution review must be classified by the independent reviewer as exactly one of:
+
+- **isolated** — the failure is genuinely specific to the current contribution and does not expose a reusable weakness in product behavior, implementation conventions, tests, metadata/evidence generation, Pull Request construction, preflight validation, templates, generators, agent instructions, governance tooling, or architectural understanding; or
+- **systemic** — the same defect class could reasonably recur in a later contribution because a reusable boundary allowed it.
+
+The reviewer records the classification and supporting evidence in the review report. When the classification is `systemic`, the reviewer also identifies the earliest reliable reusable boundary exposed by the finding where a durable guard can reasonably be applied. The reviewer does not implement that guard; implementation remains the implementer's responsibility under `docs/HUNTER_IMPLEMENTATION_CONTRACT.md`.
+
+The verifier must confirm that the required classification is present before treating a blocking finding as resolved. For a `systemic` finding, verification must also confirm evidence of the durable root-cause guard required by the implementation contract. A later recurrence of the same understood and preventable defect class is evidence that the previous systemic hardening was incomplete and must be reported as such rather than silently reclassified as a fresh isolated defect.
+
+For architecture-preparation audits, blocking classification is determined only by `docs/ARCHITECTURE_AUDIT_PROTOCOL.md`. A documentation defect does not become architecture-decision-blocking merely because it is listed here as a possible implementation-review concern. The `isolated`/`systemic` contribution-review classification in this document does not replace architecture-audit materiality classes.
 
 ---
 
@@ -226,6 +236,8 @@ The report records:
 
 - review outcome;
 - blocking findings;
+- for each blocking finding, `isolated` or `systemic` root-cause classification and supporting evidence;
+- for each systemic finding, the reusable boundary implicated and the durable-guard verification requirement;
 - recommendations;
 - required follow-up actions.
 
@@ -283,8 +295,8 @@ Every accepted contribution should remain understandable, reviewable, and mainta
 | Architecture documents | System architecture |
 | DEVELOPMENT_GOVERNANCE | Development lifecycle |
 | ARCHITECTURE_AUDIT_PROTOCOL | Architecture-preparation audit classification, materiality, verdicts, and re-audit |
-| HUNTER_IMPLEMENTATION_CONTRACT | Implementation obligations |
-| This document | Independent contribution and implementation review protocol |
+| HUNTER_IMPLEMENTATION_CONTRACT | Implementation obligations and durable guards after review classification |
+| This document | Independent contribution and implementation review protocol, including blocking-finding classification and reporting |
 
 ---
 
@@ -295,6 +307,7 @@ This document owns:
 - review roles;
 - review responsibilities;
 - independent implementation review;
+- contribution-review finding classification and reporting;
 - contribution review reporting;
 - approval protocol.
 
