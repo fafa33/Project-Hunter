@@ -71,12 +71,13 @@ def test_isolated_finding_serialization_is_supported() -> None:
 def test_incomplete_blocking_classification_fails_closed() -> None:
     finding = Finding("V-020", "body invalid", Severity.BLOCKING, "detail")
     result = DeterministicResult(findings=[finding])
-    payload = result.to_dict()
+    serialized_finding = finding.to_dict()
     assert result.blocking
     assert not finding.classification_complete
     assert result.classification_errors
-    assert payload["classification_errors"]
-    assert payload["findings"][0]["classification_complete"] is False
+    assert result.to_dict()["classification_errors"]
+    assert serialized_finding["classification_complete"] is False
+    assert isinstance(serialized_finding["classification_complete"], bool)
 
 
 def test_deterministic_blocker_is_systemic_at_reusable_boundary() -> None:
