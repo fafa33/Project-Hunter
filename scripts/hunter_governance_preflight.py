@@ -5,9 +5,10 @@ import json
 import os
 import re
 import subprocess
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 ALLOWED_ACTIONS = (
     "branch",
@@ -133,7 +134,7 @@ class IssueIdentity:
     state: str
 
     @classmethod
-    def from_payload(cls, repository: str, payload: Mapping[str, Any]) -> "IssueIdentity":
+    def from_payload(cls, repository: str, payload: Mapping[str, Any]) -> IssueIdentity:
         if payload.get("pull_request") is not None:
             raise PreflightError("Rule 21 identity target resolves to a pull request, not an Issue.")
         number = int(payload.get("number") or 0)
@@ -166,8 +167,7 @@ class FindingResolution:
 
 def _normalize(value: str) -> str:
     value = value.replace("`", "").replace("*", "")
-    value = re.sub(r"\s+", " ", value.strip().lower())
-    return value.rstrip(".")
+    return re.sub(r"\s+", " ", value.strip().lower()).rstrip(".")
 
 
 def _run(command: Sequence[str], *, cwd: Path | None = None) -> str:
@@ -192,11 +192,36 @@ def _gh_json(args: Sequence[str]) -> Any:
         raise PreflightError("GitHub CLI returned non-JSON output.") from exc
 
 
+def _gh_pr_oids(repository: str, pr_number: int) -> tuple[str, str]:
+    raw = _run(
+        (
+            "gh",
+            "pr",
+            "view",
+            str(pr_number),
+            "--repo",
+            repository,
+            "--json",
+            "baseRefOid,headRefOid",
+        )
+    )
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise PreflightError("GitHub CLI returned invalid PR OID JSON.") from exc
+    head = str(payload.get("headRefOid") or "").strip()
+    base = str(payload.get("baseRefOid") or "").strip()
+    if not head or not base:
+        raise PreflightError("Current headRefOid/baseRefOid are required for exact-pair preflight.")
+    return head, base
+
+
 def load_issue(repository: str, issue_number: int, issue_json: Path | None = None) -> IssueIdentity:
-    if issue_json is not None:
-        payload = json.loads(issue_json.read_text(encoding="utf-8"))
-    else:
-        payload = _gh_json((f"repos/{repository}/issues/{issue_number}",))
+    payload = (
+        json.loads(issue_json.read_text(encoding="utf-8"))
+        if issue_json is not None
+        else _gh_json((f"repos/{repository}/issues/{issue_number}",))
+    )
     issue = IssueIdentity.from_payload(repository, payload)
     if issue.number != int(issue_number):
         raise PreflightError(f"Issue identity mismatch: requested #{issue_number}, resolved #{issue.number}.")
@@ -206,22 +231,22 @@ def load_issue(repository: str, issue_number: int, issue_json: Path | None = Non
 
 
 def validate_canonical_governance(repo_root: Path) -> None:
-    missing: list[str] = []
-    contradictory: list[str] = []
+    failures: list[str] = []
     for path, sentinels in OWNER_SENTINELS.items():
         target = repo_root / path
         if not target.is_file():
-            missing.append(path)
+            failures.append(f"missing {path}")
             continue
-        text = target.read_text(encoding="utf-8")
-        absent = [sentinel for sentinel in sentinels if sentinel.lower() not in text.lower()]
+        text = target.read_text(encoding="utf-8").lower()
+        absent = [sentinel for sentinel in sentinels if sentinel.lower() not in text]
         if absent:
-            contradictory.append(f"{path} missing sentinel(s): {', '.join(absent)}")
+            failures.append(f"{path} missing sentinel(s): {', '.join(absent)}")
+
     template = repo_root / TEMPLATE_PATH
     if not template.is_file():
-        missing.append(TEMPLATE_PATH)
+        failures.append(f"missing {TEMPLATE_PATH}")
     else:
-        template_text = template.read_text(encoding="utf-8")
+        template_text = template.read_text(encoding="utf-8").lower()
         for heading in (
             "## Summary",
             "## Scope and architecture",
@@ -231,41 +256,37 @@ def validate_canonical_governance(repo_root: Path) -> None:
             "## Remaining limitations and risks",
             "## Implementer readiness declaration",
         ):
-            if heading.lower() not in template_text.lower():
-                contradictory.append(f"{TEMPLATE_PATH} missing canonical section {heading!r}")
-    if missing or contradictory:
-        details = [*(f"missing {item}" for item in missing), *contradictory]
-        raise PreflightError("Canonical governance cannot be resolved: " + "; ".join(details))
+            if heading.lower() not in template_text:
+                failures.append(f"{TEMPLATE_PATH} missing canonical section {heading!r}")
+    if failures:
+        raise PreflightError("Canonical governance cannot be resolved: " + "; ".join(failures))
 
 
 def issue_acceptance_criteria(issue_body: str) -> tuple[str, ...]:
     lines = issue_body.splitlines()
-    start = None
-    start_level = None
+    start: int | None = None
+    level: int | None = None
     for index, line in enumerate(lines):
         match = re.match(r"^(#{2,6})\s+Acceptance criteria\s*$", line.strip(), re.IGNORECASE)
         if match:
             start = index + 1
-            start_level = len(match.group(1))
+            level = len(match.group(1))
             break
-    if start is None or start_level is None:
+    if start is None or level is None:
         raise PreflightError("Governing Issue has no parseable 'Acceptance criteria' section.")
 
     criteria: list[str] = []
     for line in lines[start:]:
         heading = re.match(r"^(#{1,6})\s+", line.strip())
-        if heading and len(heading.group(1)) <= start_level:
+        if heading and len(heading.group(1)) <= level:
             break
         match = re.match(r"^\s*[-*+]\s+(?:\[[ xX]\]\s*)?(?P<text>.+?)\s*$", line)
-        if not match:
-            continue
-        text = match.group("text").strip()
-        if text:
-            criteria.append(text)
+        if match and match.group("text").strip():
+            criteria.append(match.group("text").strip())
     if not criteria:
         raise PreflightError("Governing Issue acceptance criteria are empty.")
     normalized = [_normalize(item) for item in criteria]
-    if len(set(normalized)) != len(normalized):
+    if len(normalized) != len(set(normalized)):
         raise PreflightError("Governing Issue contains duplicate acceptance criteria.")
     return tuple(criteria)
 
@@ -315,12 +336,10 @@ def parse_acceptance_matrix(body: str) -> tuple[MatrixRow, ...]:
             if len(lowered) >= 3 and lowered[:3] == MATRIX_HEADER:
                 in_table = True
                 continue
-            if in_table and all(set(cell) <= {"-", ":"} and cell for cell in cells[:3]):
+            if in_table and len(cells) >= 3 and all(set(cell) <= {"-", ":"} and cell for cell in cells[:3]):
                 continue
-            if in_table and len(cells) >= 3:
-                status = cells[1].lower()
-                if status in ALLOWED_STATUSES:
-                    rows.append(MatrixRow(cells[0], status, cells[2]))
+            if in_table and len(cells) >= 3 and cells[1].lower() in ALLOWED_STATUSES:
+                rows.append(MatrixRow(cells[0], cells[1].lower(), cells[2]))
                 continue
         if in_table and stripped and not stripped.startswith("|"):
             break
@@ -360,33 +379,27 @@ def validate_pr_body(
     base_sha: str,
     promotion: bool,
 ) -> None:
-    validate_issue_identity(
-        issue,
-        repository=issue.repository,
-        objective=issue.title,
-        pr_body=body,
-    )
+    validate_issue_identity(issue, repository=issue.repository, objective=issue.title, pr_body=body)
     required = issue_acceptance_criteria(issue.body)
     rows = parse_acceptance_matrix(body)
-    row_by_key: dict[str, MatrixRow] = {}
+
+    by_key: dict[str, MatrixRow] = {}
     for row in rows:
         key = _normalize(row.criterion)
-        if key in row_by_key:
+        if key in by_key:
             raise PreflightError(f"Acceptance criterion is duplicated in PR body: {row.criterion!r}.")
-        row_by_key[key] = row
+        by_key[key] = row
 
-    required_keys = {_normalize(criterion) for criterion in required}
-    missing = [criterion for criterion in required if _normalize(criterion) not in row_by_key]
+    required_keys = {_normalize(item) for item in required}
+    missing = [item for item in required if _normalize(item) not in by_key]
     if missing:
         raise PreflightError("PR body omits governing Issue acceptance criteria: " + "; ".join(missing))
-
-    extras = [row.criterion for key, row in row_by_key.items() if key not in required_keys]
+    extras = [row.criterion for key, row in by_key.items() if key not in required_keys]
     if extras:
         raise PreflightError("PR body contains acceptance criteria not present in governing Issue: " + "; ".join(extras))
 
     for row in rows:
-        evidence = _normalize(row.evidence)
-        if row.status == "pass" and evidence in PASS_EVIDENCE_PLACEHOLDERS:
+        if row.status == "pass" and _normalize(row.evidence) in PASS_EVIDENCE_PLACEHOLDERS:
             raise PreflightError(
                 f"PASS criterion lacks explicit evidence: {row.criterion!r}. Green CI alone is not completion evidence."
             )
@@ -401,11 +414,10 @@ def validate_pr_body(
         raise PreflightError("PR body evidence is stale relative to the current target revision.")
 
     if promotion:
-        bad = [row for row in rows if row.status in {"fail", "blocked"}]
-        if bad:
+        blocked = [row.criterion for row in rows if row.status in {"fail", "blocked"}]
+        if blocked:
             raise PreflightError(
-                "Ready-for-review promotion is blocked by FAIL/BLOCKED criteria: "
-                + "; ".join(row.criterion for row in bad)
+                "Ready-for-review promotion is blocked by FAIL/BLOCKED criteria: " + "; ".join(blocked)
             )
         if readiness != "ready for review":
             raise PreflightError(
@@ -419,14 +431,15 @@ def _criterion_evidence(
 ) -> tuple[str, str]:
     normalized = _normalize(criterion)
     for key, value in evidence.items():
-        if _normalize(key) == normalized:
-            status = str(value.get("status") or "").strip().upper()
-            detail = str(value.get("evidence") or "").strip()
-            if status.lower() not in ALLOWED_STATUSES:
-                raise PreflightError(f"Invalid evidence status for criterion {criterion!r}: {status!r}.")
-            if status == "PASS" and _normalize(detail) in PASS_EVIDENCE_PLACEHOLDERS:
-                raise PreflightError(f"PASS criterion {criterion!r} requires explicit evidence.")
-            return status, detail
+        if _normalize(key) != normalized:
+            continue
+        status = str(value.get("status") or "").strip().upper()
+        detail = str(value.get("evidence") or "").strip()
+        if status.lower() not in ALLOWED_STATUSES:
+            raise PreflightError(f"Invalid evidence status for criterion {criterion!r}: {status!r}.")
+        if status == "PASS" and _normalize(detail) in PASS_EVIDENCE_PLACEHOLDERS:
+            raise PreflightError(f"PASS criterion {criterion!r} requires explicit evidence.")
+        return status, detail
     return "BLOCKED", "Pending explicit criterion-specific evidence."
 
 
@@ -442,7 +455,7 @@ def generate_pr_body(
     operational_evidence: Sequence[str] = (),
     limitations: Sequence[str] = (),
 ) -> str:
-    for heading in (
+    required_headings = (
         "## Summary",
         "## Scope and architecture",
         "## Acceptance-criteria matrix",
@@ -450,54 +463,48 @@ def generate_pr_body(
         "## Operational validation",
         "## Remaining limitations and risks",
         "## Implementer readiness declaration",
-    ):
+    )
+    for heading in required_headings:
         if heading.lower() not in template_text.lower():
             raise PreflightError(f"Canonical PR template is missing {heading!r}.")
 
-    criteria = issue_acceptance_criteria(issue.body)
-    evidence = evidence or {}
-    matrix_rows: list[tuple[str, str, str]] = []
-    for criterion in criteria:
-        status, detail = _criterion_evidence(criterion, evidence)
-        matrix_rows.append((criterion, status, detail))
-
-    ready = all(status in {"PASS", "NOT APPLICABLE"} for _, status, _ in matrix_rows)
+    rows = [
+        (criterion, *_criterion_evidence(criterion, evidence or {}))
+        for criterion in issue_acceptance_criteria(issue.body)
+    ]
+    ready = all(status in {"PASS", "NOT APPLICABLE"} for _, status, _ in rows)
     readiness = "READY FOR REVIEW" if ready else "CHANGES REQUIRED"
     scope = "\n".join(f"- `{path}`" for path in sorted(set(changed_files))) or "- No changed files resolved."
+    matrix = "\n".join(
+        f"| {criterion.replace('|', '/')} | {status} | {detail.replace('|', '/')} |"
+        for criterion, status, detail in rows
+    )
     verification_text = "\n".join(f"- {item}" for item in verification) or "- Pending exact command/result evidence."
     operational_text = (
         "\n".join(f"- {item}" for item in operational_evidence)
         or "- NOT APPLICABLE unless the governing Issue requires operational/runtime validation."
     )
     limitations_text = "\n".join(f"- {item}" for item in limitations) or "- Exact-head CI and independent review remain pending."
-
-    matrix = "\n".join(
-        f"| {criterion.replace('|', '/')} | {status} | {detail.replace('|', '/')} |"
-        for criterion, status, detail in matrix_rows
+    declarations = "\n".join(
+        f"- [{'x' if label == readiness else ' '}] `{label}`"
+        for label in ("READY FOR REVIEW", "CHANGES REQUIRED", "BLOCKED")
     )
-    readiness_lines = []
-    for label in ("READY FOR REVIEW", "CHANGES REQUIRED", "BLOCKED"):
-        mark = "x" if label == readiness else " "
-        readiness_lines.append(f"- [{mark}] `{label}`")
     marker = (
         f"<!-- hunter-governance-preflight:v1 issue={issue.number} "
         f"head={head_sha.lower()} base={base_sha.lower()} -->"
     )
     return (
-        f"{marker}\n"
-        f"Closes #{issue.number}\n\n"
+        f"{marker}\nCloses #{issue.number}\n\n"
         "## Summary\n\n"
-        f"Implements the verified governing Issue **#{issue.number} — {issue.title}** through the mandatory "
-        "Hunter governance enforcement path. This description is generated from the canonical template, "
-        "the governing Issue, the exact changed scope, and explicit evidence supplied to the generator.\n\n"
+        f"Implements verified Issue **#{issue.number} — {issue.title}** through the mandatory Hunter governance "
+        "enforcement path. Metadata is generated from canonical inputs and explicit evidence.\n\n"
         "## Scope and architecture\n\n"
         f"{scope}\n\n"
-        "- Governing Issue identity was resolved from GitHub; no sequence-inferred Issue identity is accepted.\n"
-        "- Canonical governance ownership remains with the documents named by the enforcement preflight.\n"
-        "- No generated metadata grants review approval or merge authority.\n\n"
+        "- Governing Issue identity is resolved from GitHub; sequence-inferred identity is rejected.\n"
+        "- Canonical governance ownership remains with the existing owner documents.\n"
+        "- Generated metadata grants no review approval or merge authority.\n\n"
         "## Acceptance-criteria matrix\n\n"
-        "| Acceptance criterion | Status | Evidence |\n"
-        "|---|---|---|\n"
+        "| Acceptance criterion | Status | Evidence |\n|---|---|---|\n"
         f"{matrix}\n\n"
         "- No criterion is omitted or inferred from green CI.\n"
         "- PASS requires criterion-specific evidence.\n\n"
@@ -508,8 +515,7 @@ def generate_pr_body(
         "## Remaining limitations and risks\n\n"
         f"{limitations_text}\n\n"
         "## Implementer readiness declaration\n\n"
-        + "\n".join(readiness_lines)
-        + "\n\n"
+        f"{declarations}\n\n"
         "> This is the implementer's self-assessment only. Independent review and human merge approval remain required.\n"
     )
 
@@ -548,10 +554,7 @@ def added_lines_from_diff(diff_text: str) -> dict[str, list[str]]:
         if line.startswith("+++ b/"):
             current = line[6:]
             result.setdefault(current, [])
-            continue
-        if current is None:
-            continue
-        if line.startswith("+") and not line.startswith("+++"):
+        elif current is not None and line.startswith("+") and not line.startswith("+++"):
             result[current].append(line[1:])
     return result
 
@@ -566,18 +569,17 @@ def validate_finding_resolution(finding: FindingResolution) -> None:
         )
     if not (finding.classification_evidence or "").strip():
         raise PreflightError(f"Blocking finding {finding.finding_id} lacks classification evidence.")
-    if classification == "systemic":
-        if not (finding.reusable_boundary or "").strip():
-            raise PreflightError(f"Systemic finding {finding.finding_id} lacks the reusable boundary.")
-        if not (finding.durable_guard_evidence or "").strip():
-            raise PreflightError(f"Systemic finding {finding.finding_id} lacks durable reusable hardening evidence.")
-        if not (finding.verifier_evidence or "").strip():
-            raise PreflightError(f"Systemic finding {finding.finding_id} lacks verifier evidence for the durable guard.")
+    if classification != "systemic":
+        return
+    if not (finding.reusable_boundary or "").strip():
+        raise PreflightError(f"Systemic finding {finding.finding_id} lacks the reusable boundary.")
+    if not (finding.durable_guard_evidence or "").strip():
+        raise PreflightError(f"Systemic finding {finding.finding_id} lacks durable reusable hardening evidence.")
+    if not (finding.verifier_evidence or "").strip():
+        raise PreflightError(f"Systemic finding {finding.finding_id} lacks verifier evidence for the durable guard.")
 
 
 def _require_current_state_ready(pr_number: int, issue: IssueIdentity) -> None:
-    # Imported lazily so hunter_merge_readiness can import trace helpers from
-    # this module without creating an import cycle.
     import hunter_merge_readiness as readiness
 
     readiness.init_globals()
@@ -590,22 +592,18 @@ def _require_current_state_ready(pr_number: int, issue: IssueIdentity) -> None:
         raise PreflightError(f"PR #{pr_number} is not open.")
     if not state.draft:
         raise PreflightError(f"PR #{pr_number} is already out of Draft; pre-action Ready preflight was bypassed.")
-    pr_payload = _gh_json((f"repos/{readiness.repo}/pulls/{pr_number}",))
+
+    pr = _gh_json((f"repos/{issue.repository}/pulls/{pr_number}",))
     validate_issue_identity(
         issue,
-        repository=readiness.repo,
+        repository=issue.repository,
         objective=issue.title,
-        branch=str((pr_payload.get("head") or {}).get("ref") or ""),
+        branch=str((pr.get("head") or {}).get("ref") or ""),
         pr_title=state.title,
         pr_body=state.body,
     )
-    validate_pr_body(
-        state.body,
-        issue,
-        head_sha=state.head_sha,
-        base_sha=state.base_sha,
-        promotion=True,
-    )
+    validate_pr_body(state.body, issue, head_sha=state.head_sha, base_sha=state.base_sha, promotion=True)
+
     problem = readiness.feedback_error(state)
     if problem:
         raise PreflightError(problem)
@@ -644,22 +642,21 @@ def _read_json(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def _git_branch(repo_root: Path) -> str:
-    return _run(("git", "branch", "--show-current"), cwd=repo_root).strip()
+def _git_branch(root: Path) -> str:
+    return _run(("git", "branch", "--show-current"), cwd=root).strip()
 
 
-def _git_commit_message(repo_root: Path) -> str:
-    return _run(("git", "log", "-1", "--pretty=%B"), cwd=repo_root).strip()
+def _git_commit_message(root: Path) -> str:
+    return _run(("git", "log", "-1", "--pretty=%B"), cwd=root).strip()
 
 
-def _git_changed_files(repo_root: Path, base_ref: str) -> tuple[str, ...]:
-    text = _run(("git", "diff", "--name-only", f"{base_ref}...HEAD"), cwd=repo_root)
-    return tuple(line.strip() for line in text.splitlines() if line.strip())
+def _git_changed_files(root: Path, base_ref: str) -> tuple[str, ...]:
+    output = _run(("git", "diff", "--name-only", f"{base_ref}...HEAD"), cwd=root)
+    return tuple(line.strip() for line in output.splitlines() if line.strip())
 
 
-def _git_added_lines(repo_root: Path, base_ref: str) -> dict[str, list[str]]:
-    diff = _run(("git", "diff", "--unified=0", f"{base_ref}...HEAD"), cwd=repo_root)
-    return added_lines_from_diff(diff)
+def _git_added_lines(root: Path, base_ref: str) -> dict[str, list[str]]:
+    return added_lines_from_diff(_run(("git", "diff", "--unified=0", f"{base_ref}...HEAD"), cwd=root))
 
 
 def _identity_args(parser: argparse.ArgumentParser, *, body: bool = True) -> None:
@@ -672,12 +669,7 @@ def _identity_args(parser: argparse.ArgumentParser, *, body: bool = True) -> Non
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description=(
-            "Mandatory deterministic Hunter governance preflight. Canonical prose remains authoritative; "
-            "this command resolves it and fails closed before governed mutations."
-        )
-    )
+    parser = argparse.ArgumentParser(description="Deterministic Hunter governance preflight.")
     parser.add_argument("--repo-root", default=".")
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -725,13 +717,12 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _load_issue_from_args(args: argparse.Namespace) -> IssueIdentity:
-    issue_path = Path(args.issue_json) if getattr(args, "issue_json", None) else None
-    return load_issue(args.repo, args.issue, issue_path)
+    path = Path(args.issue_json) if getattr(args, "issue_json", None) else None
+    return load_issue(args.repo, args.issue, path)
 
 
 def _cmd_self_check(args: argparse.Namespace) -> int:
-    root = Path(args.repo_root).resolve()
-    validate_canonical_governance(root)
+    validate_canonical_governance(Path(args.repo_root).resolve())
     print("[Hunter Governance Preflight] PASS: canonical governance surfaces resolved.")
     return 0
 
@@ -741,12 +732,11 @@ def _cmd_generate(args: argparse.Namespace) -> int:
     validate_canonical_governance(root)
     issue = _load_issue_from_args(args)
     validate_issue_identity(issue, repository=args.repo, objective=args.objective)
-    changed = _git_changed_files(root, args.base_ref)
     evidence = _read_json(Path(args.evidence_json)) if args.evidence_json else {}
     body = generate_pr_body(
         issue,
         template_text=(root / args.template).read_text(encoding="utf-8"),
-        changed_files=changed,
+        changed_files=_git_changed_files(root, args.base_ref),
         head_sha=args.head_sha,
         base_sha=args.base_sha,
         evidence=evidence,
@@ -839,26 +829,16 @@ def _cmd_live_pr(args: argparse.Namespace) -> int:
     if len(refs) != 1:
         raise PreflightError("Live PR must contain exactly one Closes/Fixes Issue identity.")
     issue = load_issue(args.repo, refs[0])
-    branch = str((pr.get("head") or {}).get("ref") or "")
-    title = str(pr.get("title") or "")
     validate_issue_identity(
         issue,
         repository=args.repo,
         objective=issue.title,
-        branch=branch,
-        pr_title=title,
+        branch=str((pr.get("head") or {}).get("ref") or ""),
+        pr_title=str(pr.get("title") or ""),
         pr_body=body,
     )
-    head_sha = str((pr.get("head") or {}).get("sha") or "")
-    base_sha = str((pr.get("base") or {}).get("sha") or "")
-    validate_pr_body(
-        body,
-        issue,
-        head_sha=head_sha,
-        base_sha=base_sha,
-        promotion=not bool(pr.get("draft")),
-    )
-
+    head_sha, base_sha = _gh_pr_oids(args.repo, args.pr)
+    validate_pr_body(body, issue, head_sha=head_sha, base_sha=base_sha, promotion=not bool(pr.get("draft")))
     diff = _run(
         (
             "gh",
@@ -874,8 +854,7 @@ def _cmd_live_pr(args: argparse.Namespace) -> int:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = _parser()
-    args = parser.parse_args(argv)
+    args = _parser().parse_args(argv)
     try:
         return int(args.handler(args))
     except (PreflightError, OSError, json.JSONDecodeError) as exc:
