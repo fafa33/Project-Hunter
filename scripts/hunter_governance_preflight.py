@@ -199,9 +199,7 @@ def _run(command: Sequence[str], *, cwd: Path | None = None) -> str:
             timeout=COMMAND_TIMEOUT_SECONDS,
         )
     except subprocess.TimeoutExpired as exc:
-        raise PreflightError(
-            f"external command timed out after {COMMAND_TIMEOUT_SECONDS}s: {command[0]}"
-        ) from exc
+        raise PreflightError(f"external command timed out after {COMMAND_TIMEOUT_SECONDS}s: {command[0]}") from exc
     if completed.returncode != 0:
         detail = (completed.stderr or completed.stdout or "").strip()
         if detail:
@@ -286,9 +284,7 @@ def validate_canonical_governance(repo_root: Path) -> None:
         failures.append(f"missing {TEMPLATE_PATH}")
     else:
         try:
-            validate_canonical_pr_sections(
-                template.read_text(encoding="utf-8"), source=TEMPLATE_PATH
-            )
+            validate_canonical_pr_sections(template.read_text(encoding="utf-8"), source=TEMPLATE_PATH)
         except PreflightError as exc:
             failures.append(str(exc))
     if failures:
@@ -535,7 +531,9 @@ def generate_pr_body(
         "\n".join(operational_evidence)
         or "NOT APPLICABLE unless the governing Issue requires operational/runtime validation."
     )
-    limitations_text = "\n".join(f"- {item}" for item in limitations) or "- Exact-head CI and independent review remain pending."
+    limitations_text = (
+        "\n".join(f"- {item}" for item in limitations) or "- Exact-head CI and independent review remain pending."
+    )
     marker = (
         f"<!-- hunter-governance-preflight:v1 issue={issue.number} "
         f"head={head_sha.lower()} base={base_sha.lower()} -->"
