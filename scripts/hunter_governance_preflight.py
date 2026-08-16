@@ -120,8 +120,16 @@ VERIFICATION_MARKER_RE = re.compile(
     r"outcome=(?P<outcome>resolved|unresolved)\s*-->",
     re.IGNORECASE,
 )
+HOSTILE_REVIEW_MARKER_RE = re.compile(
+    r"<!--\s*hunter-hostile-review:v1\s+head=(?P<head>[0-9a-f]{40})\s+"
+    r"base=(?P<base>[0-9a-f]{40})\s+"
+    r"outcome=(?P<outcome>no-blocking-findings|changes-required|blocked)\s*-->",
+    re.IGNORECASE,
+)
 CLASSIFICATION_EVIDENCE_RE = re.compile(r"(?im)^Classification evidence:\s*(?P<value>\S.+?)\s*$")
 REUSABLE_BOUNDARY_RE = re.compile(r"(?im)^Reusable boundary:\s*(?P<value>\S.+?)\s*$")
+VERIFICATION_EVIDENCE_RE = re.compile(r"(?im)^Verification evidence:\s*(?P<value>\S.+?)\s*$")
+DURABLE_GUARD_EVIDENCE_RE = re.compile(r"(?im)^Durable guard evidence:\s*(?P<value>\S.+?)\s*$")
 SEMANTIC_MARKERS: dict[str, tuple[re.Pattern[str], ...]] = {
     "lifecycle": tuple(
         re.compile(pattern, re.IGNORECASE)
@@ -218,6 +226,9 @@ class LiveReviewEvidence:
     author: str
     body: str
     pull_request_number: int = 0
+    kind: str = "unknown"
+    review_state: str = ""
+    commit_id: str = ""
 
 
 def _normalize(value: str) -> str:
@@ -622,12 +633,10 @@ def generate_pr_body(
         (criterion, *_criterion_evidence(criterion, evidence or {}))
         for criterion in issue_acceptance_criteria(issue.body)
     ]
-    ready = (
-        all(status in {"PASS", "NOT APPLICABLE"} for _, status, _ in rows)
-        and bool(verification)
-        and bool(operational_evidence)
-    )
-    readiness = "READY FOR REVIEW" if ready else "CHANGES REQUIRED"
+    # Generation happens before hosted exact-head checks and independent hostile
+    # review can exist. Caller-supplied prose is useful trace material, but it is
+    # never authority to promote a generated body.
+    readiness = "CHANGES REQUIRED"
     scope = "\n".join(f"- `{path}`" for path in sorted(set(changed_files))) or "- No changed files resolved."
     matrix = "\n".join(
         f"| {criterion.replace('|', '/')} | {status} | {detail.replace('|', '/')} |"
@@ -769,8 +778,21 @@ def validate_finding_resolution(finding: FindingResolution) -> None:
 def _review_evidence_from_url(repository: str, pr_number: int, url: str) -> LiveReviewEvidence:
     review_match = re.search(r"#discussion_r(?P<id>\d+)$", url)
     issue_match = re.search(r"#issuecomment-(?P<id>\d+)$", url)
+    kind = "issue_comment"
+    review_state = ""
+    commit_id = ""
     if review_match is not None:
         payload = _gh_json((f"repos/{repository}/pulls/comments/{review_match.group('id')}",))
+        kind = "review_comment"
+        review_id = int(payload.get("pull_request_review_id") or 0)
+        if not review_id or payload.get("in_reply_to_id") is not None:
+            raise PreflightError("Canonical finding evidence must be a top-level PR review comment.")
+        parent_review = _gh_json((f"repos/{repository}/pulls/{pr_number}/reviews/{review_id}",))
+        review_author = str((parent_review.get("user") or {}).get("login") or "").strip()
+        if review_author.lower() != str((payload.get("user") or {}).get("login") or "").strip().lower():
+            raise PreflightError("PR review comment author does not match its canonical parent review.")
+        review_state = str(parent_review.get("state") or "").strip().lower()
+        commit_id = str(parent_review.get("commit_id") or "").strip().lower()
     elif issue_match is not None:
         payload = _gh_json((f"repos/{repository}/issues/comments/{issue_match.group('id')}",))
     else:
@@ -783,7 +805,15 @@ def _review_evidence_from_url(repository: str, pr_number: int, url: str) -> Live
     parent_number = int(parent_number_match.group("number")) if parent_number_match else 0
     if live_url != url or not author or not body or parent_number != int(pr_number):
         raise PreflightError("Live review evidence is incomplete or does not match the requested URL.")
-    return LiveReviewEvidence(url=live_url, author=author, body=body, pull_request_number=parent_number)
+    return LiveReviewEvidence(
+        url=live_url,
+        author=author,
+        body=body,
+        pull_request_number=parent_number,
+        kind=kind,
+        review_state=review_state,
+        commit_id=commit_id,
+    )
 
 
 def finding_resolution_from_live_review(
@@ -793,7 +823,6 @@ def finding_resolution_from_live_review(
     pr_author: str,
     head_sha: str,
     base_sha: str,
-    durable_guard_evidence: str | None,
 ) -> FindingResolution:
     if not pr_author:
         raise PreflightError("Live PR author identity is required for independent finding resolution.")
@@ -801,6 +830,16 @@ def finding_resolution_from_live_review(
         raise PreflightError("Finding classification and post-fix verification must be separate live evidence.")
     if finding_comment.author.lower() == pr_author.lower() or verifier_comment.author.lower() == pr_author.lower():
         raise PreflightError("Finding classification and verification must be independent from the PR author.")
+    if finding_comment.author.lower() == verifier_comment.author.lower():
+        raise PreflightError("Finding classification and verification require distinct independent authors.")
+    if (
+        finding_comment.kind != "review_comment"
+        or finding_comment.review_state != "changes_requested"
+        or finding_comment.commit_id.lower() != head_sha.lower()
+    ):
+        raise PreflightError(
+            "Canonical blocking finding is stale or does not belong to a current exact-head CHANGES_REQUESTED review."
+        )
     finding_matches = list(FINDING_MARKER_RE.finditer(finding_comment.body))
     if len(finding_matches) != 1:
         raise PreflightError("Canonical live finding must contain exactly one machine-readable finding marker.")
@@ -827,6 +866,10 @@ def finding_resolution_from_live_review(
         or verifier_marker.group("base").lower() != base_sha.lower()
     ):
         raise PreflightError("Verifier evidence is stale for the current exact pair.")
+    verifier_evidence_match = VERIFICATION_EVIDENCE_RE.search(verifier_comment.body)
+    if verifier_evidence_match is None:
+        raise PreflightError("Live verifier comment lacks substantive Verification evidence.")
+    durable_guard_match = DURABLE_GUARD_EVIDENCE_RE.search(verifier_comment.body)
 
     finding = FindingResolution(
         finding_id=finding_id,
@@ -834,12 +877,41 @@ def finding_resolution_from_live_review(
         classification=finding_marker.group("classification"),
         classification_evidence=classification_evidence.group("value"),
         reusable_boundary=(reusable_boundary_match.group("value") if reusable_boundary_match else None),
-        durable_guard_evidence=durable_guard_evidence,
-        verifier_evidence=verifier_comment.url,
+        durable_guard_evidence=(durable_guard_match.group("value") if durable_guard_match else None),
+        verifier_evidence=verifier_evidence_match.group("value"),
         resolved=True,
     )
     validate_finding_resolution(finding)
     return finding
+
+
+def require_independent_hostile_review(
+    *, repository: str, pr_number: int, pr_author: str, head_sha: str, base_sha: str
+) -> None:
+    if not pr_author:
+        raise PreflightError("Live PR author identity is required for independent hostile review.")
+    payload = _gh_json((f"repos/{repository}/pulls/{pr_number}/reviews?per_page=100",))
+    if not isinstance(payload, list):
+        raise PreflightError("Live hostile-review evidence is unavailable.")
+    candidates: list[tuple[int, str]] = []
+    for review in payload:
+        author = str((review.get("user") or {}).get("login") or "").strip()
+        if not author or author.lower() == pr_author.lower():
+            continue
+        if str(review.get("commit_id") or "").lower() != head_sha.lower():
+            continue
+        matches = list(HOSTILE_REVIEW_MARKER_RE.finditer(str(review.get("body") or "")))
+        if len(matches) != 1:
+            continue
+        marker = matches[0]
+        if marker.group("head").lower() != head_sha.lower() or marker.group("base").lower() != base_sha.lower():
+            continue
+        candidates.append((int(review.get("id") or 0), marker.group("outcome").lower()))
+    if not candidates:
+        raise PreflightError("Ready preflight lacks independent exact-pair hostile-review evidence.")
+    _review_id, outcome = max(candidates)
+    if outcome != "no-blocking-findings":
+        raise PreflightError(f"Latest independent exact-pair hostile review reports {outcome.upper()}.")
 
 
 def _require_current_state_ready(pr_number: int, issue: IssueIdentity) -> None:
@@ -887,6 +959,13 @@ def _require_current_state_ready(pr_number: int, issue: IssueIdentity) -> None:
         raise PreflightError("Ready preflight failed exact-head prerequisites: " + ", ".join(failures))
     if pending:
         raise PreflightError("Ready preflight is waiting for exact-head prerequisites: " + ", ".join(pending))
+    require_independent_hostile_review(
+        repository=issue.repository,
+        pr_number=pr_number,
+        pr_author=str((pr.get("user") or {}).get("login") or ""),
+        head_sha=state.head_sha,
+        base_sha=state.base_sha,
+    )
 
 
 def validate_trace_against_state(body: str, *, head_sha: str, base_sha: str) -> str | None:
@@ -1082,6 +1161,14 @@ def _cmd_merge_readiness(args: argparse.Namespace) -> int:
     decision = readiness.decide(state)
     if decision.state != "success":
         raise PreflightError(decision.description)
+    pr = _gh_json((f"repos/{readiness.repo}/pulls/{args.pr}",))
+    require_independent_hostile_review(
+        repository=readiness.repo,
+        pr_number=args.pr,
+        pr_author=str((pr.get("user") or {}).get("login") or ""),
+        head_sha=state.head_sha,
+        base_sha=state.base_sha,
+    )
     print(f"[Hunter Governance Preflight] PASS: PR #{args.pr} is merge-ready under canonical controller state.")
     return 0
 
@@ -1100,7 +1187,6 @@ def _cmd_finding(args: argparse.Namespace) -> int:
         pr_author=str((pr.get("user") or {}).get("login") or ""),
         head_sha=head_sha,
         base_sha=base_sha,
-        durable_guard_evidence=payload.get("durable_guard_evidence"),
     )
     print(f"[Hunter Governance Preflight] PASS: finding {finding.finding_id} resolution evidence is complete.")
     return 0

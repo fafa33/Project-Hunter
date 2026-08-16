@@ -89,7 +89,7 @@ Every governing Issue acceptance criterion is represented exactly once. Unproven
 
 Changing the source head or target revision makes that evidence stale until the body is regenerated or re-synchronized with current evidence.
 
-The generator resolves the source head and target revision from the current Git checkout. Callers cannot supply alternate SHA values. It emits `READY FOR REVIEW` only when every criterion is complete and explicit verification and operational evidence were supplied; otherwise it emits `CHANGES REQUIRED`. The live validator also rejects a `READY FOR REVIEW` body with unchecked verification/operational items or placeholder evidence.
+The generator resolves the source head and target revision from the current Git checkout. Callers cannot supply alternate SHA values. Generation always emits `CHANGES REQUIRED`: caller-supplied criterion, verification, and operational prose is trace material, not promotion authority. A later live-state action may set `READY FOR REVIEW` only after hosted exact-head gates and independent hostile review exist. The live validator also rejects a `READY FOR REVIEW` body with unchecked verification/operational items or placeholder evidence.
 
 The parser accepts the matrix only inside the canonical `## Acceptance-criteria matrix` section. A matching table elsewhere in the body cannot satisfy the governed metadata contract.
 
@@ -105,7 +105,7 @@ python scripts/hunter_governance_preflight.py ready \
   --pr <PR_NUMBER>
 ```
 
-The command re-reads current GitHub state. It requires the canonical Issue identity, complete matrix, current exact-pair trace, `READY FOR REVIEW`, no `FAIL`/`BLOCKED` criterion, current exact-head required checks, current Governance Review evidence, and no live review-feedback blocker. Event payloads are hints; current GitHub state is authority.
+The command re-reads current GitHub state. It requires the canonical Issue identity, complete matrix, current exact-pair trace, `READY FOR REVIEW`, no `FAIL`/`BLOCKED` criterion, current exact-head required checks, current Governance Review evidence, no live review-feedback blocker, and the latest independent exact-pair PR review marker to report `no-blocking-findings`. Event payloads are hints; current GitHub state is authority. Merge-readiness preflight consumes the same hostile-review artifact.
 
 Draft Promotion consumes the same canonical current-state feedback readers as Merge Readiness. An unresolved thread, a current `CHANGES_REQUESTED` review, or an unacknowledged external top-level comment therefore cannot produce a successful promotion signal.
 
@@ -122,7 +122,7 @@ python scripts/hunter_governance_preflight.py resolve-finding \
   --finding-json /tmp/finding-resolution.json
 ```
 
-The resolution record references live `finding_url` and `verifier_url` comments. The independent finding comment must carry an exact-pair `hunter-review-finding:v1` marker plus classification evidence and, when systemic, a reusable boundary. The independent verifier comment must carry the matching exact-pair `hunter-review-verification:v1` marker. Caller-supplied severity, classification, reviewer identity, or verifier identity is not authority. A systemic resolved finding additionally requires durable guard evidence. This is the executable enforcement of the implementation obligation already owned by `docs/HUNTER_IMPLEMENTATION_CONTRACT.md`.
+The resolution record references only live `finding_url` and `verifier_url` comments. The independent finding must be a top-level comment belonging to a current exact-head GitHub `CHANGES_REQUESTED` review, and must carry an exact-pair `hunter-review-finding:v1` marker plus classification evidence and, when systemic, a reusable boundary. The distinct independent verifier comment must carry the matching exact-pair `hunter-review-verification:v1` marker and a substantive `Verification evidence:` line; a systemic resolution also derives its required `Durable guard evidence:` line from that live verifier comment. Caller JSON and marker-only comments are not evidence authority. This is the executable enforcement of the implementation obligation already owned by `docs/HUNTER_IMPLEMENTATION_CONTRACT.md`.
 
 ## Canonical ownership guard
 
@@ -139,7 +139,7 @@ Some actions can be prevented before mutation only when the contributing agent c
 
 The standalone `Hunter Governance Agent Preflight` workflow also uses `pull_request_target` and the trusted default-branch checkout. It is an additional rejection surface, not a separate approval or merge authority.
 
-Top-level PR Conversation comments authored by the repository owner do not require self-acknowledgement only when they are demonstrably non-blocking status notes. Explicit owner blocking feedback remains a canonical feedback blocker until it is edited or removed after resolution. External human comments and unknown-bot comments retain the existing acknowledgement requirement; trusted structurally identifiable status/advisory automation comments retain their narrow exemption.
+Top-level PR Conversation comments authored by the repository owner do not require self-acknowledgement only when they carry the narrow structural marker `<!-- hunter-owner-status:nonblocking -->`. Every other owner comment fails closed as canonical feedback until it is edited or removed after resolution. External human comments and unknown-bot comments retain the existing acknowledgement requirement; trusted structurally identifiable status/advisory automation comments retain their narrow exemption.
 
 `Hunter Governance Review` and `Hunter Merge Readiness` remain the canonical merge-control path. The enforcement layer cannot approve itself or grant merge authority. No agent-generated metadata is approval. No automation may merge merely because preflight passes. Human approval remains required.
 

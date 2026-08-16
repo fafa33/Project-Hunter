@@ -82,7 +82,12 @@ def test_exempt_comment_does_not_change_the_semantic_revision(gh):
 
 def test_owner_authored_comment_does_not_require_self_acknowledgement(gh):
     ready_pull_request(gh)
-    gh.add_comment(501, 907, login="fafa33", body="owner implementation note")
+    gh.add_comment(
+        501,
+        907,
+        login="fafa33",
+        body="<!-- hunter-owner-status:nonblocking -->\nowner implementation status note",
+    )
 
     decision = core.reconcile_pr(501)
 
@@ -97,6 +102,7 @@ def test_owner_authored_comment_does_not_require_self_acknowledgement(gh):
         "ACCEPTED AS BLOCKING. Do not resolve until the root cause is fixed.",
         "Do not merge; this blocker remains unresolved.",
         "CHANGES REQUIRED: must fix the identity bypass.",
+        "I reject this change; it cannot proceed until the identity defect is corrected.",
     ],
 )
 def test_explicit_owner_blocking_comment_remains_a_feedback_blocker(gh, body: str):
@@ -109,6 +115,19 @@ def test_explicit_owner_blocking_comment_remains_a_feedback_blocker(gh, body: st
     assert core.unacknowledged_top_level_comments(501) == (908,)
     gh.acknowledge(908)
     assert core.reconcile_pr(501).state == "failure"
+
+
+def test_non_owner_cannot_claim_owner_nonblocking_status_exemption(gh):
+    ready_pull_request(gh)
+    gh.add_comment(
+        501,
+        909,
+        login="a-reviewer",
+        body="<!-- hunter-owner-status:nonblocking -->\nlooks fine",
+    )
+
+    assert core.reconcile_pr(501).state == "failure"
+    assert core.unacknowledged_top_level_comments(501) == (909,)
 
 
 def test_non_exempt_bot_comment_blocks_until_acknowledged(gh):

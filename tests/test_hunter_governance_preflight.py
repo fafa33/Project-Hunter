@@ -34,7 +34,7 @@ def canonical_template() -> str:
 def generated_body(*, ready: bool = True, template_text: str | None = None) -> str:
     issue = fixture_issue()
     with patch.object(preflight, "_git_exact_pair", return_value=(HEAD, BASE)):
-        return preflight.generate_pr_body(
+        body = preflight.generate_pr_body(
             issue,
             repo_root=ROOT,
             base_ref="main",
@@ -44,6 +44,11 @@ def generated_body(*, ready: bool = True, template_text: str | None = None) -> s
             verification=("ruff check .: PASS",) if ready else (),
             operational_evidence=("Governance-only validation: PASS",) if ready else (),
         )
+    if not ready:
+        return body
+    body = body.replace("- [ ] `READY FOR REVIEW`", "- [x] `READY FOR REVIEW`", 1)
+    body = body.replace("- [x] `CHANGES REQUIRED`", "- [ ] `CHANGES REQUIRED`", 1)
+    return body
 
 
 def test_canonical_governance_loader_resolves_current_repository() -> None:
@@ -106,6 +111,27 @@ def test_generator_does_not_declare_ready_when_verification_or_operational_evide
 
     assert preflight.checked_readiness(body) == "changes required"
     assert "Pending exact command/result evidence." in body
+
+
+def test_generator_never_self_promotes_from_caller_supplied_evidence() -> None:
+    issue = fixture_issue()
+    fabricated = {
+        criterion: {"status": "PASS", "evidence": "fabricated"}
+        for criterion in preflight.issue_acceptance_criteria(issue.body)
+    }
+    with patch.object(preflight, "_git_exact_pair", return_value=(HEAD, BASE)):
+        body = preflight.generate_pr_body(
+            issue,
+            repo_root=ROOT,
+            base_ref="main",
+            template_text=canonical_template(),
+            changed_files=("scripts/hunter_governance_preflight.py",),
+            evidence=fabricated,
+            verification=("fabricated",),
+            operational_evidence=("fabricated",),
+        )
+
+    assert preflight.checked_readiness(body) == "changes required"
 
 
 def test_ready_body_rejects_unchecked_or_placeholder_evidence() -> None:
@@ -406,6 +432,9 @@ def _live_review_evidence(*, author: str, body: str, suffix: str) -> preflight.L
         author=author,
         body=body,
         pull_request_number=277,
+        kind="review_comment" if suffix.startswith("discussion_r") else "issue_comment",
+        review_state="changes_requested" if suffix.startswith("discussion_r") else "",
+        commit_id=HEAD if suffix.startswith("discussion_r") else "",
     )
 
 
@@ -423,7 +452,11 @@ def test_finding_resolution_is_bound_to_live_independent_exact_pair_evidence() -
     verifier = _live_review_evidence(
         author="independent-verifier",
         suffix="issuecomment-2",
-        body=(f"<!-- hunter-review-verification:v1 finding=F-004 head={HEAD} base={BASE} outcome=resolved -->"),
+        body=(
+            f"<!-- hunter-review-verification:v1 finding=F-004 head={HEAD} base={BASE} outcome=resolved -->\n"
+            "Verification evidence: Independent counterexample now fails.\n"
+            "Durable guard evidence: Counterfactual regression covers the reusable resolver boundary."
+        ),
     )
 
     resolution = preflight.finding_resolution_from_live_review(
@@ -432,19 +465,19 @@ def test_finding_resolution_is_bound_to_live_independent_exact_pair_evidence() -
         pr_author="implementer",
         head_sha=HEAD,
         base_sha=BASE,
-        durable_guard_evidence="counterfactual regression",
     )
 
     assert resolution.classification == "systemic"
     assert resolution.severity == "blocking"
     with pytest.raises(preflight.PreflightError, match="independent"):
         preflight.finding_resolution_from_live_review(
-            finding_comment=preflight.LiveReviewEvidence(finding.url, "implementer", finding.body),
+            finding_comment=preflight.LiveReviewEvidence(
+                finding.url, "implementer", finding.body, 277, "review_comment", "changes_requested", HEAD
+            ),
             verifier_comment=verifier,
             pr_author="implementer",
             head_sha=HEAD,
             base_sha=BASE,
-            durable_guard_evidence="counterfactual regression",
         )
     with pytest.raises(preflight.PreflightError, match="stale"):
         preflight.finding_resolution_from_live_review(
@@ -453,8 +486,101 @@ def test_finding_resolution_is_bound_to_live_independent_exact_pair_evidence() -
             pr_author="implementer",
             head_sha="c" * 40,
             base_sha=BASE,
-            durable_guard_evidence="counterfactual regression",
         )
+
+    with pytest.raises(preflight.PreflightError, match="distinct independent authors"):
+        preflight.finding_resolution_from_live_review(
+            finding_comment=finding,
+            verifier_comment=preflight.LiveReviewEvidence(
+                verifier.url, finding.author, verifier.body, 277, "issue_comment", "", ""
+            ),
+            pr_author="implementer",
+            head_sha=HEAD,
+            base_sha=BASE,
+        )
+    marker_only = preflight.LiveReviewEvidence(
+        verifier.url,
+        verifier.author,
+        f"<!-- hunter-review-verification:v1 finding=F-004 head={HEAD} base={BASE} outcome=resolved -->",
+    )
+    with pytest.raises(preflight.PreflightError, match="Verification evidence"):
+        preflight.finding_resolution_from_live_review(
+            finding_comment=finding,
+            verifier_comment=marker_only,
+            pr_author="implementer",
+            head_sha=HEAD,
+            base_sha=BASE,
+        )
+
+
+def test_hostile_review_requires_independent_exact_pair_positive_evidence(monkeypatch) -> None:
+    review = {
+        "id": 9,
+        "user": {"login": "independent-reviewer"},
+        "commit_id": HEAD,
+        "body": (f"<!-- hunter-hostile-review:v1 head={HEAD} base={BASE} " "outcome=no-blocking-findings -->"),
+    }
+    monkeypatch.setattr(preflight, "_gh_json", lambda _args: [review])
+    preflight.require_independent_hostile_review(
+        repository="fafa33/Project-Hunter",
+        pr_number=277,
+        pr_author="implementer",
+        head_sha=HEAD,
+        base_sha=BASE,
+    )
+
+    review["user"] = {"login": "implementer"}
+    with pytest.raises(preflight.PreflightError, match="lacks independent"):
+        preflight.require_independent_hostile_review(
+            repository="fafa33/Project-Hunter",
+            pr_number=277,
+            pr_author="implementer",
+            head_sha=HEAD,
+            base_sha=BASE,
+        )
+
+
+def test_live_ready_rejects_missing_positive_hostile_review(monkeypatch) -> None:
+    issue = fixture_issue()
+    state = SimpleNamespace(
+        draft=True,
+        title=issue.title,
+        body=generated_body(),
+        head_sha=HEAD,
+        base_sha=BASE,
+        required=(
+            SimpleNamespace(name="Quality Gates", present=True, completed=True, conclusion="success"),
+            SimpleNamespace(name="dependency-review", present=True, completed=True, conclusion="success"),
+            SimpleNamespace(name="CodeQL", present=True, completed=True, conclusion="success"),
+        ),
+        governance=SimpleNamespace(state="success"),
+        shared_head_pull_requests=(),
+        unresolved_thread_ids=(),
+        changes_requested=(),
+        unacknowledged_comments=(),
+    )
+
+    import hunter_merge_readiness as readiness
+
+    monkeypatch.setattr(readiness, "init_globals", lambda: None)
+    monkeypatch.setattr(readiness, "read_current_state", lambda _pr: state)
+    monkeypatch.setattr(readiness, "feedback_error", lambda _state: None)
+
+    def gh_json(args):
+        if args[0].endswith("/reviews?per_page=100"):
+            return []
+        return {
+            "user": {"login": "implementer"},
+            "head": {"ref": "governance/issue-276-agent-preflight"},
+        }
+
+    monkeypatch.setattr(preflight, "_gh_json", gh_json)
+    readiness.repo = issue.repository
+    readiness.repo_owner = "fafa33"
+    readiness.token = "token"
+
+    with pytest.raises(preflight.PreflightError, match="lacks independent exact-pair hostile-review"):
+        preflight._require_current_state_ready(277, issue)
 
 
 def test_live_ready_rejects_unresolved_review_thread(monkeypatch) -> None:
