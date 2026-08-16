@@ -99,6 +99,9 @@ TRUSTED_BOT_LOGIN = "github-actions[bot]"
 DEPENDENCY_REVIEW_MARKER = "<!-- dependency-review-pr-comment-marker -->"
 DRAFT_PROMOTION_MARKER_PREFIX = "<!-- hunter-draft-promotion:"
 GOVERNANCE_PREFLIGHT_PATH = Path(__file__).with_name("hunter_governance_preflight.py")
+GOVERNANCE_PREFLIGHT_TIMEOUT_SECONDS = 120
+GOVERNANCE_PREFLIGHT_FAILURE_DESCRIPTION = "trusted governance preflight failed; see workflow logs"
+GOVERNANCE_PREFLIGHT_TIMEOUT_DESCRIPTION = "trusted governance preflight timed out; see workflow logs"
 ISSUE_276_BOOTSTRAP_PR = 277
 PREFLIGHT_ENFORCEMENT_ENV = "HUNTER_ENFORCE_GOVERNANCE_PREFLIGHT"
 
@@ -460,6 +463,14 @@ def unacknowledged_top_level_comments(pr_number: int) -> tuple[int, ...]:
     )
 
 
+def _log_governance_preflight_output(stdout: str | None, stderr: str | None) -> None:
+    """Keep subprocess diagnostics in workflow logs, never in commit status text."""
+    for name, value in (("stdout", stdout), ("stderr", stderr)):
+        detail = (value or "").strip()
+        if detail:
+            print(f"Trusted governance preflight {name}:\n{detail}")
+
+
 def trusted_governance_preflight_error(pr_number: int) -> str | None:
     """Run resident trusted governance preflight before canonical green publication."""
     if os.environ.get(PREFLIGHT_ENFORCEMENT_ENV) != "1":
@@ -474,27 +485,34 @@ def trusted_governance_preflight_error(pr_number: int) -> str | None:
     env["GITHUB_REPOSITORY"] = repo
     if token:
         env["GH_TOKEN"] = token
-    completed = subprocess.run(
-        (
-            sys.executable,
-            str(GOVERNANCE_PREFLIGHT_PATH),
-            "live-pr",
-            "--repo",
-            repo,
-            "--pr",
-            str(pr_number),
-        ),
-        check=False,
-        capture_output=True,
-        text=True,
-        env=env,
-    )
+    try:
+        completed = subprocess.run(
+            (
+                sys.executable,
+                str(GOVERNANCE_PREFLIGHT_PATH),
+                "live-pr",
+                "--repo",
+                repo,
+                "--pr",
+                str(pr_number),
+            ),
+            check=False,
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=GOVERNANCE_PREFLIGHT_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as exc:
+        _log_governance_preflight_output(exc.stdout, exc.stderr)
+        print(
+            f"Trusted governance preflight timed out after {GOVERNANCE_PREFLIGHT_TIMEOUT_SECONDS}s "
+            f"for PR #{pr_number}."
+        )
+        return GOVERNANCE_PREFLIGHT_TIMEOUT_DESCRIPTION
     if completed.returncode == 0:
         return None
-    detail = (completed.stdout or completed.stderr or "governance preflight failed").strip()
-    if not detail:
-        detail = "governance preflight failed without diagnostic output"
-    return detail.splitlines()[-1][:240]
+    _log_governance_preflight_output(completed.stdout, completed.stderr)
+    return GOVERNANCE_PREFLIGHT_FAILURE_DESCRIPTION
 
 
 def open_pull_requests() -> list[dict[str, Any]]:
