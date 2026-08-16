@@ -14,6 +14,16 @@ on:
       - reopened
       - synchronize
       - converted_to_draft
+  pull_request_review:
+    types:
+      - submitted
+      - edited
+      - dismissed
+  pull_request_review_comment:
+    types:
+      - created
+      - edited
+      - deleted
   push:
     branches:
       - main
