@@ -76,7 +76,21 @@ def gh():
 
     with (
         patch("hunter_draft_promotion_signal.request_json", side_effect=server.request_json),
-        patch("hunter_draft_promotion_signal.review_feedback_blockers", return_value=[]),
+        patch.object(
+            hunter_draft_promotion_signal.merge_readiness,
+            "unresolved_review_thread_ids",
+            return_value=(),
+        ),
+        patch.object(
+            hunter_draft_promotion_signal.merge_readiness,
+            "current_changes_requested_reviewers",
+            return_value=(),
+        ),
+        patch.object(
+            hunter_draft_promotion_signal.merge_readiness,
+            "unacknowledged_top_level_comments",
+            return_value=(),
+        ),
     ):
         yield server
 
