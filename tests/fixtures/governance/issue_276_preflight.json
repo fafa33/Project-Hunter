@@ -1,0 +1,6 @@
+{
+  "number": 276,
+  "title": "Governance enforcement: mandatory agent preflight and PR generator",
+  "state": "open",
+  "body": "## Objective\n\nTurn remembered governance into deterministic enforcement.\n\n## Acceptance criteria\n\n- A deterministic canonical preflight command/API exists.\n- PR creation can produce a complete canonical PR body from the verified Issue and repository template.\n- Human approval remains required for merge.\n\n## Required verification\n\n- Counterfactual tests.\n"
+}
