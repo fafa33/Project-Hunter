@@ -323,6 +323,32 @@ def test_fail_criterion_is_not_blocking_for_draft_pr() -> None:
     assert not any(f.validator_id == "V-040" and f.severity is Severity.BLOCKING for f in result.findings)
 
 
+def test_pass_criterion_with_negative_evidence_blocks_merge_ready_pr() -> None:
+    body = GOOD_BODY.replace("PASS | src/hunter/mispricing/service.py", "PASS | tests failed")
+    result = _deterministic(body=body)
+    assert result.blocking
+    assert any(f.validator_id == "V-040" and f.severity is Severity.BLOCKING for f in result.findings)
+
+
+def test_pass_criterion_with_negative_evidence_is_not_blocking_for_draft_pr() -> None:
+    body = GOOD_BODY.replace("PASS | src/hunter/mispricing/service.py", "PASS | tests failed")
+    result = _deterministic(body=body, pr=_pr(body=body, draft=True))
+    assert not any(f.validator_id == "V-040" and f.severity is Severity.BLOCKING for f in result.findings)
+    assert any(f.validator_id == "V-040" for f in result.findings)
+
+
+def test_pass_evidence_guard_is_bound_to_shared_substantive_boundary(monkeypatch) -> None:
+    body = GOOD_BODY.replace("PASS | src/hunter/mispricing/service.py", "PASS | tests failed")
+
+    def noop(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr("hunter_governance_review.deterministic._require_substantive_evidence", noop)
+    result = _deterministic(body=body)
+
+    assert not any(f.validator_id == "V-040" for f in result.findings)
+
+
 def test_missing_readiness_declaration_blocks() -> None:
     body = GOOD_BODY.replace("- [x] `READY FOR REVIEW`", "- [ ] `READY FOR REVIEW`")
     assert _deterministic(body=body).blocking

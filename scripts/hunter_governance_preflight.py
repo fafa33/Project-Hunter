@@ -660,10 +660,17 @@ def validate_pr_body(
         )
 
     for row in rows:
-        if row.status == "pass" and _normalize(row.evidence) in PASS_EVIDENCE_PLACEHOLDERS:
+        if row.status != "pass":
+            continue
+        if _normalize(row.evidence) in PASS_EVIDENCE_PLACEHOLDERS:
             raise PreflightError(
                 f"PASS criterion lacks explicit evidence: {row.criterion!r}. Green CI alone is not completion evidence."
             )
+        _require_substantive_evidence(
+            row.evidence,
+            label=f"Acceptance criterion {row.criterion!r} evidence",
+            status_context=True,
+        )
 
     readiness = checked_readiness(body)
     if readiness == "ready for review":
@@ -698,8 +705,14 @@ def _criterion_evidence(
         detail = str(value.get("evidence") or "").strip()
         if status.lower() not in ALLOWED_STATUSES:
             raise PreflightError(f"Invalid evidence status for criterion {criterion!r}: {status!r}.")
-        if status == "PASS" and _normalize(detail) in PASS_EVIDENCE_PLACEHOLDERS:
-            raise PreflightError(f"PASS criterion {criterion!r} requires explicit evidence.")
+        if status == "PASS":
+            if _normalize(detail) in PASS_EVIDENCE_PLACEHOLDERS:
+                raise PreflightError(f"PASS criterion {criterion!r} requires explicit evidence.")
+            _require_substantive_evidence(
+                detail,
+                label=f"Acceptance criterion {criterion!r} evidence",
+                status_context=True,
+            )
         return status, detail
     return "BLOCKED", "Pending explicit criterion-specific evidence."
 

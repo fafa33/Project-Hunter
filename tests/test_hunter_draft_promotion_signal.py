@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 from pathlib import Path
@@ -9,6 +10,16 @@ import pytest
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "scripts")))
 
 import hunter_draft_promotion_signal
+
+
+def _governing_issue() -> hunter_draft_promotion_signal.governance_preflight.IssueIdentity:
+    return hunter_draft_promotion_signal.governance_preflight.IssueIdentity(
+        repository="fafa33/Project-Hunter",
+        number=276,
+        title="Governance enforcement: mandatory agent preflight and PR generator",
+        body="",
+        state="open",
+    )
 
 
 class MockGitHubServer:
@@ -207,6 +218,21 @@ def test_evaluate_with_single_declaration_line_reaches_success_and_comments(gh):
     with (
         patch.object(
             hunter_draft_promotion_signal.governance_preflight,
+            "load_issue",
+            return_value=_governing_issue(),
+        ),
+        patch.object(
+            hunter_draft_promotion_signal,
+            "_governing_issue_number",
+            return_value=276,
+        ),
+        patch.object(
+            hunter_draft_promotion_signal.governance_preflight,
+            "validate_pr_body",
+            return_value=None,
+        ),
+        patch.object(
+            hunter_draft_promotion_signal.governance_preflight,
             "validate_ready_evidence",
             return_value=None,
         ),
@@ -230,10 +256,37 @@ def test_draft_promotion_requires_positive_hostile_review_before_mutation(gh):
     gh.pulls[124] = green_pr(124, sha, body)
     green_checks(gh, sha)
 
-    with patch.object(
-        hunter_draft_promotion_signal.governance_preflight,
-        "require_independent_hostile_review",
-        side_effect=hunter_draft_promotion_signal.governance_preflight.PreflightError("hostile evidence missing"),
+    with (
+        patch.object(
+            hunter_draft_promotion_signal.governance_preflight,
+            "load_issue",
+            return_value=_governing_issue(),
+        ),
+        patch.object(
+            hunter_draft_promotion_signal,
+            "_governing_issue_number",
+            return_value=276,
+        ),
+        patch.object(
+            hunter_draft_promotion_signal.governance_preflight,
+            "validate_pr_body",
+            return_value=None,
+        ),
+        patch.object(
+            hunter_draft_promotion_signal.governance_preflight,
+            "validate_trace_against_state",
+            return_value=None,
+        ),
+        patch.object(
+            hunter_draft_promotion_signal.governance_preflight,
+            "validate_ready_evidence",
+            return_value=None,
+        ),
+        patch.object(
+            hunter_draft_promotion_signal.governance_preflight,
+            "require_independent_hostile_review",
+            side_effect=hunter_draft_promotion_signal.governance_preflight.PreflightError("hostile evidence missing"),
+        ),
     ):
         hunter_draft_promotion_signal.evaluate(gh.pulls[124])
 
@@ -250,6 +303,21 @@ def test_draft_promotion_retracts_success_for_invalid_ready_evidence(gh):
     green_checks(gh, sha)
 
     with (
+        patch.object(
+            hunter_draft_promotion_signal.governance_preflight,
+            "load_issue",
+            return_value=_governing_issue(),
+        ),
+        patch.object(
+            hunter_draft_promotion_signal,
+            "_governing_issue_number",
+            return_value=276,
+        ),
+        patch.object(
+            hunter_draft_promotion_signal.governance_preflight,
+            "validate_pr_body",
+            return_value=None,
+        ),
         patch.object(
             hunter_draft_promotion_signal.governance_preflight,
             "validate_ready_evidence",
@@ -280,10 +348,27 @@ def test_draft_promotion_rejects_superseded_head_marker(gh):
     gh.pulls[127] = green_pr(127, sha, body)
     green_checks(gh, sha)
 
-    with patch.object(
-        hunter_draft_promotion_signal.governance_preflight,
-        "validate_trace_against_state",
-        return_value="PR body evidence is stale relative to the current source head.",
+    with (
+        patch.object(
+            hunter_draft_promotion_signal.governance_preflight,
+            "load_issue",
+            return_value=_governing_issue(),
+        ),
+        patch.object(
+            hunter_draft_promotion_signal,
+            "_governing_issue_number",
+            return_value=276,
+        ),
+        patch.object(
+            hunter_draft_promotion_signal.governance_preflight,
+            "validate_pr_body",
+            return_value=None,
+        ),
+        patch.object(
+            hunter_draft_promotion_signal.governance_preflight,
+            "validate_trace_against_state",
+            return_value="PR body evidence is stale relative to the current source head.",
+        ),
     ):
         hunter_draft_promotion_signal.evaluate(gh.pulls[127])
 
@@ -305,6 +390,21 @@ def test_draft_promotion_retracts_stale_ready_body_and_success_comment(gh):
     ]
 
     with (
+        patch.object(
+            hunter_draft_promotion_signal.governance_preflight,
+            "load_issue",
+            return_value=_governing_issue(),
+        ),
+        patch.object(
+            hunter_draft_promotion_signal,
+            "_governing_issue_number",
+            return_value=276,
+        ),
+        patch.object(
+            hunter_draft_promotion_signal.governance_preflight,
+            "validate_pr_body",
+            return_value=None,
+        ),
         patch.object(
             hunter_draft_promotion_signal.governance_preflight,
             "validate_ready_evidence",
@@ -362,6 +462,21 @@ def test_live_scope_is_reread_instead_of_trusting_event_payload(gh):
     with (
         patch.object(
             hunter_draft_promotion_signal.governance_preflight,
+            "load_issue",
+            return_value=_governing_issue(),
+        ),
+        patch.object(
+            hunter_draft_promotion_signal,
+            "_governing_issue_number",
+            return_value=276,
+        ),
+        patch.object(
+            hunter_draft_promotion_signal.governance_preflight,
+            "validate_pr_body",
+            return_value=None,
+        ),
+        patch.object(
+            hunter_draft_promotion_signal.governance_preflight,
             "validate_ready_evidence",
             return_value=None,
         ),
@@ -384,10 +499,90 @@ def test_evaluate_with_ambiguous_declaration_does_not_silently_disappear(gh):
     gh.pulls[123] = green_pr(123, sha, body)
     green_checks(gh, sha)
 
-    with pytest.raises(RuntimeError):
-        hunter_draft_promotion_signal.evaluate(gh.pulls[123])
+    hunter_draft_promotion_signal.evaluate(gh.pulls[123])
 
     assert not any(state == "success" for _sha, state, _desc in gh.published)
+    assert gh.published[-1][1] == "pending"
+    assert "Closes/Fixes governing Issue identity" in gh.published[-1][2]
+    assert 123 not in gh.patched_bodies
+
+
+def test_evaluate_rejects_negative_pass_evidence_via_shared_boundary(gh, capsys):
+    sha = "sha_negative_pass_evidence"
+    fixture = json.loads(
+        (Path(__file__).parent / "fixtures" / "governance" / "issue_276_preflight.json").read_text(encoding="utf-8")
+    )
+    issue = hunter_draft_promotion_signal.governance_preflight.IssueIdentity.from_payload(
+        "fafa33/Project-Hunter", fixture
+    )
+    base_sha = "b" * 40
+    evidence_url = "https://github.com/fafa33/Project-Hunter/pull/277"
+
+    def evidence_pair(kind: str, result: str) -> str:
+        return (
+            f"<!-- hunter-evidence:v1 kind={kind} result={result} reference={evidence_url} "
+            f"head={base_sha} base={base_sha} -->"
+        )
+
+    with patch.object(
+        hunter_draft_promotion_signal.governance_preflight,
+        "_git_exact_pair",
+        return_value=(base_sha, base_sha),
+    ):
+        body = hunter_draft_promotion_signal.governance_preflight.generate_pr_body(
+            issue,
+            repo_root=Path(__file__).parent.parent,
+            base_ref="main",
+            template_text=(Path(__file__).parent.parent / ".github" / "pull_request_template.md").read_text(
+                encoding="utf-8"
+            ),
+            changed_files=("scripts/hunter_governance_preflight.py",),
+            evidence={
+                criterion: {"status": "PASS", "evidence": f"deterministic proof {index}"}
+                for index, criterion in enumerate(
+                    hunter_draft_promotion_signal.governance_preflight.issue_acceptance_criteria(issue.body),
+                    start=1,
+                )
+            },
+            verification=(evidence_pair("verification", "verified"),),
+            operational_evidence=(evidence_pair("operational", "not-applicable"),),
+        )
+    body = body.replace("- [ ] `READY FOR REVIEW`", "- [x] `READY FOR REVIEW`", 1)
+    body = body.replace("- [x] `CHANGES REQUIRED`", "- [ ] `CHANGES REQUIRED`", 1)
+    body = body.replace(
+        "## Verification\n\n",
+        "## Verification\n\n<!-- hunter-verification:v1 ruff=pass black=pass mypy=pass pytest=pass -->\n\n",
+        1,
+    )
+    body = body.replace(
+        "## Operational validation\n\n",
+        "## Operational validation\n\n<!-- hunter-operational:v1 runbook=executed -->\n\n",
+        1,
+    )
+    first_row = hunter_draft_promotion_signal.governance_preflight.parse_acceptance_matrix(body)[0]
+    body = body.replace(
+        f"| {first_row.criterion} | PASS | {first_row.evidence} |",
+        f"| {first_row.criterion} | PASS | tests failed |",
+        1,
+    )
+
+    gh.pulls[277] = green_pr(277, sha, body)
+    green_checks(gh, sha)
+
+    with patch.object(
+        hunter_draft_promotion_signal.governance_preflight,
+        "load_issue",
+        return_value=issue,
+    ):
+        hunter_draft_promotion_signal.evaluate(gh.pulls[277])
+
+    assert not any(state == "success" for _sha, state, _description in gh.published)
+    assert gh.published[-1][1] == "pending"
+    assert "Acceptance criterion" in gh.published[-1][2]
+    assert "placeholder or explicitly negative evidence" in capsys.readouterr().out
+    assert not gh.comments.get(277)
+    assert "- [ ] `READY FOR REVIEW`" in gh.patched_bodies[277]
+    assert "- [x] `CHANGES REQUIRED`" in gh.patched_bodies[277]
 
 
 def test_unresolved_review_thread_blocks_promotion_and_metadata_mutation(gh):

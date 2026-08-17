@@ -86,7 +86,8 @@ def test_issue_276_fixture_matches_canonical_acceptance_criteria() -> None:
     issue = fixture_issue()
     criteria = list(preflight.issue_acceptance_criteria(issue.body))
 
-    # Core enforcement capabilities that must be present
+    # Core enforcement capabilities that must be present in the live Issue 276
+    # acceptance criteria, which the fixture must mirror exactly.
     required_capabilities = [
         "preflight command/api",
         "canonical pr body",
@@ -94,10 +95,9 @@ def test_issue_276_fixture_matches_canonical_acceptance_criteria() -> None:
         "readiness declarations",
         "identity mismatch",
         "ownership",
-        "exact-pair",
-        "hostile review",
+        "exact-head",
+        "blocking finding",
         "durable",
-        "bootstrap",
     ]
 
     criteria_text = " ".join(c.lower() for c in criteria)
@@ -105,12 +105,15 @@ def test_issue_276_fixture_matches_canonical_acceptance_criteria() -> None:
         assert capability in criteria_text, f"Issue 276 fixture missing {capability} acceptance criterion"
 
     # Verify specific critical criteria are present
-    assert any("trace marker" in c.lower() or "exact-pair evidence" in c.lower() for c in criteria), \
-        "Issue 276 fixture must include trace/exact-pair validation criterion"
-    assert any("per-line ownership" in c.lower() or "ownership boundaries" in c.lower() for c in criteria), \
-        "Issue 276 fixture must include ownership validation criterion"
-    assert any("durable finding" in c.lower() or "verifier evidence" in c.lower() for c in criteria), \
-        "Issue 276 fixture must include durable finding resolution criterion"
+    assert any(
+        "exact-head" in c.lower() for c in criteria
+    ), "Issue 276 fixture must include exact-head evidence validation criterion"
+    assert any(
+        "ownership evidence" in c.lower() for c in criteria
+    ), "Issue 276 fixture must include ownership validation criterion"
+    assert any(
+        "durable" in c.lower() for c in criteria
+    ), "Issue 276 fixture must include durable finding resolution criterion"
 
 
 def test_generator_uses_verified_issue_template_scope_and_complete_matrix() -> None:
@@ -178,18 +181,40 @@ def test_generator_never_self_promotes_from_caller_supplied_evidence() -> None:
         for criterion in preflight.issue_acceptance_criteria(issue.body)
     }
     with patch.object(preflight, "_git_exact_pair", return_value=(HEAD, BASE)):
-        body = preflight.generate_pr_body(
-            issue,
-            repo_root=ROOT,
-            base_ref="main",
-            template_text=canonical_template(),
-            changed_files=("scripts/hunter_governance_preflight.py",),
-            evidence=fabricated,
-            verification=("fabricated",),
-            operational_evidence=("fabricated",),
-        )
+        with pytest.raises(preflight.PreflightError, match="placeholder or explicitly negative evidence"):
+            preflight.generate_pr_body(
+                issue,
+                repo_root=ROOT,
+                base_ref="main",
+                template_text=canonical_template(),
+                changed_files=("scripts/hunter_governance_preflight.py",),
+                evidence=fabricated,
+                verification=("fabricated",),
+                operational_evidence=("fabricated",),
+            )
+
+
+def test_generator_evidence_guard_is_not_vacuous() -> None:
+    issue = fixture_issue()
+    fabricated = {
+        criterion: {"status": "PASS", "evidence": "fabricated"}
+        for criterion in preflight.issue_acceptance_criteria(issue.body)
+    }
+    with patch.object(preflight, "_git_exact_pair", return_value=(HEAD, BASE)):
+        with patch.object(preflight, "_require_substantive_evidence", return_value=None) as disabled:
+            body = preflight.generate_pr_body(
+                issue,
+                repo_root=ROOT,
+                base_ref="main",
+                template_text=canonical_template(),
+                changed_files=("scripts/hunter_governance_preflight.py",),
+                evidence=fabricated,
+                verification=("fabricated",),
+                operational_evidence=("fabricated",),
+            )
 
     assert preflight.checked_readiness(body) == "changes required"
+    assert disabled.called
 
 
 def test_ready_body_rejects_unchecked_or_placeholder_evidence() -> None:
@@ -303,6 +328,44 @@ def test_pass_cannot_be_inferred_from_green_ci() -> None:
     body = body.replace(first.evidence, "CI green", 1)
 
     with pytest.raises(preflight.PreflightError, match="explicit evidence"):
+        preflight.validate_pr_body(body, issue, head_sha=HEAD, base_sha=BASE, promotion=False)
+
+
+@pytest.mark.parametrize(
+    "negative_evidence",
+    [
+        "verification was not run",
+        "tests failed",
+        "fabricated",
+        "broken",
+        "placeholder",
+    ],
+)
+def test_pr_body_rejects_negative_or_placeholder_pass_evidence(negative_evidence: str) -> None:
+    issue = fixture_issue()
+    body = generated_body()
+    first = preflight.parse_acceptance_matrix(body)[0]
+    body = body.replace(first.evidence, negative_evidence, 1)
+
+    with pytest.raises(preflight.PreflightError, match="placeholder or explicitly negative evidence"):
+        preflight.validate_pr_body(body, issue, head_sha=HEAD, base_sha=BASE, promotion=False)
+
+
+def test_pr_body_accepts_substantive_pass_evidence() -> None:
+    issue = fixture_issue()
+    body = generated_body()
+
+    preflight.validate_pr_body(body, issue, head_sha=HEAD, base_sha=BASE, promotion=False)
+
+
+def test_pr_body_evidence_guard_is_bound_to_shared_substantive_boundary(monkeypatch) -> None:
+    issue = fixture_issue()
+    body = generated_body()
+    first = preflight.parse_acceptance_matrix(body)[0]
+    body = body.replace(first.evidence, "tests failed", 1)
+
+    with monkeypatch.context() as ctx:
+        ctx.setattr(preflight, "_require_substantive_evidence", lambda *args, **kwargs: None)
         preflight.validate_pr_body(body, issue, head_sha=HEAD, base_sha=BASE, promotion=False)
 
 
@@ -482,77 +545,113 @@ def test_post_commit_actions_reject_caller_git_identity_overrides() -> None:
             "push with --branch",
             [
                 "push",
-                "--repo", "fafa33/Project-Hunter",
-                "--issue", "276",
-                "--objective", "Governance enforcement: mandatory agent preflight and PR generator",
-                "--branch", "governance/issue-276-spoofed",
+                "--repo",
+                "fafa33/Project-Hunter",
+                "--issue",
+                "276",
+                "--objective",
+                "Governance enforcement: mandatory agent preflight and PR generator",
+                "--branch",
+                "governance/issue-276-spoofed",
             ],
         ),
         (
             "push with --commit-message",
             [
                 "push",
-                "--repo", "fafa33/Project-Hunter",
-                "--issue", "276",
-                "--objective", "Governance enforcement: mandatory agent preflight and PR generator",
-                "--commit-message", "fix: spoofed #276",
+                "--repo",
+                "fafa33/Project-Hunter",
+                "--issue",
+                "276",
+                "--objective",
+                "Governance enforcement: mandatory agent preflight and PR generator",
+                "--commit-message",
+                "fix: spoofed #276",
             ],
         ),
         (
             "pr-create with --branch",
             [
                 "pr-create",
-                "--repo", "fafa33/Project-Hunter",
-                "--issue", "276",
-                "--objective", "Governance enforcement: mandatory agent preflight and PR generator",
-                "--base-branch", "main",
-                "--pr-title", "Governance enforcement: mandatory agent preflight and PR generator",
-                "--pr-body-file", "/dev/null",
-                "--branch", "governance/issue-276-spoofed",
+                "--repo",
+                "fafa33/Project-Hunter",
+                "--issue",
+                "276",
+                "--objective",
+                "Governance enforcement: mandatory agent preflight and PR generator",
+                "--base-branch",
+                "main",
+                "--pr-title",
+                "Governance enforcement: mandatory agent preflight and PR generator",
+                "--pr-body-file",
+                "/dev/null",
+                "--branch",
+                "governance/issue-276-spoofed",
             ],
         ),
         (
             "pr-create with --commit-message",
             [
                 "pr-create",
-                "--repo", "fafa33/Project-Hunter",
-                "--issue", "276",
-                "--objective", "Governance enforcement: mandatory agent preflight and PR generator",
-                "--base-branch", "main",
-                "--pr-title", "Governance enforcement: mandatory agent preflight and PR generator",
-                "--pr-body-file", "/dev/null",
-                "--commit-message", "fix: spoofed #276",
+                "--repo",
+                "fafa33/Project-Hunter",
+                "--issue",
+                "276",
+                "--objective",
+                "Governance enforcement: mandatory agent preflight and PR generator",
+                "--base-branch",
+                "main",
+                "--pr-title",
+                "Governance enforcement: mandatory agent preflight and PR generator",
+                "--pr-body-file",
+                "/dev/null",
+                "--commit-message",
+                "fix: spoofed #276",
             ],
         ),
         (
             "pr-update with --branch",
             [
                 "pr-update",
-                "--repo", "fafa33/Project-Hunter",
-                "--issue", "276",
-                "--objective", "Governance enforcement: mandatory agent preflight and PR generator",
-                "--pr", "277",
-                "--pr-title", "Governance enforcement: mandatory agent preflight and PR generator",
-                "--pr-body-file", "/dev/null",
-                "--branch", "governance/issue-276-spoofed",
+                "--repo",
+                "fafa33/Project-Hunter",
+                "--issue",
+                "276",
+                "--objective",
+                "Governance enforcement: mandatory agent preflight and PR generator",
+                "--pr",
+                "277",
+                "--pr-title",
+                "Governance enforcement: mandatory agent preflight and PR generator",
+                "--pr-body-file",
+                "/dev/null",
+                "--branch",
+                "governance/issue-276-spoofed",
             ],
         ),
         (
             "pr-update with --commit-message",
             [
                 "pr-update",
-                "--repo", "fafa33/Project-Hunter",
-                "--issue", "276",
-                "--objective", "Governance enforcement: mandatory agent preflight and PR generator",
-                "--pr", "277",
-                "--pr-title", "Governance enforcement: mandatory agent preflight and PR generator",
-                "--pr-body-file", "/dev/null",
-                "--commit-message", "fix: spoofed #276",
+                "--repo",
+                "fafa33/Project-Hunter",
+                "--issue",
+                "276",
+                "--objective",
+                "Governance enforcement: mandatory agent preflight and PR generator",
+                "--pr",
+                "277",
+                "--pr-title",
+                "Governance enforcement: mandatory agent preflight and PR generator",
+                "--pr-body-file",
+                "/dev/null",
+                "--commit-message",
+                "fix: spoofed #276",
             ],
         ),
     ]
 
-    for action_name, args in test_cases:
+    for _action_name, args in test_cases:
         with pytest.raises(SystemExit) as exc_info:
             parser.parse_args(args)
         # Verify parsing fails because --branch or --commit-message is unrecognized,
@@ -1139,12 +1238,6 @@ def test_issue_276_fixture_criteria_match_canonical_issue() -> None:
         "No agent, automation, or generated metadata can grant itself review approval or merge authority.",
         "Human approval remains required for merge.",
         "Existing accepted governance ownership is preserved; no competing lifecycle/review/architecture-audit authority is introduced.",
-        "The preflight validates Issue identity and rejects guessed/sequence-inferred Issue numbers.",
-        "The preflight validates exact-pair evidence and rejects evidence with superseded head or base revisions.",
-        "The preflight validates ownership boundaries and rejects semantics placed outside canonical owners.",
-        "Ready-for-review gate validates current independent hostile review evidence for the exact source-head and target pair.",
-        "Durable finding fixes require verifier evidence and reusable guards for systemic classifications.",
-        "Bootstrap enforcement distinguishes pre-merge verified enforcement from post-merge active enforcement.",
     }
 
     assert fixture_criteria == canonical_criteria, (

@@ -129,6 +129,22 @@ def review_feedback_blockers(pr_number: int) -> list[str]:
     return waiting
 
 
+def _governing_issue_number(body: str) -> int:
+    """Resolve the single governing Issue identity from the canonical PR body.
+
+    The body must carry exactly one ``Closes``/``Fixes`` identity line, matching
+    the same identity contract the governance preflight enforces. A body without
+    that identity cannot be validated against its governing Issue and fails
+    closed before any readiness signal can be published.
+    """
+    numbers = [int(match.group("number")) for match in governance_preflight.ISSUE_REFERENCE_RE.finditer(body)]
+    if len(numbers) != 1:
+        raise governance_preflight.PreflightError(
+            "PR body must contain exactly one Closes/Fixes governing Issue identity."
+        )
+    return numbers[0]
+
+
 def parse_readiness_declaration(body: str) -> tuple[list[re.Match], str]:
     """Parses the Implementer Readiness Declaration checkboxes in a PR body.
 
@@ -348,6 +364,8 @@ def evaluate(pr: dict[str, Any]) -> None:
         merge_readiness.repo = repo
         merge_readiness.token = token
         base_sha, head_sha = merge_readiness.base_head_oids(pr_number)
+        issue = governance_preflight.load_issue(repo, _governing_issue_number(body))
+        governance_preflight.validate_pr_body(body, issue, head_sha=head_sha, base_sha=base_sha, promotion=False)
         trace_error = governance_preflight.validate_trace_against_state(body, head_sha=head_sha, base_sha=base_sha)
         if trace_error:
             raise governance_preflight.PreflightError(trace_error)
@@ -373,7 +391,17 @@ def evaluate(pr: dict[str, Any]) -> None:
     try:
         final_body = final_current.get("body") or ""
         final_base_sha, final_head_sha = merge_readiness.base_head_oids(pr_number)
-        trace_error = governance_preflight.validate_trace_against_state(final_body, head_sha=final_head_sha, base_sha=final_base_sha)
+        final_issue = governance_preflight.load_issue(repo, _governing_issue_number(final_body))
+        governance_preflight.validate_pr_body(
+            final_body,
+            final_issue,
+            head_sha=final_head_sha,
+            base_sha=final_base_sha,
+            promotion=False,
+        )
+        trace_error = governance_preflight.validate_trace_against_state(
+            final_body, head_sha=final_head_sha, base_sha=final_base_sha
+        )
         if trace_error:
             raise governance_preflight.PreflightError(trace_error)
         governance_preflight.validate_ready_evidence(final_body)

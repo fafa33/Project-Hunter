@@ -16,6 +16,8 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
+from hunter_governance_preflight import PreflightError, _require_substantive_evidence
+
 from hunter_governance_review.contracts import (
     CanonicalPRContract,
     ChangedFile,
@@ -234,6 +236,27 @@ def _matrix_validator(ctx: ValidationContext) -> Finding | None:
                 "merge-ready PR has FAIL or BLOCKED acceptance criteria",
                 Severity.BLOCKING,
                 "; ".join(f"{row[0]}={row[1].upper()}" for row in bad[:5]),
+            )
+    # PASS rows must carry substantive evidence. This is the same canonical
+    # substantive-evidence boundary the governance preflight enforces for PR
+    # bodies; a PASS row whose evidence is negative, contradictory, fabricated,
+    # failed, unexecuted, or otherwise non-substantive must not support a
+    # governed PASS state here either.
+    for row in rows:
+        if row[1] != "pass":
+            continue
+        try:
+            _require_substantive_evidence(
+                row[2],
+                label=f"Acceptance criterion {row[0]!r} evidence",
+                status_context=True,
+            )
+        except PreflightError as exc:
+            return _finding(
+                "V-040",
+                "PASS acceptance criteria carry negative or placeholder evidence",
+                severity,
+                str(exc),
             )
     return None
 
