@@ -686,6 +686,14 @@ def test_draft_promotion_fails_closed_on_fail_criterion_via_real_path(gh, checke
 
     gh.pulls[278] = green_pr(278, sha, body)
     green_checks(gh, sha)
+    # A stale success comment from a prior sweep must be retracted, never
+    # re-affirmed, while the criterion remains FAIL.
+    gh.comments[278] = [
+        {
+            "id": 778,
+            "body": f"<!-- hunter-draft-promotion:{sha} -->\n✅ **Hunter Draft Promotion:** stale success",
+        }
+    ]
 
     with patch.object(
         hunter_draft_promotion_signal.governance_preflight,
@@ -700,7 +708,8 @@ def test_draft_promotion_fails_closed_on_fail_criterion_via_real_path(gh, checke
         "Waiting for Draft promotion prerequisites: " "Ready-for-review promotion is blocked by FAIL/BLOCKED criteria: "
     )
     assert first_row.criterion[:20] in gh.published[-1][2]
-    assert not gh.comments.get(278)
+    assert "invalidated" in gh.comments[278][0]["body"]
+    assert "stale success" not in gh.comments[278][0]["body"]
     if checked == "CHANGES REQUIRED":
         assert 278 not in gh.patched_bodies
     else:
