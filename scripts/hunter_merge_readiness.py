@@ -100,8 +100,10 @@ DEPENDENCY_REVIEW_MARKER = "<!-- dependency-review-pr-comment-marker -->"
 DRAFT_PROMOTION_MARKER_PREFIX = "<!-- hunter-draft-promotion:"
 OWNER_NONBLOCKING_STATUS_MARKER = "<!-- hunter-owner-status:nonblocking -->"
 OWNER_NONBLOCKING_STATUS_RE = re.compile(
-    rf"\A\s*{re.escape(OWNER_NONBLOCKING_STATUS_MARKER)}\s*\n" r"\s*Status:\s*nonblocking\s*\n\s*Detail:\s*\S.+?\s*\Z",
-    re.IGNORECASE | re.DOTALL,
+    rf"\A\s*{re.escape(OWNER_NONBLOCKING_STATUS_MARKER)}\s*\n"
+    r"\s*Status:\s*nonblocking\s*\n"
+    r"\s*Detail:\s*reference=https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/\S+\s*\Z",
+    re.IGNORECASE,
 )
 GOVERNANCE_PREFLIGHT_PATH = Path(__file__).with_name("hunter_governance_preflight.py")
 GOVERNANCE_PREFLIGHT_TIMEOUT_SECONDS = 120

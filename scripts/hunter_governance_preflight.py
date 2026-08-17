@@ -109,6 +109,18 @@ NONPASS_RESULT_RE = re.compile(
     r"(?!(?:pass|not[ -]?applicable)\b)[A-Za-z][A-Za-z-]*",
     re.IGNORECASE,
 )
+STRUCTURED_EVIDENCE_VALUE_RE = re.compile(
+    r"\Aresult=(?P<result>verified|complete|disclosed);\s*"
+    r"reference=(?P<reference>https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/\S+)\Z",
+    re.IGNORECASE,
+)
+PAIR_EVIDENCE_RECORD_RE = re.compile(
+    r"<!--\s*hunter-evidence:v1\s+kind=(?P<kind>verification|operational)\s+"
+    r"result=(?P<result>verified|complete|not-applicable)\s+"
+    r"reference=(?P<reference>https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/\S+)\s+"
+    r"head=(?P<head>[0-9a-f]{40})\s+base=(?P<base>[0-9a-f]{40})\s*-->",
+    re.IGNORECASE,
+)
 REQUIRED_READY_CHECKLISTS: dict[str, tuple[str, ...]] = {
     "## Verification": (
         "`ruff check .`",
@@ -539,6 +551,24 @@ def _contains_contradictory_evidence(section: str) -> bool:
     return False
 
 
+def _unstructured_evidence_lines(section: str) -> tuple[str, ...]:
+    ignored_prefixes = ("record exact commands and results:", "operational evidence:")
+    unstructured: list[str] = []
+    for raw_line in section.splitlines():
+        line = raw_line.strip()
+        if (
+            not line
+            or line.startswith(("- [", "```"))
+            or line.lower().startswith(ignored_prefixes)
+            or VERIFICATION_RESULT_MARKER_RE.fullmatch(line)
+            or OPERATIONAL_RESULT_MARKER_RE.fullmatch(line)
+            or PAIR_EVIDENCE_RECORD_RE.fullmatch(line)
+        ):
+            continue
+        unstructured.append(line)
+    return tuple(unstructured)
+
+
 def _has_explicit_negative_evidence(value: str, *, status_context: bool = False) -> bool:
     if EXPLICIT_NEGATIVE_EVIDENCE_RE.search(value):
         return True
@@ -554,7 +584,13 @@ def _require_substantive_evidence(value: str, *, label: str, status_context: boo
         raise PreflightError(f"{label} contains placeholder or explicitly negative evidence.")
 
 
+def _require_structured_evidence_value(value: str, *, label: str) -> None:
+    if STRUCTURED_EVIDENCE_VALUE_RE.fullmatch(value.strip()) is None:
+        raise PreflightError(f"{label} must be a closed structured evidence record with a GitHub provenance reference.")
+
+
 def validate_ready_evidence(body: str) -> None:
+    head_sha, base_sha = trace_identity(body)[1:]
     for heading, expected in REQUIRED_READY_CHECKLISTS.items():
         section = _canonical_section(body, heading)
         checklist = _checklist_items(section)
@@ -572,6 +608,15 @@ def validate_ready_evidence(body: str) -> None:
         result_marker = VERIFICATION_RESULT_MARKER_RE if heading == "## Verification" else OPERATIONAL_RESULT_MARKER_RE
         if len(result_marker.findall(section)) != 1:
             raise PreflightError(f"READY FOR REVIEW requires one canonical structured result marker in {heading}.")
+        kind = "verification" if heading == "## Verification" else "operational"
+        records = [record for record in PAIR_EVIDENCE_RECORD_RE.finditer(section) if record.group("kind") == kind]
+        if len(records) != 1:
+            raise PreflightError(f"READY FOR REVIEW requires one exact-pair evidence record in {heading}.")
+        record = records[0]
+        if record.group("head").lower() != head_sha or record.group("base").lower() != base_sha:
+            raise PreflightError(f"READY FOR REVIEW evidence record in {heading} is stale or cross-pair.")
+        if _unstructured_evidence_lines(section):
+            raise PreflightError(f"READY FOR REVIEW forbids unstructured evidence prose in {heading}.")
         if _contains_contradictory_evidence(section):
             raise PreflightError(f"READY FOR REVIEW contains contradictory failure evidence in {heading}.")
 
@@ -830,21 +875,21 @@ def validate_finding_resolution(finding: FindingResolution) -> None:
         raise PreflightError(
             f"Blocking finding {finding.finding_id} cannot be resolved without canonical isolated/systemic classification."
         )
-    _require_substantive_evidence(
+    _require_structured_evidence_value(
         finding.classification_evidence or "",
         label=f"Blocking finding {finding.finding_id} classification evidence",
     )
     if classification != "systemic":
         return
-    _require_substantive_evidence(
+    _require_structured_evidence_value(
         finding.reusable_boundary or "",
         label=f"Systemic finding {finding.finding_id} reusable boundary",
     )
-    _require_substantive_evidence(
+    _require_structured_evidence_value(
         finding.durable_guard_evidence or "",
         label=f"Systemic finding {finding.finding_id} durable reusable hardening evidence",
     )
-    _require_substantive_evidence(
+    _require_structured_evidence_value(
         finding.verifier_evidence or "",
         label=f"Systemic finding {finding.finding_id} verifier evidence",
     )
@@ -1016,7 +1061,7 @@ def require_independent_hostile_review(
         ("Hostile review scope", scope),
         ("Hostile review limitations", limitations),
     ):
-        _require_substantive_evidence(match.group("value"), label=label)
+        _require_structured_evidence_value(match.group("value"), label=label)
     outcome = latest_marker.group("outcome").lower()
     count = int(blocker_count.group("count"))
     latest_state = str(latest_review.get("state") or "").strip().lower()

@@ -86,7 +86,10 @@ def test_owner_authored_comment_does_not_require_self_acknowledgement(gh):
         501,
         907,
         login="fafa33",
-        body="<!-- hunter-owner-status:nonblocking -->\nStatus: nonblocking\nDetail: owner implementation status note",
+        body=(
+            "<!-- hunter-owner-status:nonblocking -->\nStatus: nonblocking\n"
+            "Detail: reference=https://github.com/fafa33/Project-Hunter/pull/501"
+        ),
     )
 
     decision = core.reconcile_pr(501)
@@ -141,6 +144,27 @@ def test_owner_cannot_quote_nonblocking_marker_to_exempt_blocking_feedback(gh):
 
     assert core.reconcile_pr(501).state == "failure"
     assert core.unacknowledged_top_level_comments(501) == (910,)
+
+
+@pytest.mark.parametrize(
+    "detail",
+    [
+        "Reject this change; cannot proceed.",
+        "BLOCKING: do not merge.",
+        "Approval withheld until fixed.",
+    ],
+)
+def test_owner_nonblocking_schema_rejects_free_form_contradictory_detail(gh, detail: str):
+    ready_pull_request(gh)
+    gh.add_comment(
+        501,
+        911,
+        login="fafa33",
+        body=f"<!-- hunter-owner-status:nonblocking -->\nStatus: nonblocking\nDetail: {detail}",
+    )
+
+    assert core.reconcile_pr(501).state == "failure"
+    assert core.unacknowledged_top_level_comments(501) == (911,)
 
 
 def test_non_exempt_bot_comment_blocks_until_acknowledged(gh):

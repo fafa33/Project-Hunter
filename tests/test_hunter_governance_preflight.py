@@ -13,6 +13,17 @@ ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / "tests" / "fixtures" / "governance" / "issue_276_preflight.json"
 HEAD = "a" * 40
 BASE = "b" * 40
+EVIDENCE_URL = "https://github.com/fafa33/Project-Hunter/pull/277"
+
+
+def structured_evidence(result: str = "verified") -> str:
+    return f"result={result}; reference={EVIDENCE_URL}"
+
+
+def pair_evidence(kind: str, result: str) -> str:
+    return (
+        f"<!-- hunter-evidence:v1 kind={kind} result={result} reference={EVIDENCE_URL} " f"head={HEAD} base={BASE} -->"
+    )
 
 
 def fixture_issue() -> preflight.IssueIdentity:
@@ -41,8 +52,8 @@ def generated_body(*, ready: bool = True, template_text: str | None = None) -> s
             template_text=template_text or canonical_template(),
             changed_files=("scripts/hunter_governance_preflight.py", "tests/test_hunter_governance_preflight.py"),
             evidence=evidence_for(issue) if ready else {},
-            verification=("ruff check .: PASS",) if ready else (),
-            operational_evidence=("Governance-only validation: PASS",) if ready else (),
+            verification=(pair_evidence("verification", "verified"),) if ready else (),
+            operational_evidence=(pair_evidence("operational", "not-applicable"),) if ready else (),
         )
     if not ready:
         return body
@@ -148,11 +159,11 @@ def test_ready_body_rejects_unchecked_or_placeholder_evidence() -> None:
     issue = fixture_issue()
     body = generated_body()
     unchecked = body.replace("- [x] `ruff check .`", "- [ ] `ruff check .`", 1)
-    placeholder = body.replace("ruff check .: PASS", "Pending exact command/result evidence.", 1)
+    placeholder = body.replace(pair_evidence("verification", "verified"), "Pending exact command/result evidence.", 1)
 
     with pytest.raises(preflight.PreflightError, match="every Verification item complete"):
         preflight.validate_pr_body(unchecked, issue, head_sha=HEAD, base_sha=BASE, promotion=False)
-    with pytest.raises(preflight.PreflightError, match="complete evidence"):
+    with pytest.raises(preflight.PreflightError, match="complete evidence|evidence record"):
         preflight.validate_pr_body(placeholder, issue, head_sha=HEAD, base_sha=BASE, promotion=False)
 
     missing_item = body.replace("- [x] `mypy`\n", "", 1)
@@ -175,7 +186,7 @@ def test_ready_body_rejects_unchecked_or_placeholder_evidence() -> None:
         "Operational validation: FAILED; live evidence fabricated.\n<!-- hunter-operational-validation:v1",
         1,
     )
-    with pytest.raises(preflight.PreflightError, match="contradictory failure evidence"):
+    with pytest.raises(preflight.PreflightError, match="unstructured evidence prose|contradictory failure evidence"):
         preflight.validate_pr_body(contradictory, issue, head_sha=HEAD, base_sha=BASE, promotion=True)
 
     synonymous_negative = body.replace(
@@ -187,8 +198,20 @@ def test_ready_body_rejects_unchecked_or_placeholder_evidence() -> None:
         "Operational validation: BOGUS; no real evidence supplied.\n<!-- hunter-operational-validation:v1",
         1,
     )
-    with pytest.raises(preflight.PreflightError, match="contradictory failure evidence"):
+    with pytest.raises(preflight.PreflightError, match="unstructured evidence prose|contradictory failure evidence"):
         preflight.validate_pr_body(synonymous_negative, issue, head_sha=HEAD, base_sha=BASE, promotion=True)
+
+    open_text_synonyms = body.replace(
+        "<!-- hunter-verification:v1",
+        "Ruff, Black, Mypy, and Pytest were never executed.\n<!-- hunter-verification:v1",
+        1,
+    ).replace(
+        "<!-- hunter-operational-validation:v1",
+        "The operational exercise was omitted.\n<!-- hunter-operational-validation:v1",
+        1,
+    )
+    with pytest.raises(preflight.PreflightError, match="unstructured evidence prose"):
+        preflight.validate_pr_body(open_text_synonyms, issue, head_sha=HEAD, base_sha=BASE, promotion=True)
 
 
 def test_pr_body_rejects_missing_matrix() -> None:
@@ -527,8 +550,8 @@ def test_systemic_finding_requires_durable_guard_and_verifier() -> None:
         finding_id="P2-1",
         severity="blocking",
         classification="systemic",
-        classification_evidence="same defect can recur",
-        reusable_boundary="PR generator",
+        classification_evidence=structured_evidence(),
+        reusable_boundary=structured_evidence("complete"),
         durable_guard_evidence=None,
         verifier_evidence=None,
         resolved=True,
@@ -541,10 +564,10 @@ def test_systemic_finding_requires_durable_guard_and_verifier() -> None:
         finding_id="P2-1",
         severity="blocking",
         classification="systemic",
-        classification_evidence="same defect can recur",
-        reusable_boundary="PR generator",
-        durable_guard_evidence="counterfactual regression guard",
-        verifier_evidence="independent verifier reproduced failure without guard",
+        classification_evidence=structured_evidence(),
+        reusable_boundary=structured_evidence("complete"),
+        durable_guard_evidence=structured_evidence(),
+        verifier_evidence=structured_evidence(),
         resolved=True,
     )
     preflight.validate_finding_resolution(complete)
@@ -572,7 +595,7 @@ def test_systemic_finding_requires_durable_guard_and_verifier() -> None:
         verifier_evidence="NOT RUN; fabricated evidence",
         resolved=True,
     )
-    with pytest.raises(preflight.PreflightError, match="explicitly negative evidence"):
+    with pytest.raises(preflight.PreflightError, match="structured evidence record"):
         preflight.validate_finding_resolution(padded_negative)
 
 
@@ -595,8 +618,8 @@ def test_finding_resolution_is_bound_to_live_independent_exact_pair_evidence() -
         body=(
             f"<!-- hunter-review-finding:v1 id=F-004 severity=blocking classification=systemic "
             f"head={HEAD} base={BASE} -->\n"
-            "Classification evidence: Caller-controlled classification can recur across every finding.\n"
-            "Reusable boundary: live review finding resolver"
+            f"Classification evidence: {structured_evidence()}\n"
+            f"Reusable boundary: {structured_evidence('complete')}"
         ),
     )
     verifier = _live_review_evidence(
@@ -604,8 +627,8 @@ def test_finding_resolution_is_bound_to_live_independent_exact_pair_evidence() -
         suffix="issuecomment-2",
         body=(
             f"<!-- hunter-review-verification:v1 finding=F-004 head={HEAD} base={BASE} outcome=resolved -->\n"
-            "Verification evidence: Independent counterexample now fails.\n"
-            "Durable guard evidence: Counterfactual regression covers the reusable resolver boundary."
+            f"Verification evidence: {structured_evidence()}\n"
+            f"Durable guard evidence: {structured_evidence()}"
         ),
     )
 
@@ -672,9 +695,9 @@ def test_hostile_review_requires_independent_exact_pair_positive_evidence(monkey
         "submitted_at": "2026-08-16T20:00:00Z",
         "body": (
             f"<!-- hunter-hostile-review:v1 head={HEAD} base={BASE} outcome=no-blocking-findings -->\n"
-            "Hostile review evidence: Reproduced all required counterexamples against the exact pair.\n"
-            "Scope probed: All original blocker classes and newly changed enforcement boundaries.\n"
-            "Limitations: GitHub branch protection remains external human authority.\n"
+            f"Hostile review evidence: {structured_evidence()}\n"
+            f"Scope probed: {structured_evidence('complete')}\n"
+            f"Limitations: {structured_evidence('disclosed')}\n"
             "Unresolved blocking findings: 0"
         ),
     }
@@ -715,7 +738,7 @@ def test_hostile_review_rejects_padded_synonymous_negative_evidence(monkeypatch)
     }
     monkeypatch.setattr(preflight, "_gh_json", lambda _args: [review])
 
-    with pytest.raises(preflight.PreflightError, match="explicitly negative evidence"):
+    with pytest.raises(preflight.PreflightError, match="structured evidence record"):
         preflight.require_independent_hostile_review(
             repository="fafa33/Project-Hunter",
             pr_number=277,
@@ -742,9 +765,9 @@ def test_hostile_review_rejects_dismissed_marker_only_and_reads_later_pages(monk
         "submitted_at": "2026-08-16T21:00:00Z",
         "body": (
             f"<!-- hunter-hostile-review:v1 head={HEAD} base={BASE} outcome=changes-required -->\n"
-            "Hostile review evidence: A later page contains a reproducible authorization bypass.\n"
-            "Scope probed: Complete hostile-review evidence resolver across pagination.\n"
-            "Limitations: No repository mutation was attempted.\n"
+            f"Hostile review evidence: {structured_evidence()}\n"
+            f"Scope probed: {structured_evidence('complete')}\n"
+            f"Limitations: {structured_evidence('disclosed')}\n"
             "Unresolved blocking findings: 1"
         ),
     }
@@ -770,9 +793,9 @@ def test_newer_malformed_adverse_hostile_review_invalidates_older_pass(monkeypat
         "submitted_at": "2026-08-16T20:00:00Z",
         "body": (
             f"<!-- hunter-hostile-review:v1 head={HEAD} base={BASE} outcome=no-blocking-findings -->\n"
-            "Hostile review evidence: Required counterexamples fail closed.\n"
-            "Scope probed: All governed mutation and readiness boundaries.\n"
-            "Limitations: External human approval remains separate.\n"
+            f"Hostile review evidence: {structured_evidence()}\n"
+            f"Scope probed: {structured_evidence('complete')}\n"
+            f"Limitations: {structured_evidence('disclosed')}\n"
             "Unresolved blocking findings: 0"
         ),
     }
@@ -808,9 +831,9 @@ def test_newer_duplicate_adverse_markers_invalidate_older_hostile_pass(monkeypat
         "submitted_at": "2026-08-16T20:00:00Z",
         "body": (
             f"<!-- hunter-hostile-review:v1 head={HEAD} base={BASE} outcome=no-blocking-findings -->\n"
-            "Hostile review evidence: Counterexamples fail closed.\n"
-            "Scope probed: All changed governance boundaries.\n"
-            "Limitations: Human approval remains external.\n"
+            f"Hostile review evidence: {structured_evidence()}\n"
+            f"Scope probed: {structured_evidence('complete')}\n"
+            f"Limitations: {structured_evidence('disclosed')}\n"
             "Unresolved blocking findings: 0"
         ),
     }
