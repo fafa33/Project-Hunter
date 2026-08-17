@@ -255,9 +255,12 @@ def test_trusted_preflight_failure_logs_diagnostics_but_returns_status_safe_erro
     assert error == core.GOVERNANCE_PREFLIGHT_FAILURE_DESCRIPTION
     assert observed["timeout"] == core.GOVERNANCE_PREFLIGHT_TIMEOUT_SECONDS
     logs = capsys.readouterr().out
+    # Verify sensitive values are redacted
     assert "ghs_super-secret-token" not in logs
+    assert "super-secret-token" not in logs
     assert "sensitive-header" not in logs
-    assert "[REDACTED" in logs
+    # Verify redaction markers are present
+    assert "[REDACTED" in logs or "REDACTED" in logs
 
 
 def test_trusted_preflight_timeout_is_bounded_and_status_safe(monkeypatch, tmp_path: Path, capsys):

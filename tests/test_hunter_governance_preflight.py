@@ -618,6 +618,23 @@ def test_ownership_guard_requires_per_line_owner_reference() -> None:
         preflight.validate_ownership_added_lines(added)
 
 
+def test_ownership_guard_rejects_second_line_without_owner_reference() -> None:
+    """Verify each semantic line is checked independently for owner references.
+
+    The first line references the canonical owner and should pass. The second line
+    adds review semantics without referencing the owner and must be rejected.
+    """
+    added = {
+        "docs/IMPLEMENTATION_GUIDE.md": [
+            "Follow the blocking finding classification defined in docs/AI_REVIEW_PROTOCOL.md.",
+            "Every systemic finding requires independent verification before resolution.",
+        ]
+    }
+
+    with pytest.raises(preflight.PreflightError, match="contribution-review.*systemic"):
+        preflight.validate_ownership_added_lines(added)
+
+
 def test_ownership_guard_inspects_non_owner_governance_documents() -> None:
     with pytest.raises(preflight.PreflightError, match="outside canonical owner"):
         preflight.validate_ownership_added_lines(
@@ -1064,7 +1081,7 @@ def test_issue_276_fixture_criteria_match_canonical_issue() -> None:
     preflight test suite reflects the actual governing Issue acceptance criteria.
     """
     fixture = fixture_issue()
-    fixture_criteria = set(fixture.acceptance_criteria)
+    fixture_criteria = set(preflight.issue_acceptance_criteria(fixture.body))
 
     # These are the canonical acceptance criteria from Issue 276
     canonical_criteria = {
