@@ -8,6 +8,7 @@ a decision input through an event payload.
 
 from __future__ import annotations
 
+import hunter_github_transport as transport
 import hunter_merge_readiness as core
 import pytest
 from hunter_readiness_harness import READY_BODY, FakeGitHub, install, ready_pull_request
@@ -333,3 +334,134 @@ def test_a_reconciliation_error_publishes_failure_and_fails_the_run(gh, monkeypa
         core.main()
 
     assert gh.readiness_status(head)[0] == "failure"
+
+
+# --- GitHub infrastructure unavailability (bounded-retry exhaustion) ---------
+
+
+def test_infrastructure_unavailable_fails_closed_with_typed_pending(gh, monkeypatch):
+    """An exhausted GitHub outage is never a semantic verdict: pending, typed."""
+    head = ready_pull_request(gh)
+
+    def unavailable(method, path, payload=None):
+        raise transport.GitHubUnavailable(
+            f"GET {path}",
+            attempts=3,
+            last=transport.GitHubRequestError("HTTP 503: no server", category="transient", status_code=503),
+        )
+
+    monkeypatch.setattr(core, "request_json", unavailable)
+
+    decision = core.reconcile_pr(501)
+
+    assert decision is not None
+    assert decision.state == "pending"
+    assert "Readiness infrastructure unavailable" in decision.description
+    assert "success" not in decision.description
+    assert gh.readiness_status(head) is None
+    assert all(state != "success" for _, state, _ in gh.published)
+
+
+def test_infrastructure_unavailable_never_publishes_a_green(gh, monkeypatch):
+    """Failed acquisition must never collapse into an empty review/blocker set."""
+    ready_pull_request(gh)
+    original = gh.request_json
+
+    def unavailable_for_reviews(method, path, payload=None):
+        if method == "GET" and "reviews" in path:
+            raise transport.GitHubUnavailable(
+                "GET reviews",
+                attempts=3,
+                last=transport.GitHubRequestError(
+                    "GitHub node-resolution 404: could not resolve to a node with the global id",
+                    category="node-resolution",
+                    status_code=404,
+                ),
+            )
+        return original(method, path, payload)
+
+    monkeypatch.setattr(core, "request_json", unavailable_for_reviews)
+
+    decision = core.reconcile_pr(501)
+
+    assert decision is not None
+    assert decision.state == "pending"
+    assert "Readiness infrastructure unavailable" in decision.description
+    assert all(state != "success" for _, state, _ in gh.published)
+    assert all(
+        status["state"] != "success"
+        for statuses in gh.statuses.values()
+        for status in statuses
+        if status["context"] == "Hunter Merge Readiness"
+    )
+
+
+def test_unavailable_during_publication_stays_pending_never_success(gh, monkeypatch):
+    """A 503 while publishing the success state must not become a green."""
+    ready_pull_request(gh)
+    original = gh.request_json
+
+    def unavailable_for_status_writes(method, path, payload=None):
+        if method == "POST" and path.startswith("statuses/"):
+            raise transport.GitHubUnavailable(
+                f"POST {path}",
+                attempts=3,
+                last=transport.GitHubRequestError("HTTP 503: no server", category="transient", status_code=503),
+            )
+        return original(method, path, payload)
+
+    monkeypatch.setattr(core, "request_json", unavailable_for_status_writes)
+
+    decision = core.reconcile_pr(501)
+
+    assert decision is not None
+    assert decision.state == "pending"
+    assert "Readiness infrastructure unavailable" in decision.description
+    assert all(state != "success" for _, state, _ in gh.published)
+
+
+def test_unavailable_guard_is_typed_not_a_generic_except(gh, monkeypatch):
+    """Counterfactual binding: a plain RuntimeError is NOT swallowed as pending."""
+    ready_pull_request(gh)
+
+    def broken(method, path, payload=None):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(core, "request_json", broken)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        core.reconcile_pr(501)
+
+    assert all(state != "success" for _, state, _ in gh.published)
+
+
+def test_publish_controller_failure_keeps_unavailable_distinct(gh, monkeypatch):
+    """Terminal failure publication distinguishes outage from semantic failure."""
+    head = ready_pull_request(gh)
+
+    def failing_status_writes(method, path, payload=None):
+        if method == "GET" and path.startswith("pulls/"):
+            return {"head": {"sha": head}}
+        raise AssertionError(f"unexpected call: {method} {path}")
+
+    monkeypatch.setattr(core, "request_json", failing_status_writes)
+
+    recorded = []
+
+    def _record_publish(sha, state, description, published):
+        recorded.append((sha, state, description))
+
+    monkeypatch.setattr(core, "publish", _record_publish)
+
+    unavailable = transport.GitHubUnavailable(
+        "GET reviews",
+        attempts=3,
+        last=transport.GitHubRequestError("HTTP 503: no server", category="transient", status_code=503),
+    )
+    core._publish_controller_failure(501, unavailable)
+    assert recorded[-1][1] == "pending"
+    assert "Readiness infrastructure unavailable" in recorded[-1][2]
+
+    core._publish_controller_failure(501, RuntimeError("boom"))
+    assert recorded[-1][1] == "failure"
+    assert "Readiness controller error" in recorded[-1][2]

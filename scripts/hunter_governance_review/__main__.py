@@ -35,7 +35,10 @@ Exit codes:
     0  review completed and status published (or the gate is not required for
        a PR targeting a non-protected branch)
     2  could not resolve the PR, or a required environment value is missing
-    3  the status check could not be published
+    3  the status check could not be published (permanent failure)
+    4  the semantic outcome was produced but GitHub is unavailable and the
+       status check could not be published after bounded retries; the verdict
+       is reported as "published: unavailable", never as a semantic failure
 """
 
 from __future__ import annotations
@@ -66,7 +69,7 @@ from hunter_governance_review.contracts import (
 )
 from hunter_governance_review.decision import Decision, decide
 from hunter_governance_review.deterministic import ValidationContext, run_deterministic_engine
-from hunter_governance_review.github_api import GhCliRunner, GitHubError, GitHubRunner
+from hunter_governance_review.github_api import GhCliRunner, GitHubError, GitHubRunner, GitHubUnavailable
 
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
@@ -184,9 +187,16 @@ def _write_summary(
 def _resolve_pair_freshness(
     gh: GitHubRunner, pr_number: int, pair: ReviewPair
 ) -> tuple[PullRequest | None, bool, str | None]:
-    """Re-resolve the PR and compare against ``pair``. Returns (current, fresh, error)."""
+    """Re-resolve the PR and compare against ``pair``. Returns (current, fresh, error).
+
+    Raises :class:`GitHubUnavailable` when GitHub infrastructure itself is
+    unavailable, so the caller can distinguish an acquisition outage from a
+    semantic verdict instead of misreading it as a failed review.
+    """
     try:
         current = gh.get_pull_request(pr_number)
+    except GitHubUnavailable:
+        raise
     except GitHubError as exc:
         return None, False, f"could not re-resolve PR #{pr_number} to verify the review pair: {exc}"
     if current.head_oid != pair.source_head_sha or current.base_oid != pair.target_base_sha:
@@ -217,6 +227,9 @@ def run_review(
 
     try:
         pr = gh.get_pull_request(args.pr)
+    except GitHubUnavailable as exc:
+        print(f"::error::could not resolve pull request #{args.pr}: GitHub unavailable: {exc}")
+        return 4
     except GitHubError as exc:
         print(f"::error::could not resolve pull request #{args.pr}: {exc}")
         return 2
@@ -245,6 +258,9 @@ def run_review(
     files: list[ChangedFile] = []
     try:
         files = gh.get_pull_files(pr.number)
+    except GitHubUnavailable as exc:
+        print(f"::error::could not retrieve changed files for PR #{pr.number}: GitHub unavailable: {exc}")
+        return 4
     except GitHubError as exc:
         evidence_error = f"missing required repository evidence: {exc}"
 
@@ -259,6 +275,9 @@ def run_review(
                 head_sha=pair.source_head_sha,
                 changed_paths=frozenset(f.filename for f in files),
             )
+        except GitHubUnavailable as exc:
+            print(f"::error::GitHub unavailable while resolving authoritative governance context: {exc}")
+            return 4
         except ContextResolutionError as exc:
             context_error = f"authoritative governance context could not be resolved: {exc}"
         except GitHubError as exc:
@@ -279,7 +298,12 @@ def run_review(
         except Exception as exc:  # internal validator exception -> REVIEW_FAILED
             validator_error = f"internal validator exception: {exc!r}"
 
-    current, pair_fresh, pair_fresh_error = _resolve_pair_freshness(gh, pr.number, pair)
+    current, pair_fresh, pair_fresh_error = (None, True, None)
+    try:
+        current, pair_fresh, pair_fresh_error = _resolve_pair_freshness(gh, pr.number, pair)
+    except GitHubUnavailable as exc:
+        print(f"::error::GitHub unavailable while verifying the review pair for PR #{pr.number}: {exc}")
+        return 4
 
     if evidence_error is not None:
         decision = Decision(Outcome.REVIEW_FAILED, evidence_error)
@@ -338,6 +362,20 @@ def run_review(
                 description=description,
                 target_url=target_url,
             )
+        except GitHubUnavailable as exc:
+            print(
+                f"::error::semantic outcome is {decision.outcome.value} but the {CHECK_CONTEXT} "
+                f"status check could not be published because GitHub is unavailable: {exc}"
+            )
+            _write_summary(
+                env,
+                decision=decision,
+                pair=pair,
+                deterministic=deterministic,
+                context=context_manifest,
+                published_state="unavailable",
+            )
+            return 4
         except GitHubError as exc:
             print(f"::error::could not publish the {CHECK_CONTEXT} status check: {exc}")
             return 3

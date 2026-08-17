@@ -1,9 +1,10 @@
 import json
 import os
 import re
-import urllib.request
+import time
 from typing import Any
 
+import hunter_github_transport as transport
 import hunter_governance_preflight as governance_preflight
 import hunter_merge_readiness as merge_readiness
 
@@ -22,6 +23,9 @@ repo: str = ""
 token: str = ""
 run_url: str = ""
 
+# Sleeper hook so tests can inject a deterministic fake instead of sleeping.
+_sleeper = time.sleep
+
 
 def init_globals() -> None:
     global repo, token, run_url
@@ -33,20 +37,17 @@ def init_globals() -> None:
 
 
 def request_json(method: str, path: str, payload: dict[str, Any] | None = None) -> Any:
+    """REST request through the shared bounded-retry GitHub transport."""
     data = None if payload is None else json.dumps(payload).encode("utf-8")
-    request = urllib.request.Request(
-        f"https://api.github.com/repos/{repo}/{path}",
-        data=data,
+    return transport.request_rest_json(
+        url=f"https://api.github.com/repos/{repo}/{path}",
         method=method,
-        headers={
-            "Accept": "application/vnd.github+json",
-            "Authorization": f"Bearer {token}",
-            "X-GitHub-Api-Version": "2022-11-28",
-            "Content-Type": "application/json",
-        },
+        headers={},
+        data=data,
+        token=token,
+        what=f"{method} {path}",
+        sleeper=_sleeper,
     )
-    with urllib.request.urlopen(request, timeout=30) as response:
-        return json.load(response)
 
 
 def publish(sha: str, state: str, description: str) -> None:
@@ -127,6 +128,21 @@ def review_feedback_blockers(pr_number: int) -> list[str]:
         waiting.append(f"unacknowledged top-level comments={len(unacknowledged)}")
 
     return waiting
+
+
+def review_blockers_or_unavailable(pr_number: int) -> list[str]:
+    """Return review blockers, or a typed unavailable reason on infrastructure failure.
+
+    A transient GitHub outage while reading review feedback must never become
+    an empty review set, a zero-blocker claim, or a silent pass: it surfaces
+    as an explicit pending ``review feedback infrastructure unavailable``
+    reason so the advisory signal can never fire on unknown feedback state.
+    """
+    try:
+        return review_feedback_blockers(pr_number)
+    except transport.GitHubUnavailable as exc:
+        print(f"PR #{pr_number}: review feedback infrastructure unavailable: {exc}")
+        return [f"review feedback infrastructure unavailable: {exc}"]
 
 
 def _governing_issue_number(body: str) -> int:
@@ -332,7 +348,7 @@ def evaluate(pr: dict[str, Any]) -> None:
     elif governance.get("state") != "success":
         waiting.append(f"{governance_context}={governance.get('state') or 'pending'}")
 
-    waiting.extend(review_feedback_blockers(pr_number))
+    waiting.extend(review_blockers_or_unavailable(pr_number))
 
     if waiting:
         reason = "Waiting for Draft promotion prerequisites: " + ", ".join(waiting)
@@ -348,7 +364,7 @@ def evaluate(pr: dict[str, Any]) -> None:
     # Re-read review feedback immediately before mutating metadata. This closes
     # the practical race where any canonical feedback blocker is introduced
     # after the initial prerequisite read but before READY FOR REVIEW is synchronized.
-    feedback_waiting = review_feedback_blockers(pr_number)
+    feedback_waiting = review_blockers_or_unavailable(pr_number)
     if feedback_waiting:
         reason = "Waiting for Draft promotion prerequisites: " + ", ".join(feedback_waiting)
         invalidate_promotion(pr_number, sha, current.get("body") or "", reason)
@@ -387,7 +403,7 @@ def evaluate(pr: dict[str, Any]) -> None:
     if final_current is None or final_current.get("head", {}).get("sha") != sha:
         print("PR state/head changed after hostile review; refusing metadata mutation.")
         return
-    final_feedback = review_feedback_blockers(pr_number)
+    final_feedback = review_blockers_or_unavailable(pr_number)
     try:
         final_body = final_current.get("body") or ""
         final_base_sha, final_head_sha = merge_readiness.base_head_oids(pr_number)
@@ -439,6 +455,10 @@ def reconcile_open_draft_prs() -> None:
         pr_number = int(pr.get("number") or 0)
         try:
             evaluate(pr)
+        except transport.GitHubUnavailable as exc:
+            label = f"PR #{pr_number}" if pr_number else "Draft PR with missing number"
+            failures.append(f"{label}: GitHub infrastructure unavailable: {exc}")
+            print(f"Draft promotion infrastructure unavailable for {label}: {exc}")
         except Exception as exc:
             label = f"PR #{pr_number}" if pr_number else "Draft PR with missing number"
             failures.append(f"{label}: {type(exc).__name__}: {exc}")
@@ -446,6 +466,21 @@ def reconcile_open_draft_prs() -> None:
 
     if failures:
         raise RuntimeError("Draft promotion sweep completed with isolated failures: " + " | ".join(failures))
+
+
+def _evaluate_with_unavailable_guard(pr: dict[str, Any]) -> None:
+    """Evaluate a single Draft, mapping infrastructure unavailability to exit 1.
+
+    The direct-event paths run in an event workflow with no sweep isolation;
+    an exhausted GitHub outage must still fail closed with a typed diagnostic
+    instead of an unhandled traceback.
+    """
+    try:
+        evaluate(pr)
+    except transport.GitHubUnavailable as exc:
+        pr_number = int(pr.get("number") or 0)
+        print(f"Draft promotion infrastructure unavailable for PR #{pr_number}: {exc}")
+        raise SystemExit(1) from exc
 
 
 def main() -> None:
@@ -456,7 +491,7 @@ def main() -> None:
         event = json.load(handle)
 
     if "pull_request" in event:
-        evaluate(event["pull_request"])
+        _evaluate_with_unavailable_guard(event["pull_request"])
         raise SystemExit(0)
 
     if event_name == "issue_comment":
@@ -468,7 +503,7 @@ def main() -> None:
         if not pr_number:
             print("issue_comment event has no pull request number; nothing to evaluate.")
             raise SystemExit(0)
-        evaluate({"number": pr_number})
+        _evaluate_with_unavailable_guard({"number": pr_number})
         raise SystemExit(0)
 
     if event_name == "schedule":
@@ -494,7 +529,7 @@ def main() -> None:
     if pr is None:
         print("No open Draft PR matches the completed workflow exact head.")
         raise SystemExit(0)
-    evaluate(pr)
+    _evaluate_with_unavailable_guard(pr)
 
 
 if __name__ == "__main__":

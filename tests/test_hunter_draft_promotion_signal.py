@@ -753,3 +753,174 @@ def test_workflow_reconciles_when_review_feedback_changes():
     assert "issue_comment:" in workflow
     assert "schedule:" in workflow
     assert 'cron: "*/5 * * * *"' in workflow
+
+
+# --- GitHub infrastructure unavailability ------------------------------------
+
+
+def _unavailable(message="HTTP 503: no server") -> hunter_draft_promotion_signal.transport.GitHubUnavailable:
+    return hunter_draft_promotion_signal.transport.GitHubUnavailable(
+        "GET reviews",
+        attempts=3,
+        last=hunter_draft_promotion_signal.transport.GitHubRequestError(message, category="transient", status_code=503),
+    )
+
+
+def test_review_feedback_infrastructure_unavailable_publishes_pending_no_ready(gh):
+    sha = "sha_infra_unavailable"
+    body = "- [ ] `READY FOR REVIEW`\n- [x] `CHANGES REQUIRED`\n- [ ] `BLOCKED`\n"
+    gh.pulls[125] = green_pr(125, sha, body)
+    green_checks(gh, sha)
+
+    with (
+        patch.object(
+            hunter_draft_promotion_signal,
+            "review_feedback_blockers",
+            side_effect=_unavailable(),
+        ),
+        patch.object(
+            hunter_draft_promotion_signal.governance_preflight,
+            "load_issue",
+            return_value=_governing_issue(),
+        ),
+        patch.object(
+            hunter_draft_promotion_signal,
+            "_governing_issue_number",
+            return_value=276,
+        ),
+        patch.object(
+            hunter_draft_promotion_signal.governance_preflight,
+            "validate_pr_body",
+            return_value=None,
+        ),
+        patch.object(
+            hunter_draft_promotion_signal.governance_preflight,
+            "validate_ready_evidence",
+            return_value=None,
+        ),
+        patch.object(
+            hunter_draft_promotion_signal.governance_preflight,
+            "validate_trace_against_state",
+            return_value=None,
+        ),
+    ):
+        hunter_draft_promotion_signal.evaluate(gh.pulls[125])
+
+    assert not any(state == "success" for _, state, _ in gh.published)
+    assert gh.published[-1][1] == "pending"
+    assert "review feedback infrastructure unavailable" in gh.published[-1][2]
+    assert "[x] `READY FOR REVIEW`" not in (gh.patched_bodies.get(125) or "")
+
+
+def test_node_resolution_404_in_readiness_reader_becomes_typed_pending(gh):
+    sha = "sha_node_resolution_404"
+    body = "- [ ] `READY FOR REVIEW`\n- [x] `CHANGES REQUIRED`\n- [ ] `BLOCKED`\n"
+    gh.pulls[126] = green_pr(126, sha, body)
+    green_checks(gh, sha)
+
+    unavailable = hunter_draft_promotion_signal.transport.GitHubUnavailable(
+        "GET pulls/126/reviews",
+        attempts=3,
+        last=hunter_draft_promotion_signal.transport.GitHubRequestError(
+            "GitHub node-resolution 404: could not resolve to a node with the global id",
+            category="node-resolution",
+            status_code=404,
+        ),
+    )
+
+    with (
+        patch.object(
+            hunter_draft_promotion_signal.merge_readiness,
+            "unresolved_review_thread_ids",
+            side_effect=unavailable,
+        ),
+        patch.object(
+            hunter_draft_promotion_signal.governance_preflight,
+            "load_issue",
+            return_value=_governing_issue(),
+        ),
+        patch.object(
+            hunter_draft_promotion_signal,
+            "_governing_issue_number",
+            return_value=276,
+        ),
+        patch.object(
+            hunter_draft_promotion_signal.governance_preflight,
+            "validate_pr_body",
+            return_value=None,
+        ),
+        patch.object(
+            hunter_draft_promotion_signal.governance_preflight,
+            "validate_ready_evidence",
+            return_value=None,
+        ),
+        patch.object(
+            hunter_draft_promotion_signal.governance_preflight,
+            "validate_trace_against_state",
+            return_value=None,
+        ),
+    ):
+        hunter_draft_promotion_signal.evaluate(gh.pulls[126])
+
+    assert not any(state == "success" for _, state, _ in gh.published)
+    assert gh.published[-1][1] == "pending"
+    assert "review feedback infrastructure unavailable" in gh.published[-1][2]
+
+
+def test_review_unavailable_guard_is_binding_counterfactual(gh):
+    """Without the typed guard the outage propagates and nothing is published."""
+    sha = "sha_binding"
+    body = "- [ ] `READY FOR REVIEW`\n- [x] `CHANGES REQUIRED`\n- [ ] `BLOCKED`\n"
+    gh.pulls[127] = green_pr(127, sha, body)
+    green_checks(gh, sha)
+
+    with patch.object(
+        hunter_draft_promotion_signal,
+        "review_blockers_or_unavailable",
+        side_effect=_unavailable(),
+    ):
+        with pytest.raises(hunter_draft_promotion_signal.transport.GitHubUnavailable):
+            hunter_draft_promotion_signal.evaluate(gh.pulls[127])
+
+    assert gh.published == []
+
+
+def test_direct_event_path_fails_closed_with_typed_exit(gh, monkeypatch, tmp_path):
+    event_path = tmp_path / "event.json"
+    event_path.write_text(json.dumps({"pull_request": {"number": 999}}), encoding="utf-8")
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_path))
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "pull_request")
+    monkeypatch.setenv("GH_REPO", "fafa33/Project-Hunter")
+    monkeypatch.setenv("GH_TOKEN", "fake-token")
+
+    with patch.object(
+        hunter_draft_promotion_signal,
+        "evaluate",
+        side_effect=_unavailable(),
+    ):
+        with pytest.raises(SystemExit) as raised:
+            hunter_draft_promotion_signal.main()
+
+    assert raised.value.code == 1
+
+
+def test_sweep_isolates_unavailable_pr_and_reports_typed_failure(gh):
+    drafts = [
+        green_pr(275, "sha_a", "- [x] `READY FOR REVIEW` — a.\n"),
+        green_pr(276, "sha_b", "- [x] `READY FOR REVIEW` — b.\n"),
+    ]
+    visited: list[int] = []
+
+    def evaluate(pr):
+        visited.append(pr["number"])
+        if pr["number"] == 275:
+            raise _unavailable()
+
+    with (
+        patch("hunter_draft_promotion_signal.open_draft_prs", return_value=drafts),
+        patch("hunter_draft_promotion_signal.evaluate", side_effect=evaluate),
+    ):
+        with pytest.raises(RuntimeError, match="PR #275: GitHub infrastructure unavailable"):
+            hunter_draft_promotion_signal.reconcile_open_draft_prs()
+
+    assert visited == [275, 276]

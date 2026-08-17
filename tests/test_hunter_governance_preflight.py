@@ -397,6 +397,74 @@ def test_external_command_failure_does_not_embed_raw_diagnostics_in_public_error
     assert "super-secret-token" in capsys.readouterr().err
 
 
+def test_transient_gh_failure_retried_then_recovers(monkeypatch) -> None:
+    calls = []
+
+    def flaky(*_args, **_kwargs):
+        calls.append(1)
+        if len(calls) < 3:
+            return SimpleNamespace(returncode=1, stdout="", stderr="HTTP 503\nNo server is currently available")
+        return SimpleNamespace(returncode=0, stdout="{}", stderr="")
+
+    monkeypatch.setattr(preflight.subprocess, "run", flaky)
+    monkeypatch.setattr(preflight, "_sleeper", lambda _: None)
+
+    assert preflight._run(("gh", "api", "repos/fafa33/Project-Hunter")) == "{}"
+    assert len(calls) == 3
+
+
+def test_transient_gh_failure_exhaustion_raises_typed_preflight_error(monkeypatch) -> None:
+    calls = []
+
+    def always_broken(*_args, **_kwargs):
+        calls.append(1)
+        return SimpleNamespace(returncode=1, stdout="", stderr="HTTP 503\nNo server is currently available")
+
+    monkeypatch.setattr(preflight.subprocess, "run", always_broken)
+    monkeypatch.setattr(preflight, "_sleeper", lambda _: None)
+
+    with pytest.raises(preflight.PreflightError, match="after bounded GitHub availability retries") as exc_info:
+        preflight._run(("gh", "api", "repos/fafa33/Project-Hunter"))
+
+    assert len(calls) == 3
+    assert "HTTP 503" not in str(exc_info.value)
+
+
+def test_node_resolution_404_gh_failure_retried_then_typed_preflight_error(monkeypatch) -> None:
+    calls = []
+
+    def always_broken(*_args, **_kwargs):
+        calls.append(1)
+        return SimpleNamespace(
+            returncode=1,
+            stdout="",
+            stderr="HTTP 404\nCould not resolve to a node with the global id of 'PR_kwDOTRDHr87_tH6X'",
+        )
+
+    monkeypatch.setattr(preflight.subprocess, "run", always_broken)
+    monkeypatch.setattr(preflight, "_sleeper", lambda _: None)
+
+    with pytest.raises(preflight.PreflightError, match="after bounded GitHub availability retries"):
+        preflight._run(("gh", "api", "repos/fafa33/Project-Hunter/pulls/1/reviews"))
+
+    assert len(calls) == 3
+
+
+def test_plain_command_failure_is_never_retried(monkeypatch) -> None:
+    calls = []
+
+    def git_failure(*_args, **_kwargs):
+        calls.append(1)
+        return SimpleNamespace(returncode=1, stdout="", stderr="fatal: not a git repository")
+
+    monkeypatch.setattr(preflight.subprocess, "run", git_failure)
+
+    with pytest.raises(preflight.PreflightError, match=r"external command failed \(1\): git"):
+        preflight._run(("git", "rev-parse", "HEAD"))
+
+    assert len(calls) == 1
+
+
 @pytest.mark.parametrize(
     ("body", "message"),
     [

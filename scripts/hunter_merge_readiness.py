@@ -67,13 +67,13 @@ import os
 import re
 import subprocess
 import sys
-import urllib.error
-import urllib.request
+import time
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
 import hunter_controller_admission as admission
+import hunter_github_transport as transport
 from hunter_governance_revision import (
     GovernanceInputs,
     conflicting_from_rest,
@@ -133,61 +133,35 @@ def init_globals() -> None:
 
 # --- GitHub transport -------------------------------------------------------
 
+# Sleeper hook so tests can inject a deterministic fake instead of sleeping.
+_sleeper = time.sleep
+
 
 def request_json(method: str, path: str, payload: dict[str, Any] | None = None) -> Any:
+    """REST request through the shared bounded-retry GitHub transport."""
     data = None if payload is None else json.dumps(payload).encode("utf-8")
-    request = urllib.request.Request(
-        f"https://api.github.com/repos/{repo}/{path}",
-        data=data,
+    return transport.request_rest_json(
+        url=f"https://api.github.com/repos/{repo}/{path}",
         method=method,
-        headers={
-            "Accept": "application/vnd.github+json",
-            "Authorization": f"Bearer {token}",
-            "X-GitHub-Api-Version": "2022-11-28",
-            "Content-Type": "application/json",
-        },
+        headers={},
+        data=data,
+        token=token,
+        what=f"{method} {path}",
+        sleeper=_sleeper,
     )
-    try:
-        with urllib.request.urlopen(request, timeout=30) as response:
-            raw_body = response.read().decode("utf-8")
-            if not raw_body:
-                return None
-            return json.loads(raw_body)
-    except urllib.error.HTTPError as exc:
-        try:
-            body = exc.read().decode("utf-8")
-            print(f"HTTP Error {exc.code} for {method} {path}: {body}")
-        except Exception as read_exc:
-            print(f"HTTP Error {exc.code} for {method} {path} (could not read response body: {read_exc})")
-        raise
 
 
 def graphql_json(query: str, variables: dict[str, Any]) -> Any:
-    data = json.dumps({"query": query, "variables": variables}).encode("utf-8")
-    request = urllib.request.Request(
-        "https://api.github.com/graphql",
-        data=data,
-        method="POST",
-        headers={
-            "Accept": "application/vnd.github+json",
-            "Authorization": f"Bearer {token}",
-            "X-GitHub-Api-Version": "2022-11-28",
-            "Content-Type": "application/json",
-        },
+    """GraphQL request through the shared bounded-retry GitHub transport."""
+    return transport.request_graphql_json(
+        url="https://api.github.com/graphql",
+        headers={},
+        query=query,
+        variables=variables,
+        token=token,
+        what="GraphQL query",
+        sleeper=_sleeper,
     )
-    try:
-        with urllib.request.urlopen(request, timeout=30) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        try:
-            body = exc.read().decode("utf-8")
-            print(f"GraphQL HTTP Error {exc.code}: {body}")
-        except Exception as read_exc:
-            print(f"GraphQL HTTP Error {exc.code} (could not read response body: {read_exc})")
-        raise
-    if payload.get("errors"):
-        raise RuntimeError(f"GraphQL query failed: {payload['errors']}")
-    return payload["data"]
 
 
 def paged(path: str) -> list[Any]:
@@ -856,7 +830,40 @@ def publish(sha: str, state: str, description: str, published: tuple[str, str] |
 # --- Canonical reconciliation entry point -----------------------------------
 
 
+def _unavailable_decision(pr_number: int, exc: transport.GitHubUnavailable) -> ReadinessDecision:
+    """Build the typed fail-closed pending decision for infrastructure outage.
+
+    An unavailable GitHub API is never a semantic verdict: the PR is not
+    granted readiness, and the reason published is explicitly an
+    infrastructure-unavailable reason, not a semantic failure or blocker.
+    """
+    description = f"Readiness infrastructure unavailable: {exc}"
+    print(f"PR #{pr_number}: {description}")
+    return ReadinessDecision("pending", description[:140])
+
+
 def reconcile_pr(pr_number: int) -> ReadinessDecision | None:
+    try:
+        return _reconcile_pr(pr_number)
+    except transport.GitHubUnavailable as exc:
+        decision = _unavailable_decision(pr_number, exc)
+        # Best-effort publication of the typed pending state; if GitHub is
+        # still unavailable the backstop in main() reports the run failure.
+        head_sha = ""
+        try:
+            pr = request_json("GET", f"pulls/{pr_number}")
+            head_sha = ((pr or {}).get("head") or {}).get("sha") or ""
+        except transport.GitHubRequestError as probe_exc:
+            print(f"Could not re-read PR #{pr_number} to publish unavailable state: {probe_exc}")
+        if head_sha:
+            try:
+                publish(head_sha, decision.state, decision.description, None)
+            except transport.GitHubRequestError as publish_exc:
+                print(f"Could not publish infrastructure-unavailable state for PR #{pr_number}: {publish_exc}")
+        return decision
+
+
+def _reconcile_pr(pr_number: int) -> ReadinessDecision | None:
     state = read_current_state(pr_number)
     if state is None:
         print(f"PR #{pr_number} is not open; nothing to reconcile.")
@@ -1022,6 +1029,10 @@ def main() -> None:
     for pr_number in candidates:
         try:
             reconcile_pr(pr_number)
+        except transport.GitHubUnavailable as exc:
+            failures.append(pr_number)
+            print(f"Readiness infrastructure unavailable for PR #{pr_number}: {exc}")
+            _publish_controller_failure(pr_number, exc)
         except Exception as exc:
             failures.append(pr_number)
             print(f"Readiness reconciliation failed for PR #{pr_number}: {type(exc).__name__}: {exc}")
@@ -1032,12 +1043,24 @@ def main() -> None:
 
 
 def _publish_controller_failure(pr_number: int, exc: BaseException) -> None:
+    """Publish the terminal controller outcome, keeping availability distinct.
+
+    An infrastructure-unavailable error is published as a pending state with
+    an explicit unavailable reason; only genuine semantic/controller failures
+    are published as ``failure``.
+    """
+    if isinstance(exc, transport.GitHubUnavailable):
+        state = "pending"
+        prefix = "Readiness infrastructure unavailable"
+    else:
+        state = "failure"
+        prefix = "Readiness controller error"
     try:
         pr = request_json("GET", f"pulls/{pr_number}")
         sha = ((pr.get("head") or {}).get("sha") or "").strip()
         if not sha:
             return
-        publish(sha, "failure", f"Readiness controller error: {type(exc).__name__}.", None)
+        publish(sha, state, f"{prefix}: {type(exc).__name__}.", None)
     except Exception as publish_exc:
         print(f"Could not publish terminal controller failure: {type(publish_exc).__name__}: {publish_exc}")
 

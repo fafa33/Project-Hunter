@@ -66,12 +66,14 @@ jobs:
   governance-review:
     name: Hunter Governance Review
     runs-on: ubuntu-latest
-    # Deterministic-only review: no external LLM call, chunking, or retry
-    # loop remains in this path, so there is no realistic scenario where a
-    # single PR's evaluation takes more than a few minutes (GitHub API
-    # calls for PR metadata, changed files, and a handful of governance
-    # document lookups). 15 minutes is generous headroom over that, not a
-    # figure tuned against any external provider's behavior.
+    # Deterministic-only review: no external LLM call or chunking remains in
+    # this path, so there is no realistic scenario where a single PR's
+    # evaluation takes more than a few minutes (GitHub API calls for PR
+    # metadata, changed files, and a handful of governance document lookups).
+    # Transient GitHub API failures are retried with bounded deterministic
+    # backoff inside the gate itself (see scripts/hunter_github_transport.py).
+    # 15 minutes is generous headroom over that, not a figure tuned against
+    # any external provider's behavior.
     timeout-minutes: 15
 
     steps:

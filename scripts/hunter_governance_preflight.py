@@ -6,10 +6,13 @@ import os
 import re
 import subprocess
 import sys
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+import hunter_github_transport as transport
 
 ALLOWED_ACTIONS = (
     "branch",
@@ -63,6 +66,9 @@ CANONICAL_PR_HEADINGS = (
     "## Implementer readiness declaration",
 )
 COMMAND_TIMEOUT_SECONDS = 30
+
+# Sleeper hook so tests can inject a deterministic fake instead of sleeping.
+_sleeper = time.sleep
 TRACE_RE = re.compile(
     r"<!--\s*hunter-governance-preflight:v1\s+issue=(?P<issue>\d+)\s+"
     r"head=(?P<head>[0-9a-f]{7,64})\s+base=(?P<base>[0-9a-f]{7,64})\s*-->",
@@ -287,7 +293,27 @@ def _run(command: Sequence[str], *, cwd: Path | None = None) -> str:
     exception can cross the Merge Readiness status boundary. Diagnostics are
     written to stderr for workflow logs; the raised message is deterministic
     and safe for a public commit-status description.
+
+    Transient GitHub CLI failures (HTTP 429/500/502/503/504 or a node-
+    resolution 404 in the CLI diagnostics) are retried with the shared bounded
+    policy; after exhaustion the failure is reported as an explicit
+    infrastructure-unavailable PreflightError instead of a generic command
+    failure. Non-GitHub commands (git) are never retried.
     """
+    try:
+        return transport.execute_with_retry(
+            lambda: _run_once(command, cwd=cwd),
+            what=f"external command {command[0]}",
+            sleeper=_sleeper,
+        )
+    except transport.GitHubUnavailable as exc:
+        print(f"[Hunter Governance Preflight] GitHub infrastructure unavailable: {exc}", file=sys.stderr)
+        raise PreflightError(
+            f"external command failed after bounded GitHub availability retries: {command[0]}"
+        ) from exc
+
+
+def _run_once(command: Sequence[str], *, cwd: Path | None) -> str:
     try:
         completed = subprocess.run(
             tuple(command),
@@ -303,6 +329,9 @@ def _run(command: Sequence[str], *, cwd: Path | None = None) -> str:
         detail = (completed.stderr or completed.stdout or "").strip()
         if detail:
             print(f"[Hunter Governance Preflight] external command diagnostic:\n{detail}", file=sys.stderr)
+        classified = transport.classify_cli_failure(detail or "no output")
+        if classified.retryable:
+            raise classified
         raise PreflightError(f"external command failed ({completed.returncode}): {command[0]}")
     return completed.stdout
 
