@@ -138,6 +138,8 @@ The resolution record references only live `finding_url` and `verifier_url` comm
 
 When governance prose changes, preflight scans added semantics in canonical owners and non-owner Markdown/instruction documents. It rejects known lifecycle, contribution-review, architecture-audit, or implementation semantics outside the owning canonical document unless the changed document explicitly consumes that owner rather than silently introducing competing authority.
 
+The pre-action scan always derives its added-line diff from the origin tracking ref: `refs/remotes/origin/<target-branch>` for `pr-create` and `refs/remotes/origin/main` for the other mutation actions. Mutation actions reject caller-supplied base refs entirely, so the diff cannot be emptied by an argument such as `--base-ref HEAD`; a scan base that cannot be resolved fails closed rather than scanning nothing.
+
 This guard is deliberately conservative and deterministic. It is not a natural-language policy engine and does not transfer authority to itself.
 
 ## Enforcement layers and platform limits

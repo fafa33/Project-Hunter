@@ -523,6 +523,18 @@ def parse_acceptance_matrix(body: str) -> tuple[MatrixRow, ...]:
     return tuple(rows)
 
 
+def blocked_acceptance_criteria(body: str) -> tuple[str, ...]:
+    """Return the FAIL/BLOCKED acceptance-criteria names in a PR body.
+
+    Every authority that publishes promotion success treats a FAIL/BLOCKED
+    matrix row as blocking. The check must not depend on the checked readiness
+    declaration, because an advisory layer may legitimately carry CHANGES
+    REQUIRED while a criterion is still FAIL/BLOCKED — and must then never
+    claim promotion success.
+    """
+    return tuple(row.criterion for row in parse_acceptance_matrix(body) if row.status in {"fail", "blocked"})
+
+
 def checked_readiness(body: str) -> str:
     checked: list[str] = []
     for match in READINESS_RE.finditer(body):
@@ -713,7 +725,7 @@ def validate_pr_body(
         raise PreflightError("PR body evidence is stale relative to the current target revision.")
 
     if promotion:
-        blocked = [row.criterion for row in rows if row.status in {"fail", "blocked"}]
+        blocked = blocked_acceptance_criteria(body)
         if blocked:
             raise PreflightError(
                 "Ready-for-review promotion is blocked by FAIL/BLOCKED criteria: " + "; ".join(blocked)
@@ -1210,6 +1222,21 @@ def _git_added_lines(root: Path, base_ref: str) -> dict[str, list[str]]:
     return added_lines_from_diff(_run(("git", "diff", "--unified=0", base_ref), cwd=root))
 
 
+def _identity_diff_base(args: argparse.Namespace) -> str:
+    """Derive the ownership-diff base from repository authority only.
+
+    The pre-action ownership guard must never be vacated by a caller-supplied
+    base ref (for example ``--base-ref HEAD`` on a clean tree makes the diff
+    empty and the guard pass vacuously). Mutation actions therefore reject
+    caller-supplied base refs entirely; the origin tracking ref is the only
+    accepted base: the target branch's tracking ref for ``pr-create`` and the
+    default-branch tracking ref for every other mutation action.
+    """
+    if args.action == "pr-create":
+        return f"refs/remotes/origin/{args.base_branch}"
+    return "refs/remotes/origin/main"
+
+
 def _identity_args(parser: argparse.ArgumentParser, *, body: bool = True) -> None:
     parser.add_argument("--repo", required=True)
     parser.add_argument("--issue", type=int, required=True)
@@ -1240,7 +1267,6 @@ def _parser() -> argparse.ArgumentParser:
     for name in ("branch", "commit", "push", "pr-create", "pr-update"):
         action = sub.add_parser(name)
         _identity_args(action)
-        action.add_argument("--base-ref", default="main")
         if name == "branch":
             action.add_argument("--branch", required=True)
         if name == "commit":
@@ -1351,7 +1377,7 @@ def _cmd_identity_action(args: argparse.Namespace) -> int:
                 pr_body=live_body,
             )
             head_sha, base_sha = _gh_pr_oids(args.repo, args.pr)
-            local_head, local_base = _git_exact_pair(root, args.base_ref)
+            local_head, local_base = _git_exact_pair(root, _identity_diff_base(args))
             if (
                 head_sha != local_head
                 or base_sha != local_base
@@ -1363,7 +1389,7 @@ def _cmd_identity_action(args: argparse.Namespace) -> int:
             head_sha, base_sha = _git_exact_pair(root, f"refs/remotes/origin/{args.base_branch}")
         validate_pr_body(pr_body, issue, head_sha=head_sha, base_sha=base_sha, promotion=False)
     if args.allow_governance_diff_check:
-        validate_ownership_added_lines(_git_added_lines(root, args.base_ref))
+        validate_ownership_added_lines(_git_added_lines(root, _identity_diff_base(args)))
     print(f"[Hunter Governance Preflight] PASS: {args.action} authorized by verified Issue #{issue.number}.")
     return 0
 

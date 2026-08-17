@@ -382,6 +382,11 @@ def evaluate(pr: dict[str, Any]) -> None:
         base_sha, head_sha = merge_readiness.base_head_oids(pr_number)
         issue = governance_preflight.load_issue(repo, _governing_issue_number(body))
         governance_preflight.validate_pr_body(body, issue, head_sha=head_sha, base_sha=base_sha, promotion=False)
+        blocked = governance_preflight.blocked_acceptance_criteria(body)
+        if blocked:
+            raise governance_preflight.PreflightError(
+                "Ready-for-review promotion is blocked by FAIL/BLOCKED criteria: " + "; ".join(blocked)
+            )
         trace_error = governance_preflight.validate_trace_against_state(body, head_sha=head_sha, base_sha=base_sha)
         if trace_error:
             raise governance_preflight.PreflightError(trace_error)
@@ -415,6 +420,11 @@ def evaluate(pr: dict[str, Any]) -> None:
             base_sha=final_base_sha,
             promotion=False,
         )
+        blocked = governance_preflight.blocked_acceptance_criteria(final_body)
+        if blocked:
+            raise governance_preflight.PreflightError(
+                "Ready-for-review promotion is blocked by FAIL/BLOCKED criteria: " + "; ".join(blocked)
+            )
         trace_error = governance_preflight.validate_trace_against_state(
             final_body, head_sha=final_head_sha, base_sha=final_base_sha
         )

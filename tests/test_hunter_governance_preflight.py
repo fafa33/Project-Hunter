@@ -727,6 +727,56 @@ def test_post_commit_actions_reject_caller_git_identity_overrides() -> None:
         assert exc_info.value.code == 2
 
 
+@pytest.mark.parametrize(
+    "action,extra",
+    [
+        ("branch", ["--branch", "governance/issue-276-agent-preflight"]),
+        ("commit", ["--commit-message", "fix: governed #276"]),
+        ("push", []),
+        (
+            "pr-create",
+            [
+                "--base-branch",
+                "main",
+                "--pr-title",
+                "Governance enforcement: mandatory agent preflight and PR generator",
+                "--pr-body-file",
+                "/dev/null",
+            ],
+        ),
+        (
+            "pr-update",
+            [
+                "--pr",
+                "277",
+                "--pr-title",
+                "Governance enforcement: mandatory agent preflight and PR generator",
+                "--pr-body-file",
+                "/dev/null",
+            ],
+        ),
+    ],
+)
+def test_identity_actions_reject_caller_supplied_base_ref(action: str, extra: list[str]) -> None:
+    """Mutation actions must not accept --base-ref.
+
+    A caller-supplied base ref can empty the ownership diff (``--base-ref HEAD``
+    on a clean tree diffs against nothing), which would make the pre-action
+    ownership guard pass vacuously. The parser rejects the flag; only the origin
+    tracking ref is authoritative.
+    """
+    issue = fixture_issue()
+    parser = preflight._parser()
+    base = ["--repo", issue.repository, "--issue", str(issue.number), "--objective", issue.title]
+
+    with pytest.raises(SystemExit) as exc_info:
+        parser.parse_args([action, *base, "--base-ref", "HEAD", *extra])
+    assert exc_info.value.code == 2
+
+    args = parser.parse_args([action, *base, *extra])
+    assert not hasattr(args, "base_ref")
+
+
 def test_pr_update_binds_authorization_to_live_target_pr_metadata(tmp_path, monkeypatch) -> None:
     issue = fixture_issue()
     body_file = tmp_path / "body.md"
@@ -756,7 +806,6 @@ def test_pr_update_binds_authorization_to_live_target_pr_metadata(tmp_path, monk
         pr_title=issue.title,
         pr_body_file=str(body_file),
         pr=999,
-        base_ref="origin/main",
         allow_governance_diff_check=False,
     )
 
@@ -847,6 +896,89 @@ def test_ownership_guard_inspects_non_owner_governance_documents() -> None:
         preflight.validate_ownership_added_lines(
             {"docs/COMPETING_GOVERNANCE.md": ["All changes are ready for review without independent review."]}
         )
+
+
+def test_ownership_diff_binds_to_default_tracking_ref_for_push(tmp_path, monkeypatch) -> None:
+    """The pre-action push ownership guard cannot be vacated via --base-ref.
+
+    The ownership diff must always be derived from the default-branch origin
+    tracking ref, never from a caller-supplied base ref (which could diff
+    against nothing and pass vacuously). The guard must therefore fire on
+    governance semantics added to a non-owner document instead of scanning an
+    empty diff.
+    """
+    issue = fixture_issue()
+    monkeypatch.setattr(preflight, "validate_canonical_governance", lambda _root: None)
+    monkeypatch.setattr(preflight, "load_issue", lambda _repo, _number: issue)
+    monkeypatch.setattr(preflight, "_git_branch", lambda _root: "governance/issue-276-agent-preflight")
+    monkeypatch.setattr(preflight, "_git_commit_message", lambda _root: "fix: govern push #276")
+    scanned: dict[str, str] = {}
+
+    def fake_added_lines(_root: Path, base_ref: str) -> dict[str, list[str]]:
+        scanned["ref"] = base_ref
+        return {"docs/GOVERNANCE_ENFORCEMENT.md": ["Every blocking finding must be classified by a reviewer."]}
+
+    monkeypatch.setattr(preflight, "_git_added_lines", fake_added_lines)
+    args = SimpleNamespace(
+        action="push",
+        repo_root=str(tmp_path),
+        repo=issue.repository,
+        issue=issue.number,
+        objective=issue.title,
+        branch="governance/issue-276-agent-preflight",
+        commit_message="fix: govern push #276",
+        pr_title=None,
+        pr_body_file=None,
+        pr=None,
+        base_branch=None,
+        allow_governance_diff_check=True,
+    )
+
+    with pytest.raises(preflight.PreflightError, match="contribution-review"):
+        preflight._cmd_identity_action(args)
+    assert scanned["ref"] == "refs/remotes/origin/main"
+
+
+def test_ownership_diff_binds_to_target_tracking_ref_for_pr_create(tmp_path, monkeypatch) -> None:
+    """pr-create derives its ownership diff from the target branch's origin tracking ref.
+
+    The same tracking ref used for the exact-pair validation is the only
+    ownership-diff base; a caller-supplied base cannot change what the guard
+    scans.
+    """
+    issue = fixture_issue()
+    body_file = tmp_path / "body.md"
+    body_file.write_text(generated_body(), encoding="utf-8")
+    monkeypatch.setattr(preflight, "validate_canonical_governance", lambda _root: None)
+    monkeypatch.setattr(preflight, "load_issue", lambda _repo, _number: issue)
+    monkeypatch.setattr(preflight, "_git_branch", lambda _root: "governance/issue-276-agent-preflight")
+    monkeypatch.setattr(preflight, "_git_commit_message", lambda _root: "fix: govern pr-create #276")
+    monkeypatch.setattr(preflight, "_git_exact_pair", lambda _root, _base: (HEAD, BASE))
+    scanned: dict[str, str] = {}
+
+    def fake_added_lines(_root: Path, base_ref: str) -> dict[str, list[str]]:
+        scanned["ref"] = base_ref
+        return {"docs/GOVERNANCE_ENFORCEMENT.md": ["Every blocking finding must be classified by a reviewer."]}
+
+    monkeypatch.setattr(preflight, "_git_added_lines", fake_added_lines)
+    args = SimpleNamespace(
+        action="pr-create",
+        repo_root=str(tmp_path),
+        repo=issue.repository,
+        issue=issue.number,
+        objective=issue.title,
+        branch="governance/issue-276-agent-preflight",
+        commit_message="fix: govern pr-create #276",
+        pr_title=issue.title,
+        pr_body_file=str(body_file),
+        pr=None,
+        base_branch="main",
+        allow_governance_diff_check=True,
+    )
+
+    with pytest.raises(preflight.PreflightError, match="contribution-review"):
+        preflight._cmd_identity_action(args)
+    assert scanned["ref"] == "refs/remotes/origin/main"
 
 
 def test_systemic_finding_requires_durable_guard_and_verifier() -> None:

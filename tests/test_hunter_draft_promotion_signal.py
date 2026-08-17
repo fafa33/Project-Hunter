@@ -233,6 +233,11 @@ def test_evaluate_with_single_declaration_line_reaches_success_and_comments(gh):
         ),
         patch.object(
             hunter_draft_promotion_signal.governance_preflight,
+            "blocked_acceptance_criteria",
+            return_value=(),
+        ),
+        patch.object(
+            hunter_draft_promotion_signal.governance_preflight,
             "validate_ready_evidence",
             return_value=None,
         ),
@@ -271,6 +276,11 @@ def test_draft_promotion_requires_positive_hostile_review_before_mutation(gh):
             hunter_draft_promotion_signal.governance_preflight,
             "validate_pr_body",
             return_value=None,
+        ),
+        patch.object(
+            hunter_draft_promotion_signal.governance_preflight,
+            "blocked_acceptance_criteria",
+            return_value=(),
         ),
         patch.object(
             hunter_draft_promotion_signal.governance_preflight,
@@ -320,6 +330,11 @@ def test_draft_promotion_retracts_success_for_invalid_ready_evidence(gh):
         ),
         patch.object(
             hunter_draft_promotion_signal.governance_preflight,
+            "blocked_acceptance_criteria",
+            return_value=(),
+        ),
+        patch.object(
+            hunter_draft_promotion_signal.governance_preflight,
             "validate_ready_evidence",
             side_effect=hunter_draft_promotion_signal.governance_preflight.PreflightError(
                 "structured result marker missing"
@@ -366,6 +381,11 @@ def test_draft_promotion_rejects_superseded_head_marker(gh):
         ),
         patch.object(
             hunter_draft_promotion_signal.governance_preflight,
+            "blocked_acceptance_criteria",
+            return_value=(),
+        ),
+        patch.object(
+            hunter_draft_promotion_signal.governance_preflight,
             "validate_trace_against_state",
             return_value="PR body evidence is stale relative to the current source head.",
         ),
@@ -404,6 +424,11 @@ def test_draft_promotion_retracts_stale_ready_body_and_success_comment(gh):
             hunter_draft_promotion_signal.governance_preflight,
             "validate_pr_body",
             return_value=None,
+        ),
+        patch.object(
+            hunter_draft_promotion_signal.governance_preflight,
+            "blocked_acceptance_criteria",
+            return_value=(),
         ),
         patch.object(
             hunter_draft_promotion_signal.governance_preflight,
@@ -474,6 +499,11 @@ def test_live_scope_is_reread_instead_of_trusting_event_payload(gh):
             hunter_draft_promotion_signal.governance_preflight,
             "validate_pr_body",
             return_value=None,
+        ),
+        patch.object(
+            hunter_draft_promotion_signal.governance_preflight,
+            "blocked_acceptance_criteria",
+            return_value=(),
         ),
         patch.object(
             hunter_draft_promotion_signal.governance_preflight,
@@ -583,6 +613,99 @@ def test_evaluate_rejects_negative_pass_evidence_via_shared_boundary(gh, capsys)
     assert not gh.comments.get(277)
     assert "- [ ] `READY FOR REVIEW`" in gh.patched_bodies[277]
     assert "- [x] `CHANGES REQUIRED`" in gh.patched_bodies[277]
+
+
+@pytest.mark.parametrize("checked", ["CHANGES REQUIRED", "READY FOR REVIEW"])
+def test_draft_promotion_fails_closed_on_fail_criterion_via_real_path(gh, checked):
+    """A FAIL matrix row must never yield a success signal, a READY sync, or a
+    positive promotion comment, regardless of the checked declaration.
+
+    This runs the real validation path (no mocked validate_pr_body or
+    validate_ready_evidence): the promotion=False validation alone permitted
+    FAIL/BLOCKED rows, so the advisory layer published false success and
+    synchronized READY FOR REVIEW while a criterion was still failing.
+    """
+    sha = "sha_fail_criterion"
+    fixture = json.loads(
+        (Path(__file__).parent / "fixtures" / "governance" / "issue_276_preflight.json").read_text(encoding="utf-8")
+    )
+    issue = hunter_draft_promotion_signal.governance_preflight.IssueIdentity.from_payload(
+        "fafa33/Project-Hunter", fixture
+    )
+    base_sha = "b" * 40
+    evidence_url = "https://github.com/fafa33/Project-Hunter/pull/277"
+
+    def evidence_pair(kind: str, result: str) -> str:
+        return (
+            f"<!-- hunter-evidence:v1 kind={kind} result={result} reference={evidence_url} "
+            f"head={base_sha} base={base_sha} -->"
+        )
+
+    with patch.object(
+        hunter_draft_promotion_signal.governance_preflight,
+        "_git_exact_pair",
+        return_value=(base_sha, base_sha),
+    ):
+        body = hunter_draft_promotion_signal.governance_preflight.generate_pr_body(
+            issue,
+            repo_root=Path(__file__).parent.parent,
+            base_ref="main",
+            template_text=(Path(__file__).parent.parent / ".github" / "pull_request_template.md").read_text(
+                encoding="utf-8"
+            ),
+            changed_files=("scripts/hunter_governance_preflight.py",),
+            evidence={
+                criterion: {"status": "PASS", "evidence": f"deterministic proof {index}"}
+                for index, criterion in enumerate(
+                    hunter_draft_promotion_signal.governance_preflight.issue_acceptance_criteria(issue.body),
+                    start=1,
+                )
+            },
+            verification=(evidence_pair("verification", "verified"),),
+            operational_evidence=(evidence_pair("operational", "not-applicable"),),
+        )
+    if checked == "READY FOR REVIEW":
+        body = body.replace("- [ ] `READY FOR REVIEW`", "- [x] `READY FOR REVIEW`", 1)
+        body = body.replace("- [x] `CHANGES REQUIRED`", "- [ ] `CHANGES REQUIRED`", 1)
+    body = body.replace(
+        "## Verification\n\n",
+        "## Verification\n\n<!-- hunter-verification:v1 ruff=pass black=pass mypy=pass pytest=pass -->\n\n",
+        1,
+    )
+    body = body.replace(
+        "## Operational validation\n\n",
+        "## Operational validation\n\n<!-- hunter-operational-validation:v1 outcome=not-applicable -->\n\n",
+        1,
+    )
+    first_row = hunter_draft_promotion_signal.governance_preflight.parse_acceptance_matrix(body)[0]
+    body = body.replace(
+        f"| {first_row.criterion} | PASS | {first_row.evidence} |",
+        f"| {first_row.criterion} | FAIL | {first_row.evidence} |",
+        1,
+    )
+
+    gh.pulls[278] = green_pr(278, sha, body)
+    green_checks(gh, sha)
+
+    with patch.object(
+        hunter_draft_promotion_signal.governance_preflight,
+        "load_issue",
+        return_value=issue,
+    ):
+        hunter_draft_promotion_signal.evaluate(gh.pulls[278])
+
+    assert not any(state == "success" for _sha, state, _description in gh.published)
+    assert gh.published[-1][1] == "pending"
+    assert gh.published[-1][2].startswith(
+        "Waiting for Draft promotion prerequisites: " "Ready-for-review promotion is blocked by FAIL/BLOCKED criteria: "
+    )
+    assert first_row.criterion[:20] in gh.published[-1][2]
+    assert not gh.comments.get(278)
+    if checked == "CHANGES REQUIRED":
+        assert 278 not in gh.patched_bodies
+    else:
+        assert "- [ ] `READY FOR REVIEW`" in gh.patched_bodies[278]
+        assert "- [x] `CHANGES REQUIRED`" in gh.patched_bodies[278]
 
 
 def test_unresolved_review_thread_blocks_promotion_and_metadata_mutation(gh):
@@ -795,6 +918,11 @@ def test_review_feedback_infrastructure_unavailable_publishes_pending_no_ready(g
         ),
         patch.object(
             hunter_draft_promotion_signal.governance_preflight,
+            "blocked_acceptance_criteria",
+            return_value=(),
+        ),
+        patch.object(
+            hunter_draft_promotion_signal.governance_preflight,
             "validate_ready_evidence",
             return_value=None,
         ),
@@ -848,6 +976,11 @@ def test_node_resolution_404_in_readiness_reader_becomes_typed_pending(gh):
             hunter_draft_promotion_signal.governance_preflight,
             "validate_pr_body",
             return_value=None,
+        ),
+        patch.object(
+            hunter_draft_promotion_signal.governance_preflight,
+            "blocked_acceptance_criteria",
+            return_value=(),
         ),
         patch.object(
             hunter_draft_promotion_signal.governance_preflight,
