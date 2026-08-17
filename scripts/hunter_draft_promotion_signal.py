@@ -94,12 +94,69 @@ def exact_head_check_runs(sha: str) -> list[dict[str, Any]]:
         page += 1
 
 
-def latest_commit_status(sha: str, status_context: str) -> dict[str, Any] | None:
-    payload = request_json("GET", f"commits/{sha}/status?per_page=100")
-    matches = [status for status in payload.get("statuses", []) if status.get("context") == status_context]
-    if not matches:
-        return None
-    return max(matches, key=lambda status: int(status.get("id", 0)))
+def required_checks_waiting(sha: str) -> list[str]:
+    """Return the required check runs on the exact head that are not green."""
+    latest: dict[str, dict[str, Any]] = {}
+    for run in exact_head_check_runs(sha):
+        name = run.get("name")
+        if name not in required_checks:
+            continue
+        previous = latest.get(name)
+        if previous is None or int(run.get("id", 0)) > int(previous.get("id", 0)):
+            latest[name] = run
+
+    waiting: list[str] = []
+    for name in required_checks:
+        run = latest.get(name)
+        if run is None:
+            waiting.append(name)
+            continue
+        if run.get("status") != "completed" or run.get("conclusion") != "success":
+            conclusion = run.get("conclusion") or run.get("status") or "pending"
+            waiting.append(f"{name}={conclusion}")
+    return waiting
+
+
+def governance_review_waiting(pr_number: int, current: dict[str, Any], sha: str) -> list[str]:
+    """Qualify the Governance Review verdict exactly as Hunter Merge Readiness does.
+
+    A Governance Review status is usable evidence only when its description
+    carries the canonical ``[hgr:<pr>:<revision>]`` marker naming this pull
+    request and the governance revision recomputed from the current live state
+    (exact head/base pair, base ref, title, body, draft, conflict state, and
+    changed paths). We reuse the canonical readers, revision authority, and
+    evidence resolver instead of maintaining a second interpretation here, so a
+    success for the same head but an older base, an unstamped verdict, or a
+    verdict produced for another pull request fails closed identically.
+    """
+    merge_readiness.repo = repo
+    merge_readiness.token = token
+    base_sha, head_sha = merge_readiness.base_head_oids(pr_number)
+    statuses = merge_readiness.all_commit_statuses(sha)
+    inputs = merge_readiness.GovernanceInputs(
+        pull_request_number=pr_number,
+        head_sha=head_sha,
+        base_sha=base_sha,
+        base_ref=str((current.get("base") or {}).get("ref") or "").strip(),
+        title=str(current.get("title") or ""),
+        body=str(current.get("body") or ""),
+        draft=bool(current.get("draft")),
+        conflicting=merge_readiness.conflicting_from_rest(current.get("mergeable")),
+        changed_paths=tuple(
+            str(entry.get("filename") or "")
+            for entry in merge_readiness.paged(f"pulls/{pr_number}/files")
+            if isinstance(entry, dict)
+        ),
+    )
+    revision = merge_readiness.governance_revision(inputs)
+    evidence, reasons = merge_readiness.resolve_governance_evidence(statuses, pr_number, revision)
+    if evidence is None:
+        if reasons:
+            return [f"{governance_context}: " + "; ".join(reasons)]
+        return [governance_context]
+    if evidence.state != "success":
+        return [f"{governance_context}={evidence.state or 'pending'}"]
+    return []
 
 
 def review_feedback_blockers(pr_number: int) -> list[str]:
@@ -323,31 +380,8 @@ def evaluate(pr: dict[str, Any]) -> None:
         return
 
     sha = current["head"]["sha"]
-    latest: dict[str, dict[str, Any]] = {}
-    for run in exact_head_check_runs(sha):
-        name = run.get("name")
-        if name not in required_checks:
-            continue
-        previous = latest.get(name)
-        if previous is None or int(run.get("id", 0)) > int(previous.get("id", 0)):
-            latest[name] = run
-
-    waiting = []
-    for name in required_checks:
-        run = latest.get(name)
-        if run is None:
-            waiting.append(name)
-            continue
-        if run.get("status") != "completed" or run.get("conclusion") != "success":
-            conclusion = run.get("conclusion") or run.get("status") or "pending"
-            waiting.append(f"{name}={conclusion}")
-
-    governance = latest_commit_status(sha, governance_context)
-    if governance is None:
-        waiting.append(governance_context)
-    elif governance.get("state") != "success":
-        waiting.append(f"{governance_context}={governance.get('state') or 'pending'}")
-
+    waiting = required_checks_waiting(sha)
+    waiting.extend(governance_review_waiting(pr_number, current, sha))
     waiting.extend(review_blockers_or_unavailable(pr_number))
 
     if waiting:
@@ -408,6 +442,13 @@ def evaluate(pr: dict[str, Any]) -> None:
     if final_current is None or final_current.get("head", {}).get("sha") != sha:
         print("PR state/head changed after hostile review; refusing metadata mutation.")
         return
+    # Re-read the complete canonical prerequisite state immediately before
+    # mutating metadata. Required checks and the revision-qualified Governance
+    # Review verdict are revalidated here exactly as they were initially, so a
+    # check or governance change racing between the initial read and this final
+    # gate can never reach a READY FOR REVIEW synchronization.
+    final_waiting = required_checks_waiting(sha)
+    final_waiting.extend(governance_review_waiting(pr_number, final_current, sha))
     final_feedback = review_blockers_or_unavailable(pr_number)
     try:
         final_body = final_current.get("body") or ""
@@ -440,8 +481,8 @@ def evaluate(pr: dict[str, Any]) -> None:
         )
     except governance_preflight.PreflightError as exc:
         final_feedback.append(str(exc))
-    if final_feedback:
-        reason = "Waiting for Draft promotion prerequisites: " + ", ".join(final_feedback)
+    if final_waiting or final_feedback:
+        reason = "Waiting for Draft promotion prerequisites: " + ", ".join(final_waiting + final_feedback)
         invalidate_promotion(pr_number, sha, final_current.get("body") or "", reason)
         publish(sha, "pending", reason)
         return

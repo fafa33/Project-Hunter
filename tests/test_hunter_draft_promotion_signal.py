@@ -30,6 +30,7 @@ class MockGitHubServer:
         self.comments = {}
         self.published = []
         self.patched_bodies = {}
+        self.pull_files = {}
 
     def request_json(self, method, path, payload=None):
         clean_path = path.split("?")[0]
@@ -62,6 +63,10 @@ class MockGitHubServer:
                             comment["body"] = payload["body"]
                             return {}
 
+        if clean_path.startswith("pulls/") and clean_path.endswith("/files"):
+            pr_num = int(clean_path.split("/")[1])
+            return self.pull_files.get(pr_num, [])
+
         if clean_path.startswith("pulls/"):
             pr_num = int(clean_path.split("/")[1])
             return self.pulls.get(pr_num, {})
@@ -74,6 +79,8 @@ class MockGitHubServer:
                 return {"check_runs": self.check_runs.get(sha, [])}
             if sub_resource == "status":
                 return {"statuses": self.statuses.get(sha, [])}
+            if sub_resource == "statuses":
+                return self.statuses.get(sha, [])
 
         if clean_path.startswith("issues/") and clean_path.endswith("/comments"):
             pr_num = int(clean_path.split("/")[1])
@@ -94,6 +101,11 @@ def gh():
 
     with (
         patch("hunter_draft_promotion_signal.request_json", side_effect=server.request_json),
+        patch.object(
+            hunter_draft_promotion_signal.merge_readiness,
+            "request_json",
+            side_effect=server.request_json,
+        ),
         patch.object(
             hunter_draft_promotion_signal.merge_readiness,
             "unresolved_review_thread_ids",
@@ -141,7 +153,27 @@ def green_checks(gh, sha):
         {"name": "dependency-review", "status": "completed", "conclusion": "success", "id": 2},
         {"name": "CodeQL", "status": "completed", "conclusion": "success", "id": 3},
     ]
-    gh.statuses[sha] = [{"context": "Hunter Governance Review", "state": "success", "id": 1}]
+    pr = next(pr for pr in gh.pulls.values() if (pr.get("head") or {}).get("sha") == sha)
+    inputs = hunter_draft_promotion_signal.merge_readiness.GovernanceInputs(
+        pull_request_number=int(pr["number"]),
+        head_sha="b" * 40,
+        base_sha="b" * 40,
+        base_ref=str((pr.get("base") or {}).get("ref") or "").strip(),
+        title=str(pr.get("title") or ""),
+        body=str(pr.get("body") or ""),
+        draft=bool(pr.get("draft")),
+        conflicting=hunter_draft_promotion_signal.merge_readiness.conflicting_from_rest(pr.get("mergeable")),
+        changed_paths=(),
+    )
+    revision = hunter_draft_promotion_signal.merge_readiness.governance_revision(inputs)
+    gh.statuses[sha] = [
+        {
+            "context": "Hunter Governance Review",
+            "state": "success",
+            "id": 1,
+            "description": f"[hgr:{int(pr['number'])}:{revision}] Approved for head {sha}",
+        }
+    ]
 
 
 def test_single_declaration_line_does_not_crash():
@@ -767,6 +799,184 @@ def test_review_feedback_is_rechecked_before_metadata_mutation(gh):
     assert gh.published[-1][1] == "pending"
     assert 277 not in gh.patched_bodies
     assert not gh.comments.get(277)
+
+
+def test_draft_promotion_rejects_governance_success_for_superseded_base(gh):
+    sha = "sha_superseded_base"
+    body = "- [ ] `READY FOR REVIEW`\n- [x] `CHANGES REQUIRED`\n- [ ] `BLOCKED`\n"
+    gh.pulls[279] = green_pr(279, sha, body)
+    green_checks(gh, sha)
+    gh.comments[279] = [
+        {
+            "id": 779,
+            "body": f"<!-- hunter-draft-promotion:{sha} -->\n✅ **Hunter Draft Promotion:** stale success",
+        }
+    ]
+
+    with patch.object(
+        hunter_draft_promotion_signal.merge_readiness,
+        "base_head_oids",
+        return_value=("c" * 40, "b" * 40),
+    ):
+        hunter_draft_promotion_signal.evaluate(gh.pulls[279])
+
+    assert gh.published[-1][1] == "pending"
+    assert "superseded revision" in gh.published[-1][2]
+    assert not any(state == "success" for _sha, state, _description in gh.published)
+    assert 279 not in gh.patched_bodies
+    assert "invalidated" in gh.comments[279][0]["body"]
+    assert "stale success" not in gh.comments[279][0]["body"]
+
+
+@pytest.mark.parametrize(
+    "description,expected_fragment",
+    [
+        ("Hunter Governance Review approved head", "carries no revision marker"),
+        (f"[hgr:999:{'a' * 32}] Approved for head", "produced for PR #999"),
+        (f"[hgr:280:{'a' * 32}] Approved for head", "superseded revision"),
+    ],
+)
+def test_draft_promotion_rejects_unqualified_governance_evidence(gh, description, expected_fragment):
+    sha = "sha_unqualified_governance"
+    body = "- [ ] `READY FOR REVIEW`\n- [x] `CHANGES REQUIRED`\n- [ ] `BLOCKED`\n"
+    gh.pulls[280] = green_pr(280, sha, body)
+    green_checks(gh, sha)
+    gh.statuses[sha] = [
+        {"context": "Hunter Governance Review", "state": "success", "id": 1, "description": description}
+    ]
+
+    hunter_draft_promotion_signal.evaluate(gh.pulls[280])
+
+    assert gh.published[-1][1] == "pending"
+    assert expected_fragment in gh.published[-1][2]
+    assert not any(state == "success" for _sha, state, _description in gh.published)
+    assert 280 not in gh.patched_bodies
+    assert not gh.comments.get(280)
+
+
+def test_draft_promotion_final_gate_rechecks_governance_evidence(gh):
+    sha = "sha_governance_race"
+    body = "- [ ] `READY FOR REVIEW`\n- [x] `CHANGES REQUIRED`\n- [ ] `BLOCKED`\n"
+    gh.pulls[281] = green_pr(281, sha, body)
+    green_checks(gh, sha)
+    gh.comments[281] = [
+        {
+            "id": 781,
+            "body": f"<!-- hunter-draft-promotion:{sha} -->\n✅ **Hunter Draft Promotion:** stale success",
+        }
+    ]
+    stale = {
+        "context": "Hunter Governance Review",
+        "state": "success",
+        "id": 2,
+        "description": f"[hgr:281:{'a' * 32}] Approved for head {sha}",
+    }
+
+    with (
+        patch.object(
+            hunter_draft_promotion_signal.governance_preflight,
+            "load_issue",
+            return_value=_governing_issue(),
+        ),
+        patch.object(
+            hunter_draft_promotion_signal,
+            "_governing_issue_number",
+            return_value=276,
+        ),
+        patch.object(
+            hunter_draft_promotion_signal.governance_preflight,
+            "validate_pr_body",
+            return_value=None,
+        ),
+        patch.object(
+            hunter_draft_promotion_signal.governance_preflight,
+            "blocked_acceptance_criteria",
+            return_value=(),
+        ),
+        patch.object(
+            hunter_draft_promotion_signal.governance_preflight,
+            "validate_ready_evidence",
+            return_value=None,
+        ),
+        patch.object(
+            hunter_draft_promotion_signal.governance_preflight,
+            "validate_trace_against_state",
+            return_value=None,
+        ),
+        patch.object(
+            hunter_draft_promotion_signal.merge_readiness,
+            "all_commit_statuses",
+            side_effect=[[gh.statuses[sha][0]], [stale]],
+        ),
+    ):
+        hunter_draft_promotion_signal.evaluate(gh.pulls[281])
+
+    assert gh.published[-1][1] == "pending"
+    assert "superseded revision" in gh.published[-1][2]
+    assert not any(state == "success" for _sha, state, _description in gh.published)
+    assert 281 not in gh.patched_bodies
+    assert "invalidated" in gh.comments[281][0]["body"]
+    assert "stale success" not in gh.comments[281][0]["body"]
+
+
+def test_draft_promotion_final_gate_rechecks_required_checks(gh):
+    sha = "sha_checks_race"
+    body = "- [ ] `READY FOR REVIEW`\n- [x] `CHANGES REQUIRED`\n- [ ] `BLOCKED`\n"
+    gh.pulls[282] = green_pr(282, sha, body)
+    green_checks(gh, sha)
+    gh.comments[282] = [
+        {
+            "id": 782,
+            "body": f"<!-- hunter-draft-promotion:{sha} -->\n✅ **Hunter Draft Promotion:** stale success",
+        }
+    ]
+    failing = [{"name": "Quality Gates", "status": "completed", "conclusion": "failure", "id": 999}]
+
+    with (
+        patch.object(
+            hunter_draft_promotion_signal.governance_preflight,
+            "load_issue",
+            return_value=_governing_issue(),
+        ),
+        patch.object(
+            hunter_draft_promotion_signal,
+            "_governing_issue_number",
+            return_value=276,
+        ),
+        patch.object(
+            hunter_draft_promotion_signal.governance_preflight,
+            "validate_pr_body",
+            return_value=None,
+        ),
+        patch.object(
+            hunter_draft_promotion_signal.governance_preflight,
+            "blocked_acceptance_criteria",
+            return_value=(),
+        ),
+        patch.object(
+            hunter_draft_promotion_signal.governance_preflight,
+            "validate_ready_evidence",
+            return_value=None,
+        ),
+        patch.object(
+            hunter_draft_promotion_signal.governance_preflight,
+            "validate_trace_against_state",
+            return_value=None,
+        ),
+        patch.object(
+            hunter_draft_promotion_signal,
+            "exact_head_check_runs",
+            side_effect=[[run for run in gh.check_runs[sha]], failing],
+        ),
+    ):
+        hunter_draft_promotion_signal.evaluate(gh.pulls[282])
+
+    assert gh.published[-1][1] == "pending"
+    assert "Quality Gates=failure" in gh.published[-1][2]
+    assert not any(state == "success" for _sha, state, _description in gh.published)
+    assert 282 not in gh.patched_bodies
+    assert "invalidated" in gh.comments[282][0]["body"]
+    assert "stale success" not in gh.comments[282][0]["body"]
 
 
 def test_review_feedback_blockers_include_unacknowledged_top_level_comments():
