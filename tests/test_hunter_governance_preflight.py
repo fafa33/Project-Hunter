@@ -178,6 +178,18 @@ def test_ready_body_rejects_unchecked_or_placeholder_evidence() -> None:
     with pytest.raises(preflight.PreflightError, match="contradictory failure evidence"):
         preflight.validate_pr_body(contradictory, issue, head_sha=HEAD, base_sha=BASE, promotion=True)
 
+    synonymous_negative = body.replace(
+        "<!-- hunter-verification:v1",
+        "Ruff: BROKEN; Black: BROKEN; Mypy: BROKEN; full Pytest: BROKEN\n<!-- hunter-verification:v1",
+        1,
+    ).replace(
+        "<!-- hunter-operational-validation:v1",
+        "Operational validation: BOGUS; no real evidence supplied.\n<!-- hunter-operational-validation:v1",
+        1,
+    )
+    with pytest.raises(preflight.PreflightError, match="contradictory failure evidence"):
+        preflight.validate_pr_body(synonymous_negative, issue, head_sha=HEAD, base_sha=BASE, promotion=True)
+
 
 def test_pr_body_rejects_missing_matrix() -> None:
     issue = fixture_issue()
@@ -550,6 +562,19 @@ def test_systemic_finding_requires_durable_guard_and_verifier() -> None:
     with pytest.raises(preflight.PreflightError, match="classification evidence"):
         preflight.validate_finding_resolution(fabricated)
 
+    padded_negative = preflight.FindingResolution(
+        finding_id="P2-padded-negative",
+        severity="blocking",
+        classification="systemic",
+        classification_evidence="fabricated classification only",
+        reusable_boundary="bogus boundary",
+        durable_guard_evidence="BOGUS, no guard exists",
+        verifier_evidence="NOT RUN; fabricated evidence",
+        resolved=True,
+    )
+    with pytest.raises(preflight.PreflightError, match="explicitly negative evidence"):
+        preflight.validate_finding_resolution(padded_negative)
+
 
 def _live_review_evidence(*, author: str, body: str, suffix: str) -> preflight.LiveReviewEvidence:
     return preflight.LiveReviewEvidence(
@@ -664,6 +689,33 @@ def test_hostile_review_requires_independent_exact_pair_positive_evidence(monkey
 
     review["user"] = {"login": "implementer"}
     with pytest.raises(preflight.PreflightError, match="lacks independent"):
+        preflight.require_independent_hostile_review(
+            repository="fafa33/Project-Hunter",
+            pr_number=277,
+            pr_author="implementer",
+            head_sha=HEAD,
+            base_sha=BASE,
+        )
+
+
+def test_hostile_review_rejects_padded_synonymous_negative_evidence(monkeypatch) -> None:
+    review = {
+        "id": 10,
+        "user": {"login": "independent-reviewer"},
+        "commit_id": HEAD,
+        "state": "COMMENTED",
+        "submitted_at": "2026-08-16T20:00:00Z",
+        "body": (
+            f"<!-- hunter-hostile-review:v1 head={HEAD} base={BASE} outcome=no-blocking-findings -->\n"
+            "Hostile review evidence: NOT RUN; fabricated report only\n"
+            "Scope probed: NOT PROBED\n"
+            "Limitations: verification unavailable\n"
+            "Unresolved blocking findings: 0"
+        ),
+    }
+    monkeypatch.setattr(preflight, "_gh_json", lambda _args: [review])
+
+    with pytest.raises(preflight.PreflightError, match="explicitly negative evidence"):
         preflight.require_independent_hostile_review(
             repository="fafa33/Project-Hunter",
             pr_number=277,

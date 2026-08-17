@@ -95,6 +95,20 @@ EVIDENCE_CONTRADICTION_RE = re.compile(
     re.IGNORECASE,
 )
 EVIDENCE_VALUE_PLACEHOLDERS = {"", "fabricated", "placeholder", "none", "n/a", "pending", "tbd"}
+EXPLICIT_NEGATIVE_EVIDENCE_RE = re.compile(
+    r"\b(?:broken|bogus|fabricat(?:e|ed|ion|ing)?|placeholder)\b|"
+    r"\bnot\s+(?:run|performed|executed|verified|probed|tested|checked|available)\b|"
+    r"\b(?:verification|validation|evidence|review|scope|probe|tests?|checks?|guard|boundary|report)\s+"
+    r"(?:was\s+|were\s+|is\s+|are\s+)?(?:unavailable|missing|bogus|broken|fabricated|"
+    r"not\s+(?:run|performed|executed|verified|probed|tested|checked|available))\b|"
+    r"\bno\s+(?:real\s+)?(?:evidence|verification|validation|review|probe|guard|boundary|report)\b",
+    re.IGNORECASE,
+)
+NONPASS_RESULT_RE = re.compile(
+    r"\b(?:ruff|black(?:\s+\d+(?:\.\d+)*)?|mypy|(?:full\s+)?pytest|operational validation)\s*:\s*"
+    r"(?!(?:pass|not[ -]?applicable)\b)[A-Za-z][A-Za-z-]*",
+    re.IGNORECASE,
+)
 REQUIRED_READY_CHECKLISTS: dict[str, tuple[str, ...]] = {
     "## Verification": (
         "`ruff check .`",
@@ -144,7 +158,6 @@ HOSTILE_REVIEW_EVIDENCE_RE = re.compile(r"(?im)^Hostile review evidence:\s*(?P<v
 HOSTILE_REVIEW_SCOPE_RE = re.compile(r"(?im)^Scope probed:\s*(?P<value>\S.+?)\s*$")
 HOSTILE_REVIEW_LIMITATIONS_RE = re.compile(r"(?im)^Limitations:\s*(?P<value>\S.+?)\s*$")
 HOSTILE_REVIEW_BLOCKER_COUNT_RE = re.compile(r"(?im)^Unresolved blocking findings:\s*(?P<count>\d+)\s*$")
-HOSTILE_REPORT_PLACEHOLDERS = {"fabricated", "none", "n/a", "pending", "tbd"}
 CLASSIFICATION_EVIDENCE_RE = re.compile(r"(?im)^Classification evidence:\s*(?P<value>\S.+?)\s*$")
 REUSABLE_BOUNDARY_RE = re.compile(r"(?im)^Reusable boundary:\s*(?P<value>\S.+?)\s*$")
 VERIFICATION_EVIDENCE_RE = re.compile(r"(?im)^Verification evidence:\s*(?P<value>\S.+?)\s*$")
@@ -521,9 +534,24 @@ def _contains_contradictory_evidence(section: str) -> bool:
         line = raw_line.strip()
         if not line or line.startswith(("- [", "<!--", "```")):
             continue
-        if EVIDENCE_CONTRADICTION_RE.search(line):
+        if _has_explicit_negative_evidence(line, status_context=True):
             return True
     return False
+
+
+def _has_explicit_negative_evidence(value: str, *, status_context: bool = False) -> bool:
+    if EXPLICIT_NEGATIVE_EVIDENCE_RE.search(value):
+        return True
+    if status_context and (EVIDENCE_CONTRADICTION_RE.search(value) or NONPASS_RESULT_RE.search(value)):
+        return True
+    return False
+
+
+def _require_substantive_evidence(value: str, *, label: str, status_context: bool = False) -> None:
+    if _normalize(value) in EVIDENCE_VALUE_PLACEHOLDERS or _has_explicit_negative_evidence(
+        value, status_context=status_context
+    ):
+        raise PreflightError(f"{label} contains placeholder or explicitly negative evidence.")
 
 
 def validate_ready_evidence(body: str) -> None:
@@ -802,16 +830,24 @@ def validate_finding_resolution(finding: FindingResolution) -> None:
         raise PreflightError(
             f"Blocking finding {finding.finding_id} cannot be resolved without canonical isolated/systemic classification."
         )
-    if _normalize(finding.classification_evidence or "") in EVIDENCE_VALUE_PLACEHOLDERS:
-        raise PreflightError(f"Blocking finding {finding.finding_id} lacks classification evidence.")
+    _require_substantive_evidence(
+        finding.classification_evidence or "",
+        label=f"Blocking finding {finding.finding_id} classification evidence",
+    )
     if classification != "systemic":
         return
-    if _normalize(finding.reusable_boundary or "") in EVIDENCE_VALUE_PLACEHOLDERS:
-        raise PreflightError(f"Systemic finding {finding.finding_id} lacks the reusable boundary.")
-    if _normalize(finding.durable_guard_evidence or "") in EVIDENCE_VALUE_PLACEHOLDERS:
-        raise PreflightError(f"Systemic finding {finding.finding_id} lacks durable reusable hardening evidence.")
-    if _normalize(finding.verifier_evidence or "") in EVIDENCE_VALUE_PLACEHOLDERS:
-        raise PreflightError(f"Systemic finding {finding.finding_id} lacks verifier evidence for the durable guard.")
+    _require_substantive_evidence(
+        finding.reusable_boundary or "",
+        label=f"Systemic finding {finding.finding_id} reusable boundary",
+    )
+    _require_substantive_evidence(
+        finding.durable_guard_evidence or "",
+        label=f"Systemic finding {finding.finding_id} durable reusable hardening evidence",
+    )
+    _require_substantive_evidence(
+        finding.verifier_evidence or "",
+        label=f"Systemic finding {finding.finding_id} verifier evidence",
+    )
 
 
 def _review_evidence_from_url(repository: str, pr_number: int, url: str) -> LiveReviewEvidence:
@@ -975,8 +1011,12 @@ def require_independent_hostile_review(
     blocker_count = HOSTILE_REVIEW_BLOCKER_COUNT_RE.search(latest_body)
     if evidence is None or scope is None or limitations is None or blocker_count is None:
         raise PreflightError("Latest independent exact-pair hostile review report is incomplete.")
-    if any(_normalize(match.group("value")) in HOSTILE_REPORT_PLACEHOLDERS for match in (evidence, scope, limitations)):
-        raise PreflightError("Latest independent exact-pair hostile review report contains placeholder evidence.")
+    for label, match in (
+        ("Hostile review evidence", evidence),
+        ("Hostile review scope", scope),
+        ("Hostile review limitations", limitations),
+    ):
+        _require_substantive_evidence(match.group("value"), label=label)
     outcome = latest_marker.group("outcome").lower()
     count = int(blocker_count.group("count"))
     latest_state = str(latest_review.get("state") or "").strip().lower()
