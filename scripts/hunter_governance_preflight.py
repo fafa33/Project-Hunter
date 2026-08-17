@@ -837,9 +837,6 @@ def validate_ownership_added_lines(added_lines: Mapping[str, Sequence[str]]) -> 
         is_governance_prose = path.endswith(".md") or path.startswith(".github/instructions/")
         if path not in canonical_paths and not is_governance_prose:
             continue
-        document_owner_references = {
-            owner for owner in canonical_paths if any(_owner_reference_present(line, owner) for line in lines)
-        }
         for line in lines:
             text = line.strip()
             if not text:
@@ -848,7 +845,7 @@ def validate_ownership_added_lines(added_lines: Mapping[str, Sequence[str]]) -> 
                 if not any(marker.search(text) for marker in markers):
                     continue
                 owner = CANONICAL_OWNERS[domain]
-                if path == owner or _owner_reference_present(text, owner) or owner in document_owner_references:
+                if path == owner or _owner_reference_present(text, owner):
                     continue
                 failures.append(f"{path}: added {domain} semantics outside canonical owner {owner}: {text[:120]!r}")
     if failures:

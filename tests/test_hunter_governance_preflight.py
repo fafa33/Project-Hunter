@@ -433,23 +433,64 @@ def test_pr_create_requires_canonical_target_base_branch() -> None:
 
 
 def test_post_commit_actions_reject_caller_git_identity_overrides() -> None:
-    for action in ("push", "pr-create", "pr-update"):
+    """Verify --branch and --commit-message are rejected for post-commit actions.
+
+    Post-commit actions (push, pr-create, pr-update) must read git identity from
+    the repository state, not accept caller-supplied overrides. The parser should
+    reject these arguments because they are not defined for those actions.
+    """
+    test_cases = [
+        (
+            "push",
+            [
+                "push",
+                "--repo", "fafa33/Project-Hunter",
+                "--issue", "276",
+                "--objective", "Governance enforcement: mandatory agent preflight and PR generator",
+                "--branch", "governance/issue-276-spoofed",
+            ],
+        ),
+        (
+            "push",
+            [
+                "push",
+                "--repo", "fafa33/Project-Hunter",
+                "--issue", "276",
+                "--objective", "Governance enforcement: mandatory agent preflight and PR generator",
+                "--commit-message", "fix: spoofed #276",
+            ],
+        ),
+        (
+            "pr-create",
+            [
+                "pr-create",
+                "--repo", "fafa33/Project-Hunter",
+                "--issue", "276",
+                "--objective", "Governance enforcement: mandatory agent preflight and PR generator",
+                "--base-branch", "main",
+                "--pr-title", "Governance enforcement: mandatory agent preflight and PR generator",
+                "--pr-body-file", "/dev/null",
+                "--branch", "governance/issue-276-spoofed",
+            ],
+        ),
+        (
+            "pr-update",
+            [
+                "pr-update",
+                "--repo", "fafa33/Project-Hunter",
+                "--issue", "276",
+                "--objective", "Governance enforcement: mandatory agent preflight and PR generator",
+                "--pr", "277",
+                "--pr-title", "Governance enforcement: mandatory agent preflight and PR generator",
+                "--pr-body-file", "/dev/null",
+                "--commit-message", "fix: spoofed #276",
+            ],
+        ),
+    ]
+
+    for action_name, args in test_cases:
         with pytest.raises(SystemExit):
-            preflight._parser().parse_args(
-                [
-                    action,
-                    "--repo",
-                    "fafa33/Project-Hunter",
-                    "--issue",
-                    "276",
-                    "--objective",
-                    "Governance enforcement: mandatory agent preflight and PR generator",
-                    "--branch",
-                    "governance/issue-276-spoofed",
-                    "--commit-message",
-                    "fix: spoofed #276",
-                ]
-            )
+            preflight._parser().parse_args(args)
 
 
 def test_pr_update_binds_authorization_to_live_target_pr_metadata(tmp_path, monkeypatch) -> None:
@@ -536,6 +577,18 @@ def test_ownership_guard_allows_explicit_canonical_owner_consumption() -> None:
             ]
         }
     )
+
+
+def test_ownership_guard_requires_per_line_owner_reference() -> None:
+    added = {
+        "docs/HUNTER_IMPLEMENTATION_CONTRACT.md": [
+            "Consume the systemic result already classified by docs/AI_REVIEW_PROTOCOL.md.",
+            "Every blocking finding must be classified as isolated or systemic before resolution.",
+        ]
+    }
+
+    with pytest.raises(preflight.PreflightError, match="contribution-review"):
+        preflight.validate_ownership_added_lines(added)
 
 
 def test_ownership_guard_inspects_non_owner_governance_documents() -> None:
@@ -975,3 +1028,37 @@ def test_action_surface_covers_issue_required_mutations() -> None:
         "resolve-finding",
         "merge-readiness",
     }
+
+
+def test_issue_276_fixture_criteria_match_canonical_issue() -> None:
+    """Verify the fixture acceptance criteria match the live canonical Issue 276.
+
+    This contract test ensures the test fixture used throughout the governance
+    preflight test suite reflects the actual governing Issue acceptance criteria.
+    """
+    fixture = fixture_issue()
+    fixture_criteria = set(fixture.acceptance_criteria)
+
+    # These are the canonical acceptance criteria from Issue 276
+    canonical_criteria = {
+        "A deterministic canonical preflight command/API exists and is the documented mandatory entry point for agent GitHub/repository mutations covered by this issue.",
+        "PR creation can produce a complete canonical PR body from the verified Issue and repository template without manually inventing required sections.",
+        "The preflight rejects a PR body with a missing/unparseable acceptance-criteria matrix.",
+        "The preflight rejects zero, multiple, or non-`READY FOR REVIEW` checked readiness declarations when promotion is requested.",
+        "The preflight rejects an Issue/branch/commit/PR identity mismatch.",
+        "The preflight rejects a governance semantic placed in a non-owning canonical document, with deterministic ownership evidence.",
+        "The preflight detects stale exact-head review/readiness evidence after source-head or target revision changes.",
+        "The preflight rejects Ready-for-review promotion while an unresolved blocking finding/thread exists.",
+        "Blocking review findings are consumed from the canonical review protocol as `isolated` or `systemic`; systemic findings cannot be considered resolved without durable reusable hardening evidence.",
+        "Regression tests are non-vacuous: removing/disabling each new reusable guard demonstrably causes its corresponding test to fail.",
+        "The enforcement mechanism has no analytical, evidence-scoring, provider, replay, persistence, trading, dashboard, or domain-engine authority.",
+        "No agent, automation, or generated metadata can grant itself review approval or merge authority.",
+        "Human approval remains required for merge.",
+        "Existing accepted governance ownership is preserved; no competing lifecycle/review/architecture-audit authority is introduced.",
+    }
+
+    assert fixture_criteria == canonical_criteria, (
+        f"Fixture criteria mismatch with canonical Issue 276.\n"
+        f"Missing from fixture: {canonical_criteria - fixture_criteria}\n"
+        f"Extra in fixture: {fixture_criteria - canonical_criteria}"
+    )

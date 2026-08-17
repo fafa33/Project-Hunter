@@ -344,13 +344,20 @@ def evaluate(pr: dict[str, Any]) -> None:
         return
 
     try:
-        governance_preflight.validate_ready_evidence(current.get("body") or "")
+        body = current.get("body") or ""
+        merge_readiness.repo = repo
+        merge_readiness.token = token
+        base_sha, head_sha = merge_readiness.base_head_oids(pr_number)
+        trace_error = governance_preflight.validate_trace_against_state(body, head_sha=head_sha, base_sha=base_sha)
+        if trace_error:
+            raise governance_preflight.PreflightError(trace_error)
+        governance_preflight.validate_ready_evidence(body)
         governance_preflight.require_independent_hostile_review(
             repository=repo,
             pr_number=pr_number,
             pr_author=str((current.get("user") or {}).get("login") or ""),
-            head_sha=sha,
-            base_sha=str((current.get("base") or {}).get("sha") or ""),
+            head_sha=head_sha,
+            base_sha=base_sha,
         )
     except governance_preflight.PreflightError as exc:
         reason = f"Waiting for Draft promotion prerequisites: {exc}"
@@ -364,13 +371,18 @@ def evaluate(pr: dict[str, Any]) -> None:
         return
     final_feedback = review_feedback_blockers(pr_number)
     try:
-        governance_preflight.validate_ready_evidence(final_current.get("body") or "")
+        final_body = final_current.get("body") or ""
+        final_base_sha, final_head_sha = merge_readiness.base_head_oids(pr_number)
+        trace_error = governance_preflight.validate_trace_against_state(final_body, head_sha=final_head_sha, base_sha=final_base_sha)
+        if trace_error:
+            raise governance_preflight.PreflightError(trace_error)
+        governance_preflight.validate_ready_evidence(final_body)
         governance_preflight.require_independent_hostile_review(
             repository=repo,
             pr_number=pr_number,
             pr_author=str((final_current.get("user") or {}).get("login") or ""),
-            head_sha=sha,
-            base_sha=str((final_current.get("base") or {}).get("sha") or ""),
+            head_sha=final_head_sha,
+            base_sha=final_base_sha,
         )
     except governance_preflight.PreflightError as exc:
         final_feedback.append(str(exc))

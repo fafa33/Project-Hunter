@@ -482,7 +482,12 @@ def _log_governance_preflight_output(stdout: str | None, stderr: str | None) -> 
     for name, value in (("stdout", stdout), ("stderr", stderr)):
         detail = (value or "").strip()
         if detail:
-            print(f"Trusted governance preflight {name}:\n{detail}")
+            # Redact sensitive authentication and token values before logging
+            redacted = re.sub(r'(?i)Authorization:\s*Bearer\s+\S+', 'Authorization: Bearer [REDACTED]', detail)
+            redacted = re.sub(r'(?i)Authorization:\s*\S+', 'Authorization: [REDACTED]', redacted)
+            redacted = re.sub(r'(?i)Bearer\s+\S+', 'Bearer [REDACTED]', redacted)
+            redacted = re.sub(r'(?i)gh[ps]_[a-zA-Z0-9_]+', '[REDACTED_TOKEN]', redacted)
+            print(f"Trusted governance preflight {name}:\n{redacted}")
 
 
 def trusted_governance_preflight_error(pr_number: int) -> str | None:
@@ -882,6 +887,8 @@ def _confirm_success(pr_number: int, state: CurrentState, decision: ReadinessDec
             return ReadinessDecision("pending", f"Controller-upgrade admission pending: {result.reason}")
     preflight_error = trusted_governance_preflight_error(pr_number)
     if preflight_error:
+        if preflight_error == GOVERNANCE_PREFLIGHT_TIMEOUT_DESCRIPTION:
+            return ReadinessDecision("pending", f"Governance preflight timed out: {preflight_error}")
         return ReadinessDecision("failure", f"Governance preflight blocked readiness: {preflight_error}")
     return decision
 

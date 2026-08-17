@@ -18,7 +18,7 @@ Canonical ownership remains:
 
 ## Mandatory agent entry point
 
-Before a governed repository or GitHub mutation, agents run the preflight action matching the intended mutation. The supported action surface is:
+Before a governed repository or GitHub mutation, agents run the preflight action matching the intended mutation. The supported mutation actions are:
 
 - `branch`
 - `commit`
@@ -28,6 +28,12 @@ Before a governed repository or GitHub mutation, agents run the preflight action
 - `ready`
 - `resolve-finding`
 - `merge-readiness`
+
+The preflight also provides validation and generation actions that do not mutate repository state:
+
+- `self-check` — validates canonical governance document structure and sentinel presence
+- `generate-pr-body` — generates canonical PR body from verified Issue and repository template
+- `live-pr` — validates a live PR against current governance requirements (used by trusted workflows)
 
 The preflight verifies the live governing Issue rather than accepting a remembered, guessed, or sequence-inferred Issue number.
 

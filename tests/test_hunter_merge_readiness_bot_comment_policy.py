@@ -244,7 +244,7 @@ def test_trusted_preflight_failure_logs_diagnostics_but_returns_status_safe_erro
         observed.update(kwargs)
         return SimpleNamespace(
             returncode=2,
-            stdout="API diagnostic super-secret-token",
+            stdout="API diagnostic ghs_super-secret-token",
             stderr="Authorization: Bearer sensitive-header",
         )
 
@@ -257,8 +257,9 @@ def test_trusted_preflight_failure_logs_diagnostics_but_returns_status_safe_erro
     assert "sensitive" not in error
     assert observed["timeout"] == core.GOVERNANCE_PREFLIGHT_TIMEOUT_SECONDS
     logs = capsys.readouterr().out
-    assert "super-secret-token" in logs
-    assert "sensitive-header" in logs
+    assert "ghs_super-secret-token" not in logs
+    assert "sensitive-header" not in logs
+    assert "[REDACTED" in logs
 
 
 def test_trusted_preflight_timeout_is_bounded_and_status_safe(monkeypatch, tmp_path: Path, capsys):

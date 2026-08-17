@@ -105,6 +105,11 @@ def gh():
         ),
         patch.object(
             hunter_draft_promotion_signal.governance_preflight,
+            "validate_trace_against_state",
+            return_value=None,
+        ),
+        patch.object(
+            hunter_draft_promotion_signal.governance_preflight,
             "validate_ready_evidence",
             return_value=None,
         ),
@@ -249,6 +254,28 @@ def test_draft_promotion_retracts_success_for_invalid_ready_evidence(gh):
     assert 125 not in gh.patched_bodies
     assert gh.published[-1][1] == "pending"
     assert "structured result marker missing" in gh.published[-1][2]
+
+
+def test_draft_promotion_rejects_superseded_head_marker(gh):
+    sha = "sha_current_head"
+    stale_sha = "sha_old_head_123"
+    body = (
+        f"<!-- hunter-governance-preflight:v1 issue=276 head={stale_sha} base={'b' * 40} -->\n"
+        "- [ ] `READY FOR REVIEW`\n- [x] `CHANGES REQUIRED`\n- [ ] `BLOCKED`\n"
+    )
+    gh.pulls[127] = green_pr(127, sha, body)
+    green_checks(gh, sha)
+
+    with patch.object(
+        hunter_draft_promotion_signal.governance_preflight,
+        "validate_trace_against_state",
+        return_value="PR body evidence is stale relative to the current source head.",
+    ):
+        hunter_draft_promotion_signal.evaluate(gh.pulls[127])
+
+    assert 127 not in gh.patched_bodies
+    assert gh.published[-1][1] == "pending"
+    assert "stale relative to the current source head" in gh.published[-1][2]
 
 
 def test_draft_promotion_retracts_stale_ready_body_and_success_comment(gh):
