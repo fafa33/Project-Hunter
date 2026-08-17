@@ -23,10 +23,16 @@ name: Hunter Governance Review
 # - Minimal permissions: contents read, pull-requests read, statuses write.
 #   The gate never writes PR comments and never runs untrusted code.
 #
-# Bootstrap exception: until the gate engine exists on the default branch (the
-# installation PR has not merged yet), the engine is materialized from the PR
-# head so the required status check can publish during installation validation.
-# Once the installation PR merges, the default branch owns the engine and this
+# Bootstrap exception: until the resilient gate engine exists on the default
+# branch (this installation PR has not merged yet), the engine is materialized
+# from the PR head so the required status check can publish during installation
+# validation. "Resilient" means the engine executes every GitHub request
+# (including status publication) through the shared bounded-retry boundary in
+# scripts/hunter_github_transport.py; a default-branch engine that predates
+# that boundary must not run, because a transient GitHub outage would collapse
+# a semantically APPROVED review into a raw publication failure. The fallback
+# stays clearly identifiable as a one-time installation bootstrap: once this
+# installation PR merges, the default branch owns the resilient engine and this
 # fallback never activates.
 #
 # The workflow step succeeding means only "the gate ran and reported". The
@@ -100,9 +106,11 @@ jobs:
         run: |
           set -euo pipefail
           ENGINE_ROOT="${GITHUB_WORKSPACE}/engine"
-          if [ ! -f "${ENGINE_ROOT}/scripts/hunter_governance_review/__main__.py" ]; then
-            echo "::warning::Hunter Governance Review bootstrap mode: the gate engine is not yet on the default branch."
+          if [ ! -f "${ENGINE_ROOT}/scripts/hunter_governance_review/__main__.py" ] \
+             || [ ! -f "${ENGINE_ROOT}/scripts/hunter_github_transport.py" ]; then
+            echo "::warning::Hunter Governance Review bootstrap mode: the resilient gate engine is not yet on the default branch."
             echo "::warning::Running the engine from the PR head for this one-time installation review."
+            echo "::warning::The PR-head engine executes every GitHub request through the shared bounded-retry boundary (scripts/hunter_github_transport.py); once the installation PR merges, the default branch owns the engine and this fallback never activates."
             ENGINE_ROOT="${GITHUB_WORKSPACE}/pr-engine"
           fi
           cd "${ENGINE_ROOT}/scripts"
