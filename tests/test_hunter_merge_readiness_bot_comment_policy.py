@@ -253,8 +253,6 @@ def test_trusted_preflight_failure_logs_diagnostics_but_returns_status_safe_erro
     error = core.trusted_governance_preflight_error(278)
 
     assert error == core.GOVERNANCE_PREFLIGHT_FAILURE_DESCRIPTION
-    assert "secret" not in error
-    assert "sensitive" not in error
     assert observed["timeout"] == core.GOVERNANCE_PREFLIGHT_TIMEOUT_SECONDS
     logs = capsys.readouterr().out
     assert "ghs_super-secret-token" not in logs

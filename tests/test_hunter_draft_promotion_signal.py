@@ -104,9 +104,9 @@ def gh():
             return_value=None,
         ),
         patch.object(
-            hunter_draft_promotion_signal.governance_preflight,
-            "validate_trace_against_state",
-            return_value=None,
+            hunter_draft_promotion_signal.merge_readiness,
+            "base_head_oids",
+            return_value=("b" * 40, "b" * 40),
         ),
     ):
         yield server
@@ -204,10 +204,17 @@ def test_evaluate_with_single_declaration_line_reaches_success_and_comments(gh):
     gh.pulls[123] = green_pr(123, sha, body)
     green_checks(gh, sha)
 
-    with patch.object(
-        hunter_draft_promotion_signal.governance_preflight,
-        "validate_ready_evidence",
-        return_value=None,
+    with (
+        patch.object(
+            hunter_draft_promotion_signal.governance_preflight,
+            "validate_ready_evidence",
+            return_value=None,
+        ),
+        patch.object(
+            hunter_draft_promotion_signal.governance_preflight,
+            "validate_trace_against_state",
+            return_value=None,
+        ),
     ):
         hunter_draft_promotion_signal.evaluate(gh.pulls[123])
 
@@ -242,11 +249,18 @@ def test_draft_promotion_retracts_success_for_invalid_ready_evidence(gh):
     gh.pulls[125] = green_pr(125, sha, body)
     green_checks(gh, sha)
 
-    with patch.object(
-        hunter_draft_promotion_signal.governance_preflight,
-        "validate_ready_evidence",
-        side_effect=hunter_draft_promotion_signal.governance_preflight.PreflightError(
-            "structured result marker missing"
+    with (
+        patch.object(
+            hunter_draft_promotion_signal.governance_preflight,
+            "validate_ready_evidence",
+            side_effect=hunter_draft_promotion_signal.governance_preflight.PreflightError(
+                "structured result marker missing"
+            ),
+        ),
+        patch.object(
+            hunter_draft_promotion_signal.governance_preflight,
+            "validate_trace_against_state",
+            return_value=None,
         ),
     ):
         hunter_draft_promotion_signal.evaluate(gh.pulls[125])
@@ -290,11 +304,18 @@ def test_draft_promotion_retracts_stale_ready_body_and_success_comment(gh):
         }
     ]
 
-    with patch.object(
-        hunter_draft_promotion_signal.governance_preflight,
-        "validate_ready_evidence",
-        side_effect=hunter_draft_promotion_signal.governance_preflight.PreflightError(
-            "structured result marker missing"
+    with (
+        patch.object(
+            hunter_draft_promotion_signal.governance_preflight,
+            "validate_ready_evidence",
+            side_effect=hunter_draft_promotion_signal.governance_preflight.PreflightError(
+                "structured result marker missing"
+            ),
+        ),
+        patch.object(
+            hunter_draft_promotion_signal.governance_preflight,
+            "validate_trace_against_state",
+            return_value=None,
         ),
     ):
         hunter_draft_promotion_signal.evaluate(gh.pulls[126])
@@ -338,10 +359,17 @@ def test_live_scope_is_reread_instead_of_trusting_event_payload(gh):
     gh.pulls[282] = green_pr(282, sha, body)
     green_checks(gh, sha)
 
-    with patch.object(
-        hunter_draft_promotion_signal.governance_preflight,
-        "validate_ready_evidence",
-        return_value=None,
+    with (
+        patch.object(
+            hunter_draft_promotion_signal.governance_preflight,
+            "validate_ready_evidence",
+            return_value=None,
+        ),
+        patch.object(
+            hunter_draft_promotion_signal.governance_preflight,
+            "validate_trace_against_state",
+            return_value=None,
+        ),
     ):
         hunter_draft_promotion_signal.evaluate(
             {"number": 282, "state": "closed", "draft": False, "base": {"ref": "release"}}

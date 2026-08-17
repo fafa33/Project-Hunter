@@ -439,9 +439,10 @@ def test_post_commit_actions_reject_caller_git_identity_overrides() -> None:
     the repository state, not accept caller-supplied overrides. The parser should
     reject these arguments because they are not defined for those actions.
     """
+    parser = preflight._parser()
     test_cases = [
         (
-            "push",
+            "push with --branch",
             [
                 "push",
                 "--repo", "fafa33/Project-Hunter",
@@ -451,7 +452,7 @@ def test_post_commit_actions_reject_caller_git_identity_overrides() -> None:
             ],
         ),
         (
-            "push",
+            "push with --commit-message",
             [
                 "push",
                 "--repo", "fafa33/Project-Hunter",
@@ -461,7 +462,7 @@ def test_post_commit_actions_reject_caller_git_identity_overrides() -> None:
             ],
         ),
         (
-            "pr-create",
+            "pr-create with --branch",
             [
                 "pr-create",
                 "--repo", "fafa33/Project-Hunter",
@@ -474,7 +475,33 @@ def test_post_commit_actions_reject_caller_git_identity_overrides() -> None:
             ],
         ),
         (
-            "pr-update",
+            "pr-create with --commit-message",
+            [
+                "pr-create",
+                "--repo", "fafa33/Project-Hunter",
+                "--issue", "276",
+                "--objective", "Governance enforcement: mandatory agent preflight and PR generator",
+                "--base-branch", "main",
+                "--pr-title", "Governance enforcement: mandatory agent preflight and PR generator",
+                "--pr-body-file", "/dev/null",
+                "--commit-message", "fix: spoofed #276",
+            ],
+        ),
+        (
+            "pr-update with --branch",
+            [
+                "pr-update",
+                "--repo", "fafa33/Project-Hunter",
+                "--issue", "276",
+                "--objective", "Governance enforcement: mandatory agent preflight and PR generator",
+                "--pr", "277",
+                "--pr-title", "Governance enforcement: mandatory agent preflight and PR generator",
+                "--pr-body-file", "/dev/null",
+                "--branch", "governance/issue-276-spoofed",
+            ],
+        ),
+        (
+            "pr-update with --commit-message",
             [
                 "pr-update",
                 "--repo", "fafa33/Project-Hunter",
@@ -490,7 +517,7 @@ def test_post_commit_actions_reject_caller_git_identity_overrides() -> None:
 
     for action_name, args in test_cases:
         with pytest.raises(SystemExit):
-            preflight._parser().parse_args(args)
+            parser.parse_args(args)
 
 
 def test_pr_update_binds_authorization_to_live_target_pr_metadata(tmp_path, monkeypatch) -> None:
@@ -1055,6 +1082,12 @@ def test_issue_276_fixture_criteria_match_canonical_issue() -> None:
         "No agent, automation, or generated metadata can grant itself review approval or merge authority.",
         "Human approval remains required for merge.",
         "Existing accepted governance ownership is preserved; no competing lifecycle/review/architecture-audit authority is introduced.",
+        "The preflight validates Issue identity and rejects guessed/sequence-inferred Issue numbers.",
+        "The preflight validates exact-pair evidence and rejects evidence with superseded head or base revisions.",
+        "The preflight validates ownership boundaries and rejects semantics placed outside canonical owners.",
+        "Ready-for-review gate validates current independent hostile review evidence for the exact source-head and target pair.",
+        "Durable finding fixes require verifier evidence and reusable guards for systemic classifications.",
+        "Bootstrap enforcement distinguishes pre-merge verified enforcement from post-merge active enforcement.",
     }
 
     assert fixture_criteria == canonical_criteria, (

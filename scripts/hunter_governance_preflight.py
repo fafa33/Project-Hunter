@@ -845,7 +845,7 @@ def validate_ownership_added_lines(added_lines: Mapping[str, Sequence[str]]) -> 
                 if not any(marker.search(text) for marker in markers):
                     continue
                 owner = CANONICAL_OWNERS[domain]
-                if path == owner or _owner_reference_present(text, owner):
+                if _owner_reference_present(text, owner):
                     continue
                 failures.append(f"{path}: added {domain} semantics outside canonical owner {owner}: {text[:120]!r}")
     if failures:
