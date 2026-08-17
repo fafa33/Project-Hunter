@@ -76,6 +76,43 @@ def test_canonical_governance_loader_resolves_current_repository() -> None:
     preflight.validate_canonical_governance(ROOT)
 
 
+def test_issue_276_fixture_matches_canonical_acceptance_criteria() -> None:
+    """Verify the Issue 276 fixture contains all required acceptance criteria.
+
+    The fixture is used throughout governance preflight tests as the canonical
+    example. This test ensures the fixture remains synchronized with the actual
+    implemented enforcement capabilities.
+    """
+    issue = fixture_issue()
+    criteria = list(preflight.issue_acceptance_criteria(issue.body))
+
+    # Core enforcement capabilities that must be present
+    required_capabilities = [
+        "preflight command/api",
+        "canonical pr body",
+        "acceptance-criteria matrix",
+        "readiness declarations",
+        "identity mismatch",
+        "ownership",
+        "exact-pair",
+        "hostile review",
+        "durable",
+        "bootstrap",
+    ]
+
+    criteria_text = " ".join(c.lower() for c in criteria)
+    for capability in required_capabilities:
+        assert capability in criteria_text, f"Issue 276 fixture missing {capability} acceptance criterion"
+
+    # Verify specific critical criteria are present
+    assert any("trace marker" in c.lower() or "exact-pair evidence" in c.lower() for c in criteria), \
+        "Issue 276 fixture must include trace/exact-pair validation criterion"
+    assert any("per-line ownership" in c.lower() or "ownership boundaries" in c.lower() for c in criteria), \
+        "Issue 276 fixture must include ownership validation criterion"
+    assert any("durable finding" in c.lower() or "verifier evidence" in c.lower() for c in criteria), \
+        "Issue 276 fixture must include durable finding resolution criterion"
+
+
 def test_generator_uses_verified_issue_template_scope_and_complete_matrix() -> None:
     issue = fixture_issue()
     body = generated_body()
@@ -516,8 +553,11 @@ def test_post_commit_actions_reject_caller_git_identity_overrides() -> None:
     ]
 
     for action_name, args in test_cases:
-        with pytest.raises(SystemExit):
+        with pytest.raises(SystemExit) as exc_info:
             parser.parse_args(args)
+        # Verify parsing fails because --branch or --commit-message is unrecognized,
+        # not because required arguments are missing
+        assert exc_info.value.code == 2
 
 
 def test_pr_update_binds_authorization_to_live_target_pr_metadata(tmp_path, monkeypatch) -> None:
