@@ -21,8 +21,11 @@ name: Hunter / Merge Readiness
 # Feedback contract:
 # - every unresolved inline review thread blocks;
 # - every current CHANGES_REQUESTED review blocks;
-# - human and unknown top-level PR Conversation comments block until the
-#   repository owner acknowledges that exact current comment with a 👍 reaction;
+# - external human and unknown-bot top-level PR Conversation comments block
+#   until the repository owner acknowledges that exact current comment with a
+#   👍 reaction;
+# - a top-level comment authored by the repository owner is already the owner's
+#   own statement and never requires a vacuous self-👍;
 # - editing a previously acknowledged non-exempt comment invalidates that
 #   acknowledgement until the owner removes/re-applies 👍 after the edit;
 # - only structurally identifiable status/advisory comments emitted by trusted
@@ -33,6 +36,11 @@ name: Hunter / Merge Readiness
 # invalidates Governance evidence; it is re-read live on every reconciliation
 # instead. Resolving a thread or applying an acknowledgement therefore converges
 # on the next reconciliation without requiring a Governance re-run.
+#
+# Before any canonical success publication, the resident trusted-default-branch
+# governance preflight is executed. A preflight failure is converted into a
+# canonical Merge Readiness failure; PR-controlled enforcement code is never
+# executed with this workflow's statuses:write authority.
 #
 # workflow_dispatch lets an operator force an immediate reconciliation for a
 # single PR. It has no special decision semantics whatsoever -- it runs the
@@ -71,9 +79,6 @@ on:
       - Hunter Governance Review
     types:
       - completed
-  # GitHub Actions has no reaction event, and no event fires when a required
-  # check other than Governance Review completes. The sweep is the safety net
-  # that makes those observable; it has no special decision semantics either.
   schedule:
     - cron: "*/5 * * * *"
   workflow_dispatch:
@@ -83,10 +88,6 @@ on:
         required: true
         type: number
 
-# Least privilege. `actions: read` and `contents: write` are both gone: the
-# controller no longer resolves workflow runs to attribute Governance evidence
-# (the evidence states its own owner), and no longer creates the per-PR git-ref
-# lock that the removed timestamp/invalidation machinery required.
 permissions:
   checks: read
   contents: read
@@ -94,13 +95,6 @@ permissions:
   pull-requests: read
   statuses: write
 
-# Per-PR concurrency. Cancelling a predecessor is safe by construction: no
-# reconciliation depends on a predecessor completing, and the successor re-reads
-# current state from scratch. The schedule sweep evaluates many pull requests in
-# one job and so has no per-PR key; it shares a single sweep group instead, and a
-# sweep racing a PR-triggered run cannot publish a stale success because the
-# controller re-reads and re-compares the semantic revision immediately before
-# publishing green.
 concurrency:
   group: >-
     hunter-merge-readiness-${{
@@ -120,11 +114,6 @@ jobs:
     timeout-minutes: 20
 
     steps:
-      # Always run the canonical controller from the trusted default branch, never
-      # from the ref that happened to trigger this run. This matters most for
-      # workflow_dispatch: an operator can dispatch from any branch that carries
-      # this workflow file, and an unpinned checkout would execute that branch's
-      # version of the readiness controller with statuses: write permission.
       - name: Checkout trusted controller (default branch)
         uses: actions/checkout@v4
         with:
@@ -136,5 +125,6 @@ jobs:
           GH_REPO: ${{ github.repository }}
           EVENT_NAME: ${{ github.event_name }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          HUNTER_ENFORCE_GOVERNANCE_PREFLIGHT: "1"
         run: |
           python scripts/hunter_merge_readiness.py

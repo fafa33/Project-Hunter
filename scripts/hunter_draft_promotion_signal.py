@@ -1,9 +1,11 @@
 import json
 import os
 import re
-import urllib.request
+import time
 from typing import Any
 
+import hunter_github_transport as transport
+import hunter_governance_preflight as governance_preflight
 import hunter_merge_readiness as merge_readiness
 
 # Configuration
@@ -21,6 +23,9 @@ repo: str = ""
 token: str = ""
 run_url: str = ""
 
+# Sleeper hook so tests can inject a deterministic fake instead of sleeping.
+_sleeper = time.sleep
+
 
 def init_globals() -> None:
     global repo, token, run_url
@@ -32,20 +37,17 @@ def init_globals() -> None:
 
 
 def request_json(method: str, path: str, payload: dict[str, Any] | None = None) -> Any:
+    """REST request through the shared bounded-retry GitHub transport."""
     data = None if payload is None else json.dumps(payload).encode("utf-8")
-    request = urllib.request.Request(
-        f"https://api.github.com/repos/{repo}/{path}",
-        data=data,
+    return transport.request_rest_json(
+        url=f"https://api.github.com/repos/{repo}/{path}",
         method=method,
-        headers={
-            "Accept": "application/vnd.github+json",
-            "Authorization": f"Bearer {token}",
-            "X-GitHub-Api-Version": "2022-11-28",
-            "Content-Type": "application/json",
-        },
+        headers={},
+        data=data,
+        token=token,
+        what=f"{method} {path}",
+        sleeper=_sleeper,
     )
-    with urllib.request.urlopen(request, timeout=30) as response:
-        return json.load(response)
 
 
 def publish(sha: str, state: str, description: str) -> None:
@@ -92,12 +94,69 @@ def exact_head_check_runs(sha: str) -> list[dict[str, Any]]:
         page += 1
 
 
-def latest_commit_status(sha: str, status_context: str) -> dict[str, Any] | None:
-    payload = request_json("GET", f"commits/{sha}/status?per_page=100")
-    matches = [status for status in payload.get("statuses", []) if status.get("context") == status_context]
-    if not matches:
-        return None
-    return max(matches, key=lambda status: int(status.get("id", 0)))
+def required_checks_waiting(sha: str) -> list[str]:
+    """Return the required check runs on the exact head that are not green."""
+    latest: dict[str, dict[str, Any]] = {}
+    for run in exact_head_check_runs(sha):
+        name = run.get("name")
+        if name not in required_checks:
+            continue
+        previous = latest.get(name)
+        if previous is None or int(run.get("id", 0)) > int(previous.get("id", 0)):
+            latest[name] = run
+
+    waiting: list[str] = []
+    for name in required_checks:
+        run = latest.get(name)
+        if run is None:
+            waiting.append(name)
+            continue
+        if run.get("status") != "completed" or run.get("conclusion") != "success":
+            conclusion = run.get("conclusion") or run.get("status") or "pending"
+            waiting.append(f"{name}={conclusion}")
+    return waiting
+
+
+def governance_review_waiting(pr_number: int, current: dict[str, Any], sha: str) -> list[str]:
+    """Qualify the Governance Review verdict exactly as Hunter Merge Readiness does.
+
+    A Governance Review status is usable evidence only when its description
+    carries the canonical ``[hgr:<pr>:<revision>]`` marker naming this pull
+    request and the governance revision recomputed from the current live state
+    (exact head/base pair, base ref, title, body, draft, conflict state, and
+    changed paths). We reuse the canonical readers, revision authority, and
+    evidence resolver instead of maintaining a second interpretation here, so a
+    success for the same head but an older base, an unstamped verdict, or a
+    verdict produced for another pull request fails closed identically.
+    """
+    merge_readiness.repo = repo
+    merge_readiness.token = token
+    base_sha, head_sha = merge_readiness.base_head_oids(pr_number)
+    statuses = merge_readiness.all_commit_statuses(sha)
+    inputs = merge_readiness.GovernanceInputs(
+        pull_request_number=pr_number,
+        head_sha=head_sha,
+        base_sha=base_sha,
+        base_ref=str((current.get("base") or {}).get("ref") or "").strip(),
+        title=str(current.get("title") or ""),
+        body=str(current.get("body") or ""),
+        draft=bool(current.get("draft")),
+        conflicting=merge_readiness.conflicting_from_rest(current.get("mergeable")),
+        changed_paths=tuple(
+            str(entry.get("filename") or "")
+            for entry in merge_readiness.paged(f"pulls/{pr_number}/files")
+            if isinstance(entry, dict)
+        ),
+    )
+    revision = merge_readiness.governance_revision(inputs)
+    evidence, reasons = merge_readiness.resolve_governance_evidence(statuses, pr_number, revision)
+    if evidence is None:
+        if reasons:
+            return [f"{governance_context}: " + "; ".join(reasons)]
+        return [governance_context]
+    if evidence.state != "success":
+        return [f"{governance_context}={evidence.state or 'pending'}"]
+    return []
 
 
 def review_feedback_blockers(pr_number: int) -> list[str]:
@@ -126,6 +185,37 @@ def review_feedback_blockers(pr_number: int) -> list[str]:
         waiting.append(f"unacknowledged top-level comments={len(unacknowledged)}")
 
     return waiting
+
+
+def review_blockers_or_unavailable(pr_number: int) -> list[str]:
+    """Return review blockers, or a typed unavailable reason on infrastructure failure.
+
+    A transient GitHub outage while reading review feedback must never become
+    an empty review set, a zero-blocker claim, or a silent pass: it surfaces
+    as an explicit pending ``review feedback infrastructure unavailable``
+    reason so the advisory signal can never fire on unknown feedback state.
+    """
+    try:
+        return review_feedback_blockers(pr_number)
+    except transport.GitHubUnavailable as exc:
+        print(f"PR #{pr_number}: review feedback infrastructure unavailable: {exc}")
+        return [f"review feedback infrastructure unavailable: {exc}"]
+
+
+def _governing_issue_number(body: str) -> int:
+    """Resolve the single governing Issue identity from the canonical PR body.
+
+    The body must carry exactly one ``Closes``/``Fixes`` identity line, matching
+    the same identity contract the governance preflight enforces. A body without
+    that identity cannot be validated against its governing Issue and fails
+    closed before any readiness signal can be published.
+    """
+    numbers = [int(match.group("number")) for match in governance_preflight.ISSUE_REFERENCE_RE.finditer(body)]
+    if len(numbers) != 1:
+        raise governance_preflight.PreflightError(
+            "PR body must contain exactly one Closes/Fixes governing Issue identity."
+        )
+    return numbers[0]
 
 
 def parse_readiness_declaration(body: str) -> tuple[list[re.Match], str]:
@@ -179,14 +269,74 @@ def synchronize_ready_metadata(pr_number: int, body: str) -> None:
     print("Synchronized implementer readiness metadata to READY FOR REVIEW while PR remains Draft.")
 
 
+def retract_ready_metadata(pr_number: int, body: str) -> None:
+    matches, checked_label = parse_readiness_declaration(body)
+    if checked_label != "READY FOR REVIEW":
+        return
+    if not any(match.group("label").upper() == "CHANGES REQUIRED" for match in matches):
+        raise RuntimeError("CHANGES REQUIRED declaration is missing; refusing READY retraction.")
+
+    def replace(match: re.Match) -> str:
+        label = match.group("label").upper()
+        mark = "x" if label == "CHANGES REQUIRED" else " "
+        return f"{match.group('prefix')}[{mark}]{match.group('space')}{match.group('label')}{match.group('suffix')}"
+
+    updated = DECLARATION_PATTERN.sub(replace, body)
+    request_json("PATCH", f"pulls/{pr_number}", {"body": updated})
+    print("Retracted stale READY FOR REVIEW metadata while PR remains Draft.")
+
+
+def _promotion_comment(marker: str, *, success: bool, reason: str = "") -> str:
+    if not success:
+        return f"{marker}\n⚠️ **Hunter Draft Promotion invalidated:** {reason}"
+    return (
+        f"{marker}\n"
+        "✅ **Hunter Draft Promotion:** all exact-head prerequisites "
+        "and current review-feedback gates have passed, and implementer "
+        "readiness metadata is synchronized to **READY FOR REVIEW**. "
+        "The operator may now manually mark this Draft PR **Ready for Review**.\n\n"
+        "Hunter Governance Review and Hunter Merge Readiness remain the "
+        "merge authorities; any newly opened review feedback invalidates "
+        "this advisory signal until reconciled."
+    )
+
+
+def invalidate_promotion(pr_number: int, sha: str, body: str, reason: str) -> None:
+    try:
+        retract_ready_metadata(pr_number, body)
+    except RuntimeError as exc:
+        print(f"Could not retract malformed readiness metadata for PR #{pr_number}: {exc}")
+    marker = f"<!-- hunter-draft-promotion:{sha} -->"
+    page = 1
+    while True:
+        comments = request_json("GET", f"issues/{pr_number}/comments?per_page=100&page={page}")
+        for comment in comments:
+            if marker in comment.get("body", ""):
+                request_json(
+                    "PATCH",
+                    f"issues/comments/{int(comment['id'])}",
+                    {"body": _promotion_comment(marker, success=False, reason=reason)},
+                )
+                return
+        if len(comments) < 100:
+            return
+        page += 1
+
+
 def post_once(pr_number: int, sha: str) -> None:
     marker = f"<!-- hunter-draft-promotion:{sha} -->"
     page = 1
     while True:
         comments = request_json("GET", f"issues/{pr_number}/comments?per_page=100&page={page}")
-        if any(marker in comment.get("body", "") for comment in comments):
-            print("Promotion comment already exists for this exact head.")
-            return
+        for comment in comments:
+            if marker in comment.get("body", ""):
+                request_json(
+                    "PATCH",
+                    f"issues/comments/{int(comment['id'])}",
+                    {"body": _promotion_comment(marker, success=True)},
+                )
+                print("Promotion comment refreshed for this exact head.")
+                return
         if len(comments) < 100:
             break
         page += 1
@@ -194,18 +344,7 @@ def post_once(pr_number: int, sha: str) -> None:
     request_json(
         "POST",
         f"issues/{pr_number}/comments",
-        {
-            "body": (
-                f"{marker}\n"
-                "✅ **Hunter Draft Promotion:** all exact-head prerequisites "
-                "and current review-feedback gates have passed, and implementer "
-                "readiness metadata is synchronized to **READY FOR REVIEW**. "
-                "The operator may now manually mark this Draft PR **Ready for Review**.\n\n"
-                "Hunter Governance Review and Hunter Merge Readiness remain the "
-                "merge authorities; any newly opened review feedback invalidates "
-                "this advisory signal until reconciled."
-            )
-        },
+        {"body": _promotion_comment(marker, success=True)},
     )
 
 
@@ -241,35 +380,14 @@ def evaluate(pr: dict[str, Any]) -> None:
         return
 
     sha = current["head"]["sha"]
-    latest: dict[str, dict[str, Any]] = {}
-    for run in exact_head_check_runs(sha):
-        name = run.get("name")
-        if name not in required_checks:
-            continue
-        previous = latest.get(name)
-        if previous is None or int(run.get("id", 0)) > int(previous.get("id", 0)):
-            latest[name] = run
-
-    waiting = []
-    for name in required_checks:
-        run = latest.get(name)
-        if run is None:
-            waiting.append(name)
-            continue
-        if run.get("status") != "completed" or run.get("conclusion") != "success":
-            conclusion = run.get("conclusion") or run.get("status") or "pending"
-            waiting.append(f"{name}={conclusion}")
-
-    governance = latest_commit_status(sha, governance_context)
-    if governance is None:
-        waiting.append(governance_context)
-    elif governance.get("state") != "success":
-        waiting.append(f"{governance_context}={governance.get('state') or 'pending'}")
-
-    waiting.extend(review_feedback_blockers(pr_number))
+    waiting = required_checks_waiting(sha)
+    waiting.extend(governance_review_waiting(pr_number, current, sha))
+    waiting.extend(review_blockers_or_unavailable(pr_number))
 
     if waiting:
-        publish(sha, "pending", "Waiting for Draft promotion prerequisites: " + ", ".join(waiting))
+        reason = "Waiting for Draft promotion prerequisites: " + ", ".join(waiting)
+        invalidate_promotion(pr_number, sha, current.get("body") or "", reason)
+        publish(sha, "pending", reason)
         return
 
     current = current_promotion_scope(pr_number)
@@ -280,16 +398,96 @@ def evaluate(pr: dict[str, Any]) -> None:
     # Re-read review feedback immediately before mutating metadata. This closes
     # the practical race where any canonical feedback blocker is introduced
     # after the initial prerequisite read but before READY FOR REVIEW is synchronized.
-    feedback_waiting = review_feedback_blockers(pr_number)
+    feedback_waiting = review_blockers_or_unavailable(pr_number)
     if feedback_waiting:
+        reason = "Waiting for Draft promotion prerequisites: " + ", ".join(feedback_waiting)
+        invalidate_promotion(pr_number, sha, current.get("body") or "", reason)
         publish(
             sha,
             "pending",
-            "Waiting for Draft promotion prerequisites: " + ", ".join(feedback_waiting),
+            reason,
         )
         return
 
-    synchronize_ready_metadata(pr_number, current.get("body") or "")
+    try:
+        body = current.get("body") or ""
+        merge_readiness.repo = repo
+        merge_readiness.token = token
+        base_sha, head_sha = merge_readiness.base_head_oids(pr_number)
+        issue = governance_preflight.load_issue(repo, _governing_issue_number(body))
+        governance_preflight.validate_pr_body(body, issue, head_sha=head_sha, base_sha=base_sha, promotion=False)
+        blocked = governance_preflight.blocked_acceptance_criteria(body)
+        if blocked:
+            raise governance_preflight.PreflightError(
+                "Ready-for-review promotion is blocked by FAIL/BLOCKED criteria: " + "; ".join(blocked)
+            )
+        trace_error = governance_preflight.validate_trace_against_state(body, head_sha=head_sha, base_sha=base_sha)
+        if trace_error:
+            raise governance_preflight.PreflightError(trace_error)
+        governance_preflight.validate_ready_evidence(body)
+        governance_preflight.require_independent_hostile_review(
+            repository=repo,
+            pr_number=pr_number,
+            pr_author=str((current.get("user") or {}).get("login") or ""),
+            head_sha=head_sha,
+            base_sha=base_sha,
+        )
+    except governance_preflight.PreflightError as exc:
+        reason = f"Waiting for Draft promotion prerequisites: {exc}"
+        invalidate_promotion(pr_number, sha, current.get("body") or "", reason)
+        publish(sha, "pending", reason)
+        return
+
+    final_current = current_promotion_scope(pr_number)
+    if final_current is None or final_current.get("head", {}).get("sha") != sha:
+        print("PR state/head changed after hostile review; refusing metadata mutation.")
+        return
+    # Re-read the complete canonical prerequisite state immediately before
+    # mutating metadata. Required checks and the revision-qualified Governance
+    # Review verdict are revalidated here exactly as they were initially, so a
+    # check or governance change racing between the initial read and this final
+    # gate can never reach a READY FOR REVIEW synchronization.
+    final_waiting = required_checks_waiting(sha)
+    final_waiting.extend(governance_review_waiting(pr_number, final_current, sha))
+    final_feedback = review_blockers_or_unavailable(pr_number)
+    try:
+        final_body = final_current.get("body") or ""
+        final_base_sha, final_head_sha = merge_readiness.base_head_oids(pr_number)
+        final_issue = governance_preflight.load_issue(repo, _governing_issue_number(final_body))
+        governance_preflight.validate_pr_body(
+            final_body,
+            final_issue,
+            head_sha=final_head_sha,
+            base_sha=final_base_sha,
+            promotion=False,
+        )
+        blocked = governance_preflight.blocked_acceptance_criteria(final_body)
+        if blocked:
+            raise governance_preflight.PreflightError(
+                "Ready-for-review promotion is blocked by FAIL/BLOCKED criteria: " + "; ".join(blocked)
+            )
+        trace_error = governance_preflight.validate_trace_against_state(
+            final_body, head_sha=final_head_sha, base_sha=final_base_sha
+        )
+        if trace_error:
+            raise governance_preflight.PreflightError(trace_error)
+        governance_preflight.validate_ready_evidence(final_body)
+        governance_preflight.require_independent_hostile_review(
+            repository=repo,
+            pr_number=pr_number,
+            pr_author=str((final_current.get("user") or {}).get("login") or ""),
+            head_sha=final_head_sha,
+            base_sha=final_base_sha,
+        )
+    except governance_preflight.PreflightError as exc:
+        final_feedback.append(str(exc))
+    if final_waiting or final_feedback:
+        reason = "Waiting for Draft promotion prerequisites: " + ", ".join(final_waiting + final_feedback)
+        invalidate_promotion(pr_number, sha, final_current.get("body") or "", reason)
+        publish(sha, "pending", reason)
+        return
+
+    synchronize_ready_metadata(pr_number, final_current.get("body") or "")
     publish(sha, "success", "Ready to promote from Draft; checks and review feedback are clear.")
     post_once(pr_number, sha)
 
@@ -308,6 +506,10 @@ def reconcile_open_draft_prs() -> None:
         pr_number = int(pr.get("number") or 0)
         try:
             evaluate(pr)
+        except transport.GitHubUnavailable as exc:
+            label = f"PR #{pr_number}" if pr_number else "Draft PR with missing number"
+            failures.append(f"{label}: GitHub infrastructure unavailable: {exc}")
+            print(f"Draft promotion infrastructure unavailable for {label}: {exc}")
         except Exception as exc:
             label = f"PR #{pr_number}" if pr_number else "Draft PR with missing number"
             failures.append(f"{label}: {type(exc).__name__}: {exc}")
@@ -315,6 +517,21 @@ def reconcile_open_draft_prs() -> None:
 
     if failures:
         raise RuntimeError("Draft promotion sweep completed with isolated failures: " + " | ".join(failures))
+
+
+def _evaluate_with_unavailable_guard(pr: dict[str, Any]) -> None:
+    """Evaluate a single Draft, mapping infrastructure unavailability to exit 1.
+
+    The direct-event paths run in an event workflow with no sweep isolation;
+    an exhausted GitHub outage must still fail closed with a typed diagnostic
+    instead of an unhandled traceback.
+    """
+    try:
+        evaluate(pr)
+    except transport.GitHubUnavailable as exc:
+        pr_number = int(pr.get("number") or 0)
+        print(f"Draft promotion infrastructure unavailable for PR #{pr_number}: {exc}")
+        raise SystemExit(1) from exc
 
 
 def main() -> None:
@@ -325,7 +542,7 @@ def main() -> None:
         event = json.load(handle)
 
     if "pull_request" in event:
-        evaluate(event["pull_request"])
+        _evaluate_with_unavailable_guard(event["pull_request"])
         raise SystemExit(0)
 
     if event_name == "issue_comment":
@@ -337,7 +554,7 @@ def main() -> None:
         if not pr_number:
             print("issue_comment event has no pull request number; nothing to evaluate.")
             raise SystemExit(0)
-        evaluate({"number": pr_number})
+        _evaluate_with_unavailable_guard({"number": pr_number})
         raise SystemExit(0)
 
     if event_name == "schedule":
@@ -363,7 +580,7 @@ def main() -> None:
     if pr is None:
         print("No open Draft PR matches the completed workflow exact head.")
         raise SystemExit(0)
-    evaluate(pr)
+    _evaluate_with_unavailable_guard(pr)
 
 
 if __name__ == "__main__":
