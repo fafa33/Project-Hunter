@@ -78,6 +78,7 @@ ISSUE_REFERENCE_RE = re.compile(r"(?im)^\s*(?:closes|fixes)\s+#(?P<number>\d+)\s
 READINESS_RE = re.compile(r"(?im)^\s*[-*+]\s*\[(?P<mark>[ xX])\]\s*(?P<text>.+)$")
 MATRIX_HEADER = ("acceptance criterion", "status", "evidence")
 ALLOWED_STATUSES = {"pass", "fail", "blocked", "not applicable"}
+CODERABBIT_AUTHORS = {"coderabbitai", "coderabbitai[bot]"}
 READINESS_DECLARATIONS = ("ready for review", "changes required", "blocked")
 PASS_EVIDENCE_PLACEHOLDERS = {
     "",
@@ -1056,6 +1057,36 @@ def finding_resolution_from_live_review(
     return finding
 
 
+def _require_successful_coderabbit_status(
+    *,
+    status: dict[str, Any],
+    expected_context: str = "coderabbit",
+) -> bool:
+    """Validate a CodeRabbit commit status with producer authentication.
+
+    A qualifying status MUST have:
+    - context == "coderabbit"
+    - state == "success"
+    - status["creator"]["login"] in CODERABBIT_AUTHORS
+    - reject missing/malformed creator;
+    - reject creator login not in CODERABBIT_AUTHORS;
+    - remain fail-closed.
+    """
+    creator = status.get("creator")
+    if not isinstance(creator, dict):
+        return False
+    login = creator.get("login")
+    if not login:
+        return False
+    if login not in CODERABBIT_AUTHORS:
+        return False
+    if status.get("context") != expected_context:
+        return False
+    if status.get("state") != "success":
+        return False
+    return True
+
+
 def require_independent_hostile_review(
     *, repository: str, pr_number: int, pr_author: str, head_sha: str, base_sha: str
 ) -> None:
@@ -1095,6 +1126,36 @@ def require_independent_hostile_review(
             continue
         candidates.append((submitted_at, int(review.get("id") or 0), review, exact_matches))
     if not candidates:
+        # CodeRabbit recognition fallback: only when no valid Hunter hostile-review marker exists.
+        # A CodeRabbit review qualifies only if ALL are true:
+        # - author login is exactly "coderabbitai" or "coderabbitai[bot]"
+        # - author is not the PR author (already guaranteed by the filter above)
+        # - review.commit_id == current head_sha (already guaranteed by the filter above)
+        # - review state is COMMENTED for a passing review; CHANGES_REQUESTED must never qualify
+        # - review body proves it reviewed the exact current pair using CodeRabbit's
+        #   "Reviewing files ... between <base> and <head>" evidence
+        # - stale head or wrong base may not qualify; empty/malformed bodies must not qualify
+        code_rabbit_authors = {"coderabbitai", "coderabbitai[bot]"}
+        for review in reviews:
+            author = str((review.get("user") or {}).get("login") or "").strip()
+            if author not in code_rabbit_authors:
+                continue
+            state = str(review.get("state") or "").strip().lower()
+            if state != "commented":
+                continue
+            # commit_id already matches head_sha from the outer filter, but verify for safety
+            if str(review.get("commit_id") or "").lower() != head_sha.lower():
+                continue
+            body = str(review.get("body") or "")
+            # CodeRabbit's review-info evidence: "Reviewing files that changed from the base of the PR and between <base> and <head>"
+            has_exact_pair = (
+                f"between {base_sha.lower()} and {head_sha.lower()}" in body.lower()
+                or f"between {head_sha.lower()} and {base_sha.lower()}" in body.lower()
+            )
+            if not has_exact_pair:
+                continue
+            # CodeRabbit review qualifies as independent hostile-review evidence
+            return
         raise PreflightError("Ready preflight lacks independent exact-pair hostile-review evidence.")
     _submitted_at, _review_id, latest_review, latest_markers = max(candidates, key=lambda item: item[:2])
     if len(latest_markers) != 1:
