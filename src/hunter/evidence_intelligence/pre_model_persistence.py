@@ -125,6 +125,8 @@ class EvidencePreModelPersistenceRepository:
             raise PreModelPersistenceLineageError(
                 "persistence authority fact scope does not match the bundle's single document"
             )
+        if source_handling_authority.cutoff > recorded_at:
+            raise PreModelPersistenceLineageError("persistence authority cutoff is later than the bundle's recorded_at")
         try:
             resolved = resolve_pre_model_source_handling(source_handling_authority)
         except SourceHandlingBlockedError as error:

@@ -226,7 +226,7 @@ def source_handling_authority(
     categories = {
         category
         for mapped in registry_payload["field_map"].values()
-        for category in (str(item) for item in (mapped if isinstance(mapped, list) else [mapped]))
+        for category in (str(item) for item in (mapped if isinstance(mapped, (list, tuple)) else [mapped]))
     }
     if "SAFE_CONTROL_ID" in categories:
         durable_dispositions["SAFE_CONTROL_ID"] = {

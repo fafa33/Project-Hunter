@@ -196,7 +196,9 @@ def test_ready_build_persists_and_reconstructs_exact_prompt(tmp_path) -> None:
     assert reconstructed.status == "AVAILABLE"
     assert reconstructed.bundle is not None
     assert reconstructed.bundle.build_record_id == saved.build_record_id
-    assert reconstructed.exact_prompt == bundle[-1].prompt_artifact.content
+    artifact = bundle[-1].prompt_artifact
+    assert artifact is not None
+    assert reconstructed.exact_prompt == artifact.content
 
 
 def test_strict_known_cutoff_before_recording_is_unavailable(tmp_path) -> None:
@@ -476,6 +478,16 @@ def test_persistence_rejects_substituted_cutoff_even_with_identical_decision(tmp
             recorded_at=RECORDED_AT,
             source_handling_authority=substituted,
         )
+
+
+def test_persistence_rejects_authority_cutoff_after_recorded_at(tmp_path) -> None:
+    repository = EvidenceIntelligenceRepository(tmp_path / "evidence.sqlite")
+    persistence = EvidencePreModelPersistenceRepository(repository)
+    bundle = _build()
+    assert bundle[0].replay_mode == "current"
+    future_cutoff = RECORDED_AT + timedelta(hours=1)
+    with pytest.raises(PreModelPersistenceLineageError, match="later than the bundle's recorded_at"):
+        _save(persistence, bundle, authority_cutoff=future_cutoff)
 
 
 def _other_build():
