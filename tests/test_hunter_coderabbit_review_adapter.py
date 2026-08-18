@@ -111,6 +111,53 @@ def test_conflicting_pair_claims_are_rejected() -> None:
         )
 
 
+def test_successful_exact_head_coderabbit_status_is_accepted(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_request_json(method, path, *, token, payload=None):
+        del token, payload
+        assert method == "GET"
+        assert path == f"repos/fafa33/Project-Hunter/commits/{HEAD}/status"
+        return {"sha": HEAD, "statuses": [{"context": "CodeRabbit", "state": "success"}]}
+
+    monkeypatch.setattr(adapter, "_request_json", fake_request_json)
+    adapter._require_successful_coderabbit_status("fafa33/Project-Hunter", HEAD, token="test-token")
+
+
+def test_missing_coderabbit_status_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        adapter,
+        "_request_json",
+        lambda *args, **kwargs: {"sha": HEAD, "statuses": []},
+    )
+    with pytest.raises(adapter.AdapterError, match="No governed CodeRabbit status"):
+        adapter._require_successful_coderabbit_status("fafa33/Project-Hunter", HEAD, token="test-token")
+
+
+def test_unsuccessful_coderabbit_status_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        adapter,
+        "_request_json",
+        lambda *args, **kwargs: {
+            "sha": HEAD,
+            "statuses": [{"context": "CodeRabbit", "state": "failure"}],
+        },
+    )
+    with pytest.raises(adapter.AdapterError, match="not successful"):
+        adapter._require_successful_coderabbit_status("fafa33/Project-Hunter", HEAD, token="test-token")
+
+
+def test_mismatched_coderabbit_status_head_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        adapter,
+        "_request_json",
+        lambda *args, **kwargs: {
+            "sha": "9" * 40,
+            "statuses": [{"context": "CodeRabbit", "state": "success"}],
+        },
+    )
+    with pytest.raises(adapter.AdapterError, match="exact PR head"):
+        adapter._require_successful_coderabbit_status("fafa33/Project-Hunter", HEAD, token="test-token")
+
+
 def test_attest_rejects_if_pr_pair_changes_before_post(monkeypatch: pytest.MonkeyPatch) -> None:
     changed_head = "4" * 40
     pr_responses = iter(
@@ -132,6 +179,7 @@ def test_attest_rejects_if_pr_pair_changes_before_post(monkeypatch: pytest.Monke
 
     monkeypatch.setattr(adapter, "_request_json", fake_request_json)
     monkeypatch.setattr(adapter, "_paged_reviews", lambda repository, pr_number, *, token: [_review()])
+    monkeypatch.setattr(adapter, "_require_successful_coderabbit_status", lambda *args, **kwargs: None)
 
     with pytest.raises(adapter.AdapterError, match="changed during attestation"):
         adapter.attest("fafa33/Project-Hunter", 280, token="test-token")
@@ -165,6 +213,7 @@ def test_attest_rejects_adverse_review_in_refreshed_review_set(monkeypatch: pyte
 
     monkeypatch.setattr(adapter, "_request_json", fake_request_json)
     monkeypatch.setattr(adapter, "_paged_reviews", fake_paged_reviews)
+    monkeypatch.setattr(adapter, "_require_successful_coderabbit_status", lambda *args, **kwargs: None)
 
     with pytest.raises(adapter.AdapterError, match="adverse"):
         adapter.attest("fafa33/Project-Hunter", 280, token="test-token")
