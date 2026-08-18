@@ -200,7 +200,13 @@ def source_handling_authority(
     registry_payload: dict[str, object] = {
         "scope": registry_scope,
         "field_category_registry_id": registry_id,
-        "field_map": dict(field_map or {"pre_model_bundle": ["AUDIT_FIELD"]}),
+        "field_map": dict(
+            field_map
+            or {
+                "pre_model_bundle": ["AUDIT_FIELD"],
+                "locator": ["AUDIT_FIELD"],
+            }
+        ),
         "safe_control_proofs": dict(safe_control_proofs or {}),
         **_times(cutoff),
     }

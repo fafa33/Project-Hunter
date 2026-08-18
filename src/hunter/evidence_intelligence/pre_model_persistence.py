@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from typing import Any, Literal
@@ -36,6 +37,7 @@ ReconstructionStatus = Literal["AVAILABLE", "UNAVAILABLE", "NOT_KNOWN_AT_CUTOFF"
 
 RETENTION_PROHIBITED_REASON_CODE = "EXACT_PROMPT_RETENTION_PROHIBITED"
 REDACTED_SOURCE_EXCERPT = "[REDACTED:EXACT_PROMPT_RETENTION_PROHIBITED]"
+REDACTED_LOCATOR = "[REDACTED:LOCATOR_RETENTION_PROHIBITED]"
 
 
 class PreModelPersistenceConflict(RuntimeError):
@@ -151,6 +153,8 @@ class EvidencePreModelPersistenceRepository:
                     "source handling authority prohibits exact source retention but exact prompt bytes remain"
                 )
             inventory = tuple(_redacted_span(span) for span in inventory)
+        if not _locator_retention_permitted(resolved.registry_record, persistence_decision):
+            inventory = tuple(replace(span, locator=REDACTED_LOCATOR) for span in inventory)
 
         bundle = PersistedEvidencePreModelBundle(
             recorded_at=recorded_at.astimezone(UTC),
@@ -412,6 +416,22 @@ def _bundle_from_payload(payload: dict[str, Any], *, recorded_at: datetime) -> P
 
 def _redacted_span(span: EvidenceSpan) -> EvidenceSpan:
     return replace(span, excerpt=REDACTED_SOURCE_EXCERPT, section_title="")
+
+
+def _locator_retention_permitted(registry: Mapping[str, Any], decision: Mapping[str, Any]) -> bool:
+    field_map = registry.get("field_map")
+    if not isinstance(field_map, Mapping):
+        return False
+    categories = _string_sequence(field_map.get("locator"))
+    if not categories:
+        return False
+    dispositions = decision.get("durable_dispositions")
+    if not isinstance(dispositions, Mapping):
+        return False
+    return all(
+        isinstance(dispositions.get(category), Mapping) and dispositions.get(category, {}).get("PERSIST") == "ALLOW"
+        for category in categories
+    )
 
 
 def _require(condition: bool, message: str) -> None:

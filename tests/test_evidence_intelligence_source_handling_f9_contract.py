@@ -397,6 +397,23 @@ def test_credential_bearing_surface_bytes_are_structurally_excluded_from_durabil
         _persist_bundle(bundle, authority=authority, repository=persistence)
 
 
+def test_persistence_omits_locator_without_governed_retention_disposition(tmp_path) -> None:
+    authority = source_handling_authority(
+        document_id="doc-1",
+        cutoff=datetime(2026, 8, 14, 5, 0, tzinfo=UTC),
+        field_map={"pre_model_bundle": ["AUDIT_FIELD"]},
+    )
+    bundle = _build_with_source_handling_authority(authority=authority)
+
+    evidence_repository = EvidenceIntelligenceRepository(tmp_path / "evidence.sqlite")
+    persistence = EvidencePreModelPersistenceRepository(evidence_repository)
+    saved = _persist_bundle(bundle, authority=authority, repository=persistence)
+    payload_json = _persisted_payload_json(evidence_repository, saved.build_record_id)
+
+    assert "test:span-1" not in payload_json
+    assert "public evidence" in payload_json
+
+
 def test_schema_v1_build_record_fixture_preserves_original_identity() -> None:
     fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
     payload = dict(fixture["record"])
