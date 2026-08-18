@@ -618,7 +618,7 @@ def test_evaluate_rejects_negative_pass_evidence_via_shared_boundary(gh, capsys)
     )
     body = body.replace(
         "## Operational validation\n\n",
-        "## Operational validation\n\n<!-- hunter-operational:v1 runbook=executed -->\n\n",
+        "## Operational validation\n\n<!-- hunter-operational-validation:v1 outcome=not-applicable -->\n\n",
         1,
     )
     first_row = hunter_draft_promotion_signal.governance_preflight.parse_acceptance_matrix(body)[0]
@@ -645,6 +645,30 @@ def test_evaluate_rejects_negative_pass_evidence_via_shared_boundary(gh, capsys)
     assert not gh.comments.get(277)
     assert "- [ ] `READY FOR REVIEW`" in gh.patched_bodies[277]
     assert "- [x] `CHANGES REQUIRED`" in gh.patched_bodies[277]
+
+    # Counterfactual: the rejection above is caused specifically by the
+    # acceptance-criterion substantive-evidence guard, not by the canonical
+    # markers or any other validation. With that guard disabled, the exact
+    # same body must reach a success signal instead of a pending invalidation.
+    flip_sha = "sha_negative_pass_evidence_guard_off"
+    gh.pulls[278] = green_pr(278, flip_sha, body)
+    green_checks(gh, flip_sha)
+    with (
+        patch.object(
+            hunter_draft_promotion_signal.governance_preflight,
+            "load_issue",
+            return_value=issue,
+        ),
+        patch.object(
+            hunter_draft_promotion_signal.governance_preflight,
+            "_require_substantive_evidence",
+            return_value=None,
+        ),
+    ):
+        hunter_draft_promotion_signal.evaluate(gh.pulls[278])
+
+    assert any(state == "success" for _sha, state, _description in gh.published)
+    assert len(gh.comments.get(278, [])) == 1
 
 
 @pytest.mark.parametrize("checked", ["CHANGES REQUIRED", "READY FOR REVIEW"])

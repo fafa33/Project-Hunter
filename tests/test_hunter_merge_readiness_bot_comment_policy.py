@@ -262,6 +262,33 @@ def test_trusted_preflight_failure_logs_diagnostics_but_returns_status_safe_erro
     assert "[REDACTED" in logs or "REDACTED" in logs
 
 
+@pytest.mark.parametrize("prefix", ["ghp_", "ghs_", "gho_", "ghu_", "ghr_", "github_pat_"])
+def test_governance_preflight_logs_redact_every_supported_credential_prefix(prefix, capsys):
+    """Every supported GitHub credential prefix must be redacted before the
+    diagnostics cross the logging boundary: the raw credential and any prefix
+    fragment of it cannot survive in the printed logs."""
+    secret = f"{prefix}{'a' * 40}"
+    core._log_governance_preflight_output(f"API diagnostic {secret} inline", None)
+    logs = capsys.readouterr().out
+    assert secret not in logs
+    assert secret[:-10] not in logs
+    assert "[REDACTED_TOKEN]" in logs
+
+
+def test_governance_preflight_logs_redact_raw_credential_with_authorization_header(capsys):
+    """Authorization/Bearer redaction must survive unchanged while a raw
+    credential elsewhere in the same diagnostics is also redacted."""
+    secret = "github_pat_AABBCCDDEEFF001122334455"
+    core._log_governance_preflight_output("Authorization: Bearer sensitive-header-value", None)
+    core._log_governance_preflight_output(f"Bearer sensitive-header-value; token={secret}", None)
+    logs = capsys.readouterr().out
+    assert secret not in logs
+    assert "sensitive-header-value" not in logs
+    assert "Authorization: [REDACTED]" in logs
+    assert "Bearer [REDACTED]" in logs
+    assert "[REDACTED_TOKEN]" in logs
+
+
 def test_trusted_preflight_timeout_is_bounded_and_status_safe(monkeypatch, tmp_path: Path, capsys):
     script = tmp_path / "hunter_governance_preflight.py"
     script.write_text("# test preflight\n", encoding="utf-8")

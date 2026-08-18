@@ -214,8 +214,14 @@ workflow.
   (i.e., during the installation PR itself, before merge), the workflow
   materializes the engine from the PR head so the required status check can
   publish during installation validation. The fallback is guarded by the
-  existence of the engine on the default branch and never activates after the
-  installation PR merges. It emits an explicit `::warning::` when used.
+  complete engine import closure on the default branch (the
+  `hunter_governance_review` package, `hunter_governance_preflight.py`,
+  `hunter_governance_revision.py`, and the shared resilient transport
+  boundary) and never activates after the installation PR merges. PR-head
+  execution is additionally restricted to the one-time installation pull
+  request **#277** on the `pull_request` event; any other PR, event, or manual
+  dispatch fails closed with an error instead of running PR-controlled code.
+  It emits an explicit `::warning::` when used.
 - Minimal workflow permissions: `contents: read`, `pull-requests: read`,
   `statuses: write`. The gate never writes PR comments, and requires no
   repository secret of any kind.

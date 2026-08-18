@@ -37,7 +37,11 @@ E. workflow/bootstrap fixture: trusted engine missing or pre-resilience on
 from __future__ import annotations
 
 import argparse
+import ast
 import json
+import os
+import re
+import subprocess
 from pathlib import Path
 from subprocess import CompletedProcess
 
@@ -170,6 +174,96 @@ def _runner(router: GhSubprocessRouter, monkeypatch: pytest.MonkeyPatch) -> GhCl
     return GhCliRunner(REPOSITORY, token="t")
 
 
+def _workflow_text() -> str:
+    return (Path(__file__).resolve().parents[1] / ".github" / "workflows" / "hunter-governance-review.yml").read_text(
+        encoding="utf-8"
+    )
+
+
+def _engine_selection_script(workflow: str) -> str:
+    """The workflow's run block, trimmed to the engine-selection shell logic."""
+    tail = workflow.split("run: |", 1)[1]
+    lines = [line.strip() for line in tail.splitlines() if line.strip()]
+    start = next(i for i, line in enumerate(lines) if line.startswith("set -euo pipefail"))
+    end = next(i for i in range(start, len(lines)) if lines[i].startswith("cd "))
+    return "\n".join(lines[start:end])
+
+
+def _engine_selection_condition(script: str) -> str:
+    """The exact multi-line ``if [ ! -f ... ]; then`` bootstrap condition."""
+    lines = script.splitlines()
+    start = next(i for i, line in enumerate(lines) if line.startswith("if [ ! -f"))
+    end = next(i for i in range(start, len(lines)) if lines[i].rstrip().endswith("; then"))
+    return "\n".join(lines[start : end + 1])
+
+
+_CONDITION_FILE_RE = re.compile(r'\[ ! -f "([^"]+)" \]')
+
+
+def _condition_file_paths(condition: str) -> set[str]:
+    return {match.group(1).removeprefix("${ENGINE_ROOT}/scripts/") for match in _CONDITION_FILE_RE.finditer(condition)}
+
+
+def _bootstrap_guard(script: str) -> str:
+    for line in script.splitlines():
+        if '"pull_request"' in line and '"277"' in line:
+            return line
+    raise AssertionError("bootstrap PR guard not found in workflow selection script")
+
+
+def _engine_import_closure() -> set[str]:
+    """Every local module the review engine loads at import time, relative to
+    ``scripts/``. Only module-level imports count: function-deferred imports
+    (for example preflight's merge-readiness CLI subcommands) are not part of
+    what must exist on the default branch before the engine can run."""
+    scripts_root = Path(__file__).resolve().parents[1] / "scripts"
+
+    def module_level_imports(tree: ast.AST) -> list[str]:
+        modules: list[str] = []
+        for node in tree.body:
+            if isinstance(node, ast.Import):
+                modules.extend(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                modules.append(node.module)
+        return modules
+
+    def resolve(module: str) -> list[Path]:
+        as_module = scripts_root / f"{Path(*module.split('.'))}.py"
+        return [as_module] if as_module.is_file() else []
+
+    seen: set[Path] = set()
+    stack = [scripts_root / "hunter_governance_review" / "__main__.py"]
+    while stack:
+        path = stack.pop()
+        if path in seen:
+            continue
+        seen.add(path)
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for module in module_level_imports(tree):
+            stack.extend(resolve(module))
+    return {path.relative_to(scripts_root).as_posix() for path in seen}
+
+
+def _materialize_engine(tmp_path: Path, missing: tuple[str, ...] = ()) -> Path:
+    engine = tmp_path / "engine"
+    for relative in _engine_import_closure():
+        if relative in missing:
+            continue
+        target = engine / "scripts" / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("", encoding="utf-8")
+    return engine
+
+
+def _execute_selection(engine: Path, *, event_name: str, pr_number: str) -> CompletedProcess:
+    script = _engine_selection_script(_workflow_text()) + '\nprintf "%s" "${ENGINE_ROOT}"'
+    env = os.environ.copy()
+    env["GITHUB_WORKSPACE"] = str(engine.parent)
+    env["GITHUB_EVENT_NAME"] = event_name
+    env["PR_NUMBER"] = pr_number
+    return subprocess.run(["bash", "-c", script], capture_output=True, text=True, env=env)
+
+
 def test_bootstrap_approved_first_status_503_then_success(monkeypatch, capsys) -> None:
     """A: transient publication outage recovers through bounded retry."""
     router = GhSubprocessRouter(statuses="fail_once")
@@ -286,25 +380,59 @@ def test_workflow_bootstrap_binds_resilient_engine() -> None:
     assert "hunter_github_transport.py" in workflow
 
 
-def test_trusted_engine_selection_mirrors_workflow_condition(tmp_path) -> None:
-    """Mirror the shell condition: bootstrap only while the default-branch
-    engine is missing or predates the shared resilience boundary."""
-    engine = tmp_path / "engine" / "scripts"
-    review_dir = engine / "hunter_governance_review"
-    review_dir.mkdir(parents=True)
+def test_trusted_engine_selection_condition_covers_complete_import_closure() -> None:
+    """The workflow's bootstrap condition must name every local module of the
+    review engine's import closure -- exactly the files the engine needs before
+    status publication. The closure is computed from the real source imports,
+    so removing any required file check from the workflow fails this test."""
+    workflow = (
+        Path(__file__).resolve().parents[1] / ".github" / "workflows" / "hunter-governance-review.yml"
+    ).read_text(encoding="utf-8")
+    condition = _engine_selection_condition(_engine_selection_script(workflow))
+    checked = {path for path in _condition_file_paths(condition)}
+    assert checked == set(_engine_import_closure())
 
-    def fallback_needed() -> bool:
-        return not (
-            (engine / "hunter_governance_review" / "__main__.py").exists()
-            and (engine / "hunter_github_transport.py").exists()
-        )
 
-    # Pre-resilience engine on main (the exact defect state observed in
-    # hosted runs 509/510): __main__.py present, transport boundary absent.
-    (review_dir / "__main__.py").write_text("", encoding="utf-8")
-    assert fallback_needed()
+def test_workflow_bootstrap_guard_restricts_pr_head_execution_to_pr_277() -> None:
+    """PR-head bootstrap may be reachable only when the event is a
+    ``pull_request`` event for installation PR #277; the fallback assignment
+    must sit inside that guarded branch, and every other event/PR must hit the
+    fail-closed error path instead of PR-controlled code."""
+    workflow = (
+        Path(__file__).resolve().parents[1] / ".github" / "workflows" / "hunter-governance-review.yml"
+    ).read_text(encoding="utf-8")
+    script = _engine_selection_script(workflow)
+    guard = _bootstrap_guard(script)
+    assert '"pull_request"' in guard
+    assert '"277"' in guard
+    pr_engine_assignment = 'ENGINE_ROOT="${GITHUB_WORKSPACE}/pr-engine"'
+    assert pr_engine_assignment in script
+    assert script.index(pr_engine_assignment) > script.index(guard)
+    assert "exit 1" in script
 
-    # After the installation PR merges, main owns the resilient engine and
-    # the fallback never activates (trusted enforcement preserved).
-    (engine / "hunter_github_transport.py").write_text("", encoding="utf-8")
-    assert not fallback_needed()
+
+def test_workflow_bootstrap_decision_executes_binding(tmp_path) -> None:
+    """Execute the exact shell decision text extracted from the workflow and
+    prove the four live behaviors: complete engine never bootstraps; the
+    installation PR may bootstrap only when a closure file is missing; any
+    other PR number fails closed; and a manual dispatch for PR #277 also fails
+    closed (the pull_request event alone authorizes the one-time bootstrap)."""
+    complete = _materialize_engine(tmp_path / "complete")
+    incomplete = _materialize_engine(tmp_path / "incomplete", missing=("hunter_governance_preflight.py",))
+
+    ran = _execute_selection(complete, event_name="pull_request", pr_number="999")
+    assert ran.returncode == 0
+    assert ran.stdout.strip() == str(complete)
+
+    bootstrapped = _execute_selection(incomplete, event_name="pull_request", pr_number="277")
+    assert bootstrapped.returncode == 0
+    assert bootstrapped.stdout.strip().splitlines()[-1] == str(incomplete.parent / "pr-engine")
+    assert "bootstrap mode" in bootstrapped.stdout
+
+    other_pr = _execute_selection(incomplete, event_name="pull_request", pr_number="999")
+    assert other_pr.returncode == 1
+    assert "restricted to installation pull request #277" in other_pr.stdout
+
+    dispatched = _execute_selection(incomplete, event_name="workflow_dispatch", pr_number="277")
+    assert dispatched.returncode == 1
+    assert "restricted to installation pull request #277" in dispatched.stdout
