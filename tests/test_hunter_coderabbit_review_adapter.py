@@ -109,3 +109,31 @@ def test_conflicting_pair_claims_are_rejected() -> None:
         adapter.select_qualified_coderabbit_review(
             [_review(body=body)], pr_author=PR_AUTHOR, head_sha=HEAD, base_sha=BASE
         )
+
+
+def test_attest_rejects_if_pr_pair_changes_before_post(monkeypatch: pytest.MonkeyPatch) -> None:
+    changed_head = "4" * 40
+    pr_responses = iter(
+        [
+            {"user": {"login": PR_AUTHOR}, "head": {"sha": HEAD}, "base": {"sha": BASE}},
+            {"user": {"login": PR_AUTHOR}, "head": {"sha": changed_head}, "base": {"sha": BASE}},
+        ]
+    )
+    posted_payloads: list[object] = []
+
+    def fake_request_json(method, path, *, token, payload=None):
+        del token
+        if method == "GET" and path == "repos/fafa33/Project-Hunter/pulls/280":
+            return next(pr_responses)
+        if method == "POST":
+            posted_payloads.append(payload)
+            return {}
+        raise AssertionError(f"unexpected request: {method} {path}")
+
+    monkeypatch.setattr(adapter, "_request_json", fake_request_json)
+    monkeypatch.setattr(adapter, "_paged_reviews", lambda repository, pr_number, *, token: [_review()])
+
+    with pytest.raises(adapter.AdapterError, match="changed during attestation"):
+        adapter.attest("fafa33/Project-Hunter", 280, token="test-token")
+
+    assert posted_payloads == []
