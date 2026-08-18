@@ -52,9 +52,7 @@ def _exact_pair(body: str) -> tuple[str, str] | None:
 def _pr_exact_pair(pr: Mapping[str, Any]) -> tuple[str, str]:
     head_sha = str((pr.get("head") or {}).get("sha") or "").strip().lower()
     base_sha = str((pr.get("base") or {}).get("sha") or "").strip().lower()
-    if not re.fullmatch(r"[0-9a-f]{40}", head_sha) or not re.fullmatch(
-        r"[0-9a-f]{40}", base_sha
-    ):
+    if not re.fullmatch(r"[0-9a-f]{40}", head_sha) or not re.fullmatch(r"[0-9a-f]{40}", base_sha):
         raise AdapterError("PR exact head/base pair is unavailable.")
     return head_sha, base_sha
 
@@ -126,9 +124,7 @@ def select_qualified_coderabbit_review(
         )
 
     if not candidates:
-        raise AdapterError(
-            "No valid exact-pair CodeRabbit COMMENTED review exists for the current head/base pair."
-        )
+        raise AdapterError("No valid exact-pair CodeRabbit COMMENTED review exists for the current head/base pair.")
     return max(candidates, key=lambda item: (item.submitted_at, item.review_id))
 
 
@@ -172,17 +168,13 @@ def _request_json(
             raw = response.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
-        raise AdapterError(
-            f"GitHub API request failed ({exc.code}): {detail[:400]}"
-        ) from exc
+        raise AdapterError(f"GitHub API request failed ({exc.code}): {detail[:400]}") from exc
     except urllib.error.URLError as exc:
         raise AdapterError(f"GitHub API request failed: {exc.reason}") from exc
     return json.loads(raw) if raw else None
 
 
-def _paged_reviews(
-    repository: str, pr_number: int, *, token: str
-) -> list[Mapping[str, Any]]:
+def _paged_reviews(repository: str, pr_number: int, *, token: str) -> list[Mapping[str, Any]]:
     reviews: list[Mapping[str, Any]] = []
     page = 1
     while True:
@@ -199,9 +191,7 @@ def _paged_reviews(
         page += 1
 
 
-def _require_successful_coderabbit_status(
-    repository: str, head_sha: str, *, token: str
-) -> None:
+def _require_successful_coderabbit_status(repository: str, head_sha: str, *, token: str) -> None:
     payload = _request_json(
         "GET",
         f"repos/{repository}/commits/{head_sha}/status",
@@ -221,9 +211,7 @@ def _require_successful_coderabbit_status(
     coderabbit_statuses = [
         item
         for item in statuses
-        if isinstance(item, Mapping)
-        and str(item.get("context") or "").strip().lower()
-        == CODERABBIT_STATUS_CONTEXT
+        if isinstance(item, Mapping) and str(item.get("context") or "").strip().lower() == CODERABBIT_STATUS_CONTEXT
     ]
     if not coderabbit_statuses:
         raise AdapterError("No governed CodeRabbit status exists for the exact PR head.")
@@ -284,9 +272,7 @@ def attest(repository: str, pr_number: int, *, token: str) -> QualifiedReview:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(
-        description="Attest exact-pair CodeRabbit hostile-review evidence."
-    )
+    parser = argparse.ArgumentParser(description="Attest exact-pair CodeRabbit hostile-review evidence.")
     parser.add_argument("--repository", required=True)
     parser.add_argument("--pr", type=int, required=True)
     parser.add_argument("--attest", action="store_true")
