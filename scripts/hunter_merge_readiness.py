@@ -458,7 +458,7 @@ def _log_governance_preflight_output(stdout: str | None, stderr: str | None) -> 
         if detail:
             # Redact sensitive authentication and token values before logging
             redacted = re.sub(r"(?i)Authorization:\s*Bearer\s+\S+", "Authorization: Bearer [REDACTED]", detail)
-            redacted = re.sub(r"(?i)Authorization:\s*\S+", "Authorization: [REDACTED]", redacted)
+            redacted = re.sub(r"(?i)Authorization:\s*\S+(?:\s*\[REDACTED\])?", "Authorization: [REDACTED]", redacted)
             redacted = re.sub(r"(?i)Bearer\s+\S+", "Bearer [REDACTED]", redacted)
             redacted = re.sub(r"(?i)(?:gh[psour]_|github_pat_)[a-zA-Z0-9_]+", "[REDACTED_TOKEN]", redacted)
             print(f"Trusted governance preflight {name}:\n{redacted}")

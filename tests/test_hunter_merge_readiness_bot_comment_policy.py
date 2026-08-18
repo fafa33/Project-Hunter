@@ -262,31 +262,124 @@ def test_trusted_preflight_failure_logs_diagnostics_but_returns_status_safe_erro
     assert "[REDACTED" in logs or "REDACTED" in logs
 
 
+def _assert_credential_redacted(logs: str, secret: str) -> None:
+    """The strengthened redaction contract for a raw credential value.
+
+    The raw token, its prefix, and representative suffix fragments must all be
+    absent, and exactly one canonical redaction marker must stand in for the
+    credential value.
+    """
+    prefix = secret.split("_", 1)[0] + "_"
+    assert secret not in logs
+    assert prefix not in logs
+    assert secret[:-10] not in logs
+    assert secret[-8:] not in logs
+    assert logs.count("[REDACTED_TOKEN]") == 1
+
+
+def _assert_authorization_header_canonical(logs: str) -> None:
+    """The exact canonical output line for ``Authorization: Bearer <secret>``.
+
+    Exact equality binds the contract: a duplicated marker, a surviving
+    ``Bearer`` literal, or any credential residue all break this assertion.
+    """
+    assert logs == "Trusted governance preflight stdout:\nAuthorization: [REDACTED]\n"
+    assert "Bearer" not in logs
+    assert logs.count("[REDACTED]") == 1
+
+
 @pytest.mark.parametrize("prefix", ["ghp_", "ghs_", "gho_", "ghu_", "ghr_", "github_pat_"])
 def test_governance_preflight_logs_redact_every_supported_credential_prefix(prefix, capsys):
     """Every supported GitHub credential prefix must be redacted before the
-    diagnostics cross the logging boundary: the raw credential and any prefix
-    fragment of it cannot survive in the printed logs."""
+    diagnostics cross the logging boundary: the raw credential, its prefix,
+    and representative secret suffix fragments cannot survive, and the
+    canonical marker appears exactly once."""
     secret = f"{prefix}{'a' * 40}"
     core._log_governance_preflight_output(f"API diagnostic {secret} inline", None)
     logs = capsys.readouterr().out
-    assert secret not in logs
-    assert secret[:-10] not in logs
-    assert "[REDACTED_TOKEN]" in logs
+    _assert_credential_redacted(logs, secret)
+    assert "API diagnostic" in logs
+    assert "inline" in logs
 
 
-def test_governance_preflight_logs_redact_raw_credential_with_authorization_header(capsys):
-    """Authorization/Bearer redaction must survive unchanged while a raw
-    credential elsewhere in the same diagnostics is also redacted."""
-    secret = "github_pat_AABBCCDDEEFF001122334455"
-    core._log_governance_preflight_output("Authorization: Bearer sensitive-header-value", None)
-    core._log_governance_preflight_output(f"Bearer sensitive-header-value; token={secret}", None)
+def test_governance_preflight_logs_redact_authorization_header_to_exact_canonical_shape(capsys):
+    """``Authorization: Bearer <secret>`` collapses to exactly one canonical
+    marker: ``Authorization: [REDACTED]`` -- no duplicated markers, no
+    surviving Bearer literal, no credential residue."""
+    secret = "ghp_1234567890ABCDEFabcdef"
+    core._log_governance_preflight_output(f"Authorization: Bearer {secret}", None)
+    _assert_authorization_header_canonical(capsys.readouterr().out)
+
+    core._log_governance_preflight_output(f"Authorization: Bearer {secret} extra", None)
     logs = capsys.readouterr().out
+    assert logs == "Trusted governance preflight stdout:\nAuthorization: [REDACTED] extra\n"
     assert secret not in logs
-    assert "sensitive-header-value" not in logs
-    assert "Authorization: [REDACTED]" in logs
-    assert "Bearer [REDACTED]" in logs
-    assert "[REDACTED_TOKEN]" in logs
+    assert logs.count("[REDACTED]") == 1
+
+    core._log_governance_preflight_output(f"Bearer {secret} extra", None)
+    logs = capsys.readouterr().out
+    assert logs == "Trusted governance preflight stdout:\nBearer [REDACTED] extra\n"
+    assert secret not in logs
+    assert logs.count("[REDACTED]") == 1
+
+
+def test_governance_preflight_redaction_contract_fails_when_sanitizer_stops_redacting(monkeypatch, capsys):
+    """Counterfactual: if the sanitizer stops redacting entirely, the
+    strengthened contract assertions must fail -- proving the test binds."""
+    secret = "ghp_1234567890ABCDEFabcdef"
+
+    monkeypatch.setattr(core.re, "sub", lambda pattern, repl, string: string)
+    core._log_governance_preflight_output(f"API diagnostic {secret} inline", None)
+    logs = capsys.readouterr().out
+    assert secret in logs
+    with pytest.raises(AssertionError):
+        _assert_credential_redacted(logs, secret)
+
+    core._log_governance_preflight_output(f"Authorization: Bearer {secret}", None)
+    logs = capsys.readouterr().out
+    assert "Bearer" in logs
+    with pytest.raises(AssertionError):
+        _assert_authorization_header_canonical(logs)
+
+
+def test_governance_preflight_redaction_contract_fails_on_partial_token_redaction(monkeypatch, capsys):
+    """Counterfactual: if the credential-token sub is dropped from the chain,
+    the raw token survives the logging boundary and the strengthened
+    assertions fail."""
+    secret = "ghp_1234567890ABCDEFabcdef"
+    real_sub = core.re.sub
+
+    def partial_sub(pattern: str, repl: str, string: str) -> str:
+        if "gh[psour]_" in pattern:
+            return string
+        return real_sub(pattern, repl, string)
+
+    monkeypatch.setattr(core.re, "sub", partial_sub)
+    core._log_governance_preflight_output(f"API diagnostic {secret} inline", None)
+    logs = capsys.readouterr().out
+    assert secret in logs
+    with pytest.raises(AssertionError):
+        _assert_credential_redacted(logs, secret)
+
+
+def test_governance_preflight_redaction_contract_fails_on_partial_authorization_redaction(monkeypatch, capsys):
+    """Counterfactual: if the Authorization collapse is dropped from the
+    chain, the duplicated-marker shape survives and the exact canonical
+    assertion fails."""
+    secret = "ghp_1234567890ABCDEFabcdef"
+    real_sub = core.re.sub
+
+    def partial_sub(pattern: str, repl: str, string: str) -> str:
+        if "Authorization" in pattern:
+            return string
+        return real_sub(pattern, repl, string)
+
+    monkeypatch.setattr(core.re, "sub", partial_sub)
+    core._log_governance_preflight_output(f"Authorization: Bearer {secret}", None)
+    logs = capsys.readouterr().out
+    assert "Bearer" in logs
+    with pytest.raises(AssertionError):
+        _assert_authorization_header_canonical(logs)
 
 
 def test_trusted_preflight_timeout_is_bounded_and_status_safe(monkeypatch, tmp_path: Path, capsys):
