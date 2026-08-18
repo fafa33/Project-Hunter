@@ -10,7 +10,9 @@ the canonical feedback state.
 
 from __future__ import annotations
 
+import re
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -323,15 +325,39 @@ def test_governance_preflight_logs_redact_authorization_header_to_exact_canonica
     assert logs.count("[REDACTED]") == 1
 
 
+def _sabotaged_re(should_sabotage: Callable[[str], bool]) -> object:
+    """A local stand-in for the ``re`` attribute on the module under test.
+
+    Every attribute except ``sub`` delegates to the real stdlib ``re``;
+    ``sub`` returns the input unchanged for patterns the predicate selects.
+    The counterfactual seam stays confined to ``hunter_merge_readiness``
+    instead of mutating the shared stdlib ``re.sub`` process-wide.
+    """
+    real_sub = re.sub
+
+    class _LocalRe:
+        def __getattr__(self, name: str) -> object:
+            return getattr(re, name)
+
+        def sub(self, pattern: str, repl: str, string: str, count: int = 0, flags: int = 0) -> str:
+            if should_sabotage(pattern):
+                return string
+            return real_sub(pattern, repl, string, count=count, flags=flags)
+
+    return _LocalRe()
+
+
 def test_governance_preflight_redaction_contract_fails_when_sanitizer_stops_redacting(monkeypatch, capsys):
     """Counterfactual: if the sanitizer stops redacting entirely, the
     strengthened contract assertions must fail -- proving the test binds."""
     secret = "ghp_1234567890ABCDEFabcdef"
+    real_stdlib_sub = re.sub
 
-    monkeypatch.setattr(core.re, "sub", lambda pattern, repl, string: string)
+    monkeypatch.setattr(core, "re", _sabotaged_re(lambda pattern: True))
     core._log_governance_preflight_output(f"API diagnostic {secret} inline", None)
     logs = capsys.readouterr().out
     assert secret in logs
+    assert re.sub is real_stdlib_sub
     with pytest.raises(AssertionError):
         _assert_credential_redacted(logs, secret)
 
@@ -347,14 +373,8 @@ def test_governance_preflight_redaction_contract_fails_on_partial_token_redactio
     the raw token survives the logging boundary and the strengthened
     assertions fail."""
     secret = "ghp_1234567890ABCDEFabcdef"
-    real_sub = core.re.sub
 
-    def partial_sub(pattern: str, repl: str, string: str) -> str:
-        if "gh[psour]_" in pattern:
-            return string
-        return real_sub(pattern, repl, string)
-
-    monkeypatch.setattr(core.re, "sub", partial_sub)
+    monkeypatch.setattr(core, "re", _sabotaged_re(lambda pattern: "gh[psour]_" in pattern))
     core._log_governance_preflight_output(f"API diagnostic {secret} inline", None)
     logs = capsys.readouterr().out
     assert secret in logs
@@ -367,14 +387,8 @@ def test_governance_preflight_redaction_contract_fails_on_partial_authorization_
     chain, the duplicated-marker shape survives and the exact canonical
     assertion fails."""
     secret = "ghp_1234567890ABCDEFabcdef"
-    real_sub = core.re.sub
 
-    def partial_sub(pattern: str, repl: str, string: str) -> str:
-        if "Authorization" in pattern:
-            return string
-        return real_sub(pattern, repl, string)
-
-    monkeypatch.setattr(core.re, "sub", partial_sub)
+    monkeypatch.setattr(core, "re", _sabotaged_re(lambda pattern: "Authorization" in pattern))
     core._log_governance_preflight_output(f"Authorization: Bearer {secret}", None)
     logs = capsys.readouterr().out
     assert "Bearer" in logs
