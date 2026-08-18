@@ -48,6 +48,14 @@ def _exact_pair(body: str) -> tuple[str, str] | None:
     return next(iter(unique))
 
 
+def _pr_exact_pair(pr: Mapping[str, Any]) -> tuple[str, str]:
+    head_sha = str((pr.get("head") or {}).get("sha") or "").strip().lower()
+    base_sha = str((pr.get("base") or {}).get("sha") or "").strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{40}", head_sha) or not re.fullmatch(r"[0-9a-f]{40}", base_sha):
+        raise AdapterError("PR exact head/base pair is unavailable.")
+    return head_sha, base_sha
+
+
 def select_qualified_coderabbit_review(
     reviews: Sequence[Mapping[str, Any]],
     *,
@@ -177,14 +185,12 @@ def _paged_reviews(repository: str, pr_number: int, *, token: str) -> list[Mappi
 
 
 def attest(repository: str, pr_number: int, *, token: str) -> QualifiedReview:
-    pr = _request_json("GET", f"repos/{repository}/pulls/{pr_number}", token=token)
+    pr_path = f"repos/{repository}/pulls/{pr_number}"
+    pr = _request_json("GET", pr_path, token=token)
     if not isinstance(pr, Mapping):
         raise AdapterError("GitHub returned an invalid PR payload.")
     pr_author = str((pr.get("user") or {}).get("login") or "").strip()
-    head_sha = str((pr.get("head") or {}).get("sha") or "").strip().lower()
-    base_sha = str((pr.get("base") or {}).get("sha") or "").strip().lower()
-    if not re.fullmatch(r"[0-9a-f]{40}", head_sha) or not re.fullmatch(r"[0-9a-f]{40}", base_sha):
-        raise AdapterError("PR exact head/base pair is unavailable.")
+    head_sha, base_sha = _pr_exact_pair(pr)
 
     review = select_qualified_coderabbit_review(
         _paged_reviews(repository, pr_number, token=token),
@@ -192,6 +198,14 @@ def attest(repository: str, pr_number: int, *, token: str) -> QualifiedReview:
         head_sha=head_sha,
         base_sha=base_sha,
     )
+
+    current_pr = _request_json("GET", pr_path, token=token)
+    if not isinstance(current_pr, Mapping):
+        raise AdapterError("GitHub returned an invalid refreshed PR payload.")
+    current_head, current_base = _pr_exact_pair(current_pr)
+    if current_head != head_sha or current_base != base_sha:
+        raise AdapterError("PR exact head/base pair changed during attestation.")
+
     _request_json(
         "POST",
         f"repos/{repository}/pulls/{pr_number}/reviews",
