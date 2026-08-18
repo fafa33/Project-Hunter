@@ -192,7 +192,7 @@ def attest(repository: str, pr_number: int, *, token: str) -> QualifiedReview:
     pr_author = str((pr.get("user") or {}).get("login") or "").strip()
     head_sha, base_sha = _pr_exact_pair(pr)
 
-    review = select_qualified_coderabbit_review(
+    select_qualified_coderabbit_review(
         _paged_reviews(repository, pr_number, token=token),
         pr_author=pr_author,
         head_sha=head_sha,
@@ -204,6 +204,20 @@ def attest(repository: str, pr_number: int, *, token: str) -> QualifiedReview:
         raise AdapterError("GitHub returned an invalid refreshed PR payload.")
     current_head, current_base = _pr_exact_pair(current_pr)
     if current_head != head_sha or current_base != base_sha:
+        raise AdapterError("PR exact head/base pair changed during attestation.")
+
+    review = select_qualified_coderabbit_review(
+        _paged_reviews(repository, pr_number, token=token),
+        pr_author=pr_author,
+        head_sha=head_sha,
+        base_sha=base_sha,
+    )
+
+    final_pr = _request_json("GET", pr_path, token=token)
+    if not isinstance(final_pr, Mapping):
+        raise AdapterError("GitHub returned an invalid final PR payload.")
+    final_head, final_base = _pr_exact_pair(final_pr)
+    if final_head != head_sha or final_base != base_sha:
         raise AdapterError("PR exact head/base pair changed during attestation.")
 
     _request_json(
