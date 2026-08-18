@@ -21,6 +21,7 @@ from hunter.evidence_intelligence.pre_model import (
     EvidencePromptSpecification,
     PreModelInvariantError,
     build_evidence_pre_model,
+    resolve_pre_model_source_handling,
 )
 from hunter.evidence_intelligence.pre_model_persistence import (
     EvidencePreModelPersistenceRepository,
@@ -585,6 +586,33 @@ def test_handling_policy_not_bound_to_fact_subject_blocks_persistence(tmp_path) 
     persistence = EvidencePreModelPersistenceRepository(repository)
     with pytest.raises(PreModelPersistenceLineageError, match="cannot be resolved"):
         _persist_bundle(bundle, authority=mismatched, repository=persistence)
+
+
+def test_authority_fact_scope_not_bound_to_bundle_document_blocks_persistence(tmp_path) -> None:
+    cutoff = datetime(2026, 8, 14, 5, 0, tzinfo=UTC)
+    valid_authority = source_handling_authority(document_id="doc-1", cutoff=cutoff)
+    bundle = _build_with_source_handling_authority(authority=valid_authority)
+
+    other_document_authority = source_handling_authority(document_id="doc-2", cutoff=cutoff)
+    other_decision = resolve_pre_model_source_handling(other_document_authority).decision
+    build_decision = bundle[5].source_handling_decision
+    assert other_decision.get("processing_decision") == "ALLOW"
+    behavior_keys = (
+        "processing_decision",
+        "retention_decision",
+        "reconstruction_decision",
+        "access_decision",
+        "deletion_lifecycle_decision",
+    )
+    assert all(
+        other_decision.get(key) == build_decision.get(key) for key in behavior_keys
+    ), "substituted authority must derive the same behavioral decisions"
+    assert other_decision.get("fact_record_id") != build_decision.get("fact_record_id")
+
+    repository = EvidencePreModelPersistenceRepository(EvidenceIntelligenceRepository(tmp_path / "evidence.sqlite"))
+    _persist_bundle(bundle, authority=valid_authority, repository=repository)
+    with pytest.raises(PreModelPersistenceLineageError, match="fact scope"):
+        _persist_bundle(bundle, authority=other_document_authority, repository=repository)
 
 
 def test_conflicting_authorization_rules_block_processing() -> None:

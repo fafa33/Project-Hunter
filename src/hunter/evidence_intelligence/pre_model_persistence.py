@@ -120,6 +120,11 @@ class EvidencePreModelPersistenceRepository:
             raise PreModelPersistenceLineageError(
                 "persistence authority cutoff does not match the intent's historical cutoff"
             )
+        document_ids = {span.document_id for span in inventory}
+        if len(document_ids) != 1 or source_handling_authority.fact_scope not in document_ids:
+            raise PreModelPersistenceLineageError(
+                "persistence authority fact scope does not match the bundle's single document"
+            )
         try:
             resolved = resolve_pre_model_source_handling(source_handling_authority)
         except SourceHandlingBlockedError as error:
