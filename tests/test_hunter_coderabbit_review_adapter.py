@@ -137,3 +137,36 @@ def test_attest_rejects_if_pr_pair_changes_before_post(monkeypatch: pytest.Monke
         adapter.attest("fafa33/Project-Hunter", 280, token="test-token")
 
     assert posted_payloads == []
+
+
+def test_attest_rejects_adverse_review_in_refreshed_review_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    pr_payload = {"user": {"login": PR_AUTHOR}, "head": {"sha": HEAD}, "base": {"sha": BASE}}
+    pr_responses = iter([pr_payload, pr_payload, pr_payload])
+    review_responses = iter(
+        [
+            [_review()],
+            [_review(), _review(id=124, state="CHANGES_REQUESTED", submitted_at="2026-08-18T17:30:00Z")],
+        ]
+    )
+    posted_payloads: list[object] = []
+
+    def fake_request_json(method, path, *, token, payload=None):
+        del token
+        if method == "GET" and path == "repos/fafa33/Project-Hunter/pulls/280":
+            return next(pr_responses)
+        if method == "POST":
+            posted_payloads.append(payload)
+            return {}
+        raise AssertionError(f"unexpected request: {method} {path}")
+
+    def fake_paged_reviews(repository, pr_number, *, token):
+        del repository, pr_number, token
+        return next(review_responses)
+
+    monkeypatch.setattr(adapter, "_request_json", fake_request_json)
+    monkeypatch.setattr(adapter, "_paged_reviews", fake_paged_reviews)
+
+    with pytest.raises(adapter.AdapterError, match="adverse"):
+        adapter.attest("fafa33/Project-Hunter", 280, token="test-token")
+
+    assert posted_payloads == []
