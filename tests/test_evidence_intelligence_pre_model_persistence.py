@@ -16,6 +16,7 @@ from hunter.evidence_intelligence.pre_model import (
     EvidenceExtractionIntent,
     EvidencePromptSpecification,
     build_evidence_pre_model,
+    resolve_pre_model_source_handling,
 )
 from hunter.evidence_intelligence.pre_model_persistence import (
     REDACTED_SOURCE_EXCERPT,
@@ -432,6 +433,48 @@ def test_persistence_independently_rederives_and_rejects_authority_mismatch(tmp_
                 retention="DENY",
                 reconstruction="DENY",
             ),
+        )
+
+
+def test_persistence_rejects_substituted_cutoff_even_with_identical_decision(tmp_path) -> None:
+    cutoff = BUILD_AUTHORITY_CUTOFF
+    inventory = (_span("span-1", "durable evidence"),)
+    intent = replace(_intent(), historical_cutoff=cutoff)
+    policy = _policy(required=("span-1",))
+    specification = _spec()
+    capability = _cap()
+    authority = source_handling_authority(document_id="doc-1", cutoff=cutoff)
+    result = build_evidence_pre_model(
+        execution_owner_id="run-1",
+        intent=intent,
+        policy=policy,
+        specification=specification,
+        capability=capability,
+        canonical_inventory=inventory,
+        candidate_span_ids=("span-1",),
+        source_handling_authority=authority,
+    )
+
+    substituted = source_handling_authority(
+        document_id="doc-1",
+        cutoff=cutoff + timedelta(hours=2),
+    )
+    build_decision = resolve_pre_model_source_handling(authority).decision
+    substituted_decision = resolve_pre_model_source_handling(substituted).decision
+    assert json.dumps(build_decision, sort_keys=True) == json.dumps(substituted_decision, sort_keys=True)
+
+    repository = EvidenceIntelligenceRepository(tmp_path / "evidence.sqlite")
+    persistence = EvidencePreModelPersistenceRepository(repository)
+    with pytest.raises(PreModelPersistenceLineageError, match="historical cutoff"):
+        persistence.save(
+            intent=intent,
+            policy=policy,
+            specification=specification,
+            capability=capability,
+            canonical_inventory=inventory,
+            build_result=result,
+            recorded_at=RECORDED_AT,
+            source_handling_authority=substituted,
         )
 
 

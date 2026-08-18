@@ -116,6 +116,10 @@ class EvidencePreModelPersistenceRepository:
 
         if source_handling_authority is None:
             raise PreModelPersistenceLineageError("source handling authority is required at persistence")
+        if intent.historical_cutoff is not None and source_handling_authority.cutoff != intent.historical_cutoff:
+            raise PreModelPersistenceLineageError(
+                "persistence authority cutoff does not match the intent's historical cutoff"
+            )
         try:
             resolved = resolve_pre_model_source_handling(source_handling_authority)
         except SourceHandlingBlockedError as error:

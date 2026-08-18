@@ -279,6 +279,8 @@ def _publication_rule_id(record: Mapping[str, Any]) -> str:
 def resolve_pre_model_source_handling(
     authority: EvidencePreModelSourceHandlingAuthority,
 ) -> ResolvedPreModelSourceHandling:
+    if authority.policy_scope != f"policy:{authority.fact_scope}:v1":
+        raise SourceHandlingBlockedError("handling policy is not bound to the fact's governed document scope")
     fact_record = resolve_canonical_head(
         authority.store,
         family="FACT",

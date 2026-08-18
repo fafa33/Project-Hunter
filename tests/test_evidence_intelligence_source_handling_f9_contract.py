@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import inspect
 import json
+import sqlite3
 from dataclasses import fields
 from datetime import UTC, datetime
 from pathlib import Path
 
+import evidence_pre_model_source_handling_fixture as fixture
 import pytest
 from evidence_pre_model_source_handling_fixture import source_handling_authority
 
@@ -25,6 +27,7 @@ from hunter.evidence_intelligence.pre_model_persistence import (
     PreModelPersistenceLineageError,
 )
 from hunter.evidence_intelligence.repository import EvidenceIntelligenceRepository
+from hunter.evidence_intelligence.source_handling import resolve_canonical_head
 
 FIXTURE = Path(__file__).parent / "fixtures" / "evidence_intelligence" / "pre_f9_build_record_v1.json"
 
@@ -138,53 +141,186 @@ def test_f9_removes_caller_exact_source_retention_authority() -> None:
 
 
 def test_missing_source_handling_authority_blocks_before_prompt_creation() -> None:
-    with pytest.raises(PreModelInvariantError, match="SOURCE_HANDLING"):
+    with pytest.raises(PreModelInvariantError, match="SOURCE_HANDLING_AUTHORITY_REQUIRED"):
         _build_without_source_handling_authority()
+
+
+ALL_SURFACE_CASES = (
+    (
+        "intent.objective",
+        _intent(objective="credential=secret-objective"),
+        _spec(),
+        _span(),
+    ),
+    (
+        "trusted_system_constraints",
+        _intent(),
+        _spec(trusted_system_constraints="credential=secret-system"),
+        _span(),
+    ),
+    (
+        "task_instruction",
+        _intent(),
+        _spec(task_instruction="credential=secret-task"),
+        _span(),
+    ),
+    (
+        "output_contract",
+        _intent(),
+        _spec(output_contract="credential=secret-contract"),
+        _span(),
+    ),
+    (
+        "EvidenceSpan.excerpt",
+        _intent(),
+        _spec(),
+        _span(excerpt="credential=secret-excerpt"),
+    ),
+    (
+        "EvidenceSpan.section_title",
+        _intent(),
+        _spec(),
+        _span(section_title="credential=secret-section"),
+    ),
+    (
+        "EvidenceSpan.locator",
+        _intent(),
+        _spec(),
+        _span(locator="credential=secret-locator"),
+    ),
+)
+
+CREDENTIAL_SURFACE_CASES = (
+    (
+        "intent.objective",
+        _intent(objective="credential=secret-objective"),
+        _spec(),
+        _span(),
+        "credential=secret-objective",
+        True,
+    ),
+    (
+        "trusted_system_constraints",
+        _intent(),
+        _spec(trusted_system_constraints="credential=secret-system"),
+        _span(),
+        "credential=secret-system",
+        True,
+    ),
+    (
+        "task_instruction",
+        _intent(),
+        _spec(task_instruction="credential=secret-task"),
+        _span(),
+        "credential=secret-task",
+        True,
+    ),
+    (
+        "output_contract",
+        _intent(),
+        _spec(output_contract="credential=secret-contract"),
+        _span(),
+        "credential=secret-contract",
+        True,
+    ),
+    (
+        "EvidenceSpan.excerpt",
+        _intent(),
+        _spec(),
+        _span(excerpt="credential=secret-excerpt"),
+        "credential=secret-excerpt",
+        True,
+    ),
+    (
+        "EvidenceSpan.section_title",
+        _intent(),
+        _spec(),
+        _span(section_title="credential=secret-section"),
+        "credential=secret-section",
+        False,
+    ),
+    (
+        "EvidenceSpan.locator",
+        _intent(),
+        _spec(),
+        _span(locator="credential=secret-locator"),
+        "credential=secret-locator",
+        False,
+    ),
+)
+
+POSITIVE_SURFACE_CASES = (
+    (
+        "intent.objective",
+        _intent(objective="surface=objective-value"),
+        _spec(),
+        _span(),
+        "surface=objective-value",
+        True,
+    ),
+    (
+        "trusted_system_constraints",
+        _intent(),
+        _spec(trusted_system_constraints="surface=system-value"),
+        _span(),
+        "surface=system-value",
+        True,
+    ),
+    (
+        "task_instruction",
+        _intent(),
+        _spec(task_instruction="surface=task-value"),
+        _span(),
+        "surface=task-value",
+        True,
+    ),
+    (
+        "output_contract",
+        _intent(),
+        _spec(output_contract="surface=contract-value"),
+        _span(),
+        "surface=contract-value",
+        True,
+    ),
+    (
+        "EvidenceSpan.excerpt",
+        _intent(),
+        _spec(),
+        _span(excerpt="surface=excerpt-value"),
+        "surface=excerpt-value",
+        True,
+    ),
+    (
+        "EvidenceSpan.section_title",
+        _intent(),
+        _spec(),
+        _span(section_title="surface=section-value"),
+        "surface=section-value",
+        False,
+    ),
+    (
+        "EvidenceSpan.locator",
+        _intent(),
+        _spec(),
+        _span(locator="surface=locator-value"),
+        "surface=locator-value",
+        False,
+    ),
+)
 
 
 @pytest.mark.parametrize(
     ("surface", "intent", "specification", "span"),
-    (
-        (
-            "intent.objective",
-            _intent(objective="credential=secret-objective"),
-            _spec(),
-            _span(),
-        ),
-        (
-            "trusted_system_constraints",
-            _intent(),
-            _spec(trusted_system_constraints="credential=secret-system"),
-            _span(),
-        ),
-        (
-            "task_instruction",
-            _intent(),
-            _spec(task_instruction="credential=secret-task"),
-            _span(),
-        ),
-        (
-            "output_contract",
-            _intent(),
-            _spec(output_contract='{"credential":"secret-contract"}'),
-            _span(),
-        ),
-        (
-            "EvidenceSpan.excerpt",
-            _intent(),
-            _spec(),
-            _span(excerpt="credential=secret-excerpt"),
-        ),
-    ),
+    ALL_SURFACE_CASES,
+    ids=[case[0] for case in ALL_SURFACE_CASES],
 )
-def test_every_model_facing_byte_surface_is_blocked_without_authority(
+def test_every_model_facing_byte_surface_requires_authority_before_rendering(
     surface: str,
     intent: EvidenceExtractionIntent,
     specification: EvidencePromptSpecification,
     span: EvidenceSpan,
 ) -> None:
-    del surface
-    with pytest.raises(PreModelInvariantError, match="SOURCE_HANDLING"):
+    with pytest.raises(PreModelInvariantError, match="SOURCE_HANDLING_AUTHORITY_REQUIRED"):
         _build_without_source_handling_authority(
             intent=intent,
             specification=specification,
@@ -192,13 +328,72 @@ def test_every_model_facing_byte_surface_is_blocked_without_authority(
         )
 
 
-def test_source_metadata_surfaces_are_not_treated_as_permission_by_default() -> None:
-    span = _span(
-        section_title="credential=secret-section",
-        locator="credential=secret-locator",
+@pytest.mark.parametrize(
+    ("surface", "intent", "specification", "span", "marker", "rendered"),
+    POSITIVE_SURFACE_CASES,
+    ids=[case[0] for case in POSITIVE_SURFACE_CASES],
+)
+def test_authority_resolved_surface_bytes_reach_prompt_and_durable_payload(
+    tmp_path,
+    surface: str,
+    intent: EvidenceExtractionIntent,
+    specification: EvidencePromptSpecification,
+    span: EvidenceSpan,
+    marker: str,
+    rendered: bool,
+) -> None:
+    authority = source_handling_authority(
+        document_id="doc-1",
+        cutoff=datetime(2026, 8, 14, 5, 0, tzinfo=UTC),
     )
-    with pytest.raises(PreModelInvariantError, match="SOURCE_HANDLING"):
-        _build_without_source_handling_authority(span=span)
+    bundle = _build_with_source_handling_authority(
+        authority=authority,
+        intent=intent,
+        specification=specification,
+        inventory=(span,),
+    )
+    if rendered:
+        artifact = bundle[-1].prompt_artifact
+        assert artifact is not None and marker in artifact.content
+    evidence_repository = EvidenceIntelligenceRepository(tmp_path / "evidence.sqlite")
+    persistence = EvidencePreModelPersistenceRepository(evidence_repository)
+    saved = _persist_bundle(bundle, authority=authority, repository=persistence)
+    payload_json = _persisted_payload_json(evidence_repository, saved.build_record_id)
+    assert marker in payload_json
+
+
+@pytest.mark.parametrize(
+    ("surface", "intent", "specification", "span", "marker", "rendered"),
+    CREDENTIAL_SURFACE_CASES,
+    ids=[case[0] for case in CREDENTIAL_SURFACE_CASES],
+)
+def test_credential_bearing_surface_bytes_are_structurally_excluded_from_durability(
+    tmp_path,
+    surface: str,
+    intent: EvidenceExtractionIntent,
+    specification: EvidencePromptSpecification,
+    span: EvidenceSpan,
+    marker: str,
+    rendered: bool,
+) -> None:
+    authority = source_handling_authority(
+        document_id="doc-1",
+        cutoff=datetime(2026, 8, 14, 5, 0, tzinfo=UTC),
+        secret_presence=("CREDENTIAL_PRESENT",),
+    )
+    bundle = _build_with_source_handling_authority(
+        authority=authority,
+        intent=intent,
+        specification=specification,
+        inventory=(span,),
+    )
+    if rendered:
+        artifact = bundle[-1].prompt_artifact
+        assert artifact is not None and marker in artifact.content
+    evidence_repository = EvidenceIntelligenceRepository(tmp_path / "evidence.sqlite")
+    persistence = EvidencePreModelPersistenceRepository(evidence_repository)
+    with pytest.raises(PreModelPersistenceLineageError, match="durable payload rejected"):
+        _persist_bundle(bundle, authority=authority, repository=persistence)
 
 
 def test_schema_v1_build_record_fixture_preserves_original_identity() -> None:
@@ -251,30 +446,34 @@ def test_f9_integration_contract_has_no_permissive_retention_default() -> None:
 def _build_with_source_handling_authority(
     *,
     authority: EvidencePreModelSourceHandlingAuthority,
+    intent: EvidenceExtractionIntent | None = None,
+    specification: EvidencePromptSpecification | None = None,
     inventory: tuple[EvidenceSpan, ...] = (_span(),),
 ):
     span_ids = tuple(span.span_id for span in inventory)
+    actual_intent = intent or _intent()
+    actual_specification = specification or _spec()
     return (
-        _intent(),
+        actual_intent,
         EvidenceContextSelectionPolicy(
             policy_id="policy-1",
             version="1",
             required_span_ids=(inventory[0].span_id,),
             optional_span_ids=tuple(span.span_id for span in inventory[1:]),
         ),
-        _spec(),
+        actual_specification,
         _capability(),
         inventory,
         build_evidence_pre_model(
             execution_owner_id="run-1",
-            intent=_intent(),
+            intent=actual_intent,
             policy=EvidenceContextSelectionPolicy(
                 policy_id="policy-1",
                 version="1",
                 required_span_ids=(inventory[0].span_id,),
                 optional_span_ids=tuple(span.span_id for span in inventory[1:]),
             ),
-            specification=_spec(),
+            specification=actual_specification,
             capability=_capability(),
             canonical_inventory=inventory,
             candidate_span_ids=span_ids,
@@ -283,9 +482,9 @@ def _build_with_source_handling_authority(
     )
 
 
-def _persist_bundle(bundle, authority: EvidencePreModelSourceHandlingAuthority, repository) -> None:
+def _persist_bundle(bundle, authority: EvidencePreModelSourceHandlingAuthority, repository):
     intent, policy, specification, capability, inventory, build_result = bundle
-    repository.save(
+    return repository.save(
         intent=intent,
         policy=policy,
         specification=specification,
@@ -295,6 +494,97 @@ def _persist_bundle(bundle, authority: EvidencePreModelSourceHandlingAuthority, 
         recorded_at=datetime(2026, 8, 14, 6, 0, tzinfo=UTC),
         source_handling_authority=authority,
     )
+
+
+def _persisted_payload_json(repository: EvidenceIntelligenceRepository, build_record_id: str) -> str:
+    with sqlite3.connect(repository.path) as connection:
+        row = connection.execute(
+            "SELECT payload_json FROM evidence_pre_model_build_bundles WHERE build_record_id = ?",
+            (build_record_id,),
+        ).fetchone()
+    assert row is not None
+    return str(row[0])
+
+
+def _store_with_permissive_policy_for_other_document(*, cutoff):
+    store = source_handling_authority(document_id="doc-1", cutoff=cutoff).store
+    registry_id = "registry:doc-2:v1"
+    fixture._publish(
+        store,
+        family="FIELD_CATEGORY_REGISTRY",
+        scope="registry:doc-2:v1",
+        record_id=registry_id,
+        payload={
+            "scope": "registry:doc-2:v1",
+            "field_category_registry_id": registry_id,
+            "field_map": {"pre_model_bundle": ["AUDIT_FIELD"]},
+            "safe_control_proofs": {},
+            **fixture._times(cutoff),
+        },
+        cutoff=cutoff,
+    )
+    fixture._publish(
+        store,
+        family="POLICY",
+        scope="policy:doc-2:v1",
+        record_id="policy:doc-2:v1",
+        payload={
+            "scope": "policy:doc-2:v1",
+            "field_category_registry_id": registry_id,
+            "policy_body": {
+                "processing_decision": "ALLOW",
+                "retention_decision": "ALLOW",
+                "reconstruction_decision": "ALLOW",
+                "access_decision": "ALLOW",
+                "deletion_lifecycle_decision": "ALLOW",
+                "durable_dispositions": {
+                    "AUDIT_FIELD": {
+                        "PERSIST": "ALLOW",
+                        "READ_ACCESS": "ALLOW",
+                        "RECONSTRUCT": "ALLOW",
+                        "DELETE_OR_EXPIRE": "ALLOW",
+                    }
+                },
+            },
+            **fixture._times(cutoff),
+        },
+        cutoff=cutoff,
+    )
+    return store
+
+
+def test_handling_policy_not_bound_to_fact_subject_blocks_build() -> None:
+    cutoff = datetime(2026, 8, 14, 5, 0, tzinfo=UTC)
+    store = _store_with_permissive_policy_for_other_document(cutoff=cutoff)
+    authority = EvidencePreModelSourceHandlingAuthority(
+        store=store,
+        fact_scope="doc-1",
+        policy_scope="policy:doc-2:v1",
+        cutoff=cutoff,
+    )
+    with pytest.raises(PreModelInvariantError, match="not bound to the fact"):
+        _build_with_source_handling_authority(authority=authority)
+
+
+def test_handling_policy_not_bound_to_fact_subject_blocks_persistence(tmp_path) -> None:
+    cutoff = datetime(2026, 8, 14, 5, 0, tzinfo=UTC)
+    valid_authority = source_handling_authority(document_id="doc-1", cutoff=cutoff)
+    bundle = _build_with_source_handling_authority(authority=valid_authority)
+
+    store = _store_with_permissive_policy_for_other_document(cutoff=cutoff)
+    policy_head = resolve_canonical_head(store, family="POLICY", scope="policy:doc-2:v1", cutoff=cutoff)
+    assert policy_head.get("id") == "policy:doc-2:v1"
+    mismatched = EvidencePreModelSourceHandlingAuthority(
+        store=store,
+        fact_scope="doc-1",
+        policy_scope="policy:doc-2:v1",
+        cutoff=cutoff,
+    )
+
+    repository = EvidenceIntelligenceRepository(tmp_path / "evidence.sqlite")
+    persistence = EvidencePreModelPersistenceRepository(repository)
+    with pytest.raises(PreModelPersistenceLineageError, match="cannot be resolved"):
+        _persist_bundle(bundle, authority=mismatched, repository=persistence)
 
 
 def test_conflicting_authorization_rules_block_processing() -> None:
