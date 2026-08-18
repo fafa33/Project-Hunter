@@ -7,12 +7,14 @@ from evidence_pre_model_source_handling_fixture import source_handling_authority
 
 from hunter.evidence_intelligence.models import EvidenceSpan
 from hunter.evidence_intelligence.pre_model import (
-    build_evidence_pre_model as _build_evidence_pre_model,
     EvidenceCapabilityConstraint,
     EvidenceContextSelectionPolicy,
     EvidenceExtractionIntent,
     EvidencePromptSpecification,
     PreModelInvariantError,
+)
+from hunter.evidence_intelligence.pre_model import (
+    build_evidence_pre_model as _build_evidence_pre_model,
 )
 
 

@@ -259,6 +259,14 @@ class EvidencePreModelBuildResult:
     source_handling_decision: Mapping[str, Any] | None = None
 
 
+@dataclass(frozen=True)
+class ResolvedPreModelSourceHandling:
+    decision: Mapping[str, Any]
+    fact_record: Mapping[str, Any]
+    registry_record: Mapping[str, Any]
+    authorization_rule: Mapping[str, Any]
+
+
 def _publication_rule_id(record: Mapping[str, Any]) -> str:
     authorization = record.get("publication_authorization")
     if not isinstance(authorization, PublicationAuthorization):
@@ -270,7 +278,7 @@ def _publication_rule_id(record: Mapping[str, Any]) -> str:
 
 def resolve_pre_model_source_handling(
     authority: EvidencePreModelSourceHandlingAuthority,
-) -> dict[str, Any]:
+) -> ResolvedPreModelSourceHandling:
     fact_record = resolve_canonical_head(
         authority.store,
         family="FACT",
@@ -319,10 +327,15 @@ def resolve_pre_model_source_handling(
     if resolved_rule.get("authorization_rule_id") != rule_id:
         raise SourceHandlingBlockedError("authorization rule is stale or non-applicable")
 
-    return derive_source_handling_decision(
+    return ResolvedPreModelSourceHandling(
+        decision=derive_source_handling_decision(
+            fact_record=fact_record,
+            policy_record=policy_record,
+            registry_record=registry_record,
+            authorization_rule=rule,
+        ),
         fact_record=fact_record,
-        policy_record=policy_record,
-        registry_record=registry_record,
+        registry_record=resolved_registry,
         authorization_rule=rule,
     )
 
@@ -433,9 +446,10 @@ def build_evidence_pre_model(
     if len(document_ids) != 1 or source_handling_authority.fact_scope not in document_ids:
         raise PreModelInvariantError("SOURCE_HANDLING_SCOPE_AMBIGUOUS")
     try:
-        source_handling_decision = resolve_pre_model_source_handling(source_handling_authority)
+        resolved = resolve_pre_model_source_handling(source_handling_authority)
     except SourceHandlingBlockedError as error:
         raise PreModelInvariantError(f"SOURCE_HANDLING:{error}") from error
+    source_handling_decision = resolved.decision
     if source_handling_decision.get("processing_decision") != "ALLOW":
         raise PreModelInvariantError("SOURCE_HANDLING:MODEL_PROCESSING_NOT_ALLOWED")
 

@@ -26,7 +26,10 @@ from hunter.evidence_intelligence.pre_model import (
     resolve_pre_model_source_handling,
 )
 from hunter.evidence_intelligence.repository import EvidenceIntelligenceRepository
-from hunter.evidence_intelligence.source_handling import SourceHandlingBlockedError
+from hunter.evidence_intelligence.source_handling import (
+    SourceHandlingBlockedError,
+    validate_durable_payload,
+)
 
 ReconstructionStatus = Literal["AVAILABLE", "UNAVAILABLE", "NOT_KNOWN_AT_CUTOFF"]
 
@@ -113,9 +116,10 @@ class EvidencePreModelPersistenceRepository:
         if source_handling_authority is None:
             raise PreModelPersistenceLineageError("source handling authority is required at persistence")
         try:
-            persistence_decision = resolve_pre_model_source_handling(source_handling_authority)
+            resolved = resolve_pre_model_source_handling(source_handling_authority)
         except SourceHandlingBlockedError as error:
             raise PreModelPersistenceLineageError(f"source handling authority cannot be resolved: {error}") from error
+        persistence_decision = resolved.decision
         build_decision = build_result.source_handling_decision
         if build_decision is None:
             raise PreModelPersistenceLineageError("build lacks source handling authority decision")
@@ -147,6 +151,21 @@ class EvidencePreModelPersistenceRepository:
             exact_source_bytes_retained=retain_exact_source_bytes,
         )
         payload = _bundle_payload(bundle)
+        fact = resolved.fact_record.get("fact")
+        secret_presence = (
+            {str(value) for value in (fact.get("secret_presence") or ())} if isinstance(fact, dict) else set()
+        )
+        try:
+            validate_durable_payload(
+                decision=persistence_decision,
+                registry=resolved.registry_record,
+                payload={"pre_model_bundle": payload},
+                secret_presence=secret_presence,
+            )
+        except SourceHandlingBlockedError as error:
+            raise PreModelPersistenceLineageError(
+                f"durable payload rejected by source handling authority: {error}"
+            ) from error
         payload_json = _canonical_json(payload)
         payload_hash = hashlib.sha256(payload_json.encode("utf-8")).hexdigest()
         build_record_id = bundle.build_record_id
@@ -516,7 +535,10 @@ def _validate_bundle_lineage(
             and artifact.compiler_version == specification.compiler_version,
             "prompt artifact does not belong to the supplied prompt specification",
         )
-        _require(build.prompt_artifact_id == artifact.artifact_id, "build record does not reference the supplied prompt artifact")
+        _require(
+            build.prompt_artifact_id == artifact.artifact_id,
+            "build record does not reference the supplied prompt artifact",
+        )
         _validate_prompt_artifact(artifact)
         rendered = _render_prompt(
             intent=intent,

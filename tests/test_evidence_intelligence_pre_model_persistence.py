@@ -591,9 +591,7 @@ def test_available_build_with_tampered_prompt_bytes_fails_closed(tmp_path) -> No
     _corrupt_payload(
         repository,
         saved.build_record_id,
-        lambda payload: payload["build_result"]["prompt_artifact"].__setitem__(
-            "content", "tampered prompt content"
-        ),
+        lambda payload: payload["build_result"]["prompt_artifact"].__setitem__("content", "tampered prompt content"),
     )
     with pytest.raises(PreModelPersistenceCorruption):
         persistence.strict_known_reconstruction(saved.build_record_id, RECORDED_AT)

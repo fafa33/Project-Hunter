@@ -7,35 +7,41 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from evidence_pre_model_source_handling_fixture import source_handling_authority
 
-from hunter.evidence_intelligence.models import EvidenceSpan
+from hunter.evidence_intelligence.models import EvidenceSpan, evidence_text_digest
 from hunter.evidence_intelligence.pre_model import (
     EvidenceCapabilityConstraint,
     EvidenceContextSelectionPolicy,
     EvidenceExtractionIntent,
     EvidencePreModelBuildRecord,
+    EvidencePreModelSourceHandlingAuthority,
     EvidencePromptSpecification,
     PreModelInvariantError,
     build_evidence_pre_model,
 )
 from hunter.evidence_intelligence.pre_model_persistence import (
     EvidencePreModelPersistenceRepository,
+    PreModelPersistenceLineageError,
 )
+from hunter.evidence_intelligence.repository import EvidenceIntelligenceRepository
 
 FIXTURE = Path(__file__).parent / "fixtures" / "evidence_intelligence" / "pre_f9_build_record_v1.json"
 
 
 def _span(
     *,
+    span_id: str = "span-1",
+    document_id: str = "doc-1",
     excerpt: str = "public evidence",
     section_title: str = "Public section",
     locator: str = "test:span-1",
 ) -> EvidenceSpan:
     now = datetime(2026, 8, 14, 3, 0, tzinfo=UTC)
     return EvidenceSpan(
-        span_id="span-1",
-        document_id="doc-1",
-        source_evidence_id="source-1",
+        span_id=span_id,
+        document_id=document_id,
+        source_evidence_id=f"source-{span_id}",
         normalized_content_hash="normalized-1",
         normalization_version="1",
         parser_id="test-parser",
@@ -43,9 +49,9 @@ def _span(
         offset_encoding="utf-8-bytes",
         start_offset=0,
         end_offset=len(excerpt.encode("utf-8")),
-        chunk_id="chunk-1",
+        chunk_id=f"chunk-{span_id}",
         chunk_version="1",
-        text_hash="hash-1",
+        text_hash=evidence_text_digest(excerpt),
         excerpt=excerpt,
         section_title=section_title,
         locator=locator,
@@ -240,3 +246,100 @@ def test_f9_integration_contract_has_no_permissive_retention_default() -> None:
     forbidden = {"retain_exact_prompt", "retain_exact_source_bytes"}
     assert forbidden.isdisjoint(build_signature.parameters)
     assert forbidden.isdisjoint(persistence_signature.parameters)
+
+
+def _build_with_source_handling_authority(
+    *,
+    authority: EvidencePreModelSourceHandlingAuthority,
+    inventory: tuple[EvidenceSpan, ...] = (_span(),),
+):
+    span_ids = tuple(span.span_id for span in inventory)
+    return (
+        _intent(),
+        EvidenceContextSelectionPolicy(
+            policy_id="policy-1",
+            version="1",
+            required_span_ids=(inventory[0].span_id,),
+            optional_span_ids=tuple(span.span_id for span in inventory[1:]),
+        ),
+        _spec(),
+        _capability(),
+        inventory,
+        build_evidence_pre_model(
+            execution_owner_id="run-1",
+            intent=_intent(),
+            policy=EvidenceContextSelectionPolicy(
+                policy_id="policy-1",
+                version="1",
+                required_span_ids=(inventory[0].span_id,),
+                optional_span_ids=tuple(span.span_id for span in inventory[1:]),
+            ),
+            specification=_spec(),
+            capability=_capability(),
+            canonical_inventory=inventory,
+            candidate_span_ids=span_ids,
+            source_handling_authority=authority,
+        ),
+    )
+
+
+def _persist_bundle(bundle, authority: EvidencePreModelSourceHandlingAuthority, repository) -> None:
+    intent, policy, specification, capability, inventory, build_result = bundle
+    repository.save(
+        intent=intent,
+        policy=policy,
+        specification=specification,
+        capability=capability,
+        canonical_inventory=inventory,
+        build_result=build_result,
+        recorded_at=datetime(2026, 8, 14, 6, 0, tzinfo=UTC),
+        source_handling_authority=authority,
+    )
+
+
+def test_conflicting_authorization_rules_block_processing() -> None:
+    authority = source_handling_authority(
+        document_id="doc-1",
+        cutoff=datetime(2026, 8, 14, 5, 0, tzinfo=UTC),
+        policy_authorization_rule_id="AUTHORIZATION_RULE_V2",
+    )
+    with pytest.raises(PreModelInvariantError, match="SOURCE_HANDLING"):
+        _build_with_source_handling_authority(authority=authority)
+
+
+def test_ambiguous_authority_scope_blocks_processing() -> None:
+    authority = source_handling_authority(
+        document_id="doc-1",
+        cutoff=datetime(2026, 8, 14, 5, 0, tzinfo=UTC),
+    )
+    inventory = (_span(span_id="span-1", document_id="doc-1"), _span(span_id="span-2", document_id="doc-2"))
+    with pytest.raises(PreModelInvariantError, match="SOURCE_HANDLING_SCOPE_AMBIGUOUS"):
+        _build_with_source_handling_authority(authority=authority, inventory=inventory)
+
+
+def test_credential_secret_fact_passes_processing_but_blocks_durable_persistence(tmp_path) -> None:
+    authority = source_handling_authority(
+        document_id="doc-1",
+        cutoff=datetime(2026, 8, 14, 5, 0, tzinfo=UTC),
+        secret_presence=("CREDENTIAL_PRESENT",),
+    )
+    bundle = _build_with_source_handling_authority(authority=authority)
+
+    repository = EvidencePreModelPersistenceRepository(EvidenceIntelligenceRepository(tmp_path / "evidence.sqlite"))
+    with pytest.raises(PreModelPersistenceLineageError, match="durable payload rejected"):
+        _persist_bundle(bundle, authority=authority, repository=repository)
+
+
+def test_safe_control_id_without_governed_construction_proof_blocks_durable_persistence(
+    tmp_path,
+) -> None:
+    authority = source_handling_authority(
+        document_id="doc-1",
+        cutoff=datetime(2026, 8, 14, 5, 0, tzinfo=UTC),
+        field_map={"pre_model_bundle": ["SAFE_CONTROL_ID"]},
+    )
+    bundle = _build_with_source_handling_authority(authority=authority)
+
+    repository = EvidencePreModelPersistenceRepository(EvidenceIntelligenceRepository(tmp_path / "evidence.sqlite"))
+    with pytest.raises(PreModelPersistenceLineageError, match="durable payload rejected"):
+        _persist_bundle(bundle, authority=authority, repository=repository)
