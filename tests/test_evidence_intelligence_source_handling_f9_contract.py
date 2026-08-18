@@ -454,28 +454,25 @@ def _build_with_source_handling_authority(
     span_ids = tuple(span.span_id for span in inventory)
     actual_intent = intent or _intent()
     actual_specification = specification or _spec()
+    policy = EvidenceContextSelectionPolicy(
+        policy_id="policy-1",
+        version="1",
+        required_span_ids=(inventory[0].span_id,),
+        optional_span_ids=tuple(span.span_id for span in inventory[1:]),
+    )
+    capability = _capability()
     return (
         actual_intent,
-        EvidenceContextSelectionPolicy(
-            policy_id="policy-1",
-            version="1",
-            required_span_ids=(inventory[0].span_id,),
-            optional_span_ids=tuple(span.span_id for span in inventory[1:]),
-        ),
+        policy,
         actual_specification,
-        _capability(),
+        capability,
         inventory,
         build_evidence_pre_model(
             execution_owner_id="run-1",
             intent=actual_intent,
-            policy=EvidenceContextSelectionPolicy(
-                policy_id="policy-1",
-                version="1",
-                required_span_ids=(inventory[0].span_id,),
-                optional_span_ids=tuple(span.span_id for span in inventory[1:]),
-            ),
+            policy=policy,
             specification=actual_specification,
-            capability=_capability(),
+            capability=capability,
             canonical_inventory=inventory,
             candidate_span_ids=span_ids,
             source_handling_authority=authority,
