@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import Any
 
 CODERABBIT_AUTHORS = {"coderabbitai", "coderabbitai[bot]"}
+CODERABBIT_STATUS_CONTEXT = "coderabbit"
 EXACT_PAIR_RE = re.compile(
     r"Reviewing files that changed from the base of the PR and between\s+"
     r"(?P<base>[0-9a-f]{40})\s+and\s+(?P<head>[0-9a-f]{40})\.?",
@@ -184,6 +185,37 @@ def _paged_reviews(repository: str, pr_number: int, *, token: str) -> list[Mappi
         page += 1
 
 
+def _require_successful_coderabbit_status(repository: str, head_sha: str, *, token: str) -> None:
+    payload = _request_json(
+        "GET",
+        f"repos/{repository}/commits/{head_sha}/status",
+        token=token,
+    )
+    if not isinstance(payload, Mapping):
+        raise AdapterError("GitHub returned an invalid commit-status payload.")
+
+    status_sha = str(payload.get("sha") or "").strip().lower()
+    if status_sha != head_sha.lower():
+        raise AdapterError("CodeRabbit status is not anchored to the exact PR head.")
+
+    statuses = payload.get("statuses")
+    if not isinstance(statuses, Sequence) or isinstance(statuses, (str, bytes)):
+        raise AdapterError("GitHub returned an invalid commit-status list.")
+
+    coderabbit_statuses = [
+        item
+        for item in statuses
+        if isinstance(item, Mapping)
+        and str(item.get("context") or "").strip().lower() == CODERABBIT_STATUS_CONTEXT
+    ]
+    if not coderabbit_statuses:
+        raise AdapterError("No governed CodeRabbit status exists for the exact PR head.")
+
+    state = str(coderabbit_statuses[0].get("state") or "").strip().lower()
+    if state != "success":
+        raise AdapterError("Exact-head CodeRabbit status is not successful.")
+
+
 def attest(repository: str, pr_number: int, *, token: str) -> QualifiedReview:
     pr_path = f"repos/{repository}/pulls/{pr_number}"
     pr = _request_json("GET", pr_path, token=token)
@@ -212,6 +244,7 @@ def attest(repository: str, pr_number: int, *, token: str) -> QualifiedReview:
         head_sha=head_sha,
         base_sha=base_sha,
     )
+    _require_successful_coderabbit_status(repository, head_sha, token=token)
 
     final_pr = _request_json("GET", pr_path, token=token)
     if not isinstance(final_pr, Mapping):
