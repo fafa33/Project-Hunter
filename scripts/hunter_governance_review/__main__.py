@@ -35,12 +35,16 @@ Exit codes:
     0  review completed and status published (or the gate is not required for
        a PR targeting a non-protected branch)
     2  could not resolve the PR, or a required environment value is missing
-    3  the status check could not be published
+    3  the status check could not be published (permanent failure)
+    4  the semantic outcome was produced but GitHub is unavailable and the
+       status check could not be published after bounded retries; the verdict
+       is reported as "published: unavailable", never as a semantic failure
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import os
 from collections.abc import Mapping
 
@@ -65,7 +69,7 @@ from hunter_governance_review.contracts import (
 )
 from hunter_governance_review.decision import Decision, decide
 from hunter_governance_review.deterministic import ValidationContext, run_deterministic_engine
-from hunter_governance_review.github_api import GhCliRunner, GitHubError, GitHubRunner
+from hunter_governance_review.github_api import GhCliRunner, GitHubError, GitHubRunner, GitHubUnavailable
 
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
@@ -153,6 +157,16 @@ def _write_summary(
         lines.append("")
         lines.append("### Deterministic findings")
         lines.extend(f"- {finding.render()}" for finding in deterministic.findings)
+        lines.extend(
+            [
+                "",
+                "### Deterministic finding metadata",
+                "",
+                "```json",
+                json.dumps(deterministic.to_dict(), sort_keys=True, indent=2),
+                "```",
+            ]
+        )
     if context is not None:
         lines.append("")
         lines.append("### Authoritative context coverage manifest")
@@ -173,9 +187,16 @@ def _write_summary(
 def _resolve_pair_freshness(
     gh: GitHubRunner, pr_number: int, pair: ReviewPair
 ) -> tuple[PullRequest | None, bool, str | None]:
-    """Re-resolve the PR and compare against ``pair``. Returns (current, fresh, error)."""
+    """Re-resolve the PR and compare against ``pair``. Returns (current, fresh, error).
+
+    Raises :class:`GitHubUnavailable` when GitHub infrastructure itself is
+    unavailable, so the caller can distinguish an acquisition outage from a
+    semantic verdict instead of misreading it as a failed review.
+    """
     try:
         current = gh.get_pull_request(pr_number)
+    except GitHubUnavailable:
+        raise
     except GitHubError as exc:
         return None, False, f"could not re-resolve PR #{pr_number} to verify the review pair: {exc}"
     if current.head_oid != pair.source_head_sha or current.base_oid != pair.target_base_sha:
@@ -206,6 +227,9 @@ def run_review(
 
     try:
         pr = gh.get_pull_request(args.pr)
+    except GitHubUnavailable as exc:
+        print(f"::error::could not resolve pull request #{args.pr}: GitHub unavailable: {exc}")
+        return 4
     except GitHubError as exc:
         print(f"::error::could not resolve pull request #{args.pr}: {exc}")
         return 2
@@ -234,6 +258,9 @@ def run_review(
     files: list[ChangedFile] = []
     try:
         files = gh.get_pull_files(pr.number)
+    except GitHubUnavailable as exc:
+        print(f"::error::could not retrieve changed files for PR #{pr.number}: GitHub unavailable: {exc}")
+        return 4
     except GitHubError as exc:
         evidence_error = f"missing required repository evidence: {exc}"
 
@@ -241,12 +268,6 @@ def run_review(
     context_error: str | None = None
     if evidence_error is None:
         try:
-            # head_sha/changed_paths let a PR that genuinely introduces a new
-            # canonical record (a new ADR/ADPR, or another referenced
-            # governed document) resolve it as a proposed record rather than
-            # deadlocking on "it can't exist yet because this is the PR that
-            # adds it" -- see context.py's module docstring for the full
-            # base-trusted-authority vs. head-proposed-evidence boundary.
             context_manifest = resolve_context(
                 gh,
                 base_sha=pair.target_base_sha,
@@ -254,6 +275,9 @@ def run_review(
                 head_sha=pair.source_head_sha,
                 changed_paths=frozenset(f.filename for f in files),
             )
+        except GitHubUnavailable as exc:
+            print(f"::error::GitHub unavailable while resolving authoritative governance context: {exc}")
+            return 4
         except ContextResolutionError as exc:
             context_error = f"authoritative governance context could not be resolved: {exc}"
         except GitHubError as exc:
@@ -265,16 +289,21 @@ def run_review(
         assert context_manifest is not None
         try:
             deterministic = run_deterministic_engine(
-                ValidationContext(pr=pr, files=files, missing_references=context_manifest.missing_references)
+                ValidationContext(
+                    pr=pr,
+                    files=files,
+                    missing_references=context_manifest.missing_references,
+                )
             )
         except Exception as exc:  # internal validator exception -> REVIEW_FAILED
             validator_error = f"internal validator exception: {exc!r}"
 
-    # Re-verify the review pair immediately before publishing: an approval
-    # must apply to the exact pair actually reviewed above -- if either SHA
-    # advanced while resolving evidence/context/deterministic findings,
-    # publish no approval regardless of what was found.
-    current, pair_fresh, pair_fresh_error = _resolve_pair_freshness(gh, pr.number, pair)
+    current, pair_fresh, pair_fresh_error = (None, True, None)
+    try:
+        current, pair_fresh, pair_fresh_error = _resolve_pair_freshness(gh, pr.number, pair)
+    except GitHubUnavailable as exc:
+        print(f"::error::GitHub unavailable while verifying the review pair for PR #{pr.number}: {exc}")
+        return 4
 
     if evidence_error is not None:
         decision = Decision(Outcome.REVIEW_FAILED, evidence_error)
@@ -283,16 +312,14 @@ def run_review(
     elif validator_error is not None:
         decision = Decision(Outcome.REVIEW_FAILED, validator_error)
     else:
-        decision = decide(deterministic=deterministic, pair_fresh=pair_fresh, pair_fresh_error=pair_fresh_error)
+        decision = decide(
+            deterministic=deterministic,
+            pair_fresh=pair_fresh,
+            pair_fresh_error=pair_fresh_error,
+        )
 
     target_sha = current.head_oid if current is not None else pair.source_head_sha
     state = outcome_to_check_state(decision.outcome)
-    # The stamped revision describes the state this run actually evaluated --
-    # `pair` plus the PR facts read alongside it -- never the state re-read
-    # afterwards. When the pull request advanced mid-review, the decision is
-    # already REVIEW_FAILED, and stamping the evaluated (now superseded)
-    # revision is what makes the consumer correctly disregard this verdict for
-    # the newer state instead of applying it.
     revision = governance_revision(
         GovernanceInputs(
             pull_request_number=pr.number,
@@ -307,12 +334,16 @@ def run_review(
         )
     )
     description = build_status_description(decision, pair, revision)
-    target_url = f"{env.get('GITHUB_SERVER_URL', 'https://github.com')}/{repository}/actions/runs/{run_id}"
+    target_url = f"{env.get('GITHUB_SERVER_URL', 'https://github.com')}/" f"{repository}/actions/runs/{run_id}"
 
     print(f"[Outcome] {decision.outcome.value}")
     print(f"[Reason] {decision.reason}")
     for finding in deterministic.findings:
         print(f"[Finding] {finding.render()}")
+    if deterministic.classification_errors:
+        print(
+            "[FindingMetadata] incomplete blocking classifications: " + ", ".join(deterministic.classification_errors)
+        )
     if context_manifest is not None:
         for entry in context_manifest.entries:
             print(
@@ -320,7 +351,7 @@ def run_review(
                 f"provenance={entry.provenance} sha256={entry.sha256[:12] or 'n/a'}"
             )
     print(f"[Revision] governance revision {revision} for PR #{pr.number}")
-    print(f"[StatusCheck] context={CHECK_CONTEXT!r} state={state.value} on {target_sha[:12]}")
+    print(f"[StatusCheck] context={CHECK_CONTEXT!r} state={state.value} " f"on {target_sha[:12]}")
 
     if not args.dry_run:
         try:
@@ -331,6 +362,20 @@ def run_review(
                 description=description,
                 target_url=target_url,
             )
+        except GitHubUnavailable as exc:
+            print(
+                f"::error::semantic outcome is {decision.outcome.value} but the {CHECK_CONTEXT} "
+                f"status check could not be published because GitHub is unavailable: {exc}"
+            )
+            _write_summary(
+                env,
+                decision=decision,
+                pair=pair,
+                deterministic=deterministic,
+                context=context_manifest,
+                published_state="unavailable",
+            )
+            return 4
         except GitHubError as exc:
             print(f"::error::could not publish the {CHECK_CONTEXT} status check: {exc}")
             return 3

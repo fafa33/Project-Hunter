@@ -13,7 +13,10 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+from subprocess import CompletedProcess
 
+import hunter_governance_review.github_api as github_api_module
+import pytest
 import yaml
 from hunter_governance_review.__main__ import _write_summary, run_review
 from hunter_governance_review.contracts import (
@@ -30,7 +33,7 @@ from hunter_governance_review.contracts import (
 )
 from hunter_governance_review.decision import Decision, decide
 from hunter_governance_review.deterministic import ValidationContext, run_deterministic_engine
-from hunter_governance_review.github_api import GitHubError
+from hunter_governance_review.github_api import GhCliRunner, GitHubError, GitHubUnavailable
 
 GOOD_BODY = """## Summary
 
@@ -204,6 +207,8 @@ class FakeGhRunner:
         fail_reresolve: bool = False,
         fail_files: bool = False,
         publish_fail: bool = False,
+        publish_unavailable: bool = False,
+        pr_unavailable: bool = False,
     ) -> None:
         self.repository = "fafa33/Project-Hunter"
         self.pr = pr or _pr()
@@ -222,10 +227,18 @@ class FakeGhRunner:
         self.fail_reresolve = fail_reresolve
         self.fail_files = fail_files
         self.publish_fail = publish_fail
+        self.publish_unavailable = publish_unavailable
+        self.pr_unavailable = pr_unavailable
         self.pr_views = 0
 
     def get_pull_request(self, number: int) -> PullRequest:
         self.pr_views += 1
+        if self.pr_unavailable:
+            raise GitHubUnavailable(
+                "gh pr view",
+                attempts=3,
+                last=GitHubError("HTTP 503: no server currently available to process the request"),
+            )
         if self.fail_pr:
             raise GitHubError("cannot resolve pull request")
         if self.pr_sequence is not None:
@@ -263,6 +276,12 @@ class FakeGhRunner:
         description: str,
         target_url: str,
     ) -> None:
+        if self.publish_unavailable:
+            raise GitHubUnavailable(
+                "gh api statuses",
+                attempts=3,
+                last=GitHubError("HTTP 503: no server currently available to process the request"),
+            )
         if self.publish_fail:
             raise GitHubError("cannot publish status")
         self.statuses.append(
@@ -321,6 +340,32 @@ def test_fail_criterion_is_not_blocking_for_draft_pr() -> None:
     body = GOOD_BODY.replace("PASS | src/hunter/mispricing/service.py", "FAIL | not implemented")
     result = _deterministic(body=body, pr=_pr(body=body, draft=True))
     assert not any(f.validator_id == "V-040" and f.severity is Severity.BLOCKING for f in result.findings)
+
+
+def test_pass_criterion_with_negative_evidence_blocks_merge_ready_pr() -> None:
+    body = GOOD_BODY.replace("PASS | src/hunter/mispricing/service.py", "PASS | tests failed")
+    result = _deterministic(body=body)
+    assert result.blocking
+    assert any(f.validator_id == "V-040" and f.severity is Severity.BLOCKING for f in result.findings)
+
+
+def test_pass_criterion_with_negative_evidence_is_not_blocking_for_draft_pr() -> None:
+    body = GOOD_BODY.replace("PASS | src/hunter/mispricing/service.py", "PASS | tests failed")
+    result = _deterministic(body=body, pr=_pr(body=body, draft=True))
+    assert not any(f.validator_id == "V-040" and f.severity is Severity.BLOCKING for f in result.findings)
+    assert any(f.validator_id == "V-040" for f in result.findings)
+
+
+def test_pass_evidence_guard_is_bound_to_shared_substantive_boundary(monkeypatch) -> None:
+    body = GOOD_BODY.replace("PASS | src/hunter/mispricing/service.py", "PASS | tests failed")
+
+    def noop(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr("hunter_governance_review.deterministic._require_substantive_evidence", noop)
+    result = _deterministic(body=body)
+
+    assert not any(f.validator_id == "V-040" for f in result.findings)
 
 
 def test_missing_readiness_declaration_blocks() -> None:
@@ -860,3 +905,135 @@ def test_pr_head_mutation_stale_auth() -> None:
     current, pair_fresh, error = _resolve_pair_freshness(gh, 7, pair)
     assert pair_fresh is False
     assert "stale source" in error
+
+
+# --- GitHub infrastructure unavailability ------------------------------------
+
+
+def test_run_review_publication_unavailable_returns_4_not_semantic() -> None:
+    """Exhausted publication outage is a distinct outcome, never CHANGES_REQUIRED."""
+    gh = FakeGhRunner(publish_unavailable=True)
+    code = run_review(args=_args(), env=_env(), gh=gh)
+    assert code == 4
+    assert gh.statuses == []
+
+
+def test_run_review_publication_unavailable_summary_preserves_approved(tmp_path: Path) -> None:
+    summary = tmp_path / "summary.md"
+    gh = FakeGhRunner(publish_unavailable=True)
+    code = run_review(args=_args(), env=_env(GITHUB_STEP_SUMMARY=str(summary)), gh=gh)
+    assert code == 4
+    text = summary.read_text(encoding="utf-8")
+    assert "**Outcome**: `APPROVED`" in text
+    assert "-> `unavailable`" in text
+    assert "Changes required" not in text
+
+
+def test_run_review_pr_acquisition_unavailable_returns_4() -> None:
+    gh = FakeGhRunner(pr_unavailable=True)
+    code = run_review(args=_args(), env=_env(), gh=gh)
+    assert code == 4
+
+
+def test_gh_cli_runner_retries_transient_503_then_succeeds(monkeypatch) -> None:
+    calls = []
+
+    def fake_run(args, **kwargs):
+        calls.append(args)
+        if len(calls) < 3:
+            return CompletedProcess(args, 1, stderr="HTTP 503\nNo server is currently available")
+        return CompletedProcess(args, 0, stdout="{}")
+
+    monkeypatch.setattr(github_api_module.subprocess, "run", fake_run)
+    monkeypatch.setattr(github_api_module, "_sleeper", lambda _: None)
+    runner = GhCliRunner("fafa33/Project-Hunter", token="t")
+    assert runner._run(["api", "repos/x"]) == "{}"
+    assert len(calls) == 3
+
+
+def test_gh_cli_runner_transient_503_exhaustion_raises_unavailable(monkeypatch) -> None:
+    calls = []
+
+    def fake_run(args, **kwargs):
+        calls.append(args)
+        return CompletedProcess(args, 1, stderr="HTTP 503\nNo server is currently available")
+
+    monkeypatch.setattr(github_api_module.subprocess, "run", fake_run)
+    monkeypatch.setattr(github_api_module, "_sleeper", lambda _: None)
+    runner = GhCliRunner("fafa33/Project-Hunter", token="t")
+    with pytest.raises(GitHubUnavailable) as raised:
+        runner._run(["api", "repos/x"])
+    assert raised.value.attempts == 3
+    assert len(calls) == 3
+
+
+def test_gh_cli_runner_node_resolution_404_exhaustion_raises_unavailable(monkeypatch) -> None:
+    def fake_run(args, **kwargs):
+        return CompletedProcess(
+            args,
+            1,
+            stderr="HTTP 404\nCould not resolve to a node with the global id of 'PR_kwDOTRDHr87_tH6X'",
+        )
+
+    monkeypatch.setattr(github_api_module.subprocess, "run", fake_run)
+    monkeypatch.setattr(github_api_module, "_sleeper", lambda _: None)
+    runner = GhCliRunner("fafa33/Project-Hunter", token="t")
+    with pytest.raises(GitHubUnavailable) as raised:
+        runner._run(["api", "repos/x/pulls/1/reviews"])
+    assert raised.value.attempts == 3
+
+
+def test_gh_cli_runner_plain_404_never_retried(monkeypatch) -> None:
+    calls = []
+
+    def fake_run(args, **kwargs):
+        calls.append(args)
+        return CompletedProcess(args, 1, stderr="HTTP 404: Not Found")
+
+    monkeypatch.setattr(github_api_module.subprocess, "run", fake_run)
+    runner = GhCliRunner("fafa33/Project-Hunter", token="t")
+    with pytest.raises(GitHubError):
+        runner._run(["api", "repos/x"])
+    assert len(calls) == 1
+
+
+def test_gh_cli_runner_node_resolution_404_never_reads_as_missing_file(monkeypatch) -> None:
+    """A node-resolution 404 is infrastructure failure, never 'file not found'."""
+
+    def fake_run(args, **kwargs):
+        return CompletedProcess(
+            args,
+            1,
+            stderr="HTTP 404\nCould not resolve to a node with the global id of 'PR_kwDOTRDHr87_tH6X'",
+        )
+
+    monkeypatch.setattr(github_api_module.subprocess, "run", fake_run)
+    monkeypatch.setattr(github_api_module, "_sleeper", lambda _: None)
+    runner = GhCliRunner("fafa33/Project-Hunter", token="t")
+    with pytest.raises(GitHubUnavailable):
+        runner.get_file_content("docs/x.md", "a" * 40)
+
+
+def test_gh_cli_runner_plain_404_reads_as_missing_file(monkeypatch) -> None:
+    def fake_run(args, **kwargs):
+        return CompletedProcess(args, 1, stderr="HTTP 404: Not Found")
+
+    monkeypatch.setattr(github_api_module.subprocess, "run", fake_run)
+    runner = GhCliRunner("fafa33/Project-Hunter", token="t")
+    assert runner.get_file_content("docs/x.md", "a" * 40) is None
+
+
+def test_gh_cli_runner_retries_transient_503_for_file_content(monkeypatch) -> None:
+    calls = []
+
+    def fake_run(args, **kwargs):
+        calls.append(args)
+        if len(calls) < 3:
+            return CompletedProcess(args, 1, stderr="HTTP 503\nNo server is currently available")
+        return CompletedProcess(args, 0, stdout="content")
+
+    monkeypatch.setattr(github_api_module.subprocess, "run", fake_run)
+    monkeypatch.setattr(github_api_module, "_sleeper", lambda _: None)
+    runner = GhCliRunner("fafa33/Project-Hunter", token="t")
+    assert runner.get_file_content("docs/x.md", "a" * 40) == "content"
+    assert len(calls) == 3

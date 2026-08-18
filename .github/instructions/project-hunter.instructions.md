@@ -17,6 +17,7 @@ Before making changes, identify and follow the applicable repository governance,
 - `docs/AI_REVIEW_PROTOCOL.md`
 - `docs/MERGE_READINESS_GATE.md`
 - `docs/HUNTER_IMPLEMENTATION_CONTRACT.md`
+- `docs/GOVERNANCE_ENFORCEMENT.md`
 
 Rules:
 
@@ -30,7 +31,10 @@ Rules:
 - Never represent self-review as independent review.
 - Quote governing repository authorities for material architectural or governance conclusions.
 - Prefer the smallest valid change that satisfies repository governance.
+- Before a governed branch, commit, push, PR creation/body update, Ready-for-Review promotion, blocking-finding resolution, or merge-readiness assertion, run the matching `python scripts/hunter_governance_preflight.py ...` action. Do not rely on remembered Issue identity or hand-reconstructed governance state.
+- Use `python scripts/hunter_governance_preflight.py generate-pr-body ...` for normal governed PR bodies. The governing Issue, canonical template, exact changed scope, exact head/base pair, and criterion-specific evidence must drive generated metadata.
+- Never infer `PASS` from green CI. Unproven Issue acceptance criteria remain `BLOCKED`/incomplete until explicit evidence exists.
 - Before opening a normal pull request, push the final candidate head and require `Hunter Pre-PR Preflight` to succeed on that exact head.
-- Build every normal PR body from `.github/pull_request_template.md`; do not rename or omit required section headings, and select exactly one implementer readiness declaration before creation.
-- Do not use GitHub PR CI as the first execution of Ruff, Black, Mypy, or Pytest; the shared `python scripts/hunter_pr_preflight.py` command is the repository-local source of truth for those gates.
-- If the exact-head preflight fails, fix the branch and rerun preflight before creating the PR. GitHub-only checks remain independent and may still run after PR creation.
+- Do not use GitHub PR CI as the first execution of Ruff, Black, Mypy, or Pytest; the shared `python scripts/hunter_pr_preflight.py` command is the repository-local source of truth for those quality gates.
+- If the exact-head quality preflight or governance preflight fails, correct the branch and rerun the applicable preflight before the governed mutation. GitHub-only checks remain independent and may still run after PR creation.
+- Passing preflight is never review approval and never merge authority. Independent review and human merge approval remain governed by `docs/AI_REVIEW_PROTOCOL.md` and `docs/DEVELOPMENT_GOVERNANCE.md`.
