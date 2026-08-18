@@ -303,7 +303,7 @@ def test_conflicting_authorization_rules_block_processing() -> None:
         cutoff=datetime(2026, 8, 14, 5, 0, tzinfo=UTC),
         policy_authorization_rule_id="AUTHORIZATION_RULE_V2",
     )
-    with pytest.raises(PreModelInvariantError, match="SOURCE_HANDLING"):
+    with pytest.raises(PreModelInvariantError, match="authority families do not resolve to one authorization rule"):
         _build_with_source_handling_authority(authority=authority)
 
 
@@ -322,6 +322,19 @@ def test_credential_secret_fact_passes_processing_but_blocks_durable_persistence
         document_id="doc-1",
         cutoff=datetime(2026, 8, 14, 5, 0, tzinfo=UTC),
         secret_presence=("CREDENTIAL_PRESENT",),
+    )
+    bundle = _build_with_source_handling_authority(authority=authority)
+
+    repository = EvidencePreModelPersistenceRepository(EvidenceIntelligenceRepository(tmp_path / "evidence.sqlite"))
+    with pytest.raises(PreModelPersistenceLineageError, match="durable payload rejected"):
+        _persist_bundle(bundle, authority=authority, repository=repository)
+
+
+def test_bare_string_secret_presence_canonical_fact_blocks_durable_persistence(tmp_path) -> None:
+    authority = source_handling_authority(
+        document_id="doc-1",
+        cutoff=datetime(2026, 8, 14, 5, 0, tzinfo=UTC),
+        secret_presence="CREDENTIAL_PRESENT",
     )
     bundle = _build_with_source_handling_authority(authority=authority)
 

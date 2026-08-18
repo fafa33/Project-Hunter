@@ -28,6 +28,7 @@ from hunter.evidence_intelligence.pre_model import (
 from hunter.evidence_intelligence.repository import EvidenceIntelligenceRepository
 from hunter.evidence_intelligence.source_handling import (
     SourceHandlingBlockedError,
+    _string_sequence,
     validate_durable_payload,
 )
 
@@ -152,9 +153,7 @@ class EvidencePreModelPersistenceRepository:
         )
         payload = _bundle_payload(bundle)
         fact = resolved.fact_record.get("fact")
-        secret_presence = (
-            {str(value) for value in (fact.get("secret_presence") or ())} if isinstance(fact, dict) else set()
-        )
+        secret_presence = set(_string_sequence(fact.get("secret_presence") if isinstance(fact, dict) else None))
         try:
             validate_durable_payload(
                 decision=persistence_decision,
