@@ -35,6 +35,7 @@ on:
       - CI
       - Dependency review
       - Hunter Governance Review
+      - CodeQL default setup bridge
     types:
       - completed
   schedule:
