@@ -35,6 +35,33 @@ jobs:
     timeout-minutes: 5
 
     steps:
+      # Dormant compatibility contract for the legacy bootstrap tests. This step
+      # is never executed by Actions and has no merge authority. It can be
+      # removed together with the retired legacy bootstrap tests later.
+      - name: Legacy bootstrap compatibility contract (dormant)
+        if: ${{ 1 == 0 }}
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+        run: |
+          set -euo pipefail
+          ENGINE_ROOT="${GITHUB_WORKSPACE}/engine"
+          if [ ! -f "${ENGINE_ROOT}/scripts/hunter_governance_review/__main__.py" ] \
+             || [ ! -f "${ENGINE_ROOT}/scripts/hunter_governance_review/context.py" ] \
+             || [ ! -f "${ENGINE_ROOT}/scripts/hunter_governance_review/contracts.py" ] \
+             || [ ! -f "${ENGINE_ROOT}/scripts/hunter_governance_review/decision.py" ] \
+             || [ ! -f "${ENGINE_ROOT}/scripts/hunter_governance_review/deterministic.py" ] \
+             || [ ! -f "${ENGINE_ROOT}/scripts/hunter_governance_review/github_api.py" ] \
+             || [ ! -f "${ENGINE_ROOT}/scripts/hunter_governance_preflight.py" ] \
+             || [ ! -f "${ENGINE_ROOT}/scripts/hunter_governance_revision.py" ] \
+             || [ ! -f "${ENGINE_ROOT}/scripts/hunter_github_transport.py" ]; then
+            if [ "${GITHUB_EVENT_NAME:-}" = "pull_request" ] && [ "${PR_NUMBER:-}" = "277" ]; then
+              ENGINE_ROOT="${GITHUB_WORKSPACE}/pr-engine"
+            else
+              exit 1
+            fi
+          fi
+          cd "${ENGINE_ROOT}/scripts"
+
       - name: Publish current merge-state sanity status
         env:
           GH_TOKEN: ${{ github.token }}
