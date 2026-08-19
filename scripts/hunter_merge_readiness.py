@@ -33,7 +33,7 @@ The module is split into three strictly separated layers:
    network. This is what makes convergence testable rather than merely asserted:
    the same snapshot cannot produce two different results.
 3. **Reconciliation** -- :func:`reconcile_pr` composes the two and publishes or
-   confirms exactly one readiness status.
+   confirms exactly one current readiness result.
 
 Why timestamps are gone
 -----------------------
@@ -423,11 +423,11 @@ def owner_acknowledged_comment(comment: dict[str, Any]) -> bool:
     if not repo_owner:
         return False
     reactions = paged(f"issues/comments/{comment_id}/reactions")
-    return any(
-        ((reaction.get("user") or {}).get("login") or "").strip() == repo_owner
-        and reaction.get("content") == "+1"
-        for reaction in reactions
-    )
+    for reaction in reactions:
+        login = ((reaction.get("user") or {}).get("login") or "").strip()
+        if login == repo_owner and reaction.get("content") == "+1":
+            return True
+    return False
 
 
 def owner_authored_comment(comment: dict[str, Any]) -> bool:
