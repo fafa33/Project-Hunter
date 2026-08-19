@@ -31,7 +31,7 @@ def test_governance_review_has_no_bootstrap_fallback() -> None:
     path = ROOT / ".github/workflows/hunter-governance-review.yml"
     text = path.read_text(encoding="utf-8")
     assert "hunter_governance_review_v2.py" in text
-    assert "PR_NUMBER} = \"283\"" not in text
+    assert 'PR_NUMBER} = "283"' not in text
     assert "bootstrap" not in text.lower()
 
 
