@@ -18,7 +18,9 @@ def test_retired_migration_surfaces_are_absent() -> None:
 
 
 def test_agent_instructions_use_current_state_governance() -> None:
-    text = (ROOT / ".github/instructions/project-hunter.instructions.md").read_text(encoding="utf-8")
+    text = (
+        ROOT / ".github/instructions/project-hunter.instructions.md"
+    ).read_text(encoding="utf-8")
     assert "hunter_governance_preflight.py" not in text
     assert "owner-`+1`" in text
     assert "not merge authority" in text
@@ -27,7 +29,9 @@ def test_agent_instructions_use_current_state_governance() -> None:
 
 
 def test_governance_review_has_no_bootstrap_fallback() -> None:
-    text = (ROOT / ".github/workflows/hunter-governance-review.yml").read_text(encoding="utf-8")
+    text = (ROOT / ".github/workflows/hunter-governance-review.yml").read_text(
+        encoding="utf-8"
+    )
     assert "hunter_governance_review_v2.py" in text
     assert "PR_NUMBER} = \"283\"" not in text
     assert "bootstrap" not in text.lower()
