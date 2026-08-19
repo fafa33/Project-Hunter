@@ -70,7 +70,7 @@ def review(repository: str, token: str, pr_number: int) -> int:
         print(f"PR #{pr_number} is not open; no governance status published.")
         return 0
 
-    head_sha = str(((pr.get("head") or {}).get("sha") or "")).strip()
+    head_sha = str((pr.get("head") or {}).get("sha") or "").strip()
     if not head_sha:
         raise RuntimeError(f"PR #{pr_number} head SHA is unavailable")
 
