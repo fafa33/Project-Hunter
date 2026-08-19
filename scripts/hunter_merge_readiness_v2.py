@@ -144,9 +144,7 @@ def changes_requested_reviewers(pr_number: int) -> tuple[str, ...]:
             latest[login] = review
     return tuple(
         sorted(
-            login
-            for login, review in latest.items()
-            if str(review.get("state") or "").upper() == "CHANGES_REQUESTED"
+            login for login, review in latest.items() if str(review.get("state") or "").upper() == "CHANGES_REQUESTED"
         )
     )
 

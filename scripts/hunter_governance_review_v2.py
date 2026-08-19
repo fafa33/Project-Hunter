@@ -75,7 +75,9 @@ def review(repository: str, token: str, pr_number: int) -> int:
         raise RuntimeError(f"PR #{pr_number} head SHA is unavailable")
 
     if pr.get("mergeable") is False:
-        publish(repository, token, head_sha, "failure", "Blocking governance finding: pull request has merge conflicts.")
+        publish(
+            repository, token, head_sha, "failure", "Blocking governance finding: pull request has merge conflicts."
+        )
         return 0
     if pr.get("mergeable") is None:
         publish(repository, token, head_sha, "pending", "Waiting for GitHub to resolve current mergeability.")
