@@ -59,3 +59,15 @@ def test_workflow_bootstrap_uses_only_trusted_default_branch_engine_for_283():
     assert '[ "${PR_NUMBER}" = "283" ]' in workflow
     assert "python -m hunter_governance_review" in workflow
     assert "No PR-controlled code is checked out or executed." in workflow
+
+
+def test_reconcile_continues_after_one_pr_failure_and_drops_checkout_credentials():
+    workflow = (
+        Path(__file__).resolve().parents[1] / ".github" / "workflows" / "hunter-governance-reconcile.yml"
+    ).read_text(encoding="utf-8")
+
+    assert "persist-credentials: false" in workflow
+    assert "failures=0" in workflow
+    assert "if ! python scripts/hunter_governance_review_v2.py" in workflow
+    assert "failures=1" in workflow
+    assert 'exit "${failures}"' in workflow
