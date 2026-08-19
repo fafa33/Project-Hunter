@@ -188,9 +188,7 @@ def test_human_comment_blocks_until_acknowledged(gh):
 def test_acknowledgement_by_a_non_owner_does_not_count(gh):
     ready_pull_request(gh)
     gh.add_comment(501, 903)
-    gh.reactions[903] = [
-        {"user": {"login": "someone-else"}, "content": "+1", "created_at": "2026-08-13T00:00:00Z"}
-    ]
+    gh.reactions[903] = [{"user": {"login": "someone-else"}, "content": "+1", "created_at": "2026-08-13T00:00:00Z"}]
     assert core.reconcile_pr(501).state == "failure"
 
 
