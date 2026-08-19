@@ -1,7 +1,7 @@
 name: Hunter Governance Review
 
-# Lightweight current-state sanity review. It never judges PR prose, branch
-# naming, Issue identity, reactions, or process history.
+# Lightweight current-state sanity review. It does not judge PR prose, branch
+# naming, Issue identity, reactions, review history, or process ceremony.
 
 on:
   pull_request:
@@ -44,32 +44,12 @@ jobs:
       - name: Publish current merge-state sanity status
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
           GITHUB_RUN_ID: ${{ github.run_id }}
           GITHUB_SERVER_URL: ${{ github.server_url }}
         run: |
           set -euo pipefail
-
-          ENGINE_ROOT="${GITHUB_WORKSPACE}/engine"
-          if [ -f "${ENGINE_ROOT}/scripts/hunter_governance_review_v2.py" ]; then
-            python "${ENGINE_ROOT}/scripts/hunter_governance_review_v2.py" \
-              --pr "${PR_NUMBER}" \
-              --repository "${GH_REPO}"
-          elif [ "${GITHUB_EVENT_NAME}" = "pull_request" ] \
-               && [ "${PR_NUMBER}" = "283" ]; then
-            # One-time trusted bootstrap: main still owns the legacy deterministic
-            # evaluator required by main's legacy Merge Readiness consumer. Using
-            # it once publishes the revision marker that old readiness requires.
-            # No PR-controlled code is checked out or executed.
-            echo "Using trusted legacy Governance Review only to bootstrap PR #283."
-            cd "${ENGINE_ROOT}/scripts"
-            python -m hunter_governance_review \
-              --pr "${PR_NUMBER}" \
-              --repository "${GH_REPO}" \
-              --root "${ENGINE_ROOT}"
-          else
-            echo "Trusted Hunter Governance Review controller is unavailable."
-            exit 1
-          fi
+          python "${GITHUB_WORKSPACE}/engine/scripts/hunter_governance_review_v2.py" \
+            --pr "${PR_NUMBER}" \
+            --repository "${GH_REPO}"
