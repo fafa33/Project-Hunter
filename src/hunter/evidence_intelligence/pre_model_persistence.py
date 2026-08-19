@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from typing import Any, Literal
@@ -18,27 +19,25 @@ from hunter.evidence_intelligence.pre_model import (
     EvidenceExtractionIntent,
     EvidencePreModelBuildRecord,
     EvidencePreModelBuildResult,
+    EvidencePreModelSourceHandlingAuthority,
     EvidencePromptArtifact,
     EvidencePromptPlan,
     EvidencePromptSpecification,
     _render_prompt,
+    resolve_pre_model_source_handling,
 )
 from hunter.evidence_intelligence.repository import EvidenceIntelligenceRepository
+from hunter.evidence_intelligence.source_handling import (
+    SourceHandlingBlockedError,
+    _string_sequence,
+    validate_durable_payload,
+)
 
 ReconstructionStatus = Literal["AVAILABLE", "UNAVAILABLE", "NOT_KNOWN_AT_CUTOFF"]
 
 RETENTION_PROHIBITED_REASON_CODE = "EXACT_PROMPT_RETENTION_PROHIBITED"
-
-# ADR 0031 "Data handling and retention" permits durably retaining source
-# identities, revisions, ranges, and hashes, but requires artifact retention to
-# be "at least as restrictive as the governing source classification and
-# policy". When exact prompt retention is prohibited, the raw span text that the
-# prompt is rendered from must not survive either: keeping it would leave the
-# prohibited prompt trivially regenerable from the persisted bundle while the
-# build claims EXACT_PROMPT_RETENTION_PROHIBITED. This tombstone marker records
-# that the bytes were deliberately not retained. It is never presented as, and
-# must never be mistaken for, the original content.
 REDACTED_SOURCE_EXCERPT = "[REDACTED:EXACT_PROMPT_RETENTION_PROHIBITED]"
+REDACTED_LOCATOR = "[REDACTED:LOCATOR_RETENTION_PROHIBITED]"
 
 
 class PreModelPersistenceConflict(RuntimeError):
@@ -86,12 +85,7 @@ class EvidencePreModelReconstruction:
 
 
 class EvidencePreModelPersistenceRepository:
-    """Append-only durability for ADR 0031 provider-free pre-model build evidence.
-
-    The repository persists a complete immutable build bundle in the existing
-    Evidence Intelligence SQLite database. Strict-known reconstruction reads only
-    the persisted bundle; it never consults current/latest EvidenceSpan rows.
-    """
+    """Append-only durability for ADR 0031 provider-free pre-model build evidence."""
 
     def __init__(self, evidence_repository: EvidenceIntelligenceRepository) -> None:
         self.path = evidence_repository.path
@@ -107,21 +101,9 @@ class EvidencePreModelPersistenceRepository:
         canonical_inventory: tuple[EvidenceSpan, ...],
         build_result: EvidencePreModelBuildResult,
         recorded_at: datetime,
-        retain_exact_source_bytes: bool | None = None,
+        source_handling_authority: EvidencePreModelSourceHandlingAuthority | None = None,
     ) -> PersistedEvidencePreModelBundle:
-        """Persist one immutable pre-model build bundle, append-only.
-
-        The supplied bundle is validated for internal lineage consistency before
-        any INSERT: second-write conflict detection cannot protect the very
-        first write, so a mismatched combination would otherwise be recorded
-        permanently under a build identity it did not produce.
-
-        ``retain_exact_source_bytes`` carries the governing retention decision.
-        When it is None the decision is derived from the build result, and
-        persistence is refused outright when it cannot be derived: ADR 0031
-        requires a handling classification to exist before durable persistence,
-        so guessing either way would be wrong.
-        """
+        """Persist one immutable pre-model build bundle after independent authority re-resolution."""
         _aware("recorded_at", recorded_at)
         inventory = tuple(canonical_inventory)
         _validate_bundle_lineage(
@@ -134,20 +116,45 @@ class EvidencePreModelPersistenceRepository:
         )
         _validate_known_at_lower_bound(recorded_at.astimezone(UTC), inventory)
 
-        if retain_exact_source_bytes is None:
-            retain_exact_source_bytes = _derive_source_retention(build_result)
-        if retain_exact_source_bytes is None:
+        if source_handling_authority is None:
+            raise PreModelPersistenceLineageError("source handling authority is required at persistence")
+        if intent.historical_cutoff is not None and source_handling_authority.cutoff != intent.historical_cutoff:
             raise PreModelPersistenceLineageError(
-                "source retention policy cannot be derived for a build that produced no prompt artifact; "
-                "pass retain_exact_source_bytes explicitly"
+                "persistence authority cutoff does not match the intent's historical cutoff"
             )
+        document_ids = {span.document_id for span in inventory}
+        if len(document_ids) != 1 or source_handling_authority.fact_scope not in document_ids:
+            raise PreModelPersistenceLineageError(
+                "persistence authority fact scope does not match the bundle's single document"
+            )
+        if source_handling_authority.cutoff > recorded_at:
+            raise PreModelPersistenceLineageError("persistence authority cutoff is later than the bundle's recorded_at")
+        try:
+            resolved = resolve_pre_model_source_handling(source_handling_authority)
+        except SourceHandlingBlockedError as error:
+            raise PreModelPersistenceLineageError(f"source handling authority cannot be resolved: {error}") from error
+        persistence_decision = resolved.decision
+        build_decision = build_result.source_handling_decision
+        if build_decision is None:
+            raise PreModelPersistenceLineageError("build lacks source handling authority decision")
+        if _canonical_json(_jsonable(build_decision)) != _canonical_json(_jsonable(persistence_decision)):
+            raise PreModelPersistenceLineageError(
+                "persistence-time source handling decision does not match the build-time authority decision"
+            )
+
+        retain_exact_source_bytes = (
+            persistence_decision.get("retention_decision") == "ALLOW"
+            and persistence_decision.get("reconstruction_decision") == "ALLOW"
+        )
         if not retain_exact_source_bytes:
             artifact = build_result.prompt_artifact
             if artifact is not None and artifact.content:
                 raise PreModelPersistenceLineageError(
-                    "exact source byte retention is prohibited but the build still carries exact prompt content"
+                    "source handling authority prohibits exact source retention but exact prompt bytes remain"
                 )
             inventory = tuple(_redacted_span(span) for span in inventory)
+        if not _locator_retention_permitted(resolved.registry_record, persistence_decision):
+            inventory = tuple(replace(span, locator=REDACTED_LOCATOR) for span in inventory)
 
         bundle = PersistedEvidencePreModelBundle(
             recorded_at=recorded_at.astimezone(UTC),
@@ -160,6 +167,19 @@ class EvidencePreModelPersistenceRepository:
             exact_source_bytes_retained=retain_exact_source_bytes,
         )
         payload = _bundle_payload(bundle)
+        fact = resolved.fact_record.get("fact")
+        secret_presence = set(_string_sequence(fact.get("secret_presence") if isinstance(fact, dict) else None))
+        try:
+            validate_durable_payload(
+                decision=persistence_decision,
+                registry=resolved.registry_record,
+                payload={"pre_model_bundle": payload},
+                secret_presence=secret_presence,
+            )
+        except SourceHandlingBlockedError as error:
+            raise PreModelPersistenceLineageError(
+                f"durable payload rejected by source handling authority: {error}"
+            ) from error
         payload_json = _canonical_json(payload)
         payload_hash = hashlib.sha256(payload_json.encode("utf-8")).hexdigest()
         build_record_id = bundle.build_record_id
@@ -252,12 +272,6 @@ class EvidencePreModelPersistenceRepository:
         build = bundle.build_result.build_record
         artifact = bundle.build_result.prompt_artifact
         if build.reconstruction_outcome == "AVAILABLE":
-            # build_evidence_pre_model only records AVAILABLE together with a
-            # retained, non-empty prompt artifact. Reaching this state without
-            # those bytes therefore means the persisted bundle no longer matches
-            # the build it claims to be, which is corruption -- not the ordinary
-            # "exact prompt was never retainable" outcome. Downgrading it to
-            # UNAVAILABLE would silently hide a broken durability guarantee.
             if artifact is None or not artifact.content:
                 raise PreModelPersistenceCorruption(
                     "persisted build claims AVAILABLE reconstruction without retained prompt bytes"
@@ -321,6 +335,7 @@ def _bundle_payload(bundle: PersistedEvidencePreModelBundle) -> dict[str, Any]:
                 _jsonable(asdict(bundle.build_result.prompt_artifact)) if bundle.build_result.prompt_artifact else None
             ),
             "build_record": _jsonable(asdict(bundle.build_result.build_record)),
+            "source_handling_decision": _jsonable(bundle.build_result.source_handling_decision),
         },
     }
 
@@ -372,10 +387,9 @@ def _bundle_from_payload(payload: dict[str, Any], *, recorded_at: datetime) -> P
     build_payload = dict(result_payload["build_record"])
     build_payload["reason_codes"] = tuple(build_payload["reason_codes"])
     build_record = EvidencePreModelBuildRecord(**build_payload)
+    source_handling_decision = result_payload.get("source_handling_decision")
 
     retention = payload.get("source_retention") or {}
-    # Payloads written before source-retention was recorded always carried the
-    # full inventory, so True is the factually correct reading for them.
     retained = bool(retention.get("exact_source_bytes_retained", True))
 
     return PersistedEvidencePreModelBundle(
@@ -392,22 +406,32 @@ def _bundle_from_payload(payload: dict[str, Any], *, recorded_at: datetime) -> P
             prompt_plan=prompt_plan,
             prompt_artifact=prompt_artifact,
             build_record=build_record,
+            source_handling_decision=(
+                dict(source_handling_decision) if isinstance(source_handling_decision, dict) else None
+            ),
         ),
         exact_source_bytes_retained=retained,
     )
 
 
 def _redacted_span(span: EvidenceSpan) -> EvidenceSpan:
-    """Strip raw source text while preserving identities, ranges, and hashes.
-
-    ``excerpt`` is the exact text the prompt is rendered from, and
-    ``section_title`` is likewise source-derived free text. Everything retained
-    here (identities, offsets, versions, coordinates, content hashes, status,
-    timestamps) is explicitly listed by ADR 0031 as minimum persistable
-    provenance. ``excerpt`` cannot be emptied because EvidenceSpan requires it
-    to be non-empty, so it carries an unambiguous tombstone instead.
-    """
     return replace(span, excerpt=REDACTED_SOURCE_EXCERPT, section_title="")
+
+
+def _locator_retention_permitted(registry: Mapping[str, Any], decision: Mapping[str, Any]) -> bool:
+    field_map = registry.get("field_map")
+    if not isinstance(field_map, Mapping):
+        return False
+    categories = _string_sequence(field_map.get("locator"))
+    if not categories:
+        return False
+    dispositions = decision.get("durable_dispositions")
+    if not isinstance(dispositions, Mapping):
+        return False
+    return all(
+        isinstance(dispositions.get(category), Mapping) and dispositions.get(category, {}).get("PERSIST") == "ALLOW"
+        for category in categories
+    )
 
 
 def _require(condition: bool, message: str) -> None:
@@ -415,33 +439,7 @@ def _require(condition: bool, message: str) -> None:
         raise PreModelPersistenceLineageError(message)
 
 
-def _derive_source_retention(build_result: EvidencePreModelBuildResult) -> bool | None:
-    """Infer the governing source-retention decision, or None when undecidable.
-
-    Only two states are self-evident from a build result: the explicit
-    prohibition reason code, and a build that actually retained prompt bytes.
-    A build that failed before producing a prompt (REPLAN_REQUIRED /
-    INSUFFICIENT_BUDGET) carries neither signal even when the caller requested
-    `retain_exact_prompt=False`, so its retention policy is genuinely unknown
-    here and must be supplied rather than assumed.
-    """
-    if RETENTION_PROHIBITED_REASON_CODE in build_result.build_record.reason_codes:
-        return False
-    artifact = build_result.prompt_artifact
-    if artifact is not None and artifact.content:
-        return True
-    return None
-
-
 def _validate_known_at_lower_bound(recorded_at: datetime, canonical_inventory: tuple[EvidenceSpan, ...]) -> None:
-    """Reject a known-at coordinate that predates the evidence it contains.
-
-    ``strict_known_bundle`` selects on ``recorded_at <= cutoff``, so a backdated
-    coordinate would let a cutoff query return a bundle built from spans that
-    did not yet exist at that cutoff -- a false historical-knowledge claim of
-    exactly the kind ADR 0031 forbids. The bundle's true lower bound is the
-    latest creation/validation time among its own persisted spans.
-    """
     bounds: list[datetime] = []
     for span in canonical_inventory:
         bounds.append(span.created_at.astimezone(UTC))
@@ -465,14 +463,6 @@ def _validate_bundle_lineage(
     canonical_inventory: tuple[EvidenceSpan, ...],
     build_result: EvidencePreModelBuildResult,
 ) -> None:
-    """Fail closed unless every supplied input actually produced this build.
-
-    Each deterministic identity in the build result is recomputed from the
-    supplied inputs and compared. Without this, the first save() of a bundle
-    that mixes one build's result with another build's intent/policy/inventory
-    would be accepted and become permanent, silently corrupting reconstruction
-    provenance for a record that can never be rewritten.
-    """
     ledger = build_result.ledger
     allocation = build_result.allocation
     package = build_result.package
@@ -500,10 +490,7 @@ def _validate_bundle_lineage(
     )
 
     spans_by_id = {span.span_id: span for span in canonical_inventory}
-    _require(
-        len(spans_by_id) == len(canonical_inventory),
-        "canonical inventory contains duplicate span ids",
-    )
+    _require(len(spans_by_id) == len(canonical_inventory), "canonical inventory contains duplicate span ids")
     _require(
         set(policy.required_span_ids).union(policy.optional_span_ids) == set(spans_by_id),
         "supplied policy coverage does not match the supplied canonical inventory",
@@ -513,12 +500,6 @@ def _validate_bundle_lineage(
         "supplied canonical inventory does not match the build's ledger decisions",
     )
     for span in canonical_inventory:
-        # `text_hash` is a claim about the excerpt bytes. Evidence Intelligence
-        # has exactly one convention for that claim (models.evidence_text_digest,
-        # used by intake, the only original producer of EvidenceSpan), so it can
-        # be recomputed rather than trusted. Without this, an excerpt altered
-        # while its stale hash and offsets were left intact would be persisted
-        # as provenance for text it does not contain.
         _require(
             evidence_text_digest(span.excerpt) == span.text_hash,
             f"supplied span {span.span_id} excerpt bytes do not match its claimed text_hash",
@@ -589,14 +570,6 @@ def _validate_bundle_lineage(
             "build record does not reference the supplied prompt artifact",
         )
         _validate_prompt_artifact(artifact)
-
-        # `text_hash` is caller-supplied metadata with no defined relationship
-        # to `excerpt` anywhere in this codebase, so comparing hashes cannot
-        # detect an excerpt that was altered while its hash was left intact.
-        # Re-rendering is the only available proof that these exact span bytes
-        # are the ones that produced this artifact. This works even when
-        # retention is prohibited, because `content_hash` is always the digest
-        # of the full rendered prompt regardless of whether it was retained.
         rendered = _render_prompt(
             intent=intent,
             specification=specification,
@@ -615,10 +588,7 @@ def _validate_bundle_lineage(
 
     _require(build.intent_id == intent.intent_id, "build record does not belong to the supplied intent")
     _require(build.ledger_id == ledger.ledger_id, "build record does not belong to the supplied ledger")
-    _require(
-        build.allocation_id == allocation.allocation_id,
-        "build record does not belong to the supplied allocation",
-    )
+    _require(build.allocation_id == allocation.allocation_id, "build record does not belong to the supplied allocation")
 
 
 def _span_from_payload(payload: dict[str, Any]) -> EvidenceSpan:

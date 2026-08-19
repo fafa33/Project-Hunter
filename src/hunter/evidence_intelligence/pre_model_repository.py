@@ -10,6 +10,7 @@ from hunter.evidence_intelligence.pre_model import (
     EvidenceContextSelectionPolicy,
     EvidenceExtractionIntent,
     EvidencePreModelBuildResult,
+    EvidencePreModelSourceHandlingAuthority,
     EvidencePromptSpecification,
     PreModelInvariantError,
     build_evidence_pre_model,
@@ -40,12 +41,7 @@ def load_canonical_evidence_span_inventory(
     *,
     document_id: str,
 ) -> CanonicalEvidenceSpanInventory:
-    """Read the exact current EvidenceSpan inventory from repository authority.
-
-    This adapter is deliberately read-only and does not accept caller-prefiltered
-    span tuples. The canonical `evidence_spans` table remains the source of truth.
-    """
-
+    """Read the exact current EvidenceSpan inventory from repository authority."""
     with sqlite3.connect(repository.path) as connection:
         connection.row_factory = sqlite3.Row
         rows = connection.execute(
@@ -93,16 +89,9 @@ def build_evidence_pre_model_from_repository(
     policy: EvidenceContextSelectionPolicy,
     specification: EvidencePromptSpecification,
     capability: EvidenceCapabilityConstraint,
-    retain_exact_prompt: bool = True,
+    source_handling_authority: EvidencePreModelSourceHandlingAuthority | None = None,
 ) -> EvidencePreModelBuildResult:
-    """Build from the repository-owned canonical EvidenceSpan inventory.
-
-    Historical reconstruction is intentionally rejected here because the current
-    `evidence_spans` table stores current span status rather than a versioned span
-    lifecycle. Claiming a historical canonical inventory from that table would be
-    dishonest. A future historical adapter must be backed by explicit source state.
-    """
-
+    """Build from the repository-owned canonical EvidenceSpan inventory."""
     if intent.historical_cutoff is not None:
         raise PreModelInvariantError("HISTORICAL_REPOSITORY_SPAN_INVENTORY_UNSUPPORTED")
 
@@ -118,7 +107,7 @@ def build_evidence_pre_model_from_repository(
         capability=capability,
         canonical_inventory=inventory.spans,
         candidate_span_ids=inventory.span_ids,
-        retain_exact_prompt=retain_exact_prompt,
+        source_handling_authority=source_handling_authority,
     )
 
 
