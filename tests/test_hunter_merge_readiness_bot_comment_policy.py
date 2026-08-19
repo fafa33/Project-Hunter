@@ -1,11 +1,12 @@
 """Trusted-bot and owner-comment policy for Hunter Merge Readiness.
 
 The policy is fail-closed by default: external top-level PR Conversation
-comments block readiness until the repository owner acknowledges that exact
-comment version with a 👍 reaction. Trusted status/advisory automation comments
-are structurally exempt. A demonstrably non-blocking owner status note does not
+comments block readiness until the repository owner currently acknowledges the
+comment with a 👍 reaction. Trusted status/advisory automation comments are
+structurally exempt. A demonstrably non-blocking owner status note does not
 require self-acknowledgement, while explicit owner blocking feedback remains in
-the canonical feedback state.
+the canonical feedback state. Comment/reaction timestamps are deliberately not
+authoritative inputs to acknowledgement.
 """
 
 from __future__ import annotations
@@ -177,6 +178,14 @@ def test_non_exempt_bot_comment_blocks_until_acknowledged(gh):
     assert core.reconcile_pr(501).state == "success"
 
 
+def test_owner_acknowledgement_does_not_depend_on_repository_data_in_comment_payload(gh):
+    ready_pull_request(gh)
+    gh.add_comment(501, 912, login="a-reviewer", body="normal REST issue-comment shape")
+    assert "repository" not in gh.comments[501][0]
+    gh.acknowledge(912)
+    assert core.reconcile_pr(501).state == "success"
+
+
 def test_human_comment_blocks_until_acknowledged(gh):
     ready_pull_request(gh)
     gh.add_comment(501, 902, login="a-reviewer", body="please add replay evidence")
@@ -192,19 +201,19 @@ def test_acknowledgement_by_a_non_owner_does_not_count(gh):
     assert core.reconcile_pr(501).state == "failure"
 
 
-def test_acknowledgement_predating_the_current_comment_version_does_not_count(gh):
+def test_acknowledgement_survives_comment_timestamp_churn(gh):
     ready_pull_request(gh)
     gh.add_comment(501, 904)
     gh.acknowledge(904, at="2026-08-12T00:00:00Z")
     gh.comments[501][0]["updated_at"] = "2026-08-13T00:00:00Z"
-    assert core.reconcile_pr(501).state == "failure"
+    assert core.reconcile_pr(501).state == "success"
 
 
-def test_acknowledgement_without_a_reaction_time_fails_closed(gh):
+def test_owner_thumbsup_without_reaction_timestamp_counts(gh):
     ready_pull_request(gh)
     gh.add_comment(501, 905)
     gh.reactions[905] = [{"user": {"login": "fafa33"}, "content": "+1"}]
-    assert core.reconcile_pr(501).state == "failure"
+    assert core.reconcile_pr(501).state == "success"
 
 
 def test_a_non_thumbsup_reaction_is_not_an_acknowledgement(gh):
@@ -256,21 +265,14 @@ def test_trusted_preflight_failure_logs_diagnostics_but_returns_status_safe_erro
 
     assert error == core.GOVERNANCE_PREFLIGHT_FAILURE_DESCRIPTION
     logs = capsys.readouterr().out
-    # Verify sensitive values are redacted
     assert "ghs_super-secret-token" not in logs
     assert "super-secret-token" not in logs
     assert "sensitive-header" not in logs
-    # Verify redaction markers are present
     assert "[REDACTED" in logs or "REDACTED" in logs
 
 
 def _assert_credential_redacted(logs: str, secret: str) -> None:
-    """The strengthened redaction contract for a raw credential value.
-
-    The raw token, its prefix, and representative suffix fragments must all be
-    absent, and exactly one canonical redaction marker must stand in for the
-    credential value.
-    """
+    """The strengthened redaction contract for a raw credential value."""
     prefix = secret.split("_", 1)[0] + "_"
     assert secret not in logs
     assert prefix not in logs
@@ -280,11 +282,7 @@ def _assert_credential_redacted(logs: str, secret: str) -> None:
 
 
 def _assert_authorization_header_canonical(logs: str) -> None:
-    """The exact canonical output line for ``Authorization: Bearer <secret>``.
-
-    Exact equality binds the contract: a duplicated marker, a surviving
-    ``Bearer`` literal, or any credential residue all break this assertion.
-    """
+    """The exact canonical output line for ``Authorization: Bearer <secret>``."""
     assert logs == "Trusted governance preflight stdout:\nAuthorization: [REDACTED]\n"
     assert "Bearer" not in logs
     assert logs.count("[REDACTED]") == 1
@@ -292,10 +290,7 @@ def _assert_authorization_header_canonical(logs: str) -> None:
 
 @pytest.mark.parametrize("prefix", ["ghp_", "ghs_", "gho_", "ghu_", "ghr_", "github_pat_"])
 def test_governance_preflight_logs_redact_every_supported_credential_prefix(prefix, capsys):
-    """Every supported GitHub credential prefix must be redacted before the
-    diagnostics cross the logging boundary: the raw credential, its prefix,
-    and representative secret suffix fragments cannot survive, and the
-    canonical marker appears exactly once."""
+    """Every supported GitHub credential prefix must be redacted before diagnostics cross the logging boundary."""
     secret = f"{prefix}{'a' * 40}"
     core._log_governance_preflight_output(f"API diagnostic {secret} inline", None)
     logs = capsys.readouterr().out
@@ -305,9 +300,6 @@ def test_governance_preflight_logs_redact_every_supported_credential_prefix(pref
 
 
 def test_governance_preflight_logs_redact_authorization_header_to_exact_canonical_shape(capsys):
-    """``Authorization: Bearer <secret>`` collapses to exactly one canonical
-    marker: ``Authorization: [REDACTED]`` -- no duplicated markers, no
-    surviving Bearer literal, no credential residue."""
     secret = "ghp_1234567890ABCDEFabcdef"
     core._log_governance_preflight_output(f"Authorization: Bearer {secret}", None)
     _assert_authorization_header_canonical(capsys.readouterr().out)
@@ -326,13 +318,7 @@ def test_governance_preflight_logs_redact_authorization_header_to_exact_canonica
 
 
 def _sabotaged_re(should_sabotage: Callable[[str], bool]) -> object:
-    """A local stand-in for the ``re`` attribute on the module under test.
-
-    Every attribute except ``sub`` delegates to the real stdlib ``re``;
-    ``sub`` returns the input unchanged for patterns the predicate selects.
-    The counterfactual seam stays confined to ``hunter_merge_readiness``
-    instead of mutating the shared stdlib ``re.sub`` process-wide.
-    """
+    """A local stand-in for the ``re`` attribute on the module under test."""
     real_sub = re.sub
 
     class _LocalRe:
@@ -348,8 +334,6 @@ def _sabotaged_re(should_sabotage: Callable[[str], bool]) -> object:
 
 
 def test_governance_preflight_redaction_contract_fails_when_sanitizer_stops_redacting(monkeypatch, capsys):
-    """Counterfactual: if the sanitizer stops redacting entirely, the
-    strengthened contract assertions must fail -- proving the test binds."""
     secret = "ghp_1234567890ABCDEFabcdef"
     real_stdlib_sub = re.sub
 
@@ -369,11 +353,7 @@ def test_governance_preflight_redaction_contract_fails_when_sanitizer_stops_reda
 
 
 def test_governance_preflight_redaction_contract_fails_on_partial_token_redaction(monkeypatch, capsys):
-    """Counterfactual: if the credential-token sub is dropped from the chain,
-    the raw token survives the logging boundary and the strengthened
-    assertions fail."""
     secret = "ghp_1234567890ABCDEFabcdef"
-
     monkeypatch.setattr(core, "re", _sabotaged_re(lambda pattern: "gh[psour]_" in pattern))
     core._log_governance_preflight_output(f"API diagnostic {secret} inline", None)
     logs = capsys.readouterr().out
@@ -383,11 +363,7 @@ def test_governance_preflight_redaction_contract_fails_on_partial_token_redactio
 
 
 def test_governance_preflight_redaction_contract_fails_on_partial_authorization_redaction(monkeypatch, capsys):
-    """Counterfactual: if the Authorization collapse is dropped from the
-    chain, the duplicated-marker shape survives and the exact canonical
-    assertion fails."""
     secret = "ghp_1234567890ABCDEFabcdef"
-
     monkeypatch.setattr(core, "re", _sabotaged_re(lambda pattern: "Authorization" in pattern))
     core._log_governance_preflight_output(f"Authorization: Bearer {secret}", None)
     logs = capsys.readouterr().out
