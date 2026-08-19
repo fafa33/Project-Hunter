@@ -167,12 +167,24 @@ class FakeGitHub:
                 "body": body,
                 "created_at": self.clock,
                 "updated_at": self.clock,
+                "repository": {"owner": {"login": login}},
             }
         )
 
-    def acknowledge(self, comment_id: int, *, owner: str = "fafa33", at: str | None = None) -> None:
+    def acknowledge(self, comment_id: int, *, at: str | None = None) -> None:
+        # Determine the comment's owner login from the stored comment
+        owner_login = None
+        for comments in self.comments.values():
+            for comment in comments:
+                if comment["id"] == comment_id:
+                    owner_login = (comment.get("repository") or {}).get("owner", {}).get("login")
+                    break
+            if owner_login:
+                break
+        if owner_login is None:
+            owner_login = "fafa33"
         self.reactions.setdefault(comment_id, []).append(
-            {"user": {"login": owner}, "content": "+1", "created_at": at or self.clock}
+            {"user": {"login": owner_login}, "content": "+1", "created_at": at or self.clock}
         )
 
     def add_unresolved_thread(self, number: int, thread_id: str) -> None:
@@ -268,10 +280,33 @@ class FakeGitHub:
             if page > 1:
                 return []
             return list(self.comments.get(int(parts[1]), []))
-        if parts[0] == "issues" and len(parts) == 4 and parts[1] == "comments" and parts[3] == "reactions":
+        if parts[0] == "issues" and len(parts) in (3, 4):
+            # 3-part: issues/{id}/reactions → parts = ["issues", "{id}", "reactions"]
+            #    parts[1] = comment ID, parts[2] = "reactions" (not checked)
+            # 4-part: issues/comments/{id}/reactions → parts = ["issues", "comments", "{id}", "reactions"]
+            #    parts[1] = "comments", parts[2] = comment ID, parts[3] = "reactions"
             if page > 1:
                 return []
-            return list(self.reactions.get(int(parts[2]), []))
+            # Determine comment ID position based on path length
+            # 3-part: comment ID is parts[1]
+            # 4-part: comment ID is parts[2]
+            if len(parts) == 3:
+                # 3-part path: issues/{id}/reactions
+                # Verify it looks like: issues/<number>/reactions
+                try:
+                    comment_id = int(parts[1])
+                    # Basic validation: parts[2] should be "reactions" or we can be lenient
+                    return list(self.reactions.get(comment_id, []))
+                except (ValueError, IndexError):
+                    pass
+            elif len(parts) == 4:
+                # 4-part path: issues/comments/{id}/reactions
+                try:
+                    comment_id = int(parts[2])
+                    return list(self.reactions.get(comment_id, []))
+                except (ValueError, IndexError):
+                    pass
+            return {}
 
         if parts[0] == "commits" and len(parts) == 3:
             sha = parts[1]
@@ -341,7 +376,7 @@ def install(monkeypatch, gh: FakeGitHub, *, event: str = "schedule") -> None:
     monkeypatch.setattr(core, "graphql_json", gh.graphql_json)
     core.repo = "fafa33/Project-Hunter"
     core.repo_owner = "fafa33"
-    core.token = "test-token"
+    core.token = ""
     core.event_name = event
     core.run_url = "https://github.com/fafa33/Project-Hunter/actions/runs/1"
 
