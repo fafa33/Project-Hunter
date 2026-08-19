@@ -135,7 +135,7 @@ def changes_requested_reviewers(pr_number: int) -> tuple[str, ...]:
     for review in paged(f"pulls/{pr_number}/reviews"):
         if not isinstance(review, dict):
             continue
-        login = str(((review.get("user") or {}).get("login") or "")).strip()
+        login = str((review.get("user") or {}).get("login") or "").strip()
         state = str(review.get("state") or "").upper()
         if not login or state not in {"APPROVED", "CHANGES_REQUESTED", "DISMISSED"}:
             continue
@@ -160,7 +160,7 @@ def open_prs_for_head(sha: str) -> tuple[int, ...]:
             continue
         if str(pr.get("state") or "") != "open":
             continue
-        if str(((pr.get("head") or {}).get("sha") or "")) != sha:
+        if str((pr.get("head") or {}).get("sha") or "") != sha:
             continue
         numbers.append(int(pr["number"]))
     return tuple(sorted(set(numbers)))
@@ -171,7 +171,7 @@ def decide(pr_number: int) -> tuple[str, Decision] | None:
     if not isinstance(pr, dict) or pr.get("state") != "open":
         return None
 
-    head_sha = str(((pr.get("head") or {}).get("sha") or "")).strip()
+    head_sha = str((pr.get("head") or {}).get("sha") or "").strip()
     if not head_sha:
         return "", Decision("pending", "Waiting: current PR head SHA is unavailable.")
 
