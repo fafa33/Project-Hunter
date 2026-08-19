@@ -17,7 +17,7 @@ import hunter_github_transport as transport
 
 CONTEXT = "Hunter Merge Readiness"
 GOVERNANCE_CONTEXT = "Hunter Governance Review"
-REQUIRED_CHECKS = ("Quality Gates", "dependency-review")
+REQUIRED_CHECKS = ("Quality Gates", "dependency-review", "CodeQL")
 HARD_FAILURES = {"failure", "timed_out", "action_required", "startup_failure"}
 
 REPO = os.environ.get("GH_REPO") or os.environ.get("GITHUB_REPOSITORY") or ""
