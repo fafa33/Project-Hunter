@@ -412,22 +412,18 @@ def is_exempt_status_comment(comment: dict[str, Any]) -> bool:
 
 
 def owner_acknowledged_comment(comment: dict[str, Any]) -> bool:
-    """Return whether an owner +1 reaction on this comment counts as acknowledgment.
-
-    For non-owner top-level comments, an owner +1 reaction counts as acknowledgment
-    based on current presence of the +1, not reaction/comment timestamp ordering.
-    This is stable against GitHub API timestamp churn on comment updates.
-    """
     comment_id = int(comment["id"])
-    repo_owner = (comment.get("repository", {}).get("owner", {}).get("login") or "").strip()
-    if not repo_owner:
+    updated_at = (comment.get("updated_at") or comment.get("created_at") or "").strip()
+    if not updated_at:
         return False
     reactions = paged(f"issues/comments/{comment_id}/reactions")
     for reaction in reactions:
         login = ((reaction.get("user") or {}).get("login") or "").strip()
         if login != repo_owner or reaction.get("content") != "+1":
             continue
-        return True
+        reacted_at = (reaction.get("created_at") or "").strip()
+        if reacted_at and reacted_at >= updated_at:
+            return True
     return False
 
 

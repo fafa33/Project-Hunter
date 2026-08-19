@@ -125,18 +125,14 @@ def test_unacknowledged_comment_blocks_until_the_owner_reacts(gh):
 
 
 def test_editing_an_acknowledged_comment_revokes_the_acknowledgement(gh):
-    # NOTE: With the stable owner +1 acknowledgment logic, editing comment.updated_at
-    # no longer revokes acknowledgment. The +1 reaction persists as acknowledgment.
     ready_pull_request(gh)
     gh.add_comment(501, 900)
     gh.acknowledge(900, at="2026-08-13T00:00:00Z")
     assert core.reconcile_pr(501).state == "success"
 
-    # Editing updated_at no longer revokes the +1-based acknowledgment.
     gh.comments[501][0]["updated_at"] = "2026-08-13T01:00:00Z"
 
-    # The +1 reaction still counts as acknowledgment regardless of timestamp changes.
-    assert core.reconcile_pr(501).state == "success"
+    assert core.reconcile_pr(501).state == "failure"
 
 
 def test_missing_required_check_stays_pending(gh):
