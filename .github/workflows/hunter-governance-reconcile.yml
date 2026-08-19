@@ -1,20 +1,7 @@
 name: Hunter Governance Review Reconcile
 
-# Reconciliation trigger for target-branch advancement and missed events.
-#
-# GitHub Actions does not fire `pull_request` events when a protected target
-# branch advances while PRs are open. Per the Hunter Governance Review
-# specification, every approval is valid only for its exact reviewed pair
-# (source HEAD + target BASE). This workflow re-evaluates every open PR that
-# targets a protected branch:
-#
-#   - on every push to a protected branch, and
-#   - on a 30-minute schedule as a safety net.
-#
-# Each evaluated PR receives a fresh review of its exact current source HEAD
-# and target BASE. When the target BASE advanced, the previous approval is
-# stale and the gate publishes REVIEW_FAILED until the PR is updated (which
-# re-triggers the primary workflow). See docs/HUNTER_GOVERNANCE_REVIEW.md.
+# Periodic current-state sanity refresh for open PRs. No metadata history is
+# reconstructed and no PR prose is evaluated.
 
 on:
   push:
@@ -37,45 +24,32 @@ jobs:
   reconcile:
     name: Reconcile open pull requests
     runs-on: ubuntu-latest
-    # Deterministic-only review per PR (see hunter-governance-review.yml) --
-    # 90 minutes was sized for a per-PR LLM audit that no longer exists;
-    # 20 is generous headroom for a repository-wide sweep of GitHub API
-    # calls alone.
-    timeout-minutes: 20
+    timeout-minutes: 15
 
     steps:
-      - name: Checkout trusted gate engine (default branch)
+      - name: Checkout trusted gate engine
         uses: actions/checkout@v4
         with:
           ref: main
           fetch-depth: 1
 
-      - name: Evaluate open pull requests targeting protected branches
-        working-directory: scripts
+      - name: Refresh lightweight governance status
         env:
           GITHUB_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_RUN_ID: ${{ github.run_id }}
           GITHUB_SERVER_URL: ${{ github.server_url }}
-          PROTECTED_BRANCHES: ${{ vars.HUNTER_GOVERNANCE_PROTECTED_BRANCHES || 'main' }}
         run: |
           set -euo pipefail
-          for base in ${PROTECTED_BRANCHES//,/ }; do
-            echo "::group::Open PRs targeting ${base}"
-            gh pr list \
-              --repo "${GITHUB_REPOSITORY}" \
-              --state open \
-              --base "${base}" \
-              --json number \
-              --jq '.[].number' \
-            | while read -r pr_number; do
-                [ -z "${pr_number}" ] && continue
-                echo "Evaluating PR #${pr_number}"
-                python -m hunter_governance_review \
-                  --pr "${pr_number}" \
-                  --repository "${GITHUB_REPOSITORY}" \
-                  --root "${GITHUB_WORKSPACE}" \
-                || echo "::warning::gate exited $? for PR #${pr_number}; continuing"
-              done
-            echo "::endgroup::"
-          done
+          gh pr list \
+            --repo "${GITHUB_REPOSITORY}" \
+            --state open \
+            --base main \
+            --json number \
+            --jq '.[].number' \
+          | while read -r pr_number; do
+              [ -z "${pr_number}" ] && continue
+              python scripts/hunter_governance_review_v2.py \
+                --pr "${pr_number}" \
+                --repository "${GITHUB_REPOSITORY}"
+            done
