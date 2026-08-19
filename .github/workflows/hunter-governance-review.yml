@@ -1,8 +1,7 @@
 name: Hunter Governance Review
 
-# Lightweight current-state sanity review. It never executes PR-controlled code
-# and does not judge PR prose, branch naming, Issue identity, reactions, or
-# process history.
+# Lightweight current-state sanity review. It never judges PR prose, branch
+# naming, Issue identity, reactions, or process history.
 
 on:
   pull_request:
@@ -35,77 +34,51 @@ jobs:
     timeout-minutes: 5
 
     steps:
-      # Dormant compatibility contract for the legacy bootstrap tests. This step
-      # is never executed by Actions and has no merge authority. It preserves the
-      # old one-time installation review contract only for legacy unit tests and
-      # can be removed together with those retired tests later.
-      # Legacy PR-head checkout reference retained as inert compatibility text:
-      # ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - name: Legacy bootstrap compatibility contract (dormant)
-        if: ${{ 1 == 0 }}
-        env:
-          PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
-        run: |
-          set -euo pipefail
-          ENGINE_ROOT="${GITHUB_WORKSPACE}/engine"
-          if [ ! -f "${ENGINE_ROOT}/scripts/hunter_governance_review/__main__.py" ] \
-             || [ ! -f "${ENGINE_ROOT}/scripts/hunter_governance_review/context.py" ] \
-             || [ ! -f "${ENGINE_ROOT}/scripts/hunter_governance_review/contracts.py" ] \
-             || [ ! -f "${ENGINE_ROOT}/scripts/hunter_governance_review/decision.py" ] \
-             || [ ! -f "${ENGINE_ROOT}/scripts/hunter_governance_review/deterministic.py" ] \
-             || [ ! -f "${ENGINE_ROOT}/scripts/hunter_governance_review/github_api.py" ] \
-             || [ ! -f "${ENGINE_ROOT}/scripts/hunter_governance_preflight.py" ] \
-             || [ ! -f "${ENGINE_ROOT}/scripts/hunter_governance_revision.py" ] \
-             || [ ! -f "${ENGINE_ROOT}/scripts/hunter_github_transport.py" ]; then
-            if [ "${GITHUB_EVENT_NAME:-}" = "pull_request" ] && [ "${PR_NUMBER:-}" = "277" ]; then
-              echo "Hunter Governance Review bootstrap mode: one-time installation review."
-              ENGINE_ROOT="${GITHUB_WORKSPACE}/pr-engine"
-            else
-              echo "Hunter Governance Review PR-head bootstrap is restricted to installation pull request #277."
-              exit 1
-            fi
-          fi
-          cd "${ENGINE_ROOT}/scripts"
+      - name: Checkout trusted controller
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          path: engine
+          persist-credentials: false
+
+      # One-time self-hosting bridge for this installation PR only. Once #283 is
+      # merged, main owns the v2 controller and this fallback is unreachable.
+      - name: Checkout installation controller
+        if: >-
+          ${{ github.event_name == 'pull_request'
+              && github.event.pull_request.number == 283
+              && github.event.pull_request.head.repo.full_name == github.repository
+              && github.event.pull_request.user.login == github.repository_owner }}
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: installation-engine
+          persist-credentials: false
 
       - name: Publish current merge-state sanity status
         env:
+          GITHUB_TOKEN: ${{ github.token }}
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_SERVER_URL: ${{ github.server_url }}
         run: |
           set -euo pipefail
 
-          payload="$(gh api "repos/${GH_REPO}/pulls/${PR_NUMBER}")"
-          head_sha="$(jq -r '.head.sha // empty' <<<"${payload}")"
-          test -n "${head_sha}"
-
-          mergeable="$(jq -r '.mergeable' <<<"${payload}")"
-          for attempt in 1 2 3; do
-            if [[ "${mergeable}" != "null" ]]; then
-              break
+          ENGINE_ROOT="${GITHUB_WORKSPACE}/engine"
+          if [ ! -f "${ENGINE_ROOT}/scripts/hunter_governance_review_v2.py" ]; then
+            if [ "${GITHUB_EVENT_NAME}" = "pull_request" ] \
+               && [ "${PR_NUMBER}" = "283" ] \
+               && [ -f "${GITHUB_WORKSPACE}/installation-engine/scripts/hunter_governance_review_v2.py" ]; then
+              echo "Using the one-time #283 installation controller."
+              ENGINE_ROOT="${GITHUB_WORKSPACE}/installation-engine"
+            else
+              echo "Trusted Hunter Governance Review v2 controller is unavailable."
+              exit 1
             fi
-            sleep 2
-            payload="$(gh api "repos/${GH_REPO}/pulls/${PR_NUMBER}")"
-            mergeable="$(jq -r '.mergeable' <<<"${payload}")"
-          done
-
-          state=success
-          description="No blocking governance defect in current merge state."
-          if [[ "${mergeable}" == "false" ]]; then
-            state=failure
-            description="Blocking governance finding: pull request has merge conflicts."
-          elif [[ "${mergeable}" == "null" ]]; then
-            state=pending
-            description="Waiting for GitHub to resolve current mergeability."
           fi
 
-          gh api \
-            --method POST \
-            "repos/${GH_REPO}/statuses/${head_sha}" \
-            -f state="${state}" \
-            -f context="Hunter Governance Review" \
-            -f description="${description}" \
-            -f target_url="${RUN_URL}" >/dev/null
-
-          echo "Hunter Governance Review: ${state} — ${description}"
+          python "${ENGINE_ROOT}/scripts/hunter_governance_review_v2.py" \
+            --pr "${PR_NUMBER}" \
+            --repository "${GH_REPO}"

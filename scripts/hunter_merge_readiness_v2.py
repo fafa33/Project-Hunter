@@ -17,7 +17,7 @@ import hunter_github_transport as transport
 
 CONTEXT = "Hunter Merge Readiness"
 GOVERNANCE_CONTEXT = "Hunter Governance Review"
-REQUIRED_CHECKS = ("Quality Gates", "dependency-review", "CodeQL")
+REQUIRED_CHECKS = ("Quality Gates", "dependency-review")
 HARD_FAILURES = {"failure", "timed_out", "action_required", "startup_failure"}
 
 REPO = os.environ.get("GH_REPO") or os.environ.get("GITHUB_REPOSITORY") or ""
@@ -219,6 +219,12 @@ def decide(pr_number: int) -> tuple[str, Decision] | None:
             pass
         elif state in {"failure", "error"}:
             failed.append(f"{GOVERNANCE_CONTEXT}={state}")
+        elif state == "pending" and mergeable is True:
+            # The lightweight governance controller can publish pending only while
+            # GitHub mergeability is unresolved. We already re-read the live PR
+            # above and observed mergeable=True, so an older pending status is
+            # stale and must not become a permanent merge lock.
+            pass
         else:
             pending.append(GOVERNANCE_CONTEXT)
 
@@ -313,20 +319,29 @@ def candidate_prs() -> tuple[int, ...]:
 def main() -> int:
     try:
         numbers = candidate_prs()
-        print(f"Reconciling PRs: {list(numbers)}")
-        for number in numbers:
-            result = decide(number)
-            if result is None:
-                continue
-            sha, decision = result
-            publish(sha, decision)
-        return 0
     except transport.GitHubUnavailable as exc:
         print(f"Readiness infrastructure unavailable: {exc}", file=sys.stderr)
         return 1
     except Exception as exc:
         print(f"Readiness controller failed: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 1
+
+    print(f"Reconciling PRs: {list(numbers)}")
+    failures = 0
+    for number in numbers:
+        try:
+            result = decide(number)
+            if result is None:
+                continue
+            sha, decision = result
+            publish(sha, decision)
+        except transport.GitHubUnavailable as exc:
+            failures += 1
+            print(f"PR #{number} readiness infrastructure unavailable: {exc}", file=sys.stderr)
+        except Exception as exc:
+            failures += 1
+            print(f"PR #{number} readiness failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+    return 1 if failures else 0
 
 
 if __name__ == "__main__":

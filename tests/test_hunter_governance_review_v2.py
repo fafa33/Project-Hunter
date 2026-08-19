@@ -4,7 +4,14 @@ import hunter_governance_review_v2 as core
 
 
 def _pr(mergeable: bool | None) -> dict:
-    return {"state": "open", "mergeable": mergeable, "head": {"sha": "b" * 40}}
+    return {
+        "state": "open",
+        "mergeable": mergeable,
+        "title": "no canonical title or issue identity",
+        "body": "no matrix, no readiness declaration, no reaction ceremony",
+        "head": {"sha": "b" * 40, "ref": "feature/no-governance-metadata"},
+        "base": {"sha": "c" * 40, "ref": "main"},
+    }
 
 
 def test_governance_review_ignores_process_metadata(monkeypatch):

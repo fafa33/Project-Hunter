@@ -124,3 +124,42 @@ def test_failed_governance_status_blocks(monkeypatch):
 
     assert decision.state == "failure"
     assert "Hunter Governance Review=failure" in decision.description
+
+
+def test_stale_governance_pending_does_not_lock_resolved_mergeability(monkeypatch):
+    _install_green(monkeypatch)
+    monkeypatch.setattr(core, "latest_status", lambda _sha, _context: {"id": 99, "state": "pending"})
+
+    _sha, decision = core.decide(501)
+
+    assert decision.state == "success"
+
+
+def test_shared_head_waits_for_unique_attribution(monkeypatch):
+    _install_green(monkeypatch)
+    monkeypatch.setattr(core, "open_prs_for_head", lambda _sha: (501, 502))
+
+    _sha, decision = core.decide(501)
+
+    assert decision.state == "pending"
+    assert "#502" in decision.description
+
+
+def test_required_checks_match_repository_jobs():
+    assert core.REQUIRED_CHECKS == ("Quality Gates", "dependency-review")
+
+
+def test_sweep_isolates_failure_to_one_pull_request(monkeypatch):
+    published = []
+    monkeypatch.setattr(core, "candidate_prs", lambda: (501, 502))
+
+    def fake_decide(number: int):
+        if number == 501:
+            raise RuntimeError("boom")
+        return "d" * 40, core.Decision("success", "ready")
+
+    monkeypatch.setattr(core, "decide", fake_decide)
+    monkeypatch.setattr(core, "publish", lambda sha, decision: published.append((sha, decision.state)))
+
+    assert core.main() == 1
+    assert published == [("d" * 40, "success")]
