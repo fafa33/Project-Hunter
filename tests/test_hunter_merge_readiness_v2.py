@@ -107,6 +107,19 @@ def test_failed_required_check_blocks(monkeypatch):
     assert "Quality Gates=failure" in decision.description
 
 
+def test_failed_codeql_blocks(monkeypatch):
+    _install_green(monkeypatch)
+    runs = [_green_check(name, index) for index, name in enumerate(core.REQUIRED_CHECKS, start=1)]
+    codeql_index = core.REQUIRED_CHECKS.index("CodeQL")
+    runs[codeql_index] = {**runs[codeql_index], "conclusion": "failure"}
+    monkeypatch.setattr(core, "all_check_runs", lambda _sha: runs)
+
+    _sha, decision = core.decide(501)
+
+    assert decision.state == "failure"
+    assert "CodeQL=failure" in decision.description
+
+
 def test_missing_required_check_waits(monkeypatch):
     _install_green(monkeypatch)
     monkeypatch.setattr(core, "all_check_runs", lambda _sha: [])
@@ -146,7 +159,7 @@ def test_shared_head_waits_for_unique_attribution(monkeypatch):
 
 
 def test_required_checks_match_repository_jobs():
-    assert core.REQUIRED_CHECKS == ("Quality Gates", "dependency-review")
+    assert core.REQUIRED_CHECKS == ("Quality Gates", "dependency-review", "CodeQL")
 
 
 def test_sweep_isolates_failure_to_one_pull_request(monkeypatch):
