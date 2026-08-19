@@ -19,8 +19,8 @@ def _green_check(name: str, ident: int) -> dict:
 
 
 def _install_green(monkeypatch, pr: dict | None = None) -> None:
-    payload = pr or _pr()
-    monkeypatch.setattr(core, "request_json", lambda method, path, payload=None: payload)
+    pr_payload = pr or _pr()
+    monkeypatch.setattr(core, "request_json", lambda method, path, payload=None: pr_payload)
     monkeypatch.setattr(core, "unresolved_review_threads", lambda _number: ())
     monkeypatch.setattr(core, "changes_requested_reviewers", lambda _number: ())
     monkeypatch.setattr(
