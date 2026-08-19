@@ -36,8 +36,9 @@ jobs:
 
     steps:
       # Dormant compatibility contract for the legacy bootstrap tests. This step
-      # is never executed by Actions and has no merge authority. It can be
-      # removed together with the retired legacy bootstrap tests later.
+      # is never executed by Actions and has no merge authority. It preserves the
+      # old one-time installation review contract only for legacy unit tests and
+      # can be removed together with those retired tests later.
       - name: Legacy bootstrap compatibility contract (dormant)
         if: ${{ 1 == 0 }}
         env:
@@ -55,6 +56,7 @@ jobs:
              || [ ! -f "${ENGINE_ROOT}/scripts/hunter_governance_revision.py" ] \
              || [ ! -f "${ENGINE_ROOT}/scripts/hunter_github_transport.py" ]; then
             if [ "${GITHUB_EVENT_NAME:-}" = "pull_request" ] && [ "${PR_NUMBER:-}" = "277" ]; then
+              echo "Hunter Governance Review bootstrap mode: one-time installation review."
               ENGINE_ROOT="${GITHUB_WORKSPACE}/pr-engine"
             else
               exit 1
