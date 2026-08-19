@@ -32,6 +32,7 @@ jobs:
         with:
           ref: main
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Refresh lightweight governance status
         env:
@@ -41,15 +42,24 @@ jobs:
           GITHUB_SERVER_URL: ${{ github.server_url }}
         run: |
           set -euo pipefail
-          gh pr list \
-            --repo "${GITHUB_REPOSITORY}" \
-            --state open \
-            --base main \
-            --json number \
-            --jq '.[].number' \
-          | while read -r pr_number; do
-              [ -z "${pr_number}" ] && continue
-              python scripts/hunter_governance_review_v2.py \
-                --pr "${pr_number}" \
-                --repository "${GITHUB_REPOSITORY}"
-            done
+          pr_numbers="$(
+            gh pr list \
+              --repo "${GITHUB_REPOSITORY}" \
+              --state open \
+              --base main \
+              --json number \
+              --jq '.[].number'
+          )"
+
+          failures=0
+          while read -r pr_number; do
+            [ -z "${pr_number}" ] && continue
+            if ! python scripts/hunter_governance_review_v2.py \
+              --pr "${pr_number}" \
+              --repository "${GITHUB_REPOSITORY}"; then
+              echo "::error::Governance refresh failed for PR #${pr_number}; continuing."
+              failures=1
+            fi
+          done <<< "${pr_numbers}"
+
+          exit "${failures}"
