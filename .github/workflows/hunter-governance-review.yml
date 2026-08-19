@@ -41,20 +41,6 @@ jobs:
           path: engine
           persist-credentials: false
 
-      # One-time self-hosting bridge for this installation PR only. Once #283 is
-      # merged, main owns the v2 controller and this fallback is unreachable.
-      - name: Checkout installation controller
-        if: >-
-          ${{ github.event_name == 'pull_request'
-              && github.event.pull_request.number == 283
-              && github.event.pull_request.head.repo.full_name == github.repository
-              && github.event.pull_request.user.login == github.repository_owner }}
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-          path: installation-engine
-          persist-credentials: false
-
       - name: Publish current merge-state sanity status
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -67,18 +53,23 @@ jobs:
           set -euo pipefail
 
           ENGINE_ROOT="${GITHUB_WORKSPACE}/engine"
-          if [ ! -f "${ENGINE_ROOT}/scripts/hunter_governance_review_v2.py" ]; then
-            if [ "${GITHUB_EVENT_NAME}" = "pull_request" ] \
-               && [ "${PR_NUMBER}" = "283" ] \
-               && [ -f "${GITHUB_WORKSPACE}/installation-engine/scripts/hunter_governance_review_v2.py" ]; then
-              echo "Using the one-time #283 installation controller."
-              ENGINE_ROOT="${GITHUB_WORKSPACE}/installation-engine"
-            else
-              echo "Trusted Hunter Governance Review v2 controller is unavailable."
-              exit 1
-            fi
+          if [ -f "${ENGINE_ROOT}/scripts/hunter_governance_review_v2.py" ]; then
+            python "${ENGINE_ROOT}/scripts/hunter_governance_review_v2.py" \
+              --pr "${PR_NUMBER}" \
+              --repository "${GH_REPO}"
+          elif [ "${GITHUB_EVENT_NAME}" = "pull_request" ] \
+               && [ "${PR_NUMBER}" = "283" ]; then
+            # One-time trusted bootstrap: main still owns the legacy deterministic
+            # evaluator required by main's legacy Merge Readiness consumer. Using
+            # it once publishes the revision marker that old readiness requires.
+            # No PR-controlled code is checked out or executed.
+            echo "Using trusted legacy Governance Review only to bootstrap PR #283."
+            cd "${ENGINE_ROOT}/scripts"
+            python -m hunter_governance_review \
+              --pr "${PR_NUMBER}" \
+              --repository "${GH_REPO}" \
+              --root "${ENGINE_ROOT}"
+          else
+            echo "Trusted Hunter Governance Review controller is unavailable."
+            exit 1
           fi
-
-          python "${ENGINE_ROOT}/scripts/hunter_governance_review_v2.py" \
-            --pr "${PR_NUMBER}" \
-            --repository "${GH_REPO}"
