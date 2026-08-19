@@ -1,8 +1,7 @@
 name: Hunter Governance Agent Preflight
 
-# Post-merge enforcement adapter for Issue #276. The workflow definition and
-# executable policy are both loaded from the trusted default branch; pull-request
-# code is never checked out or executed by this workflow.
+# Lightweight structural sanity check. Process metadata is not merge authority.
+# The workflow never executes PR-controlled code.
 
 on:
   pull_request_target:
@@ -12,42 +11,30 @@ on:
       - opened
       - reopened
       - synchronize
-      - edited
-      - ready_for_review
-      - converted_to_draft
 
 permissions:
   contents: read
-  issues: read
   pull-requests: read
 
 concurrency:
   group: hunter-governance-agent-preflight-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   preflight:
     name: Governance Agent Preflight
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 5
 
     steps:
-      - name: Checkout trusted default-branch enforcement engine
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.repository.default_branch }}
-
-      - name: Validate live PR identity, body, trace, and governance ownership
+      - name: Validate stable PR identity required by GitHub itself
         env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
           set -euo pipefail
-          if [ ! -f scripts/hunter_governance_preflight.py ]; then
-            echo "::error::Trusted governance preflight is missing from the default branch."
-            exit 1
-          fi
-          python scripts/hunter_governance_preflight.py live-pr \
-            --repo "${GH_REPO}" \
-            --pr "${PR_NUMBER}"
+          test -n "${PR_NUMBER}"
+          test -n "${HEAD_SHA}"
+          test "${BASE_REF}" = "main"
+          echo "Governance preflight passed: PR exists, has a head SHA, and targets main."

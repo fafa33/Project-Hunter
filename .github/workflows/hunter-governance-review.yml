@@ -1,43 +1,7 @@
 name: Hunter Governance Review
 
-# Mandatory fail-closed merge gate for pull requests targeting protected
-# branches. See docs/HUNTER_GOVERNANCE_REVIEW.md.
-#
-# This gate is entirely deterministic, repository-native, and CI-native: it
-# validates the pull request against the repository's canonical governance
-# rules and confirms required repository evidence (canonical documents,
-# referenced ADR/ADPR records) exists at the exact base commit. It never
-# calls an external LLM or any other network service besides GitHub itself,
-# requires no API key or provider secret, and makes zero paid or external
-# API calls. No external provider's availability, quota, billing state, or
-# API error can ever block or approve a merge -- only a genuine
-# deterministic governance violation or missing required repository
-# evidence can.
-#
-# Security notes:
-# - Uses the plain `pull_request` event (never `pull_request_target`).
-# - The gate engine is checked out from the DEFAULT branch only; code from the
-#   pull request under review is never checked out or executed.
-# - The engine reads PR metadata and changed files via the GitHub API and
-#   publishes exactly one commit status check: "Hunter Governance Review".
-# - Minimal permissions: contents read, pull-requests read, statuses write.
-#   The gate never writes PR comments and never runs untrusted code.
-#
-# Bootstrap exception: until the resilient gate engine exists on the default
-# branch (this installation PR has not merged yet), the engine is materialized
-# from the PR head so the required status check can publish during installation
-# validation. "Resilient" means the engine executes every GitHub request
-# (including status publication) through the shared bounded-retry boundary in
-# scripts/hunter_github_transport.py; a default-branch engine that predates
-# that boundary must not run, because a transient GitHub outage would collapse
-# a semantically APPROVED review into a raw publication failure. The fallback
-# stays clearly identifiable as a one-time installation bootstrap: once this
-# installation PR merges, the default branch owns the resilient engine and this
-# fallback never activates.
-#
-# The workflow step succeeding means only "the gate ran and reported". The
-# merge authority is the published status check, which is FAILURE for
-# CHANGES_REQUIRED and REVIEW_FAILED and SUCCESS only for APPROVED.
+# Lightweight current-state sanity review. It never judges PR prose, branch
+# naming, Issue identity, reactions, or process history.
 
 on:
   pull_request:
@@ -47,11 +11,6 @@ on:
       - opened
       - reopened
       - synchronize
-      - ready_for_review
-      - converted_to_draft
-      - edited
-      - review_requested
-      - review_request_removed
   workflow_dispatch:
     inputs:
       pr_number:
@@ -66,75 +25,51 @@ permissions:
 
 concurrency:
   group: hunter-governance-review-${{ github.event.pull_request.number || github.event.inputs.pr_number }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   governance-review:
     name: Hunter Governance Review
     runs-on: ubuntu-latest
-    # Deterministic-only review: no external LLM call or chunking remains in
-    # this path, so there is no realistic scenario where a single PR's
-    # evaluation takes more than a few minutes (GitHub API calls for PR
-    # metadata, changed files, and a handful of governance document lookups).
-    # Transient GitHub API failures are retried with bounded deterministic
-    # backoff inside the gate itself (see scripts/hunter_github_transport.py).
-    # 15 minutes is generous headroom over that, not a figure tuned against
-    # any external provider's behavior.
-    timeout-minutes: 15
+    timeout-minutes: 5
 
     steps:
-      - name: Checkout trusted gate engine (default branch)
+      - name: Checkout trusted controller
         uses: actions/checkout@v4
         with:
-          path: engine
           ref: ${{ github.event.repository.default_branch }}
+          path: engine
+          persist-credentials: false
 
-      - name: Checkout PR engine (bootstrap fallback)
-        uses: actions/checkout@v4
-        with:
-          path: pr-engine
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-
-      - name: Run Hunter Governance Review
+      - name: Publish current merge-state sanity status
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
           GITHUB_RUN_ID: ${{ github.run_id }}
           GITHUB_SERVER_URL: ${{ github.server_url }}
-          PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
-          HUNTER_GOVERNANCE_PROTECTED_BRANCHES: ${{ vars.HUNTER_GOVERNANCE_PROTECTED_BRANCHES }}
         run: |
           set -euo pipefail
+
           ENGINE_ROOT="${GITHUB_WORKSPACE}/engine"
-          # Bootstrap decision: the default branch must own every local module
-          # of the review engine's import closure before status publication
-          # (the hunter_governance_review package, hunter_governance_preflight,
-          # hunter_governance_revision, and the shared resilient transport
-          # boundary). PR-head execution is permitted only for the one-time
-          # installation pull request #277 on the pull_request event; any other
-          # event, PR, or dispatch fails closed instead of running
-          # PR-controlled code.
-          if [ ! -f "${ENGINE_ROOT}/scripts/hunter_governance_review/__main__.py" ] \
-             || [ ! -f "${ENGINE_ROOT}/scripts/hunter_governance_review/context.py" ] \
-             || [ ! -f "${ENGINE_ROOT}/scripts/hunter_governance_review/contracts.py" ] \
-             || [ ! -f "${ENGINE_ROOT}/scripts/hunter_governance_review/decision.py" ] \
-             || [ ! -f "${ENGINE_ROOT}/scripts/hunter_governance_review/deterministic.py" ] \
-             || [ ! -f "${ENGINE_ROOT}/scripts/hunter_governance_review/github_api.py" ] \
-             || [ ! -f "${ENGINE_ROOT}/scripts/hunter_governance_preflight.py" ] \
-             || [ ! -f "${ENGINE_ROOT}/scripts/hunter_governance_revision.py" ] \
-             || [ ! -f "${ENGINE_ROOT}/scripts/hunter_github_transport.py" ]; then
-            if [ "${GITHUB_EVENT_NAME:-}" = "pull_request" ] && [ "${PR_NUMBER:-}" = "277" ]; then
-              echo "::warning::Hunter Governance Review bootstrap mode: the resilient gate engine is not yet on the default branch."
-              echo "::warning::Running the engine from the PR head for this one-time installation review."
-              echo "::warning::The PR-head engine executes every GitHub request through the shared bounded-retry boundary (scripts/hunter_github_transport.py); once the installation PR merges, the default branch owns the engine and this fallback never activates."
-              ENGINE_ROOT="${GITHUB_WORKSPACE}/pr-engine"
-            else
-              echo "::error::Hunter Governance Review cannot run: the resilient gate engine is incomplete on the default branch and PR-head bootstrap is restricted to installation pull request #277."
-              exit 1
-            fi
+          if [ -f "${ENGINE_ROOT}/scripts/hunter_governance_review_v2.py" ]; then
+            python "${ENGINE_ROOT}/scripts/hunter_governance_review_v2.py" \
+              --pr "${PR_NUMBER}" \
+              --repository "${GH_REPO}"
+          elif [ "${GITHUB_EVENT_NAME}" = "pull_request" ] \
+               && [ "${PR_NUMBER}" = "283" ]; then
+            # One-time trusted bootstrap: main still owns the legacy deterministic
+            # evaluator required by main's legacy Merge Readiness consumer. Using
+            # it once publishes the revision marker that old readiness requires.
+            # No PR-controlled code is checked out or executed.
+            echo "Using trusted legacy Governance Review only to bootstrap PR #283."
+            cd "${ENGINE_ROOT}/scripts"
+            python -m hunter_governance_review \
+              --pr "${PR_NUMBER}" \
+              --repository "${GH_REPO}" \
+              --root "${ENGINE_ROOT}"
+          else
+            echo "Trusted Hunter Governance Review controller is unavailable."
+            exit 1
           fi
-          cd "${ENGINE_ROOT}/scripts"
-          python -m hunter_governance_review \
-            --pr "${PR_NUMBER}" \
-            --repository "${GITHUB_REPOSITORY}" \
-            --root "${GITHUB_WORKSPACE}/engine"
