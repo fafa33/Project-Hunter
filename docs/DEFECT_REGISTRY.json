@@ -65,11 +65,11 @@
     {
       "id": "PRH-007",
       "class": "candidate-pushed-without-complete-local-preflight",
-      "source": "Issue #291 implementation hosted preflight failures on 2026-08-20",
+      "source": "Issue #291 implementation hosted preflight failures and PR #293 stale-run acceptance on 2026-08-20",
       "classification": "systemic",
-      "guard_boundary": "shared full preflight contract before review progression",
-      "guard": "agents must run the complete normal preflight before push; the exact-head hosted Pre-PR workflow independently reruns Artifact Guard, Ruff, Black, Mypy, and Pytest and fails closed",
-      "test": "tests/test_recent_preflight_defect_registry.py::test_agents_must_run_complete_preflight_before_push",
+      "guard_boundary": "shared full preflight contract plus exact-head hosted evidence before review progression",
+      "guard": "agents must run the complete normal preflight before push; hosted Pre-PR proof is valid only when the run commit SHA exactly equals the current branch HEAD; run number, latest label, or remembered green state alone is not evidence",
+      "test": "tests/test_recent_preflight_defect_registry.py::test_hosted_preflight_evidence_must_match_exact_branch_head",
       "status": "guarded"
     },
     {
