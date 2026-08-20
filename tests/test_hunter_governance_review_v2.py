@@ -47,6 +47,17 @@ def test_governance_review_waits_for_unknown_mergeability(monkeypatch):
     assert published[0][3] == "pending"
 
 
+def test_governance_review_skips_non_main_target(monkeypatch):
+    published = []
+    pr = _pr(True)
+    pr["base"]["ref"] = "release"
+    monkeypatch.setattr(core, "read_mergeability", lambda _repo, _token, _number: pr)
+    monkeypatch.setattr(core, "publish", lambda *args: published.append(args))
+
+    assert core.review("fafa33/Project-Hunter", "token", 501) == 0
+    assert published == []
+
+
 def test_workflow_uses_only_trusted_v2_controller_without_bootstrap():
     workflow = (
         Path(__file__).resolve().parents[1] / ".github" / "workflows" / "hunter-governance-review.yml"

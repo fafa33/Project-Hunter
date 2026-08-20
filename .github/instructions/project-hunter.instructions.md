@@ -12,7 +12,7 @@ Treat the repository and current GitHub state as the source of truth.
 - Read the architecture/ADR material that actually governs the area being changed. Do not perform repository-wide ceremony for a local change unless the change genuinely crosses those boundaries.
 - Prefer the smallest correct change. Do not invent missing architecture, weaken tests, or hide real failures.
 - Before pushing a code-changing candidate, run `python scripts/hunter_pr_preflight.py` when the environment permits it.
-- Link the relevant Issue/ADR when useful for traceability, but branch names, commit messages, PR titles/bodies, checkboxes, comments, reactions, and metadata formatting are not merge authority.
+- Link the relevant Issue/ADR when useful for traceability, but Issue identity, branch names, commit messages, PR titles/bodies, checkboxes, top-level PR comments, reactions, metadata-only edits, and superseded historical runs are not merge authority.
 
 ## Review and correction
 
@@ -29,10 +29,11 @@ The active merge path is current-state based. A PR is not ready while any of the
 - GitHub reports a merge conflict or unresolved mergeability;
 - a substantive inline review thread remains unresolved;
 - a current review is `CHANGES_REQUESTED`;
-- `Quality Gates`, `dependency-review`, or `CodeQL` is missing, pending, or failed;
-- `Hunter Governance Review` is failed;
+- `Quality Gates`, `dependency-review`, or `CodeQL` is missing, pending, cancelled, or failed;
+- `Hunter Governance Review` is missing or non-stale pending;
+- `Hunter Governance Review` is failed or errored;
 - the head cannot be safely attributed to the PR.
 
-Do not merge until every required gate on the final code head is green. Human merge approval remains required.
+`Hunter Merge Readiness` is the final current-state controller. Do not merge until it and every required gate on the final code head are green. Human merge approval remains required.
 
 Do not run or recreate the retired `hunter_governance_preflight.py`, Draft Promotion, owner-`+1`, PR-body identity, or exact-pair hostile-review-attestation ceremony as merge prerequisites.

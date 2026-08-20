@@ -16,6 +16,8 @@ The trusted workflow checks out the repository default branch and runs that cont
 
 ## Current decision
 
+Before publishing any status, the controller verifies that the open pull request targets `main`. A manually dispatched run for a PR targeting another base branch is ignored and publishes no governance status.
+
 For an open PR targeting `main`:
 
 - `mergeable == false` -> publish `failure` for a real merge conflict;

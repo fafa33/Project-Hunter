@@ -65,10 +65,10 @@ Every conclusion must explain why, how, evidence, confidence, and what could cha
 Truth overrides confidence. Evidence overrides opinion. Learning never ends.
 
 # Rule 21 — Traceability Without Ceremony
-Link the governing Issue, ADR, or other authority when one actually applies. Never reuse an unrelated Issue. Traceability metadata is helpful, but branch names, commit messages, PR titles/bodies, checkboxes, comments, reactions, and metadata formatting are not merge authority and must not block otherwise healthy work.
+Link the governing Issue, ADR, or other authority when one actually applies. Never reuse an unrelated Issue. Traceability metadata is helpful, but Issue identity, branch names, commit messages, PR titles/bodies, checkboxes, top-level PR comments, reactions, metadata-only edits, and superseded historical runs are not merge authority and must not block otherwise healthy work.
 
 # Rule 22 — Current-State Review Gate
-Review is proportional to risk. Substantive correctness, security, architecture, persistence/replay, evidence-integrity, migration, and equivalent findings may block. Non-blocking maintainability or style recommendations must not delay merge after real blockers are resolved. Metadata-only or non-blocking changes do not force a new full review. Material changes to reviewed behavior require targeted re-review of the affected scope.
+Review is proportional to risk. Substantive correctness, security, architecture, persistence/replay, evidence-integrity, migration, and equivalent findings may block. Current Draft/conflict state and substantive inline review findings remain blockers under Merge Readiness. Non-blocking maintainability or style recommendations must not delay merge after real blockers are resolved. Metadata-only or non-blocking changes do not force a new full review. Material changes to reviewed behavior require targeted re-review of the affected scope.
 
 # Rule 23 — No Repeat Systemic Failure
 When an independent review identifies a **blocking systemic** defect, harden the earliest reliable reusable boundary with a durable guard where appropriate (tests, validators, schemas, typed interfaces, CI, or agent instructions). This obligation applies to systemic blocking defects, not to optional review recommendations.

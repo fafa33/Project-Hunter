@@ -39,7 +39,7 @@ The active merge controls are current GitHub state, not process history. A PR mu
 
 Required checks are `Quality Gates`, `dependency-review`, `CodeQL`, and `Hunter Governance Review`, with `Hunter Merge Readiness` as the final current-state controller.
 
-PR prose, Issue/branch naming, commit-message formatting, top-level comments, reactions, metadata edits, superseded runs, Draft Promotion signals, and hostile-review attestation markers are not merge authority.
+PR prose, Issue identity, branch naming, commit-message formatting, top-level PR comments, reactions, metadata-only edits, superseded historical runs, Draft Promotion signals, and hostile-review attestation markers are not merge authority.
 
 Never merge until the final required gates are green. Human merge approval remains required.
 
