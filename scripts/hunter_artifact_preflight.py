@@ -62,9 +62,7 @@ ALLOWED_VERDICTS = (
     "ADPR_REVISION_REQUIRED",
     "ARCHITECTURE_NOT_READY",
 )
-PENDING_PLACEHOLDER_RE = re.compile(
-    r"(?im)(?:`PENDING[^`]*`|\|\s*PENDING\s*\||:\s*PENDING\b|\bPENDING\s*[—-])"
-)
+PENDING_PLACEHOLDER_RE = re.compile(r"(?im)(?:`PENDING[^`]*`|\|\s*PENDING\s*\||:\s*PENDING\b|\bPENDING\s*[—-])")
 AUDITOR_RE = re.compile(r"(?im)^-\s*Auditor:\s*(.+?)\s*$")
 REVISION_RE = re.compile(r"(?im)^-\s*Reviewed revision:\s*`?([0-9a-f]{40})`?\s*$")
 AUDIT_TYPE_RE = re.compile(r"(?im)^-\s*Audit type:\s*`?(FULL|TARGETED)`?\s*$")
@@ -153,9 +151,7 @@ def validate_registry(data: dict[str, Any]) -> list[str]:
             continue
 
         defect_id = item["id"]
-        if not isinstance(defect_id, str) or not re.fullmatch(
-            r"[A-Z]+(?:-[A-Z]+)*-\d{3}", defect_id
-        ):
+        if not isinstance(defect_id, str) or not re.fullmatch(r"[A-Z]+(?:-[A-Z]+)*-\d{3}", defect_id):
             errors.append(f"Registry item {index} has invalid id {defect_id!r}.")
         elif defect_id in seen:
             errors.append(f"Duplicate defect id: {defect_id}.")
@@ -174,11 +170,7 @@ def validate_registry(data: dict[str, Any]) -> list[str]:
 
     missing_ids = sorted(REQUIRED_DEFECT_IDS - seen)
     if missing_ids:
-        errors.append(
-            "Registry dropped required understood defect classes: "
-            + ", ".join(missing_ids)
-            + "."
-        )
+        errors.append("Registry dropped required understood defect classes: " + ", ".join(missing_ids) + ".")
     return errors
 
 
@@ -321,11 +313,7 @@ def _structured_adr_accounting_ids(text: str) -> set[str]:
 
 def _finding_matrix_rows(matrix: str) -> tuple[list[tuple[str, str, str]], list[str]]:
     semantic_matrix = _mask_markdown_nonsemantic(matrix)
-    rows = [
-        _markdown_cells(line)
-        for line in semantic_matrix.splitlines()
-        if line.strip().startswith("|")
-    ]
+    rows = [_markdown_cells(line) for line in semantic_matrix.splitlines() if line.strip().startswith("|")]
     for index, row in enumerate(rows):
         headers = [_normalized_cell(cell) for cell in row]
         if not {"finding", "class", "blocks adr"}.issubset(headers):
@@ -338,9 +326,7 @@ def _finding_matrix_rows(matrix: str) -> tuple[list[tuple[str, str, str]], list[
 
         for candidate in rows[index + 1 :]:
             populated = [cell.strip() for cell in candidate if cell.strip()]
-            if populated and all(
-                re.fullmatch(r":?-{3,}:?", cell) for cell in populated
-            ):
+            if populated and all(re.fullmatch(r":?-{3,}:?", cell) for cell in populated):
                 continue
             if max(finding_index, class_index, blocks_index) >= len(candidate):
                 continue
@@ -351,14 +337,10 @@ def _finding_matrix_rows(matrix: str) -> tuple[list[tuple[str, str, str]], list[
             if not finding_id:
                 continue
             if not re.fullmatch(r"[A-D]", severity):
-                errors.append(
-                    f"Findings Matrix row {finding_id!r} must use Class A, B, C, or D."
-                )
+                errors.append(f"Findings Matrix row {finding_id!r} must use Class A, B, C, or D.")
                 continue
             if blocks_adr not in {"YES", "NO"}:
-                errors.append(
-                    f"Findings Matrix row {finding_id!r} must set Blocks ADR to YES or NO."
-                )
+                errors.append(f"Findings Matrix row {finding_id!r} must set Blocks ADR to YES or NO.")
                 continue
             parsed.append((finding_id, severity, blocks_adr))
 
@@ -377,9 +359,7 @@ def _finding_records(findings: str) -> dict[str, dict[str, str]]:
         block = semantic_findings[heading.end() : end]
         fields: dict[str, str] = {}
         for field in FINDING_FIELD_RE.finditer(block):
-            fields[field.group("label").lower()] = _normalize_markdown_scalar(
-                field.group("value")
-            )
+            fields[field.group("label").lower()] = _normalize_markdown_scalar(field.group("value"))
         records[finding_id] = fields
     return records
 
@@ -396,20 +376,12 @@ def _validate_blocking_finding_records(findings: str, matrix: str) -> list[str]:
             continue
         record = records.get(finding_id.upper())
         if record is None:
-            errors.append(
-                f"Blocking finding {finding_id} must have a complete finding record in ## Findings."
-            )
+            errors.append(f"Blocking finding {finding_id} must have a complete finding record in ## Findings.")
             continue
 
-        missing = sorted(
-            field
-            for field in REQUIRED_FINDING_FIELDS
-            if not record.get(field, "").strip()
-        )
+        missing = sorted(field for field in REQUIRED_FINDING_FIELDS if not record.get(field, "").strip())
         if missing:
-            errors.append(
-                f"Blocking finding {finding_id} record is incomplete; missing: {', '.join(missing)}."
-            )
+            errors.append(f"Blocking finding {finding_id} record is incomplete; missing: {', '.join(missing)}.")
             continue
 
         record_severity = record["severity"].upper()
@@ -445,9 +417,7 @@ def _selected_verdicts(text: str) -> list[str]:
     return [declared] if declared in ALLOWED_VERDICTS else []
 
 
-def _validate_verdict_consistency(
-    selected_verdict: str | None, matrix: str
-) -> list[str]:
+def _validate_verdict_consistency(selected_verdict: str | None, matrix: str) -> list[str]:
     rows, errors = _finding_matrix_rows(matrix)
     if errors:
         return errors
@@ -456,17 +426,11 @@ def _validate_verdict_consistency(
 
     for finding_id, severity, blocks_adr in rows:
         if severity in {"C", "D"} and blocks_adr != "YES":
-            errors.append(
-                f"Class {severity} finding {finding_id} must set Blocks ADR = YES."
-            )
+            errors.append(f"Class {severity} finding {finding_id} must set Blocks ADR = YES.")
         if severity in {"A", "B"} and blocks_adr == "YES":
-            errors.append(
-                f"Class {severity} finding {finding_id} may not set Blocks ADR = YES."
-            )
+            errors.append(f"Class {severity} finding {finding_id} may not set Blocks ADR = YES.")
 
-    highest = max(
-        (severity for _, severity, _ in rows), key=SEVERITY_ORDER.__getitem__
-    )
+    highest = max((severity for _, severity, _ in rows), key=SEVERITY_ORDER.__getitem__)
     if highest == "D" and selected_verdict != "ARCHITECTURE_NOT_READY":
         errors.append("Unresolved Class D finding requires ARCHITECTURE_NOT_READY.")
     elif highest == "C" and selected_verdict != "ADPR_REVISION_REQUIRED":
@@ -476,21 +440,16 @@ def _validate_verdict_consistency(
         "CONDITIONAL_ADR_READY",
     }:
         errors.append(
-            "Unresolved Class B finding requires READY_FOR_ADR_WITH_MINOR_FINDINGS "
-            "or CONDITIONAL_ADR_READY."
+            "Unresolved Class B finding requires READY_FOR_ADR_WITH_MINOR_FINDINGS " "or CONDITIONAL_ADR_READY."
         )
     elif highest == "A" and selected_verdict not in {
         "READY_FOR_ADR",
         "READY_FOR_ADR_WITH_MINOR_FINDINGS",
     }:
-        errors.append(
-            "Class A-only audit requires READY_FOR_ADR or READY_FOR_ADR_WITH_MINOR_FINDINGS."
-        )
+        errors.append("Class A-only audit requires READY_FOR_ADR or READY_FOR_ADR_WITH_MINOR_FINDINGS.")
 
     if selected_verdict == "ARCHITECTURE_NOT_READY" and highest != "D":
-        errors.append(
-            "ARCHITECTURE_NOT_READY requires at least one unresolved Class D finding."
-        )
+        errors.append("ARCHITECTURE_NOT_READY requires at least one unresolved Class D finding.")
     if selected_verdict == "ADPR_REVISION_REQUIRED" and highest != "C":
         errors.append(
             "ADPR_REVISION_REQUIRED requires Class C as the highest unresolved severity and no Class D finding."
@@ -499,9 +458,7 @@ def _validate_verdict_consistency(
         "READY_FOR_ADR_WITH_MINOR_FINDINGS",
         "CONDITIONAL_ADR_READY",
     } and highest not in {"A", "B"}:
-        errors.append(
-            f"{selected_verdict} is valid only when the highest unresolved severity is A or B."
-        )
+        errors.append(f"{selected_verdict} is valid only when the highest unresolved severity is A or B.")
 
     return errors
 
@@ -538,31 +495,23 @@ def validate_audit_text(text: str, *, accepted_adrs: list[str]) -> list[str]:
     cutoff_match = CUTOFF_RE.search(semantic_text)
     if MUTABLE_EVIDENCE_RE.search(evidence):
         if not cutoff_match:
-            errors.append(
-                "Audit using mutable PR/Issue/URL evidence must record an Evidence cutoff."
-            )
+            errors.append("Audit using mutable PR/Issue/URL evidence must record an Evidence cutoff.")
         elif not _validate_iso8601(cutoff_match.group(1)):
             errors.append("Evidence cutoff must be an offset-aware ISO-8601 timestamp.")
     elif cutoff_match and not _validate_iso8601(cutoff_match.group(1)):
-        errors.append(
-            "Evidence cutoff must be an offset-aware ISO-8601 timestamp when present."
-        )
+        errors.append("Evidence cutoff must be an offset-aware ISO-8601 timestamp when present.")
 
     if audit_type == "FULL":
         accounted_adrs = _structured_adr_accounting_ids(semantic_text)
         for adr in accepted_adrs:
             if adr not in accounted_adrs:
-                errors.append(
-                    f"Accepted ADR {adr} is not structurally accounted for in FULL audit."
-                )
+                errors.append(f"Accepted ADR {adr} is not structurally accounted for in FULL audit.")
 
     scope = _section(semantic_text, "## Audit Scope")
     if PRIOR_REVIEW_SCOPE_RE.search(scope):
         prior = _section(semantic_text, "## Prior Review Finding Re-Verification")
         if not prior:
-            errors.append(
-                "Audit scope declares prior review history but lacks Prior Review Finding Re-Verification."
-            )
+            errors.append("Audit scope declares prior review history but lacks Prior Review Finding Re-Verification.")
         elif not NO_PRIOR_FINDINGS_RE.search(prior) and not (
             PRIOR_FINDING_REFERENCE_RE.search(prior)
             and re.search(r"(?i)\bevidence\b", prior)
@@ -574,29 +523,22 @@ def validate_audit_text(text: str, *, accepted_adrs: list[str]) -> list[str]:
             )
 
     if FINDING_CLASS_FIELD_RE.search(semantic_text):
-        errors.append(
-            "Finding records must use canonical `Severity`; `Class` is reserved for the Findings Matrix."
-        )
+        errors.append("Finding records must use canonical `Severity`; `Class` is reserved for the Findings Matrix.")
 
-    for match in re.finditer(
-        r"(?im)^-\s*\*\*Severity:\*\*\s*`?([^`\n]+)`?\s*$", semantic_text
-    ):
+    for match in re.finditer(r"(?im)^-\s*\*\*Severity:\*\*\s*`?([^`\n]+)`?\s*$", semantic_text):
         if not re.fullmatch(r"[A-D]", match.group(1).strip()):
             errors.append("Finding Severity must be exactly A, B, C, or D.")
 
     verdicts = _selected_verdicts(semantic_text)
     if len(verdicts) != 1:
-        errors.append(
-            "Final Verdict must contain exactly one canonical declared audit verdict line."
-        )
+        errors.append("Final Verdict must contain exactly one canonical declared audit verdict line.")
         selected_verdict = None
     else:
         selected_verdict = verdicts[0]
 
     corrections = _section(semantic_text, "## Required Corrections or Conditions")
     if selected_verdict == "CONDITIONAL_ADR_READY" and (
-        not corrections
-        or corrections.strip().lower() in {"none", "n/a", "not applicable"}
+        not corrections or corrections.strip().lower() in {"none", "n/a", "not applicable"}
     ):
         errors.append("CONDITIONAL_ADR_READY requires explicit mandatory conditions.")
 
@@ -650,9 +592,7 @@ def run_artifact_preflight(paths: list[Path] | None = None) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description=(
-            "Validate the defect registry and changed governed artifacts deterministically."
-        )
+        description=("Validate the defect registry and changed governed artifacts deterministically.")
     )
     parser.add_argument(
         "--all-audits",
