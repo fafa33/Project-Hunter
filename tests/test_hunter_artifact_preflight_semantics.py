@@ -69,6 +69,20 @@ None.
 """
 
 
+def _blocking_record(severity: str) -> str:
+    return f"""### F-001 — Blocking fixture finding
+
+- **Evidence:** Direct repository evidence.
+- **Location:** `docs/example.md`, decision boundary.
+- **Category:** Architecture decision quality.
+- **Severity:** `{severity}`
+- **Decision impact:** The decision basis can become unreliable.
+- **Consequence if ignored:** An unsupported architectural conclusion could be selected.
+- **Required action:** Correct the material defect before progression.
+- **Blocks ADR:** `YES`
+"""
+
+
 def _validate(text: str) -> list[str]:
     return hunter_artifact_preflight.validate_audit_text(
         text,
@@ -135,6 +149,7 @@ def test_ready_verdict_rejects_unresolved_class_c() -> None:
 def test_adpr_revision_required_accepts_class_c_but_not_class_d() -> None:
     class_c = (
         _good_audit()
+        .replace("No blocking findings.", _blocking_record("C"))
         .replace("- `READY_FOR_ADR`", "- `ADPR_REVISION_REQUIRED`")
         .replace(
             "| F-001 | A | None | None | NO | Evidence |",
@@ -143,9 +158,12 @@ def test_adpr_revision_required_accepts_class_c_but_not_class_d() -> None:
     )
     assert _validate(class_c) == []
 
-    class_d = class_c.replace(
-        "| F-001 | C | Impact | Consequence | YES | Evidence |",
-        "| F-001 | D | Impact | Consequence | YES | Evidence |",
+    class_d = (
+        class_c.replace("- **Severity:** `C`", "- **Severity:** `D`")
+        .replace(
+            "| F-001 | C | Impact | Consequence | YES | Evidence |",
+            "| F-001 | D | Impact | Consequence | YES | Evidence |",
+        )
     )
     errors = _validate(class_d)
     assert any("Class D finding requires ARCHITECTURE_NOT_READY" in error for error in errors)
@@ -154,6 +172,7 @@ def test_adpr_revision_required_accepts_class_c_but_not_class_d() -> None:
 def test_architecture_not_ready_requires_class_d() -> None:
     class_c = (
         _good_audit()
+        .replace("No blocking findings.", _blocking_record("C"))
         .replace("- `READY_FOR_ADR`", "- `ARCHITECTURE_NOT_READY`")
         .replace(
             "| F-001 | A | None | None | NO | Evidence |",
@@ -163,9 +182,12 @@ def test_architecture_not_ready_requires_class_d() -> None:
     errors = _validate(class_c)
     assert any("ARCHITECTURE_NOT_READY requires at least one unresolved Class D" in error for error in errors)
 
-    class_d = class_c.replace(
-        "| F-001 | C | Impact | Consequence | YES | Evidence |",
-        "| F-001 | D | Impact | Consequence | YES | Evidence |",
+    class_d = (
+        class_c.replace("- **Severity:** `C`", "- **Severity:** `D`")
+        .replace(
+            "| F-001 | C | Impact | Consequence | YES | Evidence |",
+            "| F-001 | D | Impact | Consequence | YES | Evidence |",
+        )
     )
     assert _validate(class_d) == []
 
