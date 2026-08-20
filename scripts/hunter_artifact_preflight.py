@@ -78,6 +78,8 @@ BLOCKS_ADR_FIELD_YES_RE = re.compile(r"(?im)^-\s*\*\*Blocks ADR:\*\*\s*`?YES`?\s
 ADR_DISPOSITION_RE = re.compile(
     r"(?i)\b(?:reviewed|verified|applicable|in\s+scope|out\s+of\s+scope|not\s+applicable|no\s+conflict|conflict)\b"
 )
+FENCE_OPEN_RE = re.compile(r"^[ \t]{0,3}(?P<fence>`{3,}|~{3,})(?:[^\r\n]*)$")
+FENCE_CLOSE_RE = re.compile(r"^[ \t]{0,3}(?P<fence>`{3,}|~{3,})[ \t]*$")
 
 
 def _run_git(*args: str) -> subprocess.CompletedProcess[str]:
@@ -167,15 +169,49 @@ def accepted_adr_ids(index_text: str) -> list[str]:
     return sorted(set(ids))
 
 
+def _mask_markdown_fenced_code(text: str) -> str:
+    """Mask fenced code while preserving offsets, line endings, and visible Markdown structure."""
+    masked: list[str] = []
+    fence_char: str | None = None
+    fence_length = 0
+
+    for line in text.splitlines(keepends=True):
+        body = line.rstrip("\r\n")
+        ending = line[len(body) :]
+
+        if fence_char is None:
+            opening = FENCE_OPEN_RE.fullmatch(body)
+            if opening:
+                fence = opening.group("fence")
+                fence_char = fence[0]
+                fence_length = len(fence)
+                masked.append(" " * len(body) + ending)
+                continue
+            masked.append(line)
+            continue
+
+        closing = FENCE_CLOSE_RE.fullmatch(body)
+        if closing:
+            fence = closing.group("fence")
+            if fence[0] == fence_char and len(fence) >= fence_length:
+                fence_char = None
+                fence_length = 0
+        masked.append(" " * len(body) + ending)
+
+    return "".join(masked)
+
+
 def _heading_match(text: str, heading: str) -> re.Match[str] | None:
-    return re.search(rf"(?m)^{re.escape(heading)}[ \t]*$", text)
+    semantic_text = _mask_markdown_fenced_code(text)
+    return re.search(rf"(?m)^{re.escape(heading)}[ \t]*$", semantic_text)
 
 
 def _section(text: str, heading: str) -> str:
-    match = _heading_match(text, heading)
+    semantic_text = _mask_markdown_fenced_code(text)
+    match = re.search(rf"(?m)^{re.escape(heading)}[ \t]*$", semantic_text)
     if not match:
         return ""
-    remainder = text[match.end() :]
+    remainder = semantic_text[match.end() :]
     next_heading = re.search(r"(?m)^##[ \t]+[^\n]+[ \t]*$", remainder)
     if next_heading:
         remainder = remainder[: next_heading.start()]
@@ -209,8 +245,9 @@ def _normalized_cell(value: str) -> str:
 
 
 def _structured_adr_accounting_ids(text: str) -> set[str]:
+    semantic_text = _mask_markdown_fenced_code(text)
     accounted: set[str] = set()
-    for line in text.splitlines():
+    for line in semantic_text.splitlines():
         stripped = line.strip()
         if stripped.startswith("|"):
             cells = _markdown_cells(stripped)
@@ -228,7 +265,8 @@ def _structured_adr_accounting_ids(text: str) -> set[str]:
 
 
 def _matrix_has_blocks_adr_yes(matrix: str) -> bool:
-    rows = [_markdown_cells(line) for line in matrix.splitlines() if line.strip().startswith("|")]
+    semantic_matrix = _mask_markdown_fenced_code(matrix)
+    rows = [_markdown_cells(line) for line in semantic_matrix.splitlines() if line.strip().startswith("|")]
     for index, row in enumerate(rows):
         headers = [_normalized_cell(cell) for cell in row]
         if "blocks adr" not in headers:
@@ -265,32 +303,33 @@ def _selected_verdicts(text: str) -> list[str]:
 def validate_audit_text(text: str, *, accepted_adrs: list[str]) -> list[str]:
     """Validate canonical audit requirements without inventing prose-only ceremony."""
     errors: list[str] = []
+    semantic_text = _mask_markdown_fenced_code(text)
 
     for heading in REQUIRED_AUDIT_HEADINGS:
-        if not _heading_match(text, heading):
+        if not _heading_match(semantic_text, heading):
             errors.append(f"Missing mandatory audit heading: {heading}.")
 
-    if PENDING_PLACEHOLDER_RE.search(text):
+    if PENDING_PLACEHOLDER_RE.search(semantic_text):
         errors.append("Audit contains unresolved PENDING placeholder content.")
 
-    auditor_match = AUDITOR_RE.search(text)
+    auditor_match = AUDITOR_RE.search(semantic_text)
     if not auditor_match or not auditor_match.group(1).strip():
         errors.append("Audit must record an independent auditor identity.")
     elif "pending" in auditor_match.group(1).lower():
         errors.append("Audit auditor identity may not be pending.")
 
-    if not REVISION_RE.search(text):
+    if not REVISION_RE.search(semantic_text):
         errors.append("Audit must pin Reviewed revision to an immutable 40-hex commit.")
 
-    audit_type_match = AUDIT_TYPE_RE.search(text)
+    audit_type_match = AUDIT_TYPE_RE.search(semantic_text)
     if not audit_type_match:
         errors.append("Audit type must be FULL or TARGETED.")
         audit_type = None
     else:
         audit_type = audit_type_match.group(1)
 
-    evidence = _section(text, "## Evidence Sources Examined")
-    cutoff_match = CUTOFF_RE.search(text)
+    evidence = _section(semantic_text, "## Evidence Sources Examined")
+    cutoff_match = CUTOFF_RE.search(semantic_text)
     if MUTABLE_EVIDENCE_RE.search(evidence):
         if not cutoff_match:
             errors.append("Audit using mutable PR/Issue/URL evidence must record an Evidence cutoff.")
@@ -300,14 +339,14 @@ def validate_audit_text(text: str, *, accepted_adrs: list[str]) -> list[str]:
         errors.append("Evidence cutoff must be an offset-aware ISO-8601 timestamp when present.")
 
     if audit_type == "FULL":
-        accounted_adrs = _structured_adr_accounting_ids(text)
+        accounted_adrs = _structured_adr_accounting_ids(semantic_text)
         for adr in accepted_adrs:
             if adr not in accounted_adrs:
                 errors.append(f"Accepted ADR {adr} is not structurally accounted for in FULL audit.")
 
-    scope = _section(text, "## Audit Scope")
+    scope = _section(semantic_text, "## Audit Scope")
     if PRIOR_REVIEW_SCOPE_RE.search(scope):
-        prior = _section(text, "## Prior Review Finding Re-Verification")
+        prior = _section(semantic_text, "## Prior Review Finding Re-Verification")
         if not prior:
             errors.append("Audit scope declares prior review history but lacks Prior Review Finding Re-Verification.")
         elif not NO_PRIOR_FINDINGS_RE.search(prior) and not (
@@ -320,29 +359,29 @@ def validate_audit_text(text: str, *, accepted_adrs: list[str]) -> list[str]:
                 "decision consequence, or explicitly state that none exist."
             )
 
-    if FINDING_CLASS_FIELD_RE.search(text):
+    if FINDING_CLASS_FIELD_RE.search(semantic_text):
         errors.append("Finding records must use canonical `Severity`; `Class` is reserved for the Findings Matrix.")
 
-    for match in re.finditer(r"(?im)^-\s*\*\*Severity:\*\*\s*`?([^`\n]+)`?\s*$", text):
+    for match in re.finditer(r"(?im)^-\s*\*\*Severity:\*\*\s*`?([^`\n]+)`?\s*$", semantic_text):
         if not re.fullmatch(r"[A-D]", match.group(1).strip()):
             errors.append("Finding Severity must be exactly A, B, C, or D.")
 
-    verdicts = _selected_verdicts(text)
+    verdicts = _selected_verdicts(semantic_text)
     if len(verdicts) != 1:
         errors.append("Final Verdict must contain exactly one canonical declared audit verdict line.")
         selected_verdict = None
     else:
         selected_verdict = verdicts[0]
 
-    corrections = _section(text, "## Required Corrections or Conditions")
+    corrections = _section(semantic_text, "## Required Corrections or Conditions")
     if selected_verdict == "CONDITIONAL_ADR_READY" and (
         not corrections or corrections.strip().lower() in {"none", "n/a", "not applicable"}
     ):
         errors.append("CONDITIONAL_ADR_READY requires explicit mandatory conditions.")
 
     if selected_verdict in {"ADPR_REVISION_REQUIRED", "ARCHITECTURE_NOT_READY"}:
-        findings = _section(text, "## Findings")
-        matrix = _section(text, "## Findings Matrix")
+        findings = _section(semantic_text, "## Findings")
+        matrix = _section(semantic_text, "## Findings Matrix")
         if not BLOCKS_ADR_FIELD_YES_RE.search(findings) and not _matrix_has_blocks_adr_yes(matrix):
             errors.append(f"{selected_verdict} requires at least one evidence-backed finding with Blocks ADR = YES.")
 
