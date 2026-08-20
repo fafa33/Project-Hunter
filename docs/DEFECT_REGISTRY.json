@@ -63,6 +63,26 @@
       "status": "guarded"
     },
     {
+      "id": "PRH-007",
+      "class": "candidate-pushed-without-complete-local-preflight",
+      "source": "Issue #291 implementation hosted preflight failures on 2026-08-20",
+      "classification": "systemic",
+      "guard_boundary": "shared full preflight contract before review progression",
+      "guard": "agents must run the complete normal preflight before push; the exact-head hosted Pre-PR workflow independently reruns Artifact Guard, Ruff, Black, Mypy, and Pytest and fails closed",
+      "test": "tests/test_hunter_pr_preflight.py::test_normal_quality_gate_order_matches_ci_contract",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-008",
+      "class": "ambiguous-nested-test-fixture-type-inference",
+      "source": "Issue #291 implementation Mypy failure on 2026-08-20",
+      "classification": "isolated",
+      "guard_boundary": "full-repository static typing gate",
+      "guard": "Mypy must pass in both normal and tests-first-red preflight before a candidate can progress; nested mutable test fixtures must use explicit typing when inference collapses to object",
+      "test": "tests/test_hunter_pr_preflight.py::test_normal_quality_gate_order_matches_ci_contract",
+      "status": "guarded"
+    },
+    {
       "id": "ARCH-AUD-001",
       "class": "accepted-adr-coverage-incomplete",
       "source": "PR #288 and PR #290 CodeRabbit",
