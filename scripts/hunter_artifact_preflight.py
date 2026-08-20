@@ -33,6 +33,7 @@ REQUIRED_DEFECT_IDS = {
     "PRH-007",
     "PRH-008",
     "PRH-009",
+    "PRH-010",
     "ARCH-AUD-001",
     "ARCH-AUD-002",
     "ARCH-AUD-003",
@@ -70,7 +71,6 @@ CUTOFF_RE = re.compile(r"(?im)^-\s*Evidence cutoff:\s*`?([^`\n]+)`?\s*$")
 MUTABLE_EVIDENCE_RE = re.compile(r"(?i)(?:https?://|\bPR\s*#\d+\b|\bIssue\s*#\d+\b)")
 PRIOR_REVIEW_SCOPE_RE = re.compile(r"(?i)(?:prior\s+review|previous\s+finding|\bPR\s*#\d+\b)")
 FINDING_CLASS_FIELD_RE = re.compile(r"(?im)^-\s*\*\*Class:\*\*")
-FINDING_SEVERITY_RE = re.compile(r"(?im)^-\s*\*\*Severity:\*\*\s*`?([A-D])`?\s*$")
 BLOCKS_ADR_YES_RE = re.compile(r"(?im)(?:\*\*Blocks ADR:\*\*\s*`?YES`?|\|[^\n]*\|\s*YES\s*\|)")
 
 
@@ -85,19 +85,18 @@ def _run_git(*args: str) -> subprocess.CompletedProcess[str]:
 
 
 def changed_paths() -> list[Path]:
-    """Return added/copied/modified/renamed paths relative to the branch base."""
+    """Return changed paths against the proven branch merge-base with origin/main."""
     merge_base = _run_git("merge-base", "HEAD", "origin/main")
-    if merge_base.returncode == 0 and merge_base.stdout.strip():
-        base = merge_base.stdout.strip()
-        diff = _run_git("diff", "--name-only", "--diff-filter=ACMR", f"{base}...HEAD")
-    else:
-        diff = _run_git("diff", "--name-only", "--diff-filter=ACMR", "HEAD^", "HEAD")
-
-    if diff.returncode != 0:
+    if merge_base.returncode != 0 or not merge_base.stdout.strip():
         raise RuntimeError(
-            "Unable to determine changed files. Fetch repository history/origin/main "
+            "Unable to prove merge-base with origin/main. Fetch complete repository history "
             "before running artifact preflight."
         )
+
+    base = merge_base.stdout.strip()
+    diff = _run_git("diff", "--name-only", "--diff-filter=ACMR", f"{base}...HEAD")
+    if diff.returncode != 0:
+        raise RuntimeError("Unable to determine changed files from the proven branch merge-base.")
     return [Path(line.strip()) for line in diff.stdout.splitlines() if line.strip()]
 
 
