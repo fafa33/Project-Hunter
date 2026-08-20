@@ -30,6 +30,9 @@ REQUIRED_DEFECT_IDS = {
     "PRH-004",
     "PRH-005",
     "PRH-006",
+    "PRH-007",
+    "PRH-008",
+    "PRH-009",
     "ARCH-AUD-001",
     "ARCH-AUD-002",
     "ARCH-AUD-003",
@@ -41,15 +44,14 @@ REQUIRED_AUDIT_HEADINGS = (
     "## Metadata",
     "## Audit Scope",
     "## Evidence Sources Examined",
-    "## Accepted ADR Coverage",
-    "## Prior Review Finding Re-Verification",
     "## Dimension Results",
     "## Findings",
     "## Findings Matrix",
     "## Verdict Derivation",
     "## Final Verdict",
+    "## Required Corrections or Conditions",
+    "## Non-Blocking Follow-Up",
     "## Audit Completion Check",
-    "## Progression Gate",
 )
 ALLOWED_VERDICTS = (
     "READY_FOR_ADR",
@@ -58,10 +60,18 @@ ALLOWED_VERDICTS = (
     "ADPR_REVISION_REQUIRED",
     "ARCHITECTURE_NOT_READY",
 )
-PENDING_PLACEHOLDER_RE = re.compile(r"(?im)(?:`PENDING[^`]*`|\|\s*PENDING\s*\||:\s*PENDING\b|\bPENDING\s*[—-])")
+PENDING_PLACEHOLDER_RE = re.compile(
+    r"(?im)(?:`PENDING[^`]*`|\|\s*PENDING\s*\||:\s*PENDING\b|\bPENDING\s*[—-])"
+)
 AUDITOR_RE = re.compile(r"(?im)^-\s*Auditor:\s*(.+?)\s*$")
 REVISION_RE = re.compile(r"(?im)^-\s*Reviewed revision:\s*`?([0-9a-f]{40})`?\s*$")
+AUDIT_TYPE_RE = re.compile(r"(?im)^-\s*Audit type:\s*`?(FULL|TARGETED)`?\s*$")
 CUTOFF_RE = re.compile(r"(?im)^-\s*Evidence cutoff:\s*`?([^`\n]+)`?\s*$")
+MUTABLE_EVIDENCE_RE = re.compile(r"(?i)(?:https?://|\bPR\s*#\d+\b|\bIssue\s*#\d+\b)")
+PRIOR_REVIEW_SCOPE_RE = re.compile(r"(?i)(?:prior\s+review|previous\s+finding|\bPR\s*#\d+\b)")
+FINDING_CLASS_FIELD_RE = re.compile(r"(?im)^-\s*\*\*Class:\*\*")
+FINDING_SEVERITY_RE = re.compile(r"(?im)^-\s*\*\*Severity:\*\*\s*`?([A-D])`?\s*$")
+BLOCKS_ADR_YES_RE = re.compile(r"(?im)(?:\*\*Blocks ADR:\*\*\s*`?YES`?|\|[^\n]*\|\s*YES\s*\|)")
 
 
 def _run_git(*args: str) -> subprocess.CompletedProcess[str]:
@@ -115,7 +125,9 @@ def validate_registry(data: dict[str, Any]) -> list[str]:
             continue
 
         defect_id = item["id"]
-        if not isinstance(defect_id, str) or not re.fullmatch(r"[A-Z]+(?:-[A-Z]+)*-\d{3}", defect_id):
+        if not isinstance(defect_id, str) or not re.fullmatch(
+            r"[A-Z]+(?:-[A-Z]+)*-\d{3}", defect_id
+        ):
             errors.append(f"Registry item {index} has invalid id {defect_id!r}.")
         elif defect_id in seen:
             errors.append(f"Duplicate defect id: {defect_id}.")
@@ -134,7 +146,11 @@ def validate_registry(data: dict[str, Any]) -> list[str]:
 
     missing_ids = sorted(REQUIRED_DEFECT_IDS - seen)
     if missing_ids:
-        errors.append("Registry dropped required understood defect classes: " + ", ".join(missing_ids) + ".")
+        errors.append(
+            "Registry dropped required understood defect classes: "
+            + ", ".join(missing_ids)
+            + "."
+        )
     return errors
 
 
@@ -172,7 +188,17 @@ def _validate_iso8601(value: str) -> bool:
     return parsed.tzinfo is not None
 
 
+def _selected_verdicts(text: str) -> list[str]:
+    final_verdict = _section(text, "## Final Verdict")
+    return [
+        verdict
+        for verdict in ALLOWED_VERDICTS
+        if re.search(rf"\b{verdict}\b", final_verdict)
+    ]
+
+
 def validate_audit_text(text: str, *, accepted_adrs: list[str]) -> list[str]:
+    """Validate canonical audit requirements without inventing prose-only ceremony."""
     errors: list[str] = []
 
     for heading in REQUIRED_AUDIT_HEADINGS:
@@ -191,42 +217,77 @@ def validate_audit_text(text: str, *, accepted_adrs: list[str]) -> list[str]:
     if not REVISION_RE.search(text):
         errors.append("Audit must pin Reviewed revision to an immutable 40-hex commit.")
 
+    audit_type_match = AUDIT_TYPE_RE.search(text)
+    if not audit_type_match:
+        errors.append("Audit type must be FULL or TARGETED.")
+        audit_type = None
+    else:
+        audit_type = audit_type_match.group(1)
+
+    evidence = _section(text, "## Evidence Sources Examined")
     cutoff_match = CUTOFF_RE.search(text)
-    if not cutoff_match:
-        errors.append("Audit must record an Evidence cutoff.")
-    elif not _validate_iso8601(cutoff_match.group(1)):
-        errors.append("Evidence cutoff must be an offset-aware ISO-8601 timestamp.")
+    if MUTABLE_EVIDENCE_RE.search(evidence):
+        if not cutoff_match:
+            errors.append(
+                "Audit using mutable PR/Issue/URL evidence must record an Evidence cutoff."
+            )
+        elif not _validate_iso8601(cutoff_match.group(1)):
+            errors.append("Evidence cutoff must be an offset-aware ISO-8601 timestamp.")
+    elif cutoff_match and not _validate_iso8601(cutoff_match.group(1)):
+        errors.append("Evidence cutoff must be an offset-aware ISO-8601 timestamp when present.")
 
-    coverage = _section(text, "## Accepted ADR Coverage")
-    for adr in accepted_adrs:
-        if not re.search(rf"\bADR[ -]?{re.escape(adr)}\b", coverage):
-            errors.append(f"Accepted ADR {adr} is not accounted for in Accepted ADR Coverage.")
+    if audit_type == "FULL":
+        coverage_heading = "## Accepted ADR Coverage"
+        if coverage_heading not in text:
+            errors.append("FULL audit must include explicit Accepted ADR Coverage.")
+        coverage = _section(text, coverage_heading)
+        for adr in accepted_adrs:
+            if not re.search(rf"\bADR[ -]?{re.escape(adr)}\b", coverage):
+                errors.append(
+                    f"Accepted ADR {adr} is not accounted for in FULL-audit Accepted ADR Coverage."
+                )
 
-    prior = _section(text, "## Prior Review Finding Re-Verification")
-    if not prior:
-        errors.append("Audit must contain prior-review finding re-verification evidence.")
-    elif not re.search(r"(?i)\b(?:none|finding|PR\s*#\d+)\b", prior):
-        errors.append("Prior Review Finding Re-Verification must state findings examined or explicitly none.")
+    scope = _section(text, "## Audit Scope")
+    if PRIOR_REVIEW_SCOPE_RE.search(scope):
+        prior = _section(text, "## Prior Review Finding Re-Verification")
+        if not prior:
+            errors.append(
+                "Audit scope declares prior review history but lacks Prior Review Finding Re-Verification."
+            )
+        elif not re.search(r"(?i)\b(?:none|finding|PR\s*#\d+)\b", prior):
+            errors.append(
+                "Prior Review Finding Re-Verification must state findings examined or explicitly none."
+            )
 
-    if re.search(r"(?im)^-\s*\*\*Severity:\*\*", text):
-        errors.append("Finding records must use the canonical `Class` field, not `Severity`.")
+    if FINDING_CLASS_FIELD_RE.search(text):
+        errors.append(
+            "Finding records must use canonical `Severity`; `Class` is reserved for the Findings Matrix."
+        )
 
-    final_verdict = _section(text, "## Final Verdict")
-    verdicts = [verdict for verdict in ALLOWED_VERDICTS if re.search(rf"\b{verdict}\b", final_verdict)]
+    for match in re.finditer(r"(?im)^-\s*\*\*Severity:\*\*\s*`?([^`\n]+)`?\s*$", text):
+        if not re.fullmatch(r"[A-D]", match.group(1).strip()):
+            errors.append("Finding Severity must be exactly A, B, C, or D.")
+
+    verdicts = _selected_verdicts(text)
     if len(verdicts) != 1:
         errors.append("Final Verdict must select exactly one permitted audit verdict.")
+        selected_verdict = None
+    else:
+        selected_verdict = verdicts[0]
 
-    gate = " ".join(_section(text, "## Progression Gate").split())
-    for verdict in ALLOWED_VERDICTS:
-        if verdict not in gate:
-            errors.append(f"Progression Gate must explicitly account for {verdict}.")
-    gate_lower = gate.lower()
-    if "clean progression" not in gate_lower:
-        errors.append("Progression Gate must explicitly define clean progression.")
-    if "condition" not in gate_lower:
-        errors.append("Progression Gate must state handling for conditional readiness.")
-    if "block" not in gate_lower:
-        errors.append("Progression Gate must explicitly state blocking verdict behavior.")
+    corrections = _section(text, "## Required Corrections or Conditions")
+    if selected_verdict == "CONDITIONAL_ADR_READY" and (
+        not corrections or corrections.strip().lower() in {"none", "n/a", "not applicable"}
+    ):
+        errors.append("CONDITIONAL_ADR_READY requires explicit mandatory conditions.")
+
+    if selected_verdict in {"ADPR_REVISION_REQUIRED", "ARCHITECTURE_NOT_READY"}:
+        findings = _section(text, "## Findings")
+        matrix = _section(text, "## Findings Matrix")
+        if not BLOCKS_ADR_YES_RE.search(findings + "\n" + matrix):
+            errors.append(
+                f"{selected_verdict} requires at least one evidence-backed finding with Blocks ADR = YES."
+            )
 
     return errors
 
@@ -273,7 +334,9 @@ def run_artifact_preflight(paths: list[Path] | None = None) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description=("Validate the defect registry and changed governed artifacts deterministically.")
+        description=(
+            "Validate the defect registry and changed governed artifacts deterministically."
+        )
     )
     parser.add_argument(
         "--all-audits",
