@@ -18,8 +18,8 @@
       "source": "PR #286",
       "classification": "systemic",
       "guard_boundary": "agent instruction parity",
-      "guard": "structural test requiring both instruction surfaces to document preflight",
-      "test": "tests/test_hunter_pr_preflight.py::test_agent_instructions_document_both_preflight_modes_and_defect_registry",
+      "guard": "structural tests require both instruction surfaces to reference the canonical registry, mode marker, and preflight command without pinning explanatory prose",
+      "test": "tests/test_hunter_pr_preflight.py::test_agent_instructions_reference_machine_contract_surfaces",
       "status": "guarded"
     },
     {
@@ -67,9 +67,9 @@
       "class": "candidate-pushed-without-complete-local-preflight",
       "source": "Issue #291 implementation hosted preflight failures and PR #293 stale-run acceptance on 2026-08-20",
       "classification": "systemic",
-      "guard_boundary": "shared full preflight contract plus exact-head hosted evidence before review progression",
-      "guard": "agents must run the complete normal preflight before push; hosted Pre-PR proof is valid only when the run commit SHA exactly equals the current branch HEAD; run number, latest label, or remembered green state alone is not evidence",
-      "test": "tests/test_recent_preflight_defect_registry.py::test_hosted_preflight_evidence_must_match_exact_branch_head",
+      "guard_boundary": "shared full preflight contract plus commit-scoped hosted evidence before review progression",
+      "guard": "agents run the canonical normal preflight before push; hosted Pre-PR executes on branch pushes and GitHub check evidence is commit-scoped, while agent instructions require confirming the run belongs to current HEAD",
+      "test": "tests/test_recent_preflight_defect_registry.py::test_agents_reference_canonical_preflight_command",
       "status": "guarded"
     },
     {
@@ -85,31 +85,41 @@
     {
       "id": "PRH-009",
       "class": "guard-overreach-or-canonical-authority-conflict",
-      "source": "Issue #291 pre-PR guard audit on 2026-08-20",
+      "source": "Issue #291 pre-PR guard audit and PR #293 CodeRabbit on 2026-08-20",
       "classification": "systemic",
       "guard_boundary": "artifact-validator conformance to canonical audit protocol and proportional scope",
-      "guard": "artifact guards enforce canonical semantic invariants, scope repository-wide requirements to FULL audits, allow TARGETED re-audits to remain targeted, and do not block equivalent valid prose or canonical Severity terminology",
-      "test": "tests/test_hunter_artifact_preflight.py::test_targeted_audit_does_not_require_repository_wide_adr_accounting",
+      "guard": "artifact guards enforce semantic or structural invariants, scope repository-wide requirements to FULL audits, allow TARGETED work to remain targeted, and accept equivalent canonical wording instead of exact prose",
+      "test": "tests/test_hunter_artifact_preflight.py::test_current_pr_reference_alone_does_not_trigger_prior_review_requirement",
       "status": "guarded"
     },
     {
       "id": "PRH-010",
       "class": "shared-preflight-runs-with-unproven-shallow-history",
-      "source": "Issue #291 pre-PR guard audit on 2026-08-20",
+      "source": "Issue #291 pre-PR guard audit and PR #293 CodeRabbit on 2026-08-20",
       "classification": "systemic",
-      "guard_boundary": "every workflow invoking the shared preflight and merge-base resolution",
-      "guard": "all shared-preflight workflows fetch full history, and artifact changed-path detection fails closed unless merge-base with origin/main is proven",
-      "test": "tests/test_hunter_pr_preflight.py::test_shared_preflight_workflows_fetch_full_history",
+      "guard_boundary": "checkout step that prepares every shared-preflight job plus merge-base resolution",
+      "guard": "each job that runs the shared preflight must use a preceding actions/checkout step with fetch-depth 0; changed-path detection fails closed unless merge-base with origin/main is proven",
+      "test": "tests/test_hunter_pr_preflight.py::test_full_history_must_belong_to_checkout_preceding_preflight",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-011",
+      "class": "semantic-invariant-reduced-to-text-presence-proxy",
+      "source": "PR #293 CodeRabbit hostile review on 2026-08-20",
+      "classification": "systemic",
+      "guard_boundary": "artifact and workflow validators plus their regression fixtures",
+      "guard": "security/governance semantics must be derived from the relevant Markdown or workflow structure rather than arbitrary substring presence; hostile fixtures prove quoted headings, incidental verdict/ADR tokens, wrong matrix columns, unrelated PR references, unrelated checkout settings, and wording-only assertions cannot satisfy guards",
+      "test": "tests/test_hunter_artifact_preflight.py::test_required_headings_must_be_real_level_two_headings",
       "status": "guarded"
     },
     {
       "id": "ARCH-AUD-001",
       "class": "accepted-adr-coverage-incomplete",
-      "source": "PR #288 and PR #290 CodeRabbit",
+      "source": "PR #288, PR #290, and PR #293 CodeRabbit",
       "classification": "systemic",
       "guard_boundary": "architecture-audit artifact preflight",
-      "guard": "FULL audit reports explicitly account for every Accepted ADR; TARGETED re-audits are not forced into repository-wide ADR recertification",
-      "test": "tests/test_hunter_artifact_preflight.py::test_full_audit_requires_every_accepted_adr",
+      "guard": "FULL audits require a structured per-ADR accounting entry with an explicit review/applicability disposition for every Accepted ADR; arbitrary ADR mentions do not count; TARGETED re-audits are not forced into repository-wide recertification",
+      "test": "tests/test_hunter_artifact_preflight.py::test_full_audit_rejects_arbitrary_adr_mentions_as_accounting",
       "status": "guarded"
     },
     {
@@ -118,8 +128,8 @@
       "source": "PR #290 Codex and CodeRabbit",
       "classification": "systemic",
       "guard_boundary": "architecture-audit artifact preflight",
-      "guard": "review-ready changed audit reports may not contain unresolved PENDING placeholders",
-      "test": "tests/test_hunter_artifact_preflight.py::test_pending_audit_is_rejected",
+      "guard": "review-ready changed audit reports may not contain unresolved PENDING placeholders and mandatory sections must be real level-two headings",
+      "test": "tests/test_hunter_artifact_preflight.py::test_required_headings_must_be_real_level_two_headings",
       "status": "guarded"
     },
     {
@@ -135,21 +145,21 @@
     {
       "id": "ARCH-AUD-004",
       "class": "prior-review-findings-not-independently-reverified",
-      "source": "PR #290 CodeRabbit",
+      "source": "PR #290 and PR #293 CodeRabbit",
       "classification": "systemic",
       "guard_boundary": "architecture-audit artifact preflight",
-      "guard": "when Audit Scope declares prior review history, the report must include independent prior-finding re-verification evidence",
-      "test": "tests/test_hunter_artifact_preflight.py::test_prior_review_scope_requires_verification_section",
+      "guard": "only explicit prior-review/previous-finding scope triggers re-verification; a current PR reference alone does not; when triggered, the report must identify prior finding references with evidence and decision consequence or explicitly state none exist",
+      "test": "tests/test_hunter_artifact_preflight.py::test_current_pr_reference_alone_does_not_trigger_prior_review_requirement",
       "status": "guarded"
     },
     {
       "id": "ARCH-AUD-005",
       "class": "adr-progression-gate-ambiguous",
-      "source": "PR #290 CodeRabbit",
+      "source": "PR #290 and PR #293 CodeRabbit",
       "classification": "systemic",
-      "guard_boundary": "architecture-audit verdict semantics",
-      "guard": "verdict-specific semantics are checked directly: conditional readiness requires real conditions and blocking verdicts require at least one Blocks ADR = YES finding; duplicated progression prose is not required",
-      "test": "tests/test_hunter_artifact_preflight.py::test_conditional_verdict_requires_real_conditions_not_duplicated_gate_prose",
+      "guard_boundary": "architecture-audit verdict and blocking-finding semantics",
+      "guard": "Final Verdict must contain one canonical declared verdict line; conditional readiness requires real conditions; blocking verdicts require YES specifically in the labeled Blocks ADR field or the identified Blocks ADR matrix column",
+      "test": "tests/test_hunter_artifact_preflight.py::test_blocks_adr_yes_must_come_from_the_blocks_adr_field_or_column",
       "status": "guarded"
     },
     {
