@@ -20,11 +20,23 @@ def test_retired_migration_surfaces_are_absent() -> None:
 def test_agent_instructions_use_current_state_governance() -> None:
     path = ROOT / ".github/instructions/project-hunter.instructions.md"
     text = path.read_text(encoding="utf-8")
-    assert "hunter_governance_preflight.py" not in text
+    assert "generate-pr-body" not in text
+    assert "Before a governed branch" not in text
     assert "owner-`+1`" in text
     assert "not merge authority" in text
     assert "Quality Gates" in text
     assert "CodeQL" in text
+
+
+def test_active_workflows_do_not_invoke_retired_preflight() -> None:
+    active_workflows = (
+        ".github/workflows/hunter-governance-preflight.yml",
+        ".github/workflows/hunter-governance-review.yml",
+        ".github/workflows/hunter-merge-readiness.yml",
+    )
+    for relative in active_workflows:
+        text = (ROOT / relative).read_text(encoding="utf-8")
+        assert "hunter_governance_preflight.py" not in text, relative
 
 
 def test_governance_review_has_no_bootstrap_fallback() -> None:
