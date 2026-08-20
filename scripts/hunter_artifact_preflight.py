@@ -80,6 +80,8 @@ ADR_DISPOSITION_RE = re.compile(
 )
 FENCE_OPEN_RE = re.compile(r"^[ \t]{0,3}(?P<fence>`{3,}|~{3,})(?:[^\r\n]*)$")
 FENCE_CLOSE_RE = re.compile(r"^[ \t]{0,3}(?P<fence>`{3,}|~{3,})[ \t]*$")
+HTML_COMMENT_RE = re.compile(r"<!--.*?(?:-->|\Z)", re.DOTALL)
+SEVERITY_ORDER = {"A": 1, "B": 2, "C": 3, "D": 4}
 
 
 def _run_git(*args: str) -> subprocess.CompletedProcess[str]:
@@ -169,45 +171,58 @@ def accepted_adr_ids(index_text: str) -> list[str]:
     return sorted(set(ids))
 
 
-def _mask_markdown_fenced_code(text: str) -> str:
-    """Mask fenced code while preserving offsets, line endings, and visible Markdown structure."""
+def _mask_span_preserving_newlines(value: str) -> str:
+    return "".join(char if char in "\r\n" else " " for char in value)
+
+
+def _mask_markdown_nonsemantic(text: str) -> str:
+    """Mask Markdown regions that do not render as semantic audit structure."""
+    without_comments = HTML_COMMENT_RE.sub(
+        lambda match: _mask_span_preserving_newlines(match.group(0)),
+        text,
+    )
     masked: list[str] = []
     fence_char: str | None = None
     fence_length = 0
 
-    for line in text.splitlines(keepends=True):
+    for line in without_comments.splitlines(keepends=True):
         body = line.rstrip("\r\n")
         ending = line[len(body) :]
 
-        if fence_char is None:
-            opening = FENCE_OPEN_RE.fullmatch(body)
-            if opening:
-                fence = opening.group("fence")
-                fence_char = fence[0]
-                fence_length = len(fence)
-                masked.append(" " * len(body) + ending)
-                continue
-            masked.append(line)
+        if fence_char is not None:
+            closing = FENCE_CLOSE_RE.fullmatch(body)
+            if closing:
+                fence = closing.group("fence")
+                if fence[0] == fence_char and len(fence) >= fence_length:
+                    fence_char = None
+                    fence_length = 0
+            masked.append(" " * len(body) + ending)
             continue
 
-        closing = FENCE_CLOSE_RE.fullmatch(body)
-        if closing:
-            fence = closing.group("fence")
-            if fence[0] == fence_char and len(fence) >= fence_length:
-                fence_char = None
-                fence_length = 0
-        masked.append(" " * len(body) + ending)
+        opening = FENCE_OPEN_RE.fullmatch(body)
+        if opening:
+            fence = opening.group("fence")
+            fence_char = fence[0]
+            fence_length = len(fence)
+            masked.append(" " * len(body) + ending)
+            continue
+
+        if body.startswith("\t") or re.match(r"^ {4,}\S", body):
+            masked.append(" " * len(body) + ending)
+            continue
+
+        masked.append(line)
 
     return "".join(masked)
 
 
 def _heading_match(text: str, heading: str) -> re.Match[str] | None:
-    semantic_text = _mask_markdown_fenced_code(text)
+    semantic_text = _mask_markdown_nonsemantic(text)
     return re.search(rf"(?m)^{re.escape(heading)}[ \t]*$", semantic_text)
 
 
 def _section(text: str, heading: str) -> str:
-    semantic_text = _mask_markdown_fenced_code(text)
+    semantic_text = _mask_markdown_nonsemantic(text)
     match = re.search(rf"(?m)^{re.escape(heading)}[ \t]*$", semantic_text)
     if not match:
         return ""
@@ -245,7 +260,7 @@ def _normalized_cell(value: str) -> str:
 
 
 def _structured_adr_accounting_ids(text: str) -> set[str]:
-    semantic_text = _mask_markdown_fenced_code(text)
+    semantic_text = _mask_markdown_nonsemantic(text)
     accounted: set[str] = set()
     for line in semantic_text.splitlines():
         stripped = line.strip()
@@ -264,23 +279,47 @@ def _structured_adr_accounting_ids(text: str) -> set[str]:
     return accounted
 
 
-def _matrix_has_blocks_adr_yes(matrix: str) -> bool:
-    semantic_matrix = _mask_markdown_fenced_code(matrix)
+def _finding_matrix_rows(matrix: str) -> tuple[list[tuple[str, str, str]], list[str]]:
+    semantic_matrix = _mask_markdown_nonsemantic(matrix)
     rows = [_markdown_cells(line) for line in semantic_matrix.splitlines() if line.strip().startswith("|")]
     for index, row in enumerate(rows):
         headers = [_normalized_cell(cell) for cell in row]
-        if "blocks adr" not in headers:
+        if not {"finding", "class", "blocks adr"}.issubset(headers):
             continue
+        finding_index = headers.index("finding")
+        class_index = headers.index("class")
         blocks_index = headers.index("blocks adr")
+        parsed: list[tuple[str, str, str]] = []
+        errors: list[str] = []
+
         for candidate in rows[index + 1 :]:
-            if blocks_index >= len(candidate):
+            populated = [cell.strip() for cell in candidate if cell.strip()]
+            if populated and all(re.fullmatch(r":?-{3,}:?", cell) for cell in populated):
                 continue
-            if all(re.fullmatch(r":?-{3,}:?", cell.strip()) for cell in candidate if cell.strip()):
+            if max(finding_index, class_index, blocks_index) >= len(candidate):
                 continue
-            if _normalized_cell(candidate[blocks_index]) == "yes":
-                return True
-        return False
-    return False
+
+            finding_id = _normalize_markdown_scalar(candidate[finding_index])
+            severity = _normalize_markdown_scalar(candidate[class_index]).upper()
+            blocks_adr = _normalize_markdown_scalar(candidate[blocks_index]).upper()
+            if not finding_id:
+                continue
+            if not re.fullmatch(r"[A-D]", severity):
+                errors.append(f"Findings Matrix row {finding_id!r} must use Class A, B, C, or D.")
+                continue
+            if blocks_adr not in {"YES", "NO"}:
+                errors.append(f"Findings Matrix row {finding_id!r} must set Blocks ADR to YES or NO.")
+                continue
+            parsed.append((finding_id, severity, blocks_adr))
+
+        return parsed, errors
+
+    return [], ["Findings Matrix must identify Finding, Class, and Blocks ADR columns."]
+
+
+def _matrix_has_blocks_adr_yes(matrix: str) -> bool:
+    rows, _ = _finding_matrix_rows(matrix)
+    return any(blocks_adr == "YES" for _, _, blocks_adr in rows)
 
 
 def _validate_iso8601(value: str) -> bool:
@@ -300,10 +339,39 @@ def _selected_verdicts(text: str) -> list[str]:
     return [declared] if declared in ALLOWED_VERDICTS else []
 
 
+def _validate_verdict_consistency(selected_verdict: str | None, matrix: str) -> list[str]:
+    rows, errors = _finding_matrix_rows(matrix)
+    if errors:
+        return errors
+    if not rows or selected_verdict is None:
+        return []
+
+    for finding_id, severity, blocks_adr in rows:
+        if severity in {"C", "D"} and blocks_adr != "YES":
+            errors.append(f"Class {severity} finding {finding_id} must set Blocks ADR = YES.")
+        if severity in {"A", "B"} and blocks_adr == "YES":
+            errors.append(f"Class {severity} finding {finding_id} may not set Blocks ADR = YES.")
+
+    highest = max((severity for _, severity, _ in rows), key=SEVERITY_ORDER.__getitem__)
+    if highest == "D" and selected_verdict != "ARCHITECTURE_NOT_READY":
+        errors.append("Unresolved Class D finding requires ARCHITECTURE_NOT_READY.")
+    elif highest == "C" and selected_verdict != "ADPR_REVISION_REQUIRED":
+        errors.append("Unresolved Class C finding requires ADPR_REVISION_REQUIRED.")
+
+    if selected_verdict == "ARCHITECTURE_NOT_READY" and highest != "D":
+        errors.append("ARCHITECTURE_NOT_READY requires at least one unresolved Class D finding.")
+    if selected_verdict == "ADPR_REVISION_REQUIRED" and highest != "C":
+        errors.append(
+            "ADPR_REVISION_REQUIRED requires Class C as the highest unresolved severity and no Class D finding."
+        )
+
+    return errors
+
+
 def validate_audit_text(text: str, *, accepted_adrs: list[str]) -> list[str]:
     """Validate canonical audit requirements without inventing prose-only ceremony."""
     errors: list[str] = []
-    semantic_text = _mask_markdown_fenced_code(text)
+    semantic_text = _mask_markdown_nonsemantic(text)
 
     for heading in REQUIRED_AUDIT_HEADINGS:
         if not _heading_match(semantic_text, heading):
@@ -379,9 +447,11 @@ def validate_audit_text(text: str, *, accepted_adrs: list[str]) -> list[str]:
     ):
         errors.append("CONDITIONAL_ADR_READY requires explicit mandatory conditions.")
 
+    findings = _section(semantic_text, "## Findings")
+    matrix = _section(semantic_text, "## Findings Matrix")
+    errors.extend(_validate_verdict_consistency(selected_verdict, matrix))
+
     if selected_verdict in {"ADPR_REVISION_REQUIRED", "ARCHITECTURE_NOT_READY"}:
-        findings = _section(semantic_text, "## Findings")
-        matrix = _section(semantic_text, "## Findings Matrix")
         if not BLOCKS_ADR_FIELD_YES_RE.search(findings) and not _matrix_has_blocks_adr_yes(matrix):
             errors.append(f"{selected_verdict} requires at least one evidence-backed finding with Blocks ADR = YES.")
 
