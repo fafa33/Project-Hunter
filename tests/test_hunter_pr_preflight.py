@@ -151,7 +151,8 @@ def test_pre_pr_workflow_reads_machine_readable_mode_marker() -> None:
 
 def test_workflows_use_current_node24_action_majors() -> None:
     workflow_dir = ROOT / ".github" / "workflows"
-    for path in sorted(workflow_dir.glob("*.yml")):
+    workflow_paths = sorted((*workflow_dir.glob("*.yml"), *workflow_dir.glob("*.yaml")))
+    for path in workflow_paths:
         text = path.read_text(encoding="utf-8")
         for line in text.splitlines():
             stripped = line.strip()
