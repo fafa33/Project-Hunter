@@ -71,8 +71,7 @@ def run_preflight(*, mode: str = NORMAL_MODE) -> int:
             return completed.returncode
 
         print(
-            "[Hunter Pre-PR] EXPECTED RED: Pytest exited 1; artifact guard, Ruff, Black, "
-            "and Mypy are clean.",
+            "[Hunter Pre-PR] EXPECTED RED: Pytest exited 1; artifact guard, Ruff, Black, " "and Mypy are clean.",
             flush=True,
         )
         print("[Hunter Pre-PR] PASS: tests-first RED hygiene contract", flush=True)
