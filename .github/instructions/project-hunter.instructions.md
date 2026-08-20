@@ -16,6 +16,7 @@ Treat the repository and current GitHub state as the source of truth.
 - For an intentional tests-first RED commit, create `.hunter-preflight-mode` containing exactly `tests-first-red` and commit that marker on the exact branch head being pushed. The exact-head preflight may pass only when the Artifact Guard, Ruff, Black, and Mypy are green and Pytest is genuinely RED. This exception is for Draft tests-first work only; it never makes failing tests merge-ready.
 - Before implementation or any normal candidate resumes, remove `.hunter-preflight-mode`, commit that removal on the branch head being pushed, and return to `python scripts/hunter_pr_preflight.py --mode normal`.
 - CI and preflight are verification only. Do not auto-format, auto-commit, or hide failures merely to obtain a green status.
+- A machine guard must be grounded in canonical authority or a demonstrated recurring defect. Prefer semantic/structural invariants over brittle wording checks; do not force TARGETED work through FULL-review ceremony or block canonically valid equivalent wording. A false-positive merge blocker is itself a defect and must be corrected.
 - Link the relevant Issue/ADR when useful for traceability, but Issue identity, branch names, commit messages, PR titles/bodies, checkboxes, top-level PR comments, reactions, metadata-only edits, and superseded historical runs are not merge authority.
 
 ## Review and correction
