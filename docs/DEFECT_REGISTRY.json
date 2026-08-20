@@ -105,11 +105,11 @@
     {
       "id": "PRH-011",
       "class": "semantic-invariant-reduced-to-text-presence-proxy",
-      "source": "PR #293 CodeRabbit hostile review on 2026-08-20",
+      "source": "PR #293 CodeRabbit hostile review and hostile re-review P1 recurrence on 2026-08-20",
       "classification": "systemic",
-      "guard_boundary": "artifact and workflow validators plus their regression fixtures",
-      "guard": "security/governance semantics must be derived from the relevant Markdown or workflow structure rather than arbitrary substring presence; hostile fixtures prove quoted headings, incidental verdict/ADR tokens, wrong matrix columns, unrelated PR references, unrelated checkout settings, and wording-only assertions cannot satisfy guards",
-      "test": "tests/test_hunter_artifact_preflight.py::test_required_headings_must_be_real_level_two_headings",
+      "guard_boundary": "Markdown-aware artifact parsing and workflow validators plus hostile regression fixtures",
+      "guard": "security/governance semantics must be derived from rendered Markdown/workflow structure rather than arbitrary text presence; fenced code blocks are masked before heading, metadata, ADR, finding, matrix, PENDING, and verdict parsing, and hostile fixtures prove quoted or fenced templates, incidental tokens, wrong columns, unrelated PR references, unrelated checkout settings, and wording-only assertions cannot satisfy guards",
+      "test": "tests/test_hunter_artifact_preflight_fences.py::test_complete_audit_inside_fenced_code_cannot_impersonate_real_structure",
       "status": "guarded"
     },
     {
