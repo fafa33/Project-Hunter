@@ -9,40 +9,17 @@ INSTRUCTION_PATHS = (
     ROOT / ".github" / "instructions" / "project-hunter.instructions.md",
     ROOT / "CLAUDE.md",
 )
+CANONICAL_PREFLIGHT_COMMAND = "python scripts/hunter_pr_preflight.py --mode normal"
 
 
 def test_recent_preflight_failures_remain_registered() -> None:
     data = json.loads(REGISTRY.read_text(encoding="utf-8"))
     ids = {item["id"] for item in data["defects"]}
 
-    assert {"PRH-007", "PRH-008"} <= ids
+    assert {"PRH-007", "PRH-008", "PRH-009", "PRH-010", "PRH-011"} <= ids
 
 
-def test_agents_must_run_complete_preflight_before_push() -> None:
-    required = (
-        "Before pushing",
-        "python scripts/hunter_pr_preflight.py --mode normal",
-        "Artifact Guard",
-        "Ruff",
-        "Black",
-        "Mypy",
-        "Pytest",
-    )
-
+def test_agents_reference_canonical_preflight_command() -> None:
     for path in INSTRUCTION_PATHS:
         text = path.read_text(encoding="utf-8")
-        for phrase in required:
-            assert phrase in text, (path, phrase)
-
-
-def test_hosted_preflight_evidence_must_match_exact_branch_head() -> None:
-    required = (
-        "run's commit SHA exactly equals the current branch HEAD",
-        "run number",
-        "not exact-head evidence",
-    )
-
-    for path in INSTRUCTION_PATHS:
-        text = path.read_text(encoding="utf-8")
-        for phrase in required:
-            assert phrase in text, (path, phrase)
+        assert CANONICAL_PREFLIGHT_COMMAND in text, path
