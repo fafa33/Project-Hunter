@@ -47,7 +47,18 @@ def test_governance_review_waits_for_unknown_mergeability(monkeypatch):
     assert published[0][3] == "pending"
 
 
-def test_workflow_bootstrap_uses_only_trusted_default_branch_engine_for_283():
+def test_governance_review_skips_non_main_target(monkeypatch):
+    published = []
+    pr = _pr(True)
+    pr["base"]["ref"] = "release"
+    monkeypatch.setattr(core, "read_mergeability", lambda _repo, _token, _number: pr)
+    monkeypatch.setattr(core, "publish", lambda *args: published.append(args))
+
+    assert core.review("fafa33/Project-Hunter", "token", 501) == 0
+    assert published == []
+
+
+def test_workflow_uses_only_trusted_v2_controller_without_bootstrap():
     workflow = (
         Path(__file__).resolve().parents[1] / ".github" / "workflows" / "hunter-governance-review.yml"
     ).read_text(encoding="utf-8")
@@ -56,9 +67,10 @@ def test_workflow_bootstrap_uses_only_trusted_default_branch_engine_for_283():
     assert "installation-engine" not in workflow
     assert "ref: ${{ github.event.repository.default_branch }}" in workflow
     assert "persist-credentials: false" in workflow
-    assert '[ "${PR_NUMBER}" = "283" ]' in workflow
-    assert "python -m hunter_governance_review" in workflow
-    assert "No PR-controlled code is checked out or executed." in workflow
+    assert 'PR_NUMBER} = "283"' not in workflow
+    assert "python -m hunter_governance_review" not in workflow
+    assert "bootstrap" not in workflow.lower()
+    assert "hunter_governance_review_v2.py" in workflow
 
 
 def test_reconcile_continues_after_one_pr_failure_and_drops_checkout_credentials():

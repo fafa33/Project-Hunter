@@ -2,77 +2,56 @@
 
 ## Status
 
-This document is a reference and implementation guide. It does not define an independent governance authority.
+Implementation guide for the Merge Readiness rule owned by `docs/DEVELOPMENT_GOVERNANCE.md`.
 
-The mandatory Merge Readiness rule is owned by `docs/DEVELOPMENT_GOVERNANCE.md` (Pull Request Governance / Merge Readiness section), consistent with that document's Ownership Boundary over pull request readiness, review workflow, validation workflow, and process governance. This document elaborates that rule with required review dimensions, the acceptance-criteria matrix format, the evidence package a Pull Request must include, and the pull request template that operationalizes it. Where anything below appears to restate the rule, `docs/DEVELOPMENT_GOVERNANCE.md` is authoritative and this document must be read as consistent with it, not as a second source of the rule.
+## Principle
 
-## Purpose
+Merge Readiness evaluates **current merge risk**. It does not grade process history or PR prose.
 
-Project Hunter pull requests must not be merged solely because automated checks are green or because no unresolved blocking review comment remains. Those signals establish code health only; they do not prove that the governing Issue, ADR, evidence, replay, persistence, or operational requirements are complete.
+## Required current-state blockers
 
-## Mandatory rule
+`Hunter Merge Readiness` blocks or waits when:
 
-A pull request is merge-ready only when all required acceptance criteria and operational validations are explicitly evidenced as passing.
+- the PR is Draft;
+- mergeability is unresolved or the PR conflicts with `main`;
+- an inline review thread with a substantive unresolved finding remains open;
+- a current review is `CHANGES_REQUESTED`;
+- `Quality Gates`, `dependency-review`, or `CodeQL` is missing, pending, cancelled, or failed;
+- `Hunter Governance Review` is missing or non-stale pending, so readiness waits;
+- `Hunter Governance Review` is failed or errored;
+- the same head SHA is shared by another open PR in a way that makes status attribution unsafe.
 
-Two distinct declarations exist, and they are never made by the same role:
+When none of those conditions exists, the controller may publish success.
 
-- The **implementer** declares one of `READY FOR REVIEW`, `CHANGES REQUIRED`, or `BLOCKED` on the Pull Request, per `docs/DEVELOPMENT_GOVERNANCE.md`'s Merge Readiness section. The implementer never declares `APPROVED`.
-- The **independent reviewer** alone declares the final verdict of `APPROVED`, `CHANGES REQUIRED`, or `BLOCKED`, per `docs/AI_REVIEW_PROTOCOL.md`'s Approval section, only after required review and verification have completed.
+A pending `Hunter Governance Review` status may be ignored only when current mergeability is `true` and the controller treats that pending status as stale evidence from an earlier unresolved-mergeability observation.
 
-A `FAIL` or `BLOCKED` required criterion prohibits merge regardless of which role is declaring readiness.
+## Explicit non-authority
 
-## Required review dimensions
+The following do not determine automated merge readiness:
 
-### Code quality
+- Issue identity;
+- branch naming;
+- commit-message Issue references;
+- PR title/body format or acceptance-matrix syntax;
+- readiness checkboxes;
+- top-level PR comments;
+- reactions or owner `+1` acknowledgements;
+- metadata-only edits;
+- timestamps;
+- cancelled or superseded historical runs;
+- Draft Promotion signals;
+- hostile-review attestation markers.
 
-The repository-approved Ruff, Black, MyPy, Pytest, migration, and configuration checks must pass. Exact commands and results must be recorded in the PR.
+These may still be useful traceability, but they are not merge authority.
 
-### Architecture compliance
+## Review findings
 
-The PR must identify governing Issues and ADRs and record both the Architecture Impact Check and Evidence Impact. Review must verify authority boundaries, provenance, correction semantics, missingness, strict-known replay, persistence, entity scope, and any applicable anti-correlation rules.
+Current `CHANGES_REQUESTED` and unresolved substantive inline findings block. Non-blocking recommendations do not. Closing or dispositioning a non-blocking recommendation does not require a new code commit or another full review.
 
-### Acceptance-criteria matrix
+## Required product evidence
 
-Every acceptance criterion must appear in the PR description with exactly one status:
+If the governing Issue genuinely requires live acquisition, migration, persistence/replay, or other operational behavior, that requirement must actually be satisfied before human merge approval. No particular PR-body formatting is required to prove it.
 
-- `PASS`
-- `FAIL`
-- `BLOCKED`
-- `NOT APPLICABLE`
+## Final rule
 
-No criterion may be silently omitted or treated as satisfied merely because tests pass.
-
-### Operational validation
-
-When the Issue requires real acquisition, provider access, persistence, replay, query, correction, or runbook execution, those actions must actually be performed in a suitable environment. Evidence must include the relevant commands, environment, persisted identifiers, query or replay output, and disclosed limitations.
-
-Mocked, fixture-backed, fabricated, or current-state-substituted evidence does not satisfy a requirement for live or point-in-time validation unless the governing Issue explicitly permits it.
-
-### Evidence package
-
-A merge-ready PR must include:
-
-- final commit SHA;
-- exact quality-gate results;
-- acceptance-criteria matrix;
-- runtime and runbook evidence;
-- persisted record identifiers where applicable;
-- independent query or replay confirmation;
-- known limitations and residual risks;
-- final verdict.
-
-## Reviewer responsibility
-
-Reviewers must distinguish code correctness from completion correctness. An approval must not be inferred from silence. The final review must explicitly state one allowed verdict and justify it against the complete acceptance-criteria matrix and operational evidence.
-
-## Author responsibility
-
-Authors declare `READY FOR REVIEW` only when required verification and self-assessment are complete; otherwise the PR remains in draft status or is clearly marked `CHANGES REQUIRED` or `BLOCKED`. Authors never declare `APPROVED`. Environmental limitations must be reported immediately and must not be converted into fabricated evidence, narrowed acceptance criteria, or an undocumented scope change.
-
-## Maintainer responsibility
-
-Maintainers must not merge when any required criterion is `FAIL`, `BLOCKED`, missing, or unsupported by evidence. Green CI is necessary but never sufficient.
-
-## Origin
-
-This gate was introduced after PR #110 demonstrated that all automated checks could pass while a required live supply-basis acquisition and complete persisted evidence chain remained outstanding due to an environment-specific CoinGecko network block.
+Do not merge until all required checks on the final code head are green and no real blocker remains. Automation reports readiness; a human performs the merge.

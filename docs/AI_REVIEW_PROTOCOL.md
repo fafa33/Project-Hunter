@@ -2,324 +2,75 @@
 
 ## Purpose
 
-This document defines the mandatory protocol for independent review of Project Hunter contributions.
+This document owns independent contribution-review roles, finding classification, review reporting, and approval semantics. It extends `docs/DEVELOPMENT_GOVERNANCE.md`; it does not define product architecture.
 
-Its purpose is to ensure that every contribution receives an objective architectural review before merge.
+## Roles
 
-This document governs review responsibilities and review reporting only.
+- **Implementer** — produces and self-verifies the change. The implementer does not independently approve its own substantive work.
+- **Reviewer** — evaluates the actual implementation against applicable architecture, contracts, evidence, tests, and repository boundaries.
+- **Verifier** — confirms that a blocking finding was actually resolved.
 
-It does not define constitutional authority, engineering principles, architecture, implementation obligations, or the development lifecycle.
+## When independent review is required
 
----
+Independent review is required for substantive production-code, architecture, security, authority, persistence/replay, evidence-integrity, migration, and similarly material changes. Review is proportional to risk and scope.
 
-# Scope
+A trivial documentation, metadata, or mechanical cleanup does not require a hostile full-repository audit merely because it is a permanent contribution. A reviewer may still be used when useful.
 
-This protocol applies to every permanent repository contribution, including:
+## Review method
 
-- source code;
-- documentation;
-- configuration;
-- database migrations;
-- automation;
-- tests;
-- architecture changes;
-- operational tooling.
+Reviewers should actively try to falsify the change and inspect the relevant diff and governing repository facts. Review should be evidence-based, reproducible, and focused on the behavior actually affected.
 
-The protocol applies equally to human contributors and AI contributors.
+The old rule requiring a fresh exact-head/exact-base hostile-review attestation after every source or target movement is retired. After a substantive code change, re-review the affected scope. Repeat a broad review only when the substantive scope materially changes. Metadata-only edits and non-blocking dispositions do not invalidate review.
 
-Independent audits of Architecture Decision Preparation Records and architecture-decision readiness are governed by `docs/ARCHITECTURE_AUDIT_PROTOCOL.md`. This document governs implementation and contribution review and must not be used to replace the architecture-audit severity, materiality, verdict, or re-audit rules.
+## Findings
 
----
+### Blocking
 
-# Relationship To The Development Lifecycle
+A finding blocks merge only when it demonstrates a real risk such as:
 
-Every contribution follows the lifecycle defined by:
+- correctness or deterministic-behavior failure;
+- security or credential exposure;
+- architecture or ownership violation;
+- persistence, replay, lineage, migration, or evidence-integrity failure;
+- an unsatisfied required operational behavior;
+- another defect that makes the contribution unsafe to merge.
 
-`docs/DEVELOPMENT_GOVERNANCE.md`
+A confirmed blocking finding is classified as:
 
-This document extends only the review-related stages of that lifecycle.
+- **isolated** — specific to this contribution; or
+- **systemic** — exposes a reusable boundary that could reasonably permit recurrence.
 
-It does not create an alternative lifecycle or approval process.
+A systemic blocking finding should identify the earliest practical reusable boundary for durable hardening.
 
----
+### Non-blocking
 
-# Review Roles
+Maintainability improvements, optional refactors, readability changes, style preferences, extra-test suggestions, defensive hardening without a demonstrated failure, and future improvements are non-blocking unless evidence shows they create an actual merge risk.
 
-A contribution may involve three independent roles.
+Non-blocking recommendations must not delay merge after blocking findings are resolved. They may be documented for later work without another commit or full review cycle.
 
-## Implementer
+## Resolution and verification
 
-The implementer produces the change.
+Fix blocking findings in scope and verify the affected behavior. For systemic blocking findings, verify an appropriate durable guard when required by `docs/HUNTER_IMPLEMENTATION_CONTRACT.md`.
 
-The implementer is responsible for:
+Do not turn a non-blocking recommendation into a mandatory change merely to clear a comment counter. A resolved or explicitly non-blocking thread is not a merge blocker.
 
-- implementing the approved scope;
-- performing self-verification;
-- documenting implementation changes;
-- requesting review.
+## Review report
 
-The implementer does not approve the implementation.
+A review report records:
 
----
-
-## Reviewer
-
-The reviewer performs an independent technical review.
-
-The reviewer evaluates whether the contribution remains consistent with:
-
-- accepted architecture;
-- implementation obligations;
-- documentation;
-- repository boundaries;
-- project governance.
-
-The reviewer evaluates the implementation directly.
-
-The reviewer does not rely solely on implementation summaries.
-
----
-
-## Verifier
-
-The verifier confirms that required review findings have been resolved.
-
-Verification confirms the implemented state rather than the intended state.
-
-The verifier may be a human or an AI.
-
----
-
-# Independence
-
-Independent review requires separation between implementation and approval.
-
-The reviewer shall evaluate the actual implementation rather than the implementer's explanation.
-
-Independent review exists to detect:
-
-- architectural inconsistencies;
-- undocumented behavior;
-- implementation mistakes;
-- documentation inconsistencies;
-- hidden side effects;
-- incomplete verification.
-
----
-
-# Review Principles
-
-Every review shall be:
-
-- evidence-based;
-- objective;
-- reproducible;
-- architecture-aware;
-- implementation-aware;
-- proportional to the scope of the change.
-
-Personal preference must never replace architectural requirements.
-
----
-
-# Review Responsibilities
-
-Review shall evaluate, where applicable:
-
-- consistency with accepted architecture;
-- implementation boundary compliance;
-- documentation consistency;
-- migration safety;
-- replay safety;
-- persistence safety;
-- deterministic behavior;
-- compatibility;
-- evidence integrity;
-- test adequacy.
-
-Review evaluates implementation.
-
-It does not redefine architecture or implementation contracts.
-
----
-
-# Mandatory Hostile Review Gate
-
-Every agent-authored Pull Request must receive an independent hostile review before it may leave Draft status or be merged.
-
-Draft Pull Request creation is not gated. It remains governed by `docs/DEVELOPMENT_GOVERNANCE.md` and may occur after Local Verification.
-
-The hostile reviewer must be independent from the implementation author and must review the exact pair of:
-
-- the proposed source-branch head commit;
-- the target-branch commit against which the change is evaluated.
-
-The hostile reviewer must attempt to reject the change by checking the complete diff and all applicable repository facts, architecture, governance, evidence, tests, traceability, and quality gates.
-
-The hostile reviewer is review-only. The reviewer must not implement fixes, create replacement branches or pull requests, commit, push, or approve its own implementation.
-
-The review report must record:
-
-- reviewer identity;
-- reviewed source commit SHA;
-- reviewed target commit SHA;
-- commands and checks used;
-- environment limitations;
-- blocking findings and non-blocking recommendations;
-- for every blocking finding, its root-cause classification as `isolated` or `systemic`, the evidence supporting that classification, and the reusable boundary implicated when systemic;
+- reviewed scope;
+- blocking findings, if any;
+- non-blocking recommendations, if useful;
+- classification/evidence for each blocking finding;
+- verification of blocker resolution;
 - final review outcome.
 
-The canonical passing outcome is:
+Valid outcomes are `APPROVED`, `CHANGES REQUIRED`, or `BLOCKED`. Approval means no unresolved blocking finding remains; it does not override required CI/security checks or human merge approval.
 
-> No blocking findings were identified.
+## Independence
 
-Any blocking finding produces a changes-required outcome. An unavailable environment, provider, credential, or external condition produces a blocked outcome rather than approval.
+Independent review requires separation between implementation and approval for substantive changes. Reviewers do not implement their own blocking fixes and then treat that self-review as independent approval.
 
-The passing outcome is valid only for the exact reviewed source-head and target-commit pair. Any subsequent change to the source branch, or any advance of the target branch beyond the reviewed commit, invalidates the review and requires a new hostile review before the Pull Request may leave Draft status or be merged.
+## Long-term objective
 
-This gate does not replace any additional independent post-PR review required by repository policy.
-
----
-
-# Blocking Findings
-
-A blocking finding is an issue that makes the contribution unsafe to merge.
-
-Examples include:
-
-- architectural violations;
-- implementation boundary violations;
-- undocumented behavior changes;
-- migration risks;
-- replay failures;
-- evidence integrity failures;
-- documentation contradictions;
-- security issues;
-- deterministic behavior failures.
-
-Blocking findings must be resolved before approval.
-
-Every confirmed blocking finding in contribution review must be classified by the independent reviewer as exactly one of:
-
-- **isolated** — the failure is genuinely specific to the current contribution and does not expose a reusable weakness in product behavior, implementation conventions, tests, metadata/evidence generation, Pull Request construction, preflight validation, templates, generators, agent instructions, governance tooling, or architectural understanding; or
-- **systemic** — the same defect class could reasonably recur in a later contribution because a reusable boundary allowed it.
-
-The reviewer records the classification and supporting evidence in the review report. When the classification is `systemic`, the reviewer also identifies the earliest reliable reusable boundary exposed by the finding where a durable guard can reasonably be applied. The reviewer does not implement that guard; implementation remains the implementer's responsibility under `docs/HUNTER_IMPLEMENTATION_CONTRACT.md`.
-
-The verifier must confirm that the required classification is present before treating a blocking finding as resolved. For a `systemic` finding, verification must also confirm evidence of the durable root-cause guard required by the implementation contract. A later recurrence of the same understood and preventable defect class is evidence that the previous systemic hardening was incomplete and must be reported as such rather than silently reclassified as a fresh isolated defect.
-
-For architecture-preparation audits, blocking classification is determined only by `docs/ARCHITECTURE_AUDIT_PROTOCOL.md`. A documentation defect does not become architecture-decision-blocking merely because it is listed here as a possible implementation-review concern. The `isolated`/`systemic` contribution-review classification in this document does not replace architecture-audit materiality classes.
-
----
-
-# Non-blocking Findings
-
-Recommendations improve quality without making the contribution unsafe.
-
-Examples include:
-
-- maintainability improvements;
-- documentation enhancements;
-- additional testing;
-- readability improvements;
-- future refactoring opportunities.
-
-Recommendations must not delay merge after all blocking findings are resolved.
-
----
-
-# Review Reports
-
-Every review produces a review report.
-
-The report records:
-
-- review outcome;
-- blocking findings;
-- for each blocking finding, `isolated` or `systemic` root-cause classification and supporting evidence;
-- for each systemic finding, the reusable boundary implicated and the durable-guard verification requirement;
-- recommendations;
-- required follow-up actions.
-
-If no blocking findings exist, the report explicitly records:
-
-> No blocking findings were identified.
-
-Architecture-preparation audit reports must use `docs/ARCHITECTURE_AUDIT_TEMPLATE.md` and the verdict rules defined by `docs/ARCHITECTURE_AUDIT_PROTOCOL.md`.
-
----
-
-# Approval
-
-Approval is permitted only after:
-
-- required review has completed;
-- blocking findings have been resolved;
-- required verification has completed.
-
-Approval confirms review completion.
-
-It does not replace repository governance or merge policy.
-
----
-
-# AI Collaboration
-
-AI systems may participate as:
-
-- implementers;
-- reviewers;
-- verifiers.
-
-Roles must remain independent whenever independent review is required.
-
-No AI system should approve its own implementation without an independent reviewer unless the work is explicitly identified as a local draft outside the normal repository lifecycle.
-
----
-
-# Long-Term Objective
-
-Independent review exists to preserve Project Hunter's architectural integrity over long-term development.
-
-Every accepted contribution should remain understandable, reviewable, and maintainable years after it is merged.
-
----
-
-# Relationship to Other Canonical Documents
-
-| Document | Responsibility |
-|----------|----------------|
-| PROJECT_CONSTITUTION | Constitutional governance |
-| PROJECT_PRINCIPLES | Engineering principles |
-| CANONICAL_ARCHITECTURE_MAP | Canonical document hierarchy |
-| Architecture documents | System architecture |
-| DEVELOPMENT_GOVERNANCE | Development lifecycle |
-| ARCHITECTURE_AUDIT_PROTOCOL | Architecture-preparation audit classification, materiality, verdicts, and re-audit |
-| HUNTER_IMPLEMENTATION_CONTRACT | Implementation obligations and durable guards after review classification |
-| This document | Independent contribution and implementation review protocol, including blocking-finding classification and reporting |
-
----
-
-# Ownership Boundary
-
-This document owns:
-
-- review roles;
-- review responsibilities;
-- independent implementation review;
-- contribution-review finding classification and reporting;
-- contribution review reporting;
-- approval protocol.
-
-This document does not own:
-
-- constitutional governance;
-- engineering principles;
-- architecture;
-- architecture-preparation audit verdicts;
-- implementation contracts;
-- development lifecycle;
-- Sprint planning;
-- operational procedures.
-
-Those responsibilities remain with their respective canonical documents.
+Review exists to catch consequential defects while preserving development throughput. Review quality is measured by the material risk it detects, not by the number of comments it produces.

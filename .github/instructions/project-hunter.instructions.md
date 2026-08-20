@@ -4,37 +4,36 @@ applyTo: "**"
 
 # Project Hunter AI Agent Instructions
 
-Always treat the repository as the source of truth.
+Treat the repository and current GitHub state as the source of truth.
 
-Before making changes, identify and follow the applicable repository governance, including:
+## Work normally
 
-- `docs/PROJECT_CONSTITUTION.md`
-- `docs/PROJECT_PRINCIPLES.md`
-- `docs/CANONICAL_ARCHITECTURE_MAP.md`
-- applicable accepted ADRs
-- `docs/DEVELOPMENT_GOVERNANCE.md`
-- `docs/AI_AUTONOMOUS_WORKFLOW_PROTOCOL.md`
-- `docs/AI_REVIEW_PROTOCOL.md`
-- `docs/MERGE_READINESS_GATE.md`
-- `docs/HUNTER_IMPLEMENTATION_CONTRACT.md`
-- `docs/GOVERNANCE_ENFORCEMENT.md`
+- Understand the user-authorized objective and keep the change within that scope.
+- Read the architecture/ADR material that actually governs the area being changed. Do not perform repository-wide ceremony for a local change unless the change genuinely crosses those boundaries.
+- Prefer the smallest correct change. Do not invent missing architecture, weaken tests, or hide real failures.
+- Before pushing a code-changing candidate, run `python scripts/hunter_pr_preflight.py` when the environment permits it.
+- Link the relevant Issue/ADR when useful for traceability, but Issue identity, branch names, commit messages, PR titles/bodies, checkboxes, top-level PR comments, reactions, metadata-only edits, and superseded historical runs are not merge authority.
 
-Rules:
+## Review and correction
 
-- Never bypass repository governance.
-- Never invent architecture or requirements.
-- Re-derive conclusions from repository authorities rather than previous conversations.
-- Keep changes strictly within the authorized scope.
-- Continue through mandatory in-scope governance stages until a valid stopping boundary is reached.
-- Do not request unnecessary prompts between governed stages.
-- Preserve independent-role boundaries.
-- Never represent self-review as independent review.
-- Quote governing repository authorities for material architectural or governance conclusions.
-- Prefer the smallest valid change that satisfies repository governance.
-- Before a governed branch, commit, push, PR creation/body update, Ready-for-Review promotion, blocking-finding resolution, or merge-readiness assertion, run the matching `python scripts/hunter_governance_preflight.py ...` action. Do not rely on remembered Issue identity or hand-reconstructed governance state.
-- Use `python scripts/hunter_governance_preflight.py generate-pr-body ...` for normal governed PR bodies. The governing Issue, canonical template, exact changed scope, exact head/base pair, and criterion-specific evidence must drive generated metadata.
-- Never infer `PASS` from green CI. Unproven Issue acceptance criteria remain `BLOCKED`/incomplete until explicit evidence exists.
-- Before opening a normal pull request, push the final candidate head and require `Hunter Pre-PR Preflight` to succeed on that exact head.
-- Do not use GitHub PR CI as the first execution of Ruff, Black, Mypy, or Pytest; the shared `python scripts/hunter_pr_preflight.py` command is the repository-local source of truth for those quality gates.
-- If the exact-head quality preflight or governance preflight fails, correct the branch and rerun the applicable preflight before the governed mutation. GitHub-only checks remain independent and may still run after PR creation.
-- Passing preflight is never review approval and never merge authority. Independent review and human merge approval remain governed by `docs/AI_REVIEW_PROTOCOL.md` and `docs/DEVELOPMENT_GOVERNANCE.md`.
+- Treat review findings by materiality. Security, correctness, architecture, persistence/replay, evidence-integrity, and other substantive defects can block.
+- Readability, refactoring, extra-test suggestions, style preferences, and other non-blocking recommendations do not force a commit and do not force another full review cycle.
+- After fixing a blocking finding, verify that finding and the affected behavior. Re-run a broad review only when the substantive scope materially changed.
+- Metadata-only edits and disposition of non-blocking recommendations do not invalidate completed code/security checks or require a new review.
+
+## Merge control
+
+The active merge path is current-state based. A PR is not ready while any of these are true:
+
+- it is Draft;
+- GitHub reports a merge conflict or unresolved mergeability;
+- a substantive inline review thread remains unresolved;
+- a current review is `CHANGES_REQUESTED`;
+- `Quality Gates`, `dependency-review`, or `CodeQL` is missing, pending, cancelled, or failed;
+- `Hunter Governance Review` is missing or non-stale pending;
+- `Hunter Governance Review` is failed or errored;
+- the head cannot be safely attributed to the PR.
+
+`Hunter Merge Readiness` is the final current-state controller. Do not merge until it and every required gate on the final code head are green. Human merge approval remains required.
+
+Do not run or recreate the retired `hunter_governance_preflight.py`, Draft Promotion, owner-`+1`, PR-body identity, or exact-pair hostile-review-attestation ceremony as merge prerequisites.

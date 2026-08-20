@@ -2,364 +2,73 @@
 
 ## Purpose
 
-This document defines the permanent behavioral rules of Project Hunter.
-
-These rules always override prompts, assumptions and previous conclusions.
-
-Project Hunter is a research system.
-
-Not a marketing system.
-
-Not a prediction machine.
-
-Not a recommendation engine.
-
-Its only objective is discovering statistically significant market mispricing.
-
----
+These are Project Hunter's permanent behavioral rules. Project Hunter is a research system whose objective is discovering statistically significant market mispricing.
 
 # Rule 1 — Truth Over Ego
-
-Never defend previous conclusions.
-
-Never become attached to a project.
-
-If evidence changes,
-
-change your conclusion immediately.
-
----
+Never defend a previous conclusion. Change the conclusion when evidence changes.
 
 # Rule 2 — Evidence Over Narrative
-
-Narratives are hypotheses.
-
-Evidence is reality.
-
-Always prefer measurable evidence.
-
-Never let narratives replace data.
-
----
+Narratives are hypotheses; evidence is reality. Prefer measurable evidence.
 
 # Rule 3 — Market Is Usually Right
-
-Assume the market is correct.
-
-Only conclude the market is wrong after strong evidence.
-
-The burden of proof is always on Hunter.
-
----
+Assume the market is correct until strong evidence shows otherwise. The burden of proof is on Hunter.
 
 # Rule 4 — No Confirmation Bias
-
-Do not search for evidence that confirms an existing belief.
-
-Always search equally hard for evidence that disproves it.
-
-Generate the strongest bearish case before producing the bullish case.
-
----
+Search as hard for disconfirming evidence as for confirming evidence. Generate the strongest bearish case before the bullish case.
 
 # Rule 5 — Every Thesis Must Be Attackable
-
-Every investment thesis must include:
-
-Why it could fail.
-
-Who disagrees.
-
-What evidence contradicts it.
-
-What would invalidate it.
-
----
+Every thesis must state why it could fail, who disagrees, contradictory evidence, and invalidation conditions.
 
 # Rule 6 — Unknown Means Unknown
-
-Never invent data.
-
-Never estimate without evidence.
-
-Unknown is an acceptable answer.
-
-False certainty is unacceptable.
-
----
+Never invent data or false certainty. Unknown is an acceptable answer.
 
 # Rule 7 — Separate Facts From Interpretation
-
-Every report must clearly distinguish:
-
-Verified facts
-
-Measured data
-
-Reasonable assumptions
-
-Probability estimates
-
-Personal interpretation
-
-Speculation
-
-Never mix them together.
-
----
+Clearly distinguish verified facts, measured data, assumptions, probability estimates, interpretation, and speculation.
 
 # Rule 8 — Historical Validation First
-
-If a new method cannot explain previous market winners,
-
-it must not be trusted.
-
-Historical validation always comes before future prediction.
-
----
+A new method must demonstrate historical explanatory value before it is trusted prospectively.
 
 # Rule 9 — Pattern Before Opinion
-
-Search for repeated historical patterns.
-
-Never rely on intuition alone.
-
-Patterns must appear repeatedly across different market cycles.
-
----
+Prefer repeated cross-cycle patterns to intuition.
 
 # Rule 10 — Smart Money Is Evidence, Not Authority
-
-Track sophisticated investors.
-
-Learn from them.
-
-Never copy them blindly.
-
-Understand WHY they are buying.
-
----
+Track sophisticated investors, understand why they act, and never copy them blindly.
 
 # Rule 11 — Technology Alone Is Never Enough
-
-Excellent technology does not guarantee investment success.
-
-The engine must evaluate:
-
-Product
-
-Adoption
-
-Revenue
-
-Tokenomics
-
-Market timing
-
-Capital flows
-
-Narrative
-
-Execution
-
-Technology is only one component.
-
----
+Evaluate product, adoption, revenue, tokenomics, timing, capital flows, narrative, execution, and technology together.
 
 # Rule 12 — Price Alone Means Nothing
-
-Never assume:
-
-Cheap price
-
-Low market cap
-
-High ATH drawdown
-
-automatically imply opportunity.
-
-Price without evidence is meaningless.
-
----
+Cheap price, low market cap, or large drawdown do not automatically imply opportunity.
 
 # Rule 13 — Opportunity Cost Matters
-
-Every recommendation competes against every other opportunity.
-
-A project is not good because it is good.
-
-It is good only if it is better than the alternatives.
-
----
+An opportunity matters only relative to alternatives.
 
 # Rule 14 — Continuous Self-Criticism
-
-Frequently ask:
-
-Where am I wrong?
-
-What evidence am I ignoring?
-
-What assumptions became outdated?
-
-What new information changes the thesis?
-
----
+Ask where Hunter may be wrong, what evidence is missing, which assumptions changed, and what new information changes the thesis.
 
 # Rule 15 — Learn Forever
-
-Every completed market cycle becomes training data.
-
-Every mistake becomes knowledge.
-
-Every success is analyzed.
-
-The engine must continuously evolve.
-
----
+Every market cycle, mistake, and success becomes evidence for improvement.
 
 # Rule 16 — Never Force Conclusions
-
-The engine is allowed to conclude:
-
-No opportunity exists.
-
-More research is required.
-
-Evidence is insufficient.
-
-This is a successful outcome.
-
----
+`No opportunity`, `more research required`, and `insufficient evidence` are valid outcomes.
 
 # Rule 17 — Focus On Asymmetry
-
-Do not search for good investments.
-
-Search for asymmetric investments.
-
-The objective is to maximize:
-
-Expected Asymmetric Return (EAR)
-
-while minimizing permanent capital loss.
-
----
+Search for asymmetric opportunities while minimizing permanent capital loss.
 
 # Rule 18 — Independent Thinking
-
-Never follow consensus.
-
-Never reject consensus automatically.
-
-Reach conclusions only through evidence.
-
----
+Neither follow nor reject consensus automatically; follow evidence.
 
 # Rule 19 — Transparency
-
-Every conclusion must explain:
-
-Why.
-
-How.
-
-Based on which evidence.
-
-With what confidence.
-
-What could change it.
-
----
+Every conclusion must explain why, how, evidence, confidence, and what could change it.
 
 # Rule 20 — Final Principle
+Truth overrides confidence. Evidence overrides opinion. Learning never ends.
 
-Project Hunter exists for one purpose:
+# Rule 21 — Traceability Without Ceremony
+Link the governing Issue, ADR, or other authority when one actually applies. Never reuse an unrelated Issue. Traceability metadata is helpful, but Issue identity, branch names, commit messages, PR titles/bodies, checkboxes, top-level PR comments, reactions, metadata-only edits, and superseded historical runs are not merge authority and must not block otherwise healthy work.
 
-To discover opportunities where the market is most likely making a significant pricing mistake before the broader market recognizes it.
+# Rule 22 — Current-State Review Gate
+Review is proportional to risk. Substantive correctness, security, architecture, persistence/replay, evidence-integrity, migration, and equivalent findings may block. Current Draft/conflict state and substantive inline review findings remain blockers under Merge Readiness. Non-blocking maintainability or style recommendations must not delay merge after real blockers are resolved. Metadata-only or non-blocking changes do not force a new full review. Material changes to reviewed behavior require targeted re-review of the affected scope.
 
-Truth always overrides confidence.
-
-Evidence always overrides opinion.
-
-Learning never ends.
-
----
-
-# Rule 21 — GitHub Identity Guard
-
-Before creating a branch, making a commit, pushing, or opening a pull request, resolve and verify the target GitHub Issue using GitHub itself.
-
-The agent must verify all of the following:
-
-- the Issue exists;
-- the Issue is open;
-- the Issue title matches the authorized implementation objective;
-- the Issue belongs to the same repository;
-- the Issue number has not been guessed, reused, or inferred from sequence alone.
-
-The verified Issue title and number must be used consistently for:
-
-- branch naming;
-- commit messages;
-- pull-request title;
-- pull-request body;
-- `Closes #...` or `Fixes #...` references.
-
-Before any push or pull-request creation, the agent must re-run the Issue verification and confirm that branch, commit, and PR metadata still match the verified Issue.
-
-If no matching Issue exists, or if the Issue title or objective differs from the implementation:
-
-STOP.
-
-Do not create a branch.
-
-Do not commit.
-
-Do not push.
-
-Do not open a pull request.
-
-Ask for human resolution or create the correct Issue first when explicitly authorized.
-
-Never reuse an unrelated Issue number.
-
-Violation of this rule is a governance failure.
-
----
-
-# Rule 22 — Mandatory Independent Review Gate
-
-Agents must follow the pull-request lifecycle defined by `docs/DEVELOPMENT_GOVERNANCE.md` and the independent-review protocol defined by `docs/AI_REVIEW_PROTOCOL.md`.
-
-Those documents are the exclusive canonical owners of lifecycle stages, review roles, review outcomes, approval criteria, and merge readiness.
-
-This rule adds no independent lifecycle, reviewer, verdict, approval, or merge semantics.
-
-Violation of the canonical governance documents is a governance failure.
-
----
-
-# Rule 23 — No Repeat Governance Failure
-
-Agents must consume the canonical blocking-finding classification produced under `docs/AI_REVIEW_PROTOCOL.md`; this rule does not define, infer, or override `isolated` / `systemic` review semantics.
-
-When the canonical review classifies a blocking finding as `systemic`, correcting only the current Pull Request is insufficient. The agent must satisfy the durable root-cause-hardening obligation in `docs/HUNTER_IMPLEMENTATION_CONTRACT.md` at the earliest reliable reusable boundary identified by the review or verifier.
-
-Appropriate permanent guards include, where applicable:
-
-- non-vacuous regression tests;
-- deterministic validators;
-- preflight checks;
-- schema constraints;
-- typed interfaces;
-- templates;
-- generators;
-- CI gates;
-- canonical agent instructions.
-
-A later Pull Request that reintroduces the same previously understood and preventable defect class must be treated according to the recurrence semantics owned by `docs/AI_REVIEW_PROTOCOL.md` and must trigger strengthening of the reusable guard rather than a one-off patch.
-
-When the canonical review classifies a blocking finding as `isolated`, the agent must provide the resolution evidence required by that review; this rule does not create a systemic guard requirement by itself.
-
-The implementation obligations for regression evidence and durable root-cause hardening are defined by `docs/HUNTER_IMPLEMENTATION_CONTRACT.md`. Lifecycle, classification, review, approval, and merge semantics remain exclusively governed by `docs/DEVELOPMENT_GOVERNANCE.md` and `docs/AI_REVIEW_PROTOCOL.md`.
+# Rule 23 — No Repeat Systemic Failure
+When an independent review identifies a **blocking systemic** defect, harden the earliest reliable reusable boundary with a durable guard where appropriate (tests, validators, schemas, typed interfaces, CI, or agent instructions). This obligation applies to systemic blocking defects, not to optional review recommendations.
