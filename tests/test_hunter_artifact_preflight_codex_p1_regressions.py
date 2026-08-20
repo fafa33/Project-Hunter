@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-import pytest
-
 import hunter_artifact_preflight
+import pytest
 
 
 def _audit() -> str:
