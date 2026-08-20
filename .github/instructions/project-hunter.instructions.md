@@ -11,7 +11,10 @@ Treat the repository and current GitHub state as the source of truth.
 - Understand the user-authorized objective and keep the change within that scope.
 - Read the architecture/ADR material that actually governs the area being changed. Do not perform repository-wide ceremony for a local change unless the change genuinely crosses those boundaries.
 - Prefer the smallest correct change. Do not invent missing architecture, weaken tests, or hide real failures.
-- Before pushing a code-changing candidate, run `python scripts/hunter_pr_preflight.py` when the environment permits it.
+- Before pushing an ordinary code-changing candidate, run `python scripts/hunter_pr_preflight.py --mode normal`; Ruff, Black, Mypy, and Pytest must all pass.
+- For an intentional tests-first RED commit, create `.hunter-preflight-mode` containing exactly `tests-first-red` before pushing. The exact-head preflight may pass only when Ruff, Black, and Mypy are green and Pytest is genuinely RED. This exception is for Draft tests-first work only; it never makes failing tests merge-ready.
+- Before implementation or any normal candidate resumes, remove `.hunter-preflight-mode` and return to `python scripts/hunter_pr_preflight.py --mode normal`.
+- CI and preflight are verification only. Do not auto-format, auto-commit, or hide failures merely to obtain a green status.
 - Link the relevant Issue/ADR when useful for traceability, but Issue identity, branch names, commit messages, PR titles/bodies, checkboxes, top-level PR comments, reactions, metadata-only edits, and superseded historical runs are not merge authority.
 
 ## Review and correction
