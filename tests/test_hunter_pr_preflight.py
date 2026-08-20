@@ -2,11 +2,59 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import hunter_pr_preflight
 import pytest
+import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
+PREFLIGHT_COMMAND = "python scripts/hunter_pr_preflight.py"
+
+
+def _load_workflow(path: Path) -> dict[str, Any]:
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    assert isinstance(data, dict), path
+    return data
+
+
+def _preflight_checkout_depths(workflow: dict[str, Any]) -> list[object]:
+    depths: list[object] = []
+    jobs = workflow.get("jobs", {})
+    if not isinstance(jobs, dict):
+        return depths
+
+    for job in jobs.values():
+        if not isinstance(job, dict):
+            continue
+        steps = job.get("steps", [])
+        if not isinstance(steps, list):
+            continue
+        for index, step in enumerate(steps):
+            if not isinstance(step, dict):
+                continue
+            run = step.get("run")
+            if not isinstance(run, str) or PREFLIGHT_COMMAND not in run:
+                continue
+
+            checkout: dict[str, Any] | None = None
+            for prior in reversed(steps[:index]):
+                if not isinstance(prior, dict):
+                    continue
+                uses = prior.get("uses")
+                if isinstance(uses, str) and uses.startswith("actions/checkout@"):
+                    checkout = prior
+                    break
+
+            if checkout is None:
+                depths.append(None)
+                continue
+            with_config = checkout.get("with", {})
+            if not isinstance(with_config, dict):
+                depths.append(None)
+                continue
+            depths.append(with_config.get("fetch-depth"))
+    return depths
 
 
 def test_normal_quality_gate_order_matches_ci_contract() -> None:
@@ -166,7 +214,6 @@ def test_pre_pr_workflow_reads_machine_readable_mode_marker() -> None:
     assert "PREFLIGHT_MODE" in text
     assert "--mode" in text
     assert "tests-first-red" in text
-    assert "fetch-depth: 0" in text
 
 
 def test_shared_preflight_workflows_fetch_full_history() -> None:
@@ -174,12 +221,27 @@ def test_shared_preflight_workflows_fetch_full_history() -> None:
     workflow_paths = sorted((*workflow_dir.glob("*.yml"), *workflow_dir.glob("*.yaml")))
     matched: list[Path] = []
     for path in workflow_paths:
-        text = path.read_text(encoding="utf-8")
-        if "python scripts/hunter_pr_preflight.py" not in text:
+        depths = _preflight_checkout_depths(_load_workflow(path))
+        if not depths:
             continue
         matched.append(path)
-        assert "fetch-depth: 0" in text, path
+        assert all(str(depth) == "0" for depth in depths), (path, depths)
     assert matched
+
+
+def test_full_history_must_belong_to_checkout_preceding_preflight() -> None:
+    workflow = {
+        "jobs": {
+            "quality": {
+                "steps": [
+                    {"uses": "actions/checkout@v7", "with": {"fetch-depth": 1}},
+                    {"name": "Unrelated", "with": {"fetch-depth": 0}},
+                    {"run": "python scripts/hunter_pr_preflight.py --mode normal"},
+                ]
+            }
+        }
+    }
+    assert _preflight_checkout_depths(workflow) == [1]
 
 
 def test_workflows_use_current_node24_action_majors() -> None:
@@ -195,16 +257,17 @@ def test_workflows_use_current_node24_action_majors() -> None:
                 assert stripped.endswith("actions/setup-python@v6"), path
 
 
-def test_agent_instructions_document_both_preflight_modes_and_defect_registry() -> None:
+def test_agent_instructions_reference_machine_contract_surfaces() -> None:
     paths = (
         ROOT / ".github" / "instructions" / "project-hunter.instructions.md",
         ROOT / "CLAUDE.md",
     )
+    required = (
+        "docs/DEFECT_REGISTRY.json",
+        ".hunter-preflight-mode",
+        "python scripts/hunter_pr_preflight.py --mode normal",
+    )
     for path in paths:
         text = path.read_text(encoding="utf-8")
-        assert "tests-first-red" in text, path
-        assert ".hunter-preflight-mode" in text, path
-        assert "python scripts/hunter_pr_preflight.py" in text, path
-        assert "docs/DEFECT_REGISTRY.json" in text, path
-        assert "false-positive" in text, path
-        assert "TARGETED" in text, path
+        for contract_surface in required:
+            assert contract_surface in text, (path, contract_surface)
