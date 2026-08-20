@@ -28,6 +28,8 @@ CI failures are actionable: diagnose and fix real failures without asking for an
 
 When independent review confirms a blocking systemic defect, update `docs/DEFECT_REGISTRY.json` in the correcting or immediately following governed contribution and add or strengthen a deterministic guard/test appropriate to the failure class. Do not rely on prose memory alone where a machine-checkable boundary exists.
 
+A machine guard must itself be justified by canonical authority or a demonstrated recurring defect. Prefer semantic or structural invariants over brittle wording checks. Do not make TARGETED work satisfy FULL-review ceremony, do not block canonically valid equivalent wording, and do not add a merge-blocking check merely because it is easy to automate. A guard that rejects valid canonical output or creates false-positive merge blockage is itself a defect and must be corrected.
+
 ## Pull requests and review
 
 A Draft PR is optional for incomplete work; it is not a required ceremony for an already locally verified contribution.
