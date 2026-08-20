@@ -6,34 +6,50 @@ from typing import Any
 import hunter_artifact_preflight
 
 
-def _good_audit(*, accepted_adrs: tuple[str, ...] = ("0001", "0002")) -> str:
-    coverage = "\n".join(f"- ADR {adr}: reviewed; out of scope for this audit." for adr in accepted_adrs)
+def _good_audit(
+    *,
+    audit_type: str = "FULL",
+    accepted_adrs: tuple[str, ...] = ("0001", "0002"),
+    scope: str = "Full independent architecture audit.",
+    evidence: str = "- Immutable repository evidence at the reviewed revision.",
+    evidence_cutoff: str = "",
+) -> str:
+    coverage = "\n".join(
+        f"- ADR {adr}: reviewed; out of scope for this audit." for adr in accepted_adrs
+    )
+    coverage_section = ""
+    if audit_type == "FULL":
+        coverage_section = f"""
+## Accepted ADR Coverage
+
+{coverage}
+"""
+
+    cutoff_line = ""
+    if evidence_cutoff:
+        cutoff_line = f"- Evidence cutoff: `{evidence_cutoff}`\n"
+
     return f"""# Independent Architecture Audit
 
 ## Metadata
 
 - Reviewed artifact: `docs/example.md`
 - Reviewed revision: `0123456789abcdef0123456789abcdef01234567`
-- Audit type: `FULL`
+- Audit type: `{audit_type}`
 - Auditor: Jules — independent architecture audit agent
 - Audit date: 2026-08-20
-- Evidence cutoff: `2026-08-20T13:00:00+02:00`
-
+{cutoff_line}
 ## Audit Scope
 
-Full independent architecture audit.
+{scope}
 
 ## Evidence Sources Examined
 
-- Immutable repository evidence at the reviewed revision.
-
-## Accepted ADR Coverage
-
-{coverage}
-
+{evidence}
+{coverage_section}
 ## Prior Review Finding Re-Verification
 
-- PR #288 findings independently re-verified against the reviewed baseline.
+- No prior review findings are in scope for this fixture.
 
 ## Dimension Results
 
@@ -53,26 +69,27 @@ No blocking findings.
 
 ## Verdict Derivation
 
-Highest unresolved class: A. No blocking materiality.
+Highest unresolved severity: A. No blocking materiality.
 
 ## Final Verdict
 
 READY_FOR_ADR
 
+## Required Corrections or Conditions
+
+None.
+
+## Non-Blocking Follow-Up
+
+None.
+
 ## Audit Completion Check
 
 - [x] Complete
-
-## Progression Gate
-
-READY_FOR_ADR and READY_FOR_ADR_WITH_MINOR_FINDINGS permit clean progression.
-CONDITIONAL_ADR_READY may permit drafting only under its stated conditions and does not
-permit approval or merge until those conditions are satisfied.
-ADPR_REVISION_REQUIRED and ARCHITECTURE_NOT_READY block ADR drafting.
 """
 
 
-def test_good_audit_passes() -> None:
+def test_good_audit_passes_without_unnecessary_progression_prose_or_cutoff() -> None:
     assert (
         hunter_artifact_preflight.validate_audit_text(
             _good_audit(),
@@ -94,22 +111,40 @@ def test_pending_audit_is_rejected() -> None:
     assert any("PENDING" in error for error in errors)
 
 
-def test_audit_requires_revision_and_cutoff() -> None:
-    text = _good_audit()
-    text = text.replace(
+def test_audit_requires_immutable_reviewed_revision() -> None:
+    text = _good_audit().replace(
         "- Reviewed revision: `0123456789abcdef0123456789abcdef01234567`\n",
         "",
     )
-    text = text.replace("- Evidence cutoff: `2026-08-20T13:00:00+02:00`\n", "")
     errors = hunter_artifact_preflight.validate_audit_text(
         text,
         accepted_adrs=["0001", "0002"],
     )
     assert any("Reviewed revision" in error for error in errors)
+
+
+def test_mutable_evidence_requires_valid_cutoff() -> None:
+    text = _good_audit(evidence="- PR #288 review history and Issue #287 state.")
+    errors = hunter_artifact_preflight.validate_audit_text(
+        text,
+        accepted_adrs=["0001", "0002"],
+    )
     assert any("Evidence cutoff" in error for error in errors)
 
+    corrected = _good_audit(
+        evidence="- PR #288 review history and Issue #287 state.",
+        evidence_cutoff="2026-08-20T13:00:00+02:00",
+    )
+    assert (
+        hunter_artifact_preflight.validate_audit_text(
+            corrected,
+            accepted_adrs=["0001", "0002"],
+        )
+        == []
+    )
 
-def test_audit_requires_every_accepted_adr() -> None:
+
+def test_full_audit_requires_every_accepted_adr() -> None:
     errors = hunter_artifact_preflight.validate_audit_text(
         _good_audit(accepted_adrs=("0001",)),
         accepted_adrs=["0001", "0002"],
@@ -117,10 +152,27 @@ def test_audit_requires_every_accepted_adr() -> None:
     assert any("Accepted ADR 0002" in error for error in errors)
 
 
+def test_targeted_audit_does_not_require_repository_wide_adr_accounting() -> None:
+    text = _good_audit(
+        audit_type="TARGETED",
+        accepted_adrs=(),
+        scope="Targeted re-audit of previously blocking finding F-003 and changed sections.",
+    )
+    assert (
+        hunter_artifact_preflight.validate_audit_text(
+            text,
+            accepted_adrs=["0001", "0002"],
+        )
+        == []
+    )
+
+
 def test_prior_review_scope_requires_verification_section() -> None:
-    text = _good_audit().replace(
+    text = _good_audit(
+        scope="Full audit including prior review PR #288 findings.",
+    ).replace(
         "## Prior Review Finding Re-Verification\n\n"
-        "- PR #288 findings independently re-verified against the reviewed baseline.\n\n",
+        "- No prior review findings are in scope for this fixture.\n\n",
         "",
     )
     errors = hunter_artifact_preflight.validate_audit_text(
@@ -130,31 +182,51 @@ def test_prior_review_scope_requires_verification_section() -> None:
     assert any("Prior Review Finding Re-Verification" in error for error in errors)
 
 
-def test_severity_label_is_rejected() -> None:
+def test_finding_record_class_label_is_rejected_in_favor_of_canonical_severity() -> None:
     text = _good_audit().replace(
         "No blocking findings.",
-        "- **Severity:** A\n- **Class:** A",
+        "- **Class:** `A`",
     )
     errors = hunter_artifact_preflight.validate_audit_text(
         text,
         accepted_adrs=["0001", "0002"],
     )
-    assert any("canonical `Class`" in error for error in errors)
+    assert any("canonical `Severity`" in error for error in errors)
 
 
-def test_progression_gate_is_explicit() -> None:
+def test_canonical_severity_field_is_accepted() -> None:
     text = _good_audit().replace(
-        """READY_FOR_ADR and READY_FOR_ADR_WITH_MINOR_FINDINGS permit clean progression.
-CONDITIONAL_ADR_READY may permit drafting only under its stated conditions and does not
-permit approval or merge until those conditions are satisfied.
-ADPR_REVISION_REQUIRED and ARCHITECTURE_NOT_READY block ADR drafting.""",
-        "READY_FOR_ADR permits progression.",
+        "No blocking findings.",
+        "- **Severity:** `A`",
+    )
+    assert (
+        hunter_artifact_preflight.validate_audit_text(
+            text,
+            accepted_adrs=["0001", "0002"],
+        )
+        == []
+    )
+
+
+def test_conditional_verdict_requires_real_conditions_not_duplicated_gate_prose() -> None:
+    text = _good_audit().replace("READY_FOR_ADR\n", "CONDITIONAL_ADR_READY\n").replace(
+        "## Required Corrections or Conditions\n\nNone.",
+        "## Required Corrections or Conditions\n\nNone",
     )
     errors = hunter_artifact_preflight.validate_audit_text(
         text,
         accepted_adrs=["0001", "0002"],
     )
-    assert any("Progression Gate" in error for error in errors)
+    assert any("explicit mandatory conditions" in error for error in errors)
+
+
+def test_blocking_verdict_requires_a_blocks_adr_yes_finding() -> None:
+    text = _good_audit().replace("READY_FOR_ADR\n", "ADPR_REVISION_REQUIRED\n")
+    errors = hunter_artifact_preflight.validate_audit_text(
+        text,
+        accepted_adrs=["0001", "0002"],
+    )
+    assert any("Blocks ADR = YES" in error for error in errors)
 
 
 def test_registry_rejects_dropped_understood_defect_class() -> None:
