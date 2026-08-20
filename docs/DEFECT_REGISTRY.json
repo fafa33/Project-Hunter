@@ -93,6 +93,16 @@
       "status": "guarded"
     },
     {
+      "id": "PRH-010",
+      "class": "shared-preflight-runs-with-unproven-shallow-history",
+      "source": "Issue #291 pre-PR guard audit on 2026-08-20",
+      "classification": "systemic",
+      "guard_boundary": "every workflow invoking the shared preflight and merge-base resolution",
+      "guard": "all shared-preflight workflows fetch full history, and artifact changed-path detection fails closed unless merge-base with origin/main is proven",
+      "test": "tests/test_hunter_pr_preflight.py::test_shared_preflight_workflows_fetch_full_history",
+      "status": "guarded"
+    },
+    {
       "id": "ARCH-AUD-001",
       "class": "accepted-adr-coverage-incomplete",
       "source": "PR #288 and PR #290 CodeRabbit",
