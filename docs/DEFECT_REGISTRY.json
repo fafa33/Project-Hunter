@@ -69,7 +69,7 @@
       "classification": "systemic",
       "guard_boundary": "shared full preflight contract before review progression",
       "guard": "agents must run the complete normal preflight before push; the exact-head hosted Pre-PR workflow independently reruns Artifact Guard, Ruff, Black, Mypy, and Pytest and fails closed",
-      "test": "tests/test_hunter_pr_preflight.py::test_normal_quality_gate_order_matches_ci_contract",
+      "test": "tests/test_recent_preflight_defect_registry.py::test_agents_must_run_complete_preflight_before_push",
       "status": "guarded"
     },
     {
@@ -78,8 +78,18 @@
       "source": "Issue #291 implementation Mypy failure on 2026-08-20",
       "classification": "isolated",
       "guard_boundary": "full-repository static typing gate",
-      "guard": "Mypy must pass in both normal and tests-first-red preflight before a candidate can progress; nested mutable test fixtures must use explicit typing when inference collapses to object",
+      "guard": "Mypy must pass in both normal and tests-first-red preflight before a candidate can progress; nested mutable test fixtures use explicit typing when inference collapses to object",
       "test": "tests/test_hunter_pr_preflight.py::test_normal_quality_gate_order_matches_ci_contract",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-009",
+      "class": "guard-overreach-or-canonical-authority-conflict",
+      "source": "Issue #291 pre-PR guard audit on 2026-08-20",
+      "classification": "systemic",
+      "guard_boundary": "artifact-validator conformance to canonical audit protocol and proportional scope",
+      "guard": "artifact guards enforce canonical semantic invariants, scope repository-wide requirements to FULL audits, allow TARGETED re-audits to remain targeted, and do not block equivalent valid prose or canonical Severity terminology",
+      "test": "tests/test_hunter_artifact_preflight.py::test_targeted_audit_does_not_require_repository_wide_adr_accounting",
       "status": "guarded"
     },
     {
@@ -88,8 +98,8 @@
       "source": "PR #288 and PR #290 CodeRabbit",
       "classification": "systemic",
       "guard_boundary": "architecture-audit artifact preflight",
-      "guard": "changed audit reports must account for every Accepted ADR",
-      "test": "tests/test_hunter_artifact_preflight.py::test_audit_requires_every_accepted_adr",
+      "guard": "FULL audit reports explicitly account for every Accepted ADR; TARGETED re-audits are not forced into repository-wide ADR recertification",
+      "test": "tests/test_hunter_artifact_preflight.py::test_full_audit_requires_every_accepted_adr",
       "status": "guarded"
     },
     {
@@ -98,7 +108,7 @@
       "source": "PR #290 Codex and CodeRabbit",
       "classification": "systemic",
       "guard_boundary": "architecture-audit artifact preflight",
-      "guard": "changed audit reports may not contain unresolved PENDING placeholders",
+      "guard": "review-ready changed audit reports may not contain unresolved PENDING placeholders",
       "test": "tests/test_hunter_artifact_preflight.py::test_pending_audit_is_rejected",
       "status": "guarded"
     },
@@ -108,8 +118,8 @@
       "source": "PR #290 CodeRabbit",
       "classification": "systemic",
       "guard_boundary": "architecture-audit artifact preflight",
-      "guard": "reviewed revision and evidence cutoff are mandatory",
-      "test": "tests/test_hunter_artifact_preflight.py::test_audit_requires_revision_and_cutoff",
+      "guard": "reviewed revision is mandatory; mutable PR, Issue, or URL evidence also requires a valid offset-aware evidence cutoff",
+      "test": "tests/test_hunter_artifact_preflight.py::test_mutable_evidence_requires_valid_cutoff",
       "status": "guarded"
     },
     {
@@ -118,7 +128,7 @@
       "source": "PR #290 CodeRabbit",
       "classification": "systemic",
       "guard_boundary": "architecture-audit artifact preflight",
-      "guard": "audit reports must include prior-review finding re-verification evidence",
+      "guard": "when Audit Scope declares prior review history, the report must include independent prior-finding re-verification evidence",
       "test": "tests/test_hunter_artifact_preflight.py::test_prior_review_scope_requires_verification_section",
       "status": "guarded"
     },
@@ -127,19 +137,19 @@
       "class": "adr-progression-gate-ambiguous",
       "source": "PR #290 CodeRabbit",
       "classification": "systemic",
-      "guard_boundary": "architecture-audit artifact preflight",
-      "guard": "clean-progression, conditional, and blocking verdict semantics are mandatory",
-      "test": "tests/test_hunter_artifact_preflight.py::test_progression_gate_is_explicit",
+      "guard_boundary": "architecture-audit verdict semantics",
+      "guard": "verdict-specific semantics are checked directly: conditional readiness requires real conditions and blocking verdicts require at least one Blocks ADR = YES finding; duplicated progression prose is not required",
+      "test": "tests/test_hunter_artifact_preflight.py::test_conditional_verdict_requires_real_conditions_not_duplicated_gate_prose",
       "status": "guarded"
     },
     {
       "id": "ARCH-AUD-006",
       "class": "finding-classification-terminology-drift",
-      "source": "PR #290 CodeRabbit",
+      "source": "PR #290 CodeRabbit, corrected against canonical Architecture Audit Protocol v2.0",
       "classification": "isolated",
       "guard_boundary": "architecture-audit artifact preflight",
-      "guard": "audit finding records use Class, never Severity",
-      "test": "tests/test_hunter_artifact_preflight.py::test_severity_label_is_rejected",
+      "guard": "finding records use canonical Severity while the Findings Matrix uses Class; the validator must not invert those protocol-owned terms",
+      "test": "tests/test_hunter_artifact_preflight.py::test_finding_record_class_label_is_rejected_in_favor_of_canonical_severity",
       "status": "guarded"
     }
   ]
