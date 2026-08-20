@@ -105,11 +105,11 @@
     {
       "id": "PRH-011",
       "class": "semantic-invariant-reduced-to-text-presence-proxy",
-      "source": "PR #293 CodeRabbit hostile review and hostile re-review P1 recurrence on 2026-08-20",
+      "source": "PR #293 CodeRabbit hostile review, CodeRabbit P1 recurrence, and Codex P1 recurrence on 2026-08-20",
       "classification": "systemic",
-      "guard_boundary": "Markdown-aware artifact parsing and workflow validators plus hostile regression fixtures",
-      "guard": "security/governance semantics must be derived from rendered Markdown/workflow structure rather than arbitrary text presence; fenced code blocks are masked before heading, metadata, ADR, finding, matrix, PENDING, and verdict parsing, and hostile fixtures prove quoted or fenced templates, incidental tokens, wrong columns, unrelated PR references, unrelated checkout settings, and wording-only assertions cannot satisfy guards",
-      "test": "tests/test_hunter_artifact_preflight_fences.py::test_complete_audit_inside_fenced_code_cannot_impersonate_real_structure",
+      "guard_boundary": "rendered-Markdown-aware artifact parsing and workflow validators plus hostile regression fixtures",
+      "guard": "security/governance semantics must be derived from rendered Markdown/workflow structure rather than arbitrary text presence; fenced code blocks, HTML comments, and indented code blocks are masked before heading, metadata, ADR, finding, matrix, PENDING, and verdict parsing, and hostile fixtures prove non-rendered templates and unrelated matching structure cannot satisfy guards",
+      "test": "tests/test_hunter_artifact_preflight_semantics.py::test_html_comment_cannot_impersonate_audit_structure",
       "status": "guarded"
     },
     {
@@ -155,11 +155,11 @@
     {
       "id": "ARCH-AUD-005",
       "class": "adr-progression-gate-ambiguous",
-      "source": "PR #290 and PR #293 CodeRabbit",
+      "source": "PR #290 and PR #293 CodeRabbit plus PR #293 Codex P1 on 2026-08-20",
       "classification": "systemic",
-      "guard_boundary": "architecture-audit verdict and blocking-finding semantics",
-      "guard": "Final Verdict must contain one canonical declared verdict line; conditional readiness requires real conditions; blocking verdicts require YES specifically in the labeled Blocks ADR field or the identified Blocks ADR matrix column",
-      "test": "tests/test_hunter_artifact_preflight.py::test_blocks_adr_yes_must_come_from_the_blocks_adr_field_or_column",
+      "guard_boundary": "architecture-audit verdict, severity, and blocking-finding semantics",
+      "guard": "Final Verdict must contain one canonical declared verdict line and be bidirectionally consistent with the highest unresolved Findings Matrix severity: Class C requires ADPR_REVISION_REQUIRED, Class D requires ARCHITECTURE_NOT_READY, blocking verdicts require their corresponding severity, and every Class C/D finding must set Blocks ADR = YES; conditional readiness still requires real conditions",
+      "test": "tests/test_hunter_artifact_preflight_semantics.py::test_adpr_revision_required_accepts_class_c_but_not_class_d",
       "status": "guarded"
     },
     {
