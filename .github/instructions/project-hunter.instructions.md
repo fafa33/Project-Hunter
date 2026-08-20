@@ -13,6 +13,7 @@ Treat the repository and current GitHub state as the source of truth.
 - Read `docs/DEFECT_REGISTRY.json` for defect classes relevant to the work. A repeated understood defect means the prior hardening was insufficient; strengthen the reusable guard instead of treating the recurrence as a new one-off correction.
 - Prefer the smallest correct change. Do not invent missing architecture, weaken tests, or hide real failures.
 - Before pushing an ordinary code-changing candidate, run `python scripts/hunter_pr_preflight.py --mode normal`; the Artifact Guard, Ruff, Black, Mypy, and Pytest must all pass.
+- Before treating a hosted Pre-PR run as proof or opening a PR based on it, verify that the run's commit SHA exactly equals the current branch HEAD. A run number, "latest" label, or remembered green result alone is not exact-head evidence.
 - For an intentional tests-first RED commit, create `.hunter-preflight-mode` containing exactly `tests-first-red` and commit that marker on the exact branch head being pushed. The exact-head preflight may pass only when the Artifact Guard, Ruff, Black, and Mypy are green and Pytest is genuinely RED. This exception is for Draft tests-first work only; it never makes failing tests merge-ready.
 - Before implementation or any normal candidate resumes, remove `.hunter-preflight-mode`, commit that removal on the branch head being pushed, and return to `python scripts/hunter_pr_preflight.py --mode normal`.
 - CI and preflight are verification only. Do not auto-format, auto-commit, or hide failures merely to obtain a green status.
