@@ -94,6 +94,20 @@ def _without_prior_review_section(text: str) -> str:
     )
 
 
+def _blocking_finding_record() -> str:
+    return """### F-001 — Material finding
+
+- **Evidence:** Direct repository evidence.
+- **Location:** `docs/example.md`, decision boundary.
+- **Category:** Architecture decision quality.
+- **Severity:** `C`
+- **Decision impact:** The decision basis can become unreliable.
+- **Consequence if ignored:** An unsupported architectural conclusion could be selected.
+- **Required action:** Correct the material defect before progression.
+- **Blocks ADR:** `YES`
+"""
+
+
 def test_good_audit_passes_without_unnecessary_progression_prose_or_cutoff() -> None:
     assert (
         hunter_artifact_preflight.validate_audit_text(
@@ -331,9 +345,12 @@ def test_blocks_adr_yes_must_come_from_the_blocks_adr_field_or_column() -> None:
     )
     assert any("Blocks ADR = YES" in error for error in errors)
 
-    corrected = text.replace(
-        "| F-001 | C | YES | Consequence | NO | Evidence |",
-        "| F-001 | C | Impact | Consequence | YES | Evidence |",
+    corrected = (
+        text.replace(
+            "| F-001 | C | YES | Consequence | NO | Evidence |",
+            "| F-001 | C | Impact | Consequence | YES | Evidence |",
+        )
+        .replace("No blocking findings.", _blocking_finding_record())
     )
     assert (
         hunter_artifact_preflight.validate_audit_text(
