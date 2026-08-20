@@ -3,9 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
-import pytest
-
 import hunter_pr_preflight
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 
