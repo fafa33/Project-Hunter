@@ -20,7 +20,7 @@ Before pushing an ordinary code-changing candidate, run when available:
 python scripts/hunter_pr_preflight.py --mode normal
 ```
 
-Normal mode requires Ruff, Black, Mypy, and Pytest to pass. For an intentional tests-first RED commit only, create `.hunter-preflight-mode` containing exactly `tests-first-red` before pushing. That mode is valid only when Ruff, Black, and Mypy pass and Pytest exits with a real test-failure result. It is a Draft tests-first hygiene signal, never merge readiness. Remove the marker and return to normal mode before implementation or any green candidate resumes.
+Normal mode requires Ruff, Black, Mypy, and Pytest to pass. For an intentional tests-first RED commit only, create `.hunter-preflight-mode` containing exactly `tests-first-red` and commit that marker on the exact branch head being pushed. That mode is valid only when Ruff, Black, and Mypy pass and Pytest exits with a real test-failure result. It is a Draft tests-first hygiene signal, never merge readiness. Before implementation or any green candidate resumes, remove `.hunter-preflight-mode`, commit that removal on the branch head being pushed, and return to normal mode.
 
 CI failures are actionable: diagnose and fix real failures without asking for another prompt when the fix is in scope.
 
