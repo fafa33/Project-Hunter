@@ -34,6 +34,7 @@ REQUIRED_DEFECT_IDS = {
     "PRH-008",
     "PRH-009",
     "PRH-010",
+    "PRH-011",
     "ARCH-AUD-001",
     "ARCH-AUD-002",
     "ARCH-AUD-003",
@@ -67,9 +68,16 @@ REVISION_RE = re.compile(r"(?im)^-\s*Reviewed revision:\s*`?([0-9a-f]{40})`?\s*$
 AUDIT_TYPE_RE = re.compile(r"(?im)^-\s*Audit type:\s*`?(FULL|TARGETED)`?\s*$")
 CUTOFF_RE = re.compile(r"(?im)^-\s*Evidence cutoff:\s*`?([^`\n]+)`?\s*$")
 MUTABLE_EVIDENCE_RE = re.compile(r"(?i)(?:https?://|\bPR\s*#\d+\b|\bIssue\s*#\d+\b)")
-PRIOR_REVIEW_SCOPE_RE = re.compile(r"(?i)(?:prior\s+review|previous\s+finding|\bPR\s*#\d+\b)")
+PRIOR_REVIEW_SCOPE_RE = re.compile(
+    r"(?i)\b(?:prior\s+(?:review|finding(?:s)?)|previous\s+finding(?:s)?|previously\s+(?:blocking\s+)?finding(?:s)?)\b"
+)
+NO_PRIOR_FINDINGS_RE = re.compile(r"(?i)\bno\s+prior\s+(?:review\s+)?findings?\b")
+PRIOR_FINDING_REFERENCE_RE = re.compile(r"(?i)\b(?:PR\d+-F\d+|F-\d{3})\b")
 FINDING_CLASS_FIELD_RE = re.compile(r"(?im)^-\s*\*\*Class:\*\*")
-BLOCKS_ADR_YES_RE = re.compile(r"(?im)(?:\*\*Blocks ADR:\*\*\s*`?YES`?|\|[^\n]*\|\s*YES\s*\|)")
+BLOCKS_ADR_FIELD_YES_RE = re.compile(r"(?im)^-\s*\*\*Blocks ADR:\*\*\s*`?YES`?\s*$")
+ADR_DISPOSITION_RE = re.compile(
+    r"(?i)\b(?:reviewed|verified|applicable|in\s+scope|out\s+of\s+scope|not\s+applicable|no\s+conflict|conflict)\b"
+)
 
 
 def _run_git(*args: str) -> subprocess.CompletedProcess[str]:
@@ -159,15 +167,82 @@ def accepted_adr_ids(index_text: str) -> list[str]:
     return sorted(set(ids))
 
 
+def _heading_match(text: str, heading: str) -> re.Match[str] | None:
+    return re.search(rf"(?m)^{re.escape(heading)}[ \t]*$", text)
+
+
 def _section(text: str, heading: str) -> str:
-    start = text.find(heading)
-    if start < 0:
+    match = _heading_match(text, heading)
+    if not match:
         return ""
-    remainder = text[start + len(heading) :]
-    next_heading = re.search(r"(?m)^##\s+", remainder)
+    remainder = text[match.end() :]
+    next_heading = re.search(r"(?m)^##[ \t]+[^\n]+[ \t]*$", remainder)
     if next_heading:
         remainder = remainder[: next_heading.start()]
     return remainder.strip()
+
+
+def _direct_section_lines(text: str, heading: str) -> list[str]:
+    section = _section(text, heading)
+    direct = re.split(r"(?m)^#{3,6}[ \t]+[^\n]+[ \t]*$", section, maxsplit=1)[0]
+    return [line.strip() for line in direct.splitlines() if line.strip()]
+
+
+def _normalize_markdown_scalar(value: str) -> str:
+    normalized = value.strip()
+    if normalized.startswith(("- ", "* ")):
+        normalized = normalized[2:].strip()
+    if len(normalized) >= 2 and normalized.startswith("`") and normalized.endswith("`"):
+        normalized = normalized[1:-1].strip()
+    return normalized
+
+
+def _markdown_cells(line: str) -> list[str]:
+    stripped = line.strip()
+    if not stripped.startswith("|"):
+        return []
+    return [cell.strip() for cell in stripped.strip("|").split("|")]
+
+
+def _normalized_cell(value: str) -> str:
+    return re.sub(r"[`*_]", "", value).strip().lower()
+
+
+def _structured_adr_accounting_ids(text: str) -> set[str]:
+    accounted: set[str] = set()
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("|"):
+            cells = _markdown_cells(stripped)
+            if not cells:
+                continue
+            first_cell = _normalized_cell(cells[0])
+            match = re.match(r"(?i)^ADR[ -]?(\d{4})\b", first_cell)
+            remainder = " ".join(cells[1:])
+        else:
+            match = re.match(r"(?i)^[-*]\s+(?:[`*_]+)?ADR[ -]?(\d{4})\b", stripped)
+            remainder = stripped[match.end() :] if match else ""
+        if match and ADR_DISPOSITION_RE.search(remainder):
+            accounted.add(match.group(1))
+    return accounted
+
+
+def _matrix_has_blocks_adr_yes(matrix: str) -> bool:
+    rows = [_markdown_cells(line) for line in matrix.splitlines() if line.strip().startswith("|")]
+    for index, row in enumerate(rows):
+        headers = [_normalized_cell(cell) for cell in row]
+        if "blocks adr" not in headers:
+            continue
+        blocks_index = headers.index("blocks adr")
+        for candidate in rows[index + 1 :]:
+            if blocks_index >= len(candidate):
+                continue
+            if all(re.fullmatch(r":?-{3,}:?", cell.strip()) for cell in candidate if cell.strip()):
+                continue
+            if _normalized_cell(candidate[blocks_index]) == "yes":
+                return True
+        return False
+    return False
 
 
 def _validate_iso8601(value: str) -> bool:
@@ -180,8 +255,11 @@ def _validate_iso8601(value: str) -> bool:
 
 
 def _selected_verdicts(text: str) -> list[str]:
-    final_verdict = _section(text, "## Final Verdict")
-    return [verdict for verdict in ALLOWED_VERDICTS if re.search(rf"\b{verdict}\b", final_verdict)]
+    lines = _direct_section_lines(text, "## Final Verdict")
+    if len(lines) != 1:
+        return []
+    declared = _normalize_markdown_scalar(lines[0])
+    return [declared] if declared in ALLOWED_VERDICTS else []
 
 
 def validate_audit_text(text: str, *, accepted_adrs: list[str]) -> list[str]:
@@ -189,7 +267,7 @@ def validate_audit_text(text: str, *, accepted_adrs: list[str]) -> list[str]:
     errors: list[str] = []
 
     for heading in REQUIRED_AUDIT_HEADINGS:
-        if heading not in text:
+        if not _heading_match(text, heading):
             errors.append(f"Missing mandatory audit heading: {heading}.")
 
     if PENDING_PLACEHOLDER_RE.search(text):
@@ -222,17 +300,25 @@ def validate_audit_text(text: str, *, accepted_adrs: list[str]) -> list[str]:
         errors.append("Evidence cutoff must be an offset-aware ISO-8601 timestamp when present.")
 
     if audit_type == "FULL":
+        accounted_adrs = _structured_adr_accounting_ids(text)
         for adr in accepted_adrs:
-            if not re.search(rf"\bADR[ -]?{re.escape(adr)}\b", text):
-                errors.append(f"Accepted ADR {adr} is not accounted for in FULL audit.")
+            if adr not in accounted_adrs:
+                errors.append(f"Accepted ADR {adr} is not structurally accounted for in FULL audit.")
 
     scope = _section(text, "## Audit Scope")
     if PRIOR_REVIEW_SCOPE_RE.search(scope):
         prior = _section(text, "## Prior Review Finding Re-Verification")
         if not prior:
             errors.append("Audit scope declares prior review history but lacks Prior Review Finding Re-Verification.")
-        elif not re.search(r"(?i)\b(?:none|finding|PR\s*#\d+)\b", prior):
-            errors.append("Prior Review Finding Re-Verification must state findings examined or explicitly none.")
+        elif not NO_PRIOR_FINDINGS_RE.search(prior) and not (
+            PRIOR_FINDING_REFERENCE_RE.search(prior)
+            and re.search(r"(?i)\bevidence\b", prior)
+            and re.search(r"(?i)\bconsequence\b", prior)
+        ):
+            errors.append(
+                "Prior Review Finding Re-Verification must identify prior finding(s) with evidence and "
+                "decision consequence, or explicitly state that none exist."
+            )
 
     if FINDING_CLASS_FIELD_RE.search(text):
         errors.append("Finding records must use canonical `Severity`; `Class` is reserved for the Findings Matrix.")
@@ -243,7 +329,7 @@ def validate_audit_text(text: str, *, accepted_adrs: list[str]) -> list[str]:
 
     verdicts = _selected_verdicts(text)
     if len(verdicts) != 1:
-        errors.append("Final Verdict must select exactly one permitted audit verdict.")
+        errors.append("Final Verdict must contain exactly one canonical declared audit verdict line.")
         selected_verdict = None
     else:
         selected_verdict = verdicts[0]
@@ -257,7 +343,7 @@ def validate_audit_text(text: str, *, accepted_adrs: list[str]) -> list[str]:
     if selected_verdict in {"ADPR_REVISION_REQUIRED", "ARCHITECTURE_NOT_READY"}:
         findings = _section(text, "## Findings")
         matrix = _section(text, "## Findings Matrix")
-        if not BLOCKS_ADR_YES_RE.search(findings + "\n" + matrix):
+        if not BLOCKS_ADR_FIELD_YES_RE.search(findings) and not _matrix_has_blocks_adr_yes(matrix):
             errors.append(f"{selected_verdict} requires at least one evidence-backed finding with Blocks ADR = YES.")
 
     return errors
