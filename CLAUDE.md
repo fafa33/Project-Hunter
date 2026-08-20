@@ -14,11 +14,13 @@ For a materially architectural change, verify the applicable architecture before
 
 Use the smallest correct change. Do not weaken tests or evidence requirements to make a check pass.
 
-Before pushing a code-changing candidate, run when available:
+Before pushing an ordinary code-changing candidate, run when available:
 
 ```text
-python scripts/hunter_pr_preflight.py
+python scripts/hunter_pr_preflight.py --mode normal
 ```
+
+Normal mode requires Ruff, Black, Mypy, and Pytest to pass. For an intentional tests-first RED commit only, create `.hunter-preflight-mode` containing exactly `tests-first-red` before pushing. That mode is valid only when Ruff, Black, and Mypy pass and Pytest exits with a real test-failure result. It is a Draft tests-first hygiene signal, never merge readiness. Remove the marker and return to normal mode before implementation or any green candidate resumes.
 
 CI failures are actionable: diagnose and fix real failures without asking for another prompt when the fix is in scope.
 
