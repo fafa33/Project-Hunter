@@ -61,9 +61,7 @@ ALLOWED_VERDICTS = (
     "ADPR_REVISION_REQUIRED",
     "ARCHITECTURE_NOT_READY",
 )
-PENDING_PLACEHOLDER_RE = re.compile(
-    r"(?im)(?:`PENDING[^`]*`|\|\s*PENDING\s*\||:\s*PENDING\b|\bPENDING\s*[—-])"
-)
+PENDING_PLACEHOLDER_RE = re.compile(r"(?im)(?:`PENDING[^`]*`|\|\s*PENDING\s*\||:\s*PENDING\b|\bPENDING\s*[—-])")
 AUDITOR_RE = re.compile(r"(?im)^-\s*Auditor:\s*(.+?)\s*$")
 REVISION_RE = re.compile(r"(?im)^-\s*Reviewed revision:\s*`?([0-9a-f]{40})`?\s*$")
 AUDIT_TYPE_RE = re.compile(r"(?im)^-\s*Audit type:\s*`?(FULL|TARGETED)`?\s*$")
@@ -124,9 +122,7 @@ def validate_registry(data: dict[str, Any]) -> list[str]:
             continue
 
         defect_id = item["id"]
-        if not isinstance(defect_id, str) or not re.fullmatch(
-            r"[A-Z]+(?:-[A-Z]+)*-\d{3}", defect_id
-        ):
+        if not isinstance(defect_id, str) or not re.fullmatch(r"[A-Z]+(?:-[A-Z]+)*-\d{3}", defect_id):
             errors.append(f"Registry item {index} has invalid id {defect_id!r}.")
         elif defect_id in seen:
             errors.append(f"Duplicate defect id: {defect_id}.")
@@ -145,11 +141,7 @@ def validate_registry(data: dict[str, Any]) -> list[str]:
 
     missing_ids = sorted(REQUIRED_DEFECT_IDS - seen)
     if missing_ids:
-        errors.append(
-            "Registry dropped required understood defect classes: "
-            + ", ".join(missing_ids)
-            + "."
-        )
+        errors.append("Registry dropped required understood defect classes: " + ", ".join(missing_ids) + ".")
     return errors
 
 
@@ -189,11 +181,7 @@ def _validate_iso8601(value: str) -> bool:
 
 def _selected_verdicts(text: str) -> list[str]:
     final_verdict = _section(text, "## Final Verdict")
-    return [
-        verdict
-        for verdict in ALLOWED_VERDICTS
-        if re.search(rf"\b{verdict}\b", final_verdict)
-    ]
+    return [verdict for verdict in ALLOWED_VERDICTS if re.search(rf"\b{verdict}\b", final_verdict)]
 
 
 def validate_audit_text(text: str, *, accepted_adrs: list[str]) -> list[str]:
@@ -227,9 +215,7 @@ def validate_audit_text(text: str, *, accepted_adrs: list[str]) -> list[str]:
     cutoff_match = CUTOFF_RE.search(text)
     if MUTABLE_EVIDENCE_RE.search(evidence):
         if not cutoff_match:
-            errors.append(
-                "Audit using mutable PR/Issue/URL evidence must record an Evidence cutoff."
-            )
+            errors.append("Audit using mutable PR/Issue/URL evidence must record an Evidence cutoff.")
         elif not _validate_iso8601(cutoff_match.group(1)):
             errors.append("Evidence cutoff must be an offset-aware ISO-8601 timestamp.")
     elif cutoff_match and not _validate_iso8601(cutoff_match.group(1)):
@@ -244,18 +230,12 @@ def validate_audit_text(text: str, *, accepted_adrs: list[str]) -> list[str]:
     if PRIOR_REVIEW_SCOPE_RE.search(scope):
         prior = _section(text, "## Prior Review Finding Re-Verification")
         if not prior:
-            errors.append(
-                "Audit scope declares prior review history but lacks Prior Review Finding Re-Verification."
-            )
+            errors.append("Audit scope declares prior review history but lacks Prior Review Finding Re-Verification.")
         elif not re.search(r"(?i)\b(?:none|finding|PR\s*#\d+)\b", prior):
-            errors.append(
-                "Prior Review Finding Re-Verification must state findings examined or explicitly none."
-            )
+            errors.append("Prior Review Finding Re-Verification must state findings examined or explicitly none.")
 
     if FINDING_CLASS_FIELD_RE.search(text):
-        errors.append(
-            "Finding records must use canonical `Severity`; `Class` is reserved for the Findings Matrix."
-        )
+        errors.append("Finding records must use canonical `Severity`; `Class` is reserved for the Findings Matrix.")
 
     for match in re.finditer(r"(?im)^-\s*\*\*Severity:\*\*\s*`?([^`\n]+)`?\s*$", text):
         if not re.fullmatch(r"[A-D]", match.group(1).strip()):
@@ -278,9 +258,7 @@ def validate_audit_text(text: str, *, accepted_adrs: list[str]) -> list[str]:
         findings = _section(text, "## Findings")
         matrix = _section(text, "## Findings Matrix")
         if not BLOCKS_ADR_YES_RE.search(findings + "\n" + matrix):
-            errors.append(
-                f"{selected_verdict} requires at least one evidence-backed finding with Blocks ADR = YES."
-            )
+            errors.append(f"{selected_verdict} requires at least one evidence-backed finding with Blocks ADR = YES.")
 
     return errors
 
@@ -327,9 +305,7 @@ def run_artifact_preflight(paths: list[Path] | None = None) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description=(
-            "Validate the defect registry and changed governed artifacts deterministically."
-        )
+        description=("Validate the defect registry and changed governed artifacts deterministically.")
     )
     parser.add_argument(
         "--all-audits",
