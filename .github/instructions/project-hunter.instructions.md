@@ -10,9 +10,10 @@ Treat the repository and current GitHub state as the source of truth.
 
 - Understand the user-authorized objective and keep the change within that scope.
 - Read the architecture/ADR material that actually governs the area being changed. Do not perform repository-wide ceremony for a local change unless the change genuinely crosses those boundaries.
+- Read `docs/DEFECT_REGISTRY.json` for defect classes relevant to the work. A repeated understood defect means the prior hardening was insufficient; strengthen the reusable guard instead of treating the recurrence as a new one-off correction.
 - Prefer the smallest correct change. Do not invent missing architecture, weaken tests, or hide real failures.
-- Before pushing an ordinary code-changing candidate, run `python scripts/hunter_pr_preflight.py --mode normal`; Ruff, Black, Mypy, and Pytest must all pass.
-- For an intentional tests-first RED commit, create `.hunter-preflight-mode` containing exactly `tests-first-red` and commit that marker on the exact branch head being pushed. The exact-head preflight may pass only when Ruff, Black, and Mypy are green and Pytest is genuinely RED. This exception is for Draft tests-first work only; it never makes failing tests merge-ready.
+- Before pushing an ordinary code-changing candidate, run `python scripts/hunter_pr_preflight.py --mode normal`; the Artifact Guard, Ruff, Black, Mypy, and Pytest must all pass.
+- For an intentional tests-first RED commit, create `.hunter-preflight-mode` containing exactly `tests-first-red` and commit that marker on the exact branch head being pushed. The exact-head preflight may pass only when the Artifact Guard, Ruff, Black, and Mypy are green and Pytest is genuinely RED. This exception is for Draft tests-first work only; it never makes failing tests merge-ready.
 - Before implementation or any normal candidate resumes, remove `.hunter-preflight-mode`, commit that removal on the branch head being pushed, and return to `python scripts/hunter_pr_preflight.py --mode normal`.
 - CI and preflight are verification only. Do not auto-format, auto-commit, or hide failures merely to obtain a green status.
 - Link the relevant Issue/ADR when useful for traceability, but Issue identity, branch names, commit messages, PR titles/bodies, checkboxes, top-level PR comments, reactions, metadata-only edits, and superseded historical runs are not merge authority.
@@ -22,6 +23,7 @@ Treat the repository and current GitHub state as the source of truth.
 - Treat review findings by materiality. Security, correctness, architecture, persistence/replay, evidence-integrity, and other substantive defects can block.
 - Readability, refactoring, extra-test suggestions, style preferences, and other non-blocking recommendations do not force a commit and do not force another full review cycle.
 - After fixing a blocking finding, verify that finding and the affected behavior. Re-run a broad review only when the substantive scope materially changed.
+- When independent review confirms a blocking systemic defect, update `docs/DEFECT_REGISTRY.json` and add or strengthen the earliest practical deterministic guard/test. Do not rely on prose memory alone where a machine-checkable boundary exists.
 - Metadata-only edits and disposition of non-blocking recommendations do not invalidate completed code/security checks or require a new review.
 
 ## Merge control
