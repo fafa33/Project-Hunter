@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+from typing import Any
 
 import hunter_artifact_preflight
 
@@ -157,7 +158,7 @@ ADPR_REVISION_REQUIRED and ARCHITECTURE_NOT_READY block ADR drafting.""",
 
 
 def test_registry_rejects_dropped_understood_defect_class() -> None:
-    data = {
+    data: dict[str, Any] = {
         "version": 1,
         "defects": [
             {
