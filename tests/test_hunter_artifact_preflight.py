@@ -14,9 +14,7 @@ def _good_audit(
     evidence: str = "- Immutable repository evidence at the reviewed revision.",
     evidence_cutoff: str = "",
 ) -> str:
-    coverage = "\n".join(
-        f"- ADR {adr}: reviewed; out of scope for this audit." for adr in accepted_adrs
-    )
+    coverage = "\n".join(f"- ADR {adr}: reviewed; out of scope for this audit." for adr in accepted_adrs)
     coverage_section = ""
     if audit_type == "FULL":
         coverage_section = f"""
@@ -185,8 +183,7 @@ def test_prior_review_scope_requires_verification_section() -> None:
     text = _good_audit(
         scope="Full audit including prior review PR #288 findings.",
     ).replace(
-        "## Prior Review Finding Re-Verification\n\n"
-        "- No prior review findings are in scope for this fixture.\n\n",
+        "## Prior Review Finding Re-Verification\n\n" "- No prior review findings are in scope for this fixture.\n\n",
         "",
     )
     errors = hunter_artifact_preflight.validate_audit_text(
@@ -223,9 +220,13 @@ def test_canonical_severity_field_is_accepted() -> None:
 
 
 def test_conditional_verdict_requires_real_conditions_not_duplicated_gate_prose() -> None:
-    text = _good_audit().replace("READY_FOR_ADR\n", "CONDITIONAL_ADR_READY\n").replace(
-        "## Required Corrections or Conditions\n\nNone.",
-        "## Required Corrections or Conditions\n\nNone",
+    text = (
+        _good_audit()
+        .replace("READY_FOR_ADR\n", "CONDITIONAL_ADR_READY\n")
+        .replace(
+            "## Required Corrections or Conditions\n\nNone.",
+            "## Required Corrections or Conditions\n\nNone",
+        )
     )
     errors = hunter_artifact_preflight.validate_audit_text(
         text,
