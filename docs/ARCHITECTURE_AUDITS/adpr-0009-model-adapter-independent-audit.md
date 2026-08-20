@@ -144,7 +144,7 @@ No evidence retrieved after the evidence cutoff `2026-08-20T12:45:18Z` was used 
 - **Evidence:** ADPR-0009 Traceability table states `PR: #288` and `Merge commit: not yet created`, whereas PR #288 was merged into `main` as commit `cd1ef1981975f15dd26d48031b00c8b55c28f3d5`.
 - **Location:** `docs/architecture-records/ADPR-0009-evidence-intelligence-model-adapter.md`, Traceability section.
 - **Category:** Traceability / Metadata formatting.
-- **Class:** `A`
+- **Severity:** `A`
 - **Decision impact:** None. Editorial/metadata staleness regarding PR #288 merge commit SHA.
 - **Consequence if ignored:** The preparation record traceability table lists "not yet created" instead of citing commit `cd1ef1981975f15dd26d48031b00c8b55c28f3d5`.
 - **Required action:** Update the Traceability section during future ADPR maintenance or ADR 0034 drafting to cite merge commit `cd1ef1981975f15dd26d48031b00c8b55c28f3d5`.
@@ -161,7 +161,7 @@ No evidence retrieved after the evidence cutoff `2026-08-20T12:45:18Z` was used 
 - **Evidence:** ADPR-0009 Open Questions table states: "Generic deterministic accepted-ADR coverage/status-consistency checker ... Follow-up hardening required".
 - **Location:** `docs/architecture-records/ADPR-0009-evidence-intelligence-model-adapter.md`, Open Questions table and Conformance Case 14.
 - **Category:** Governance compatibility / Testability.
-- **Class:** `B`
+- **Severity:** `B`
 - **Decision impact:** Non-blocking quality observation. ADPR-0009 correctly distinguishes Model Adapter runtime contract test obligations (conformance cases 1-12) from repository governance preflight tooling obligations (conformance cases 13-14).
 - **Consequence if ignored:** Automated repository preflight tooling will not automatically verify architecture index status consistency for future architecture PRs until the tooling check is implemented.
 - **Required action:** Implement the reusable repository preflight check during the next governance/engineering tooling slice as planned.
