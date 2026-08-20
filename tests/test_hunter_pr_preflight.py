@@ -169,6 +169,19 @@ def test_pre_pr_workflow_reads_machine_readable_mode_marker() -> None:
     assert "fetch-depth: 0" in text
 
 
+def test_shared_preflight_workflows_fetch_full_history() -> None:
+    workflow_dir = ROOT / ".github" / "workflows"
+    workflow_paths = sorted((*workflow_dir.glob("*.yml"), *workflow_dir.glob("*.yaml")))
+    matched: list[Path] = []
+    for path in workflow_paths:
+        text = path.read_text(encoding="utf-8")
+        if "python scripts/hunter_pr_preflight.py" not in text:
+            continue
+        matched.append(path)
+        assert "fetch-depth: 0" in text, path
+    assert matched
+
+
 def test_workflows_use_current_node24_action_majors() -> None:
     workflow_dir = ROOT / ".github" / "workflows"
     workflow_paths = sorted((*workflow_dir.glob("*.yml"), *workflow_dir.glob("*.yaml")))
