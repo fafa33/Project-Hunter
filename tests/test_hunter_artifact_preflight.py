@@ -152,6 +152,20 @@ def test_full_audit_requires_every_accepted_adr() -> None:
     assert any("Accepted ADR 0002" in error for error in errors)
 
 
+def test_full_audit_accepts_equivalent_adr_accounting_without_fixed_heading() -> None:
+    text = _good_audit().replace(
+        "## Accepted ADR Coverage",
+        "## Pinned Evidence Inventory",
+    )
+    assert (
+        hunter_artifact_preflight.validate_audit_text(
+            text,
+            accepted_adrs=["0001", "0002"],
+        )
+        == []
+    )
+
+
 def test_targeted_audit_does_not_require_repository_wide_adr_accounting() -> None:
     text = _good_audit(
         audit_type="TARGETED",
