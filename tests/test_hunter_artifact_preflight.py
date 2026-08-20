@@ -6,9 +6,7 @@ import hunter_artifact_preflight
 
 
 def _good_audit(*, accepted_adrs: tuple[str, ...] = ("0001", "0002")) -> str:
-    coverage = "\n".join(
-        f"- ADR {adr}: reviewed; out of scope for this audit." for adr in accepted_adrs
-    )
+    coverage = "\n".join(f"- ADR {adr}: reviewed; out of scope for this audit." for adr in accepted_adrs)
     return f"""# Independent Architecture Audit
 
 ## Metadata
