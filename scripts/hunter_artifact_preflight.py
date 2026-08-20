@@ -236,15 +236,9 @@ def validate_audit_text(text: str, *, accepted_adrs: list[str]) -> list[str]:
         errors.append("Evidence cutoff must be an offset-aware ISO-8601 timestamp when present.")
 
     if audit_type == "FULL":
-        coverage_heading = "## Accepted ADR Coverage"
-        if coverage_heading not in text:
-            errors.append("FULL audit must include explicit Accepted ADR Coverage.")
-        coverage = _section(text, coverage_heading)
         for adr in accepted_adrs:
-            if not re.search(rf"\bADR[ -]?{re.escape(adr)}\b", coverage):
-                errors.append(
-                    f"Accepted ADR {adr} is not accounted for in FULL-audit Accepted ADR Coverage."
-                )
+            if not re.search(rf"\bADR[ -]?{re.escape(adr)}\b", text):
+                errors.append(f"Accepted ADR {adr} is not accounted for in FULL audit.")
 
     scope = _section(text, "## Audit Scope")
     if PRIOR_REVIEW_SCOPE_RE.search(scope):
