@@ -44,7 +44,7 @@ jobs:
           set -euo pipefail
           PREFLIGHT_MODE=normal
           if [ -f .hunter-preflight-mode ]; then
-            IFS= read -r PREFLIGHT_MODE < .hunter-preflight-mode || true
+            PREFLIGHT_MODE="$(cat .hunter-preflight-mode)"
             if [ "${PREFLIGHT_MODE}" != "tests-first-red" ]; then
               echo "::error::.hunter-preflight-mode must contain exactly tests-first-red"
               exit 2
