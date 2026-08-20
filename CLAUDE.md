@@ -32,6 +32,8 @@ When independent review confirms a blocking systemic defect, update `docs/DEFECT
 
 A machine guard must itself be justified by canonical authority or a demonstrated recurring defect. Prefer semantic or structural invariants over brittle wording checks. Do not make TARGETED work satisfy FULL-review ceremony, do not block canonically valid equivalent wording, and do not add a merge-blocking check merely because it is easy to automate. A guard that rejects valid canonical output or creates false-positive merge blockage is itself a defect and must be corrected.
 
+For any contribution that adds or materially changes a parser, validator, artifact guard, workflow guard, or merge-blocking gate, perform an adversarial bypass pass before requesting independent review. Test the semantic boundary, not only the happy-path text. Ask both: (1) can content that does not actually render/execute as the required construct still satisfy the guard, and (2) can a canonically valid equivalent construct be rejected? Where practical, add paired negative/positive fixtures for representation traps relevant to the parser or gate, including literal/example regions, fenced or otherwise non-semantic content, quoted/escaped text, negation, partial or duplicate declarations, wrong field/column/scope binding, and unrelated matching structure. This requirement applies to guard/parser/gate changes only; it is not ceremony for ordinary PRs.
+
 ## Pull requests and review
 
 A Draft PR is optional for incomplete work; it is not a required ceremony for an already locally verified contribution.
