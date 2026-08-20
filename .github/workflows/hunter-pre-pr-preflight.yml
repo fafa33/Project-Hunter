@@ -20,10 +20,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11.13"
           cache: pip
@@ -38,5 +38,22 @@ jobs:
           set -euo pipefail
           python -m pip install --disable-pip-version-check -c requirements/ci-constraints.txt -e ".[dev]"
 
+      - name: Select exact-head preflight mode
+        id: preflight-mode
+        run: |
+          set -euo pipefail
+          PREFLIGHT_MODE=normal
+          if [ -f .hunter-preflight-mode ]; then
+            PREFLIGHT_MODE="$(cat .hunter-preflight-mode)"
+            if [ "${PREFLIGHT_MODE}" != "tests-first-red" ]; then
+              echo "::error::.hunter-preflight-mode must contain exactly tests-first-red"
+              exit 2
+            fi
+          fi
+          echo "mode=${PREFLIGHT_MODE}" >> "${GITHUB_OUTPUT}"
+          echo "Selected preflight mode: ${PREFLIGHT_MODE}"
+
       - name: Run shared deterministic preflight
-        run: python scripts/hunter_pr_preflight.py
+        env:
+          PREFLIGHT_MODE: ${{ steps.preflight-mode.outputs.mode }}
+        run: python scripts/hunter_pr_preflight.py --mode "${PREFLIGHT_MODE}"
