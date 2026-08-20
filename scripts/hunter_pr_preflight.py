@@ -10,6 +10,7 @@ PREFLIGHT_MODES = (NORMAL_MODE, TESTS_FIRST_RED_MODE)
 PYTEST_TEST_FAILURE_EXIT = 1
 
 NORMAL_QUALITY_GATES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("Artifact Guard", ("python", "scripts/hunter_artifact_preflight.py")),
     ("Ruff", ("ruff", "check", ".")),
     ("Black", ("black", "--check", "--diff", ".")),
     ("Mypy", ("mypy",)),
@@ -70,7 +71,8 @@ def run_preflight(*, mode: str = NORMAL_MODE) -> int:
             return completed.returncode
 
         print(
-            "[Hunter Pre-PR] EXPECTED RED: Pytest exited 1; Ruff, Black, and Mypy are clean.",
+            "[Hunter Pre-PR] EXPECTED RED: Pytest exited 1; artifact guard, Ruff, Black, "
+            "and Mypy are clean.",
             flush=True,
         )
         print("[Hunter Pre-PR] PASS: tests-first RED hygiene contract", flush=True)
@@ -90,8 +92,8 @@ def _gates_for_listing(mode: str) -> tuple[tuple[str, tuple[str, ...]], ...]:
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Run the exact repository-local deterministic quality gates shared by "
-            "feature-branch preflight and GitHub CI."
+            "Run the exact repository-local deterministic quality and artifact gates "
+            "shared by feature-branch preflight and GitHub CI."
         )
     )
     parser.add_argument(
@@ -99,8 +101,9 @@ def main() -> int:
         choices=PREFLIGHT_MODES,
         default=NORMAL_MODE,
         help=(
-            "normal requires Ruff/Black/Mypy/Pytest green; tests-first-red requires "
-            "Ruff/Black/Mypy green and Pytest exit 1 from intentionally failing tests."
+            "normal requires Artifact Guard/Ruff/Black/Mypy/Pytest green; "
+            "tests-first-red requires Artifact Guard/Ruff/Black/Mypy green and "
+            "Pytest exit 1 from intentionally failing tests."
         ),
     )
     parser.add_argument(
