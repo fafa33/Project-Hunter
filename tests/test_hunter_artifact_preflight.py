@@ -89,8 +89,7 @@ None.
 
 def _without_prior_review_section(text: str) -> str:
     return text.replace(
-        "## Prior Review Finding Re-Verification\n\n"
-        "- No prior review findings are in scope for this fixture.\n\n",
+        "## Prior Review Finding Re-Verification\n\n" "- No prior review findings are in scope for this fixture.\n\n",
         "",
     )
 
@@ -318,9 +317,13 @@ def test_blocking_verdict_requires_a_blocks_adr_yes_finding() -> None:
 
 
 def test_blocks_adr_yes_must_come_from_the_blocks_adr_field_or_column() -> None:
-    text = _good_audit().replace("- `READY_FOR_ADR`", "- `ADPR_REVISION_REQUIRED`").replace(
-        "| F-001 | A | None | None | NO | Evidence |",
-        "| F-001 | C | YES | Consequence | NO | Evidence |",
+    text = (
+        _good_audit()
+        .replace("- `READY_FOR_ADR`", "- `ADPR_REVISION_REQUIRED`")
+        .replace(
+            "| F-001 | A | None | None | NO | Evidence |",
+            "| F-001 | C | YES | Consequence | NO | Evidence |",
+        )
     )
     errors = hunter_artifact_preflight.validate_audit_text(
         text,
