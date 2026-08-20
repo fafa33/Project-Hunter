@@ -123,6 +123,19 @@ def test_tests_first_red_fails_closed_when_pytest_is_unexpectedly_green(monkeypa
     assert calls[-1] == ("pytest",)
 
 
+@pytest.mark.parametrize("pytest_exit", [2, 3, 4, 5])
+def test_tests_first_red_rejects_non_test_failure_pytest_exits(monkeypatch, pytest_exit: int) -> None:
+    return_codes = iter((0, 0, 0, pytest_exit))
+
+    def fake_run(command, *, check):
+        assert check is False
+        return SimpleNamespace(returncode=next(return_codes))
+
+    monkeypatch.setattr(hunter_pr_preflight.subprocess, "run", fake_run)
+
+    assert hunter_pr_preflight.run_preflight(mode="tests-first-red") == pytest_exit
+
+
 def test_unknown_mode_fails_closed() -> None:
     with pytest.raises(ValueError, match="Unsupported preflight mode"):
         hunter_pr_preflight.run_preflight(mode="anything-else")
