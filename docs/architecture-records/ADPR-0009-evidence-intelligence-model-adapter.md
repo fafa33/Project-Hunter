@@ -21,7 +21,7 @@ Project Hunter now has an Accepted ADR 0031 pre-model architecture and a concret
 
 The repository also contains an older `AIExtractionProvider` / `SecureAIProviderRunner` path. That path operates over `ExtractionRequest(document_id, spans, schema, ...)`, performs provider health checks, persists `AIProviderArtifact` and `ExtractionProposal`, and does not consume the ADR 0031 `EvidencePromptArtifact`. It is therefore evidence that provider execution mechanics exist, but it is not the architecture-authorized handoff from the current pre-model chain. The next architecture must define how these generations coexist or migrate rather than silently treating the older provider path as the new Model Adapter.
 
-Five materially distinct options were evaluated. The recommended architecture is a **consumer-owned, provider-neutral Evidence Intelligence Model Adapter contract with provider-specific transport implementations, while deferring multi-provider routing**. The first implementation should admit at most one explicitly configured, versioned execution profile at a time. A provider/model choice that changes the capability constraint requires a new pre-model build; a provider-specific transformation of canonical prompt content creates a distinct `ProviderRequestArtifact` or an explicit request-evidence-unavailable state, with exact bytes, hashes, sizes, or content-derived identity persisted only when the applicable Source Handling durable dispositions authorize those categories; every invocation/retry creates an immutable `ModelAttemptRecord`; and any exact response bytes are a separate `ProviderResponseArtifact` governed by Source Handling Authority. Credentials and authentication material are structurally excluded from all canonical artifacts.
+Five materially distinct options were evaluated. The recommended architecture is a **consumer-owned, provider-neutral Evidence Intelligence Model Adapter contract with provider-specific transport implementations, while deferring multi-provider routing**. The first implementation should admit at most one explicitly configured, versioned execution profile at a time. A provider/model choice that changes the capability constraint requires a new pre-model build. A provider-specific transport returns a deterministic, non-secret request transformation result but owns no durable artifact semantics. The Model Adapter alone applies Source Handling, creates any authorized `ProviderRequestArtifact`, prepares an immutable pre-send attempt, binds a single-use handoff snapshot to that attempt, and invokes the transport. Exact request/response bytes, hashes, sizes, or content-derived identities are persisted only when the applicable durable dispositions authorize those categories. Credentials and authentication material are structurally excluded from all canonical artifacts.
 
 A successful adapter attempt is transport evidence only. It cannot validate response truth, create an `ExtractionProposal` by itself, or promote anything into canonical Hunter knowledge. `ResponseValidator` remains a separate future boundary. Provider/model routing, if Hunter later needs to select among multiple execution profiles, also remains a separately governed decision.
 
@@ -46,7 +46,7 @@ That path demonstrates useful implementation experience but predates the accepte
 
 ### Desired condition
 
-Hunter has one explicit, auditable boundary between the completed pre-model build and any external model execution. The boundary must preserve exact identities and bytes when their durable categories are authorized, otherwise preserve explicit unavailability without regenerating prohibited evidence; independently enforce Source Handling Authority; structurally exclude credentials; distinguish provider-specific request transformation from the canonical prompt artifact; record every attempt/retry/failure immutably; make unavailable states explicit; and prevent model execution success from acquiring validation or canonical promotion authority.
+Hunter has one explicit, auditable boundary between the completed pre-model build and any external model execution. The boundary must preserve exact identities and bytes when their durable categories are authorized, otherwise preserve explicit unavailability without regenerating prohibited evidence; independently enforce Source Handling Authority; structurally exclude credentials; distinguish provider-specific request transformation from the canonical prompt artifact; durably establish each attempt before network transmission; make uncertain-delivery and persistence failures explicit; and prevent model execution success from acquiring validation or canonical promotion authority.
 
 ### Decision required
 
@@ -55,10 +55,11 @@ Decide:
 1. who owns the Model Adapter and provider-attempt semantics;
 2. whether the adapter contract is provider-neutral or provider-specific;
 3. how `EvidencePromptArtifact` becomes an exact provider request without rewriting upstream history;
-4. what identities and immutable artifacts represent execution profiles, provider requests, attempts, failures, and responses;
-5. how Source Handling Authority applies at the handoff and to durable request/response surfaces;
-6. whether provider/model routing belongs in this boundary or remains separately deferred; and
-7. where the Model Adapter ends and a future Response Validator begins.
+4. what identities and immutable artifacts represent execution profiles, provider requests, pre-send attempts, handoffs, outcomes, failures, and responses;
+5. how Source Handling Authority applies atomically at the handoff and to durable request/response surfaces;
+6. how uncertain delivery, idempotency, retry, reconciliation, and persistence failure behave;
+7. whether provider/model routing belongs in this boundary or remains separately deferred; and
+8. where the Model Adapter ends and a future Response Validator begins.
 
 ### In scope
 
@@ -67,7 +68,9 @@ Decide:
 - exact prompt-to-provider-request handoff;
 - provider execution profile identity/version;
 - provider request artifact identity and byte semantics;
+- atomic attempt-time Source Handling handoff semantics;
 - model attempt/retry/failure identity and lineage;
+- provider idempotency/correlation, uncertain-delivery, reconciliation, and retry rules;
 - provider response artifact identity and retention semantics;
 - Source Handling Authority re-resolution/enforcement at the model boundary;
 - credentials/secret exclusion;
@@ -98,15 +101,17 @@ ADR 0032 further prevents solving this by prematurely promoting a Model Adapter 
 
 ADR 0033 makes the handoff safety problem architectural rather than merely operational. Future model-facing components are consumers only; unresolved handling authority is `BLOCKED`; every handling decision derives from exact Source Handling facts and policy applicable and knowable at the relevant cutoff; and persistence must independently rederive rather than trust caller-supplied decisions.
 
-This is therefore a real unresolved architecture decision involving component ownership, external-provider boundary, persistence, replay, security, migration, and future extensibility. It is not an ordinary implementation choice.
+This is therefore a real unresolved architecture decision involving component ownership, external-provider boundary, persistence, replay, security, migration, failure recovery, and future extensibility. It is not an ordinary implementation choice.
 
 ## Motivation
 
-Without this architecture, Hunter has three unsafe failure modes:
+Without this architecture, Hunter has five unsafe failure modes:
 
 1. **Opaque execution** — a response may exist without proof of the exact canonical prompt and exact provider request that produced it when such proof is durably authorized, or without an explicit policy-governed unavailability state when it is not.
 2. **Authority laundering** — provider choice, transport transformation, caller flags, or adapter success may accidentally acquire authority over source handling, prompt content, response validity, or canonical promotion.
 3. **Historical false replay** — a later provider re-call may be mistaken for reconstruction of the original attempt, or current provider configuration may be substituted for historically unavailable request/response state.
+4. **Revocation race** — authority may change between a loose pre-send check and network handoff unless the send consumes one immutable attempt-time authority snapshot.
+5. **Duplicate/unknown execution** — a crash or timeout after provider acceptance can make blind retry issue a second billable invocation while the first remains unresolved.
 
 A narrow Model Adapter boundary allows Hunter to add provider execution later without collapsing context selection, prompt compilation, transport, routing, validation, persistence, and domain authority into a generic `AIService`.
 
@@ -149,7 +154,7 @@ ADR 0032 establishes only a project-neutral portability boundary and admission r
 - provider exception normalization;
 - prompt-injection detection over spans;
 - forbidden response-capability checks;
-- immutable-ish provider artifact/proposal persistence through the Evidence Intelligence repository.
+- provider artifact/proposal persistence through the Evidence Intelligence repository.
 
 However, it predates the current pre-model architecture and operates from `ExtractionRequest` rather than `EvidencePromptArtifact`. Its provider artifact identity is based on document/provider/schema/payload status and does not prove the exact provider request bytes. Its direct proposal creation also crosses the future Model Adapter -> Response Validator separation now required by ADR 0031. It should be treated as migration evidence, not as binding Model Adapter architecture.
 
@@ -170,30 +175,40 @@ Accepted ADR 0009 (`Repository Purification`) separates provider integration, se
 
 ### Governance and accepted ADRs
 
-- ADR 0031 governs the concrete Hunter pre-model chain and explicitly requires separate Model Adapter architecture.
-- ADR 0032 prevents premature shared-core ownership and explicitly excludes provider/model selection/routing/invocation/credentials/response validation from core authority.
-- ADR 0033 makes Model Adapter a consumer of Source Handling Authority only.
-- ADR 0020 strict-known semantics prohibit current/latest fallback during historical reconstruction.
-- ADR 0009 requires provider/service/repository separation.
+The complete accepted-ADR index was checked for material applicability rather than assuming every accepted ADR governs this boundary.
+
+- ADR 0031 directly governs the concrete Hunter pre-model chain and explicitly requires separate Model Adapter architecture.
+- ADR 0032 directly governs project-neutral admission and explicitly excludes provider/model selection, routing, invocation, credentials, and response validation from shared-core authority.
+- ADR 0033 directly governs Source Handling; the Model Adapter is a consumer only.
+- ADR 0020 directly governs strict-known historical selection and prohibits current/latest fallback during historical reconstruction.
+- ADR 0009 directly governs provider/service/repository separation.
+- ADR 0025 was reviewed and is out of scope for this decision: it owns Canonical Valuation Evidence Assembly, not Evidence Intelligence model transport, provider attempts, or response handling. This ADPR changes none of its authority, record families, evidence assembly semantics, or runtime activation gates.
+- ADR 0026 was reviewed and is out of scope for this decision: it owns Canonical Comparative Valuation methodology/peer semantics, not Evidence Intelligence model invocation. This ADPR creates no valuation/comparative-valuation authority or dependency.
+- ADR 0028 was reviewed and is out of scope for the Model Adapter ownership decision: it governs valuation-methodology/evidence-assembly supporting authorities and exact semantic lineage into assembled valuation evidence. This ADPR does not modify those owners, records, sufficiency semantics, or the Evidence Assembly activation state.
 - No AI/provider capability may enter Hunter Governance Review or Merge Readiness.
+
+The out-of-scope determinations above are negative-scope evidence, not claims that those ADRs are unimportant repository-wide.
 
 ### Technical
 
 - `EvidencePromptArtifact` is immutable and historically meaningful; the adapter may not mutate it in place.
 - Provider-specific transformed content must have its own transient representation and, when durable request evidence is authorized, its own distinct durable artifact semantics.
+- Durable request-artifact identity, Source Handling enforcement, retention decisions, and repository persistence remain Model Adapter responsibilities; provider transports own wire-format transformation and network mechanics only.
 - Capability constraints used to make a prompt fit are upstream build inputs. Selecting a provider/model whose effective capability differs cannot silently reuse an incompatible build.
 - External model execution is non-deterministic and network-dependent; historical audit must not pretend that re-invocation reproduces the original response.
 
 ### Operational
 
-- Provider outages, timeouts, rate limits, quota exhaustion, billing unavailability, safety refusal, malformed/partial responses, and unsupported capabilities are normal explicit outcomes, not exceptional gaps to hide.
+- Provider outages, timeouts, rate limits, quota exhaustion, billing unavailability, safety refusal, malformed/partial responses, unsupported capabilities, and uncertain delivery are normal explicit outcomes, not exceptional gaps to hide.
 - Retry must be bounded and observable; a retry is a new attempt, not mutation of an old attempt.
 - Every new invocation or retry is a new live processing event and must re-evaluate Source Handling authority at that attempt's own cutoff; prior build-time or prior-attempt `ALLOW` never authorizes a later network send.
+- The attempt must exist durably before the network call. If delivery may have occurred but its result is unknown, automatic retry is prohibited until reconciliation or provider idempotency proves a duplicate send is safe.
 - A first implementation should be operable with one explicit execution profile without forcing premature routing architecture.
 
 ### Persistence and migration
 
-- Attempt, request, response, and failure history is append-only/immutable once recorded, but only fields and categories whose durable dispositions permit persistence may be recorded.
+- Attempt, request, response, handoff, outcome, and failure history is append-only/immutable once recorded, but only fields and categories whose durable dispositions permit persistence may be recorded.
+- A pre-send `ModelAttemptRecord` is immutable. Terminal state is represented by a separate append-only `ModelAttemptOutcomeRecord`; no attempt record is updated in place.
 - Corrections are new records or superseding metadata, not mutation of historical bytes.
 - Existing ADR 0031 build/artifact identities remain unchanged.
 - Existing provider-runner records remain historical records of their original schema; migration must not relabel them as if they had Model Adapter request lineage they never recorded.
@@ -205,6 +220,7 @@ Accepted ADR 0009 (`Repository Purification`) separates provider integration, se
 - Re-invoking a provider is a new execution, not historical replay.
 - If exact request or response bytes were not authorized for retention, reconstruction is explicitly unavailable rather than regenerated from current state.
 - A digest, measured size, content-derived identifier, or other derived request/response evidence may be retained only when the exact Source Handling durable disposition permits that category; hashes are not automatically safe.
+- A nonterminal pre-send attempt remaining after crash/restart is evidence of uncertainty, not permission to retry.
 
 ### Compatibility
 
@@ -217,7 +233,8 @@ Accepted ADR 0009 (`Repository Purification`) separates provider integration, se
 
 - Credentials, bearer tokens, API keys, cookies, authentication headers, client secrets, and equivalent transport secrets are never canonical request artifacts.
 - Provider request durability may contain only governed non-secret data whose exact durable categories are authorized; otherwise request content/hash/content-derived identity remains explicitly unavailable.
-- Source Handling Authority must allow model processing at the live attempt cutoff immediately before any network handoff.
+- Source Handling Authority must allow model processing at the live attempt cutoff before any network handoff.
+- A live send must consume a single-use handoff snapshot bound to the exact attempt and request-evidence state; it may not perform an unbound check and later send arbitrary bytes.
 - Durable request/response content and content-derived metadata must pass the applicable attempt-time field-category/disposition enforcement independently at persistence.
 - Provider responses are untrusted external data and may not request tools, repository writes, schema changes, or other capabilities outside the authorized adapter contract.
 
@@ -232,11 +249,13 @@ Accepted ADR 0009 (`Repository Purification`) separates provider integration, se
 A model attempt must preserve enough evidence to answer, when authorized:
 
 - which `EvidencePreModelBuildRecord` and `EvidencePromptArtifact` were used;
-- which provider request was transmitted, including exact durable request artifact/bytes when authorized or an explicit policy-governed request-evidence-unavailable outcome when not;
+- which deterministic transport transformation was produced and, when permitted, which durable request artifact represented it;
 - which versioned execution profile/provider/model/protocol was used;
-- which attempt/retry produced the result;
-- which response artifact or explicit unavailable outcome resulted;
-- which Source Handling authority state and **attempt cutoff** permitted the live handoff and new durable surfaces, while separately preserving the build cutoff used for upstream historical lineage; and
+- which pre-send attempt and single-use handoff snapshot authorized dispatch;
+- which exact Source Handling authority identities and **attempt cutoff** governed that handoff, while separately preserving the build cutoff for upstream historical lineage;
+- whether provider delivery was known, known-not-delivered, or uncertain;
+- which provider idempotency/correlation evidence was available;
+- which response artifact or explicit unavailable/persistence-failure outcome resulted; and
 - whether exact reconstruction is available or unavailable.
 
 ## Evidence Inventory
@@ -247,19 +266,22 @@ A model attempt must preserve enough evidence to answer, when authorized:
 | E-002 | Provider-specific request wrapping must be distinct | Accepted ADR 0031 | Provider-facing transformation must remain distinct from canonical prompt; durable exact bytes/derived IDs remain handling-governed | Direct architectural requirement | Supports separate request evidence semantics |
 | E-003 | Project-neutral core admission/exclusions | Accepted ADR 0032 | Routing, credentials, invocation, provider selection and response validation are not shared-core authority; concrete shared contracts require two-consumer evidence | Direct; no current second-consumer Model Adapter evidence | Challenges shared-core option |
 | E-004 | Source Handling canonical ownership | Accepted ADR 0033 | Model Adapter is consumer only; unresolved authority blocks model-facing processing; live attempts cannot inherit an older permission | Direct | Requires independent adapter enforcement |
-| E-005 | Durable category and authorization mechanics | Source Handling Design Contract | Field/category dispositions and exact payload-bound authorization govern durable surfaces; content-derived hashes/identities are not automatically retainable | Runtime contract subordinate to accepted ADRs; status text says ready for review but mechanics are implemented/integrated in current runtime | Supports request/response persistence controls |
+| E-005 | Durable category and authorization mechanics | Source Handling Design Contract | Field/category dispositions and exact payload-bound authorization govern durable surfaces; content-derived hashes/identities are not automatically retainable | Runtime contract subordinate to accepted ADRs; mechanics are implemented/integrated in current runtime | Supports request/response persistence controls |
 | E-006 | Concrete prompt/build runtime | `src/hunter/evidence_intelligence/pre_model.py` | `EvidencePromptArtifact`, `EvidencePreModelBuildRecord`, capability constraints, and Source Handling gated model processing exist | Direct current source observation | Defines exact upstream handoff |
 | E-007 | Existing provider runner | `src/hunter/evidence_intelligence/provider.py` | Older runner has provider health/error/security/proposal mechanics but consumes spans/schema rather than PromptArtifact | Direct source; predates ADR 0031/0033 handoff | Useful migration precedent; insufficient as final architecture |
 | E-008 | Pre-PR hygiene / governance cleanup complete | merged PRs #285 and #286 | Governance migration scaffolding retired and deterministic exact-head preflight hardened before Prompt Machine resumes | Current repository history | Removes process blocker, not architecture evidence |
 | E-009 | ADPR numbering | `docs/architecture-index.md` and architecture-record README | ADPR-0001 through ADPR-0008 allocated; numbers are monotonic and never reused | Direct current index | Confirms ADPR-0009 |
 | E-010 | ADR numbering | `docs/ADR/README.md` | ADR 0033 is latest allocated accepted ADR; no ADR 0034 exists | Direct current index/search | Supports planned ADR 0034 |
+| E-011 | Accepted valuation/evidence-assembly ADR scope | ADRs 0025, 0026, 0028 and architecture index | These accepted decisions govern valuation/evidence-assembly authorities and do not own Evidence Intelligence model transport/provider attempts | Direct accepted architecture; negative-scope check | Confirms no hidden competing owner for this boundary |
+| E-012 | Current architecture-index lifecycle/runtime distinction | `docs/architecture-index.md` in this contribution | ADPR-0006 remains `APPROVED` as preparation while current source contains later ADR 0031 provider-free runtime implementation | Direct repository evidence | Removes stale lifecycle/runtime contradiction |
 
 ### Evidence limitations
 
 - No live provider benchmark, quota experiment, cost comparison, or production credential evidence is used here. Those are operational implementation inputs, not prerequisites for deciding the ownership boundary.
 - The existing provider runner proves code shape and past semantics, not the correctness of a future Model Adapter.
-- The architecture index contains stale implementation-status prose for some earlier ADR 0031 work; this record relies on current source plus accepted ADRs for the actual runtime boundary and does not treat index prose as implementation authority.
+- The architecture index previously conflated ADPR lifecycle status with downstream implementation state for ADR 0031. This contribution corrects the index to state both separately; this ADPR relies on current source plus accepted ADRs for runtime evidence.
 - No second independent consumer has demonstrated a Model Adapter contract under ADR 0032. That absence is material to shared-core admission.
+- Provider idempotency and reconciliation capabilities vary by provider. The architecture therefore requires explicit capability representation and fail-closed retry behavior rather than assuming idempotency exists.
 
 ## Assumptions
 
@@ -269,6 +291,7 @@ A model attempt must preserve enough evidence to answer, when authorized:
 | A-002 | Provider APIs can represent the canonical prompt either directly or through a deterministic transform whose exact non-secret request content can be identified in memory and durably recorded only when handling permits | Common transport property and ADR 0031 already anticipates transformations | High | A provider requires opaque mutable server-side prompt transformation that cannot be represented/audited even transiently | That provider is not admissible under this boundary without new architecture |
 | A-003 | Source Handling decisions applicable at each model attempt are sufficient to constrain request/response durability when combined with the field-category registry | Follows ADR 0033 design | Medium | Provider responses introduce a new durable data category not expressible by the governed registry | Source Handling design must be extended before response persistence |
 | A-004 | Remote model output cannot be reproduced deterministically merely by replaying the same request | External model execution is outside Hunter deterministic control | High | Provider supplies a verifiable deterministic execution contract Hunter can prove | Architecture may later add a stronger reproducibility mode; current audit/replay distinction remains safe |
+| A-005 | The persistence substrate used by the Model Adapter can durably create a pre-send attempt and one immutable handoff snapshot before network dispatch | Required to avoid orphan sends with no attempt lineage | Medium | Repository/storage cannot provide durable pre-send commit or unique handoff consumption semantics | Provider activation remains blocked until an authorized durable outbox/transaction mechanism is designed |
 
 ## Architectural Dimensions
 
@@ -277,19 +300,20 @@ A model attempt must preserve enough evidence to answer, when authorized:
 3. **Prompt immutability** — preserving canonical prompt bytes while permitting provider-specific transport representations.
 4. **Execution profile identity** — exact provider/model/protocol/capability binding without giving the provider selection authority over upstream build semantics.
 5. **Provider request evidence** — exact non-secret bytes/structure when durably authorized, plus explicit unavailable semantics when content-derived durability is prohibited.
-6. **Attempt identity and retries** — append-only execution lineage and explicit outcomes, with attempt-time authority re-evaluation for every live send.
-7. **Response identity** — exact/raw or unavailable response evidence distinct from validated proposal semantics.
-8. **Source Handling enforcement** — live processing authority resolved at the attempt cutoff and durable-category decisions independently re-resolved at persistence; historical build cutoff is lineage/reconstruction only.
-9. **Credential exclusion** — transport secrets excluded structurally from canonical bytes, logs, diagnostics, and hashes.
-10. **Failure/missingness** — timeout, quota, billing, refusal, malformed data, provider outage, unsupported capability, and persistence restrictions are explicit.
-11. **Persistence/replay** — exact historical audit versus new re-invocation.
-12. **Provenance/observability** — proof chain from build to request to attempt to response, subject to durable dispositions.
-13. **Routing** — whether selecting among providers/models is part of the adapter or a later authority.
-14. **Validation boundary** — transport success versus Response Validator semantics.
-15. **Migration** — coexistence with legacy `AIExtractionProvider` / `SecureAIProviderRunner` records.
-16. **Testability** — deterministic contract and fake-transport tests without live provider dependencies.
-17. **Reversibility/no lock-in** — ability to add/replace provider transports without rewriting prompt/build history.
-18. **Governance isolation** — no provider/LLM dependency in merge authority.
+6. **Artifact ownership** — transport returns deterministic wire transformation; Model Adapter alone owns durable request/attempt/handoff/outcome artifact creation and persistence semantics.
+7. **Attempt identity and retries** — append-only pre-send attempt lineage, idempotency/correlation, uncertain-delivery, reconciliation, and explicit retry eligibility.
+8. **Response identity** — exact/raw or unavailable response evidence distinct from validated proposal semantics.
+9. **Source Handling enforcement** — live processing authority resolved at the attempt cutoff and bound into one immutable handoff snapshot; historical build cutoff is lineage/reconstruction only.
+10. **Credential exclusion** — transport secrets excluded structurally from canonical bytes, logs, diagnostics, and hashes.
+11. **Failure/missingness** — timeout, quota, billing, refusal, malformed data, provider outage, unsupported capability, uncertain delivery, and persistence failure are explicit.
+12. **Persistence/replay** — exact historical audit versus new re-invocation.
+13. **Provenance/observability** — proof chain from build to transformation/request to pre-send attempt to handoff to outcome/response, subject to durable dispositions.
+14. **Routing** — whether selecting among providers/models is part of the adapter or a later authority.
+15. **Validation boundary** — transport success versus Response Validator semantics.
+16. **Migration** — coexistence with legacy `AIExtractionProvider` / `SecureAIProviderRunner` records.
+17. **Testability** — deterministic contract and fake-transport tests without live provider dependencies.
+18. **Reversibility/no lock-in** — ability to add/replace provider transports without rewriting prompt/build history.
+19. **Governance isolation** — no provider/LLM dependency in merge authority.
 
 ## Candidate Options
 
@@ -303,25 +327,25 @@ A model attempt must preserve enough evidence to answer, when authorized:
 - **Compatibility:** High short-term compatibility; high semantic migration risk.
 - **Advantages:** Low immediate implementation effort; reuses provider health/error code.
 - **Disadvantages:** Encourages silent upgrade of old artifacts into guarantees they did not historically possess; blurs Response Validator boundary.
-- **Failure modes:** Direct proposal creation can bypass future validation separation; provider request bytes may remain implicit.
+- **Failure modes:** Direct proposal creation can bypass future validation separation; provider request bytes may remain implicit; uncertain-delivery recovery is not defined.
 - **Migration implications:** Complex version branching inside a legacy abstraction.
 - **Reversibility:** Medium.
 - **Open dependencies:** Must redesign multiple existing record semantics simultaneously.
 
 ### Option 2 — Consumer-owned provider-neutral Model Adapter with provider-specific transports; routing deferred
 
-- **Description:** Define a new Evidence Intelligence `ModelAdapter` contract that consumes an exact completed pre-model build and one explicit versioned `ModelExecutionProfile`. Provider-specific transports deterministically map the canonical prompt to a provider request in memory. The adapter records only request, attempt, outcome, and response evidence whose durable categories are authorized, with explicit unavailable states otherwise. It does not choose among profiles dynamically.
-- **Authority and ownership:** Evidence Intelligence owns the adapter/attempt contract. Source Handling remains sole handling authority. Provider transports own protocol mechanics only. Repositories persist mechanically. Response Validator remains separate.
-- **Boundaries:** Clean handoff: `PreModelBuild -> ModelAdapter -> transient ProviderRequest -> ProviderRequestArtifact or request-evidence-unavailable -> ModelAttemptRecord -> ProviderResponseArtifact/unavailable -> future ResponseValidator`.
-- **Persistence and replay:** Append-only immutable attempt lineage; exact request/response reconstruction only when authorized; re-invocation always a new attempt; new live attempts re-resolve handling at their own cutoff.
-- **Evidence and provenance:** Strong linkage from prompt/build to profile/attempt and, when policy permits, exact request/response artifacts; otherwise explicit policy-governed unavailability.
+- **Description:** Define a new Evidence Intelligence `ModelAdapter` contract that consumes an exact completed pre-model build and one explicit versioned `ModelExecutionProfile`. Provider-specific transports deterministically map the canonical prompt to a non-secret provider request transformation result but do not create durable artifacts. The Model Adapter applies Source Handling, creates any authorized request artifact, persists a pre-send attempt, creates/consumes the attempt-bound handoff snapshot, invokes transport, and records immutable outcomes. It does not choose among profiles dynamically.
+- **Authority and ownership:** Evidence Intelligence owns adapter/request/attempt/handoff/outcome semantics. Source Handling remains sole handling authority. Provider transports own protocol transformation/network mechanics only. Repositories persist mechanically. Response Validator remains separate.
+- **Boundaries:** `PreModelBuild -> ModelAdapter -> transport transformation result -> authorized ProviderRequestArtifact or request-evidence-unavailable -> pre-send ModelAttemptRecord -> ModelHandoffRecord -> transport send -> ModelAttemptOutcomeRecord + ProviderResponseArtifact/unavailable -> future ResponseValidator`.
+- **Persistence and replay:** Append-only attempt/handoff/outcome lineage; exact request/response reconstruction only when authorized; re-invocation always a new attempt; uncertain delivery blocks blind retry pending reconciliation/idempotency proof.
+- **Evidence and provenance:** Strong linkage from prompt/build to profile, request-evidence state, attempt, handoff, delivery certainty, and response/outcome.
 - **Compatibility:** Existing provider runner can remain historical and later be adapted behind a transport or deprecated without rewriting old records.
-- **Advantages:** Preserves ADR 0031 identities, minimizes provider lock-in, keeps routing out of scope, provides deterministic test seam, preserves validation separation.
-- **Disadvantages:** Introduces new records and a migration boundary rather than reusing old provider artifacts directly.
-- **Failure modes:** An execution profile may be mismatched to the build's capability constraint; a restrictive successor may invalidate live processing; content-derived durable fields may be prohibited. Architecture must fail closed or record explicit unavailability rather than adapt/persist silently.
+- **Advantages:** Preserves ADR 0031 identities, minimizes provider lock-in, keeps routing out of scope, defines crash/retry safety, provides deterministic test seam, preserves validation separation.
+- **Disadvantages:** Introduces new records and a migration boundary rather than reusing old provider artifacts directly; requires durable pre-send commit/handoff semantics.
+- **Failure modes:** Capability mismatch, restrictive successor, prohibited durable fields, uncertain delivery, or persistence failure all fail closed or remain explicit; no silent adaptation/retry.
 - **Migration implications:** New V1 record families coexist with legacy provider artifacts; no backfill of nonexistent request lineage.
 - **Reversibility:** High; transports can be replaced while canonical pre-model and attempt history remain stable.
-- **Open dependencies:** Detailed schema/transport implementation belongs to later design/implementation after ADR acceptance.
+- **Open dependencies:** Exact storage/outbox mechanics and provider-specific idempotency implementation belong to later design/implementation, but the required semantics are fixed here.
 
 ### Option 3 — Promote Model Adapter into project-neutral Prompt Intelligence core now
 
@@ -360,7 +384,7 @@ A model attempt must preserve enough evidence to answer, when authorized:
 - **Compatibility:** Lowest initial abstraction cost.
 - **Advantages:** Small initial implementation and minimal generic surface.
 - **Disadvantages:** Provider-specific request/response semantics leak into service contracts; later provider substitution requires refactoring canonical execution code.
-- **Failure modes:** Provider model names/parameters become accidental canonical authority or leak upstream.
+- **Failure modes:** Provider model names/parameters become accidental canonical authority; retry/idempotency semantics can become provider-specific architecture by accident.
 - **Migration implications:** Medium-high if a second provider is later needed.
 - **Reversibility:** Medium.
 - **Open dependencies:** Concrete provider chosen before architecture proves the stable consumer-owned seam.
@@ -377,16 +401,17 @@ A model attempt must preserve enough evidence to answer, when authorized:
 | Source Handling isolation | Medium | **High** | Medium | Medium | Medium |
 | Response Validator separation | Low-medium | **High** | High | High | Medium |
 | Replay/audit clarity | Medium | **High** | High | High but distributed | High for one provider |
+| Crash/uncertain-delivery safety | Low | **High** | Medium | High if specified | Medium-low |
 | Credential exclusion boundary | Medium | **High** | Medium | High but operationally complex | Medium |
 | Provider lock-in | Medium-high | **Low** | Low | Low | **High** |
-| Operational complexity | Low-medium | **Medium-low** | Medium | **High** | Low |
+| Operational complexity | Low-medium | **Medium** | Medium | **High** | Low |
 | Migration risk | High semantic risk | **Low-medium** | High | High | Medium-high |
 | Implementation effort | Low-medium | Medium | High | Very high | Low |
 | Reversibility | Medium | **High** | Medium | Low-medium | Medium |
 | Long-term extensibility | Medium | **High** | High only after admission | High | Low-medium |
 | Deterministic testability without live provider | Medium | **High** | High | Medium | Medium-high |
 
-Option 2 gives the best current balance: it creates only the consumer-owned seam Hunter demonstrably needs, preserves future provider substitution, satisfies ADR 0032 by not claiming shared ownership, and avoids routing/service architecture before evidence exists.
+Option 2 gives the best current balance: it creates only the consumer-owned seam Hunter demonstrably needs, preserves future provider substitution, satisfies ADR 0032 by not claiming shared ownership, and fixes handoff/retry semantics without introducing multi-provider routing or a network gateway.
 
 ## Falsification Results
 
@@ -394,7 +419,7 @@ Option 2 gives the best current balance: it creates only the consumer-owned seam
 
 **Hypothesis:** the existing provider runner can simply be declared the Model Adapter.
 
-**Counterevidence:** it consumes `ExtractionRequest` built from spans/schema rather than the canonical `EvidencePromptArtifact`, and directly creates `ExtractionProposal`. It therefore lacks the exact ADR 0031 handoff and crosses the deferred Response Validator separation. The hypothesis fails unless the runner is materially redesigned, at which point preserving it as the architectural abstraction gives little benefit and creates legacy semantic ambiguity.
+**Counterevidence:** it consumes `ExtractionRequest` built from spans/schema rather than the canonical `EvidencePromptArtifact`, directly creates `ExtractionProposal`, and lacks the pre-send attempt/handoff/uncertain-delivery semantics required here. The hypothesis fails unless the runner is materially redesigned, at which point preserving it as the architectural abstraction gives little benefit and creates legacy semantic ambiguity.
 
 **Result:** does not survive as the preferred architecture. Some health/error/detector mechanics may be reused later as implementation details.
 
@@ -402,15 +427,19 @@ Option 2 gives the best current balance: it creates only the consumer-owned seam
 
 **Hypothesis:** a new provider-neutral Hunter-owned adapter seam is unnecessary abstraction because only one provider may be used initially.
 
-**Test:** remove all multi-provider routing from the option and require only one explicit execution profile. The neutral seam still has independent value because it separates canonical prompt identity from provider-specific request transformation, attempt identity, transport secrets, response evidence, and future validation. Those boundaries exist even with one provider.
+**Test:** remove all multi-provider routing from the option and require only one explicit execution profile. The neutral seam still has independent value because it separates canonical prompt identity from provider-specific request transformation, Source Handling/artifact ownership, durable pre-send attempt identity, one-shot handoff, transport secrets, uncertain delivery, response evidence, and future validation. Those boundaries exist even with one provider.
 
-**Boundary case:** provider requires transformation of message structure. The option survives because the transformed non-secret request exists as a distinct transient representation; exact bytes/hash/content-derived identity become a distinct durable `ProviderRequestArtifact` only when the relevant Source Handling dispositions permit those categories, otherwise durability is explicitly unavailable.
+**Boundary case:** provider requires transformation of message structure. The option survives because the transport returns a deterministic non-secret transformation result; the Model Adapter alone decides whether any exact bytes/hash/content-derived identity may become durable evidence.
 
 **Boundary case:** provider/model capability differs from the build capability. The option survives only by failing closed and requiring a new build; silent adaptation is prohibited.
 
-**Boundary case:** a build was allowed at its historical cutoff but a restrictive successor becomes known before a new invocation or retry. The option survives only by re-resolving Source Handling at the new attempt cutoff and blocking the network send when processing is no longer allowed. The build cutoff remains historical lineage, not live authorization.
+**Boundary case:** a build was allowed at its historical cutoff but a restrictive successor becomes known before a new invocation or retry. The option survives because the Model Adapter resolves at the attempt cutoff and atomically binds the resulting authority snapshot to a single-use handoff before dispatch. The build cutoff remains historical lineage, not live authorization.
 
 **Boundary case:** exact request or response retention, hashes, or content-derived IDs are forbidden. The option survives by persisting only categories explicitly authorized by the relevant durable dispositions and recording explicit unavailability for prohibited evidence; a mandatory content-derived artifact identity is not required.
+
+**Boundary case:** timeout/crash occurs after the provider may have accepted the request but before Hunter has a terminal outcome. The durable pre-send attempt remains nonterminal/uncertain; automatic retry is prohibited unless provider idempotency or reconciliation proves duplicate dispatch cannot occur.
+
+**Boundary case:** a response is captured but terminal persistence fails. The provider call is never treated as safely retryable. The pre-send attempt remains durably unresolved and recovery records a persistence-failure/unknown outcome when canonical persistence resumes; exact response reconstruction may be unavailable if policy or failure prevented durable response capture.
 
 **Result:** survives falsification.
 
@@ -434,7 +463,7 @@ Option 2 gives the best current balance: it creates only the consumer-owned seam
 
 **Hypothesis:** provider-specific code is the smallest correct V1 and can be generalized later.
 
-**Counterexample:** even one provider needs a stable distinction among canonical prompt, provider-transformed request, secrets, attempt, raw response, and validation. If those concepts are implemented only in provider-specific types, the first provider's protocol becomes the accidental architecture. A minimal neutral execution seam avoids that without introducing routing.
+**Counterexample:** even one provider needs stable distinctions among canonical prompt, transport transformation, Source Handling-owned durability decisions, pre-send attempt, handoff, idempotency/correlation, uncertain outcome, raw response, and validation. If those concepts exist only in provider-specific types, the first provider's protocol becomes the accidental architecture.
 
 **Result:** viable as an implementation shortcut but inferior as architecture. Reconsider only if Hunter permanently commits to one provider and accepts the migration cost explicitly in a later decision.
 
@@ -444,16 +473,25 @@ Option 2 gives the best current balance: it creates only the consumer-owned seam
 
 Create an Evidence Intelligence-owned Model Adapter boundary. The canonical adapter contract belongs to Hunter Evidence Intelligence, not to the project-neutral core and not to the provider transport.
 
-Provider-specific transports are subordinate implementations. They may translate request/response wire formats, perform network calls, and normalize transport errors. They may not:
+Provider-specific transports are subordinate implementations. They may:
+
+- deterministically translate the adapter's canonical prompt/profile inputs into a **non-secret transport transformation result**;
+- perform the network call only when given a valid single-use dispatch handoff by the Model Adapter;
+- return raw transport response/error/correlation evidence to the Model Adapter.
+
+They may not:
 
 - select or modify context;
 - mutate `EvidencePromptArtifact`;
-- create Source Handling authority;
+- create or persist `ProviderRequestArtifact`, `ModelAttemptRecord`, `ModelHandoffRecord`, `ModelAttemptOutcomeRecord`, or `ProviderResponseArtifact` as canonical Hunter artifacts;
+- create Source Handling authority or decide retention/durability;
 - choose a different capability constraint silently;
 - validate response truth;
 - create canonical knowledge;
 - approve tools or autonomous actions;
 - alter Hunter governance state.
+
+The Model Adapter owns the durable execution artifact graph and calls repositories mechanically after rederiving the exact authorized durable state. This avoids ownership inversion where provider-specific code would own canonical artifact identity or retention semantics.
 
 ### Execution profile
 
@@ -466,7 +504,8 @@ Introduce a versioned `ModelExecutionProfile` concept owned by the Model Adapter
 - required capability-constraint identity or exact compatibility requirement;
 - deterministic non-secret request parameters that affect model execution;
 - prohibited capabilities/tools;
-- response format expectation identity.
+- response format expectation identity;
+- provider idempotency/correlation capability classification (`SUPPORTED`, `UNAVAILABLE`, or explicit unknown/blocking state).
 
 V1 does **not** dynamically select among profiles. The authorized caller/workflow supplies or is bound to one explicitly configured profile, and the adapter verifies it. Multi-profile/provider routing is a separate future architecture decision.
 
@@ -474,9 +513,9 @@ If the execution profile's capability contract does not exactly satisfy the capa
 
 ### Provider request artifact
 
-Before network transmission, the provider transport deterministically creates the exact non-secret provider-facing request in memory. The Model Adapter then evaluates the applicable durable dispositions independently from processing permission.
+The provider transport first returns a deterministic, non-secret **transport transformation result** in memory. That result is not a Hunter durable artifact and carries no Source Handling or persistence authority.
 
-When the relevant Source Handling dispositions authorize durable request evidence, a `ProviderRequestArtifact` may record only the allowed categories, linked as applicable to:
+The Model Adapter then independently resolves the applicable Source Handling durable dispositions. When those dispositions authorize durable request evidence, the **Model Adapter**, not the transport, constructs and persists a `ProviderRequestArtifact` through the mechanical repository boundary. It may record only the allowed categories, linked as applicable to:
 
 - `EvidencePreModelBuildRecord` identity;
 - `EvidencePromptArtifact` identity;
@@ -489,58 +528,68 @@ When the relevant Source Handling dispositions authorize durable request evidenc
 
 No content-derived hash, size, digest, canonical-byte fingerprint, or identity is presumed safe merely because model processing is allowed. When those durable categories are denied, the request may still be transmitted if live processing is authorized, but prohibited evidence is not persisted. The attempt instead records an authorized non-content-derived request-evidence outcome such as `REQUEST_EVIDENCE_UNAVAILABLE_BY_POLICY`; if even that metadata category is not authorized, no substitute identifier is fabricated.
 
-A durable request artifact, when one exists, is always semantically distinct from `EvidencePromptArtifact`, even when its authorized content mapping is byte-equivalent. This prevents provider wrapping from retroactively becoming canonical prompt content. When no durable request artifact is permitted, that absence is explicit and does not collapse back into the prompt artifact.
+A durable request artifact, when one exists, is always semantically distinct from `EvidencePromptArtifact`, even when its authorized content mapping is byte-equivalent. When no durable request artifact is permitted, that absence is explicit and does not collapse back into the prompt artifact.
 
-Authentication headers, bearer tokens, API keys, cookies, client secrets, signing secrets, and equivalent credentials are structurally outside the transient canonical request representation used for evidence and outside every canonical hash. Their existence may be represented only by a non-secret credential-slot/configuration identity if separately authorized; secret values never appear.
+Authentication headers, bearer tokens, API keys, cookies, client secrets, signing secrets, and equivalent credentials are structurally outside the transport transformation result used for Hunter evidence and outside every canonical hash. Their existence may be represented only by a non-secret credential-slot/configuration identity if separately authorized; secret values never appear.
 
-### Source Handling execution gate
+### Atomic Source Handling handoff
 
-A live model invocation has **two distinct Source Handling coordinates** that must not be conflated:
+A live model invocation has two Source Handling coordinates that must not be conflated:
 
-1. **Build lineage coordinate.** The adapter may re-resolve the build's historical Source Handling state at the build cutoff to verify that the existing `EvidencePreModelBuildRecord` and `EvidencePromptArtifact` remain valid historical lineage. This resolution is reconstruction/audit evidence only and grants no permission for a new network operation.
-2. **Attempt authorization coordinate.** Immediately before preparing/transmitting provider-facing bytes for every invocation or retry, the Model Adapter independently resolves Source Handling authority for the same governed document/version scope using the new attempt's effective context and strict-known **attempt cutoff**. The live send is authorized only by this attempt-time resolution.
+1. **Build lineage coordinate.** The adapter may re-resolve the build's historical Source Handling state at the build cutoff to verify historical lineage. This is reconstruction/audit evidence only and grants no permission for a new network operation.
+2. **Attempt authorization coordinate.** For every invocation or retry, the Model Adapter resolves Source Handling for the governed document/version using the new attempt's effective context and strict-known **attempt cutoff**. The live send is authorized only by this attempt-time resolution.
 
-The attempt-time gate verifies that:
+The loose pattern `resolve -> later send` is prohibited. Before any network call, the Model Adapter must establish an immutable `ModelHandoffRecord` (name may vary in implementation but semantics are mandatory) as **execution evidence, not Source Handling authority**. Its creation and authority resolution must occur from one serializable/atomic Source Handling snapshot or an equivalent Source Handling-issued snapshot/capability primitive. If the storage/authority substrate cannot provide an equivalent atomic snapshot-to-handoff guarantee, Model Adapter activation remains blocked.
 
-- all required handling facts, policy, field-category registry, authorization rule, and provenance applicable and knowable at the attempt cutoff resolve without ambiguity;
-- `processing_decision == ALLOW` at the attempt cutoff;
-- any restrictive successor fact/policy known by that cutoff, including withdrawal/deletion or processing prohibition, takes effect for the new network operation and blocks it when applicable;
-- provider-request and later response durable field/category dispositions permit each newly persisted field/category; processing permission alone never grants durability;
-- no caller/provider decision, prior build decision, prior attempt decision, or existence of historical bytes substitutes for current attempt-time authority.
+The handoff binds, to the extent each durable category is authorized:
 
-Every retry is a new live attempt and repeats this gate. A prior successful attempt does not authorize the next retry.
+- handoff identity and schema version;
+- pre-send `ModelAttemptRecord` identity;
+- build/prompt/execution-profile identities;
+- durable `ProviderRequestArtifact` identity when permitted, otherwise the explicit request-evidence-unavailable state;
+- exact fact, policy, field-category-registry, authorization-rule, and required provenance identities resolved for the attempt;
+- attempt effective context and strict-known attempt cutoff;
+- `processing_decision == ALLOW`;
+- exact durable-disposition identities/results applicable to request/response categories;
+- an opaque single-use dispatch nonce/capability identity that is not content-derived and is persisted only when its metadata category is authorized;
+- expiry/dispatch-validity bound required by the implementation contract.
 
-The build cutoff remains immutable lineage for historical reconstruction. It must never be replaced by current authority when reconstructing the old build, just as the old build cutoff must never be reused as permission for a new live send. A restriction learned only after an already-completed historical attempt does not retroactively rewrite that attempt; it governs future operations from the point it becomes applicable/knowable under Source Handling semantics.
+The provider transport may execute a network send only by consuming a valid handoff bound to the same attempt/profile/transformation state. Consumption must be single-use through a unique/compare-and-set/transactional-outbox equivalent so two workers cannot dispatch the same attempt twice. The handoff does **not** become a second handling authority: its facts/decisions are valid only because they are bound to the exact canonical Source Handling snapshot at the attempt cutoff.
 
-Implementation design must minimize and explicitly bound the time-of-check/time-of-use interval between attempt-time authority resolution and network transmission. If the implementation cannot establish an acceptable bounded handoff, it must fail closed rather than treat a stale permission as current.
+A restrictive successor already applicable/knowable at the handoff cutoff must be included and can block creation of the handoff. A successor that becomes applicable/knowable only **after** the handoff's committed cutoff does not retroactively rewrite that already-created execution evidence; every later retry/new attempt must create a new handoff and therefore sees the later authority. This defines the atomic authorization point instead of pretending the system can continuously re-check authority during an external network call.
 
-### Model attempt
+### Model attempt, durable commit, and uncertain delivery
 
-Every network invocation creates a new immutable `ModelAttemptRecord` identity. At minimum it links, to the extent each durable category is authorized:
+Every possible network invocation starts with a durable immutable `ModelAttemptRecord` **before** any provider call. The attempt record establishes identity and lineage but not a terminal result. At minimum, subject to durable dispositions, it links:
 
 - execution owner;
 - pre-model build ID;
 - prompt artifact ID;
-- provider request artifact ID **when a durable request artifact exists**, otherwise an explicit authorized request-evidence-unavailable outcome/reason;
+- provider request artifact ID when one durably exists, otherwise the explicit authorized request-evidence-unavailable outcome/reason;
 - execution profile ID;
 - attempt ordinal;
 - predecessor/retry attempt ID where applicable;
-- attempt effective context and attempt cutoff used for live Source Handling authorization;
-- build cutoff retained separately for upstream lineage/reconstruction;
-- started/finished/recorded coordinates;
-- exact terminal outcome/reason code;
-- provider correlation/request ID only when safe and governed;
-- response artifact ID when one exists;
-- explicit exact-reconstruction availability.
+- attempt effective context/cutoff and build cutoff as distinct coordinates;
+- created/recorded time;
+- provider idempotency capability and an opaque attempt-scoped idempotency key/correlation slot when supported and safe to persist.
 
-Retries never overwrite an attempt. A timeout followed by success is two attempts with lineage, not one mutated record.
+Terminal result is a separate append-only `ModelAttemptOutcomeRecord`; the pre-send attempt is never updated in place. The outcome links the attempt/handoff and records terminal or uncertainty state, response-artifact identity when one exists, safe provider correlation metadata, timestamps, and reconstruction availability.
 
-Closed high-level outcome families should distinguish at least:
+Provider idempotency/retry rules are binding:
 
-- `SUCCEEDED_TRANSPORT` — a response was received; says nothing about semantic validity;
-- `PROVIDER_UNAVAILABLE` — provider health/outage;
-- `TIMEOUT`;
-- `RATE_LIMITED`;
+- When the provider supports a trustworthy idempotency key, Hunter uses one stable opaque attempt-scoped key for reconciliation of **that attempt**. A new intentional retry is a new Hunter attempt and must not silently reuse semantic state from the predecessor.
+- When provider idempotency is unavailable or cannot prove whether a request was accepted, a timeout, connection loss, process crash, or ambiguous provider error after dispatch produces `DELIVERY_UNKNOWN` / `OUTCOME_UNKNOWN` semantics. It is not classified as safe non-delivery.
+- An uncertain attempt is **not automatically retryable**. Recovery must first reconcile using provider correlation/status/idempotency facilities when available. If reconciliation cannot establish non-delivery or a definitive terminal result, the attempt remains unknown and automated retry is blocked; a separately governed operator/policy decision may later authorize a new attempt.
+- A retry may proceed automatically only from outcomes whose semantics prove that no provider execution occurred, or after reconciliation establishes a safe retry condition. Rate-limit/validation errors are not assumed non-delivery unless the provider contract proves that property.
+- Crash recovery scans durable pre-send attempts lacking terminal outcome. Such attempts are reconstructed as uncertain pending reconciliation, never as failed-safe-to-retry.
+
+High-level outcome families must distinguish at least:
+
+- `SUCCEEDED_TRANSPORT` — response received; says nothing about semantic validity;
+- `PROVIDER_UNAVAILABLE`;
+- `TIMEOUT_CONFIRMED_NO_DELIVERY` when the provider contract proves no dispatch/acceptance;
+- `DELIVERY_UNKNOWN` / `OUTCOME_UNKNOWN`;
+- `RATE_LIMITED` with explicit delivery certainty;
 - `QUOTA_UNAVAILABLE`;
 - `BILLING_UNAVAILABLE`;
 - `CAPABILITY_UNSUPPORTED`;
@@ -548,15 +597,16 @@ Closed high-level outcome families should distinguish at least:
 - `MALFORMED_TRANSPORT_RESPONSE`;
 - `SECURITY_BLOCKED`;
 - `SOURCE_HANDLING_BLOCKED`;
+- `RESPONSE_CAPTURED_PERSISTENCE_FAILED` as an operational observation when response capture succeeded but canonical terminal persistence failed;
 - `INTERNAL_ADAPTER_ERROR`.
 
-Exact vocabulary is design/implementation detail, but these failure distinctions must not be collapsed into a generic exception that destroys auditability.
+If a response is captured but canonical persistence of the response/outcome fails, the adapter must **not retry**. While the process is alive it reports `RESPONSE_CAPTURED_PERSISTENCE_FAILED` and retains response bytes only within the already-authorized transient/durable handling rules. If the canonical store itself is unavailable and therefore cannot record that failure, the durable pre-send attempt intentionally remains nonterminal; recovery treats it as `OUTCOME_UNKNOWN`, performs reconciliation, and never fabricates a terminal result. A later recovery record may state that exact response evidence is unavailable if it could not be retained legally or durably.
 
 ### Provider response artifact
 
-A received provider response creates a distinct `ProviderResponseArtifact` or explicit unavailable durable state. It records, as authorized:
+A received provider response creates a distinct `ProviderResponseArtifact` or explicit unavailable durable state **under Model Adapter ownership**. The transport returns raw response evidence but does not own canonical artifact creation. The Model Adapter applies Source Handling and records, as authorized:
 
-- attempt ID;
+- attempt/outcome identity;
 - provider request artifact ID when one durably exists, otherwise the authorized request-evidence-unavailable linkage;
 - execution profile ID;
 - exact response protocol/version;
@@ -570,7 +620,7 @@ Provider response bytes are untrusted external data. Merely persisting them does
 
 ### Response Validator boundary
 
-The Model Adapter ends after transport-level response capture and normalization. A separately governed future `ResponseValidator` consumes the response evidence and may validate syntax/schema/capability/evidence-reference rules. Only after that boundary may Evidence Intelligence produce an `ExtractionProposal` through its authorized service path.
+The Model Adapter ends after transport-level response capture, normalization, and authorized persistence/outcome recording. A separately governed future `ResponseValidator` consumes the response evidence and may validate syntax/schema/capability/evidence-reference rules. Only after that boundary may Evidence Intelligence produce an `ExtractionProposal` through its authorized service path.
 
 The existing legacy provider runner's direct proposal creation is not adopted as the new Model Adapter rule. Historical behavior remains historical; any future migration must preserve old schema identity while routing new executions through the new boundary.
 
@@ -584,22 +634,31 @@ If Hunter later needs automatic selection among two or more provider/model profi
 
 - Reconstructing a historical build or attempt means reading its persisted immutable evidence under that artifact's historical cutoff and authority state; current/later authority never backfills historical absence.
 - Re-invoking a provider, even with identical transient request bytes and model identifier, is a **new attempt**, not replay of the old response.
-- Every new invocation/retry resolves live Source Handling at its own attempt cutoff; an older build or attempt `ALLOW` is never reused as live permission.
+- Every new invocation/retry resolves live Source Handling at its own attempt cutoff and creates a new attempt/handoff; an older build or attempt `ALLOW` is never reused as live permission.
 - No current provider version or current configuration may backfill missing historical execution evidence.
 - When exact bytes, hashes, measured sizes, or content-derived identifiers were not durably authorized, reconstruction remains explicitly unavailable for those categories.
+- A persisted pre-send attempt without a terminal outcome is replayed as uncertain state, not rewritten into a failure or success based on later convenience.
 
 ### Mandatory conformance cases
 
 The resulting ADR and implementation contract must require deterministic tests for these defect classes before any live provider integration:
 
-1. **Revocation between build and send:** build-time Source Handling resolves `ALLOW`; before invocation a restrictive successor becomes applicable/knowable. The new attempt must resolve at its own cutoff and return `SOURCE_HANDLING_BLOCKED` without transmitting bytes. Historical reconstruction of the build must still use the original build cutoff.
-2. **Revocation between attempts:** attempt 1 is authorized; a restrictive successor becomes applicable/knowable before retry. Attempt 2 must re-resolve and block. Prior success cannot authorize retry.
-3. **Processing allowed, content durability denied:** model processing is `ALLOW`, while request exact bytes, `CONTENT_DERIVED_ID`, hashes, measured size, or equivalent derived durable categories are denied. Transmission may proceed, but no prohibited bytes/hash/derived identity is persisted; request evidence is explicitly unavailable by policy, and `ModelAttemptRecord` does not require a prohibited request-artifact ID.
-4. **Response echo under restrictive durability:** provider response echoes protected source content while response retention/hash categories are denied. The attempt records only authorized metadata/unavailable state and persists no prohibited response bytes or derived digest.
-5. **No authority laundering:** caller/provider supplied handling decisions, prior build decisions, prior attempt decisions, or presence of existing prompt bytes cannot make either a live processing gate or durable category permissive.
-6. **Cutoff separation:** historical replay/reconstruction uses the historical artifact cutoff; live invocation uses the attempt cutoff. Tests must fail if either coordinate is substituted for the other.
+1. **Revocation between build and handoff:** build-time Source Handling resolves `ALLOW`; before invocation a restrictive successor becomes applicable/knowable. The attempt-time atomic snapshot must block handoff creation and transmit no bytes. Historical reconstruction of the build still uses the original build cutoff.
+2. **Revocation between attempts:** attempt 1 is authorized; a restrictive successor becomes applicable/knowable before retry. Attempt 2 must resolve a new snapshot and block. Prior success cannot authorize retry.
+3. **Atomic snapshot/dispatch binding:** the transport cannot send without a handoff bound to the exact attempt/profile/request-evidence state; stale, mismatched, expired, reused, or concurrently consumed handoffs are rejected. Tests prove one handoff cannot dispatch twice.
+4. **Processing allowed, content durability denied:** model processing is `ALLOW`, while request exact bytes, `CONTENT_DERIVED_ID`, hashes, measured size, or equivalent derived durable categories are denied. Transmission may proceed, but no prohibited bytes/hash/derived identity is persisted; `ModelAttemptRecord` does not require a prohibited request-artifact ID.
+5. **Response echo under restrictive durability:** provider response echoes protected source content while response retention/hash categories are denied. The attempt records only authorized metadata/unavailable state and persists no prohibited response bytes or derived digest.
+6. **Ownership inversion guard:** fake provider transports can return transformation/response evidence but cannot construct/persist canonical request/attempt/handoff/outcome/response artifacts or decide Source Handling dispositions.
+7. **Durable-before-send:** transport invocation is impossible until the pre-send attempt and valid handoff are durably established.
+8. **Crash/timeout after possible acceptance:** an incomplete post-dispatch attempt becomes `DELIVERY_UNKNOWN`/`OUTCOME_UNKNOWN`; no automatic retry occurs until reconciliation proves a safe retry condition.
+9. **Idempotency capability:** supported provider idempotency is exercised deterministically; unsupported/unknown idempotency never defaults to retry-safe.
+10. **Response captured, persistence fails:** no retry is emitted; if terminal failure cannot be persisted, the durable pre-send attempt remains nonterminal and recovery treats it as unknown pending reconciliation.
+11. **No authority laundering:** caller/provider supplied handling decisions, prior build decisions, prior attempt decisions, or presence of existing prompt bytes cannot make either a live processing gate or durable category permissive.
+12. **Cutoff separation:** historical replay/reconstruction uses the historical artifact cutoff; live invocation uses the attempt/handoff cutoff. Tests fail if either coordinate is substituted for the other.
+13. **Accepted-ADR applicability review:** architecture review must either cite every materially applicable accepted ADR or explicitly record a justified out-of-scope determination; absence of a named ADR cannot be mistaken for having reviewed it.
+14. **Lifecycle/runtime status consistency:** architecture-index tests/checks or deterministic review tooling must distinguish immutable ADPR lifecycle state from later runtime implementation state and reject a known contradiction such as “not started” while canonical runtime evidence is present.
 
-These are permanent regression obligations for the Model Adapter boundary, not review-only prose. A future implementation that cannot encode them as deterministic tests is not ready for provider activation.
+These are permanent regression obligations for the Model Adapter boundary and architecture-maintenance process, not review-only prose. A future implementation that cannot encode items 1-12 as deterministic tests is not ready for provider activation. Items 13-14 must be enforced by deterministic repository review/preflight tooling before future architecture contributions claim canonical consistency; the exact reusable check location may be chosen in the next implementation/governance hardening slice rather than by this architecture-only PR.
 
 ## Rejected Options
 
@@ -624,41 +683,46 @@ Rejected because provider-specific semantics would become the accidental stable 
 | Risk | Category | Likelihood | Impact | Mitigation | Residual uncertainty |
 |---|---|---|---|---|---|
 | Execution-profile/capability mismatch reuses an invalid prompt build | Correctness | Medium | High | Exact compatibility check; fail closed; require new pre-model build | Exact compatibility representation remains implementation design |
-| Request transformation changes model-facing meaning | Correctness | Medium | High | Distinct transient request representation; distinct durable artifact only when authorized; never mutate prompt artifact | Provider SDKs may perform hidden transformations; such SDK modes are inadmissible unless observable |
-| Credentials leak into artifacts/logs/hashes | Security | Low-medium | Critical | Structural exclusion, secret-free request canonicalization, tests scanning all durable/log surfaces | Third-party SDK diagnostics require explicit hardening |
-| Source content is processed after authority becomes unresolved/revoked | Security/governance | Low-medium | High | Resolve strict-known Source Handling at every attempt cutoff immediately before handoff; restrictive successors block future sends | Time-of-check/time-of-use interval must be bounded in implementation design |
+| Request transformation changes model-facing meaning | Correctness | Medium | High | Transport returns deterministic non-secret transformation; Model Adapter owns durable artifact semantics; never mutate prompt artifact | Provider SDKs may perform hidden transformations; such modes are inadmissible unless observable |
+| Credentials leak into artifacts/logs/hashes | Security | Low-medium | Critical | Structural exclusion, secret-free transformation evidence, tests scanning durable/log surfaces | Third-party SDK diagnostics require explicit hardening |
+| Source content is processed after authority becomes unresolved/revoked | Security/governance | Low-medium | High | Atomic attempt-time authority snapshot bound to single-use handoff; new attempt for every retry | Exact transaction/capability implementation must be proven before activation |
+| Handoff is reused or mismatched | Security/correctness | Low | High | Single-use consumption, unique attempt binding, expiry, deterministic rejection tests | Distributed-worker implementation details remain later design |
 | Content-derived request evidence persists when durability is denied | Security/privacy | Low-medium | High | Per-category durability checks; no mandatory hash/content-derived request ID; explicit unavailable state | Exact field-category mapping must be validated before implementation |
-| Raw model response persists prohibited source echoes | Security/privacy | Medium | High | Govern request/response durable categories via Source Handling; fail closed on unresolved disposition | Output-specific category coverage may need design refinement |
+| Duplicate provider billing/execution after uncertain timeout/crash | Operational/cost | Medium | High | Durable pre-send attempt, provider idempotency classification, no blind retry, reconciliation | Some providers may expose no reconciliation API; such attempts can remain unknown |
+| Response captured but canonical persistence fails | Evidence/operational | Low-medium | High | No retry; nonterminal durable attempt becomes unknown; reconcile on recovery; preserve response only if handling and storage permit | Exact response may be irrecoverable after process loss |
+| Raw model response persists prohibited source echoes | Security/privacy | Medium | High | Model Adapter governs response durable categories; fail closed on unresolved disposition | Output-specific category coverage may need design refinement |
 | Adapter transport success is mistaken for valid proposal | Authority | Medium | High | Separate Response Validator; attempt outcome named transport-only; no proposal creation in adapter | Legacy runner semantics may confuse migration unless clearly versioned |
 | Multi-provider fallback sneaks in as implementation convenience | Governance/operational | Medium | Medium-high | V1 explicitly forbids routing/fallback; separate architecture required | Pressure may rise during outages/quota limits |
 | Legacy provider artifacts are retroactively relabeled | Migration | Low | High | Preserve historical schema/identity; no synthetic backfill | Mapping old records to new audit views may remain partial |
 | Remote provider behavior changes despite same model name | Replay | High | Medium-high | Record exact safe provider/model/version/protocol metadata when authorized; distinguish audit from re-invocation | Provider may not expose immutable model revision identifiers |
-| Provider-specific SDK hides wire request bytes | Evidence | Medium | High | Require deterministic observable transient request representation; reject opaque modes/providers | Some provider SDKs may need lower-level HTTP transport |
-| Project-neutral extraction becomes desirable later | Long-term | Medium | Low | Keep consumer contract narrow and transport interface clean; use ADR 0032 admission later | Future consumer semantics unknown |
+| Provider-specific SDK hides wire request bytes | Evidence | Medium | High | Require deterministic observable transient transformation; reject opaque modes/providers | Some provider SDKs may need lower-level HTTP transport |
+| Architecture index becomes stale again | Governance/evidence | Medium | Medium | Explicit lifecycle/runtime distinction plus future deterministic repository check required by conformance case 14 | Generic cross-ADR status inference needs a reusable checker |
 
 ## Open Questions
 
 | Question | Blocking? | Owner | Required evidence or action | Status |
 |---|---|---|---|---|
 | Exact Python module/type names and SQL layout | No | future implementation | Design mechanically under accepted ADR | Deferred |
-| Exact closed attempt reason-code vocabulary | No | future design/implementation | Contract tests before runtime | Deferred |
+| Exact closed attempt/outcome reason-code vocabulary | No | future design/implementation | Contract tests before runtime | Deferred |
 | Which concrete provider should first implement the transport | No | future separately scoped implementation | Operational/provider evaluation after architecture acceptance | Deferred |
 | Whether provider exposes immutable model revision IDs | No for architecture | future provider adapter | Record best available exact safe identity when authorized; mark unknown explicitly | Deferred |
 | Whether response bytes require an output-specific Source Handling category expansion | No for ownership decision; may block response persistence | Source Handling design/implementation | Validate field-category coverage before Model Adapter runtime | Required before implementation if current registry is insufficient |
 | Exact allowed non-content-derived attempt/request-unavailable metadata categories | No for ownership decision; may block implementation | Source Handling design/implementation | Validate field-category registry and durable dispositions before runtime | Required before implementation |
-| Maximum acceptable time-of-check/time-of-use interval for live handling authorization | No for ownership decision; may block implementation | future Model Adapter design | Define bounded handoff/fail-closed semantics before network activation | Required before implementation |
+| Concrete serializable snapshot / handoff persistence mechanism | No for ADR ownership decision; **yes before runtime activation** | future Model Adapter design | Prove atomic Source Handling snapshot-to-handoff and single-use dispatch semantics | Required before implementation |
+| Provider-specific idempotency/correlation/reconciliation mechanics | No for architecture; **yes for each provider before activation** | provider transport implementation | Classify supported/unavailable semantics and prove retry behavior | Required per provider |
+| Generic deterministic accepted-ADR coverage/status-consistency checker | No for Model Adapter architecture; required before future architecture contribution claims rely on the same defect classes | Engineering/Governance hardening | Add reusable repository check/preflight derived from conformance cases 13-14 | Follow-up hardening required |
 | Automatic multi-provider routing | No; explicitly out of V1 | future architecture | New evidence/ADPR if operational need appears | Deferred |
 | Shared project-neutral Model Adapter | No; explicitly not admitted | future ADR 0032 admission process | Two independent consumer contracts | Deferred |
 
-No open question blocks the ownership/boundary decision proposed here. Implementation remains blocked where the table explicitly requires pre-runtime resolution.
+No open question blocks the ownership/boundary decision proposed here. Items explicitly marked required before implementation/provider activation are hard runtime gates, not permissive deferrals.
 
 ## Constitution Review
 
-- **Rule 2 — Evidence Authority:** satisfied by exact build/request/attempt/response lineage when authorized and explicit unavailable states otherwise. Adapter success carries no analytical authority.
-- **Rule 3 — Deterministic Intelligence:** satisfied by keeping deterministic identities, canonicalization, transforms, and replay under Hunter control while explicitly refusing to represent remote model output as deterministic replay.
-- **Rule 4 — Architectural Integrity:** strengthened by separating prompt compilation, transport, routing, response validation, and canonical promotion.
-- **Rule 5 — Single Source of Truth:** Source Handling remains the sole handling authority; Model Adapter owns execution semantics only; Response Validator and domain promotion remain separate owners.
-- **Rule 6 — Explainability:** attempt provenance can explain what governed build/profile/attempt produced a response or failure, with exact request/response evidence only where durability permits and explicit unavailable states otherwise.
+- **Rule 2 — Evidence Authority:** satisfied by exact build/request/attempt/handoff/outcome/response lineage when authorized and explicit unavailable/unknown states otherwise. Adapter success carries no analytical authority.
+- **Rule 3 — Deterministic Intelligence:** satisfied by keeping deterministic identities, canonicalization, transformation, attempt/handoff/outcome records, and replay under Hunter control while refusing to represent remote model output or uncertain delivery as deterministic fact.
+- **Rule 4 — Architectural Integrity:** strengthened by separating prompt compilation, Model Adapter artifact ownership, provider transport, routing, response validation, and canonical promotion.
+- **Rule 5 — Single Source of Truth:** Source Handling remains the sole handling authority; Model Adapter owns execution artifact semantics only; provider transport owns protocol mechanics only; Response Validator and domain promotion remain separate owners.
+- **Rule 6 — Explainability:** attempt provenance can explain the governed build/profile, attempt-time authority snapshot, handoff, delivery certainty, and response/outcome, subject to durable dispositions.
 - **Rule 7 — Long-Term Evolution:** provider-specific transports are replaceable without rewriting canonical pre-model history.
 - **Rule 8 — Governance:** architecture preparation precedes ADR and implementation.
 
@@ -669,9 +733,10 @@ No constitutional conflict is identified.
 - `ARCHITECTURE_DECISION_PREPARATION_GUIDE.md` applies because this change creates a new external-service subsystem boundary and defines persistence/replay/security semantics.
 - ADR 0031 is reaffirmed and extended at its explicitly deferred Model Adapter boundary; no upstream intent/context/prompt ownership is changed.
 - ADR 0032 remains controlling for project-neutral admission. This record deliberately keeps the concrete Model Adapter Hunter-owned.
-- ADR 0033 remains sole Source Handling authority. The Model Adapter independently consumes/rederives but never publishes handling policy/facts. Historical build authority is used for lineage/reconstruction only; every new live attempt resolves applicable/knowable authority at the attempt cutoff.
+- ADR 0033 remains sole Source Handling authority. `ModelHandoffRecord` is execution evidence bound to an exact Source Handling snapshot; it does not publish handling facts/policy or become a second authority.
 - ADR 0020 strict-known semantics are applied to historical execution audit without using historical cutoffs as live authorization.
-- ADR 0009 provider/service/repository separation is preserved.
+- ADR 0009 provider/service/repository separation is preserved, and provider transport is explicitly prohibited from owning canonical durable execution artifacts.
+- ADRs 0025, 0026, and 0028 were reviewed and explicitly determined non-governing for this Model Adapter/provider-attempt boundary; their valuation/evidence-assembly owners and semantics remain unchanged.
 - The deterministic Governance Review / Merge Readiness path is isolated and remains zero-LLM.
 - Human merge approval remains required for any future implementation contribution.
 
@@ -682,55 +747,59 @@ No unresolved governance conflict is identified.
 | Dimension | Rating | Evidence and rationale | Blocking limitation |
 |---|---|---|---|
 | Problem correctness | EXCELLENT | Gap is explicit in Accepted ADR 0031 and observable between current pre-model and provider runtime | None |
-| Scope completeness | GOOD | Ownership, handoff, persistence, replay, security, routing, validation, migration, and non-goals are explicit | Exact runtime schemas deferred intentionally |
-| Canonical consistency | EXCELLENT | ADRs 0031/0032/0033/0020/0009 and Constitution checked directly; live-attempt and historical-cutoff semantics separated | None |
-| Evidence integrity | GOOD | Accepted ADRs and current source are primary evidence; limitations/stale index prose disclosed | No live provider evidence, not required for boundary decision |
-| Assumption discipline | GOOD | Four assumptions isolated with falsification conditions | A-003 requires implementation-time category validation |
+| Scope completeness | EXCELLENT | Ownership, handoff, atomic authorization, durable attempt/outcome, uncertain delivery, persistence, replay, security, routing, validation, migration, and non-goals are explicit | Exact runtime schemas deferred intentionally |
+| Canonical consistency | EXCELLENT | Material accepted ADRs are cited; ADRs 0025/0026/0028 have explicit out-of-scope determinations; lifecycle/runtime index contradiction corrected | Independent audit still required |
+| Evidence integrity | GOOD | Accepted ADRs and current source are primary evidence; limitations and status correction disclosed | No live provider evidence, not required for boundary decision |
+| Assumption discipline | GOOD | Five assumptions isolated with falsification conditions | A-005 must be proven before runtime activation |
 | Option completeness | GOOD | Legacy extension, Hunter-neutral adapter, shared core, gateway, and direct provider options covered | None material identified |
-| Comparative fairness | GOOD | Same correctness/authority/replay/complexity/migration criteria applied | Cost numbers unavailable and not fabricated |
-| Falsifiability | GOOD | Each viable option challenged with current ADR/source counterevidence and boundary cases, including revocation and durability-denied cases | Independent audit still required |
-| Authority and ownership clarity | EXCELLENT | Model Adapter, Source Handling, transport, repository, routing, validator, and promotion boundaries separated | None |
-| Persistence and replay quality | EXCELLENT | Immutable attempt lineage, attempt-time live authority, historical cutoff isolation, category-conditional durable evidence, strict-known audit vs new invocation explicit | Exact schema deferred |
-| Evidence and provenance quality | EXCELLENT | Exact lineage where authorized plus explicit unavailable semantics; no prohibited digest assumed safe | Provider model revision visibility may be limited |
-| Operational quality | GOOD | Outage/timeout/rate/quota/billing/refusal/security/capability outcomes, retry semantics, and live re-authorization addressed | Concrete timeout/retry/TOCTOU values deferred |
-| Implementation and migration impact | GOOD | New V1 families coexist with legacy provider records; no historical rewrite | Detailed migration API deferred |
-| Testability and validation | EXCELLENT | Permanent conformance cases require revocation-between-build/send, revocation-between-retries, durability-denied request/response evidence, no authority laundering, and cutoff separation | Operational live canary belongs later |
-| Maintainability and extensibility | EXCELLENT | Provider transports replaceable; routing/shared core deferred until evidence | None |
-| Risk quality | GOOD | Material security/authority/replay/migration risks include mitigation and residual uncertainty | None blocking |
-| Traceability | GOOD | Issue #287, ADPR-0009, PR #288, planned ADR 0034 identified; later merge/release remain explicitly absent | Independent review not yet complete |
+| Comparative fairness | GOOD | Same correctness/authority/replay/operational/migration criteria applied | Cost numbers unavailable and not fabricated |
+| Falsifiability | EXCELLENT | Revocation, forbidden durability, ownership inversion, atomic handoff, uncertain delivery, idempotency, and persistence-failure boundary cases tested conceptually | Independent audit still required |
+| Authority and ownership clarity | EXCELLENT | Source Handling, Model Adapter, transport, repository, routing, validator, and promotion boundaries separated | None |
+| Persistence and replay quality | EXCELLENT | Durable pre-send attempt, immutable handoff/outcome, strict-known cutoff separation, uncertain-delivery recovery, no blind retry | Exact storage mechanism must be proven before activation |
+| Evidence and provenance quality | EXCELLENT | Exact lineage where authorized plus explicit unavailable/unknown semantics; no prohibited digest assumed safe | Provider reconciliation visibility may be limited |
+| Operational quality | EXCELLENT | Outage/timeout/rate/quota/billing/refusal/security/capability, idempotency, crash, uncertain delivery, and persistence failure addressed | Provider-specific mechanics remain later design |
+| Implementation and migration impact | GOOD | New V1 families coexist with legacy provider records; no historical rewrite; transport cannot own canonical artifacts | Detailed SQL/API layout deferred |
+| Testability and validation | EXCELLENT | Fourteen permanent conformance cases define reusable regression guards, including review defect classes | Architecture-only PR does not itself add runtime tests |
+| Maintainability and extensibility | EXCELLENT | Provider transports replaceable; routing/shared core deferred until evidence; artifact ownership centralized | None |
+| Risk quality | EXCELLENT | Material security/authority/replay/retry/persistence/status risks include mitigation and residual uncertainty | None blocking for ADR readiness |
+| Traceability | GOOD | Issue #287, ADPR-0009, PR #288, planned ADR 0034 identified; later merge/release remain absent | Independent architecture audit not yet complete |
 
-All mandatory quality dimensions are at least `ACCEPTABLE`; Constitution/canonical consistency and Governance are at least `GOOD`. No self-identified blocking architecture question remains.
+All mandatory quality dimensions are at least `ACCEPTABLE`; Constitution/canonical consistency and Governance are at least `GOOD`. No self-identified blocking architecture question remains. Runtime activation remains blocked on the explicitly identified implementation/provider proofs.
 
 ## Architecture Readiness
 
 - Outcome: `READY`
-- Rationale: the architectural problem is validated by accepted ADRs and current runtime shape; material ownership, security, persistence, replay, migration, routing, and validation boundaries are resolved at architecture level; live attempt authorization is separated from historical reconstruction; durability of exact/content-derived evidence is policy-conditional; implementation mechanics are separable and explicitly deferred.
-- Missing evidence: no live provider operational evidence; not required for choosing the ownership/handoff architecture. Concrete provider selection remains a later implementation input.
+- Rationale: the architectural problem is validated by accepted ADRs and current runtime shape; material ownership, security, atomic handoff, persistence, uncertain-delivery/retry, replay, migration, routing, and validation boundaries are resolved at architecture level; implementation mechanisms can now be designed mechanically against fixed semantics.
+- Missing evidence: no live provider operational evidence; not required for choosing ownership/handoff architecture. Each provider must later prove idempotency/reconciliation and transport observability before activation.
 - Unresolved conflicts: none identified.
 
 ## ADR Readiness
 
 - Outcome: `READY_FOR_ADR`
 - Proposed ADR title: **Evidence Intelligence Model Adapter and Provider Attempt Boundary**
-- Proposed ADR scope: bind the consumer-owned Model Adapter ownership, `EvidencePromptArtifact` handoff, distinct provider-request semantics with disposition-conditional durable exact/content-derived evidence, execution profile/attempt/response lineage, attempt-time Source Handling execution and persistence invariants, credential exclusion, historical audit versus re-invocation, routing deferral, Response Validator separation, and legacy migration rules.
+- Proposed ADR scope: bind the consumer-owned Model Adapter ownership, transport-only wire mechanics, disposition-conditional provider-request/response evidence, durable pre-send attempt, atomic Source Handling handoff snapshot, immutable attempt outcome, uncertain-delivery/idempotency/reconciliation rules, credential exclusion, historical audit versus re-invocation, routing deferral, Response Validator separation, and legacy migration rules.
 - Decisions the ADR must fix:
   1. Model Adapter is Hunter Evidence Intelligence owned.
-  2. Contract is provider-neutral with subordinate provider transports.
+  2. Contract is provider-neutral with subordinate provider transports; transport cannot own canonical durable artifacts or Source Handling decisions.
   3. Provider-specific transformed request is distinct from `EvidencePromptArtifact`; durable exact bytes/hash/content-derived request identity exist only when the relevant Source Handling categories permit them, otherwise request evidence is explicitly unavailable.
-  4. Every invocation/retry is an immutable attempt with lineage and its own live Source Handling attempt cutoff.
-  5. Build cutoff is historical lineage/reconstruction only and cannot authorize a later live send; restrictive successors applicable/knowable at an attempt cutoff govern that new operation.
-  6. Request/response durability is independently governed per durable category; processing `ALLOW` does not grant persistence.
-  7. Credentials are structurally excluded.
-  8. Transport success grants no validation or canonical authority.
-  9. Response Validator remains separate.
-  10. Multi-provider routing is deferred.
-  11. Historical reconstruction never means provider re-invocation.
-  12. Legacy provider records retain original identity and are not synthetic-backfilled.
+  4. Every possible invocation has a durable immutable pre-send attempt before network dispatch.
+  5. Every live attempt creates/consumes a single-use handoff bound to one atomic strict-known Source Handling snapshot at the attempt cutoff; build cutoff is lineage/reconstruction only.
+  6. Terminal attempt state is append-only and separate from the immutable pre-send attempt.
+  7. Uncertain provider delivery is a first-class outcome; blind retry is prohibited until idempotency/reconciliation proves retry safety.
+  8. Response-captured persistence failure cannot trigger retry; nonterminal durable attempts recover as unknown pending reconciliation.
+  9. Request/response durability is independently governed per durable category; processing `ALLOW` does not grant persistence.
+  10. Credentials are structurally excluded.
+  11. Transport success grants no validation or canonical authority.
+  12. Response Validator remains separate.
+  13. Multi-provider routing is deferred.
+  14. Historical reconstruction never means provider re-invocation.
+  15. Legacy provider records retain original identity and are not synthetic-backfilled.
 - Matters the ADR must leave open:
   - concrete provider/model choice;
   - exact runtime schemas/SQL/module paths;
-  - retry counts/timeouts/backoff policy;
-  - maximum live authorization TOCTOU interval;
+  - concrete serializable transaction/outbox implementation satisfying the handoff invariant;
+  - retry counts/timeouts/backoff for outcomes already proven retry-safe;
+  - provider-specific idempotency/correlation/reconciliation API mechanics;
   - provider SDK/library choice;
   - exact response validation rules;
   - exact Source Handling field-category mapping for request/response derived metadata;
@@ -739,11 +808,11 @@ All mandatory quality dimensions are at least `ACCEPTABLE`; Constitution/canonic
 
 ## Final Recommendation
 
-Adopt **Option 2: an Evidence Intelligence-owned, provider-neutral Model Adapter contract with provider-specific transport implementations, one explicit versioned execution profile per attempt, and no automatic routing in V1**.
+Adopt **Option 2: an Evidence Intelligence-owned, provider-neutral Model Adapter contract with provider-specific transport implementations, one explicit versioned execution profile per attempt, durable pre-send attempt + atomic Source Handling handoff, and no automatic routing in V1**.
 
-This option is the smallest boundary that actually solves the accepted architecture gap. It preserves ADR 0031 prompt/build identity, keeps ADR 0033 handling authority singular, separates historical build lineage from live attempt authorization, prevents processing permission from laundering prohibited durable hashes/identities, obeys ADR 0032's anti-premature-generalization rule, allows provider substitution without rewriting history, and keeps Response Validator and canonical promotion outside transport authority.
+This option is the smallest boundary that actually solves the accepted architecture gap without pushing canonical artifact ownership into provider-specific code. It preserves ADR 0031 prompt/build identity, keeps ADR 0033 handling authority singular, makes revocation and handoff atomic at a defined strict-known cutoff, prevents processing permission from laundering prohibited durable hashes/identities, makes uncertain provider delivery and retry safety explicit, obeys ADR 0032's anti-premature-generalization rule, allows provider substitution without rewriting history, and keeps Response Validator and canonical promotion outside transport authority.
 
-After independent architecture audit returns an ADR-ready verdict, create proposed ADR 0034 as a separate governed lifecycle contribution. Runtime provider integration remains blocked until ADR 0034 is separately accepted and a dedicated implementation issue freezes the mandatory conformance cases above as deterministic contract tests before concrete provider code.
+After independent architecture audit returns an ADR-ready verdict, create proposed ADR 0034 as a separate governed lifecycle contribution. Runtime provider integration remains blocked until ADR 0034 is separately accepted and a dedicated implementation issue freezes mandatory conformance cases 1-12 as deterministic contract tests before concrete provider code. The recurring architecture-maintenance defect classes in cases 13-14 require a reusable deterministic repository check before future architecture contributions claim canonical consistency.
 
 ## Decision History
 
@@ -751,13 +820,14 @@ After independent architecture audit returns an ADR-ready verdict, create propos
 |---|---|---|---|
 | 2026-08-20 | READY_FOR_REVIEW | Initial ADPR-0009 created from Issue #287 after PR #286 merge; recommendation is Hunter-owned provider-neutral adapter with routing deferred | ChatGPT / repository owner-directed |
 | 2026-08-20 | READY_FOR_REVIEW | P1 review remediation: separated live attempt cutoff from historical build cutoff; made request hashes/content-derived identity durability conditional; added permanent regression/conformance obligations | ChatGPT / repository owner-directed |
+| 2026-08-20 | READY_FOR_REVIEW | CodeRabbit major-review remediation: reviewed accepted ADR 0025/0026/0028 applicability, reconciled index lifecycle/runtime status, centralized durable artifact ownership in Model Adapter, defined atomic handoff, durable pre-send attempts, uncertain-delivery/idempotency/reconciliation semantics, and expanded permanent conformance guards | ChatGPT / repository owner-directed |
 
 ## Traceability
 
 - Epic: not yet created
 - Issue: #287
 - Preparation working document: this ADPR serves as the permanent preparation record; no separate working file created
-- Checklist review: author self-assessment completed against preparation guide and quality standard; Codex P1 review findings on PR #288 remediated; independent architecture audit remains required
+- Checklist review: author self-assessment completed against preparation guide and quality standard; initial Codex P1 findings and subsequent CodeRabbit major findings on PR #288 remediated; independent architecture audit remains required
 - ADPR: `docs/architecture-records/ADPR-0009-evidence-intelligence-model-adapter.md`
 - ADR: proposed ADR 0034, not yet created
 - Implementation plan: not yet created; blocked on ADR acceptance
