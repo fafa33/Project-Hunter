@@ -128,6 +128,14 @@ def test_unknown_mode_fails_closed() -> None:
         hunter_pr_preflight.run_preflight(mode="anything-else")
 
 
+def test_pre_pr_workflow_reads_machine_readable_mode_marker() -> None:
+    text = (ROOT / ".github" / "workflows" / "hunter-pre-pr-preflight.yml").read_text(encoding="utf-8")
+    assert ".hunter-preflight-mode" in text
+    assert "PREFLIGHT_MODE" in text
+    assert "--mode" in text
+    assert "tests-first-red" in text
+
+
 def test_workflows_use_node24_compatible_action_majors() -> None:
     workflow_dir = ROOT / ".github" / "workflows"
     for path in sorted(workflow_dir.glob("*.yml")):
@@ -139,4 +147,5 @@ def test_workflows_use_node24_compatible_action_majors() -> None:
 def test_agent_instructions_document_both_preflight_modes() -> None:
     text = (ROOT / ".github" / "instructions" / "project-hunter.instructions.md").read_text(encoding="utf-8")
     assert "tests-first-red" in text
+    assert ".hunter-preflight-mode" in text
     assert "python scripts/hunter_pr_preflight.py" in text
