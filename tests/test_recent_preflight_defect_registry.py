@@ -33,3 +33,16 @@ def test_agents_must_run_complete_preflight_before_push() -> None:
         text = path.read_text(encoding="utf-8")
         for phrase in required:
             assert phrase in text, (path, phrase)
+
+
+def test_hosted_preflight_evidence_must_match_exact_branch_head() -> None:
+    required = (
+        "run's commit SHA exactly equals the current branch HEAD",
+        "run number",
+        "not exact-head evidence",
+    )
+
+    for path in INSTRUCTION_PATHS:
+        text = path.read_text(encoding="utf-8")
+        for phrase in required:
+            assert phrase in text, (path, phrase)
