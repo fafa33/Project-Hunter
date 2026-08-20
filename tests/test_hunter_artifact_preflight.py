@@ -71,7 +71,7 @@ Highest unresolved severity: A. No blocking materiality.
 
 ## Final Verdict
 
-READY_FOR_ADR
+- `READY_FOR_ADR`
 
 ## Required Corrections or Conditions
 
@@ -85,6 +85,14 @@ None.
 
 - [x] Complete
 """
+
+
+def _without_prior_review_section(text: str) -> str:
+    return text.replace(
+        "## Prior Review Finding Re-Verification\n\n"
+        "- No prior review findings are in scope for this fixture.\n\n",
+        "",
+    )
 
 
 def test_good_audit_passes_without_unnecessary_progression_prose_or_cutoff() -> None:
@@ -150,10 +158,22 @@ def test_full_audit_requires_every_accepted_adr() -> None:
     assert any("Accepted ADR 0002" in error for error in errors)
 
 
-def test_full_audit_accepts_equivalent_adr_accounting_without_fixed_heading() -> None:
+def test_full_audit_rejects_arbitrary_adr_mentions_as_accounting() -> None:
+    text = _good_audit().replace(
+        "- ADR 0002: reviewed; out of scope for this audit.",
+        "The evidence set also mentions ADR 0002, but records no review disposition.",
+    )
+    errors = hunter_artifact_preflight.validate_audit_text(
+        text,
+        accepted_adrs=["0001", "0002"],
+    )
+    assert any("Accepted ADR 0002" in error for error in errors)
+
+
+def test_full_audit_accepts_structured_accounting_under_equivalent_heading() -> None:
     text = _good_audit().replace(
         "## Accepted ADR Coverage",
-        "## Pinned Evidence Inventory",
+        "## Pinned Decision Accounting",
     )
     assert (
         hunter_artifact_preflight.validate_audit_text(
@@ -179,18 +199,71 @@ def test_targeted_audit_does_not_require_repository_wide_adr_accounting() -> Non
     )
 
 
+def test_required_headings_must_be_real_level_two_headings() -> None:
+    text = _good_audit().replace("## Findings Matrix\n", "")
+    text = text.replace(
+        "Full independent architecture audit.",
+        "Full independent architecture audit. The phrase ## Findings Matrix may appear in prose.",
+    )
+    errors = hunter_artifact_preflight.validate_audit_text(
+        text,
+        accepted_adrs=["0001", "0002"],
+    )
+    assert any("Missing mandatory audit heading: ## Findings Matrix" in error for error in errors)
+
+
+def test_final_verdict_requires_a_canonical_declaration_not_a_token_mention() -> None:
+    text = _good_audit().replace(
+        "- `READY_FOR_ADR`",
+        "The audit is not READY_FOR_ADR.",
+    )
+    errors = hunter_artifact_preflight.validate_audit_text(
+        text,
+        accepted_adrs=["0001", "0002"],
+    )
+    assert any("canonical declared audit verdict" in error for error in errors)
+
+
 def test_prior_review_scope_requires_verification_section() -> None:
-    text = _good_audit(
-        scope="Full audit including prior review PR #288 findings.",
-    ).replace(
-        "## Prior Review Finding Re-Verification\n\n" "- No prior review findings are in scope for this fixture.\n\n",
-        "",
+    text = _without_prior_review_section(
+        _good_audit(
+            scope="Full audit including prior review PR #288 findings.",
+        )
     )
     errors = hunter_artifact_preflight.validate_audit_text(
         text,
         accepted_adrs=["0001", "0002"],
     )
     assert any("Prior Review Finding Re-Verification" in error for error in errors)
+
+
+def test_current_pr_reference_alone_does_not_trigger_prior_review_requirement() -> None:
+    text = _without_prior_review_section(
+        _good_audit(
+            audit_type="TARGETED",
+            accepted_adrs=(),
+            scope="Targeted audit of the current PR #293 implementation changes.",
+        )
+    )
+    assert (
+        hunter_artifact_preflight.validate_audit_text(
+            text,
+            accepted_adrs=["0001", "0002"],
+        )
+        == []
+    )
+
+
+def test_prior_review_evidence_must_include_reference_evidence_and_consequence() -> None:
+    text = _good_audit(scope="Full audit including prior review PR #288 findings.").replace(
+        "- No prior review findings are in scope for this fixture.",
+        "- PR288-F01 was checked.",
+    )
+    errors = hunter_artifact_preflight.validate_audit_text(
+        text,
+        accepted_adrs=["0001", "0002"],
+    )
+    assert any("evidence and decision consequence" in error for error in errors)
 
 
 def test_finding_record_class_label_is_rejected_in_favor_of_canonical_severity() -> None:
@@ -222,7 +295,7 @@ def test_canonical_severity_field_is_accepted() -> None:
 def test_conditional_verdict_requires_real_conditions_not_duplicated_gate_prose() -> None:
     text = (
         _good_audit()
-        .replace("READY_FOR_ADR\n", "CONDITIONAL_ADR_READY\n")
+        .replace("- `READY_FOR_ADR`", "- `CONDITIONAL_ADR_READY`")
         .replace(
             "## Required Corrections or Conditions\n\nNone.",
             "## Required Corrections or Conditions\n\nNone",
@@ -236,12 +309,36 @@ def test_conditional_verdict_requires_real_conditions_not_duplicated_gate_prose(
 
 
 def test_blocking_verdict_requires_a_blocks_adr_yes_finding() -> None:
-    text = _good_audit().replace("READY_FOR_ADR\n", "ADPR_REVISION_REQUIRED\n")
+    text = _good_audit().replace("- `READY_FOR_ADR`", "- `ADPR_REVISION_REQUIRED`")
     errors = hunter_artifact_preflight.validate_audit_text(
         text,
         accepted_adrs=["0001", "0002"],
     )
     assert any("Blocks ADR = YES" in error for error in errors)
+
+
+def test_blocks_adr_yes_must_come_from_the_blocks_adr_field_or_column() -> None:
+    text = _good_audit().replace("- `READY_FOR_ADR`", "- `ADPR_REVISION_REQUIRED`").replace(
+        "| F-001 | A | None | None | NO | Evidence |",
+        "| F-001 | C | YES | Consequence | NO | Evidence |",
+    )
+    errors = hunter_artifact_preflight.validate_audit_text(
+        text,
+        accepted_adrs=["0001", "0002"],
+    )
+    assert any("Blocks ADR = YES" in error for error in errors)
+
+    corrected = text.replace(
+        "| F-001 | C | YES | Consequence | NO | Evidence |",
+        "| F-001 | C | Impact | Consequence | YES | Evidence |",
+    )
+    assert (
+        hunter_artifact_preflight.validate_audit_text(
+            corrected,
+            accepted_adrs=["0001", "0002"],
+        )
+        == []
+    )
 
 
 def test_registry_rejects_dropped_understood_defect_class() -> None:
