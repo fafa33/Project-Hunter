@@ -161,9 +161,7 @@ def test_unknown_mode_fails_closed() -> None:
 
 
 def test_pre_pr_workflow_reads_machine_readable_mode_marker() -> None:
-    text = (ROOT / ".github" / "workflows" / "hunter-pre-pr-preflight.yml").read_text(
-        encoding="utf-8"
-    )
+    text = (ROOT / ".github" / "workflows" / "hunter-pre-pr-preflight.yml").read_text(encoding="utf-8")
     assert ".hunter-preflight-mode" in text
     assert "PREFLIGHT_MODE" in text
     assert "--mode" in text
