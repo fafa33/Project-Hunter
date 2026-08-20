@@ -162,7 +162,12 @@ def test_workflows_use_current_node24_action_majors() -> None:
 
 
 def test_agent_instructions_document_both_preflight_modes() -> None:
-    text = (ROOT / ".github" / "instructions" / "project-hunter.instructions.md").read_text(encoding="utf-8")
-    assert "tests-first-red" in text
-    assert ".hunter-preflight-mode" in text
-    assert "python scripts/hunter_pr_preflight.py" in text
+    paths = (
+        ROOT / ".github" / "instructions" / "project-hunter.instructions.md",
+        ROOT / "CLAUDE.md",
+    )
+    for path in paths:
+        text = path.read_text(encoding="utf-8")
+        assert "tests-first-red" in text, path
+        assert ".hunter-preflight-mode" in text, path
+        assert "python scripts/hunter_pr_preflight.py" in text, path
