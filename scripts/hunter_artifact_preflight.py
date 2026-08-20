@@ -58,9 +58,7 @@ ALLOWED_VERDICTS = (
     "ADPR_REVISION_REQUIRED",
     "ARCHITECTURE_NOT_READY",
 )
-PENDING_PLACEHOLDER_RE = re.compile(
-    r"(?im)(?:`PENDING[^`]*`|\|\s*PENDING\s*\||:\s*PENDING\b|\bPENDING\s*[—-])"
-)
+PENDING_PLACEHOLDER_RE = re.compile(r"(?im)(?:`PENDING[^`]*`|\|\s*PENDING\s*\||:\s*PENDING\b|\bPENDING\s*[—-])")
 AUDITOR_RE = re.compile(r"(?im)^-\s*Auditor:\s*(.+?)\s*$")
 REVISION_RE = re.compile(r"(?im)^-\s*Reviewed revision:\s*`?([0-9a-f]{40})`?\s*$")
 CUTOFF_RE = re.compile(r"(?im)^-\s*Evidence cutoff:\s*`?([^`\n]+)`?\s*$")
@@ -117,9 +115,7 @@ def validate_registry(data: dict[str, Any]) -> list[str]:
             continue
 
         defect_id = item["id"]
-        if not isinstance(defect_id, str) or not re.fullmatch(
-            r"[A-Z]+(?:-[A-Z]+)*-\d{3}", defect_id
-        ):
+        if not isinstance(defect_id, str) or not re.fullmatch(r"[A-Z]+(?:-[A-Z]+)*-\d{3}", defect_id):
             errors.append(f"Registry item {index} has invalid id {defect_id!r}.")
         elif defect_id in seen:
             errors.append(f"Duplicate defect id: {defect_id}.")
@@ -138,11 +134,7 @@ def validate_registry(data: dict[str, Any]) -> list[str]:
 
     missing_ids = sorted(REQUIRED_DEFECT_IDS - seen)
     if missing_ids:
-        errors.append(
-            "Registry dropped required understood defect classes: "
-            + ", ".join(missing_ids)
-            + "."
-        )
+        errors.append("Registry dropped required understood defect classes: " + ", ".join(missing_ids) + ".")
     return errors
 
 
@@ -214,19 +206,13 @@ def validate_audit_text(text: str, *, accepted_adrs: list[str]) -> list[str]:
     if not prior:
         errors.append("Audit must contain prior-review finding re-verification evidence.")
     elif not re.search(r"(?i)\b(?:none|finding|PR\s*#\d+)\b", prior):
-        errors.append(
-            "Prior Review Finding Re-Verification must state findings examined or explicitly none."
-        )
+        errors.append("Prior Review Finding Re-Verification must state findings examined or explicitly none.")
 
     if re.search(r"(?im)^-\s*\*\*Severity:\*\*", text):
         errors.append("Finding records must use the canonical `Class` field, not `Severity`.")
 
     final_verdict = _section(text, "## Final Verdict")
-    verdicts = [
-        verdict
-        for verdict in ALLOWED_VERDICTS
-        if re.search(rf"\b{verdict}\b", final_verdict)
-    ]
+    verdicts = [verdict for verdict in ALLOWED_VERDICTS if re.search(rf"\b{verdict}\b", final_verdict)]
     if len(verdicts) != 1:
         errors.append("Final Verdict must select exactly one permitted audit verdict.")
 
@@ -287,9 +273,7 @@ def run_artifact_preflight(paths: list[Path] | None = None) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description=(
-            "Validate the defect registry and changed governed artifacts deterministically."
-        )
+        description=("Validate the defect registry and changed governed artifacts deterministically.")
     )
     parser.add_argument(
         "--all-audits",
