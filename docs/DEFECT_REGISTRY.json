@@ -1,0 +1,126 @@
+{
+  "version": 1,
+  "purpose": "Canonical registry of understood review defect classes and their durable cross-PR guards.",
+  "defects": [
+    {
+      "id": "PRH-001",
+      "class": "import-ordering-regression",
+      "source": "PR #286 hosted preflight",
+      "classification": "systemic",
+      "guard_boundary": "Ruff import sorting",
+      "guard": "ruff check .",
+      "test": "tests/test_hunter_pr_preflight.py::test_normal_quality_gate_order_matches_ci_contract",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-002",
+      "class": "agent-instruction-preflight-drift",
+      "source": "PR #286",
+      "classification": "systemic",
+      "guard_boundary": "agent instruction parity",
+      "guard": "structural test requiring both instruction surfaces to document preflight",
+      "test": "tests/test_hunter_pr_preflight.py::test_agent_instructions_document_both_preflight_modes_and_defect_registry",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-003",
+      "class": "tests-first-marker-not-on-exact-pushed-head",
+      "source": "PR #286 CodeRabbit",
+      "classification": "systemic",
+      "guard_boundary": "exact-head preflight mode selection",
+      "guard": ".hunter-preflight-mode is read from the checked-out branch head",
+      "test": "tests/test_hunter_pr_preflight.py::test_pre_pr_workflow_reads_machine_readable_mode_marker",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-004",
+      "class": "outdated-github-action-major",
+      "source": "PR #286",
+      "classification": "systemic",
+      "guard_boundary": "workflow structural validation",
+      "guard": "checkout@v7 and setup-python@v6 structural test",
+      "test": "tests/test_hunter_pr_preflight.py::test_workflows_use_current_node24_action_majors",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-005",
+      "class": "tests-first-red-accepts-non-test-pytest-exit",
+      "source": "PR #286",
+      "classification": "systemic",
+      "guard_boundary": "tests-first-red exit-code contract",
+      "guard": "only pytest exit 1 is accepted as intentional RED",
+      "test": "tests/test_hunter_pr_preflight.py::test_tests_first_red_rejects_non_test_failure_pytest_exits",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-006",
+      "class": "workflow-scan-omits-yaml-extension",
+      "source": "PR #286",
+      "classification": "systemic",
+      "guard_boundary": "workflow structural validation",
+      "guard": "tests scan both .yml and .yaml",
+      "test": "tests/test_hunter_pr_preflight.py::test_workflows_use_current_node24_action_majors",
+      "status": "guarded"
+    },
+    {
+      "id": "ARCH-AUD-001",
+      "class": "accepted-adr-coverage-incomplete",
+      "source": "PR #288 and PR #290 CodeRabbit",
+      "classification": "systemic",
+      "guard_boundary": "architecture-audit artifact preflight",
+      "guard": "changed audit reports must account for every Accepted ADR",
+      "test": "tests/test_hunter_artifact_preflight.py::test_audit_requires_every_accepted_adr",
+      "status": "guarded"
+    },
+    {
+      "id": "ARCH-AUD-002",
+      "class": "incomplete-audit-artifact-reaches-review",
+      "source": "PR #290 Codex and CodeRabbit",
+      "classification": "systemic",
+      "guard_boundary": "architecture-audit artifact preflight",
+      "guard": "changed audit reports may not contain unresolved PENDING placeholders",
+      "test": "tests/test_hunter_artifact_preflight.py::test_pending_audit_is_rejected",
+      "status": "guarded"
+    },
+    {
+      "id": "ARCH-AUD-003",
+      "class": "audit-evidence-not-immutably-pinned",
+      "source": "PR #290 CodeRabbit",
+      "classification": "systemic",
+      "guard_boundary": "architecture-audit artifact preflight",
+      "guard": "reviewed revision and evidence cutoff are mandatory",
+      "test": "tests/test_hunter_artifact_preflight.py::test_audit_requires_revision_and_cutoff",
+      "status": "guarded"
+    },
+    {
+      "id": "ARCH-AUD-004",
+      "class": "prior-review-findings-not-independently-reverified",
+      "source": "PR #290 CodeRabbit",
+      "classification": "systemic",
+      "guard_boundary": "architecture-audit artifact preflight",
+      "guard": "audit reports must include prior-review finding re-verification evidence",
+      "test": "tests/test_hunter_artifact_preflight.py::test_prior_review_scope_requires_verification_section",
+      "status": "guarded"
+    },
+    {
+      "id": "ARCH-AUD-005",
+      "class": "adr-progression-gate-ambiguous",
+      "source": "PR #290 CodeRabbit",
+      "classification": "systemic",
+      "guard_boundary": "architecture-audit artifact preflight",
+      "guard": "clean-progression, conditional, and blocking verdict semantics are mandatory",
+      "test": "tests/test_hunter_artifact_preflight.py::test_progression_gate_is_explicit",
+      "status": "guarded"
+    },
+    {
+      "id": "ARCH-AUD-006",
+      "class": "finding-classification-terminology-drift",
+      "source": "PR #290 CodeRabbit",
+      "classification": "isolated",
+      "guard_boundary": "architecture-audit artifact preflight",
+      "guard": "audit finding records use Class, never Severity",
+      "test": "tests/test_hunter_artifact_preflight.py::test_severity_label_is_rejected",
+      "status": "guarded"
+    }
+  ]
+}
