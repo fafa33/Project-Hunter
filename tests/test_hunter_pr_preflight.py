@@ -206,3 +206,5 @@ def test_agent_instructions_document_both_preflight_modes_and_defect_registry() 
         assert ".hunter-preflight-mode" in text, path
         assert "python scripts/hunter_pr_preflight.py" in text, path
         assert "docs/DEFECT_REGISTRY.json" in text, path
+        assert "false-positive" in text, path
+        assert "TARGETED" in text, path
