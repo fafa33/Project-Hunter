@@ -158,12 +158,9 @@ def test_adpr_revision_required_accepts_class_c_but_not_class_d() -> None:
     )
     assert _validate(class_c) == []
 
-    class_d = (
-        class_c.replace("- **Severity:** `C`", "- **Severity:** `D`")
-        .replace(
-            "| F-001 | C | Impact | Consequence | YES | Evidence |",
-            "| F-001 | D | Impact | Consequence | YES | Evidence |",
-        )
+    class_d = class_c.replace("- **Severity:** `C`", "- **Severity:** `D`").replace(
+        "| F-001 | C | Impact | Consequence | YES | Evidence |",
+        "| F-001 | D | Impact | Consequence | YES | Evidence |",
     )
     errors = _validate(class_d)
     assert any("Class D finding requires ARCHITECTURE_NOT_READY" in error for error in errors)
@@ -182,12 +179,9 @@ def test_architecture_not_ready_requires_class_d() -> None:
     errors = _validate(class_c)
     assert any("ARCHITECTURE_NOT_READY requires at least one unresolved Class D" in error for error in errors)
 
-    class_d = (
-        class_c.replace("- **Severity:** `C`", "- **Severity:** `D`")
-        .replace(
-            "| F-001 | C | Impact | Consequence | YES | Evidence |",
-            "| F-001 | D | Impact | Consequence | YES | Evidence |",
-        )
+    class_d = class_c.replace("- **Severity:** `C`", "- **Severity:** `D`").replace(
+        "| F-001 | C | Impact | Consequence | YES | Evidence |",
+        "| F-001 | D | Impact | Consequence | YES | Evidence |",
     )
     assert _validate(class_d) == []
 
