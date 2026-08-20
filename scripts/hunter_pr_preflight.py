@@ -7,6 +7,7 @@ from collections.abc import Sequence
 NORMAL_MODE = "normal"
 TESTS_FIRST_RED_MODE = "tests-first-red"
 PREFLIGHT_MODES = (NORMAL_MODE, TESTS_FIRST_RED_MODE)
+PYTEST_TEST_FAILURE_EXIT = 1
 
 NORMAL_QUALITY_GATES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Ruff", ("ruff", "check", ".")),
@@ -60,10 +61,16 @@ def run_preflight(*, mode: str = NORMAL_MODE) -> int:
                 flush=True,
             )
             return 2
+        if completed.returncode != PYTEST_TEST_FAILURE_EXIT:
+            print(
+                f"[Hunter Pre-PR] FAIL: Pytest exited {completed.returncode}; only exit 1 "
+                "(tests failed) is a valid declared RED state.",
+                flush=True,
+            )
+            return completed.returncode
 
         print(
-            f"[Hunter Pre-PR] EXPECTED RED: Pytest exited {completed.returncode}; "
-            "Ruff, Black, and Mypy are clean.",
+            "[Hunter Pre-PR] EXPECTED RED: Pytest exited 1; Ruff, Black, and Mypy are clean.",
             flush=True,
         )
         print("[Hunter Pre-PR] PASS: tests-first RED hygiene contract", flush=True)
@@ -93,7 +100,7 @@ def main() -> int:
         default=NORMAL_MODE,
         help=(
             "normal requires Ruff/Black/Mypy/Pytest green; tests-first-red requires "
-            "Ruff/Black/Mypy green and an intentionally RED Pytest result."
+            "Ruff/Black/Mypy green and Pytest exit 1 from intentionally failing tests."
         ),
     )
     parser.add_argument(
