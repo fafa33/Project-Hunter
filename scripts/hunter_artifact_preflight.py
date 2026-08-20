@@ -421,8 +421,16 @@ def _validate_verdict_consistency(selected_verdict: str | None, matrix: str) -> 
     rows, errors = _finding_matrix_rows(matrix)
     if errors:
         return errors
-    if not rows or selected_verdict is None:
+    if selected_verdict is None:
         return []
+
+    if selected_verdict in {"ADPR_REVISION_REQUIRED", "ARCHITECTURE_NOT_READY"} and not any(
+        blocks_adr == "YES" for _, _, blocks_adr in rows
+    ):
+        errors.append(f"{selected_verdict} requires at least one finding with Blocks ADR = YES.")
+
+    if not rows:
+        return errors
 
     for finding_id, severity, blocks_adr in rows:
         if severity in {"C", "D"} and blocks_adr != "YES":
@@ -537,8 +545,9 @@ def validate_audit_text(text: str, *, accepted_adrs: list[str]) -> list[str]:
         selected_verdict = verdicts[0]
 
     corrections = _section(semantic_text, "## Required Corrections or Conditions")
+    normalized_corrections = _normalize_markdown_scalar(corrections).strip().lower().rstrip(".;:")
     if selected_verdict == "CONDITIONAL_ADR_READY" and (
-        not corrections or corrections.strip().lower() in {"none", "n/a", "not applicable"}
+        not corrections or normalized_corrections in {"none", "n/a", "not applicable"}
     ):
         errors.append("CONDITIONAL_ADR_READY requires explicit mandatory conditions.")
 
