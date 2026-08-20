@@ -91,9 +91,7 @@ def _blocking_record(*, finding_id: str = "F-001", severity: str = "C") -> str:
         ('<textarea name="audit">', "</textarea>"),
     ],
 )
-def test_raw_html_literal_blocks_cannot_impersonate_audit_structure(
-    opening: str, closing: str
-) -> None:
+def test_raw_html_literal_blocks_cannot_impersonate_audit_structure(opening: str, closing: str) -> None:
     errors = _validate(f"{opening}\n{_audit()}\n{closing}\n")
 
     assert any("Missing mandatory audit heading: ## Metadata" in error for error in errors)
@@ -117,19 +115,11 @@ def test_blocking_matrix_row_requires_complete_matching_finding_record() -> None
     )
 
     errors = _validate(text)
-    assert any(
-        "Blocking finding F-001 must have a complete finding record" in error
-        for error in errors
-    )
+    assert any("Blocking finding F-001 must have a complete finding record" in error for error in errors)
 
-    mismatched = text.replace(
-        "No blocking findings.", _blocking_record(finding_id="F-002")
-    )
+    mismatched = text.replace("No blocking findings.", _blocking_record(finding_id="F-002"))
     errors = _validate(mismatched)
-    assert any(
-        "Blocking finding F-001 must have a complete finding record" in error
-        for error in errors
-    )
+    assert any("Blocking finding F-001 must have a complete finding record" in error for error in errors)
 
 
 def test_blocking_record_requires_all_fields_and_matrix_consistency() -> None:
@@ -144,22 +134,15 @@ def test_blocking_record_requires_all_fields_and_matrix_consistency() -> None:
     )
     assert _validate(valid) == []
 
-    incomplete = valid.replace(
-        "- **Required action:** Correct the material defect before progression.\n", ""
-    )
+    incomplete = valid.replace("- **Required action:** Correct the material defect before progression.\n", "")
     errors = _validate(incomplete)
-    assert any(
-        "record is incomplete" in error and "required action" in error
-        for error in errors
-    )
+    assert any("record is incomplete" in error and "required action" in error for error in errors)
 
     severity_mismatch = valid.replace("- **Severity:** `C`", "- **Severity:** `D`")
     errors = _validate(severity_mismatch)
     assert any("severity disagrees" in error for error in errors)
 
-    blocks_mismatch = valid.replace(
-        "- **Blocks ADR:** `YES`", "- **Blocks ADR:** `NO`"
-    )
+    blocks_mismatch = valid.replace("- **Blocks ADR:** `YES`", "- **Blocks ADR:** `NO`")
     errors = _validate(blocks_mismatch)
     assert any("Blocks ADR disagrees" in error for error in errors)
 
@@ -173,9 +156,7 @@ def test_ready_for_adr_rejects_class_b_but_minor_verdict_accepts_it() -> None:
     errors = _validate(class_b)
     assert any("Unresolved Class B finding requires" in error for error in errors)
 
-    minor = class_b.replace(
-        "- `READY_FOR_ADR`", "- `READY_FOR_ADR_WITH_MINOR_FINDINGS`"
-    )
+    minor = class_b.replace("- `READY_FOR_ADR`", "- `READY_FOR_ADR_WITH_MINOR_FINDINGS`")
     assert _validate(minor) == []
 
 
