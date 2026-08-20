@@ -149,12 +149,16 @@ def test_pre_pr_workflow_reads_machine_readable_mode_marker() -> None:
     assert "tests-first-red" in text
 
 
-def test_workflows_use_node24_compatible_action_majors() -> None:
+def test_workflows_use_current_node24_action_majors() -> None:
     workflow_dir = ROOT / ".github" / "workflows"
     for path in sorted(workflow_dir.glob("*.yml")):
         text = path.read_text(encoding="utf-8")
-        assert "actions/checkout@v4" not in text, path
-        assert "actions/setup-python@v5" not in text, path
+        for line in text.splitlines():
+            stripped = line.strip()
+            if "uses: actions/checkout@" in stripped:
+                assert stripped.endswith("actions/checkout@v7"), path
+            if "uses: actions/setup-python@" in stripped:
+                assert stripped.endswith("actions/setup-python@v6"), path
 
 
 def test_agent_instructions_document_both_preflight_modes() -> None:
