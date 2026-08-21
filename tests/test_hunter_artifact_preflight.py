@@ -356,13 +356,10 @@ def test_blocks_adr_yes_must_come_from_the_blocks_adr_field_or_column() -> None:
     )
     assert any("Blocks ADR = YES" in error for error in errors)
 
-    corrected = (
-        text.replace(
-            "| F-001 | C | YES | Consequence | NO | Evidence |",
-            "| F-001 | C | Impact | Consequence | YES | Evidence |",
-        )
-        .replace(_minor_finding_record(), _blocking_finding_record())
-    )
+    corrected = text.replace(
+        "| F-001 | C | YES | Consequence | NO | Evidence |",
+        "| F-001 | C | Impact | Consequence | YES | Evidence |",
+    ).replace(_minor_finding_record(), _blocking_finding_record())
     assert (
         hunter_artifact_preflight.validate_audit_text(
             corrected,
