@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import pytest
-
 import hunter_artifact_preflight
 
 
@@ -91,27 +89,27 @@ def _blocking_record(*, finding_id: str = "F-001", severity: str = "C") -> str:
 """
 
 
-@pytest.mark.parametrize("opening,closing", RAW_HTML_LITERAL_CASES)
-def test_raw_html_literal_blocks_cannot_impersonate_audit_structure(opening: str, closing: str) -> None:
-    errors = _validate(f"{opening}\n{_audit()}\n{closing}\n")
+def test_raw_html_literal_blocks_cannot_impersonate_audit_structure() -> None:
+    for opening, closing in RAW_HTML_LITERAL_CASES:
+        errors = _validate(f"{opening}\n{_audit()}\n{closing}\n")
 
-    assert any("Missing mandatory audit heading: ## Metadata" in error for error in errors)
-    assert any("canonical declared audit verdict" in error for error in errors)
-
-
-@pytest.mark.parametrize("opening,_closing", RAW_HTML_LITERAL_CASES)
-def test_unclosed_raw_html_literal_blocks_mask_to_eof(opening: str, _closing: str) -> None:
-    errors = _validate(f"{opening}\n{_audit()}")
-
-    assert any("Missing mandatory audit heading: ## Metadata" in error for error in errors)
-    assert any("canonical declared audit verdict" in error for error in errors)
+        assert any("Missing mandatory audit heading: ## Metadata" in error for error in errors), opening
+        assert any("canonical declared audit verdict" in error for error in errors), opening
 
 
-@pytest.mark.parametrize("opening,closing", RAW_HTML_LITERAL_CASES)
-def test_raw_html_decoys_do_not_hide_real_rendered_audit(opening: str, closing: str) -> None:
-    decoy = f"{opening}\n{_audit().replace('Jules', 'PENDING')}\n{closing}\n"
+def test_unclosed_raw_html_literal_blocks_mask_to_eof() -> None:
+    for opening, _closing in RAW_HTML_LITERAL_CASES:
+        errors = _validate(f"{opening}\n{_audit()}")
 
-    assert _validate(_audit() + decoy) == []
+        assert any("Missing mandatory audit heading: ## Metadata" in error for error in errors), opening
+        assert any("canonical declared audit verdict" in error for error in errors), opening
+
+
+def test_raw_html_decoys_do_not_hide_real_rendered_audit() -> None:
+    for opening, closing in RAW_HTML_LITERAL_CASES:
+        decoy = f"{opening}\n{_audit().replace('Jules', 'PENDING')}\n{closing}\n"
+
+        assert _validate(_audit() + decoy) == [], opening
 
 
 def test_blocking_matrix_row_requires_complete_matching_finding_record() -> None:
