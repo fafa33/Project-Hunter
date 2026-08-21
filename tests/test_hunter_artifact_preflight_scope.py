@@ -20,6 +20,16 @@ from pathlib import Path
 import hunter_artifact_preflight
 
 IMPLEMENTATION_AUDIT = Path("docs/ARCHITECTURE_AUDITS/v3.5.0-supply-basis-value-capture.md")
+HISTORICAL_IMPLEMENTATION_AUDITS = (
+    "issue-166-valuation-family-blocker-remediation.md",
+    "issue-190-evidence-assembly-authority-gap.md",
+    "v3.5.0-final-main-audit.md",
+    "v3.5.0-final-remediation-audit.md",
+    "v3.5.0-post-merge-final-audit.md",
+    "v3.5.0-remediation-status.md",
+    "v3.5.0-supply-basis-value-capture.md",
+    "v3.5.1-issue-95-post-merge-audit.md",
+)
 
 
 def _readiness_audit(*, governing_protocol: bool = True, final_verdict: bool = True) -> str:
@@ -239,6 +249,9 @@ def test_readiness_audit_without_a_verdict_declaration_remains_governed() -> Non
 
 def test_historical_implementation_audits_remain_outside_readiness_enforcement() -> None:
     directory = hunter_artifact_preflight.ROOT / "docs" / "ARCHITECTURE_AUDITS"
-    for path in sorted(directory.glob("*.md")):
+    paths = [directory / name for name in HISTORICAL_IMPLEMENTATION_AUDITS]
+
+    assert all(path.is_file() for path in paths), "historical implementation-audit corpus changed"
+    for path in paths:
         text = path.read_text(encoding="utf-8")
         assert not hunter_artifact_preflight.is_architecture_readiness_audit(text), path.name
