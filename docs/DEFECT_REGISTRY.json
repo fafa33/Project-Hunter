@@ -68,7 +68,7 @@
       "source": "Issue #291 implementation hosted preflight failures and PR #293 stale-run acceptance on 2026-08-20",
       "classification": "systemic",
       "guard_boundary": "shared full preflight contract plus commit-scoped hosted evidence before review progression",
-      "guard": "agents run the canonical normal preflight before push; hosted Pre-PR executes on branch pushes and GitHub check evidence is commit-scoped, while agent instructions require confirming the run belongs to current HEAD",
+      "guard": "agents run the canonical normal preflight before push and verify hosted evidence belongs to current HEAD",
       "test": "tests/test_recent_preflight_defect_registry.py::test_agents_reference_canonical_preflight_command",
       "status": "guarded"
     },
@@ -78,18 +78,18 @@
       "source": "Issue #291 implementation Mypy failure on 2026-08-20",
       "classification": "isolated",
       "guard_boundary": "full-repository static typing gate",
-      "guard": "Mypy must pass in both normal and tests-first-red preflight before a candidate can progress; nested mutable test fixtures use explicit typing when inference collapses to object",
+      "guard": "Mypy must pass in both normal and tests-first-red preflight",
       "test": "tests/test_hunter_pr_preflight.py::test_normal_quality_gate_order_matches_ci_contract",
       "status": "guarded"
     },
     {
       "id": "PRH-009",
       "class": "guard-overreach-or-canonical-authority-conflict",
-      "source": "Issue #291 pre-PR guard audit and PR #293 CodeRabbit on 2026-08-20",
+      "source": "Issue #291 pre-PR guard audit and PR #293 CodeRabbit/Codex reviews on 2026-08-20",
       "classification": "systemic",
-      "guard_boundary": "artifact-validator conformance to canonical audit protocol and proportional scope",
-      "guard": "artifact guards enforce semantic or structural invariants, scope repository-wide requirements to FULL audits, allow TARGETED work to remain targeted, and accept equivalent canonical wording instead of exact prose",
-      "test": "tests/test_hunter_artifact_preflight.py::test_current_pr_reference_alone_does_not_trigger_prior_review_requirement",
+      "guard_boundary": "artifact-validator conformance to canonical protocol without false-positive merge blockers",
+      "guard": "artifact guards bind checks to the canonical semantic scope, accept equivalent valid formatting, and preserve escaped Markdown delimiters such as \\| inside table cells",
+      "test": "tests/test_hunter_artifact_preflight_semantics.py::test_escaped_pipe_in_matrix_free_text_is_not_a_delimiter",
       "status": "guarded"
     },
     {
@@ -98,18 +98,18 @@
       "source": "Issue #291 pre-PR guard audit and PR #293 CodeRabbit on 2026-08-20",
       "classification": "systemic",
       "guard_boundary": "checkout step that prepares every shared-preflight job plus merge-base resolution",
-      "guard": "each job that runs the shared preflight must use a preceding actions/checkout step with fetch-depth 0; changed-path detection fails closed unless merge-base with origin/main is proven",
+      "guard": "each shared-preflight job uses a preceding full-history checkout and changed-path detection fails closed without a proven origin/main merge-base",
       "test": "tests/test_hunter_pr_preflight.py::test_full_history_must_belong_to_checkout_preceding_preflight",
       "status": "guarded"
     },
     {
       "id": "PRH-011",
       "class": "semantic-invariant-reduced-to-text-presence-proxy",
-      "source": "PR #293 CodeRabbit hostile review, CodeRabbit P1 recurrence, and Codex P1 recurrence on 2026-08-20",
+      "source": "PR #293 CodeRabbit hostile review and Codex recurrence reviews on 2026-08-20",
       "classification": "systemic",
-      "guard_boundary": "rendered-Markdown-aware artifact parsing and workflow validators plus hostile regression fixtures",
-      "guard": "security/governance semantics must be derived from rendered Markdown/workflow structure rather than arbitrary text presence; fenced code blocks, HTML comments, indented code blocks, and raw literal HTML pre/script/style/textarea regions are masked before heading, metadata, ADR, finding, matrix, PENDING, and verdict parsing, including mixed case, attributes, multiline content, and unclosed-to-EOF cases; hostile fixtures prove non-rendered templates and unrelated matching structure cannot satisfy guards",
-      "test": "tests/test_hunter_artifact_preflight_codex_p1_regressions.py::test_raw_html_literal_blocks_cannot_impersonate_audit_structure",
+      "guard_boundary": "rendered-Markdown-aware artifact parsing plus hostile representation fixtures",
+      "guard": "non-rendered fenced/commented/indented/raw-HTML content cannot impersonate audit semantics; raw pre/script/style/textarea blocks are masked including mixed case, attributes, multiline and unclosed-to-EOF forms",
+      "test": "tests/test_hunter_artifact_preflight_semantics.py::test_unclosed_raw_html_literal_blocks_mask_to_eof",
       "status": "guarded"
     },
     {
@@ -118,18 +118,18 @@
       "source": "PR #288, PR #290, and PR #293 CodeRabbit",
       "classification": "systemic",
       "guard_boundary": "architecture-audit artifact preflight",
-      "guard": "FULL audits require a structured per-ADR accounting entry with an explicit review/applicability disposition for every Accepted ADR; arbitrary ADR mentions do not count; TARGETED re-audits are not forced into repository-wide recertification",
+      "guard": "FULL audits require structured per-ADR accounting while TARGETED audits remain proportionally scoped",
       "test": "tests/test_hunter_artifact_preflight.py::test_full_audit_rejects_arbitrary_adr_mentions_as_accounting",
       "status": "guarded"
     },
     {
       "id": "ARCH-AUD-002",
       "class": "incomplete-audit-artifact-reaches-review",
-      "source": "PR #290 Codex and CodeRabbit",
+      "source": "PR #290 Codex/CodeRabbit and PR #293 Codex P1 on 2026-08-20",
       "classification": "systemic",
-      "guard_boundary": "architecture-audit artifact preflight",
-      "guard": "review-ready changed audit reports may not contain unresolved PENDING placeholders and mandatory sections must be real level-two headings",
-      "test": "tests/test_hunter_artifact_preflight.py::test_required_headings_must_be_real_level_two_headings",
+      "guard_boundary": "architecture-audit artifact completeness preflight",
+      "guard": "mandatory real headings cannot be empty where substantive scope/evidence/results/derivation/completion are required, Reviewed artifact identity is mandatory, and unresolved PENDING placeholders are rejected",
+      "test": "tests/test_hunter_artifact_preflight_semantics.py::test_mandatory_substantive_sections_may_not_be_empty",
       "status": "guarded"
     },
     {
@@ -138,7 +138,7 @@
       "source": "PR #290 CodeRabbit",
       "classification": "systemic",
       "guard_boundary": "architecture-audit artifact preflight",
-      "guard": "reviewed revision is mandatory; mutable PR, Issue, or URL evidence also requires a valid offset-aware evidence cutoff",
+      "guard": "reviewed revision is mandatory and mutable PR/Issue/URL evidence requires a valid offset-aware evidence cutoff",
       "test": "tests/test_hunter_artifact_preflight.py::test_mutable_evidence_requires_valid_cutoff",
       "status": "guarded"
     },
@@ -148,38 +148,38 @@
       "source": "PR #290 and PR #293 CodeRabbit",
       "classification": "systemic",
       "guard_boundary": "architecture-audit artifact preflight",
-      "guard": "only explicit prior-review/previous-finding scope triggers re-verification; a current PR reference alone does not; when triggered, the report must identify prior finding references with evidence and decision consequence or explicitly state none exist",
+      "guard": "only explicit prior-review/previous-finding scope triggers re-verification, which then requires references with evidence/consequence or an explicit none declaration",
       "test": "tests/test_hunter_artifact_preflight.py::test_current_pr_reference_alone_does_not_trigger_prior_review_requirement",
       "status": "guarded"
     },
     {
       "id": "ARCH-AUD-005",
       "class": "adr-progression-gate-ambiguous",
-      "source": "PR #290 and PR #293 CodeRabbit plus PR #293 Codex P1 on 2026-08-20",
+      "source": "PR #290 and PR #293 CodeRabbit/Codex reviews on 2026-08-20",
       "classification": "systemic",
-      "guard_boundary": "architecture-audit verdict, severity, and blocking-finding semantics",
-      "guard": "Final Verdict must contain one canonical declared verdict line and be bidirectionally consistent with the highest unresolved Findings Matrix severity: Class A permits READY_FOR_ADR or READY_FOR_ADR_WITH_MINOR_FINDINGS; unresolved Class B rejects READY_FOR_ADR and permits READY_FOR_ADR_WITH_MINOR_FINDINGS or CONDITIONAL_ADR_READY when real mandatory conditions are stated; Class C requires ADPR_REVISION_REQUIRED; Class D requires ARCHITECTURE_NOT_READY; blocking flags must remain consistent with severity",
-      "test": "tests/test_hunter_artifact_preflight_codex_p1_regressions.py::test_ready_for_adr_rejects_class_b_but_minor_verdict_accepts_it",
+      "guard_boundary": "architecture-audit verdict, severity, and blocking semantics",
+      "guard": "one canonical verdict is derived bidirectionally from unresolved severity: A permits ready/minor, B rejects READY_FOR_ADR and permits minor/conditional, C requires ADPR_REVISION_REQUIRED, D requires ARCHITECTURE_NOT_READY",
+      "test": "tests/test_hunter_artifact_preflight_semantics.py::test_ready_for_adr_rejects_class_b_but_minor_verdict_accepts_it",
       "status": "guarded"
     },
     {
       "id": "ARCH-AUD-006",
       "class": "finding-classification-terminology-drift",
-      "source": "PR #290 CodeRabbit, corrected against canonical Architecture Audit Protocol v2.0",
-      "classification": "isolated",
-      "guard_boundary": "architecture-audit artifact preflight",
-      "guard": "finding records use canonical Severity while the Findings Matrix uses Class; the validator must not invert those protocol-owned terms",
-      "test": "tests/test_hunter_artifact_preflight.py::test_finding_record_class_label_is_rejected_in_favor_of_canonical_severity",
+      "source": "PR #290 CodeRabbit and PR #293 Codex P2 on 2026-08-20",
+      "classification": "systemic",
+      "guard_boundary": "finding-record-local terminology validation",
+      "guard": "finding records use canonical Severity A-D and the matrix uses Class; validation is scoped to actual finding records so unrelated Severity prose cannot create a false-positive blocker",
+      "test": "tests/test_hunter_artifact_preflight_semantics.py::test_nonfinding_severity_bullet_does_not_trigger_finding_validation",
       "status": "guarded"
     },
     {
       "id": "ARCH-AUD-007",
-      "class": "blocking-finding-record-incomplete-or-matrix-only",
-      "source": "PR #293 Codex P1 on 2026-08-20",
+      "class": "finding-record-incomplete-or-matrix-only",
+      "source": "PR #293 Codex P1 reviews on 2026-08-20",
       "classification": "systemic",
-      "guard_boundary": "architecture-audit blocking-finding record completeness and matrix cross-validation",
-      "guard": "every Findings Matrix row with Blocks ADR = YES must map by stable Finding ID to a real finding record in ## Findings; all canonical mandatory record fields must be non-empty, record Severity and Blocks ADR must agree with the matrix, and a matrix-only or unsupported blocking claim cannot authorize a blocking verdict",
-      "test": "tests/test_hunter_artifact_preflight_codex_p1_regressions.py::test_blocking_matrix_row_requires_complete_matching_finding_record",
+      "guard_boundary": "all architecture-audit finding records and matrix cross-validation",
+      "guard": "every matrix finding, blocking or nonblocking, maps by stable Finding ID to a complete canonical finding record; record Severity and Blocks ADR must agree with the matrix",
+      "test": "tests/test_hunter_artifact_preflight_semantics.py::test_every_matrix_finding_requires_complete_matching_record",
       "status": "guarded"
     }
   ]

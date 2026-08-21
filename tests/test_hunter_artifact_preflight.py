@@ -6,6 +6,20 @@ from typing import Any
 import hunter_artifact_preflight
 
 
+def _minor_finding_record() -> str:
+    return """### F-001 — Minor fixture finding
+
+- **Evidence:** Direct repository evidence.
+- **Location:** `docs/example.md`, wording boundary.
+- **Category:** Audit clarity.
+- **Severity:** `A`
+- **Decision impact:** No material decision impact.
+- **Consequence if ignored:** Minor auditability debt remains.
+- **Required action:** Track as non-blocking follow-up.
+- **Blocks ADR:** `NO`
+"""
+
+
 def _good_audit(
     *,
     audit_type: str = "FULL",
@@ -53,17 +67,17 @@ def _good_audit(
 
 | Dimension | Result | Evidence and rationale | Finding IDs |
 |---|---|---|---|
-| Problem correctness | PASS | Evidence-backed. | |
+| Problem correctness | PASS | Evidence-backed. | F-001 |
 
 ## Findings
 
-No blocking findings.
+{_minor_finding_record()}
 
 ## Findings Matrix
 
 | Finding | Class | Decision impact | Consequence if ignored | Blocks ADR | Evidence |
 |---|---|---|---|---|---|
-| F-001 | A | None | None | NO | Evidence |
+| F-001 | A | None | Minor auditability debt | NO | Evidence |
 
 ## Verdict Derivation
 
@@ -79,7 +93,7 @@ None.
 
 ## Non-Blocking Follow-Up
 
-None.
+Track F-001 as non-blocking cleanup.
 
 ## Audit Completion Check
 
@@ -120,8 +134,9 @@ def test_good_audit_passes_without_unnecessary_progression_prose_or_cutoff() -> 
 
 def test_pending_audit_is_rejected() -> None:
     text = _good_audit().replace(
-        "No blocking findings.",
-        "`PENDING — auditor must complete findings.`",
+        "## Findings\n\n",
+        "## Findings\n\n`PENDING — auditor must complete findings.`\n\n",
+        1,
     )
     errors = hunter_artifact_preflight.validate_audit_text(
         text,
@@ -281,7 +296,7 @@ def test_prior_review_evidence_must_include_reference_evidence_and_consequence()
 
 def test_finding_record_class_label_is_rejected_in_favor_of_canonical_severity() -> None:
     text = _good_audit().replace(
-        "No blocking findings.",
+        "- **Severity:** `A`",
         "- **Class:** `A`",
     )
     errors = hunter_artifact_preflight.validate_audit_text(
@@ -292,13 +307,9 @@ def test_finding_record_class_label_is_rejected_in_favor_of_canonical_severity()
 
 
 def test_canonical_severity_field_is_accepted() -> None:
-    text = _good_audit().replace(
-        "No blocking findings.",
-        "- **Severity:** `A`",
-    )
     assert (
         hunter_artifact_preflight.validate_audit_text(
-            text,
+            _good_audit(),
             accepted_adrs=["0001", "0002"],
         )
         == []
@@ -335,7 +346,7 @@ def test_blocks_adr_yes_must_come_from_the_blocks_adr_field_or_column() -> None:
         _good_audit()
         .replace("- `READY_FOR_ADR`", "- `ADPR_REVISION_REQUIRED`")
         .replace(
-            "| F-001 | A | None | None | NO | Evidence |",
+            "| F-001 | A | None | Minor auditability debt | NO | Evidence |",
             "| F-001 | C | YES | Consequence | NO | Evidence |",
         )
     )
@@ -345,10 +356,13 @@ def test_blocks_adr_yes_must_come_from_the_blocks_adr_field_or_column() -> None:
     )
     assert any("Blocks ADR = YES" in error for error in errors)
 
-    corrected = text.replace(
-        "| F-001 | C | YES | Consequence | NO | Evidence |",
-        "| F-001 | C | Impact | Consequence | YES | Evidence |",
-    ).replace("No blocking findings.", _blocking_finding_record())
+    corrected = (
+        text.replace(
+            "| F-001 | C | YES | Consequence | NO | Evidence |",
+            "| F-001 | C | Impact | Consequence | YES | Evidence |",
+        )
+        .replace(_minor_finding_record(), _blocking_finding_record())
+    )
     assert (
         hunter_artifact_preflight.validate_audit_text(
             corrected,

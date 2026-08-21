@@ -35,17 +35,26 @@ Full independent architecture audit.
 
 | Dimension | Result | Evidence and rationale | Finding IDs |
 |---|---|---|---|
-| Problem correctness | PASS | Evidence-backed. | |
+| Problem correctness | PASS | Evidence-backed. | F-001 |
 
 ## Findings
 
-No blocking findings.
+### F-001 — Minor fixture finding
+
+- **Evidence:** Direct repository evidence.
+- **Location:** `docs/example.md`, wording boundary.
+- **Category:** Audit clarity.
+- **Severity:** `A`
+- **Decision impact:** No material decision impact.
+- **Consequence if ignored:** Minor auditability debt remains.
+- **Required action:** Track as non-blocking follow-up.
+- **Blocks ADR:** `NO`
 
 ## Findings Matrix
 
 | Finding | Class | Decision impact | Consequence if ignored | Blocks ADR | Evidence |
 |---|---|---|---|---|---|
-| F-001 | A | None | None | NO | Evidence |
+| F-001 | A | None | Minor auditability debt | NO | Evidence |
 
 ## Verdict Derivation
 
@@ -61,7 +70,7 @@ None.
 
 ## Non-Blocking Follow-Up
 
-None.
+Track F-001 as non-blocking cleanup.
 
 ## Audit Completion Check
 

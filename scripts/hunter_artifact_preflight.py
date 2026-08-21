@@ -56,6 +56,13 @@ REQUIRED_AUDIT_HEADINGS = (
     "## Non-Blocking Follow-Up",
     "## Audit Completion Check",
 )
+REQUIRED_NONEMPTY_SECTIONS = (
+    "## Audit Scope",
+    "## Evidence Sources Examined",
+    "## Dimension Results",
+    "## Verdict Derivation",
+    "## Audit Completion Check",
+)
 ALLOWED_VERDICTS = (
     "READY_FOR_ADR",
     "READY_FOR_ADR_WITH_MINOR_FINDINGS",
@@ -64,6 +71,7 @@ ALLOWED_VERDICTS = (
     "ARCHITECTURE_NOT_READY",
 )
 PENDING_PLACEHOLDER_RE = re.compile(r"(?im)(?:`PENDING[^`]*`|\|\s*PENDING\s*\||:\s*PENDING\b|\bPENDING\s*[—-])")
+REVIEWED_ARTIFACT_RE = re.compile(r"(?im)^-\s*Reviewed artifact:\s*(.+?)\s*$")
 AUDITOR_RE = re.compile(r"(?im)^-\s*Auditor:\s*(.+?)\s*$")
 REVISION_RE = re.compile(r"(?im)^-\s*Reviewed revision:\s*`?([0-9a-f]{40})`?\s*$")
 AUDIT_TYPE_RE = re.compile(r"(?im)^-\s*Audit type:\s*`?(FULL|TARGETED)`?\s*$")
@@ -285,7 +293,30 @@ def _markdown_cells(line: str) -> list[str]:
     stripped = line.strip()
     if not stripped.startswith("|"):
         return []
-    return [cell.strip() for cell in stripped.strip("|").split("|")]
+
+    content = stripped[1:]
+    if content.endswith("|"):
+        content = content[:-1]
+
+    cells: list[str] = []
+    current: list[str] = []
+    for char in content:
+        if char == "|":
+            backslashes = 0
+            for previous in reversed(current):
+                if previous != "\\":
+                    break
+                backslashes += 1
+            if backslashes % 2 == 1:
+                current.append(char)
+                continue
+            cells.append("".join(current).strip())
+            current = []
+            continue
+        current.append(char)
+
+    cells.append("".join(current).strip())
+    return cells
 
 
 def _normalized_cell(value: str) -> str:
@@ -365,36 +396,50 @@ def _finding_records(findings: str) -> dict[str, dict[str, str]]:
     return records
 
 
-def _validate_blocking_finding_records(findings: str, matrix: str) -> list[str]:
+def _validate_finding_records(findings: str, matrix: str) -> list[str]:
     rows, matrix_errors = _finding_matrix_rows(matrix)
     if matrix_errors:
         return []
+
     records = _finding_records(findings)
     errors: list[str] = []
+    valid_records: set[str] = set()
 
-    for finding_id, severity, blocks_adr in rows:
-        if blocks_adr != "YES":
-            continue
-        record = records.get(finding_id.upper())
-        if record is None:
-            errors.append(f"Blocking finding {finding_id} must have a complete finding record in ## Findings.")
-            continue
-
+    for finding_id, record in records.items():
         missing = sorted(field for field in REQUIRED_FINDING_FIELDS if not record.get(field, "").strip())
         if missing:
-            errors.append(f"Blocking finding {finding_id} record is incomplete; missing: {', '.join(missing)}.")
+            errors.append(f"Finding {finding_id} record is incomplete; missing: {', '.join(missing)}.")
+            continue
+
+        severity = record["severity"].upper()
+        blocks_adr = record["blocks adr"].upper()
+        if severity not in SEVERITY_ORDER:
+            errors.append(f"Finding {finding_id} Severity must be exactly A, B, C, or D.")
+            continue
+        if blocks_adr not in {"YES", "NO"}:
+            errors.append(f"Finding {finding_id} Blocks ADR must be YES or NO.")
+            continue
+        valid_records.add(finding_id)
+
+    for finding_id, severity, blocks_adr in rows:
+        normalized_id = finding_id.upper()
+        record = records.get(normalized_id)
+        if record is None:
+            errors.append(f"Finding {finding_id} must have a complete finding record in ## Findings.")
+            continue
+        if normalized_id not in valid_records:
             continue
 
         record_severity = record["severity"].upper()
         record_blocks = record["blocks adr"].upper()
         if record_severity != severity:
             errors.append(
-                f"Blocking finding {finding_id} severity disagrees between Findings ({record_severity}) "
+                f"Finding {finding_id} severity disagrees between Findings ({record_severity}) "
                 f"and Findings Matrix ({severity})."
             )
         if record_blocks != blocks_adr:
             errors.append(
-                f"Blocking finding {finding_id} Blocks ADR disagrees between Findings ({record_blocks}) "
+                f"Finding {finding_id} Blocks ADR disagrees between Findings ({record_blocks}) "
                 f"and Findings Matrix ({blocks_adr})."
             )
 
@@ -449,7 +494,8 @@ def _validate_verdict_consistency(selected_verdict: str | None, matrix: str) -> 
         "CONDITIONAL_ADR_READY",
     }:
         errors.append(
-            "Unresolved Class B finding requires READY_FOR_ADR_WITH_MINOR_FINDINGS " "or CONDITIONAL_ADR_READY."
+            "Unresolved Class B finding requires READY_FOR_ADR_WITH_MINOR_FINDINGS "
+            "or CONDITIONAL_ADR_READY."
         )
     elif highest == "A" and selected_verdict not in {
         "READY_FOR_ADR",
@@ -481,19 +527,30 @@ def validate_audit_text(text: str, *, accepted_adrs: list[str]) -> list[str]:
         if not _heading_match(semantic_text, heading):
             errors.append(f"Missing mandatory audit heading: {heading}.")
 
+    for heading in REQUIRED_NONEMPTY_SECTIONS:
+        if _heading_match(semantic_text, heading) and not _section(semantic_text, heading):
+            errors.append(f"Mandatory audit section must not be empty: {heading}.")
+
     if PENDING_PLACEHOLDER_RE.search(semantic_text):
         errors.append("Audit contains unresolved PENDING placeholder content.")
 
-    auditor_match = AUDITOR_RE.search(semantic_text)
+    metadata = _section(semantic_text, "## Metadata")
+    reviewed_artifact_match = REVIEWED_ARTIFACT_RE.search(metadata)
+    if not reviewed_artifact_match or not reviewed_artifact_match.group(1).strip():
+        errors.append("Audit must identify the Reviewed artifact.")
+    elif "pending" in reviewed_artifact_match.group(1).lower():
+        errors.append("Reviewed artifact may not be pending.")
+
+    auditor_match = AUDITOR_RE.search(metadata)
     if not auditor_match or not auditor_match.group(1).strip():
         errors.append("Audit must record an independent auditor identity.")
     elif "pending" in auditor_match.group(1).lower():
         errors.append("Audit auditor identity may not be pending.")
 
-    if not REVISION_RE.search(semantic_text):
+    if not REVISION_RE.search(metadata):
         errors.append("Audit must pin Reviewed revision to an immutable 40-hex commit.")
 
-    audit_type_match = AUDIT_TYPE_RE.search(semantic_text)
+    audit_type_match = AUDIT_TYPE_RE.search(metadata)
     if not audit_type_match:
         errors.append("Audit type must be FULL or TARGETED.")
         audit_type = None
@@ -501,7 +558,7 @@ def validate_audit_text(text: str, *, accepted_adrs: list[str]) -> list[str]:
         audit_type = audit_type_match.group(1)
 
     evidence = _section(semantic_text, "## Evidence Sources Examined")
-    cutoff_match = CUTOFF_RE.search(semantic_text)
+    cutoff_match = CUTOFF_RE.search(metadata)
     if MUTABLE_EVIDENCE_RE.search(evidence):
         if not cutoff_match:
             errors.append("Audit using mutable PR/Issue/URL evidence must record an Evidence cutoff.")
@@ -531,12 +588,9 @@ def validate_audit_text(text: str, *, accepted_adrs: list[str]) -> list[str]:
                 "decision consequence, or explicitly state that none exist."
             )
 
-    if FINDING_CLASS_FIELD_RE.search(semantic_text):
+    findings = _section(semantic_text, "## Findings")
+    if FINDING_CLASS_FIELD_RE.search(findings):
         errors.append("Finding records must use canonical `Severity`; `Class` is reserved for the Findings Matrix.")
-
-    for match in re.finditer(r"(?im)^-\s*\*\*Severity:\*\*\s*`?([^`\n]+)`?\s*$", semantic_text):
-        if not re.fullmatch(r"[A-D]", match.group(1).strip()):
-            errors.append("Finding Severity must be exactly A, B, C, or D.")
 
     verdicts = _selected_verdicts(semantic_text)
     if len(verdicts) != 1:
@@ -552,10 +606,9 @@ def validate_audit_text(text: str, *, accepted_adrs: list[str]) -> list[str]:
     ):
         errors.append("CONDITIONAL_ADR_READY requires explicit mandatory conditions.")
 
-    findings = _section(semantic_text, "## Findings")
     matrix = _section(semantic_text, "## Findings Matrix")
     errors.extend(_validate_verdict_consistency(selected_verdict, matrix))
-    errors.extend(_validate_blocking_finding_records(findings, matrix))
+    errors.extend(_validate_finding_records(findings, matrix))
 
     return errors
 
