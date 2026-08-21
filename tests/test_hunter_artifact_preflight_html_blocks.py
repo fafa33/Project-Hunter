@@ -159,3 +159,65 @@ def test_literal_tag_names_in_rendered_prose_and_tables_are_not_containers() -> 
     )
 
     assert _validate(text) == []
+
+
+def test_type_seven_block_after_an_atx_heading_hides_following_structure() -> None:
+    """A type 7 block may not interrupt a paragraph, but a heading is not a paragraph.
+
+    After an ATX heading the parser is between blocks, so a bare tag on the next
+    line legitimately opens a type 7 HTML block and everything up to the next
+    blank line is raw HTML.
+    """
+    errors = _validate(f"# Decoy\n<x>\n{_packed_audit()}\n")
+
+    assert any("Missing mandatory audit heading: ## Metadata" in error for error in errors), errors
+
+
+def test_type_seven_block_after_a_rendered_level_two_heading_hides_structure() -> None:
+    body = "\n".join(line for line in _good_audit().splitlines() if line.strip())
+    errors = _validate(f"## Some rendered heading\n<custom-tag>\n{body}\n")
+
+    assert any("Missing mandatory audit heading: ## Final Verdict" in error for error in errors), errors
+
+
+def test_type_seven_block_after_a_fenced_block_hides_structure() -> None:
+    errors = _validate(f"```\ncode\n```\n<x>\n{_packed_audit()}\n")
+
+    assert any("Missing mandatory audit heading: ## Metadata" in error for error in errors), errors
+
+
+def test_type_seven_tag_may_not_interrupt_an_active_paragraph() -> None:
+    """`<x>` inside a paragraph is inline HTML, so the paragraph keeps rendering."""
+    text = _good_audit().replace(
+        "Full independent architecture audit.",
+        "Full independent architecture audit\n<x>\ncontinues in the same paragraph.",
+    )
+
+    assert _validate(text) == []
+
+
+def test_inline_type_seven_tag_within_prose_remains_rendered_prose() -> None:
+    text = _good_audit().replace(
+        "Full independent architecture audit.",
+        "Full independent <x>architecture</x> audit.",
+    )
+
+    assert _validate(text) == []
+
+
+def test_blank_line_started_type_seven_block_remains_masked() -> None:
+    errors = _validate(f"Intro paragraph.\n\n<x>\n{_packed_audit()}\n")
+
+    assert any("Missing mandatory audit heading: ## Metadata" in error for error in errors), errors
+
+
+def test_real_rendered_audit_adjacent_to_a_type_seven_decoy_still_passes() -> None:
+    decoy = f"\n<x>\n{_packed_audit().replace('Jules', 'PENDING')}\n"
+
+    assert _validate(_good_audit() + decoy) == []
+
+
+def test_type_seven_tag_inside_a_fence_does_not_corrupt_block_state() -> None:
+    fenced = "\n```html\n<x>\n<custom-tag>\n```\n\nRendered prose resumes here.\n"
+
+    assert _validate(_good_audit() + fenced) == []

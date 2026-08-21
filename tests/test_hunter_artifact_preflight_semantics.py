@@ -657,3 +657,68 @@ def test_duplicate_final_verdict_is_detected_through_legal_indentation() -> None
         text = _good_audit() + f"\n{indent}## Final Verdict\n\n- `ARCHITECTURE_NOT_READY`\n"
         errors = _validate(text)
         assert any("exactly one" in e and "Final Verdict" in e for e in errors), indent
+
+
+def _with_closing_hashes(text: str, suffix: str) -> str:
+    return "\n".join((line + suffix) if line.startswith("## ") else line for line in text.splitlines()) + "\n"
+
+
+def test_atx_heading_without_closing_hashes_is_recognized() -> None:
+    assert _validate(_good_audit()) == []
+
+
+def test_atx_heading_with_a_single_closing_hash_is_the_same_heading() -> None:
+    assert _validate(_with_closing_hashes(_good_audit(), " #")) == []
+
+
+def test_atx_heading_with_a_closing_hash_sequence_is_the_same_heading() -> None:
+    for suffix in (" ##", " ####", " ######"):
+        assert _validate(_with_closing_hashes(_good_audit(), suffix)) == [], suffix
+
+
+def test_closing_hashes_combine_with_legal_leading_indentation() -> None:
+    text = "\n".join(("   " + line + " ###") if line.startswith("## ") else line for line in _good_audit().splitlines())
+
+    assert _validate(text + "\n") == []
+
+
+def test_four_space_indent_with_closing_hashes_is_not_a_rendered_heading() -> None:
+    text = "\n".join(
+        ("    " + line + " ###") if line.startswith("## ") else line for line in _good_audit().splitlines()
+    )
+
+    errors = _validate(text + "\n")
+    assert any("Missing mandatory audit heading: ## Metadata" in error for error in errors), errors
+
+
+def test_unseparated_trailing_hashes_stay_part_of_the_heading_content() -> None:
+    """`## Metadata###` renders as the heading "Metadata###", not "Metadata"."""
+    text = _good_audit().replace("## Metadata", "## Metadata###")
+
+    errors = _validate(text)
+    assert any("Missing mandatory audit heading: ## Metadata" in error for error in errors), errors
+
+
+def test_duplicate_final_verdict_is_detected_across_closing_hash_forms() -> None:
+    text = _good_audit() + "\n## Final Verdict ###\n\n- `ARCHITECTURE_NOT_READY`\n"
+
+    errors = _validate(text)
+    assert any("exactly one" in error and "Final Verdict" in error for error in errors), errors
+
+
+def test_finding_record_heading_accepts_a_closing_hash_sequence() -> None:
+    text = _good_audit().replace(
+        "### F-001 — Non-blocking fixture finding", "### F-001 — Non-blocking fixture finding ###"
+    )
+
+    assert _validate(text) == []
+
+
+def test_headings_with_closing_hashes_inside_nonsemantic_regions_stay_nonsemantic() -> None:
+    decoys = (
+        "\n```markdown\n## Final Verdict ##\n\n- `ARCHITECTURE_NOT_READY`\n```\n",
+        "\n<!--\n## Final Verdict ##\n\n- `ARCHITECTURE_NOT_READY`\n-->\n",
+        "\n    ## Final Verdict ##\n",
+    )
+    for decoy in decoys:
+        assert _validate(_good_audit() + decoy) == [], decoy

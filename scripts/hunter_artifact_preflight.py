@@ -137,6 +137,7 @@ REQUIRED_COMPLETION_ITEMS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("auditor did not recommend or rank options", re.compile(r"(?i)\b(?:recommend|rank)")),
 )
 TASK_LIST_ITEM_RE = re.compile(r"(?m)^[ ]{0,3}[-*+][ \t]+\[(?P<state>[ xX])\][ \t]*(?P<text>[^\n]*)$")
+THEMATIC_BREAK_RE = re.compile(r"^[ ]{0,3}(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,})$")
 HTML_BLOCK_TERMINATORS = {
     1: HTML_BLOCK_TYPE_1_CLOSE_RE,
     2: re.compile(r"-->"),
@@ -149,13 +150,26 @@ HTML_BLOCK_TERMINATORS = {
 # shares this one indent boundary so section identity cannot disagree between
 # helpers.
 ATX_INDENT = r"[ ]{0,3}"
-LEVEL_TWO_HEADING_RE = re.compile(rf"(?m)^{ATX_INDENT}##[ \t]+[^\n]+[ \t]*$")
-SUBHEADING_RE = re.compile(rf"(?m)^{ATX_INDENT}#{{3,6}}[ \t]+[^\n]+[ \t]*$")
-DOCUMENT_TITLE_RE = re.compile(rf"(?m)^{ATX_INDENT}#[ \t]+\S")
-FINDING_HEADING_RE = re.compile(rf"(?im)^{ATX_INDENT}#{{3,6}}[ \t]+(?P<id>F-\d{{3}})\b[^\n]*$")
+# One ATX heading grammar for the whole validator. CommonMark allows up to three
+# leading spaces, requires whitespace between the opening hashes and the
+# content, and permits an optional closing hash sequence that is only decoration
+# when it is separated from the content by whitespace.
+ATX_HEADING_RE = re.compile(rf"^{ATX_INDENT}(?P<hashes>#{{1,6}})(?:[ \t]+(?P<content>.*?))?[ \t]*$")
+ATX_CLOSING_SEQUENCE_RE = re.compile(r"(?:^|[ \t])#+[ \t]*$")
+FINDING_ID_RE = re.compile(r"(?i)^(?P<id>F-\d{3})\b")
 FINDING_FIELD_RE = re.compile(
     r"(?im)^-\s*\*\*(?P<label>Evidence|Location|Category|Severity|Decision impact|Consequence if ignored|Required action|Blocks ADR):\*\*\s*(?P<value>[^\n]*)$"
 )
+CANONICAL_FINDING_FIELD_LABELS = {
+    "evidence": "Evidence",
+    "location": "Location",
+    "category": "Category",
+    "severity": "Severity",
+    "decision impact": "Decision impact",
+    "consequence if ignored": "Consequence if ignored",
+    "required action": "Required action",
+    "blocks adr": "Blocks ADR",
+}
 REQUIRED_FINDING_FIELDS = {
     "evidence",
     "location",
@@ -276,7 +290,7 @@ def _mask_span_preserving_newlines(value: str) -> str:
     return "".join(char if char in "\r\n" else " " for char in value)
 
 
-def _html_block_open_type(body: str, *, previous_line_blank: bool) -> int | None:
+def _html_block_open_type(body: str, *, in_paragraph: bool) -> int | None:
     """Return the CommonMark HTML block type this line opens, if any."""
     if HTML_BLOCK_TYPE_1_OPEN_RE.match(body):
         return 1
@@ -290,9 +304,10 @@ def _html_block_open_type(body: str, *, previous_line_blank: bool) -> int | None
         return 4
     if HTML_BLOCK_TYPE_6_OPEN_RE.match(body):
         return 6
-    # Type 7 cannot interrupt a paragraph, so inline HTML inside rendered prose
-    # never starts a block.
-    if previous_line_blank and HTML_BLOCK_TYPE_7_OPEN_RE.match(body):
+    # Type 7 is the only HTML block that cannot interrupt a paragraph. It may
+    # still begin anywhere the parser is between blocks -- after a blank line,
+    # but equally after a heading, a fence, or another block construct.
+    if not in_paragraph and HTML_BLOCK_TYPE_7_OPEN_RE.match(body):
         return 7
     return None
 
@@ -313,7 +328,10 @@ def _mask_markdown_nonsemantic(text: str) -> str:
     fence_char: str | None = None
     fence_length = 0
     html_block_type: int | None = None
-    previous_line_blank = True
+    # Whether a paragraph is currently open. This is the real CommonMark
+    # boundary for type 7 blocks: a blank line is only one of several ways to
+    # close a paragraph, and a heading or fence closes one just as well.
+    in_paragraph = False
 
     for line in without_comments.splitlines(keepends=True):
         body = line.rstrip("\r\n")
@@ -321,18 +339,17 @@ def _mask_markdown_nonsemantic(text: str) -> str:
         blank = not body.strip()
 
         if html_block_type is not None:
-            if html_block_type in (6, 7):
+            if html_block_type in (6, 7) and blank:
                 # A type 6 or 7 block ends at a blank line, which is not part of
                 # the block itself.
-                if blank:
-                    html_block_type = None
-                    masked.append(line)
-                    previous_line_blank = True
-                    continue
+                html_block_type = None
+                masked.append(line)
+                in_paragraph = False
+                continue
             masked.append(" " * len(body) + ending)
             if html_block_type not in (6, 7) and HTML_BLOCK_TERMINATORS[html_block_type].search(body):
                 html_block_type = None
-            previous_line_blank = blank
+            in_paragraph = False
             continue
 
         if fence_char is not None:
@@ -343,17 +360,17 @@ def _mask_markdown_nonsemantic(text: str) -> str:
                     fence_char = None
                     fence_length = 0
             masked.append(" " * len(body) + ending)
-            previous_line_blank = blank
+            in_paragraph = False
             continue
 
-        opened = _html_block_open_type(body, previous_line_blank=previous_line_blank)
+        opened = _html_block_open_type(body, in_paragraph=in_paragraph)
         if opened is not None:
             masked.append(" " * len(body) + ending)
             terminator = HTML_BLOCK_TERMINATORS.get(opened)
             # Types 1-5 may open and close on the same line.
             if terminator is None or not terminator.search(body):
                 html_block_type = opened
-            previous_line_blank = blank
+            in_paragraph = False
             continue
 
         opening = FENCE_OPEN_RE.fullmatch(body)
@@ -362,29 +379,95 @@ def _mask_markdown_nonsemantic(text: str) -> str:
             fence_char = fence[0]
             fence_length = len(fence)
             masked.append(" " * len(body) + ending)
-            previous_line_blank = blank
+            in_paragraph = False
             continue
 
         if body.startswith("\t") or re.match(r"^ {4,}\S", body):
             masked.append(" " * len(body) + ending)
-            previous_line_blank = blank
+            in_paragraph = False
             continue
 
         masked.append(line)
-        previous_line_blank = blank
+        # A blank line, an ATX heading, and a thematic break each leave the
+        # parser between blocks; anything else non-blank continues a paragraph.
+        if blank or _parse_atx_heading(body) is not None or THEMATIC_BREAK_RE.match(body):
+            in_paragraph = False
+        else:
+            in_paragraph = True
 
     return "".join(masked)
 
 
+def _parse_atx_heading(body: str) -> tuple[int, str] | None:
+    """Parse one line as a CommonMark ATX heading.
+
+    Returns ``(level, rendered_content)`` or ``None``. A closing hash sequence
+    is stripped only when CommonMark treats it as decoration; unseparated
+    trailing hashes such as ``## Metadata###`` stay part of the content, so
+    heading identity matches what actually renders.
+    """
+    match = ATX_HEADING_RE.match(body)
+    if not match:
+        return None
+    content = match.group("content") or ""
+    closing = ATX_CLOSING_SEQUENCE_RE.search(content)
+    if closing:
+        content = content[: closing.start()]
+    return len(match.group("hashes")), content.strip()
+
+
 @cache
-def _named_heading_re(heading: str) -> re.Pattern[str]:
-    """Compile the canonical rendered pattern for one named heading."""
-    return re.compile(rf"(?m)^{ATX_INDENT}{re.escape(heading)}[ \t]*$")
+def _heading_identity(heading: str) -> tuple[int, str]:
+    """Normalize a canonical heading string such as ``## Metadata``."""
+    parsed = _parse_atx_heading(heading)
+    if parsed is None:  # pragma: no cover - canonical constants are well formed
+        raise ValueError(f"not a canonical ATX heading: {heading!r}")
+    return parsed
 
 
-def _heading_match(text: str, heading: str) -> re.Match[str] | None:
+def _heading_spans(text: str) -> list[tuple[int, int, int, str]]:
+    """Every rendered ATX heading as ``(start, end, level, content)``.
+
+    Positions are offsets into ``text`` so section slicing, boundary detection
+    and counting all share one notion of heading identity.
+    """
+    spans: list[tuple[int, int, int, str]] = []
+    offset = 0
+    for line in text.splitlines(keepends=True):
+        body = line.rstrip("\r\n")
+        parsed = _parse_atx_heading(body)
+        if parsed is not None:
+            level, content = parsed
+            spans.append((offset, offset + len(body), level, content))
+        offset += len(line)
+    return spans
+
+
+def _finding_record_headings(text: str) -> list[tuple[int, int, str]]:
+    """Rendered finding-record headings as ``(start, end, FINDING_ID)``."""
+    headings: list[tuple[int, int, str]] = []
+    for start, end, level, content in _heading_spans(text):
+        if level < 3:
+            continue
+        match = FINDING_ID_RE.match(content)
+        if match:
+            headings.append((start, end, match.group("id").upper()))
+    return headings
+
+
+def _named_heading_spans(text: str, heading: str) -> list[tuple[int, int]]:
+    level, content = _heading_identity(heading)
+    return [
+        (start, end)
+        for start, end, span_level, span_content in _heading_spans(text)
+        if span_level == level and span_content == content
+    ]
+
+
+def _heading_match(text: str, heading: str) -> tuple[int, int] | None:
     semantic_text = _mask_markdown_nonsemantic(text)
-    return _named_heading_re(heading).search(semantic_text)
+    spans = _named_heading_spans(semantic_text, heading)
+    return spans[0] if spans else None
 
 
 def _rendered_heading_count(text: str, heading: str) -> int:
@@ -395,24 +478,30 @@ def _rendered_heading_count(text: str, heading: str) -> int:
     identity therefore has to be counted separately from section content.
     """
     semantic_text = _mask_markdown_nonsemantic(text)
-    return len(_named_heading_re(heading).findall(semantic_text))
+    return len(_named_heading_spans(semantic_text, heading))
 
 
 def _section(text: str, heading: str) -> str:
     semantic_text = _mask_markdown_nonsemantic(text)
-    match = _named_heading_re(heading).search(semantic_text)
-    if not match:
+    spans = _named_heading_spans(semantic_text, heading)
+    if not spans:
         return ""
-    remainder = semantic_text[match.end() :]
-    next_heading = LEVEL_TWO_HEADING_RE.search(remainder)
-    if next_heading:
-        remainder = remainder[: next_heading.start()]
-    return remainder.strip()
+    _, end = spans[0]
+    boundary = len(semantic_text)
+    for start, _span_end, level, _content in _heading_spans(semantic_text):
+        if start >= end and level <= 2:
+            boundary = start
+            break
+    return semantic_text[end:boundary].strip()
 
 
 def _direct_section_lines(text: str, heading: str) -> list[str]:
     section = _section(text, heading)
-    direct = SUBHEADING_RE.split(section, maxsplit=1)[0]
+    direct = section
+    for start, _end, level, _content in _heading_spans(section):
+        if level >= 3:
+            direct = section[:start]
+            break
     return [line.strip() for line in direct.splitlines() if line.strip()]
 
 
@@ -492,17 +581,33 @@ def _finding_matrix_rows(matrix: str) -> tuple[list[tuple[str, str, str]], list[
         parsed: list[tuple[str, str, str]] = []
         errors: list[str] = []
 
-        for candidate in rows[index + 1 :]:
+        width = len(row)
+        for offset, candidate in enumerate(rows[index + 1 :], start=1):
             populated = [cell.strip() for cell in candidate if cell.strip()]
-            if populated and all(re.fullmatch(r":?-{3,}:?", cell) for cell in populated):
+            if not populated:
+                # An entirely empty row is the canonical template placeholder,
+                # not a data row making a claim.
                 continue
-            if max(finding_index, class_index, blocks_index) >= len(candidate):
+            if all(re.fullmatch(r":?-{3,}:?", cell) for cell in populated):
+                continue
+
+            # A data row beneath a recognized header may never be skipped: a
+            # skipped row disappears from cardinality, severity, and verdict
+            # derivation alike, which is exactly how a blocker gets hidden.
+            if len(candidate) < width:
+                label = _normalize_markdown_scalar(candidate[finding_index]) if finding_index < len(candidate) else ""
+                identity = repr(label) if label else f"at position {offset}"
+                errors.append(
+                    f"Findings Matrix row {identity} is truncated; the header declares {width} columns "
+                    f"but the row has {len(candidate)}."
+                )
                 continue
 
             finding_id = _normalize_markdown_scalar(candidate[finding_index])
             severity = _normalize_markdown_scalar(candidate[class_index]).upper()
             blocks_adr = _normalize_markdown_scalar(candidate[blocks_index]).upper()
             if not finding_id:
+                errors.append(f"Findings Matrix row at position {offset} must declare a Finding identifier.")
                 continue
             if not re.fullmatch(r"[A-D]", severity):
                 errors.append(f"Findings Matrix row {finding_id!r} must use Class A, B, C, or D.")
@@ -517,25 +622,38 @@ def _finding_matrix_rows(matrix: str) -> tuple[list[tuple[str, str, str]], list[
     return [], ["Findings Matrix must identify Finding, Class, and Blocks ADR columns."]
 
 
-def _finding_records(findings: str) -> list[tuple[str, dict[str, str]]]:
+def _finding_records(findings: str) -> list[tuple[str, list[tuple[str, str]]]]:
     """Return every rendered finding record in document order.
 
-    Records are returned as a list rather than a mapping so that a duplicate
-    Finding ID cannot be silently collapsed by a later record overwriting an
-    earlier one. Cardinality is part of the canonical finding/matrix contract.
+    Both records and their fields are returned as ordered sequences rather than
+    mappings. A mapping would let a duplicate Finding ID, or a duplicate
+    canonical field inside one record, be silently collapsed by last-write-wins
+    and erase the rendered evidence. Cardinality is validated before any
+    normalized mapping is built.
     """
     semantic_findings = _mask_markdown_nonsemantic(findings)
-    headings = list(FINDING_HEADING_RE.finditer(semantic_findings))
-    records: list[tuple[str, dict[str, str]]] = []
-    for index, heading in enumerate(headings):
-        finding_id = heading.group("id").upper()
-        end = headings[index + 1].start() if index + 1 < len(headings) else len(semantic_findings)
-        block = semantic_findings[heading.end() : end]
-        fields: dict[str, str] = {}
-        for field in FINDING_FIELD_RE.finditer(block):
-            fields[field.group("label").lower()] = _normalize_markdown_scalar(field.group("value"))
+    headings = _finding_record_headings(semantic_findings)
+    records: list[tuple[str, list[tuple[str, str]]]] = []
+    for index, (_start, heading_end, finding_id) in enumerate(headings):
+        end = headings[index + 1][0] if index + 1 < len(headings) else len(semantic_findings)
+        block = semantic_findings[heading_end:end]
+        fields = [
+            (field.group("label").lower(), _normalize_markdown_scalar(field.group("value")))
+            for field in FINDING_FIELD_RE.finditer(block)
+        ]
         records.append((finding_id, fields))
     return records
+
+
+def _duplicate_field_errors(finding_id: str, fields: list[tuple[str, str]]) -> list[str]:
+    """Each canonical field may appear exactly once per rendered record."""
+    counts = Counter(label for label, _value in fields)
+    return [
+        f"Finding {finding_id} field {CANONICAL_FINDING_FIELD_LABELS.get(label, label)} must appear "
+        f"exactly once per finding record; found {count}."
+        for label, count in sorted(counts.items())
+        if count > 1
+    ]
 
 
 def _validate_finding_records(findings: str, matrix: str) -> list[str]:
@@ -549,10 +667,21 @@ def _validate_finding_records(findings: str, matrix: str) -> list[str]:
 
     record_counts = Counter(finding_id for finding_id, _ in records)
     row_counts = Counter(finding_id.upper() for finding_id, _, _ in rows)
-    unique_records = dict(records)
 
-    # Cardinality first: a duplicate on either side can otherwise hide or
-    # double-count a real finding during verdict derivation.
+    # Field cardinality is proven before any normalized mapping exists, so a
+    # duplicate canonical field cannot overwrite an earlier value and hide the
+    # state the record actually renders.
+    duplicate_field_ids: set[str] = set()
+    for finding_id, fields in records:
+        field_errors = _duplicate_field_errors(finding_id, fields)
+        if field_errors:
+            duplicate_field_ids.add(finding_id)
+            errors.extend(field_errors)
+
+    unique_records = {finding_id: dict(fields) for finding_id, fields in records}
+
+    # Record and row cardinality next: a duplicate on either side can otherwise
+    # hide or double-count a real finding during verdict derivation.
     for finding_id, count in sorted(record_counts.items()):
         if count > 1:
             errors.append(
@@ -563,6 +692,8 @@ def _validate_finding_records(findings: str, matrix: str) -> list[str]:
             errors.append(f"Finding {finding_id} must appear exactly once in the Findings Matrix; found {count}.")
 
     for finding_id, record in sorted(unique_records.items()):
+        if finding_id in duplicate_field_ids:
+            continue
         missing = sorted(field for field in REQUIRED_FINDING_FIELDS if not record.get(field, "").strip())
         if missing:
             errors.append(f"Finding {finding_id} record is incomplete; missing: {', '.join(missing)}.")
@@ -867,7 +998,8 @@ def is_architecture_readiness_audit(text: str) -> bool:
         return True
     if _selected_verdicts(semantic_text):
         return True
-    return bool(FINDING_HEADING_RE.search(semantic_text) and CANONICAL_SEVERITY_FIELD_RE.search(semantic_text))
+    has_record_heading = bool(_finding_record_headings(semantic_text))
+    return bool(has_record_heading and CANONICAL_SEVERITY_FIELD_RE.search(semantic_text))
 
 
 def _validate_baseline_artifact_integrity(text: str) -> list[str]:
@@ -880,7 +1012,7 @@ def _validate_baseline_artifact_integrity(text: str) -> list[str]:
     semantic_text = _mask_markdown_nonsemantic(text)
     if not semantic_text.strip():
         return ["Governed artifact must contain rendered content."]
-    if not DOCUMENT_TITLE_RE.search(semantic_text):
+    if not any(level == 1 and content for _s, _e, level, content in _heading_spans(semantic_text)):
         return ["Governed artifact must declare a rendered level-one title."]
     return []
 

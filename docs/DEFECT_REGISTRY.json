@@ -105,11 +105,11 @@
     {
       "id": "PRH-011",
       "class": "semantic-invariant-reduced-to-text-presence-proxy",
-      "source": "PR #293 CodeRabbit hostile review and Codex recurrence reviews on 2026-08-20; PR #293 Codex raw-HTML-block and heading-indentation recurrences on 2026-08-21",
+      "source": "PR #293 CodeRabbit hostile review and Codex recurrence reviews on 2026-08-20; PR #293 Codex raw-HTML-block and heading-indentation recurrences on 2026-08-21; PR #293 Codex type-7 block-state and ATX closing-hash recurrences on 2026-08-21",
       "classification": "systemic",
-      "guard_boundary": "single rendered-Markdown structure boundary: CommonMark HTML blocks, fences, indented code, and ATX heading identity",
-      "guard": "semantic audit parsing runs on rendered structure only: all seven CommonMark HTML block types are masked, including block-level containers such as div/section/table, processing instructions, declarations and CDATA, alongside the earlier pre/script/style/textarea literals and HTML comments, while type 7 may not interrupt a paragraph so inline HTML in rendered prose is preserved; the same boundary recognizes ATX headings with CommonMark's legal 0-3 space indentation and rejects 4-space indented code, so neither literal content impersonating structure nor canonically valid equivalent indentation is mishandled",
-      "test": "tests/test_hunter_artifact_preflight_html_blocks.py::test_entire_audit_hidden_in_a_div_block_cannot_satisfy_audit_structure",
+      "guard_boundary": "single rendered-Markdown structure boundary: CommonMark HTML block state including paragraph continuation, fences, indented code, and one shared ATX heading identity parser",
+      "guard": "semantic audit parsing runs on rendered structure only: all seven CommonMark HTML block types are masked, including block-level containers such as div/section/table, processing instructions, declarations and CDATA, alongside the earlier pre/script/style/textarea literals and HTML comments, while type 7 may not interrupt a paragraph so inline HTML in rendered prose is preserved; the same boundary recognizes ATX headings with CommonMark's legal 0-3 space indentation and rejects 4-space indented code, so neither literal content impersonating structure nor canonically valid equivalent indentation is mishandled; HTML block state tracks real paragraph continuation rather than a preceding-blank-line proxy, so a type 7 block correctly begins wherever the parser is between blocks -- after a heading, fence, or thematic break as well as after a blank line -- while still never interrupting an active paragraph; and one _parse_atx_heading() normalizer gives every heading consumer the same identity, accepting CommonMark's optional closing hash sequence as decoration while leaving unseparated trailing hashes such as '## Metadata###' as heading content",
+      "test": "tests/test_hunter_artifact_preflight_html_blocks.py::test_type_seven_block_after_an_atx_heading_hides_following_structure",
       "status": "guarded"
     },
     {
@@ -165,21 +165,21 @@
     {
       "id": "ARCH-AUD-006",
       "class": "finding-classification-terminology-drift",
-      "source": "PR #290 CodeRabbit and PR #293 Codex P2 on 2026-08-20",
+      "source": "PR #290 CodeRabbit and PR #293 Codex P2 on 2026-08-20; PR #293 Codex duplicate-finding-field recurrence on 2026-08-21",
       "classification": "systemic",
-      "guard_boundary": "finding-record-local terminology validation",
-      "guard": "finding records use canonical Severity A-D and the matrix uses Class; validation is scoped to actual finding records so unrelated Severity prose cannot create a false-positive blocker",
-      "test": "tests/test_hunter_artifact_preflight_semantics.py::test_nonfinding_severity_bullet_does_not_trigger_finding_validation",
+      "guard_boundary": "finding-record-local canonical field terminology and cardinality validation",
+      "guard": "finding records use canonical Severity A-D and the matrix uses Class; validation is scoped to actual finding records so unrelated Severity prose cannot create a false-positive blocker; each canonical field may appear exactly once per rendered finding record, validated on an ordered field sequence before any normalized mapping exists, so a duplicate label -- contradictory, identical, or differing only by case -- cannot overwrite an earlier value and erase the state the record actually renders; matrix agreement is evaluated only after field cardinality is proven",
+      "test": "tests/test_hunter_artifact_preflight_cardinality.py::test_duplicate_contradictory_severity_field_is_rejected",
       "status": "guarded"
     },
     {
       "id": "ARCH-AUD-007",
       "class": "finding-record-incomplete-or-matrix-only",
-      "source": "PR #293 Codex P1 reviews on 2026-08-20 and 2026-08-21",
+      "source": "PR #293 Codex P1 reviews on 2026-08-20 and 2026-08-21; PR #293 Codex truncated-matrix-row recurrence on 2026-08-21",
       "classification": "systemic",
       "guard_boundary": "strict one-to-one architecture-audit finding record and matrix cross-validation",
-      "guard": "finding records and Findings Matrix rows are bidirectionally one-to-one by stable Finding ID: every rendered canonical record appears exactly once in the matrix and every matrix row maps to exactly one complete rendered record; duplicate record headings and duplicate matrix rows are rejected on cardinality rather than collapsed by a dict or set, so a rendered blocker cannot be omitted from the matrix and hidden from verdict derivation; record Severity and Blocks ADR must agree with the matrix",
-      "test": "tests/test_hunter_artifact_preflight_semantics.py::test_rendered_class_c_blocker_may_not_be_omitted_from_the_matrix",
+      "guard": "finding records and Findings Matrix rows are bidirectionally one-to-one by stable Finding ID: every rendered canonical record appears exactly once in the matrix and every matrix row maps to exactly one complete rendered record; duplicate record headings and duplicate matrix rows are rejected on cardinality rather than collapsed by a dict or set, so a rendered blocker cannot be omitted from the matrix and hidden from verdict derivation; record Severity and Blocks ADR must agree with the matrix; every candidate data row beneath a recognized Findings Matrix header is either parsed or reported, never silently skipped: a row with fewer cells than the header, or with no Finding identifier, is a deterministic error rather than a discarded row, so a truncated blocker cannot vanish from cardinality, severity, and verdict derivation at once, while blank template placeholder rows and separator rows remain non-data and escaped pipes remain cell content",
+      "test": "tests/test_hunter_artifact_preflight_cardinality.py::test_truncated_row_cannot_escape_cardinality_severity_or_verdict_checks",
       "status": "guarded"
     }
   ]
