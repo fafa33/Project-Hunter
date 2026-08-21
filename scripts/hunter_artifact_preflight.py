@@ -4,6 +4,7 @@ import argparse
 import json
 import re
 import subprocess
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -108,6 +109,23 @@ REQUIRED_FINDING_FIELDS = {
     "blocks adr",
 }
 SEVERITY_ORDER = {"A": 1, "B": 2, "C": 3, "D": 4}
+
+# Canonical architecture-readiness (ADPR) signals.
+#
+# `docs/ARCHITECTURE_AUDIT_PROTOCOL.md` scopes itself, under "Applicability", to
+# independent review of ADPRs, architecture-decision readiness assessments,
+# substantive revisions to architecture preparation records, option-set
+# completeness reviews, and audits required by the Development Governance
+# lifecycle. The same section states that "Implementation reviews remain
+# governed by `docs/AI_REVIEW_PROTOCOL.md`", and "Document Precedence" repeats
+# that AI_REVIEW_PROTOCOL governs implementation review. Repository location is
+# therefore not the governing predicate; the artifact's own readiness claim is.
+GOVERNING_PROTOCOL_RE = re.compile(
+    r"(?im)^-[ \t]*Governing protocol:[ \t]*`?docs/ARCHITECTURE_AUDIT_PROTOCOL\.md`?[ \t]*$"
+)
+CANONICAL_VERDICT_RE = re.compile(r"\b(?:" + "|".join(ALLOWED_VERDICTS) + r")\b")
+CANONICAL_SEVERITY_FIELD_RE = re.compile(r"(?im)^-[ \t]*\*\*Severity:\*\*[ \t]*`?[A-D]`?[ \t]*$")
+READINESS_INSTRUMENT_HEADINGS = ("## Final Verdict", "## Findings Matrix", "## Verdict Derivation")
 
 
 def _run_git(*args: str) -> subprocess.CompletedProcess[str]:
@@ -262,6 +280,17 @@ def _heading_match(text: str, heading: str) -> re.Match[str] | None:
     return re.search(rf"(?m)^{re.escape(heading)}[ \t]*$", semantic_text)
 
 
+def _rendered_heading_count(text: str, heading: str) -> int:
+    """Count real rendered occurrences of one level-two heading.
+
+    `_section()` stops at the next level-two heading, so a validator that reads
+    a section can never observe a second section with the same heading. Section
+    identity therefore has to be counted separately from section content.
+    """
+    semantic_text = _mask_markdown_nonsemantic(text)
+    return len(re.findall(rf"(?m)^{re.escape(heading)}[ \t]*$", semantic_text))
+
+
 def _section(text: str, heading: str) -> str:
     semantic_text = _mask_markdown_nonsemantic(text)
     match = re.search(rf"(?m)^{re.escape(heading)}[ \t]*$", semantic_text)
@@ -381,10 +410,16 @@ def _finding_matrix_rows(matrix: str) -> tuple[list[tuple[str, str, str]], list[
     return [], ["Findings Matrix must identify Finding, Class, and Blocks ADR columns."]
 
 
-def _finding_records(findings: str) -> dict[str, dict[str, str]]:
+def _finding_records(findings: str) -> list[tuple[str, dict[str, str]]]:
+    """Return every rendered finding record in document order.
+
+    Records are returned as a list rather than a mapping so that a duplicate
+    Finding ID cannot be silently collapsed by a later record overwriting an
+    earlier one. Cardinality is part of the canonical finding/matrix contract.
+    """
     semantic_findings = _mask_markdown_nonsemantic(findings)
     headings = list(FINDING_HEADING_RE.finditer(semantic_findings))
-    records: dict[str, dict[str, str]] = {}
+    records: list[tuple[str, dict[str, str]]] = []
     for index, heading in enumerate(headings):
         finding_id = heading.group("id").upper()
         end = headings[index + 1].start() if index + 1 < len(headings) else len(semantic_findings)
@@ -392,7 +427,7 @@ def _finding_records(findings: str) -> dict[str, dict[str, str]]:
         fields: dict[str, str] = {}
         for field in FINDING_FIELD_RE.finditer(block):
             fields[field.group("label").lower()] = _normalize_markdown_scalar(field.group("value"))
-        records[finding_id] = fields
+        records.append((finding_id, fields))
     return records
 
 
@@ -405,7 +440,22 @@ def _validate_finding_records(findings: str, matrix: str) -> list[str]:
     errors: list[str] = []
     valid_records: set[str] = set()
 
-    for finding_id, record in records.items():
+    record_counts = Counter(finding_id for finding_id, _ in records)
+    row_counts = Counter(finding_id.upper() for finding_id, _, _ in rows)
+    unique_records = dict(records)
+
+    # Cardinality first: a duplicate on either side can otherwise hide or
+    # double-count a real finding during verdict derivation.
+    for finding_id, count in sorted(record_counts.items()):
+        if count > 1:
+            errors.append(
+                f"Finding {finding_id} must have exactly one complete finding record in ## Findings; found {count}."
+            )
+    for finding_id, count in sorted(row_counts.items()):
+        if count > 1:
+            errors.append(f"Finding {finding_id} must appear exactly once in the Findings Matrix; found {count}.")
+
+    for finding_id, record in sorted(unique_records.items()):
         missing = sorted(field for field in REQUIRED_FINDING_FIELDS if not record.get(field, "").strip())
         if missing:
             errors.append(f"Finding {finding_id} record is incomplete; missing: {', '.join(missing)}.")
@@ -421,9 +471,17 @@ def _validate_finding_records(findings: str, matrix: str) -> list[str]:
             continue
         valid_records.add(finding_id)
 
+    # A rendered finding record that never reaches the matrix would be invisible
+    # to verdict derivation, which reads matrix rows only.
+    for finding_id in sorted(record_counts):
+        if finding_id not in row_counts:
+            errors.append(
+                f"Finding {finding_id} has a rendered finding record but is missing from the Findings Matrix."
+            )
+
     for finding_id, severity, blocks_adr in rows:
         normalized_id = finding_id.upper()
-        record = records.get(normalized_id)
+        record = unique_records.get(normalized_id)
         if record is None:
             errors.append(f"Finding {finding_id} must have a complete finding record in ## Findings.")
             continue
@@ -591,8 +649,15 @@ def validate_audit_text(text: str, *, accepted_adrs: list[str]) -> list[str]:
     if FINDING_CLASS_FIELD_RE.search(findings):
         errors.append("Finding records must use canonical `Severity`; `Class` is reserved for the Findings Matrix.")
 
+    final_verdict_sections = _rendered_heading_count(semantic_text, "## Final Verdict")
     verdicts = _selected_verdicts(semantic_text)
-    if len(verdicts) != 1:
+    selected_verdict: str | None
+    if final_verdict_sections > 1:
+        errors.append(
+            f"Audit must contain exactly one rendered ## Final Verdict section; found {final_verdict_sections}."
+        )
+        selected_verdict = None
+    elif len(verdicts) != 1:
         errors.append("Final Verdict must contain exactly one canonical declared audit verdict line.")
         selected_verdict = None
     else:
@@ -612,6 +677,66 @@ def validate_audit_text(text: str, *, accepted_adrs: list[str]) -> list[str]:
     return errors
 
 
+def is_architecture_readiness_audit(text: str) -> bool:
+    """Report whether an artifact is governed by ARCHITECTURE_AUDIT_PROTOCOL.md.
+
+    The predicate is a disjunction over independent canonical readiness
+    instruments, evaluated on rendered content only:
+
+    1. the template's `Governing protocol` declaration
+       (`docs/ARCHITECTURE_AUDIT_TEMPLATE.md`, bound by the protocol's
+       "Standard Audit Template" section);
+    2. a rendered canonical readiness instrument heading -- Final Verdict,
+       Findings Matrix, or Verdict Derivation -- each required by the protocol's
+       "Audit Completion Requirements";
+    3. a rendered canonical verdict from the protocol's "Verdicts" section;
+    4. a canonical finding record (`F-NNN` heading plus an A-D `Severity`
+       field) as defined by "Required Finding Record" and "Severity Classes".
+
+    Being a disjunction is what makes it fail-safe rather than an opt-in flag.
+    Deleting any single discriminator -- most obviously the `Governing protocol`
+    metadata line -- does not remove the artifact from governance, because the
+    remaining instruments still evidence a readiness claim. To escape the
+    validator an artifact must abandon every instrument through which the
+    protocol permits readiness to be established *or* blocked: the protocol
+    states that "An audit without this matrix is incomplete and cannot establish
+    readiness or block readiness". An artifact with no verdict, no matrix, no
+    verdict derivation, and no canonical finding records asserts no readiness
+    outcome at all, which is precisely the out-of-scope case the protocol
+    assigns to `docs/AI_REVIEW_PROTOCOL.md`.
+    """
+    semantic_text = _mask_markdown_nonsemantic(text)
+    if GOVERNING_PROTOCOL_RE.search(semantic_text):
+        return True
+    if any(_heading_match(semantic_text, heading) for heading in READINESS_INSTRUMENT_HEADINGS):
+        return True
+    if CANONICAL_VERDICT_RE.search(semantic_text):
+        return True
+    return bool(FINDING_HEADING_RE.search(semantic_text) and CANONICAL_SEVERITY_FIELD_RE.search(semantic_text))
+
+
+def _validate_baseline_artifact_integrity(text: str) -> list[str]:
+    """Protocol-independent integrity floor for every governed audit artifact.
+
+    Not being ADPR-governed does not mean unvalidated. This keeps the checks that
+    hold for any governed artifact regardless of which review protocol applies,
+    without importing architecture-readiness ceremony.
+    """
+    semantic_text = _mask_markdown_nonsemantic(text)
+    if not semantic_text.strip():
+        return ["Governed artifact must contain rendered content."]
+    if not re.search(r"(?m)^#[ \t]+\S", semantic_text):
+        return ["Governed artifact must declare a rendered level-one title."]
+    return []
+
+
+def validate_governed_artifact_text(text: str, *, accepted_adrs: list[str]) -> list[str]:
+    """Validate one governed artifact under the protocol that actually governs it."""
+    if is_architecture_readiness_audit(text):
+        return validate_audit_text(text, accepted_adrs=accepted_adrs)
+    return _validate_baseline_artifact_integrity(text)
+
+
 def validate_changed_artifacts(paths: list[Path]) -> list[str]:
     errors: list[str] = []
     accepted = accepted_adr_ids(ADR_INDEX_PATH.read_text(encoding="utf-8"))
@@ -622,7 +747,7 @@ def validate_changed_artifacts(paths: list[Path]) -> list[str]:
         full_path = ROOT / relative
         if not full_path.exists():
             continue
-        for error in validate_audit_text(
+        for error in validate_governed_artifact_text(
             full_path.read_text(encoding="utf-8"),
             accepted_adrs=accepted,
         ):

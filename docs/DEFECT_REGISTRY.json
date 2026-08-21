@@ -85,11 +85,11 @@
     {
       "id": "PRH-009",
       "class": "guard-overreach-or-canonical-authority-conflict",
-      "source": "Issue #291 pre-PR guard audit and PR #293 CodeRabbit/Codex reviews on 2026-08-20",
+      "source": "Issue #291 pre-PR guard audit and PR #293 CodeRabbit/Codex reviews on 2026-08-20; PR #293 Codex P2 ADPR validator overreach on 2026-08-21",
       "classification": "systemic",
       "guard_boundary": "artifact-validator conformance to canonical protocol without false-positive merge blockers",
-      "guard": "artifact guards bind checks to the canonical semantic scope, accept equivalent valid formatting, and preserve escaped Markdown delimiters such as \\| inside table cells",
-      "test": "tests/test_hunter_artifact_preflight_semantics.py::test_escaped_pipe_in_matrix_free_text_is_not_a_delimiter",
+      "guard": "artifact guards bind checks to the canonical semantic scope, accept equivalent valid formatting, and preserve escaped Markdown delimiters such as \\| inside table cells; the architecture-readiness (ADPR) validator is scoped by the artifact's own canonical readiness claim rather than by repository path, because ARCHITECTURE_AUDIT_PROTOCOL.md limits its applicability to ADPR/readiness review and assigns implementation review to AI_REVIEW_PROTOCOL.md; the predicate is a disjunction over independent canonical readiness instruments (Governing protocol declaration, Final Verdict / Findings Matrix / Verdict Derivation headings, canonical verdict, canonical A-D finding record) so deleting one discriminator cannot evade validation, while non-readiness governed artifacts still receive protocol-independent baseline integrity validation",
+      "test": "tests/test_hunter_artifact_preflight_scope.py::test_malformed_readiness_audit_cannot_escape_by_deleting_the_protocol_declaration",
       "status": "guarded"
     },
     {
@@ -155,11 +155,11 @@
     {
       "id": "ARCH-AUD-005",
       "class": "adr-progression-gate-ambiguous",
-      "source": "PR #290 and PR #293 CodeRabbit/Codex reviews on 2026-08-20",
+      "source": "PR #290 and PR #293 CodeRabbit/Codex reviews on 2026-08-20; PR #293 Codex P1 duplicate-verdict recurrence on 2026-08-21",
       "classification": "systemic",
-      "guard_boundary": "architecture-audit verdict, severity, and blocking semantics",
-      "guard": "one canonical verdict is derived bidirectionally from unresolved severity: A permits ready/minor, B rejects READY_FOR_ADR and permits minor/conditional, C requires ADPR_REVISION_REQUIRED, D requires ARCHITECTURE_NOT_READY",
-      "test": "tests/test_hunter_artifact_preflight_semantics.py::test_ready_for_adr_rejects_class_b_but_minor_verdict_accepts_it",
+      "guard_boundary": "architecture-audit verdict section identity plus verdict, severity, and blocking semantics",
+      "guard": "one canonical verdict is derived bidirectionally from unresolved severity: A permits ready/minor, B rejects READY_FOR_ADR and permits minor/conditional, C requires ADPR_REVISION_REQUIRED, D requires ARCHITECTURE_NOT_READY; verdict section identity is counted independently of section content, so exactly one rendered level-two Final Verdict section may exist and a second identical or conflicting section cannot be ignored by section parsing that stops at the next heading; duplicate-looking verdict headings inside fenced, indented, commented, or raw-HTML literal regions do not count",
+      "test": "tests/test_hunter_artifact_preflight_semantics.py::test_duplicate_conflicting_final_verdict_sections_are_rejected",
       "status": "guarded"
     },
     {
@@ -175,11 +175,11 @@
     {
       "id": "ARCH-AUD-007",
       "class": "finding-record-incomplete-or-matrix-only",
-      "source": "PR #293 Codex P1 reviews on 2026-08-20",
+      "source": "PR #293 Codex P1 reviews on 2026-08-20 and 2026-08-21",
       "classification": "systemic",
-      "guard_boundary": "all architecture-audit finding records and matrix cross-validation",
-      "guard": "every matrix finding, blocking or nonblocking, maps by stable Finding ID to a complete canonical finding record; record Severity and Blocks ADR must agree with the matrix",
-      "test": "tests/test_hunter_artifact_preflight_semantics.py::test_every_matrix_finding_requires_complete_matching_record",
+      "guard_boundary": "strict one-to-one architecture-audit finding record and matrix cross-validation",
+      "guard": "finding records and Findings Matrix rows are bidirectionally one-to-one by stable Finding ID: every rendered canonical record appears exactly once in the matrix and every matrix row maps to exactly one complete rendered record; duplicate record headings and duplicate matrix rows are rejected on cardinality rather than collapsed by a dict or set, so a rendered blocker cannot be omitted from the matrix and hidden from verdict derivation; record Severity and Blocks ADR must agree with the matrix",
+      "test": "tests/test_hunter_artifact_preflight_semantics.py::test_rendered_class_c_blocker_may_not_be_omitted_from_the_matrix",
       "status": "guarded"
     }
   ]

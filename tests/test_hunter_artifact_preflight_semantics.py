@@ -350,3 +350,150 @@ def test_nonfinding_severity_bullet_does_not_trigger_finding_validation() -> Non
         "Track F-001 as non-blocking cleanup.\n\n- **Severity:** High",
     )
     assert _validate(text) == []
+
+
+def _with_finding_id(record: str, finding_id: str) -> str:
+    return record.replace("F-001", finding_id)
+
+
+def _add_finding_record(text: str, record: str) -> str:
+    return text.replace(
+        _nonblocking_finding_record(),
+        f"{_nonblocking_finding_record()}\n{record}",
+    )
+
+
+def _add_matrix_row(text: str, row: str) -> str:
+    anchor = "| F-001 | A | None | Minor auditability debt | NO | Evidence |"
+    return text.replace(anchor, f"{anchor}\n{row}")
+
+
+def test_rendered_class_c_blocker_may_not_be_omitted_from_the_matrix() -> None:
+    text = _add_finding_record(_good_audit(), _with_finding_id(_blocking_record("C"), "F-002"))
+
+    errors = _validate(text)
+    assert any("F-002" in error and "Findings Matrix" in error for error in errors), errors
+
+
+def test_rendered_class_d_blocker_may_not_be_omitted_from_the_matrix() -> None:
+    text = _add_finding_record(_good_audit(), _with_finding_id(_blocking_record("D"), "F-002"))
+
+    errors = _validate(text)
+    assert any("F-002" in error and "Findings Matrix" in error for error in errors), errors
+
+
+def test_duplicate_matrix_rows_for_one_finding_id_are_rejected() -> None:
+    text = _add_matrix_row(_good_audit(), "| F-001 | A | None | Minor auditability debt | NO | Evidence |")
+
+    errors = _validate(text)
+    assert any("F-001" in error and "exactly once in the Findings Matrix" in error for error in errors), errors
+
+
+def test_duplicate_rendered_finding_records_for_one_finding_id_are_rejected() -> None:
+    text = _add_finding_record(_good_audit(), _nonblocking_finding_record())
+
+    errors = _validate(text)
+    assert any("F-001" in error and "exactly one complete finding record" in error for error in errors), errors
+
+
+def test_exact_one_to_one_finding_and_matrix_mapping_passes() -> None:
+    text = _add_matrix_row(
+        _add_finding_record(
+            _good_audit().replace("- `READY_FOR_ADR`", "- `READY_FOR_ADR_WITH_MINOR_FINDINGS`"),
+            _with_finding_id(_nonblocking_finding_record("B"), "F-002"),
+        ),
+        "| F-002 | B | Quality | Reduced auditability | NO | Evidence |",
+    )
+
+    assert _validate(text) == []
+
+
+def test_matrix_only_finding_without_a_rendered_record_is_still_rejected() -> None:
+    text = _add_matrix_row(_good_audit(), "| F-002 | A | None | Minor auditability debt | NO | Evidence |")
+
+    errors = _validate(text)
+    assert any("F-002" in error and "complete finding record" in error for error in errors), errors
+
+
+def test_duplicate_identical_final_verdict_sections_are_rejected() -> None:
+    text = _good_audit() + "\n## Final Verdict\n\n- `READY_FOR_ADR`\n"
+
+    errors = _validate(text)
+    assert any("exactly one" in error and "Final Verdict" in error for error in errors), errors
+
+
+def test_duplicate_conflicting_final_verdict_sections_are_rejected() -> None:
+    text = _good_audit() + "\n## Final Verdict\n\n- `ADPR_REVISION_REQUIRED`\n"
+
+    errors = _validate(text)
+    assert any("exactly one" in error and "Final Verdict" in error for error in errors), errors
+
+
+def test_fenced_duplicate_final_verdict_does_not_count_as_a_second_section() -> None:
+    fenced = "\n```markdown\n## Final Verdict\n\n- `ARCHITECTURE_NOT_READY`\n```\n"
+
+    assert _validate(_good_audit() + fenced) == []
+
+
+def test_nonsemantic_duplicate_final_verdict_regions_do_not_count_as_second_sections() -> None:
+    decoys = (
+        "\n<!--\n## Final Verdict\n\n- `ARCHITECTURE_NOT_READY`\n-->\n",
+        "\n<pre>\n## Final Verdict\n\n- `ARCHITECTURE_NOT_READY`\n</pre>\n",
+        '\n<textarea name="audit">\n## Final Verdict\n\n- `ADPR_REVISION_REQUIRED`\n</textarea>\n',
+        "\n    ## Final Verdict\n\n    - `ARCHITECTURE_NOT_READY`\n",
+    )
+    for decoy in decoys:
+        assert _validate(_good_audit() + decoy) == [], decoy
+
+
+def test_exactly_one_rendered_final_verdict_section_passes() -> None:
+    assert _validate(_good_audit()) == []
+
+
+def test_finding_id_case_variation_cannot_smuggle_a_duplicate_matrix_row() -> None:
+    text = _add_matrix_row(_good_audit(), "| f-001 | A | None | Minor auditability debt | NO | Evidence |")
+
+    errors = _validate(text)
+    assert any("F-001" in error and "exactly once in the Findings Matrix" in error for error in errors), errors
+
+
+def test_finding_id_case_variation_cannot_smuggle_a_duplicate_record() -> None:
+    text = _add_finding_record(_good_audit(), _nonblocking_finding_record().replace("F-001", "f-001"))
+
+    errors = _validate(text)
+    assert any("F-001" in error and "exactly one complete finding record" in error for error in errors), errors
+
+
+def test_finding_id_case_variation_still_matches_across_findings_and_matrix() -> None:
+    text = _good_audit().replace(
+        "| F-001 | A | None | Minor auditability debt | NO | Evidence |",
+        "| f-001 | A | None | Minor auditability debt | NO | Evidence |",
+    )
+
+    assert _validate(text) == []
+
+
+def test_nonsemantic_finding_records_do_not_create_phantom_matrix_omissions() -> None:
+    decoys = (
+        "\n```markdown\n### F-777 — Fenced example finding\n\n- **Severity:** `D`\n- **Blocks ADR:** `YES`\n```\n",
+        "\n<!--\n### F-778 — Commented example finding\n\n- **Severity:** `C`\n-->\n",
+    )
+    for decoy in decoys:
+        text = _good_audit().replace(
+            "## Findings Matrix",
+            f"{decoy}\n## Findings Matrix",
+        )
+        assert _validate(text) == [], decoy
+
+
+def test_trailing_whitespace_cannot_hide_a_second_final_verdict_section() -> None:
+    text = _good_audit() + "\n## Final Verdict   \n\n- `ARCHITECTURE_NOT_READY`\n"
+
+    errors = _validate(text)
+    assert any("exactly one" in error and "Final Verdict" in error for error in errors), errors
+
+
+def test_deeper_heading_level_is_not_a_second_final_verdict_section() -> None:
+    text = _good_audit() + "\n### Final Verdict\n\nHistorical restatement for readers.\n"
+
+    assert _validate(text) == []
