@@ -6,6 +6,7 @@ import re
 import subprocess
 from collections import Counter
 from datetime import datetime
+from functools import cache
 from pathlib import Path
 from typing import Any
 
@@ -90,11 +91,68 @@ ADR_DISPOSITION_RE = re.compile(
 FENCE_OPEN_RE = re.compile(r"^[ \t]{0,3}(?P<fence>`{3,}|~{3,})(?:[^\r\n]*)$")
 FENCE_CLOSE_RE = re.compile(r"^[ \t]{0,3}(?P<fence>`{3,}|~{3,})[ \t]*$")
 HTML_COMMENT_RE = re.compile(r"<!--.*?(?:-->|\Z)", re.DOTALL)
-RAW_HTML_LITERAL_OPEN_RE = re.compile(
-    r"^[ ]{0,3}<(?P<tag>pre|script|style|textarea)(?=[\s>/])",
-    re.IGNORECASE,
+# CommonMark section 4.6 "HTML blocks". Inside an HTML block the contained lines
+# are raw HTML, so Markdown structure -- headings, tables, list fields -- is not
+# interpreted there. Masking them is what keeps semantic audit validation bound
+# to rendered structure rather than to source text.
+#
+# Type 6 is the block-level tag list; a type 6 or 7 block ends at a blank line,
+# while types 1-5 end at their own terminator (or end of document).
+HTML_BLOCK_TYPE_6_TAGS = (
+    "address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|"
+    "dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h1|h2|h3|h4|h5|h6|head|header|"
+    "hr|html|iframe|legend|li|link|main|menu|menuitem|nav|noframes|ol|optgroup|option|p|param|search|"
+    "section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul"
 )
-FINDING_HEADING_RE = re.compile(r"(?im)^#{3,6}[ \t]+(?P<id>F-\d{3})\b[^\n]*$")
+HTML_BLOCK_TYPE_1_OPEN_RE = re.compile(r"^[ ]{0,3}<(?:pre|script|style|textarea)(?=[\s>]|/>|$)", re.IGNORECASE)
+HTML_BLOCK_TYPE_1_CLOSE_RE = re.compile(r"</(?:pre|script|style|textarea)>", re.IGNORECASE)
+HTML_BLOCK_TYPE_2_OPEN_RE = re.compile(r"^[ ]{0,3}<!--")
+HTML_BLOCK_TYPE_3_OPEN_RE = re.compile(r"^[ ]{0,3}<\?")
+HTML_BLOCK_TYPE_4_OPEN_RE = re.compile(r"^[ ]{0,3}<![A-Za-z]")
+HTML_BLOCK_TYPE_5_OPEN_RE = re.compile(r"^[ ]{0,3}<!\[CDATA\[")
+HTML_BLOCK_TYPE_6_OPEN_RE = re.compile(rf"^[ ]{{0,3}}</?(?:{HTML_BLOCK_TYPE_6_TAGS})(?=[\s/>]|$)", re.IGNORECASE)
+# Type 7: a complete open or close tag standing alone on its line. It may not
+# interrupt a paragraph, which is what keeps ordinary inline HTML in rendered
+# prose from starting a block.
+_HTML_ATTRIBUTE = r"""(?:\s+[A-Za-z_:][A-Za-z0-9_.:-]*(?:\s*=\s*(?:[^\s"'=<>`]+|'[^']*'|"[^"]*"))?)*"""
+HTML_BLOCK_TYPE_7_OPEN_RE = re.compile(
+    rf"^[ ]{{0,3}}(?:<[A-Za-z][A-Za-z0-9-]*{_HTML_ATTRIBUTE}\s*/?>|</[A-Za-z][A-Za-z0-9-]*\s*>)[ \t]*$"
+)
+# docs/ARCHITECTURE_AUDIT_TEMPLATE.md defines the canonical Audit Completion
+# Check as a named checklist, and the protocol's "Standard Audit Template"
+# section binds auditors to that template. Each entry below is matched on the
+# item's topic rather than on verbatim template wording, so canonically
+# equivalent phrasing is accepted while a fabricated single "Complete" item
+# cannot impersonate the contract.
+REQUIRED_COMPLETION_ITEMS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("exact artifact and revision identified", re.compile(r"(?is)(?:artifact.*revision|revision.*artifact)")),
+    ("audit scope identified", re.compile(r"(?i)\bscope\b")),
+    ("evidence sources listed", re.compile(r"(?i)\bevidence\b")),
+    ("applicable dimensions assessed", re.compile(r"(?i)\bdimension")),
+    ("every finding includes all mandatory fields", re.compile(r"(?is)\bfinding.*\b(?:mandatory|field)")),
+    ("class C or D findings demonstrate decision consequence", re.compile(r"(?i)\bconsequence\b")),
+    ("findings matrix completed", re.compile(r"(?i)\bmatrix\b")),
+    ("verdict derived from severity and materiality", re.compile(r"(?i)\bverdict\b")),
+    ("targeted re-audit rule followed where applicable", re.compile(r"(?i)re-?audit")),
+    ("auditor did not recommend or rank options", re.compile(r"(?i)\b(?:recommend|rank)")),
+)
+TASK_LIST_ITEM_RE = re.compile(r"(?m)^[ ]{0,3}[-*+][ \t]+\[(?P<state>[ xX])\][ \t]*(?P<text>[^\n]*)$")
+HTML_BLOCK_TERMINATORS = {
+    1: HTML_BLOCK_TYPE_1_CLOSE_RE,
+    2: re.compile(r"-->"),
+    3: re.compile(r"\?>"),
+    4: re.compile(r">"),
+    5: re.compile(r"\]\]>"),
+}
+# CommonMark allows an ATX heading to be indented by up to three spaces; four or
+# more spaces is indented code, not a heading. Every structural heading check
+# shares this one indent boundary so section identity cannot disagree between
+# helpers.
+ATX_INDENT = r"[ ]{0,3}"
+LEVEL_TWO_HEADING_RE = re.compile(rf"(?m)^{ATX_INDENT}##[ \t]+[^\n]+[ \t]*$")
+SUBHEADING_RE = re.compile(rf"(?m)^{ATX_INDENT}#{{3,6}}[ \t]+[^\n]+[ \t]*$")
+DOCUMENT_TITLE_RE = re.compile(rf"(?m)^{ATX_INDENT}#[ \t]+\S")
+FINDING_HEADING_RE = re.compile(rf"(?im)^{ATX_INDENT}#{{3,6}}[ \t]+(?P<id>F-\d{{3}})\b[^\n]*$")
 FINDING_FIELD_RE = re.compile(
     r"(?im)^-\s*\*\*(?P<label>Evidence|Location|Category|Severity|Decision impact|Consequence if ignored|Required action|Blocks ADR):\*\*\s*(?P<value>[^\n]*)$"
 )
@@ -123,7 +181,6 @@ SEVERITY_ORDER = {"A": 1, "B": 2, "C": 3, "D": 4}
 GOVERNING_PROTOCOL_RE = re.compile(
     r"(?im)^-[ \t]*Governing protocol:[ \t]*`?docs/ARCHITECTURE_AUDIT_PROTOCOL\.md`?[ \t]*$"
 )
-CANONICAL_VERDICT_RE = re.compile(r"\b(?:" + "|".join(ALLOWED_VERDICTS) + r")\b")
 CANONICAL_SEVERITY_FIELD_RE = re.compile(r"(?im)^-[ \t]*\*\*Severity:\*\*[ \t]*`?[A-D]`?[ \t]*$")
 READINESS_INSTRUMENT_HEADINGS = ("## Final Verdict", "## Findings Matrix", "## Verdict Derivation")
 
@@ -219,8 +276,35 @@ def _mask_span_preserving_newlines(value: str) -> str:
     return "".join(char if char in "\r\n" else " " for char in value)
 
 
+def _html_block_open_type(body: str, *, previous_line_blank: bool) -> int | None:
+    """Return the CommonMark HTML block type this line opens, if any."""
+    if HTML_BLOCK_TYPE_1_OPEN_RE.match(body):
+        return 1
+    if HTML_BLOCK_TYPE_2_OPEN_RE.match(body):
+        return 2
+    if HTML_BLOCK_TYPE_3_OPEN_RE.match(body):
+        return 3
+    if HTML_BLOCK_TYPE_5_OPEN_RE.match(body):
+        return 5
+    if HTML_BLOCK_TYPE_4_OPEN_RE.match(body):
+        return 4
+    if HTML_BLOCK_TYPE_6_OPEN_RE.match(body):
+        return 6
+    # Type 7 cannot interrupt a paragraph, so inline HTML inside rendered prose
+    # never starts a block.
+    if previous_line_blank and HTML_BLOCK_TYPE_7_OPEN_RE.match(body):
+        return 7
+    return None
+
+
 def _mask_markdown_nonsemantic(text: str) -> str:
-    """Mask Markdown regions that do not render as semantic audit structure."""
+    """Mask Markdown regions that do not render as semantic audit structure.
+
+    This is the single rendered-structure boundary for the whole validator. It
+    masks CommonMark HTML blocks (section 4.6, all seven types), fenced code,
+    indented code, and HTML comments, preserving line structure so downstream
+    structural parsing stays stable.
+    """
     without_comments = HTML_COMMENT_RE.sub(
         lambda match: _mask_span_preserving_newlines(match.group(0)),
         text,
@@ -228,24 +312,27 @@ def _mask_markdown_nonsemantic(text: str) -> str:
     masked: list[str] = []
     fence_char: str | None = None
     fence_length = 0
-    raw_html_tag: str | None = None
+    html_block_type: int | None = None
+    previous_line_blank = True
 
     for line in without_comments.splitlines(keepends=True):
         body = line.rstrip("\r\n")
         ending = line[len(body) :]
+        blank = not body.strip()
 
-        if raw_html_tag is not None:
-            if re.search(rf"</{re.escape(raw_html_tag)}\s*>", body, re.IGNORECASE):
-                raw_html_tag = None
+        if html_block_type is not None:
+            if html_block_type in (6, 7):
+                # A type 6 or 7 block ends at a blank line, which is not part of
+                # the block itself.
+                if blank:
+                    html_block_type = None
+                    masked.append(line)
+                    previous_line_blank = True
+                    continue
             masked.append(" " * len(body) + ending)
-            continue
-
-        raw_open = RAW_HTML_LITERAL_OPEN_RE.match(body)
-        if raw_open:
-            tag = raw_open.group("tag").lower()
-            if not re.search(rf"</{re.escape(tag)}\s*>", body, re.IGNORECASE):
-                raw_html_tag = tag
-            masked.append(" " * len(body) + ending)
+            if html_block_type not in (6, 7) and HTML_BLOCK_TERMINATORS[html_block_type].search(body):
+                html_block_type = None
+            previous_line_blank = blank
             continue
 
         if fence_char is not None:
@@ -256,6 +343,17 @@ def _mask_markdown_nonsemantic(text: str) -> str:
                     fence_char = None
                     fence_length = 0
             masked.append(" " * len(body) + ending)
+            previous_line_blank = blank
+            continue
+
+        opened = _html_block_open_type(body, previous_line_blank=previous_line_blank)
+        if opened is not None:
+            masked.append(" " * len(body) + ending)
+            terminator = HTML_BLOCK_TERMINATORS.get(opened)
+            # Types 1-5 may open and close on the same line.
+            if terminator is None or not terminator.search(body):
+                html_block_type = opened
+            previous_line_blank = blank
             continue
 
         opening = FENCE_OPEN_RE.fullmatch(body)
@@ -264,20 +362,29 @@ def _mask_markdown_nonsemantic(text: str) -> str:
             fence_char = fence[0]
             fence_length = len(fence)
             masked.append(" " * len(body) + ending)
+            previous_line_blank = blank
             continue
 
         if body.startswith("\t") or re.match(r"^ {4,}\S", body):
             masked.append(" " * len(body) + ending)
+            previous_line_blank = blank
             continue
 
         masked.append(line)
+        previous_line_blank = blank
 
     return "".join(masked)
 
 
+@cache
+def _named_heading_re(heading: str) -> re.Pattern[str]:
+    """Compile the canonical rendered pattern for one named heading."""
+    return re.compile(rf"(?m)^{ATX_INDENT}{re.escape(heading)}[ \t]*$")
+
+
 def _heading_match(text: str, heading: str) -> re.Match[str] | None:
     semantic_text = _mask_markdown_nonsemantic(text)
-    return re.search(rf"(?m)^{re.escape(heading)}[ \t]*$", semantic_text)
+    return _named_heading_re(heading).search(semantic_text)
 
 
 def _rendered_heading_count(text: str, heading: str) -> int:
@@ -288,16 +395,16 @@ def _rendered_heading_count(text: str, heading: str) -> int:
     identity therefore has to be counted separately from section content.
     """
     semantic_text = _mask_markdown_nonsemantic(text)
-    return len(re.findall(rf"(?m)^{re.escape(heading)}[ \t]*$", semantic_text))
+    return len(_named_heading_re(heading).findall(semantic_text))
 
 
 def _section(text: str, heading: str) -> str:
     semantic_text = _mask_markdown_nonsemantic(text)
-    match = re.search(rf"(?m)^{re.escape(heading)}[ \t]*$", semantic_text)
+    match = _named_heading_re(heading).search(semantic_text)
     if not match:
         return ""
     remainder = semantic_text[match.end() :]
-    next_heading = re.search(r"(?m)^##[ \t]+[^\n]+[ \t]*$", remainder)
+    next_heading = LEVEL_TWO_HEADING_RE.search(remainder)
     if next_heading:
         remainder = remainder[: next_heading.start()]
     return remainder.strip()
@@ -305,7 +412,7 @@ def _section(text: str, heading: str) -> str:
 
 def _direct_section_lines(text: str, heading: str) -> list[str]:
     section = _section(text, heading)
-    direct = re.split(r"(?m)^#{3,6}[ \t]+[^\n]+[ \t]*$", section, maxsplit=1)[0]
+    direct = SUBHEADING_RE.split(section, maxsplit=1)[0]
     return [line.strip() for line in direct.splitlines() if line.strip()]
 
 
@@ -504,6 +611,32 @@ def _validate_finding_records(findings: str, matrix: str) -> list[str]:
     return errors
 
 
+def _validate_audit_completion(section: str) -> list[str]:
+    """Require the Audit Completion Check to record completed required work.
+
+    A non-empty section is not enough: the canonical checklist in
+    docs/ARCHITECTURE_AUDIT_TEMPLATE.md is what the audit asserts it has done,
+    so every rendered checklist item must be checked and the canonical items
+    must actually be covered. The section text is already rendered-masked by
+    `_section()`, so checklist-looking content inside fenced, indented,
+    commented, or raw HTML regions never reaches this check.
+    """
+    items = list(TASK_LIST_ITEM_RE.finditer(section))
+    if not items:
+        return ["Audit Completion Check must record the canonical completion checklist."]
+
+    errors: list[str] = []
+    unchecked = [match.group("text").strip() for match in items if match.group("state") == " "]
+    for text in unchecked:
+        errors.append(f"Audit Completion Check item is not complete: {text or '(unlabelled item)'}.")
+
+    completed = "\n".join(match.group("text") for match in items if match.group("state") != " ")
+    missing = [label for label, pattern in REQUIRED_COMPLETION_ITEMS if not pattern.search(completed)]
+    if missing:
+        errors.append("Audit Completion Check is missing required completed items: " + "; ".join(missing) + ".")
+    return errors
+
+
 def _validate_iso8601(value: str) -> bool:
     candidate = value.strip().replace("Z", "+00:00")
     try:
@@ -532,6 +665,17 @@ def _validate_verdict_consistency(selected_verdict: str | None, matrix: str) -> 
         blocks_adr == "YES" for _, _, blocks_adr in rows
     ):
         errors.append(f"{selected_verdict} requires at least one finding with Blocks ADR = YES.")
+
+    # Finding-dependent verdicts must be checked before any zero-row shortcut.
+    # ARCHITECTURE_AUDIT_PROTOCOL.md defines READY_FOR_ADR_WITH_MINOR_FINDINGS as
+    # "Use when only Class A and non-cumulative Class B findings exist" and
+    # CONDITIONAL_ADR_READY as "Use when no Class C or D finding exists, but
+    # cumulative Class B findings must be resolved". Both therefore require real
+    # qualifying findings; the no-finding case maps to READY_FOR_ADR.
+    if selected_verdict == "READY_FOR_ADR_WITH_MINOR_FINDINGS" and not rows:
+        errors.append("READY_FOR_ADR_WITH_MINOR_FINDINGS requires at least one unresolved Class A or B finding.")
+    if selected_verdict == "CONDITIONAL_ADR_READY" and not any(severity == "B" for _, severity, _ in rows):
+        errors.append("CONDITIONAL_ADR_READY requires at least one unresolved Class B finding.")
 
     if not rows:
         return errors
@@ -670,6 +814,10 @@ def validate_audit_text(text: str, *, accepted_adrs: list[str]) -> list[str]:
     ):
         errors.append("CONDITIONAL_ADR_READY requires explicit mandatory conditions.")
 
+    completion = _section(semantic_text, "## Audit Completion Check")
+    if completion:
+        errors.extend(_validate_audit_completion(completion))
+
     matrix = _section(semantic_text, "## Findings Matrix")
     errors.extend(_validate_verdict_consistency(selected_verdict, matrix))
     errors.extend(_validate_finding_records(findings, matrix))
@@ -689,7 +837,14 @@ def is_architecture_readiness_audit(text: str) -> bool:
     2. a rendered canonical readiness instrument heading -- Final Verdict,
        Findings Matrix, or Verdict Derivation -- each required by the protocol's
        "Audit Completion Requirements";
-    3. a rendered canonical verdict from the protocol's "Verdicts" section;
+    3. a canonical verdict *declaration*, parsed by the same
+       `_selected_verdicts()` semantics audit validation itself uses -- a
+       rendered `## Final Verdict` section declaring exactly one canonical
+       verdict. A bare verdict token is deliberately not a signal: an
+       incidental, quoted, historical, or negated mention such as "this review
+       does not issue READY_FOR_ADR" is not a readiness declaration, and
+       treating it as one would pull implementation reviews governed by
+       `docs/AI_REVIEW_PROTOCOL.md` into the wrong protocol;
     4. a canonical finding record (`F-NNN` heading plus an A-D `Severity`
        field) as defined by "Required Finding Record" and "Severity Classes".
 
@@ -710,7 +865,7 @@ def is_architecture_readiness_audit(text: str) -> bool:
         return True
     if any(_heading_match(semantic_text, heading) for heading in READINESS_INSTRUMENT_HEADINGS):
         return True
-    if CANONICAL_VERDICT_RE.search(semantic_text):
+    if _selected_verdicts(semantic_text):
         return True
     return bool(FINDING_HEADING_RE.search(semantic_text) and CANONICAL_SEVERITY_FIELD_RE.search(semantic_text))
 
@@ -725,7 +880,7 @@ def _validate_baseline_artifact_integrity(text: str) -> list[str]:
     semantic_text = _mask_markdown_nonsemantic(text)
     if not semantic_text.strip():
         return ["Governed artifact must contain rendered content."]
-    if not re.search(r"(?m)^#[ \t]+\S", semantic_text):
+    if not DOCUMENT_TITLE_RE.search(semantic_text):
         return ["Governed artifact must declare a rendered level-one title."]
     return []
 

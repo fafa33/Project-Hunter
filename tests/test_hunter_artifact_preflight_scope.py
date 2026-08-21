@@ -86,7 +86,16 @@ Track F-001 as non-blocking cleanup.
 
 ## Audit Completion Check
 
-- [x] Complete
+- [x] Exact artifact and revision identified
+- [x] Audit scope identified
+- [x] Evidence sources listed
+- [x] Applicable dimensions assessed
+- [x] Every finding includes all mandatory fields
+- [x] Every Class C or D finding demonstrates decision consequence
+- [x] Findings matrix completed
+- [x] Verdict derived from severity and materiality
+- [x] Targeted re-audit rule followed where applicable
+- [x] Auditor did not recommend or rank options unless explicitly authorized
 """
 
 
@@ -172,3 +181,64 @@ def test_all_audits_diagnostic_uses_the_same_classification_rule() -> None:
     paths = sorted(path.relative_to(hunter_artifact_preflight.ROOT) for path in directory.glob("*.md"))
 
     assert hunter_artifact_preflight.run_artifact_preflight(paths) == 0
+
+
+def test_negated_verdict_mention_does_not_classify_an_implementation_review() -> None:
+    """`docs/AI_REVIEW_PROTOCOL.md` governs implementation review.
+
+    A verdict token appearing in prose is not a readiness declaration, so it
+    must not drag an implementation review into the ADPR readiness template.
+    """
+    review = """# Implementation Review
+
+Severity: Critical
+
+This review does not issue `READY_FOR_ADR`; readiness remains out of scope here.
+"""
+
+    assert not hunter_artifact_preflight.is_architecture_readiness_audit(review)
+
+
+def test_incidental_or_historical_verdict_mentions_do_not_classify_an_artifact() -> None:
+    mentions = (
+        "# Notes\n\n`READY_FOR_ADR` is one possible protocol verdict.\n",
+        "# Notes\n\nThe prior audit recorded ARCHITECTURE_NOT_READY before remediation.\n",
+        "# Notes\n\nVerdicts include READY_FOR_ADR_WITH_MINOR_FINDINGS and CONDITIONAL_ADR_READY.\n",
+    )
+    for text in mentions:
+        assert not hunter_artifact_preflight.is_architecture_readiness_audit(text), text
+
+
+def test_canonical_final_verdict_declaration_is_still_a_readiness_signal() -> None:
+    declaration = """# Independent Architecture Audit
+
+## Final Verdict
+
+- `READY_FOR_ADR`
+"""
+
+    assert hunter_artifact_preflight.is_architecture_readiness_audit(declaration)
+
+
+def test_readiness_classification_reuses_the_validator_verdict_parser() -> None:
+    """One canonical declared-verdict parser, not a second inconsistent one."""
+    negated = "# Report\n\n## Final Verdict\n\nThis report does not issue READY_FOR_ADR.\n"
+
+    assert hunter_artifact_preflight._selected_verdicts(negated) == []
+    # Still governed: the rendered Final Verdict heading is an independent signal.
+    assert hunter_artifact_preflight.is_architecture_readiness_audit(negated)
+
+
+def test_readiness_audit_without_a_verdict_declaration_remains_governed() -> None:
+    malformed = _readiness_audit(governing_protocol=False, final_verdict=False)
+
+    assert hunter_artifact_preflight.is_architecture_readiness_audit(malformed)
+    errors = hunter_artifact_preflight.validate_audit_text(malformed, accepted_adrs=[])
+    assert any("Final Verdict" in error for error in errors), errors
+
+
+def test_historical_implementation_audits_remain_outside_readiness_enforcement() -> None:
+    directory = hunter_artifact_preflight.ROOT / "docs" / "ARCHITECTURE_AUDITS"
+    for path in sorted(directory.glob("*.md")):
+        text = path.read_text(encoding="utf-8")
+        assert not hunter_artifact_preflight.is_architecture_readiness_audit(text), path.name

@@ -79,7 +79,16 @@ Track F-001 as non-blocking cleanup.
 
 ## Audit Completion Check
 
-- [x] Complete
+- [x] Exact artifact and revision identified
+- [x] Audit scope identified
+- [x] Evidence sources listed
+- [x] Applicable dimensions assessed
+- [x] Every finding includes all mandatory fields
+- [x] Every Class C or D finding demonstrates decision consequence
+- [x] Findings matrix completed
+- [x] Verdict derived from severity and materiality
+- [x] Targeted re-audit rule followed where applicable
+- [x] Auditor did not recommend or rank options unless explicitly authorized
 """
 
 
@@ -497,3 +506,154 @@ def test_deeper_heading_level_is_not_a_second_final_verdict_section() -> None:
     text = _good_audit() + "\n### Final Verdict\n\nHistorical restatement for readers.\n"
 
     assert _validate(text) == []
+
+
+def _canonical_completion_items() -> list[str]:
+    section = _good_audit().split("## Audit Completion Check", 1)[1]
+    return [line for line in section.splitlines() if line.startswith("- [x] ")]
+
+
+def _without_findings(text: str) -> str:
+    return text.replace(_nonblocking_finding_record(), "No findings were identified.").replace(
+        "| F-001 | A | None | Minor auditability debt | NO | Evidence |\n", ""
+    )
+
+
+def test_zero_findings_cannot_support_conditional_adr_ready() -> None:
+    text = (
+        _without_findings(_good_audit())
+        .replace("- `READY_FOR_ADR`", "- `CONDITIONAL_ADR_READY`")
+        .replace(
+            "## Required Corrections or Conditions\n\nNone.",
+            "## Required Corrections or Conditions\n\n- Resolve the cumulative limitation before approval.",
+        )
+    )
+
+    errors = _validate(text)
+    assert any("CONDITIONAL_ADR_READY requires at least one unresolved Class B" in e for e in errors), errors
+
+
+def test_zero_findings_cannot_support_ready_for_adr_with_minor_findings() -> None:
+    text = _without_findings(_good_audit()).replace("- `READY_FOR_ADR`", "- `READY_FOR_ADR_WITH_MINOR_FINDINGS`")
+
+    errors = _validate(text)
+    assert any("READY_FOR_ADR_WITH_MINOR_FINDINGS requires at least one" in e for e in errors), errors
+
+
+def test_zero_findings_accepts_the_canonical_no_finding_verdict() -> None:
+    assert _validate(_without_findings(_good_audit())) == []
+
+
+def test_class_a_only_cannot_support_conditional_adr_ready() -> None:
+    """CONDITIONAL_ADR_READY is defined by cumulative Class B findings."""
+    text = (
+        _good_audit()
+        .replace("- `READY_FOR_ADR`", "- `CONDITIONAL_ADR_READY`")
+        .replace(
+            "## Required Corrections or Conditions\n\nNone.",
+            "## Required Corrections or Conditions\n\n- Resolve the cumulative limitation before approval.",
+        )
+    )
+
+    errors = _validate(text)
+    assert any("CONDITIONAL_ADR_READY requires at least one unresolved Class B" in e for e in errors), errors
+
+
+def test_header_only_matrix_cannot_bypass_verdict_derivation() -> None:
+    for verdict in ("CONDITIONAL_ADR_READY", "READY_FOR_ADR_WITH_MINOR_FINDINGS"):
+        text = _without_findings(_good_audit()).replace("- `READY_FOR_ADR`", f"- `{verdict}`")
+        assert _validate(text), verdict
+
+
+def test_unchecked_completion_item_is_rejected() -> None:
+    text = _good_audit().replace("- [x] Audit scope identified", "- [ ] Audit scope identified")
+
+    errors = _validate(text)
+    assert any("Audit Completion Check item is not complete" in e for e in errors), errors
+
+
+def test_single_unchecked_item_among_completed_items_is_rejected() -> None:
+    text = _good_audit().replace("- [x] Findings matrix completed", "- [ ] Findings matrix completed")
+
+    errors = _validate(text)
+    assert any("Findings matrix completed" in e and "not complete" in e for e in errors), errors
+
+
+def test_all_canonical_completion_items_checked_passes() -> None:
+    assert _validate(_good_audit()) == []
+
+
+def test_fabricated_single_completion_item_cannot_impersonate_the_checklist() -> None:
+    text = _good_audit()
+    for item in _canonical_completion_items():
+        text = text.replace(item + "\n", "")
+    text = text.replace("## Audit Completion Check\n", "## Audit Completion Check\n\n- [x] Complete\n")
+
+    errors = _validate(text)
+    assert any("missing required completed items" in e for e in errors), errors
+
+
+def test_completion_prose_without_a_checklist_is_rejected() -> None:
+    text = _good_audit()
+    for item in _canonical_completion_items():
+        text = text.replace(item + "\n", "")
+    text = text.replace(
+        "## Audit Completion Check\n",
+        "## Audit Completion Check\n\nThe auditor confirms every required step is complete.\n",
+    )
+
+    errors = _validate(text)
+    assert any("canonical completion checklist" in e for e in errors), errors
+
+
+def test_unchecked_boxes_outside_the_completion_section_do_not_trigger_the_rule() -> None:
+    text = _good_audit().replace(
+        "Track F-001 as non-blocking cleanup.",
+        "Track F-001 as non-blocking cleanup.\n\n- [ ] Optional future editorial pass",
+    )
+
+    assert _validate(text) == []
+
+
+def test_nonsemantic_completion_checklists_do_not_satisfy_or_break_the_rule() -> None:
+    fenced = "\n```markdown\n- [ ] Fenced unchecked example item\n```\n"
+    assert _validate(_good_audit() + fenced) == []
+
+    commented = "\n<!--\n- [ ] Commented unchecked example item\n-->\n"
+    assert _validate(_good_audit() + commented) == []
+
+
+def test_level_two_headings_accept_legal_commonmark_indentation() -> None:
+    for indent in range(4):
+        text = "\n".join(
+            (" " * indent + line) if line.startswith("## ") else line for line in _good_audit().splitlines()
+        )
+        assert _validate(text + "\n") == [], indent
+
+
+def test_four_space_indented_heading_is_not_a_rendered_heading() -> None:
+    text = "\n".join(("    " + line) if line.startswith("## ") else line for line in _good_audit().splitlines())
+
+    errors = _validate(text + "\n")
+    assert any("Missing mandatory audit heading: ## Metadata" in e for e in errors), errors
+
+
+def test_mixed_legal_heading_indentation_across_sections_passes() -> None:
+    indents = ("", " ", "  ", "   ")
+    lines = []
+    index = 0
+    for line in _good_audit().splitlines():
+        if line.startswith("## "):
+            lines.append(indents[index % len(indents)] + line)
+            index += 1
+        else:
+            lines.append(line)
+
+    assert _validate("\n".join(lines) + "\n") == []
+
+
+def test_duplicate_final_verdict_is_detected_through_legal_indentation() -> None:
+    for indent in (" ", "  ", "   "):
+        text = _good_audit() + f"\n{indent}## Final Verdict\n\n- `ARCHITECTURE_NOT_READY`\n"
+        errors = _validate(text)
+        assert any("exactly one" in e and "Final Verdict" in e for e in errors), indent

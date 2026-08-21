@@ -85,11 +85,11 @@
     {
       "id": "PRH-009",
       "class": "guard-overreach-or-canonical-authority-conflict",
-      "source": "Issue #291 pre-PR guard audit and PR #293 CodeRabbit/Codex reviews on 2026-08-20; PR #293 Codex P2 ADPR validator overreach on 2026-08-21",
+      "source": "Issue #291 pre-PR guard audit and PR #293 CodeRabbit/Codex reviews on 2026-08-20; PR #293 Codex P2 ADPR validator overreach on 2026-08-21; PR #293 Codex negated-verdict classification recurrence on 2026-08-21",
       "classification": "systemic",
       "guard_boundary": "artifact-validator conformance to canonical protocol without false-positive merge blockers",
-      "guard": "artifact guards bind checks to the canonical semantic scope, accept equivalent valid formatting, and preserve escaped Markdown delimiters such as \\| inside table cells; the architecture-readiness (ADPR) validator is scoped by the artifact's own canonical readiness claim rather than by repository path, because ARCHITECTURE_AUDIT_PROTOCOL.md limits its applicability to ADPR/readiness review and assigns implementation review to AI_REVIEW_PROTOCOL.md; the predicate is a disjunction over independent canonical readiness instruments (Governing protocol declaration, Final Verdict / Findings Matrix / Verdict Derivation headings, canonical verdict, canonical A-D finding record) so deleting one discriminator cannot evade validation, while non-readiness governed artifacts still receive protocol-independent baseline integrity validation",
-      "test": "tests/test_hunter_artifact_preflight_scope.py::test_malformed_readiness_audit_cannot_escape_by_deleting_the_protocol_declaration",
+      "guard": "artifact guards bind checks to the canonical semantic scope, accept equivalent valid formatting, and preserve escaped Markdown delimiters such as \\| inside table cells; the architecture-readiness (ADPR) validator is scoped by the artifact's own canonical readiness claim rather than by repository path, because ARCHITECTURE_AUDIT_PROTOCOL.md limits its applicability to ADPR/readiness review and assigns implementation review to AI_REVIEW_PROTOCOL.md; the predicate is a disjunction over independent canonical readiness instruments (Governing protocol declaration, Final Verdict / Findings Matrix / Verdict Derivation headings, canonical verdict, canonical A-D finding record) so deleting one discriminator cannot evade validation, while non-readiness governed artifacts still receive protocol-independent baseline integrity validation; readiness classification recognizes a canonical verdict *declaration* parsed by the same _selected_verdicts() semantics the validator uses, never a bare verdict token, so an incidental, quoted, historical or negated mention cannot pull an AI_REVIEW_PROTOCOL implementation review into the ADPR readiness template while the remaining independent signals keep classification fail-safe",
+      "test": "tests/test_hunter_artifact_preflight_scope.py::test_negated_verdict_mention_does_not_classify_an_implementation_review",
       "status": "guarded"
     },
     {
@@ -105,11 +105,11 @@
     {
       "id": "PRH-011",
       "class": "semantic-invariant-reduced-to-text-presence-proxy",
-      "source": "PR #293 CodeRabbit hostile review and Codex recurrence reviews on 2026-08-20",
+      "source": "PR #293 CodeRabbit hostile review and Codex recurrence reviews on 2026-08-20; PR #293 Codex raw-HTML-block and heading-indentation recurrences on 2026-08-21",
       "classification": "systemic",
-      "guard_boundary": "rendered-Markdown-aware artifact parsing plus hostile representation fixtures",
-      "guard": "non-rendered fenced/commented/indented/raw-HTML content cannot impersonate audit semantics; raw pre/script/style/textarea blocks are masked including mixed case, attributes, multiline and unclosed-to-EOF forms",
-      "test": "tests/test_hunter_artifact_preflight_semantics.py::test_unclosed_raw_html_literal_blocks_mask_to_eof",
+      "guard_boundary": "single rendered-Markdown structure boundary: CommonMark HTML blocks, fences, indented code, and ATX heading identity",
+      "guard": "semantic audit parsing runs on rendered structure only: all seven CommonMark HTML block types are masked, including block-level containers such as div/section/table, processing instructions, declarations and CDATA, alongside the earlier pre/script/style/textarea literals and HTML comments, while type 7 may not interrupt a paragraph so inline HTML in rendered prose is preserved; the same boundary recognizes ATX headings with CommonMark's legal 0-3 space indentation and rejects 4-space indented code, so neither literal content impersonating structure nor canonically valid equivalent indentation is mishandled",
+      "test": "tests/test_hunter_artifact_preflight_html_blocks.py::test_entire_audit_hidden_in_a_div_block_cannot_satisfy_audit_structure",
       "status": "guarded"
     },
     {
@@ -125,11 +125,11 @@
     {
       "id": "ARCH-AUD-002",
       "class": "incomplete-audit-artifact-reaches-review",
-      "source": "PR #290 Codex/CodeRabbit and PR #293 Codex P1 on 2026-08-20",
+      "source": "PR #290 Codex/CodeRabbit and PR #293 Codex P1 on 2026-08-20; PR #293 Codex completion-checklist recurrence on 2026-08-21",
       "classification": "systemic",
       "guard_boundary": "architecture-audit artifact completeness preflight",
-      "guard": "mandatory real headings cannot be empty where substantive scope/evidence/results/derivation/completion are required, Reviewed artifact identity is mandatory, and unresolved PENDING placeholders are rejected",
-      "test": "tests/test_hunter_artifact_preflight_semantics.py::test_mandatory_substantive_sections_may_not_be_empty",
+      "guard": "mandatory real headings cannot be empty where substantive scope/evidence/results/derivation/completion are required, Reviewed artifact identity is mandatory, and unresolved PENDING placeholders are rejected; the Audit Completion Check must record completed work rather than merely non-empty text: every rendered checklist item must be checked and the canonical template checklist topics must be covered, matched by topic so equivalent wording is accepted while a fabricated single item cannot impersonate the contract, scoped to that section so unchecked boxes elsewhere raise no false positive",
+      "test": "tests/test_hunter_artifact_preflight_semantics.py::test_unchecked_completion_item_is_rejected",
       "status": "guarded"
     },
     {
@@ -155,11 +155,11 @@
     {
       "id": "ARCH-AUD-005",
       "class": "adr-progression-gate-ambiguous",
-      "source": "PR #290 and PR #293 CodeRabbit/Codex reviews on 2026-08-20; PR #293 Codex P1 duplicate-verdict recurrence on 2026-08-21",
+      "source": "PR #290 and PR #293 CodeRabbit/Codex reviews on 2026-08-20; PR #293 Codex P1 duplicate-verdict recurrence on 2026-08-21; PR #293 Codex zero-finding verdict recurrence on 2026-08-21",
       "classification": "systemic",
       "guard_boundary": "architecture-audit verdict section identity plus verdict, severity, and blocking semantics",
-      "guard": "one canonical verdict is derived bidirectionally from unresolved severity: A permits ready/minor, B rejects READY_FOR_ADR and permits minor/conditional, C requires ADPR_REVISION_REQUIRED, D requires ARCHITECTURE_NOT_READY; verdict section identity is counted independently of section content, so exactly one rendered level-two Final Verdict section may exist and a second identical or conflicting section cannot be ignored by section parsing that stops at the next heading; duplicate-looking verdict headings inside fenced, indented, commented, or raw-HTML literal regions do not count",
-      "test": "tests/test_hunter_artifact_preflight_semantics.py::test_duplicate_conflicting_final_verdict_sections_are_rejected",
+      "guard": "one canonical verdict is derived bidirectionally from unresolved severity: A permits ready/minor, B rejects READY_FOR_ADR and permits minor/conditional, C requires ADPR_REVISION_REQUIRED, D requires ARCHITECTURE_NOT_READY; verdict section identity is counted independently of section content, so exactly one rendered level-two Final Verdict section may exist and a second identical or conflicting section cannot be ignored by section parsing that stops at the next heading; duplicate-looking verdict headings inside fenced, indented, commented, or raw-HTML literal regions do not count; verdict derivation stays bidirectional when the Findings Matrix has zero data rows, so a header-only matrix cannot reach an early return: per the protocol's Verdicts section READY_FOR_ADR_WITH_MINOR_FINDINGS requires at least one Class A or B finding and CONDITIONAL_ADR_READY requires cumulative Class B findings, leaving the no-finding case to READY_FOR_ADR",
+      "test": "tests/test_hunter_artifact_preflight_semantics.py::test_header_only_matrix_cannot_bypass_verdict_derivation",
       "status": "guarded"
     },
     {
