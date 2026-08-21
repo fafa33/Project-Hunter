@@ -198,3 +198,16 @@ def test_class_c_and_d_findings_must_block_adr() -> None:
 
     errors = _validate(text)
     assert any("Class C finding F-001 must set Blocks ADR = YES" in error for error in errors)
+
+
+def test_unclosed_raw_html_literal_blocks_mask_to_eof() -> None:
+    openings = (
+        "<pre>",
+        '<SCRIPT type="text/plain">',
+        '<style media="all">',
+        '<textarea name="audit">',
+    )
+    for opening in openings:
+        errors = _validate(f"{opening}\n{_good_audit()}")
+        assert any("Missing mandatory audit heading: ## Metadata" in error for error in errors), opening
+        assert any("canonical declared audit verdict" in error for error in errors), opening
