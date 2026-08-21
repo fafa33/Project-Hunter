@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import hunter_artifact_preflight
 import pytest
+
+import hunter_artifact_preflight
 
 
 RAW_HTML_LITERAL_CASES = [
