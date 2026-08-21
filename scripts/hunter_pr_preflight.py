@@ -10,6 +10,7 @@ PREFLIGHT_MODES = (NORMAL_MODE, TESTS_FIRST_RED_MODE)
 PYTEST_TEST_FAILURE_EXIT = 1
 
 NORMAL_QUALITY_GATES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("Architecture Index Guard", ("python", "scripts/hunter_architecture_index_preflight.py")),
     ("Artifact Guard", ("python", "scripts/hunter_artifact_preflight.py")),
     ("Ruff", ("ruff", "check", ".")),
     ("Black", ("black", "--check", "--diff", ".")),
@@ -71,7 +72,8 @@ def run_preflight(*, mode: str = NORMAL_MODE) -> int:
             return completed.returncode
 
         print(
-            "[Hunter Pre-PR] EXPECTED RED: Pytest exited 1; artifact guard, Ruff, Black, " "and Mypy are clean.",
+            "[Hunter Pre-PR] EXPECTED RED: Pytest exited 1; architecture index guard, artifact guard, "
+            "Ruff, Black, and Mypy are clean.",
             flush=True,
         )
         print("[Hunter Pre-PR] PASS: tests-first RED hygiene contract", flush=True)
@@ -100,8 +102,8 @@ def main() -> int:
         choices=PREFLIGHT_MODES,
         default=NORMAL_MODE,
         help=(
-            "normal requires Artifact Guard/Ruff/Black/Mypy/Pytest green; "
-            "tests-first-red requires Artifact Guard/Ruff/Black/Mypy green and "
+            "normal requires Architecture Index Guard/Artifact Guard/Ruff/Black/Mypy/Pytest green; "
+            "tests-first-red requires Architecture Index Guard/Artifact Guard/Ruff/Black/Mypy green and "
             "Pytest exit 1 from intentionally failing tests."
         ),
     )
