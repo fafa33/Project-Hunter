@@ -136,6 +136,7 @@ REQUIRED_COMPLETION_ITEMS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("targeted re-audit rule followed where applicable", re.compile(r"(?i)re-?audit")),
     ("auditor did not recommend or rank options", re.compile(r"(?i)\b(?:recommend|rank)")),
 )
+TABLE_DELIMITER_CELL_RE = re.compile(r":?-+:?")
 TASK_LIST_ITEM_RE = re.compile(r"(?m)^[ ]{0,3}[-*+][ \t]+\[(?P<state>[ xX])\][ \t]*(?P<text>[^\n]*)$")
 THEMATIC_BREAK_RE = re.compile(r"^[ ]{0,3}(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,})$")
 HTML_BLOCK_TERMINATORS = {
@@ -568,10 +569,26 @@ def _structured_adr_accounting_ids(text: str) -> set[str]:
     return accounted
 
 
+def _is_table_delimiter_row(cells: list[str]) -> bool:
+    """Whether these cells form a Markdown table delimiter row."""
+    return bool(cells) and all(TABLE_DELIMITER_CELL_RE.fullmatch(cell.strip()) for cell in cells)
+
+
 def _finding_matrix_rows(matrix: str) -> tuple[list[tuple[str, str, str]], list[str]]:
+    """Parse the Findings Matrix, which is valid only as a rendered table.
+
+    The protocol makes the final findings matrix mandatory, and a matrix that
+    Markdown does not render as a table is not one. A canonical header line is
+    therefore only a matrix when the immediately following line is a matching
+    delimiter row; data rows are the contiguous table rows after it, and
+    parsing stops where the rendered table ends.
+    """
     semantic_matrix = _mask_markdown_nonsemantic(matrix)
-    rows = [_markdown_cells(line) for line in semantic_matrix.splitlines() if line.strip().startswith("|")]
-    for index, row in enumerate(rows):
+    lines = semantic_matrix.splitlines()
+    for index, line in enumerate(lines):
+        if not line.strip().startswith("|"):
+            continue
+        row = _markdown_cells(line)
         headers = [_normalized_cell(cell) for cell in row]
         if not {"finding", "class", "blocks adr"}.issubset(headers):
             continue
@@ -582,7 +599,22 @@ def _finding_matrix_rows(matrix: str) -> tuple[list[tuple[str, str, str]], list[
         errors: list[str] = []
 
         width = len(row)
-        for offset, candidate in enumerate(rows[index + 1 :], start=1):
+        delimiter = _markdown_cells(lines[index + 1]) if index + 1 < len(lines) else []
+        if not _is_table_delimiter_row(delimiter) or len(delimiter) != width:
+            return [], [
+                "Findings Matrix header must be immediately followed by a Markdown table delimiter row "
+                f"of {width} columns; without it the rows do not render as a table."
+            ]
+
+        body: list[list[str]] = []
+        for following in lines[index + 2 :]:
+            if not following.strip().startswith("|"):
+                # The rendered table ends here; later pipe lines are a
+                # different block and carry no Findings Matrix semantics.
+                break
+            body.append(_markdown_cells(following))
+
+        for offset, candidate in enumerate(body, start=1):
             populated = [cell.strip() for cell in candidate if cell.strip()]
             if not populated:
                 # An entirely empty row is the canonical template placeholder,
@@ -742,15 +774,52 @@ def _validate_finding_records(findings: str, matrix: str) -> list[str]:
     return errors
 
 
+def _unmatched_completion_topics(entries: list[str]) -> list[str]:
+    """Canonical completion topics with no distinct checked entry of their own.
+
+    The canonical Audit Completion Check in docs/ARCHITECTURE_AUDIT_TEMPLATE.md
+    is an item-by-item completion contract, not a bag of words: each required
+    topic is its own asserted piece of work. Topics are therefore matched
+    injectively -- one checked entry may satisfy at most one topic -- so a
+    single fabricated entry listing every keyword cannot stand in for ten
+    separate assertions.
+
+    A maximum bipartite matching is used rather than a greedy pass so that an
+    entry able to satisfy several topics is never claimed by the wrong one,
+    which would falsely reject a canonically valid checklist.
+    """
+    candidates = [
+        [index for index, entry in enumerate(entries) if pattern.search(entry)]
+        for _label, pattern in REQUIRED_COMPLETION_ITEMS
+    ]
+    entry_owner: dict[int, int] = {}
+
+    def _assign(topic: int, visited: set[int]) -> bool:
+        for entry in candidates[topic]:
+            if entry in visited:
+                continue
+            visited.add(entry)
+            if entry not in entry_owner or _assign(entry_owner[entry], visited):
+                entry_owner[entry] = topic
+                return True
+        return False
+
+    return [
+        REQUIRED_COMPLETION_ITEMS[topic][0]
+        for topic in range(len(REQUIRED_COMPLETION_ITEMS))
+        if not _assign(topic, set())
+    ]
+
+
 def _validate_audit_completion(section: str) -> list[str]:
     """Require the Audit Completion Check to record completed required work.
 
     A non-empty section is not enough: the canonical checklist in
     docs/ARCHITECTURE_AUDIT_TEMPLATE.md is what the audit asserts it has done,
-    so every rendered checklist item must be checked and the canonical items
-    must actually be covered. The section text is already rendered-masked by
-    `_section()`, so checklist-looking content inside fenced, indented,
-    commented, or raw HTML regions never reaches this check.
+    so every rendered checklist item must be checked and each canonical topic
+    must be covered by its own distinct entry. The section text is already
+    rendered-masked by `_section()`, so checklist-looking content inside fenced,
+    indented, commented, or raw HTML regions never reaches this check.
     """
     items = list(TASK_LIST_ITEM_RE.finditer(section))
     if not items:
@@ -761,8 +830,8 @@ def _validate_audit_completion(section: str) -> list[str]:
     for text in unchecked:
         errors.append(f"Audit Completion Check item is not complete: {text or '(unlabelled item)'}.")
 
-    completed = "\n".join(match.group("text") for match in items if match.group("state") != " ")
-    missing = [label for label, pattern in REQUIRED_COMPLETION_ITEMS if not pattern.search(completed)]
+    completed = [match.group("text").strip() for match in items if match.group("state") != " "]
+    missing = _unmatched_completion_topics(completed)
     if missing:
         errors.append("Audit Completion Check is missing required completed items: " + "; ".join(missing) + ".")
     return errors

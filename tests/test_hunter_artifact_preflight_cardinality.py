@@ -163,3 +163,234 @@ def test_duplicate_fields_inside_nonsemantic_regions_do_not_count() -> None:
     )
     for decoy in decoys:
         assert _validate(_good_audit() + decoy) == [], decoy
+
+
+def _completion_items(text: str) -> list[str]:
+    return [line for line in text.splitlines() if line.startswith("- [x] ")]
+
+
+def _with_completion_checklist(entries: list[str]) -> str:
+    text = _good_audit()
+    for item in _completion_items(text):
+        text = text.replace(item + "\n", "")
+    body = "".join(entry + "\n" for entry in entries)
+    return text.replace("## Audit Completion Check\n", f"## Audit Completion Check\n\n{body}")
+
+
+CANONICAL_COMPLETION_ENTRIES = _completion_items(_good_audit())
+ALL_TOPIC_WORDS = (
+    "- [x] artifact revision scope evidence dimension finding mandatory field "
+    "consequence matrix verdict re-audit recommend"
+)
+
+
+def test_one_fabricated_entry_cannot_satisfy_the_whole_checklist() -> None:
+    errors = _validate(_with_completion_checklist([ALL_TOPIC_WORDS]))
+
+    assert any("missing required completed items" in error for error in errors), errors
+
+
+def test_two_broad_entries_cannot_impersonate_ten_distinct_checks() -> None:
+    entries = [
+        "- [x] artifact revision scope evidence dimension",
+        "- [x] finding mandatory field consequence matrix verdict re-audit recommend",
+    ]
+
+    errors = _validate(_with_completion_checklist(entries))
+    assert any("missing required completed items" in error for error in errors), errors
+
+
+def test_nine_distinct_entries_with_one_canonical_topic_missing_is_rejected() -> None:
+    entries = [entry for entry in CANONICAL_COMPLETION_ENTRIES if "matrix" not in entry.lower()]
+    assert len(entries) == len(CANONICAL_COMPLETION_ENTRIES) - 1
+
+    errors = _validate(_with_completion_checklist(entries))
+    assert any("findings matrix completed" in error for error in errors), errors
+
+
+def test_ten_distinct_canonical_entries_pass() -> None:
+    assert _validate(_with_completion_checklist(CANONICAL_COMPLETION_ENTRIES)) == []
+
+
+def test_ten_entries_with_one_unchecked_is_rejected() -> None:
+    entries = list(CANONICAL_COMPLETION_ENTRIES)
+    entries[3] = entries[3].replace("- [x] ", "- [ ] ")
+
+    errors = _validate(_with_completion_checklist(entries))
+    assert any("is not complete" in error for error in errors), errors
+
+
+def test_duplicating_one_topic_while_omitting_another_is_rejected() -> None:
+    entries = [entry for entry in CANONICAL_COMPLETION_ENTRIES if "matrix" not in entry.lower()]
+    entries.append("- [x] Audit scope identified")
+
+    errors = _validate(_with_completion_checklist(entries))
+    assert any("findings matrix completed" in error for error in errors), errors
+
+
+def test_equivalent_wording_for_each_canonical_topic_passes() -> None:
+    entries = [
+        "- [x] The reviewed artifact and its exact revision are identified",
+        "- [x] The audit scope is stated",
+        "- [x] All evidence sources are listed",
+        "- [x] Applicable dimensions were assessed",
+        "- [x] Each finding carries every mandatory field",
+        "- [x] Blocking findings demonstrate decision consequence",
+        "- [x] The findings matrix is complete",
+        "- [x] The verdict follows severity and materiality",
+        "- [x] Targeted reaudit rules were followed",
+        "- [x] No option was recommended or ranked without authorization",
+    ]
+
+    assert _validate(_with_completion_checklist(entries)) == []
+
+
+def test_extra_legitimate_checked_entries_do_not_invalidate_the_audit() -> None:
+    entries = CANONICAL_COMPLETION_ENTRIES + ["- [x] Reviewer notes archived"]
+
+    assert _validate(_with_completion_checklist(entries)) == []
+
+
+def test_reordered_canonical_entries_pass() -> None:
+    entries = list(reversed(CANONICAL_COMPLETION_ENTRIES))
+
+    assert _validate(_with_completion_checklist(entries)) == []
+
+
+def test_checklist_decoys_outside_the_completion_section_do_not_count() -> None:
+    text = _with_completion_checklist(
+        [entry for entry in CANONICAL_COMPLETION_ENTRIES if "matrix" not in entry.lower()]
+    ).replace(
+        "Track F-001 as non-blocking cleanup.",
+        "Track F-001 as non-blocking cleanup.\n\n- [x] Findings matrix completed",
+    )
+
+    errors = _validate(text)
+    assert any("findings matrix completed" in error for error in errors), errors
+
+
+def test_checklist_decoys_in_literal_regions_do_not_count() -> None:
+    text = (
+        _with_completion_checklist([entry for entry in CANONICAL_COMPLETION_ENTRIES if "matrix" not in entry.lower()])
+        + "\n```markdown\n- [x] Findings matrix completed\n```\n"
+    )
+
+    errors = _validate(text)
+    assert any("findings matrix completed" in error for error in errors), errors
+
+
+def _matrix_block(delimiter: str | None, rows: list[str]) -> str:
+    header = "| Finding | Class | Decision impact | Consequence if ignored | Blocks ADR | Evidence |"
+    lines = [header]
+    if delimiter is not None:
+        lines.append(delimiter)
+    lines.extend(rows)
+    return "\n".join(lines)
+
+
+CANONICAL_MATRIX = _matrix_block("|---|---|---|---|---|---|", [MATRIX_ROW])
+
+
+def _with_matrix(block: str) -> str:
+    return _good_audit().replace(CANONICAL_MATRIX, block)
+
+
+def test_matrix_header_without_a_delimiter_row_is_rejected() -> None:
+    errors = _validate(_with_matrix(_matrix_block(None, [MATRIX_ROW])))
+
+    assert any("delimiter" in error for error in errors), errors
+
+
+def test_matrix_header_with_an_invalid_delimiter_row_is_rejected() -> None:
+    for delimiter in ("|===|===|===|===|===|===|", "|---|---|", "| a | b | c | d | e | f |"):
+        errors = _validate(_with_matrix(_matrix_block(delimiter, [MATRIX_ROW])))
+        assert any("delimiter" in error for error in errors), delimiter
+
+
+def test_matrix_header_with_an_immediate_valid_delimiter_passes() -> None:
+    assert _validate(_good_audit()) == []
+
+
+def test_delimiter_appearing_after_unrelated_prose_does_not_bind_to_the_header() -> None:
+    block = _matrix_block(None, []) + "\n\nUnrelated prose.\n\n|---|---|---|---|---|---|\n" + MATRIX_ROW
+
+    errors = _validate(_with_matrix(block))
+    assert any("delimiter" in error for error in errors), errors
+
+
+def test_an_unrelated_pipe_table_cannot_rescue_a_malformed_findings_matrix() -> None:
+    block = _matrix_block(None, [MATRIX_ROW]) + "\n\n| Other | Table |\n|---|---|\n| a | b |"
+
+    errors = _validate(_with_matrix(block))
+    assert any("delimiter" in error for error in errors), errors
+
+
+def test_valid_table_with_zero_data_rows_keeps_canonical_zero_finding_semantics() -> None:
+    text = _with_matrix(_matrix_block("|---|---|---|---|---|---|", [])).replace(
+        _nonblocking_finding_record(), "No findings were identified."
+    )
+
+    assert _validate(text) == []
+
+
+def test_rows_after_the_rendered_table_ends_are_not_matrix_rows() -> None:
+    block = CANONICAL_MATRIX + "\n\nRendered prose ends the table.\n\n| F-999 | C | a | b | YES | c |"
+
+    errors = _validate(_with_matrix(block))
+    assert not any("F-999" in error for error in errors), errors
+
+
+def test_pipe_prefixed_prose_outside_the_matrix_does_not_enter_matrix_semantics() -> None:
+    text = _good_audit().replace(
+        "Track F-001 as non-blocking cleanup.",
+        "Track F-001 as non-blocking cleanup.\n\n| F-999 | D | a | b | YES | c |",
+    )
+
+    assert _validate(text) == []
+
+
+def test_delimiter_row_is_never_treated_as_a_data_row() -> None:
+    errors = _validate(_good_audit())
+
+    assert errors == [], errors
+
+
+def test_fake_matrix_inside_literal_regions_does_not_count() -> None:
+    fake = "\n```markdown\n" + CANONICAL_MATRIX + "\n```\n"
+
+    assert _validate(_good_audit() + fake) == []
+
+
+def test_canonically_valid_delimiter_forms_are_accepted() -> None:
+    """Alignment colons, single dashes, and padding are all valid delimiters."""
+    delimiters = (
+        "|-|-|-|-|-|-|",
+        "|:---|:---:|---:|---|---|---|",
+        "| --- | --- | --- | --- | --- | --- |",
+    )
+    for delimiter in delimiters:
+        assert _validate(_with_matrix(_matrix_block(delimiter, [MATRIX_ROW]))) == [], delimiter
+
+
+def test_delimiter_must_be_adjacent_not_merely_present() -> None:
+    header = "| Finding | Class | Decision impact | Consequence if ignored | Blocks ADR | Evidence |"
+    separated = f"{header}\n\n|---|---|---|---|---|---|\n{MATRIX_ROW}"
+
+    errors = _validate(_with_matrix(separated))
+    assert any("delimiter" in error for error in errors), errors
+
+
+def test_alternative_checklist_markers_and_indentation_remain_valid() -> None:
+    variants = (
+        [entry.replace("- [x]", "* [x]") for entry in CANONICAL_COMPLETION_ENTRIES],
+        [entry.replace("[x]", "[X]") for entry in CANONICAL_COMPLETION_ENTRIES],
+        ["   " + entry for entry in CANONICAL_COMPLETION_ENTRIES],
+    )
+    for entries in variants:
+        assert _validate(_with_completion_checklist(entries)) == [], entries[0]
+
+
+def test_repeating_one_topic_ten_times_cannot_satisfy_the_checklist() -> None:
+    errors = _validate(_with_completion_checklist(["- [x] Audit scope identified"] * 10))
+
+    assert any("missing required completed items" in error for error in errors), errors
