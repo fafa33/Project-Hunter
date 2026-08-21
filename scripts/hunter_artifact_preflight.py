@@ -494,8 +494,7 @@ def _validate_verdict_consistency(selected_verdict: str | None, matrix: str) -> 
         "CONDITIONAL_ADR_READY",
     }:
         errors.append(
-            "Unresolved Class B finding requires READY_FOR_ADR_WITH_MINOR_FINDINGS "
-            "or CONDITIONAL_ADR_READY."
+            "Unresolved Class B finding requires READY_FOR_ADR_WITH_MINOR_FINDINGS " "or CONDITIONAL_ADR_READY."
         )
     elif highest == "A" and selected_verdict not in {
         "READY_FOR_ADR",
