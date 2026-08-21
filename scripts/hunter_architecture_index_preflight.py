@@ -77,6 +77,13 @@ def _adpr_rows(headers: list[str], rows: list[list[str]], adpr: str) -> list[dic
     return matched
 
 
+def _display_path(path: Path) -> str:
+    try:
+        return path.relative_to(ROOT).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
 def validate_architecture_index(
     text: str,
     *,
@@ -124,7 +131,7 @@ def validate_architecture_index(
             f"and Approved and Implemented Records ({approved_status})."
         )
 
-    missing_runtime = [path.relative_to(ROOT).as_posix() for path in runtime_paths if not path.is_file()]
+    missing_runtime = [_display_path(path) for path in runtime_paths if not path.is_file()]
     if missing_runtime:
         errors.append(
             f"{ADPR_0006} canonical provider-free pre-model runtime evidence is missing: " + ", ".join(missing_runtime) + "."
