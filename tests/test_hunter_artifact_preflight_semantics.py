@@ -107,7 +107,8 @@ def _validate(text: str) -> list[str]:
 def _empty_section(text: str, heading: str) -> str:
     start = text.index(heading) + len(heading)
     next_heading = text.find("\n## ", start)
-    assert next_heading >= 0
+    if next_heading < 0:
+        return text[:start] + "\n"
     return text[:start] + "\n" + text[next_heading:]
 
 
