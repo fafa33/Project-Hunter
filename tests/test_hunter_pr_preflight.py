@@ -59,6 +59,7 @@ def _preflight_checkout_depths(workflow: dict[str, Any]) -> list[object]:
 
 def test_normal_quality_gate_order_matches_ci_contract() -> None:
     assert hunter_pr_preflight.NORMAL_QUALITY_GATES == (
+        ("Architecture Index Guard", ("python", "scripts/hunter_architecture_index_preflight.py")),
         ("Artifact Guard", ("python", "scripts/hunter_artifact_preflight.py")),
         ("Ruff", ("ruff", "check", ".")),
         ("Black", ("black", "--check", "--diff", ".")),
@@ -70,6 +71,7 @@ def test_normal_quality_gate_order_matches_ci_contract() -> None:
 
 def test_tests_first_red_hygiene_gate_order_excludes_only_pytest() -> None:
     assert hunter_pr_preflight.TESTS_FIRST_HYGIENE_GATES == (
+        ("Architecture Index Guard", ("python", "scripts/hunter_architecture_index_preflight.py")),
         ("Artifact Guard", ("python", "scripts/hunter_artifact_preflight.py")),
         ("Ruff", ("ruff", "check", ".")),
         ("Black", ("black", "--check", "--diff", ".")),
@@ -118,7 +120,7 @@ def test_preflight_returns_success_when_all_gates_pass(monkeypatch) -> None:
 
 def test_tests_first_red_succeeds_only_for_clean_hygiene_and_red_pytest(monkeypatch) -> None:
     calls: list[tuple[str, ...]] = []
-    return_codes = iter((0, 0, 0, 0, 1))
+    return_codes = iter((0, 0, 0, 0, 0, 1))
 
     def fake_run(command, *, check):
         assert check is False
@@ -131,6 +133,7 @@ def test_tests_first_red_succeeds_only_for_clean_hygiene_and_red_pytest(monkeypa
 
     assert result == 0
     assert calls == [
+        ("python", "scripts/hunter_architecture_index_preflight.py"),
         ("python", "scripts/hunter_artifact_preflight.py"),
         ("ruff", "check", "."),
         ("black", "--check", "--diff", "."),
@@ -139,7 +142,7 @@ def test_tests_first_red_succeeds_only_for_clean_hygiene_and_red_pytest(monkeypa
     ]
 
 
-def test_tests_first_red_never_launders_artifact_failure(monkeypatch) -> None:
+def test_tests_first_red_never_launders_architecture_index_failure(monkeypatch) -> None:
     calls: list[tuple[str, ...]] = []
 
     def fake_run(command, *, check):
@@ -152,12 +155,32 @@ def test_tests_first_red_never_launders_artifact_failure(monkeypatch) -> None:
     result = hunter_pr_preflight.run_preflight(mode="tests-first-red")
 
     assert result == 9
-    assert calls == [("python", "scripts/hunter_artifact_preflight.py")]
+    assert calls == [("python", "scripts/hunter_architecture_index_preflight.py")]
+
+
+def test_tests_first_red_never_launders_artifact_failure(monkeypatch) -> None:
+    calls: list[tuple[str, ...]] = []
+    return_codes = iter((0, 9))
+
+    def fake_run(command, *, check):
+        assert check is False
+        calls.append(tuple(command))
+        return SimpleNamespace(returncode=next(return_codes))
+
+    monkeypatch.setattr(hunter_pr_preflight.subprocess, "run", fake_run)
+
+    result = hunter_pr_preflight.run_preflight(mode="tests-first-red")
+
+    assert result == 9
+    assert calls == [
+        ("python", "scripts/hunter_architecture_index_preflight.py"),
+        ("python", "scripts/hunter_artifact_preflight.py"),
+    ]
 
 
 def test_tests_first_red_never_launders_hygiene_failure(monkeypatch) -> None:
     calls: list[tuple[str, ...]] = []
-    return_codes = iter((0, 0, 8, 0, 1))
+    return_codes = iter((0, 0, 0, 8, 0, 1))
 
     def fake_run(command, *, check):
         assert check is False
@@ -170,6 +193,7 @@ def test_tests_first_red_never_launders_hygiene_failure(monkeypatch) -> None:
 
     assert result == 8
     assert calls == [
+        ("python", "scripts/hunter_architecture_index_preflight.py"),
         ("python", "scripts/hunter_artifact_preflight.py"),
         ("ruff", "check", "."),
         ("black", "--check", "--diff", "."),
@@ -192,7 +216,7 @@ def test_tests_first_red_fails_closed_when_pytest_is_unexpectedly_green(monkeypa
 
 @pytest.mark.parametrize("pytest_exit", [2, 3, 4, 5])
 def test_tests_first_red_rejects_non_test_failure_pytest_exits(monkeypatch, pytest_exit: int) -> None:
-    return_codes = iter((0, 0, 0, 0, pytest_exit))
+    return_codes = iter((0, 0, 0, 0, 0, pytest_exit))
 
     def fake_run(command, *, check):
         assert check is False
