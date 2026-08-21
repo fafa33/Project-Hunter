@@ -394,3 +394,266 @@ def test_repeating_one_topic_ten_times_cannot_satisfy_the_checklist() -> None:
     errors = _validate(_with_completion_checklist(["- [x] Audit scope identified"] * 10))
 
     assert any("missing required completed items" in error for error in errors), errors
+
+
+CANONICAL_REVISION = "- Reviewed revision: `0123456789abcdef0123456789abcdef01234567`"
+SECOND_REVISION = "- Reviewed revision: `bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb`"
+
+
+def _second_matrix(severity: str = "D", blocks: str = "YES") -> str:
+    return (
+        "\n## Findings Matrix\n\n"
+        "| Finding | Class | Decision impact | Consequence if ignored | Blocks ADR | Evidence |\n"
+        "|---|---|---|---|---|---|\n"
+        f"| F-900 | {severity} | Fundamental gap | Unreliable decision | {blocks} | Evidence |\n"
+    )
+
+
+def test_exactly_one_rendered_findings_matrix_section_passes() -> None:
+    assert _validate(_good_audit()) == []
+
+
+def test_two_identical_findings_matrix_sections_are_rejected() -> None:
+    duplicate = "\n## Findings Matrix\n\n" + CANONICAL_MATRIX + "\n"
+
+    errors = _validate(_good_audit() + duplicate)
+    assert any("exactly one" in error and "Findings Matrix" in error for error in errors), errors
+
+
+def test_two_conflicting_findings_matrix_sections_are_rejected() -> None:
+    errors = _validate(_good_audit() + _second_matrix("A", "NO"))
+
+    assert any("exactly one" in error and "Findings Matrix" in error for error in errors), errors
+
+
+def test_a_second_matrix_hiding_a_class_d_blocker_is_rejected() -> None:
+    errors = _validate(_good_audit() + _second_matrix())
+
+    assert any("exactly one" in error and "Findings Matrix" in error for error in errors), errors
+
+
+def test_duplicate_matrix_heading_in_nonsemantic_regions_does_not_count() -> None:
+    decoys = (
+        "\n```markdown\n## Findings Matrix\n\n" + CANONICAL_MATRIX + "\n```\n",
+        "\n<!--\n## Findings Matrix\n\n" + CANONICAL_MATRIX + "\n-->\n",
+        "\n<pre>\n## Findings Matrix\n\n" + CANONICAL_MATRIX + "\n</pre>\n",
+        "\n    ## Findings Matrix\n",
+    )
+    for decoy in decoys:
+        assert _validate(_good_audit() + decoy) == [], decoy
+
+
+def test_prose_mentioning_the_findings_matrix_is_not_a_second_section() -> None:
+    text = _good_audit().replace(
+        "Track F-001 as non-blocking cleanup.",
+        'Track F-001 as non-blocking cleanup. The "Findings Matrix" heading is discussed here.',
+    )
+
+    assert _validate(text) == []
+
+
+def test_duplicate_matrix_section_detected_through_legal_atx_equivalents() -> None:
+    variants = (
+        "\n## Findings Matrix ##\n\n" + CANONICAL_MATRIX + "\n",
+        "\n   ## Findings Matrix\n\n" + CANONICAL_MATRIX + "\n",
+    )
+    for variant in variants:
+        errors = _validate(_good_audit() + variant)
+        assert any("exactly one" in error and "Findings Matrix" in error for error in errors), variant
+
+
+def test_zero_findings_matrix_sections_still_fails_as_a_missing_heading() -> None:
+    text = _good_audit().replace("## Findings Matrix", "## Findings Overview")
+
+    errors = _validate(text)
+    assert any("Missing mandatory audit heading: ## Findings Matrix" in error for error in errors), errors
+
+
+def _completion_variant(original: str, replacement: str) -> str:
+    text = _good_audit()
+    assert original in text
+    return text.replace(original, replacement)
+
+
+PROHIBITION_ITEM = "- [x] Auditor did not recommend or rank options unless explicitly authorized"
+REAUDIT_ITEM = "- [x] Targeted re-audit rule followed where applicable"
+
+
+def test_canonical_prohibition_assertion_passes() -> None:
+    assert _validate(_good_audit()) == []
+
+
+def test_positive_recommendation_admission_cannot_satisfy_the_prohibition() -> None:
+    text = _completion_variant(PROHIBITION_ITEM, "- [x] Auditor did recommend and rank options without authorization")
+
+    errors = _validate(text)
+    assert any("auditor did not recommend or rank options" in error for error in errors), errors
+
+
+def test_bare_recommendation_statement_cannot_satisfy_the_prohibition() -> None:
+    text = _completion_variant(PROHIBITION_ITEM, "- [x] Auditor recommended options")
+
+    errors = _validate(text)
+    assert any("auditor did not recommend or rank options" in error for error in errors), errors
+
+
+def test_equivalent_absence_wording_satisfies_the_prohibition() -> None:
+    for wording in (
+        "- [x] No options were recommended or ranked",
+        "- [x] No option was recommended or ranked without authorization",
+        "- [x] The auditor never recommended or ranked any option",
+    ):
+        assert _validate(_completion_variant(PROHIBITION_ITEM, wording)) == [], wording
+
+
+def test_canonical_reaudit_compliance_assertion_passes() -> None:
+    for wording in (
+        REAUDIT_ITEM,
+        "- [x] Targeted reaudit rules were followed",
+        "- [x] The targeted re-audit rule was followed where applicable",
+    ):
+        assert _validate(_completion_variant(REAUDIT_ITEM, wording)) == [], wording
+
+
+def test_explicit_reaudit_noncompliance_cannot_satisfy_the_topic() -> None:
+    for wording in (
+        "- [x] Targeted re-audit rule was not followed",
+        "- [x] Targeted re-audit was ignored",
+        "- [x] The targeted re-audit rule was skipped",
+    ):
+        errors = _validate(_completion_variant(REAUDIT_ITEM, wording))
+        assert any("targeted re-audit rule followed" in error for error in errors), wording
+
+
+def test_contradictory_completion_text_outside_the_section_does_not_count() -> None:
+    text = _good_audit().replace(
+        "Track F-001 as non-blocking cleanup.",
+        "Track F-001 as non-blocking cleanup.\n\nThe auditor did recommend options in a prior draft.",
+    )
+
+    assert _validate(text) == []
+
+
+def test_contradictory_completion_text_in_literal_regions_does_not_count() -> None:
+    decoy = "\n```markdown\n- [x] Targeted re-audit rule was not followed\n```\n"
+
+    assert _validate(_good_audit() + decoy) == []
+
+
+def test_all_ten_canonical_items_with_one_opposite_polarity_is_rejected() -> None:
+    text = _completion_variant(REAUDIT_ITEM, "- [x] Targeted re-audit rule was not followed")
+
+    errors = _validate(text)
+    assert any("missing required completed items" in error for error in errors), errors
+
+
+def test_polarity_enforcement_preserves_distinct_entry_cardinality() -> None:
+    errors = _validate(_with_completion_checklist([ALL_TOPIC_WORDS]))
+
+    assert any("missing required completed items" in error for error in errors), errors
+
+
+def test_exactly_one_reviewed_revision_passes() -> None:
+    assert _validate(_good_audit()) == []
+
+
+def test_two_different_reviewed_revision_declarations_are_rejected() -> None:
+    text = _good_audit().replace(CANONICAL_REVISION, f"{CANONICAL_REVISION}\n{SECOND_REVISION}")
+
+    errors = _validate(text)
+    assert any("exactly one" in error and "Reviewed revision" in error for error in errors), errors
+
+
+def test_repeated_identical_reviewed_revision_declarations_are_rejected() -> None:
+    text = _good_audit().replace(CANONICAL_REVISION, f"{CANONICAL_REVISION}\n{CANONICAL_REVISION}")
+
+    errors = _validate(text)
+    assert any("exactly one" in error and "Reviewed revision" in error for error in errors), errors
+
+
+def test_zero_reviewed_revision_declarations_are_rejected() -> None:
+    text = _good_audit().replace(CANONICAL_REVISION + "\n", "")
+
+    errors = _validate(text)
+    assert any("Reviewed revision" in error for error in errors), errors
+
+
+def test_malformed_reviewed_revision_keeps_existing_validity_failure() -> None:
+    text = _good_audit().replace(CANONICAL_REVISION, "- Reviewed revision: `not-a-commit`")
+
+    errors = _validate(text)
+    assert any("immutable 40-hex commit" in error for error in errors), errors
+
+
+def test_unrelated_sha_in_prose_does_not_count_as_a_second_declaration() -> None:
+    text = _good_audit().replace(
+        "- Immutable repository evidence at the reviewed revision.",
+        "- Immutable repository evidence at `bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb`.",
+    )
+
+    assert _validate(text) == []
+
+
+def test_reviewed_revision_decoys_in_literal_regions_do_not_count() -> None:
+    decoys = (
+        f"\n```markdown\n{SECOND_REVISION}\n```\n",
+        f"\n<!--\n{SECOND_REVISION}\n-->\n",
+        f"\n<pre>\n{SECOND_REVISION}\n</pre>\n",
+    )
+    for decoy in decoys:
+        assert _validate(_good_audit() + decoy) == [], decoy
+
+
+def test_reviewed_revision_outside_metadata_does_not_satisfy_metadata() -> None:
+    text = (
+        _good_audit()
+        .replace(CANONICAL_REVISION + "\n", "")
+        .replace(
+            "Track F-001 as non-blocking cleanup.",
+            f"Track F-001 as non-blocking cleanup.\n\n{CANONICAL_REVISION}",
+        )
+    )
+
+    errors = _validate(text)
+    assert any("Reviewed revision" in error for error in errors), errors
+
+
+def test_contradiction_guard_covers_the_other_affirmative_topics() -> None:
+    cases = (
+        ("- [x] Findings matrix completed", "- [x] Findings matrix not completed", "findings matrix completed"),
+        ("- [x] Evidence sources listed", "- [x] Evidence sources were omitted", "evidence sources listed"),
+    )
+    for original, contradicted, label in cases:
+        errors = _validate(_completion_variant(original, contradicted))
+        assert any(label in error for error in errors), contradicted
+
+
+def test_negative_words_in_valid_phrasing_do_not_falsely_reject_an_entry() -> None:
+    """ "none omitted" and "no incomplete fields" affirm completion, not its opposite."""
+    variants = (
+        ("- [x] Evidence sources listed", "- [x] Evidence sources listed; none omitted"),
+        (
+            "- [x] Every finding includes all mandatory fields",
+            "- [x] Every finding includes all mandatory fields, no incomplete fields",
+        ),
+    )
+    for original, valid in variants:
+        assert _validate(_completion_variant(original, valid)) == [], valid
+
+
+def test_three_findings_matrix_sections_are_rejected() -> None:
+    extra = "\n## Findings Matrix\n\n" + CANONICAL_MATRIX + "\n"
+
+    errors = _validate(_good_audit() + extra + extra)
+    assert any("exactly one" in error and "Findings Matrix" in error for error in errors), errors
+
+
+def test_four_space_indented_matrix_heading_is_not_a_second_section() -> None:
+    assert _validate(_good_audit() + "\n    ## Findings Matrix\n") == []
+
+
+def test_valid_revision_plus_malformed_second_declaration_is_rejected() -> None:
+    text = _good_audit().replace(CANONICAL_REVISION, f"{CANONICAL_REVISION}\n- Reviewed revision: `not-a-commit`")
+
+    errors = _validate(text)
+    assert any("exactly one" in error and "Reviewed revision" in error for error in errors), errors

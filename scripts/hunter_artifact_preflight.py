@@ -76,6 +76,11 @@ PENDING_PLACEHOLDER_RE = re.compile(r"(?im)(?:`PENDING[^`]*`|\|\s*PENDING\s*\||:
 REVIEWED_ARTIFACT_RE = re.compile(r"(?im)^-\s*Reviewed artifact:\s*(.+?)\s*$")
 AUDITOR_RE = re.compile(r"(?im)^-\s*Auditor:\s*(.+?)\s*$")
 REVISION_RE = re.compile(r"(?im)^-\s*Reviewed revision:\s*`?([0-9a-f]{40})`?\s*$")
+# Declaration identity, independent of whether the value is well formed: the
+# protocol requires audits to be reproducible from "reviewed artifact and exact
+# revision", so two declarations leave the evidence state ambiguous even when
+# both are syntactically valid or identical.
+REVISION_DECLARATION_RE = re.compile(r"(?im)^-\s*Reviewed revision:.*$")
 AUDIT_TYPE_RE = re.compile(r"(?im)^-\s*Audit type:\s*`?(FULL|TARGETED)`?\s*$")
 CUTOFF_RE = re.compile(r"(?im)^-\s*Evidence cutoff:\s*`?([^`\n]+)`?\s*$")
 MUTABLE_EVIDENCE_RE = re.compile(r"(?i)(?:https?://|\bPR\s*#\d+\b|\bIssue\s*#\d+\b)")
@@ -124,17 +129,56 @@ HTML_BLOCK_TYPE_7_OPEN_RE = re.compile(
 # item's topic rather than on verbatim template wording, so canonically
 # equivalent phrasing is accepted while a fabricated single "Complete" item
 # cannot impersonate the contract.
-REQUIRED_COMPLETION_ITEMS: tuple[tuple[str, re.Pattern[str]], ...] = (
-    ("exact artifact and revision identified", re.compile(r"(?is)(?:artifact.*revision|revision.*artifact)")),
-    ("audit scope identified", re.compile(r"(?i)\bscope\b")),
-    ("evidence sources listed", re.compile(r"(?i)\bevidence\b")),
-    ("applicable dimensions assessed", re.compile(r"(?i)\bdimension")),
-    ("every finding includes all mandatory fields", re.compile(r"(?is)\bfinding.*\b(?:mandatory|field)")),
-    ("class C or D findings demonstrate decision consequence", re.compile(r"(?i)\bconsequence\b")),
-    ("findings matrix completed", re.compile(r"(?i)\bmatrix\b")),
-    ("verdict derived from severity and materiality", re.compile(r"(?i)\bverdict\b")),
-    ("targeted re-audit rule followed where applicable", re.compile(r"(?i)re-?audit")),
-    ("auditor did not recommend or rank options", re.compile(r"(?i)\b(?:recommend|rank)")),
+# A checked completion entry must assert the required state, not merely mention
+# the topic. Two polarity guards are applied, both deliberately narrow rather
+# than general language understanding:
+#
+# * COMPLETION_CONTRADICTION_RE rejects an entry that explicitly admits the work
+#   was not done. It requires the negation to sit directly on a completion verb,
+#   or an abandonment verb to be the entry's own assertion ("was ignored"), so
+#   canonically valid phrasings that merely contain a negative word -- "none
+#   omitted", "no incomplete fields" -- are not falsely rejected.
+# * A per-item required-assertion pattern, set only where the canonical template
+#   text is itself directional. Of the ten canonical items only "Auditor did not
+#   recommend or rank options unless explicitly authorized" is a prohibition, so
+#   it alone must positively assert absence; the other nine are affirmative and
+#   are governed by the contradiction guard.
+COMPLETION_CONTRADICTION_RE = re.compile(
+    r"(?i)\b(?:not|never)\s+(?:been\s+)?(?:fully\s+|properly\s+)?"
+    r"(?:identified|listed|assessed|completed|derived|followed|demonstrated|included|documented|recorded"
+    r"|applied|verified|performed)\b"
+    r"|\b(?:was|were|is|are|been)\s+(?:ignored|skipped|omitted|disregarded|violated)\b"
+)
+RECOMMENDATION_ABSENCE_RE = re.compile(
+    r"(?i)\b(?:not|never|no|none|neither|refrained\s+from|abstained\s+from)\b[^.;]{0,60}?\b(?:recommend|rank)"
+)
+# Only an explicit positive auxiliary counts as an admission. "recommended or
+# ranked" is polarity-neutral and appears inside the valid negated form
+# "No option was recommended or ranked", so it must not disqualify an entry.
+RECOMMENDATION_ADMISSION_RE = re.compile(r"(?i)\bdid\s+recommend\b|\bdid\s+rank\b")
+REQUIRED_COMPLETION_ITEMS: tuple[tuple[str, re.Pattern[str], re.Pattern[str] | None], ...] = (
+    (
+        "exact artifact and revision identified",
+        re.compile(r"(?is)(?:artifact.*revision|revision.*artifact)"),
+        None,
+    ),
+    ("audit scope identified", re.compile(r"(?i)\bscope\b"), None),
+    ("evidence sources listed", re.compile(r"(?i)\bevidence\b"), None),
+    ("applicable dimensions assessed", re.compile(r"(?i)\bdimension"), None),
+    (
+        "every finding includes all mandatory fields",
+        re.compile(r"(?is)\bfinding.*\b(?:mandatory|field)"),
+        None,
+    ),
+    ("class C or D findings demonstrate decision consequence", re.compile(r"(?i)\bconsequence\b"), None),
+    ("findings matrix completed", re.compile(r"(?i)\bmatrix\b"), None),
+    ("verdict derived from severity and materiality", re.compile(r"(?i)\bverdict\b"), None),
+    ("targeted re-audit rule followed where applicable", re.compile(r"(?i)re-?audit"), None),
+    (
+        "auditor did not recommend or rank options",
+        re.compile(r"(?i)\b(?:recommend|rank)"),
+        RECOMMENDATION_ABSENCE_RE,
+    ),
 )
 TABLE_DELIMITER_CELL_RE = re.compile(r":?-+:?")
 TASK_LIST_ITEM_RE = re.compile(r"(?m)^[ ]{0,3}[-*+][ \t]+\[(?P<state>[ xX])\][ \t]*(?P<text>[^\n]*)$")
@@ -774,6 +818,23 @@ def _validate_finding_records(findings: str, matrix: str) -> list[str]:
     return errors
 
 
+def _entry_asserts_topic(entry: str, topic: re.Pattern[str], required: re.Pattern[str] | None) -> bool:
+    """Whether one checked entry actually asserts a canonical completion topic.
+
+    Topic presence alone is not the invariant: an entry that names the topic
+    while admitting the opposite state -- "Targeted re-audit rule was not
+    followed", "Auditor did recommend and rank options" -- records
+    noncompliance, so it may never satisfy the requirement it contradicts.
+    """
+    if not topic.search(entry):
+        return False
+    if COMPLETION_CONTRADICTION_RE.search(entry):
+        return False
+    if required is not None and not required.search(entry):
+        return False
+    return not (required is RECOMMENDATION_ABSENCE_RE and RECOMMENDATION_ADMISSION_RE.search(entry))
+
+
 def _unmatched_completion_topics(entries: list[str]) -> list[str]:
     """Canonical completion topics with no distinct checked entry of their own.
 
@@ -789,8 +850,8 @@ def _unmatched_completion_topics(entries: list[str]) -> list[str]:
     which would falsely reject a canonically valid checklist.
     """
     candidates = [
-        [index for index, entry in enumerate(entries) if pattern.search(entry)]
-        for _label, pattern in REQUIRED_COMPLETION_ITEMS
+        [index for index, entry in enumerate(entries) if _entry_asserts_topic(entry, pattern, required)]
+        for _label, pattern, required in REQUIRED_COMPLETION_ITEMS
     ]
     entry_owner: dict[int, int] = {}
 
@@ -948,7 +1009,10 @@ def validate_audit_text(text: str, *, accepted_adrs: list[str]) -> list[str]:
     elif "pending" in auditor_match.group(1).lower():
         errors.append("Audit auditor identity may not be pending.")
 
-    if not REVISION_RE.search(metadata):
+    revision_declarations = len(REVISION_DECLARATION_RE.findall(metadata))
+    if revision_declarations > 1:
+        errors.append(f"Audit Metadata must declare exactly one Reviewed revision; found {revision_declarations}.")
+    elif not REVISION_RE.search(metadata):
         errors.append("Audit must pin Reviewed revision to an immutable 40-hex commit.")
 
     audit_type_match = AUDIT_TYPE_RE.search(metadata)
@@ -1017,6 +1081,14 @@ def validate_audit_text(text: str, *, accepted_adrs: list[str]) -> list[str]:
     completion = _section(semantic_text, "## Audit Completion Check")
     if completion:
         errors.extend(_validate_audit_completion(completion))
+
+    # The Findings Matrix carries the audit's blocking state, so a second
+    # rendered section could hold an unresolved blocker that section-scoped
+    # reads never observe. Section identity is counted the same way as for
+    # Final Verdict.
+    matrix_sections = _rendered_heading_count(semantic_text, "## Findings Matrix")
+    if matrix_sections > 1:
+        errors.append(f"Audit must contain exactly one rendered ## Findings Matrix section; found {matrix_sections}.")
 
     matrix = _section(semantic_text, "## Findings Matrix")
     errors.extend(_validate_verdict_consistency(selected_verdict, matrix))
