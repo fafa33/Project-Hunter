@@ -41,6 +41,7 @@ REQUIRED_DEFECT_IDS = {
     "ARCH-AUD-004",
     "ARCH-AUD-005",
     "ARCH-AUD-006",
+    "ARCH-AUD-007",
 }
 REQUIRED_AUDIT_HEADINGS = (
     "## Metadata",

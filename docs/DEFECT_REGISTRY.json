@@ -108,8 +108,8 @@
       "source": "PR #293 CodeRabbit hostile review, CodeRabbit P1 recurrence, and Codex P1 recurrence on 2026-08-20",
       "classification": "systemic",
       "guard_boundary": "rendered-Markdown-aware artifact parsing and workflow validators plus hostile regression fixtures",
-      "guard": "security/governance semantics must be derived from rendered Markdown/workflow structure rather than arbitrary text presence; fenced code blocks, HTML comments, and indented code blocks are masked before heading, metadata, ADR, finding, matrix, PENDING, and verdict parsing, and hostile fixtures prove non-rendered templates and unrelated matching structure cannot satisfy guards",
-      "test": "tests/test_hunter_artifact_preflight_semantics.py::test_html_comment_cannot_impersonate_audit_structure",
+      "guard": "security/governance semantics must be derived from rendered Markdown/workflow structure rather than arbitrary text presence; fenced code blocks, HTML comments, indented code blocks, and raw literal HTML pre/script/style/textarea regions are masked before heading, metadata, ADR, finding, matrix, PENDING, and verdict parsing, including mixed case, attributes, multiline content, and unclosed-to-EOF cases; hostile fixtures prove non-rendered templates and unrelated matching structure cannot satisfy guards",
+      "test": "tests/test_hunter_artifact_preflight_codex_p1_regressions.py::test_raw_html_literal_blocks_cannot_impersonate_audit_structure",
       "status": "guarded"
     },
     {
@@ -158,8 +158,8 @@
       "source": "PR #290 and PR #293 CodeRabbit plus PR #293 Codex P1 on 2026-08-20",
       "classification": "systemic",
       "guard_boundary": "architecture-audit verdict, severity, and blocking-finding semantics",
-      "guard": "Final Verdict must contain one canonical declared verdict line and be bidirectionally consistent with the highest unresolved Findings Matrix severity: Class C requires ADPR_REVISION_REQUIRED, Class D requires ARCHITECTURE_NOT_READY, blocking verdicts require their corresponding severity, and every Class C/D finding must set Blocks ADR = YES; conditional readiness still requires real conditions",
-      "test": "tests/test_hunter_artifact_preflight_semantics.py::test_adpr_revision_required_accepts_class_c_but_not_class_d",
+      "guard": "Final Verdict must contain one canonical declared verdict line and be bidirectionally consistent with the highest unresolved Findings Matrix severity: Class A permits READY_FOR_ADR or READY_FOR_ADR_WITH_MINOR_FINDINGS; unresolved Class B rejects READY_FOR_ADR and permits READY_FOR_ADR_WITH_MINOR_FINDINGS or CONDITIONAL_ADR_READY when real mandatory conditions are stated; Class C requires ADPR_REVISION_REQUIRED; Class D requires ARCHITECTURE_NOT_READY; blocking flags must remain consistent with severity",
+      "test": "tests/test_hunter_artifact_preflight_codex_p1_regressions.py::test_ready_for_adr_rejects_class_b_but_minor_verdict_accepts_it",
       "status": "guarded"
     },
     {
@@ -170,6 +170,16 @@
       "guard_boundary": "architecture-audit artifact preflight",
       "guard": "finding records use canonical Severity while the Findings Matrix uses Class; the validator must not invert those protocol-owned terms",
       "test": "tests/test_hunter_artifact_preflight.py::test_finding_record_class_label_is_rejected_in_favor_of_canonical_severity",
+      "status": "guarded"
+    },
+    {
+      "id": "ARCH-AUD-007",
+      "class": "blocking-finding-record-incomplete-or-matrix-only",
+      "source": "PR #293 Codex P1 on 2026-08-20",
+      "classification": "systemic",
+      "guard_boundary": "architecture-audit blocking-finding record completeness and matrix cross-validation",
+      "guard": "every Findings Matrix row with Blocks ADR = YES must map by stable Finding ID to a real finding record in ## Findings; all canonical mandatory record fields must be non-empty, record Severity and Blocks ADR must agree with the matrix, and a matrix-only or unsupported blocking claim cannot authorize a blocking verdict",
+      "test": "tests/test_hunter_artifact_preflight_codex_p1_regressions.py::test_blocking_matrix_row_requires_complete_matching_finding_record",
       "status": "guarded"
     }
   ]

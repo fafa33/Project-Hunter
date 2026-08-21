@@ -16,7 +16,7 @@ def test_recent_preflight_failures_remain_registered() -> None:
     data = json.loads(REGISTRY.read_text(encoding="utf-8"))
     ids = {item["id"] for item in data["defects"]}
 
-    assert {"PRH-007", "PRH-008", "PRH-009", "PRH-010", "PRH-011"} <= ids
+    assert {"PRH-007", "PRH-008", "PRH-009", "PRH-010", "PRH-011", "ARCH-AUD-007"} <= ids
 
 
 def test_agents_reference_canonical_preflight_command() -> None:
