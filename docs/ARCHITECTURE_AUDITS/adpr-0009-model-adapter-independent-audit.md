@@ -2,9 +2,9 @@
 
 > Status: `COMPLETED`
 >
-> Final Verdict: `READY_FOR_ADR_WITH_MINOR_FINDINGS`
+> Final Verdict: `READY_FOR_ADR`
 >
-> Progression Gate: Clean progression to a dedicated ADR 0034 drafting lifecycle is permitted. Non-blocking findings are recorded for tracking during ADR drafting and subsequent engineering/governance tooling updates.
+> Progression Gate: Clean progression to a dedicated ADR 0034 drafting lifecycle is permitted. One trivial recorded Class A traceability finding remains for follow-up during ADR drafting.
 
 ## Metadata
 
@@ -19,6 +19,11 @@
 - Governing issue: #289, state snapshot snapshot as of evidence cutoff `2026-08-20T12:45:18Z`
 - Preparation PR: #288, merged into `main` as `cd1ef1981975f15dd26d48031b00c8b55c28f3d5`
 - Planned decision if audit permits progression: ADR 0034
+- Targeted re-audit baseline: `df8f260ba84af7679467b7ce3ce10328d42a11e9`
+- Targeted re-audit evidence cutoff: `2026-08-22T12:00:00Z`
+- Targeted re-audit scope: prior findings `F-001` and `F-002` only, under the Re-Audit Protocol
+
+The original FULL audit is pinned to baseline `cd1ef1981975f15dd26d48031b00c8b55c28f3d5`. A later targeted re-audit of prior findings `F-001` and `F-002` alone was performed against baseline `df8f260ba84af7679467b7ce3ce10328d42a11e9`; that second namespace is used only to determine whether those two findings remain open, never to re-open the architectural assessment. Canonical audit authority is unchanged between the two baselines, so the Re-Audit Protocol's Full Re-Audit triggers are not met.
 
 The evidence cutoff freezes the issue/PR/review state admitted to this audit. Repository files, canonical governance documents, architecture documents, contracts, and Accepted ADRs used as substantive evidence were read from the exact repository baseline `cd1ef1981975f15dd26d48031b00c8b55c28f3d5`. The auditor has recorded the immutable locator and retrieval time for every source examined.
 
@@ -74,6 +79,11 @@ The entries below define the reproducible evidence namespace retrieved for this 
 | Pre-model runtime implementation | `cd1ef1981975f15dd26d48031b00c8b55c28f3d5:src/hunter/evidence_intelligence/pre_model.py` | `2026-08-20T14:30:00Z` |
 | Legacy provider runner implementation | `cd1ef1981975f15dd26d48031b00c8b55c28f3d5:src/hunter/evidence_intelligence/provider.py` | `2026-08-20T14:30:00Z` |
 | Architecture Index | `cd1ef1981975f15dd26d48031b00c8b55c28f3d5:docs/architecture-index.md` | `2026-08-20T14:30:00Z` |
+| Merged PR #293 (Artifact Guard) | `df8f260ba84af7679467b7ce3ce10328d42a11e9:scripts/hunter_artifact_preflight.py` | `2026-08-22T12:00:00Z` |
+| Merged PR #298 (Architecture Index Guard) | `df8f260ba84af7679467b7ce3ce10328d42a11e9:scripts/hunter_architecture_index_preflight.py` | `2026-08-22T12:00:00Z` |
+| Shared Pre-PR gate chain | `df8f260ba84af7679467b7ce3ce10328d42a11e9:scripts/hunter_pr_preflight.py` | `2026-08-22T12:00:00Z` |
+| Defect registry entry `ARCH-AUD-008` | `df8f260ba84af7679467b7ce3ce10328d42a11e9:docs/DEFECT_REGISTRY.json` | `2026-08-22T12:00:00Z` |
+| ADPR-0009 at targeted re-audit baseline | `df8f260ba84af7679467b7ce3ce10328d42a11e9:docs/architecture-records/ADPR-0009-evidence-intelligence-model-adapter.md` | `2026-08-22T12:00:00Z` |
 
 ## Audit Scope
 
@@ -92,6 +102,17 @@ Every substantive prior finding from PR #288 was independently verified against 
 | `PR288-F05` | Model Adapter, not provider transport, owns canonical request artifact identity/authorization/persistence | ADPR-0009 sections "Recommended Architecture -> Ownership" and "Provider request artifact" specify that provider-specific transports return a deterministic, non-secret transport transformation result in memory and own no durable artifact semantics. The Model Adapter alone applies Source Handling, resolves dispositions, creates, and persists `ProviderRequestArtifact`. | Ownership inversion where provider-specific code creates canonical artifacts would bypass Source Handling enforcement and pollute canonical persistence with provider-specific SDK abstractions. | `VERIFIED_CLOSED` |
 | `PR288-F06` | Source Handling snapshot-to-send boundary must be atomic and single-use | ADPR-0009 section "Atomic Source Handling handoff" defines `ModelHandoffRecord` created from one atomic Source Handling snapshot at the attempt cutoff, with single-use dispatch consumption (e.g., unique compare-and-set or transactional outbox) before transport invocation. | A race condition between permission check and network dispatch could allow source-handling revocation to be bypassed, or allow double-dispatch of the same attempt. | `VERIFIED_CLOSED` |
 | `PR288-F07` | Durable pre-send attempt, uncertain delivery, idempotency/reconciliation, and no-blind-retry semantics must be explicit | ADPR-0009 section "Model attempt, durable commit, and uncertain delivery" requires durable immutable pre-send `ModelAttemptRecord`, append-only `ModelAttemptOutcomeRecord`, first-class `DELIVERY_UNKNOWN`/`OUTCOME_UNKNOWN` semantics, provider idempotency classification, prohibition of automatic retry without reconciliation, and `RESPONSE_CAPTURED_PERSISTENCE_FAILED` handling without retry. | In-flight crashes or network timeouts could result in orphan provider executions, duplicate billable dispatches, or lost outcome provenance. | `VERIFIED_CLOSED` |
+
+## Targeted Re-Audit of Prior Findings
+
+Under the Re-Audit Protocol, a full re-audit is required only when decision scope, canonical authority, option viability, or the audited baseline's validity changes. None of those triggers occurred: `docs/ARCHITECTURE_AUDIT_PROTOCOL.md`, `docs/ARCHITECTURE_AUDIT_TEMPLATE.md`, and ADPR-0009 itself are byte-identical between `cd1ef1981975f15dd26d48031b00c8b55c28f3d5` and `df8f260ba84af7679467b7ce3ce10328d42a11e9`. What changed is repository tooling that one prior finding asserted was absent. This section therefore re-audits only `F-001` and `F-002`.
+
+| Prior finding | Prior assertion | Independent verification at `df8f260ba84af7679467b7ce3ce10328d42a11e9` | Disposition |
+|---|---|---|---|
+| `F-001` | ADPR-0009 Traceability records the PR #288 merge commit as not yet created | The Traceability section of ADPR-0009 still records the merge commit as not yet created, while PR #288 merged as `cd1ef1981975f15dd26d48031b00c8b55c28f3d5`. The staleness is unchanged and remains editorial. | `RETAINED` |
+| `F-002` | Deterministic repository preflight for conformance cases 13-14 remains a follow-up tooling obligation | Both obligations are now implemented and enforced in the shared Pre-PR chain. Case 13 (accepted-ADR applicability) is enforced by the Artifact Guard, which rejects a FULL audit omitting any Accepted ADR with `Accepted ADR NNNN is not structurally accounted for in FULL audit`. Case 14 (lifecycle/runtime status consistency) is enforced by the Architecture Index Guard and registered as guarded defect class `ARCH-AUD-008`. Both guards run as required stages of `scripts/hunter_pr_preflight.py`. | `RESOLVED` |
+
+`F-002` is closed on evidence, not by process history: the condition it described no longer exists in the repository. It is therefore removed from the findings set, the findings matrix, and the verdict derivation rather than retained mechanically. `F-001` is retained because its underlying evidence is unchanged and independently reconfirmed.
 
 ## Evidence Sources Examined
 
@@ -137,7 +158,7 @@ No evidence retrieved after the evidence cutoff `2026-08-20T12:45:18Z` was used 
 | Maintainability and extensibility | `PASS` | Provider transports are replaceable without rewriting prompt or pre-model history. Routing and shared-core abstraction are deferred until evidence exists. | None |
 | Governance compatibility | `PASS` | Fully compliant with Development Governance, ADR 0032 admission rules, zero-LLM governance review protocol, and Project Constitution. | None |
 | Traceability | `PASS_WITH_FINDINGS` | Correctly links Issue #287, Issue #289, PR #288, ADPR-0009, proposed ADR 0034. Minor metadata staleness in Traceability table listing merge commit as "not yet created" for PR #288 (merged as `cd1ef1981975f15dd26d48031b00c8b55c28f3d5`). | `F-001` |
-| Risks and unresolved uncertainty | `PASS_WITH_FINDINGS` | Evaluates 15 risks with category, likelihood, impact, mitigation, and residual uncertainty. Open questions are bounded with owner and required evidence. Generic repository check for conformance cases 13-14 is deferred to follow-up engineering/governance hardening. | `F-002` |
+| Risks and unresolved uncertainty | `PASS` | Evaluates 15 risks with category, likelihood, impact, mitigation, and residual uncertainty. Open questions are bounded with owner and required evidence. The deterministic repository check for conformance cases 13-14, previously the sole basis for a finding here, is implemented and enforced at the targeted re-audit baseline. | None |
 
 ## Findings
 
@@ -156,51 +177,38 @@ No evidence retrieved after the evidence cutoff `2026-08-20T12:45:18Z` was used 
 >
 > N/A — Finding is Class A (editorial/metadata presentation only) and cannot alter the architectural decision basis or option eligibility.
 
----
-
-### F-002 — Generic repository preflight checker for conformance cases 13-14 is deferred to follow-up tooling slice
-
-- **Evidence:** ADPR-0009 Open Questions table states: "Generic deterministic accepted-ADR coverage/status-consistency checker ... Follow-up hardening required".
-- **Location:** `docs/architecture-records/ADPR-0009-evidence-intelligence-model-adapter.md`, Open Questions table and Conformance Case 14.
-- **Category:** Governance compatibility / Testability.
-- **Severity:** `B`
-- **Decision impact:** Non-blocking quality observation. ADPR-0009 correctly distinguishes Model Adapter runtime contract test obligations (conformance cases 1-12) from repository governance preflight tooling obligations (conformance cases 13-14).
-- **Consequence if ignored:** Automated repository preflight tooling will not automatically verify architecture index status consistency for future architecture PRs until the tooling check is implemented.
-- **Required action:** Implement the reusable repository preflight check during the next governance/engineering tooling slice as planned.
-- **Blocks ADR:** `NO`
-
-> What incorrect, incomplete, or unsupported architectural decision could result if this finding is ignored?
->
-> N/A — Finding is Class B (quality/tooling observation). The Model Adapter architecture itself is fully specified and testable under conformance cases 1-12. Case 14 is a process-level preflight check for future repository maintenance.
-
 ## Findings Matrix
 
 | Finding | Class | Decision impact | Consequence if ignored | Blocks ADR | Evidence |
 |---|---|---|---|---|---|
 | `F-001` | A | None (editorial metadata) | Traceability table lists "not yet created" for PR #288 merge commit | NO | `docs/architecture-records/ADPR-0009-evidence-intelligence-model-adapter.md`, Traceability table |
-| `F-002` | B | Non-blocking quality observation | Repository preflight tooling check for index status consistency is deferred to follow-up tooling slice | NO | `docs/architecture-records/ADPR-0009-evidence-intelligence-model-adapter.md`, Open Questions table |
 
 ## Verdict Derivation
 
-- Highest unresolved severity: `Class B`
-- Cumulative Class B materiality: Low (does not impair auditability, option comparison, or architectural decision quality).
-- Blocking findings: None.
-- Conditions required before ADR approval: None blocking ADR 0034 drafting.
+- Highest unresolved severity: `Class A`
+- Trivial: yes. `F-001` is editorial traceability metadata with recorded decision impact `None`; it cannot alter the decision basis or option eligibility.
+- Cumulative Class B materiality: not applicable. No unresolved Class B finding remains after the targeted re-audit closed `F-002` on evidence.
+- Blocking findings: none. No Class C or Class D finding exists.
+- Conditions required before ADR approval: none.
 
-Under `docs/ARCHITECTURE_AUDIT_PROTOCOL.md` Section "Verdict Derivation":
-- Highest unresolved severity is Class B.
-- Class B findings are not cumulatively material.
-- Therefore, the protocol mandatorily derives the verdict: `READY_FOR_ADR_WITH_MINOR_FINDINGS`.
+Under `docs/ARCHITECTURE_AUDIT_PROTOCOL.md`:
 
-The audit verified that ADPR-0009 is thoroughly evidenced, internally consistent, compliant with the Project Constitution and accepted ADRs, and successfully closes all seven prior defect classes from PR #288 (`PR288-F01` through `PR288-F07`).
+- the "Verdicts" section defines `READY_FOR_ADR` as applying when no material deficiencies remain, and states that Class A findings may exist if they are trivial and recorded;
+- the "Verdict Derivation" table maps highest unresolved severity `None or trivial A` with no material limitation to `READY_FOR_ADR`;
+- `READY_FOR_ADR_WITH_MINOR_FINDINGS` is not derived, because it applies to Class A *and non-cumulative Class B* findings, and no Class B finding remains;
+- `CONDITIONAL_ADR_READY`, `ADPR_REVISION_REQUIRED`, and `ARCHITECTURE_NOT_READY` are excluded because no cumulative Class B, Class C, or Class D finding exists.
+
+The verdict is therefore derived as `READY_FOR_ADR`. It is not carried over from the prior audit revision: the prior verdict rested on `F-002`, which no longer has an evidentiary basis.
+
+The audit verified that ADPR-0009 is thoroughly evidenced, internally consistent, compliant with the Project Constitution and accepted ADRs, and closes all seven prior defect classes from PR #288 (`PR288-F01` through `PR288-F07`).
 
 ## Final Verdict
 
-- `READY_FOR_ADR_WITH_MINOR_FINDINGS`
+- `READY_FOR_ADR`
 
 ### ADR 0034 progression semantics
 
-- `READY_FOR_ADR_WITH_MINOR_FINDINGS`: Clean progression to a dedicated ADR 0034 drafting lifecycle is permitted. Non-blocking findings F-001 and F-002 are tracked for follow-up during ADR drafting and engineering tooling updates.
+- `READY_FOR_ADR`: Clean progression to a dedicated ADR 0034 drafting lifecycle is permitted. The single trivial Class A finding `F-001` is tracked for follow-up during ADR drafting and does not condition progression.
 
 No audit verdict authorizes runtime implementation, provider/model invocation, credentials, Response Validator implementation, routing implementation, canonical knowledge mutation, or an LLM dependency in Hunter Governance Review / Merge Readiness.
 
@@ -211,7 +219,7 @@ No corrections or conditions block opening the ADR 0034 drafting lifecycle.
 ## Non-Blocking Follow-Up
 
 1. **F-001 (Traceability metadata):** Update ADPR-0009 Traceability section during ADR 0034 drafting or ADPR maintenance to cite PR #288 merge commit `cd1ef1981975f15dd26d48031b00c8b55c28f3d5`.
-2. **F-002 (Governance preflight check):** Implement the generic deterministic accepted-ADR coverage/status-consistency checker in future repository preflight tooling (as noted in Conformance Case 14).
+2. **ADPR-0009 Open Questions maintenance:** the Open Questions row describing the conformance case 13-14 checker as "Follow-up hardening required" is now satisfied by merged tooling and may be marked complete during ADR 0034 drafting. This is record maintenance, not an audit finding.
 
 ## Audit Completion Check
 
@@ -232,7 +240,7 @@ No corrections or conditions block opening the ADR 0034 drafting lifecycle.
 - [x] Findings matrix completed
 - [x] Verdict derived from class and materiality
 - [x] Full-audit scope followed
-- [x] Targeted re-audit rule followed where applicable (not applicable to this FULL initial audit)
+- [x] Targeted re-audit rule followed where applicable (targeted re-audit of prior findings F-001 and F-002 performed under the Re-Audit Protocol; full re-audit triggers not met)
 - [x] Auditor did not recommend or rank options unless explicitly authorized
 - [x] Auditor independence recorded (`Jules — independent architecture audit agent`)
 
