@@ -11,7 +11,13 @@ ADPR_0006_RUNTIME_PATHS = (
     ROOT / "src" / "hunter" / "evidence_intelligence" / "pre_model_persistence.py",
 )
 
-NEGATIVE_IMPLEMENTATION_RE = re.compile(r"(?i)\b(?:not\s+started|not\s+implemented|not\s+authorized|unimplemented)\b")
+RUNTIME_ASSERTION_RE = re.compile(
+    r"(?i)\b(?:ADR\s+0031\s+)?provider-free\s+pre-model\s+runtime\s+is\s+implemented\s+in\s+current\s+source\b"
+)
+RUNTIME_REVOCATION_RE = re.compile(
+    r"(?i)\bprovider-free\s+pre-model\s+runtime\b.{0,240}\b(?:has\s+since\s+been\s+removed|"
+    r"was\s+removed|is\s+removed|no\s+longer\s+implemented|is\s+not\s+implemented|unimplemented|disabled|absent)\b"
+)
 DECISION_HEADERS = (
     "adpr",
     "title",
@@ -43,6 +49,57 @@ def _normalized_cells(line: str) -> tuple[str, ...]:
     return tuple(_normalized_cell(cell) for cell in _markdown_cells(line))
 
 
+def _rendered_markdown(text: str) -> str:
+    """Remove fenced-code and HTML-comment content before semantic parsing."""
+    rendered: list[str] = []
+    in_fence = False
+    in_comment = False
+    fence_marker = ""
+
+    for raw_line in text.splitlines():
+        stripped = raw_line.lstrip()
+        if not in_comment and (stripped.startswith("```") or stripped.startswith("~~~")):
+            marker = stripped[:3]
+            if not in_fence:
+                in_fence = True
+                fence_marker = marker
+            elif marker == fence_marker:
+                in_fence = False
+                fence_marker = ""
+            continue
+        if in_fence:
+            continue
+
+        line = raw_line
+        visible_parts: list[str] = []
+        cursor = 0
+        while cursor < len(line):
+            if in_comment:
+                end = line.find("-->", cursor)
+                if end == -1:
+                    cursor = len(line)
+                    break
+                in_comment = False
+                cursor = end + 3
+                continue
+
+            start = line.find("<!--", cursor)
+            if start == -1:
+                visible_parts.append(line[cursor:])
+                break
+            visible_parts.append(line[cursor:start])
+            end = line.find("-->", start + 4)
+            if end == -1:
+                in_comment = True
+                cursor = len(line)
+                break
+            cursor = end + 3
+
+        rendered.append("".join(visible_parts))
+
+    return "\n".join(rendered)
+
+
 def _section(text: str, heading: str) -> str:
     lines = text.splitlines()
     try:
@@ -65,7 +122,7 @@ def _canonical_table(section: str, headers: tuple[str, ...]) -> list[list[str]] 
         if index + 1 >= len(lines):
             return None
         delimiter = _markdown_cells(lines[index + 1])
-        if not delimiter or not all(re.fullmatch(r":?-{3,}:?", cell) for cell in delimiter):
+        if len(delimiter) != len(headers) or not all(re.fullmatch(r":?-{3,}:?", cell) for cell in delimiter):
             return None
         rows: list[list[str]] = []
         for candidate in lines[index + 2 :]:
@@ -96,15 +153,18 @@ def validate_architecture_index(
 ) -> list[str]:
     """Validate the known lifecycle/runtime consistency invariant from ADPR-0009 case 14."""
     errors: list[str] = []
+    semantic_text = _rendered_markdown(text)
 
-    decision_table = _canonical_table(_section(text, "## Decision Registry"), DECISION_HEADERS)
+    decision_table = _canonical_table(_section(semantic_text, "## Decision Registry"), DECISION_HEADERS)
     if decision_table is None:
-        errors.append("Decision Registry must contain the canonical ADPR/Status table schema.")
+        errors.append("Decision Registry must contain the rendered canonical ADPR/Status table schema.")
         return errors
-    approved_table = _canonical_table(_section(text, "## Approved and Implemented Records"), APPROVED_HEADERS)
+    approved_table = _canonical_table(
+        _section(semantic_text, "## Approved and Implemented Records"), APPROVED_HEADERS
+    )
     if approved_table is None:
         errors.append(
-            "Approved and Implemented Records must separate ADPR lifecycle Status from downstream Implementation."
+            "Approved and Implemented Records must contain the rendered canonical table with separate ADPR lifecycle Status and downstream Implementation."
         )
         return errors
 
@@ -141,14 +201,13 @@ def validate_architecture_index(
         return errors
 
     implementation_cell = approved_matches[0][3]
-    implementation = _normalized_cell(implementation_cell)
-    if NEGATIVE_IMPLEMENTATION_RE.search(implementation):
-        errors.append(f"{ADPR_0006} implementation state contradicts canonical runtime evidence: {implementation_cell}")
-    if "provider-free" not in implementation or "pre-model" not in implementation:
-        errors.append(f"{ADPR_0006} implementation state must identify the provider-free pre-model runtime.")
-    if "implemented" not in implementation or "current source" not in implementation:
+    if not RUNTIME_ASSERTION_RE.search(implementation_cell):
         errors.append(
-            f"{ADPR_0006} implementation state must positively record that the runtime is implemented in current source."
+            f"{ADPR_0006} implementation state must explicitly assert that the provider-free pre-model runtime is implemented in current source."
+        )
+    if RUNTIME_REVOCATION_RE.search(implementation_cell):
+        errors.append(
+            f"{ADPR_0006} implementation state revokes or contradicts the current provider-free pre-model runtime: {implementation_cell}"
         )
 
     return errors
