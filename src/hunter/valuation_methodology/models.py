@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from typing import Literal
 
 VALUATION_METHODOLOGY_SCHEMA_VERSION = "valuation-methodology-v1"
+METHODOLOGY_CONTRACT_SCHEMA_VERSION = "methodology-evidence-input-contract-v1"
 
 QualityState = Literal["accepted", "stale", "partial", "ambiguous", "unavailable", "unsupported"]
 ConflictState = Literal["none", "open", "contested", "resolved"]
@@ -67,6 +68,7 @@ class ValuationMethodologySnapshot:
     correlation_group: str
     authorizing_adr_reference: str
     authorized_by: str
+    accepts_assembled_evidence: bool = False
     supersedes_record_id: str | None = None
     correction_reason: str = ""
 
@@ -129,6 +131,63 @@ def _required_text(instance: object, *fields: str) -> None:
 def _member(name: str, value: str, allowed: frozenset[str]) -> None:
     if value not in allowed:
         raise ValueError(f"unsupported {name}: {value}")
+
+
+@dataclass(frozen=True)
+class MethodologyEvidenceInputContract:
+    contract_id: str
+    contract_version: str
+    accepts_assembled_evidence: bool
+    accepted_shape_ids: tuple[str, ...]
+    accepted_assembly_rule_versions: tuple[str, ...]
+    accounting_window_start: datetime
+    accounting_window_end: datetime
+    exact_gap_free_non_overlapping_coverage_required: bool
+    allow_representation_boundary_crossing: bool
+    allow_pathway_boundary_crossing: bool
+    allow_supply_basis_boundary_crossing: bool
+    provenance_content_hash_required: bool
+    conflict_policy: Literal["reject"]
+    minimum_quality_state: Literal["accepted"]
+    entity_id: str
+    representation_id: str
+    currency: str
+    unit: str
+    missingness_behavior: Literal["unavailable"]
+    strict_known_required: bool
+    effective_at: datetime
+    recorded_at: datetime
+    known_at: datetime
+    quality_state: Literal["accepted"]
+    conflict_state: Literal["none", "resolved"]
+    content_hash: str
+    supersedes_contract_version: str | None = None
+    correction_reason: str = ""
+
+    def __post_init__(self) -> None:
+        _required_text(
+            self,
+            "contract_id",
+            "contract_version",
+            "entity_id",
+            "representation_id",
+            "currency",
+            "unit",
+            "content_hash",
+        )
+        object.__setattr__(
+            self, "accounting_window_start", _utc("accounting_window_start", self.accounting_window_start)
+        )
+        object.__setattr__(self, "accounting_window_end", _utc("accounting_window_end", self.accounting_window_end))
+        object.__setattr__(self, "effective_at", _utc("effective_at", self.effective_at))
+        object.__setattr__(self, "recorded_at", _utc("recorded_at", self.recorded_at))
+        object.__setattr__(self, "known_at", _utc("known_at", self.known_at))
+        if self.accounting_window_start >= self.accounting_window_end:
+            raise ValueError("methodology contract accounting window must have positive duration")
+        if self.supersedes_contract_version is None and self.correction_reason.strip():
+            raise ValueError("initial methodology contract cannot carry a correction reason")
+        if self.supersedes_contract_version is not None and not self.correction_reason.strip():
+            raise ValueError("correction reason is required for methodology contract correction")
 
 
 def _normalize_chronology(instance: object) -> None:

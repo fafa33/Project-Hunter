@@ -8,12 +8,16 @@ from typing import Any
 from hunter.persistence.models import QuerySpec
 from hunter.persistence.records import SnapshotRecord
 from hunter.persistence.sql import RepositoryFactory, SessionFactory, create_schema, create_sqlite_engine
-from hunter.valuation_methodology.models import ValuationMethodologySnapshot
+from hunter.valuation_methodology.models import (
+    MethodologyEvidenceInputContract,
+    ValuationMethodologySnapshot,
+)
 
 DEFAULT_VALUATION_METHODOLOGY_DB = Path("data/data_ops.sqlite")
 VALUATION_METHODOLOGY_MIGRATION_ID = "generic-sql-valuation-methodology-snapshot-v1"
 
 _METHODOLOGY_TYPE = "valuation-methodology-snapshot"
+_CONTRACT_TYPE = "methodology-evidence-input-contract"
 
 
 class ValuationMethodologyIntegrityError(ValueError):
@@ -44,11 +48,17 @@ class ValuationMethodologyRepository:
         snapshot = self._load(record_id)
         return _from_payload(snapshot.payload) if snapshot is not None else None
 
+    def get_contract(self, contract_id: str, contract_version: str) -> MethodologyEvidenceInputContract | None:
+        snapshot = self._load_contract(contract_id, contract_version)
+        return _contract_from_payload(snapshot.payload) if snapshot is not None else None
+
     def count(self, table: str) -> int:
         if table == "valuation_methodology_schema_migrations":
             return 1
         if table == "valuation_methodology_snapshots":
             return len(self._snapshots())
+        if table == "valuation_methodology_contracts":
+            return len(self._contract_snapshots())
         raise ValueError("unsupported valuation-methodology table")
 
     def migration_ids(self) -> tuple[str, ...]:
@@ -63,12 +73,36 @@ class ValuationMethodologyRepository:
         )
         return tuple(records)
 
+    def contract_history(self, contract_id: str) -> tuple[MethodologyEvidenceInputContract, ...]:
+        if not contract_id.strip():
+            raise ValueError("contract_id must not be blank")
+        records = [contract for contract in self._contracts_skipping_malformed() if contract.contract_id == contract_id]
+        records.sort(
+            key=lambda item: (item.effective_at, item.recorded_at, item.known_at, item.contract_version),
+        )
+        return tuple(records)
+
     def records(self) -> tuple[ValuationMethodologySnapshot, ...]:
         """Return every decodable record in deterministic storage order."""
         return tuple(
             sorted(
                 self._records_skipping_malformed(),
                 key=lambda item: (item.logical_id, item.effective_at, item.recorded_at, item.known_at, item.record_id),
+            )
+        )
+
+    def contracts(self) -> tuple[MethodologyEvidenceInputContract, ...]:
+        """Return every decodable contract in deterministic storage order."""
+        return tuple(
+            sorted(
+                self._contracts_skipping_malformed(),
+                key=lambda item: (
+                    item.contract_id,
+                    item.effective_at,
+                    item.recorded_at,
+                    item.known_at,
+                    item.contract_version,
+                ),
             )
         )
 
@@ -85,6 +119,15 @@ class ValuationMethodologyRepository:
                 continue
         return tuple(records)
 
+    def _contracts_skipping_malformed(self) -> tuple[MethodologyEvidenceInputContract, ...]:
+        records = []
+        for snapshot in self._contract_snapshots():
+            try:
+                records.append(_contract_from_payload(snapshot.payload))
+            except (ValuationMethodologyIntegrityError, ValueError, KeyError):
+                continue
+        return tuple(records)
+
     def _load(self, record_id: str) -> SnapshotRecord | None:
         engine = create_sqlite_engine(self.path)
         session = SessionFactory(engine).create()
@@ -97,12 +140,35 @@ class ValuationMethodologyRepository:
             session.close()
             engine.dispose()
 
+    def _load_contract(self, contract_id: str, contract_version: str) -> SnapshotRecord | None:
+        target_id = f"{contract_id}:{contract_version}"
+        engine = create_sqlite_engine(self.path)
+        session = SessionFactory(engine).create()
+        try:
+            snapshot = RepositoryFactory(session).snapshots().load(target_id)
+            if snapshot is None or snapshot.snapshot_type != _CONTRACT_TYPE:
+                return None
+            return snapshot
+        finally:
+            session.close()
+            engine.dispose()
+
     def _snapshots(self) -> tuple[SnapshotRecord, ...]:
         engine = create_sqlite_engine(self.path)
         session = SessionFactory(engine).create()
         try:
             records = RepositoryFactory(session).snapshots().query(QuerySpec(record_kind="snapshot"))
             return tuple(item for item in records if item.snapshot_type == _METHODOLOGY_TYPE)
+        finally:
+            session.close()
+            engine.dispose()
+
+    def _contract_snapshots(self) -> tuple[SnapshotRecord, ...]:
+        engine = create_sqlite_engine(self.path)
+        session = SessionFactory(engine).create()
+        try:
+            records = RepositoryFactory(session).snapshots().query(QuerySpec(record_kind="snapshot"))
+            return tuple(item for item in records if item.snapshot_type == _CONTRACT_TYPE)
         finally:
             session.close()
             engine.dispose()
@@ -122,6 +188,26 @@ def methodology_snapshot(record: ValuationMethodologySnapshot) -> SnapshotRecord
             "domain": "valuation-methodology",
             "logical_id": record.logical_id,
             "known_at": record.known_at.isoformat(),
+        },
+    )
+
+
+def methodology_contract_snapshot(contract: MethodologyEvidenceInputContract) -> SnapshotRecord:
+    target_id = f"{contract.contract_id}:{contract.contract_version}"
+    return SnapshotRecord(
+        id=target_id,
+        created_at=contract.recorded_at,
+        effective_at=contract.effective_at,
+        snapshot_type=_CONTRACT_TYPE,
+        target_id=contract.contract_id,
+        record_ids=(target_id,),
+        payload=_payload(contract),
+        metadata={
+            "authority_class": "production-authoritative",
+            "domain": "valuation-methodology-contract",
+            "contract_id": contract.contract_id,
+            "contract_version": contract.contract_version,
+            "known_at": contract.known_at.isoformat(),
         },
     )
 
@@ -163,9 +249,44 @@ def _from_payload(payload: dict[str, Any]) -> ValuationMethodologySnapshot:
             + ",".join(missing)
         )
     result = dict(payload)
+    result.setdefault("accepts_assembled_evidence", False)
     for name in ("effective_at", "recorded_at", "known_at"):
         result[name] = datetime.fromisoformat(str(result[name])).astimezone(UTC)
     return ValuationMethodologySnapshot(**result)
+
+
+def _contract_from_payload(payload: dict[str, Any]) -> MethodologyEvidenceInputContract:
+    required_fields = (
+        "contract_id",
+        "contract_version",
+        "accepts_assembled_evidence",
+        "accepted_shape_ids",
+        "accepted_assembly_rule_versions",
+        "accounting_window_start",
+        "accounting_window_end",
+        "entity_id",
+        "representation_id",
+        "currency",
+        "unit",
+        "effective_at",
+        "recorded_at",
+        "known_at",
+        "quality_state",
+        "conflict_state",
+        "content_hash",
+    )
+    missing = tuple(name for name in required_fields if name not in payload)
+    if missing:
+        raise ValuationMethodologyIntegrityError(
+            "legacy methodology contract snapshot is missing required fields: " + ",".join(missing)
+        )
+    result = dict(payload)
+    for name in ("accepted_shape_ids", "accepted_assembly_rule_versions"):
+        if isinstance(result.get(name), list):
+            result[name] = tuple(result[name])
+    for name in ("accounting_window_start", "accounting_window_end", "effective_at", "recorded_at", "known_at"):
+        result[name] = datetime.fromisoformat(str(result[name])).astimezone(UTC)
+    return MethodologyEvidenceInputContract(**result)
 
 
 def _aware(value: datetime) -> datetime:
