@@ -181,6 +181,16 @@
       "guard": "finding records and Findings Matrix rows are bidirectionally one-to-one by stable Finding ID: every rendered canonical record appears exactly once in the matrix and every matrix row maps to exactly one complete rendered record; duplicate record headings and duplicate matrix rows are rejected on cardinality rather than collapsed by a dict or set, so a rendered blocker cannot be omitted from the matrix and hidden from verdict derivation; record Severity and Blocks ADR must agree with the matrix; every candidate data row beneath a recognized Findings Matrix header is either parsed or reported, never silently skipped: a row with fewer cells than the header, or with no Finding identifier, is a deterministic error rather than a discarded row, so a truncated blocker cannot vanish from cardinality, severity, and verdict derivation at once, while blank template placeholder rows and separator rows remain non-data and escaped pipes remain cell content; the Findings Matrix counts only when it actually renders as a Markdown table: the canonical header must be immediately followed by a matching delimiter row, data rows are the contiguous table rows after it, and parsing stops where the rendered table ends, so pipe-prefixed prose, a delimiter placed later in the section, and an unrelated table elsewhere can neither establish nor rescue the mandatory matrix; the audit must contain exactly one rendered level-two Findings Matrix section, counted through the same heading-identity machinery as Final Verdict, so a second rendered matrix cannot hold an unresolved blocker that section-scoped reads never observe, while duplicate matrix headings inside fenced, commented, raw-HTML, or indented-code regions stay non-semantic",
       "test": "tests/test_hunter_artifact_preflight_cardinality.py::test_a_second_matrix_hiding_a_class_d_blocker_is_rejected",
       "status": "guarded"
+    },
+    {
+      "id": "ARCH-AUD-008",
+      "class": "architecture-index-lifecycle-runtime-status-contradiction",
+      "source": "PR #288 CodeRabbit lifecycle/runtime finding and PR #290 exact-head Codex review on 2026-08-21",
+      "classification": "systemic",
+      "guard_boundary": "shared deterministic architecture-index preflight",
+      "guard": "the architecture index must keep ADPR lifecycle Status separate from downstream Implementation, keep ADPR-0006 APPROVED consistently across canonical tables, and when the canonical provider-free ADR 0031 pre-model runtime files exist, positively record the implemented current-source state while rejecting contradictions such as not started, not implemented, or not authorized",
+      "test": "tests/test_hunter_architecture_index_preflight.py::test_known_not_started_contradiction_is_rejected",
+      "status": "guarded"
     }
   ]
 }
