@@ -28,9 +28,9 @@ def _fixture(
 
 ## Decision Registry
 
-| ADPR | Title | Status | Epic |
-|---|---|---|---|
-| [ADPR-0006](example.md) | AI Context | {decision_status} | none |
+| ADPR | Title | Status | Epic | Issue | ADR | Implementation PR | Merge Commit | Release | Supersedes | Superseded By |
+|---|---|---|---|---|---|---|---|---|---|---|
+| [ADPR-0006](example.md) | AI Context | {decision_status} | none | #1 | ADR 0031 | #2 | abc123 | v3.6.0 | none | none |
 
 ## Approved and Implemented Records
 
