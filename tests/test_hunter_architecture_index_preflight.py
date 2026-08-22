@@ -84,6 +84,25 @@ def test_lifecycle_and_runtime_must_have_separate_columns() -> None:
     assert any("separate ADPR lifecycle Status" in error for error in errors), errors
 
 
+def test_same_width_decoy_rows_outside_canonical_tables_cannot_satisfy_guard() -> None:
+    text = _fixture().replace(
+        "| [ADPR-0006](example.md) | AI Context | APPROVED | none | #1 | ADR 0031 | #2 | abc123 | v3.6.0 | none | none |",
+        "| [ADPR-0005](example.md) | AI Context | APPROVED | none | #1 | ADR 0031 | #2 | abc123 | v3.6.0 | none | none |",
+    )
+    text += """
+
+## Unrelated Evidence
+
+| A | B | C | D | E | F | G | H | I | J | K |
+|---|---|---|---|---|---|---|---|---|---|---|
+| ADPR-0006 | decoy | APPROVED | x | x | x | x | x | x | x | x |
+"""
+
+    errors = hunter_architecture_index_preflight.validate_architecture_index(text)
+
+    assert any("Decision Registry must contain exactly one ADPR-0006 row; found 0" in error for error in errors), errors
+
+
 def test_runtime_evidence_disappearance_fails_closed(tmp_path: Path) -> None:
     missing = (tmp_path / "pre_model.py", tmp_path / "pre_model_persistence.py")
 
