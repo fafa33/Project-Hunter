@@ -829,8 +829,8 @@ After independent architecture audit returns an ADR-ready verdict, create propos
 - Preparation working document: this ADPR serves as the permanent preparation record; no separate working file created
 - Checklist review: author self-assessment completed against preparation guide and quality standard; initial Codex P1 findings and subsequent CodeRabbit major findings on PR #288 remediated; the independent architecture audit then required was subsequently completed and returned final verdict `READY_FOR_ADR` with no blocking finding (PR #290, merge commit `09603c7b0ee3076f902190a0c1c1d223f9d71d8b`)
 - ADPR: `docs/architecture-records/ADPR-0009-evidence-intelligence-model-adapter.md`
-- ADR: [ADR 0034](../ADR/0034-evidence-intelligence-model-adapter-provider-attempt-boundary.md) drafted under Issue #299; `Proposed`, not yet accepted
-- Implementation plan: not yet created; blocked on ADR acceptance
+- ADR: [ADR 0034](../ADR/0034-evidence-intelligence-model-adapter-provider-attempt-boundary.md) drafted under Issue #299 (PR #300, merge commit `164449a0ccfbbfd32ed8ec4ca7791dc4c60827b8`) and Accepted under Issue #301
+- Implementation plan: not yet created; the ADR-acceptance blocker recorded here is discharged, and implementation requires a separate authorized lifecycle
 - PR: #288
 - Merge commit: `cd1ef1981975f15dd26d48031b00c8b55c28f3d5`
 - Release: not yet assigned

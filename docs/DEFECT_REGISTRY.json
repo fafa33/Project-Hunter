@@ -191,6 +191,16 @@
       "guard": "the architecture index must keep ADPR lifecycle Status separate from downstream Implementation, keep ADPR-0006 APPROVED consistently across canonical tables, and when the canonical provider-free ADR 0031 pre-model runtime files exist, positively record the implemented current-source state while rejecting contradictions such as not started, not implemented, or not authorized",
       "test": "tests/test_hunter_architecture_index_preflight.py::test_known_not_started_contradiction_is_rejected",
       "status": "guarded"
+    },
+    {
+      "id": "ARCH-AUD-009",
+      "class": "pinned-audit-judged-against-current-accepted-adr-state",
+      "source": "Issue #301 ADR 0034 acceptance: marking ADR 0034 Accepted made the merged ADPR-0009 FULL audit, pinned at baseline cd1ef1981975f15dd26d48031b00c8b55c28f3d5, fail the Artifact Guard for not accounting for a decision that did not exist at its own evidence cutoff",
+      "classification": "systemic",
+      "guard_boundary": "shared deterministic artifact preflight, FULL-audit accepted-ADR accounting",
+      "guard": "a FULL audit's accepted-ADR accounting requirement resolves the accepted set from docs/ADR/README.md at the audit's own pinned Reviewed revision rather than from current state, so a later ADR acceptance cannot retroactively invalidate an already-merged pinned audit; an ADR accepted at or before that baseline remains strictly required, and an absent or unresolvable baseline falls back to the stricter current set",
+      "test": "tests/test_hunter_artifact_preflight_adr_baseline.py",
+      "status": "guarded"
     }
   ]
 }

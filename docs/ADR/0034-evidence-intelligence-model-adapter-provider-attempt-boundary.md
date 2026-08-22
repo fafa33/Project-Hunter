@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed.
+Accepted.
 
 ## Date
 
@@ -16,7 +16,9 @@ The independent architecture audit of that preparation record, `docs/ARCHITECTUR
 
 This ADR formalizes the architecture ADPR-0009 recommended and the audit validated. It introduces no materially new architecture beyond that audited basis. It is drafted under Issue #299.
 
-`Proposed` status means this decision is not yet binding. Acceptance is a separate owner decision and, per `docs/ADR/README.md`, acceptance of architecture is not authorization of runtime implementation.
+The repository owner accepted ADR 0034 under Issue #301, after the architecture-only drafting contribution merged through PR #300 as commit `164449a0ccfbbfd32ed8ec4ca7791dc4c60827b8`. Acceptance was a separate lifecycle from drafting: every substantive review finding raised on PR #300 was resolved before that merge, and the acceptance contribution changed no architectural decision in this record.
+
+This lifecycle transition makes the decision binding architecture. Per `docs/ADR/README.md`, accepted architecture does not imply completed implementation and does not authorize runtime implementation. Runtime state is recorded separately under `Implementation Status`, which remains not started and not activated.
 
 ## Context
 
@@ -449,9 +451,11 @@ Acceptance of this ADR is architecture authority. It is not runtime activation. 
 
 ## Implementation Status
 
-Architecture only. Not started, and not authorized by this ADR.
+- **Architecture: Accepted.** This decision is binding.
+- **Runtime implementation: not implemented, not started, and not activated.** No Model Adapter runtime, provider transport, provider SDK, endpoint, credential, persistence schema, `ResponseValidator`, or routing exists, and none is authorized by this acceptance.
+- **Conformance obligations CO-01 through CO-23: not satisfied.** They remain future implementation gates; acceptance neither pre-satisfies nor discharges any of them.
 
-Implementation requires a separately authorized issue and lifecycle after this ADR is accepted. That implementation must freeze CO-01 through CO-23 as deterministic contract tests before concrete provider code, and must additionally prove the atomic snapshot-to-handoff and single-use dispatch mechanism, the field-category coverage for request and response durable evidence, and each provider's idempotency, correlation, and reconciliation classification before any provider is activated.
+Acceptance of architecture is not authorization of implementation. Implementation requires a separately authorized issue and lifecycle after this acceptance merges. That implementation must freeze CO-01 through CO-23 as deterministic contract tests before concrete provider code, and must additionally prove the atomic snapshot-to-handoff and single-use dispatch mechanism, the field-category coverage for request and response durable evidence, and each provider's idempotency, correlation, and reconciliation classification before any provider is activated.
 
 ## Consequences
 

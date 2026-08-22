@@ -13,6 +13,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 REGISTRY_PATH = ROOT / "docs" / "DEFECT_REGISTRY.json"
 ADR_INDEX_PATH = ROOT / "docs" / "ADR" / "README.md"
+ADR_INDEX_RELATIVE = "docs/ADR/README.md"
 AUDIT_PREFIX = "docs/ARCHITECTURE_AUDITS/"
 
 REQUIRED_REGISTRY_FIELDS = {
@@ -329,6 +330,29 @@ def accepted_adr_ids(index_text: str) -> list[str]:
         if match and cells[2].startswith("Accepted"):
             ids.append(match.group(1))
     return sorted(set(ids))
+
+
+def accepted_adrs_at_baseline(revision: str | None, *, current: list[str]) -> list[str]:
+    """Accepted ADRs knowable at a FULL audit's own pinned baseline.
+
+    A FULL audit is pinned to an exact reviewed revision and evidence cutoff, and
+    its whole evidence namespace is that revision. Judging its ADR accounting
+    against the *current* accepted set substitutes present state for that
+    historical cutoff -- the substitution ADR 0020 and ADR 0033 prohibit -- and
+    makes every later ADR acceptance retroactively invalidate an already-merged
+    historical audit that could not possibly have accounted for a decision that
+    did not yet exist. Resolve the set as of the pinned revision instead.
+
+    Falls back to the current set whenever the baseline cannot be resolved, which
+    is the stricter of the two behaviours: an unresolvable baseline requires more
+    accounting, never less.
+    """
+    if revision is None:
+        return current
+    result = _run_git("show", f"{revision}:{ADR_INDEX_RELATIVE}")
+    if result.returncode != 0 or not result.stdout.strip():
+        return current
+    return accepted_adr_ids(result.stdout)
 
 
 def _mask_span_preserving_newlines(value: str) -> str:
@@ -1033,8 +1057,13 @@ def validate_audit_text(text: str, *, accepted_adrs: list[str]) -> list[str]:
         errors.append("Evidence cutoff must be an offset-aware ISO-8601 timestamp when present.")
 
     if audit_type == "FULL":
+        revision_match = REVISION_RE.search(metadata)
+        required_adrs = accepted_adrs_at_baseline(
+            revision_match.group(1) if revision_match else None,
+            current=accepted_adrs,
+        )
         accounted_adrs = _structured_adr_accounting_ids(semantic_text)
-        for adr in accepted_adrs:
+        for adr in required_adrs:
             if adr not in accounted_adrs:
                 errors.append(f"Accepted ADR {adr} is not structurally accounted for in FULL audit.")
 
