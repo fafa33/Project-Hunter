@@ -118,10 +118,42 @@ Every reusable guard was verified non-vacuous by deliberately weakening it in so
 | Prohibited-capability secret screening | yes |
 | Persistence request-evidence re-derivation | yes |
 
-Two rounds of mutation testing were required. The first exposed one vacuously
+Three rounds of mutation testing were required. The first exposed one vacuously
 covered guard (top-level retention denial); the second, run after review fixes,
 exposed two more where an overlapping check masked the guard under test. Each was
 isolated with a case only that guard can reject.
+
+The third round, prompted by a review observation, exposed a different and more
+uncomfortable failure mode: not a guard that was masked, but a *test* whose
+fixture could not express the counterfactual its name asserted. It is recorded
+as `MA-003`.
+
+### `MA-003` — an invariant test that could not fail for the named reason
+
+`test_build_time_allow_cannot_authorize_an_attempt` built a build-time ALLOW
+authority, asserted on it, discarded it, and then handed `prepare_attempt` an
+authority store that resolved DENY at *every* cutoff. It therefore proved only
+that an attempt-time DENY refuses — which another test already proved. The ALLOW
+was never reachable by the code under test, so no amount of build-time-authority
+leakage could have made it fail.
+
+This was confirmed, not assumed. Mutating the adapter to resolve authority a full
+day stale — precisely the "an earlier ALLOW carries forward" bug the test is named
+for — left the original test **passing**. The rewritten test fails under that same
+mutation.
+
+The fix is in the fixture, not the assertion: `publish_policy_successor` publishes
+a restrictive successor into an existing authority lineage, so a single store
+carries an ALLOW head at the build cutoff and a DENY head at the attempt cutoff,
+with only the cutoff separating them. The test now asserts both heads are
+genuinely resolvable from the store it hands over, which is what forecloses the
+"the ALLOW simply was not there" explanation for the refusal.
+
+The general lesson is registered as the guard for this defect class: an invariant
+test must be mutation-verified against the specific bug its *name* asserts, not
+merely against some weakening of a nearby guard. The two earlier rounds mutated
+guards and so could not have caught this; a green suite and a passing mutation
+round are not interchangeable with proof that a given invariant is exercised.
 
 ## Defects found by hostile self-review
 
