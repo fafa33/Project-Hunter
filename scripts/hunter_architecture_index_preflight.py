@@ -11,9 +11,7 @@ ADPR_0006_RUNTIME_PATHS = (
     ROOT / "src" / "hunter" / "evidence_intelligence" / "pre_model_persistence.py",
 )
 
-NEGATIVE_IMPLEMENTATION_RE = re.compile(
-    r"(?i)\b(?:not\s+started|not\s+implemented|not\s+authorized|unimplemented)\b"
-)
+NEGATIVE_IMPLEMENTATION_RE = re.compile(r"(?i)\b(?:not\s+started|not\s+implemented|not\s+authorized|unimplemented)\b")
 DECISION_HEADERS = (
     "adpr",
     "title",
@@ -98,7 +96,9 @@ def validate_architecture_index(
     decision_status = _normalized_cell(decision_matches[0][2]).upper()
     approved_status = _normalized_cell(approved_matches[0][2]).upper()
     if decision_status != "APPROVED":
-        errors.append(f"{ADPR_0006} Decision Registry lifecycle status must remain APPROVED; found {decision_status!r}.")
+        errors.append(
+            f"{ADPR_0006} Decision Registry lifecycle status must remain APPROVED; found {decision_status!r}."
+        )
     if approved_status != decision_status:
         errors.append(
             f"{ADPR_0006} lifecycle status disagrees between Decision Registry ({decision_status}) "
@@ -108,7 +108,9 @@ def validate_architecture_index(
     missing_runtime = [_display_path(path) for path in runtime_paths if not path.is_file()]
     if missing_runtime:
         errors.append(
-            f"{ADPR_0006} canonical provider-free pre-model runtime evidence is missing: " + ", ".join(missing_runtime) + "."
+            f"{ADPR_0006} canonical provider-free pre-model runtime evidence is missing: "
+            + ", ".join(missing_runtime)
+            + "."
         )
         return errors
 
