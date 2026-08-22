@@ -102,6 +102,5 @@ def test_case_14_defect_class_is_permanently_registered() -> None:
     assert len(matching) == 1
     assert matching[0]["status"] == "guarded"
     assert matching[0]["test"] == (
-        "tests/test_hunter_architecture_index_preflight.py::"
-        "test_known_not_started_contradiction_is_rejected"
+        "tests/test_hunter_architecture_index_preflight.py::" "test_known_not_started_contradiction_is_rejected"
     )
