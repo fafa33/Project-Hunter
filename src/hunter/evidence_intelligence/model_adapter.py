@@ -430,7 +430,15 @@ def _jsonable(value: Any) -> Any:
     return value
 
 
-def _disposition_identity(decision: Mapping[str, Any]) -> str:
+def disposition_identity(decision: Mapping[str, Any]) -> str:
+    """Identity of a decision's durable dispositions.
+
+    Public because the persistence boundary must derive this identity the
+    *same* way the adapter does in order to reject a handoff bound to
+    dispositions the rederived authority did not produce. Single-sourcing it
+    here is what makes that check meaningful; a second implementation could
+    drift and silently agree with a forgery.
+    """
     return _identity("durable-disposition", _jsonable(decision.get("durable_dispositions") or {}))
 
 
@@ -626,7 +634,7 @@ class ModelAdapterService:
             authorization_rule_id=str(decision.get("authorization_rule_id") or ""),
             attempt_cutoff=attempt.attempt_cutoff,
             processing_decision="ALLOW",
-            durable_disposition_identity=_disposition_identity(decision),
+            durable_disposition_identity=disposition_identity(decision),
             dispatch_capability_identity=dispatch_capability_identity,
             expires_at=handoff_expires_at,
         )

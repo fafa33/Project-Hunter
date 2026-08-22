@@ -221,6 +221,16 @@
       "guard": "persist_attempt_and_handoff requires the attempt authority, independently re-resolves it per the ADR 0033 persistence invariant, and rejects any handoff whose bound fact, policy, field-category-registry, authorization-rule, durable-disposition, or attempt-cutoff identities disagree with the rederived decision; direct_write remains forbidden outright",
       "test": "tests/test_model_adapter_phase_a.py::test_repository_cannot_be_used_to_forge_an_authoritative_record",
       "status": "guarded"
+    },
+    {
+      "id": "MA-003",
+      "class": "invariant-test-whose-fixture-cannot-express-the-counterfactual",
+      "source": "PR #304 independent review (CodeRabbit): test_build_time_allow_cannot_authorize_an_attempt constructed a build-time ALLOW authority, asserted on it, then discarded it and passed prepare_attempt an authority store that resolved DENY at every cutoff, so the test proved only that an attempt-time DENY refuses; confirmed by mutation, the original test passed while the adapter resolved authority a full day stale, which is precisely the bug the test was named for",
+      "classification": "systemic",
+      "guard_boundary": "Phase A Model Adapter adversarial suite and its governed authority fixture",
+      "guard": "An invariant test must be mutation-verified against the specific bug its name asserts, not merely against any weakening of a nearby guard; where the invariant is that an earlier permissive decision does not carry forward, the permissive head must be reachable in the same authority store handed to the code under test. evidence_pre_model_source_handling_fixture.publish_policy_successor and model_adapter_fixture.deny_successor publish a restrictive successor into an existing lineage so one store carries both decisions and only the cutoff separates them",
+      "test": "tests/test_model_adapter_phase_a.py::test_build_time_allow_cannot_authorize_an_attempt",
+      "status": "guarded"
     }
   ]
 }
