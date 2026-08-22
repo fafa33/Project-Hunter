@@ -452,8 +452,9 @@ Acceptance of this ADR is architecture authority. It is not runtime activation. 
 ## Implementation Status
 
 - **Architecture: Accepted.** This decision is binding.
-- **Runtime implementation: not implemented, not started, and not activated.** No Model Adapter runtime, provider transport, provider SDK, endpoint, credential, persistence schema, `ResponseValidator`, or routing exists, and none is authorized by this acceptance.
+- **Runtime implementation: not implemented, not started, and not activated.** No ADR 0034-conformant Model Adapter runtime, provider transport, provider SDK, endpoint, credential, execution-record persistence schema, `ResponseValidator`, or routing exists, and none is authorized by this acceptance.
 - **Conformance obligations CO-01 through CO-23: not satisfied.** They remain future implementation gates; acceptance neither pre-satisfies nor discharges any of them.
+- **Legacy provider path: unaffected and non-conformant.** The pre-existing `AIExtractionProvider` / `SecureAIProviderRunner` path and its persisted `AIProviderArtifact` / `ExtractionProposal` records continue to exist as the historical execution architecture described in `Context`. They lie outside this accepted boundary, satisfy none of its obligations, and are not evidence of Model Adapter implementation. Every absence claim above is scoped to ADR 0034-conformant functionality, not to provider execution anywhere in Hunter.
 
 Acceptance of architecture is not authorization of implementation. Implementation requires a separately authorized issue and lifecycle after this acceptance merges. That implementation must freeze CO-01 through CO-23 as deterministic contract tests before concrete provider code, and must additionally prove the atomic snapshot-to-handoff and single-use dispatch mechanism, the field-category coverage for request and response durable evidence, and each provider's idempotency, correlation, and reconciliation classification before any provider is activated.
 

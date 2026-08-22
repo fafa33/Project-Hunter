@@ -198,7 +198,7 @@
       "source": "Issue #301 ADR 0034 acceptance: marking ADR 0034 Accepted made the merged ADPR-0009 FULL audit, pinned at baseline cd1ef1981975f15dd26d48031b00c8b55c28f3d5, fail the Artifact Guard for not accounting for a decision that did not exist at its own evidence cutoff",
       "classification": "systemic",
       "guard_boundary": "shared deterministic artifact preflight, FULL-audit accepted-ADR accounting",
-      "guard": "a FULL audit's accepted-ADR accounting requirement resolves the accepted set from docs/ADR/README.md at the audit's own pinned Reviewed revision rather than from current state, so a later ADR acceptance cannot retroactively invalidate an already-merged pinned audit; an ADR accepted at or before that baseline remains strictly required, and an absent or unresolvable baseline falls back to the stricter current set",
+      "guard": "a FULL audit's accepted-ADR accounting requirement resolves the accepted set from docs/ADR/README.md at the audit's own separately declared Repository evidence baseline, so a later ADR acceptance cannot retroactively invalidate an already-merged pinned audit; the reviewed artifact's own revision is never accepted as a substitute for that baseline, an ADR accepted at or before the baseline remains strictly required, and an absent or unresolvable baseline falls back to the stricter current set",
       "test": "tests/test_hunter_artifact_preflight_adr_baseline.py",
       "status": "guarded"
     }

@@ -66,13 +66,21 @@ def pinned_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> str:
     return baseline
 
 
-def _audit(revision: str, *accounted: str) -> str:
-    """A canonically valid FULL audit pinned to `revision`.
+def _audit(revision: str, *accounted: str, baseline: str | None = None) -> str:
+    """A canonically valid FULL audit, optionally declaring a repository-evidence baseline.
 
     Built from the shared valid-audit fixture so this module tests only the
     baseline-resolution boundary, not a private copy of the audit template.
+
+    `revision` is the reviewed artifact's revision; `baseline` is the separately
+    declared repository-evidence namespace. They are deliberately distinct.
     """
     text = _good_audit(accepted_adrs=tuple(accounted))
+    if baseline is not None:
+        text = text.replace(
+            f"- Reviewed revision: `{CANONICAL_FIXTURE_REVISION}`\n",
+            f"- Reviewed revision: `{CANONICAL_FIXTURE_REVISION}`\n" f"- Repository evidence baseline: `{baseline}`\n",
+        )
     return text.replace(CANONICAL_FIXTURE_REVISION, revision)
 
 
@@ -80,10 +88,10 @@ def _adr_errors(errors: list[str], adr: str) -> list[str]:
     return [error for error in errors if f"ADR {adr}" in error]
 
 
-def test_adr_accepted_after_the_pinned_baseline_is_not_required(pinned_repo: str) -> None:
+def test_adr_accepted_after_the_proven_baseline_is_not_required(pinned_repo: str) -> None:
     """The positive half: a canonically valid pinned audit is not falsely rejected."""
     errors = hunter_artifact_preflight.validate_audit_text(
-        _audit(pinned_repo, *BASELINE_ADRS),
+        _audit(CANONICAL_FIXTURE_REVISION, *BASELINE_ADRS, baseline=pinned_repo),
         accepted_adrs=[*BASELINE_ADRS, LATER_ADR],
     )
 
@@ -94,7 +102,7 @@ def test_adr_accepted_after_the_pinned_baseline_is_not_required(pinned_repo: str
 def test_adr_accepted_at_the_baseline_is_still_required(pinned_repo: str) -> None:
     """The negative half: the relaxation must not become a blanket exemption."""
     errors = hunter_artifact_preflight.validate_audit_text(
-        _audit(pinned_repo, BASELINE_ADRS[0]),
+        _audit(CANONICAL_FIXTURE_REVISION, BASELINE_ADRS[0], baseline=pinned_repo),
         accepted_adrs=[*BASELINE_ADRS, LATER_ADR],
     )
 
@@ -104,7 +112,7 @@ def test_adr_accepted_at_the_baseline_is_still_required(pinned_repo: str) -> Non
 def test_unresolvable_baseline_falls_back_to_the_stricter_current_set(pinned_repo: str) -> None:
     """An unresolvable revision must require more accounting, never less."""
     errors = hunter_artifact_preflight.validate_audit_text(
-        _audit(ABSENT_REVISION, *BASELINE_ADRS),
+        _audit(CANONICAL_FIXTURE_REVISION, *BASELINE_ADRS, baseline=ABSENT_REVISION),
         accepted_adrs=[*BASELINE_ADRS, LATER_ADR],
     )
 
@@ -117,6 +125,12 @@ def test_missing_revision_declaration_falls_back_to_the_stricter_current_set(pin
     errors = hunter_artifact_preflight.validate_audit_text(text, accepted_adrs=[*BASELINE_ADRS, LATER_ADR])
 
     assert _adr_errors(errors, LATER_ADR)
+
+
+def test_absent_baseline_declaration_falls_back_to_the_stricter_current_set(pinned_repo: str) -> None:
+    resolved = hunter_artifact_preflight.accepted_adrs_at_baseline(None, current=[*BASELINE_ADRS, LATER_ADR])
+
+    assert resolved == [*BASELINE_ADRS, LATER_ADR]
 
 
 def test_baseline_resolution_reads_the_index_at_that_revision(pinned_repo: str) -> None:
