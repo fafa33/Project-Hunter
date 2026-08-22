@@ -92,7 +92,7 @@ A transport returns evidence. The Model Adapter decides what that evidence means
 
 `EvidencePromptArtifact` and `EvidencePreModelBuildRecord` remain immutable and upstream-owned. The Model Adapter consumes them. It may not mutate them, re-canonicalize them, reinterpret their identity, or rewrite their historical meaning.
 
-Capability constraints are upstream build inputs. If the execution profile's capability contract does not exactly satisfy the capability-constraint identity recorded by the governing `EvidencePreModelBuildRecord`, invocation fails closed with a `CAPABILITY_UNSUPPORTED` outcome. A provider or model choice that changes the effective capability constraint requires a new upstream allocation, prompt, and build identity. Silent reuse of an incompatible pre-model build is prohibited.
+Capability constraints are upstream build inputs. If the execution profile's capability contract does not exactly satisfy the capability-constraint identity recorded by the governing `EvidencePreModelBuildRecord`, invocation fails closed with a `CAPABILITY_UNSUPPORTED` outcome, recorded as a pre-dispatch refusal under the lineage rule below. A provider or model choice that changes the effective capability constraint requires a new upstream allocation, prompt, and build identity. Silent reuse of an incompatible pre-model build is prohibited.
 
 ### Execution profile
 
@@ -200,7 +200,7 @@ A restrictive successor already applicable and knowable at the handoff cutoff mu
 
 Terminal execution state belongs to a separate, append-only `ModelAttemptOutcomeRecord` family. The pre-send attempt is never updated in place, and no outcome record is mutated after it is written. A correction is a new record with explicit lineage, never a rewrite.
 
-An outcome links the attempt and handoff identities and records terminal or uncertainty state, the response-artifact identity where one exists, governed provider correlation metadata, timestamps, and per-category reconstruction availability.
+An outcome links the attempt identity where an attempt record exists and the handoff identity where a handoff was created, and records terminal, refusal, or uncertainty state, the response-artifact identity where one exists, governed provider correlation metadata, timestamps, and per-category reconstruction availability. Handoff linkage is conditional precisely because some mandatory outcomes are decided before a handoff can exist; see **Pre-dispatch refusal lineage** below.
 
 The outcome family must distinguish at least:
 
@@ -222,6 +222,19 @@ The outcome family must distinguish at least:
 | `INTERNAL_ADAPTER_ERROR` | An adapter-internal error occurred. |
 
 Materially different failure states must not be collapsed into a generic failure. In particular, execution failure, response-capture success followed by persistence failure, and uncertain execution or delivery are three distinct states and must remain distinguishable in the recorded outcome family.
+
+### Pre-dispatch refusal lineage
+
+The adapter evaluates in a fixed order: capability compatibility, then attempt-time Source Handling resolution, then the request-evidence decision, then the durable attempt, then the handoff, then the send. Two mandatory outcomes are therefore decided *before* an attempt record or a handoff exists: `CAPABILITY_UNSUPPORTED`, refused at the capability check, and `SOURCE_HANDLING_BLOCKED`, refused at attempt-time resolution. A handoff requires `processing_decision == ALLOW`, so neither refusal can ever be represented by a handoff.
+
+Both are recorded as a **pre-dispatch refusal**: an outcome record carrying exactly the lineage that actually exists, and no more.
+
+- Build, prompt, and execution-profile identities are always recorded, subject to durable dispositions.
+- The predecessor attempt identity is recorded where the refusal concerns a retry, as lineage only; it never implies that the refused operation was authorized.
+- No attempt identity is recorded when no attempt record was established, and no handoff identity is ever recorded.
+- A refused, partial, incomplete, expired, or non-`ALLOW` handoff is never fabricated to satisfy a linkage field, and neither is a placeholder attempt.
+
+A pre-dispatch refusal is positive evidence that no network transmission occurred and that no attempt was ever dispatchable. It does not weaken the durable-before-send guarantee: that guarantee binds every *possible* invocation, and a refusal establishes that no invocation was possible. Where an attempt record had already been durably established and the refusal occurs after it, the outcome links that attempt and still records no handoff.
 
 ### Uncertain delivery, idempotency, and retry
 
@@ -260,6 +273,8 @@ Subject to per-category authorization the adapter records:
 - per-category reconstruction availability or unavailability with stable reason codes.
 
 Response durability is governed independently of request durability and independently of processing. A response that echoes protected source content is subject to the same per-category enforcement, and unresolved disposition fails closed.
+
+Response capture is additionally subject to the same structural credential exclusion as every other canonical record family. A provider response is untrusted external content and may echo an API key, bearer token, cookie, or other secret irrespective of which durable categories are authorized, so category authorization alone never licenses exact-content persistence. Exact raw or canonical response bytes, and any content-derived representation of them, may be persisted only where the implementation establishes at capture time, before the canonical record is constructed, that the captured content carries no credential or credential-derived material. Where that cannot be established, no exact content and no derived representation is persisted: the adapter records the governed response-evidence-unavailable state with a stable reason code, while still recording the transport-level outcome. Scanning an already-constructed record is detection, not the structural boundary this decision requires.
 
 Provider response content is **untrusted external data**. It may not request tools, repository or canonical-record writes, schema or migration changes, unauthorized retrieval, configuration or credential mutation, governance-rule changes, or any capability outside the authorized adapter contract.
 
@@ -319,9 +334,11 @@ No Model Adapter capability, provider transport, provider dependency, credential
 ```text
 EvidencePreModelBuildRecord + EvidencePromptArtifact        (ADR 0031, immutable, upstream-owned)
   -> ModelAdapter
-       -> capability compatibility check against ModelExecutionProfile   (fail closed)
+       -> capability compatibility check against ModelExecutionProfile   (fail closed -> pre-dispatch refusal)
        -> transport transformation result                                (transient, non-secret, no authority)
-       -> attempt-time strict-known Source Handling resolution           (ADR 0033, attempt cutoff)
+       -> attempt-time strict-known Source Handling resolution           (ADR 0033, attempt cutoff;
+                                                                          fail closed -> pre-dispatch refusal,
+                                                                          no attempt, no handoff, no bytes)
        -> ProviderRequestArtifact  OR  explicit request-evidence-unavailable state
        -> durable pre-send ModelAttemptRecord                            (immutable, before any network I/O)
        -> single-use ModelHandoffRecord                                  (atomic snapshot binding)
@@ -365,7 +382,7 @@ Three deferred items are hard runtime gates rather than open options. Before any
 
 ## Conformance Obligations
 
-The obligations below are permanent regression obligations for this boundary. Each must be encoded as a deterministic test that can prove or fail without a live provider. A later implementation that cannot encode CO-01 through CO-22 deterministically is not authorized for provider activation.
+The obligations below are permanent regression obligations for this boundary. Each must be encoded as a deterministic test that can prove or fail without a live provider. A later implementation that cannot encode CO-01 through CO-23 deterministically is not authorized for provider activation.
 
 | ID | Obligation | Deterministic test that proves or fails it |
 |---|---|---|
@@ -383,16 +400,17 @@ The obligations below are permanent regression obligations for this boundary. Ea
 | CO-12 | Idempotency, correlation, and reconciliation semantics | Where the profile classifies idempotency `SUPPORTED`, one stable opaque attempt-scoped key is used for reconciliation of that attempt and is not silently reused by a new attempt. Where classified `UNAVAILABLE` or unknown, retry is blocked until reconciliation establishes a safe condition. Reconciliation that cannot establish non-delivery or a definitive result leaves the attempt unknown and retry blocked. |
 | CO-13 | Response-capture persistence failure | With response capture succeeding and terminal persistence failing, no second provider call is emitted; the outcome is `RESPONSE_CAPTURED_PERSISTENCE_FAILED`. With the canonical store unavailable, the pre-send attempt remains nonterminal and recovery classifies it `OUTCOME_UNKNOWN` without fabricating a terminal result. Execution failure, response-captured-persistence-failure, and uncertain delivery remain three distinguishable recorded states. Recovery operates on the recorded attempt identity. |
 | CO-14 | Source Handling-controlled durable request evidence | With `processing_decision == ALLOW` while exact-content, `CONTENT_DERIVED_ID`, hash, or measured-size categories are denied, transmission may proceed but no prohibited bytes, digest, size, or derived identity is persisted, and the attempt record does not require a prohibited request-artifact identity. Denial of every request-evidence metadata category yields explicit unavailability with no fabricated substitute identifier. No later code path regenerates the prohibited evidence. |
-| CO-15 | Source Handling-controlled durable response evidence | With a response echoing protected source content while response retention or hash categories are denied, only authorized metadata or an explicit unavailable state is persisted, and no prohibited response bytes or derived digest are written. An unresolved response-category disposition fails closed rather than defaulting to persist. |
-| CO-16 | Structural secret exclusion | Constructing any of the six canonical record families with credential, API-key, bearer-token, authorization-header, cookie, or client-secret material is structurally rejected rather than sanitized. Secret- or credential-derived secondary representations, including digests, are equally rejected. A scan of durable payloads, adapter logs, and diagnostics for seeded secret values finds none. |
+| CO-15 | Source Handling-controlled durable response evidence | With a response echoing protected source content while response retention or hash categories are denied, only authorized metadata or an explicit unavailable state is persisted, and no prohibited response bytes or derived digest are written. An unresolved response-category disposition fails closed rather than defaulting to persist. With response categories fully authorized but the capture gate unable to establish the content as credential-free, no exact content and no derived representation is persisted; the governed response-evidence-unavailable state is recorded with a stable reason code and the transport outcome is still recorded. |
+| CO-16 | Structural secret exclusion | Constructing any of the six canonical record families with credential, API-key, bearer-token, authorization-header, cookie, or client-secret material is structurally rejected rather than sanitized. Secret- or credential-derived secondary representations, including digests, are equally rejected. Responses echoing a seeded API key, bearer token, and cookie are rejected by the capture gate *before* `ProviderResponseArtifact` construction, not detected afterwards. A scan of durable payloads, adapter logs, and diagnostics for seeded secret values finds none, and that scan is treated as a backstop rather than as the boundary. |
 | CO-17 | `ResponseValidator` authority separation | The adapter never constructs an `ExtractionProposal`, never asserts response validity, and never promotes canonical knowledge. A `SUCCEEDED_TRANSPORT` outcome over a semantically invalid or schema-violating response is still recorded as transport success with no validity claim. No `ResponseValidator` type, interface, or behavior is introduced by this boundary. |
 | CO-18 | Routing deferral | With more than one profile present in configuration, the adapter refuses to select among them rather than choosing one. No score-based, health-based, cost-based, quota-based, latency-based, or fallback selection path exists. A `PROVIDER_UNAVAILABLE`, `RATE_LIMITED`, or `QUOTA_UNAVAILABLE` outcome never triggers an alternate-profile attempt. |
 | CO-19 | Historical reconstruction versus re-invocation | Reconstruction reads only persisted evidence admissible at the historical cutoff. Current profile, current policy, current registry, current capability, and current transformation are rejected as substitutes, and unavailable categories report explicit unavailability with stable reason codes. A re-invocation test asserts a new attempt identity, a new attempt cutoff, and no claim of response equality with the prior attempt. |
 | CO-20 | Legacy provider-path migration truthfulness | Legacy `AIProviderArtifact`, `AIProviderHealth`, and `ExtractionProposal` records retain their original schema and identity after the adapter exists. No migration path writes Model Adapter lineage onto a legacy record, and no combined audit view reports a legacy record as carrying request, attempt, handoff, or outcome lineage it never captured. `SecureAIProviderRunner` is not registered or resolvable as the canonical Model Adapter. |
 | CO-21 | Repository and persistence authority separation | Repository code contains no provider selection, prompt alteration, meaning validation, or permission granting. Persistence independently rederives every relevant handling decision and rejects an adapter-supplied decision that does not match, along with missing authority, mismatched inputs, and contradictory payload state. A repository cannot be substituted for the adapter as a decision authority. |
 | CO-22 | Governance-review isolation | An architecture regression test proves the Hunter Governance Review and Hunter Merge Readiness packages and workflows import no Model Adapter, provider transport, provider SDK, credential, or LLM dependency, directly or transitively, and that both surfaces execute deterministically with every provider path absent. |
+| CO-23 | Pre-dispatch refusal lineage | `CAPABILITY_UNSUPPORTED` and `SOURCE_HANDLING_BLOCKED` are each representable as a persisted outcome without any handoff identity and, where no attempt record was established, without an attempt identity. No test path fabricates a refused, partial, expired, or non-`ALLOW` handoff, or a placeholder attempt, to satisfy a linkage field. A refusal concerning a retry records the predecessor attempt as lineage only. Each refusal is verifiable as evidence that zero bytes were transmitted. |
 
-CO-01 through CO-19 subsume ADPR-0009 mandatory conformance cases 1 through 12. ADPR-0009 cases 13 and 14 — accepted-ADR applicability accounting and architecture-index lifecycle/runtime status consistency — are already implemented and enforced in the shared Pre-PR chain by the Artifact Guard and the Architecture Index Guard, with the latter registered as guarded defect class `ARCH-AUD-008`; the merged independent audit closed that finding on evidence. They are process guards over architecture maintenance and are not re-stated as Model Adapter runtime obligations here.
+CO-01 through CO-19 subsume ADPR-0009 mandatory conformance cases 1 through 12. CO-23 resolves the pre-handoff lineage rule that those cases left implicit. ADPR-0009 cases 13 and 14 — accepted-ADR applicability accounting and architecture-index lifecycle/runtime status consistency — are already implemented and enforced in the shared Pre-PR chain by the Artifact Guard and the Architecture Index Guard, with the latter registered as guarded defect class `ARCH-AUD-008`; the merged independent audit closed that finding on evidence. They are process guards over architecture maintenance and are not re-stated as Model Adapter runtime obligations here.
 
 ## Compatibility
 
@@ -433,7 +451,7 @@ Acceptance of this ADR is architecture authority. It is not runtime activation. 
 
 Architecture only. Not started, and not authorized by this ADR.
 
-Implementation requires a separately authorized issue and lifecycle after this ADR is accepted. That implementation must freeze CO-01 through CO-22 as deterministic contract tests before concrete provider code, and must additionally prove the atomic snapshot-to-handoff and single-use dispatch mechanism, the field-category coverage for request and response durable evidence, and each provider's idempotency, correlation, and reconciliation classification before any provider is activated.
+Implementation requires a separately authorized issue and lifecycle after this ADR is accepted. That implementation must freeze CO-01 through CO-23 as deterministic contract tests before concrete provider code, and must additionally prove the atomic snapshot-to-handoff and single-use dispatch mechanism, the field-category coverage for request and response durable evidence, and each provider's idempotency, correlation, and reconciliation classification before any provider is activated.
 
 ## Consequences
 
