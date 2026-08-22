@@ -65,7 +65,7 @@ def _canonical_table(section: str, headers: tuple[str, ...]) -> list[list[str]] 
         if index + 1 >= len(lines):
             return None
         delimiter = _markdown_cells(lines[index + 1])
-        if len(delimiter) != len(headers) or not all(re.fullmatch(r":?-{3,}:?", cell) for cell in delimiter):
+        if not delimiter or not all(re.fullmatch(r":?-{3,}:?", cell) for cell in delimiter):
             return None
         rows: list[list[str]] = []
         for candidate in lines[index + 2 :]:
