@@ -148,7 +148,15 @@ def source_handling_authority(
     field_map: Mapping[str, Sequence[str]] | None = None,
     safe_control_proofs: Mapping[str, object] | None = None,
     policy_authorization_rule_id: str = "AUTHORIZATION_RULE_V1",
+    durable_dispositions_override: Mapping[str, Mapping[str, str]] | None = None,
 ) -> EvidencePreModelSourceHandlingAuthority:
+    """Build a governed authority store for tests.
+
+    ``durable_dispositions_override``, when supplied, replaces the default per-category
+    disposition map verbatim. It exists so a caller can govern categories beyond
+    the pre-model defaults (for example content-derived request categories)
+    without duplicating this fixture.
+    """
     store = authority_store(provenance_resolver=_provenance_resolver)
 
     rule = copy.deepcopy(json.loads(_RULE_FIXTURE.read_text(encoding="utf-8")))
@@ -241,6 +249,8 @@ def source_handling_authority(
             "RECONSTRUCT": "ALLOW",
             "DELETE_OR_EXPIRE": "ALLOW",
         }
+    if durable_dispositions_override is not None:
+        durable_dispositions = {category: dict(values) for category, values in durable_dispositions_override.items()}
     policy_payload: dict[str, object] = {
         "scope": policy_scope,
         "field_category_registry_id": registry_id,
@@ -268,5 +278,85 @@ def source_handling_authority(
         store=store,
         fact_scope=document_id,
         policy_scope=policy_scope,
+        cutoff=cutoff,
+    )
+
+
+def publish_policy_successor(
+    authority: EvidencePreModelSourceHandlingAuthority,
+    *,
+    cutoff,
+    processing: str = "ALLOW",
+    retention: str = "ALLOW",
+    reconstruction: str = "ALLOW",
+    durable_dispositions_override: Mapping[str, Mapping[str, str]] | None = None,
+) -> EvidencePreModelSourceHandlingAuthority:
+    """Publish a successor POLICY into an existing authority store.
+
+    Returns a view of the *same* store bound at ``cutoff``. The predecessor
+    policy stays resolvable at its own earlier cutoff, so a single store can
+    carry a permissive historical head and a restrictive current head. That is
+    what makes "an earlier ALLOW does not carry forward" testable: both
+    decisions are reachable from one lineage, and only the cutoff separates
+    them.
+    """
+    head_id = authority.store.current_canonical_head_id("POLICY", authority.policy_scope)
+    if head_id is None:
+        raise ValueError("a policy successor requires an existing canonical policy head")
+    head = authority.store.canonical_record_by_id("POLICY", head_id)
+    if head is None:
+        raise ValueError("canonical policy head is unavailable")
+    head_body = head["policy_body"]
+    if durable_dispositions_override is not None:
+        dispositions: dict[str, object] = {
+            category: dict(values) for category, values in durable_dispositions_override.items()
+        }
+    else:
+        dispositions = copy.deepcopy(dict(head_body["durable_dispositions"]))
+
+    record_id = f"{authority.policy_scope}:successor:{cutoff.isoformat()}"
+    payload: dict[str, object] = {
+        "scope": authority.policy_scope,
+        "field_category_registry_id": head["field_category_registry_id"],
+        "policy_body": {
+            "processing_decision": processing,
+            "retention_decision": retention,
+            "reconstruction_decision": reconstruction,
+            "access_decision": head_body.get("access_decision", "ALLOW"),
+            "deletion_lifecycle_decision": head_body.get("deletion_lifecycle_decision", "ALLOW"),
+            "durable_dispositions": dispositions,
+        },
+        "supersedes_policy_record_id": head_id,
+        **_times(cutoff),
+    }
+    authorization = issue_publication_authorization(
+        authority.store,
+        publication_kind="POLICY",
+        governed_subject_scope=authority.policy_scope,
+        payload=payload,
+        authorization_rule_id="AUTHORIZATION_RULE_V1",
+        authorization_id=f"auth:POLICY:{record_id}",
+        evidence_ids=(f"evidence:POLICY:{record_id}",),
+        evidence_strength="AUTHORITATIVE_SOURCE_EVIDENCE",
+        evidence_method="SOURCE_TERMS_VERIFIED",
+        verifier_ids=(f"verifier:POLICY:{record_id}",),
+        verifier_type="SOURCE_VERIFIER",
+        **_times(cutoff),
+    )
+    authority.store.publish(
+        family="POLICY",
+        scope=authority.policy_scope,
+        expected_current_head_id=head_id,
+        record={
+            "id": record_id,
+            **payload,
+            "publication_payload": payload,
+            "publication_authorization": authorization,
+        },
+    )
+    return EvidencePreModelSourceHandlingAuthority(
+        store=authority.store,
+        fact_scope=authority.fact_scope,
+        policy_scope=authority.policy_scope,
         cutoff=cutoff,
     )
