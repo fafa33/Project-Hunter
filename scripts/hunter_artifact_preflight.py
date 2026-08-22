@@ -13,6 +13,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 REGISTRY_PATH = ROOT / "docs" / "DEFECT_REGISTRY.json"
 ADR_INDEX_PATH = ROOT / "docs" / "ADR" / "README.md"
+ADR_INDEX_RELATIVE = "docs/ADR/README.md"
 AUDIT_PREFIX = "docs/ARCHITECTURE_AUDITS/"
 
 REQUIRED_REGISTRY_FIELDS = {
@@ -81,6 +82,10 @@ REVISION_RE = re.compile(r"(?im)^-\s*Reviewed revision:\s*`?([0-9a-f]{40})`?\s*$
 # revision", so two declarations leave the evidence state ambiguous even when
 # both are syntactically valid or identical.
 REVISION_DECLARATION_RE = re.compile(r"(?im)^-\s*Reviewed revision:.*$")
+# The repository-evidence namespace an audit admitted, which is NOT the same fact as
+# the reviewed artifact's own revision: an audit may review an unchanged artifact
+# pinned at an older commit while admitting later repository evidence.
+EVIDENCE_BASELINE_RE = re.compile(r"(?im)^-\s*Repository evidence baseline:\s*`?([0-9a-f]{40})`?\s*$")
 AUDIT_TYPE_RE = re.compile(r"(?im)^-\s*Audit type:\s*`?(FULL|TARGETED)`?\s*$")
 CUTOFF_RE = re.compile(r"(?im)^-\s*Evidence cutoff:\s*`?([^`\n]+)`?\s*$")
 MUTABLE_EVIDENCE_RE = re.compile(r"(?i)(?:https?://|\bPR\s*#\d+\b|\bIssue\s*#\d+\b)")
@@ -329,6 +334,33 @@ def accepted_adr_ids(index_text: str) -> list[str]:
         if match and cells[2].startswith("Accepted"):
             ids.append(match.group(1))
     return sorted(set(ids))
+
+
+def accepted_adrs_at_baseline(baseline: str | None, *, current: list[str]) -> list[str]:
+    """Accepted ADRs knowable within a FULL audit's proven repository-evidence baseline.
+
+    Judging a pinned historical audit's ADR accounting against the *current*
+    accepted set substitutes present state for that audit's own cutoff -- the
+    substitution ADR 0020 and ADR 0033 prohibit -- and makes every later ADR
+    acceptance retroactively invalidate an already-merged audit that could not
+    possibly have accounted for a decision which did not yet exist.
+
+    The relaxation is granted only against a separately declared
+    ``Repository evidence baseline``. The reviewed artifact's own revision is
+    deliberately *not* accepted as a substitute: an audit may review an unchanged
+    artifact pinned at an older commit while admitting later repository evidence,
+    so treating the artifact revision as the whole evidence namespace would
+    silently exempt an ADR that was already binding and knowable to that audit.
+
+    Every other case falls back to the current set, which is the stricter
+    behaviour: an unproven baseline requires more accounting, never less.
+    """
+    if baseline is None:
+        return current
+    result = _run_git("show", f"{baseline}:{ADR_INDEX_RELATIVE}")
+    if result.returncode != 0 or not result.stdout.strip():
+        return current
+    return accepted_adr_ids(result.stdout)
 
 
 def _mask_span_preserving_newlines(value: str) -> str:
@@ -1033,8 +1065,13 @@ def validate_audit_text(text: str, *, accepted_adrs: list[str]) -> list[str]:
         errors.append("Evidence cutoff must be an offset-aware ISO-8601 timestamp when present.")
 
     if audit_type == "FULL":
+        baseline_match = EVIDENCE_BASELINE_RE.search(metadata)
+        required_adrs = accepted_adrs_at_baseline(
+            baseline_match.group(1) if baseline_match else None,
+            current=accepted_adrs,
+        )
         accounted_adrs = _structured_adr_accounting_ids(semantic_text)
-        for adr in accepted_adrs:
+        for adr in required_adrs:
             if adr not in accounted_adrs:
                 errors.append(f"Accepted ADR {adr} is not structurally accounted for in FULL audit.")
 
