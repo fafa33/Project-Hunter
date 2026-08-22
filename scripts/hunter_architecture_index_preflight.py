@@ -29,18 +29,12 @@ def _normalized_cell(value: str) -> str:
 
 
 def _section(text: str, heading: str) -> str:
-    lines = text.splitlines()
-    try:
-        start = next(index for index, line in enumerate(lines) if line.strip() == heading)
-    except StopIteration:
-        return ""
-
-    body: list[str] = []
-    for line in lines[start + 1 :]:
-        if line.startswith("## "):
-            break
-        body.append(line)
-    return "\n".join(body).strip()
+    """Return one level-two Markdown section bounded by the next level-two heading."""
+    pattern = re.compile(
+        rf"(?ms)^[ ]{{0,3}}{re.escape(heading)}[ \t]*\r?\n(?P<body>.*?)(?=^[ ]{{0,3}}##[ \t]+|\Z)"
+    )
+    match = pattern.search(text)
+    return match.group("body").strip() if match else ""
 
 
 def _table_rows(section: str, required_headers: set[str]) -> tuple[list[str], list[list[str]]]:
