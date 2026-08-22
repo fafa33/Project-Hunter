@@ -41,6 +41,7 @@ from hunter.evidence_intelligence.model_adapter_persistence import (
     ModelAdapterPersistenceError,
     ModelAdapterPersistenceRepository,
 )
+from hunter.evidence_intelligence.pre_model import resolve_pre_model_source_handling
 from hunter.evidence_intelligence.repository import EvidenceIntelligenceRepository
 
 
@@ -126,15 +127,26 @@ def test_authorized_attempt_produces_a_durable_attempt_and_single_use_handoff(
 def test_build_time_allow_cannot_authorize_an_attempt(service: ModelAdapterService) -> None:
     """A build-time ALLOW is lineage, never live permission.
 
-    The build authority still resolves ALLOW at the build cutoff; only the
-    attempt-cutoff authority denies. If the adapter consulted build-time
-    authority, this would wrongly succeed.
+    Both decisions live in *one* authority lineage: the policy head at the
+    build cutoff is ALLOW, and its restrictive successor at the attempt cutoff
+    is DENY. That is what gives this test discriminating power. Handing
+    ``prepare_attempt`` a store that only ever says DENY would prove nothing
+    here -- an adapter that honoured any ALLOW anywhere in the lineage, or that
+    resolved at the build cutoff, would pass such a test. It cannot pass this
+    one: the ALLOW is reachable in the very store it is given, and only the
+    cutoff separates it from the DENY.
     """
     build_time_authority = fixture.attempt_authority(cutoff=fixture.BUILD_CUTOFF, processing="ALLOW")
-    assert build_time_authority.cutoff == fixture.BUILD_CUTOFF
+    attempt_time_authority = fixture.deny_successor(build_time_authority)
+
+    # The permissive head is genuinely reachable in this same store, so the
+    # refusal below cannot be explained by the ALLOW simply being absent.
+    assert resolve_pre_model_source_handling(build_time_authority).decision["processing_decision"] == "ALLOW"
+    assert resolve_pre_model_source_handling(attempt_time_authority).decision["processing_decision"] == "DENY"
+    assert attempt_time_authority.store is build_time_authority.store
 
     with pytest.raises(PreDispatchRefused) as error:
-        _prepare(service, attempt_authority=fixture.attempt_authority(processing="DENY"))
+        _prepare(service, attempt_authority=attempt_time_authority)
 
     assert error.value.refusal == "SOURCE_HANDLING_BLOCKED"
 

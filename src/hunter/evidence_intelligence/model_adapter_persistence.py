@@ -33,7 +33,7 @@ from hunter.evidence_intelligence.model_adapter import (
     ModelAttemptRecord,
     ModelHandoffRecord,
     ProviderRequestEvidence,
-    _disposition_identity,
+    disposition_identity,
     permitted_request_evidence_state,
 )
 from hunter.evidence_intelligence.pre_model import (
@@ -243,7 +243,7 @@ class ModelAdapterPersistenceRepository:
         for name, value in expected.items():
             if getattr(handoff, name) != value:
                 raise ModelAdapterAuthorityMismatch(f"handoff {name} does not match independently rederived authority")
-        if handoff.durable_disposition_identity != _disposition_identity(decision):
+        if handoff.durable_disposition_identity != disposition_identity(decision):
             raise ModelAdapterAuthorityMismatch(
                 "handoff durable-disposition identity does not match independently rederived authority"
             )

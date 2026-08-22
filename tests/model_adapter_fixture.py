@@ -11,7 +11,10 @@ import hashlib
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 
-from evidence_pre_model_source_handling_fixture import source_handling_authority
+from evidence_pre_model_source_handling_fixture import (
+    publish_policy_successor,
+    source_handling_authority,
+)
 
 from hunter.evidence_intelligence.model_adapter import ModelExecutionProfile
 from hunter.evidence_intelligence.pre_model import (
@@ -181,3 +184,28 @@ def execution_profile(
 
 def later(minutes: int) -> datetime:
     return ATTEMPT_CUTOFF + timedelta(minutes=minutes)
+
+
+def deny_successor(
+    authority,
+    *,
+    cutoff: datetime = ATTEMPT_CUTOFF,
+    request_content: bool = True,
+    dispatch_capability: bool = True,
+):
+    """A DENY successor published into `authority`'s own store, viewed at `cutoff`.
+
+    The predecessor decision stays resolvable at its earlier cutoff, so one
+    lineage carries both. Tests that must show an earlier ALLOW does not carry
+    forward need exactly that: the permissive head reachable in the same store
+    the adapter is handed.
+    """
+    return publish_policy_successor(
+        authority,
+        cutoff=cutoff,
+        processing="DENY",
+        durable_dispositions_override=dispositions(
+            request_content=request_content,
+            dispatch_capability=dispatch_capability,
+        ),
+    )
