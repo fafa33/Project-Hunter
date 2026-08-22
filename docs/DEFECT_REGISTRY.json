@@ -201,6 +201,26 @@
       "guard": "a FULL audit's accepted-ADR accounting requirement resolves the accepted set from docs/ADR/README.md at the audit's own separately declared Repository evidence baseline, so a later ADR acceptance cannot retroactively invalidate an already-merged pinned audit; the reviewed artifact's own revision is never accepted as a substitute for that baseline, an ADR accepted at or before the baseline remains strictly required, and an absent or unresolvable baseline falls back to the stricter current set",
       "test": "tests/test_hunter_artifact_preflight_adr_baseline.py",
       "status": "guarded"
+    },
+    {
+      "id": "MA-001",
+      "class": "one-attempt-authorizing-more-than-one-dispatch",
+      "source": "Issue #303 ADR 0034 Phase A hostile self-review: two handoffs differing only in expiry bound to one attempt identity, each independently consumable, dispatching a single attempt twice",
+      "classification": "systemic",
+      "guard_boundary": "Model Adapter handoff persistence and consumption",
+      "guard": "a ModelAttemptRecord may have at most one ModelHandoffRecord: the service rejects a second distinct handoff for an existing attempt and a UNIQUE index on model_handoff_records(attempt_id) enforces the same invariant at the storage layer, so single-use is per attempt rather than merely per handoff",
+      "test": "tests/test_model_adapter_phase_a.py::test_one_attempt_can_authorize_at_most_one_dispatch",
+      "status": "guarded"
+    },
+    {
+      "id": "MA-002",
+      "class": "repository-write-path-bypassing-model-adapter-authority",
+      "source": "Issue #303 ADR 0034 Phase A hostile self-review: a caller bypassing ModelAdapterService could persist an attempt and handoff carrying entirely forged Source Handling identities and then consume the handoff",
+      "classification": "systemic",
+      "guard_boundary": "Model Adapter persistence repository",
+      "guard": "persist_attempt_and_handoff requires the attempt authority, independently re-resolves it per the ADR 0033 persistence invariant, and rejects any handoff whose bound fact, policy, field-category-registry, authorization-rule, durable-disposition, or attempt-cutoff identities disagree with the rederived decision; direct_write remains forbidden outright",
+      "test": "tests/test_model_adapter_phase_a.py::test_repository_cannot_be_used_to_forge_an_authoritative_record",
+      "status": "guarded"
     }
   ]
 }
