@@ -32,6 +32,11 @@ DECISION_HEADERS = (
     "superseded by",
 )
 APPROVED_HEADERS = ("adpr", "adr", "status", "implementation", "validation")
+# CommonMark permits up to three leading spaces before an ATX heading's opening
+# hashes. Four or more spaces -- or a leading tab -- opens an indented code
+# block instead, so such a line renders as code and cannot satisfy a canonical
+# section requirement.
+ATX_HEADING_RE = re.compile(r"^ {0,3}(?P<heading>#{1,6}[ \t]+\S[^\n]*?)[ \t]*$")
 
 
 def _markdown_cells(line: str) -> list[str]:
@@ -100,15 +105,27 @@ def _rendered_markdown(text: str) -> str:
     return "\n".join(rendered)
 
 
+def _atx_heading(line: str) -> str | None:
+    """Return the rendered ATX heading on this line, or None if it is not one.
+
+    Comparing on ``line.strip()`` would accept an indented pseudo-heading that
+    Markdown renders as code, which is the same rendered-vs-literal boundary the
+    fenced-code and HTML-comment masking already enforces.
+    """
+    match = ATX_HEADING_RE.match(line)
+    return match.group("heading") if match else None
+
+
 def _section(text: str, heading: str) -> str:
     lines = text.splitlines()
     try:
-        start = next(index for index, line in enumerate(lines) if line.strip() == heading)
+        start = next(index for index, line in enumerate(lines) if _atx_heading(line) == heading)
     except StopIteration:
         return ""
     body: list[str] = []
     for line in lines[start + 1 :]:
-        if line.startswith("## "):
+        candidate = _atx_heading(line)
+        if candidate is not None and candidate.startswith("## "):
             break
         body.append(line)
     return "\n".join(body)

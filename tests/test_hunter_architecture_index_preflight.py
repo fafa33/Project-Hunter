@@ -308,6 +308,59 @@ def test_missing_adpr_0006_rows_are_rejected_in_both_canonical_tables() -> None:
     ), errors
 
 
+CANONICAL_HEADINGS = ("## Decision Registry", "## Approved and Implemented Records")
+
+
+def test_four_space_indented_canonical_headings_render_as_code_not_headings() -> None:
+    """Four or more leading spaces makes the line an indented code block."""
+    for heading in CANONICAL_HEADINGS:
+        text = _fixture().replace(heading, "    " + heading)
+        errors = hunter_architecture_index_preflight.validate_architecture_index(text)
+        assert any("must contain the rendered canonical" in error for error in errors), heading
+
+
+def test_deeply_space_indented_canonical_headings_are_not_headings() -> None:
+    for heading in CANONICAL_HEADINGS:
+        text = _fixture().replace(heading, "      " + heading)
+        errors = hunter_architecture_index_preflight.validate_architecture_index(text)
+        assert any("must contain the rendered canonical" in error for error in errors), heading
+
+
+def test_tab_indented_canonical_headings_are_not_headings() -> None:
+    """A leading tab also opens indented code, so it is not a rendered heading."""
+    for heading in CANONICAL_HEADINGS:
+        text = _fixture().replace(heading, "\t" + heading)
+        errors = hunter_architecture_index_preflight.validate_architecture_index(text)
+        assert any("must contain the rendered canonical" in error for error in errors), heading
+
+
+def test_multiple_tab_indented_canonical_headings_are_not_headings() -> None:
+    for heading in CANONICAL_HEADINGS:
+        text = _fixture().replace(heading, "\t\t" + heading)
+        errors = hunter_architecture_index_preflight.validate_architecture_index(text)
+        assert any("must contain the rendered canonical" in error for error in errors), heading
+
+
+def test_unindented_canonical_headings_pass() -> None:
+    assert hunter_architecture_index_preflight.validate_architecture_index(_fixture()) == []
+
+
+def test_canonical_headings_with_legal_commonmark_indentation_pass() -> None:
+    """CommonMark permits up to three leading spaces before the opening hashes."""
+    for indent in (1, 2, 3):
+        text = _fixture()
+        for heading in CANONICAL_HEADINGS:
+            text = text.replace(heading, " " * indent + heading)
+        assert hunter_architecture_index_preflight.validate_architecture_index(text) == [], indent
+
+
+def test_each_canonical_heading_independently_accepts_legal_indentation() -> None:
+    for heading in CANONICAL_HEADINGS:
+        for indent in (1, 2, 3):
+            text = _fixture().replace(heading, " " * indent + heading)
+            assert hunter_architecture_index_preflight.validate_architecture_index(text) == [], (heading, indent)
+
+
 def test_case_14_defect_class_is_permanently_registered() -> None:
     registry = json.loads((ROOT / "docs" / "DEFECT_REGISTRY.json").read_text(encoding="utf-8"))
     matching = [item for item in registry["defects"] if item.get("id") == "ARCH-AUD-008"]
