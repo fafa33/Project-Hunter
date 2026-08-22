@@ -11,10 +11,23 @@ ADPR_0006_RUNTIME_PATHS = (
     ROOT / "src" / "hunter" / "evidence_intelligence" / "pre_model_persistence.py",
 )
 
-TABLE_DELIMITER_RE = re.compile(r"^:?-{3,}:?$")
 NEGATIVE_IMPLEMENTATION_RE = re.compile(
     r"(?i)\b(?:not\s+started|not\s+implemented|not\s+authorized|unimplemented)\b"
 )
+DECISION_HEADERS = (
+    "adpr",
+    "title",
+    "status",
+    "epic",
+    "issue",
+    "adr",
+    "implementation pr",
+    "merge commit",
+    "release",
+    "supersedes",
+    "superseded by",
+)
+APPROVED_HEADERS = ("adpr", "adr", "status", "implementation", "validation")
 
 
 def _markdown_cells(line: str) -> list[str]:
@@ -28,46 +41,22 @@ def _normalized_cell(value: str) -> str:
     return re.sub(r"[`*_]", "", value).strip().lower()
 
 
-def _section(text: str, heading: str) -> str:
-    """Return one level-two Markdown section bounded by the next level-two heading."""
-    pattern = re.compile(
-        rf"(?ms)^[ ]{{0,3}}{re.escape(heading)}[ \t]*\r?\n(?P<body>.*?)(?=^[ ]{{0,3}}##[ \t]+|\Z)"
-    )
-    match = pattern.search(text)
-    return match.group("body").strip() if match else ""
+def _normalized_cells(line: str) -> tuple[str, ...]:
+    return tuple(_normalized_cell(cell) for cell in _markdown_cells(line))
 
 
-def _table_rows(section: str, required_headers: set[str]) -> tuple[list[str], list[list[str]]]:
-    lines = section.splitlines()
-    for index, line in enumerate(lines):
-        if not line.strip().startswith("|"):
+def _schema_present(text: str, headers: tuple[str, ...]) -> bool:
+    return any(_normalized_cells(line) == headers for line in text.splitlines() if line.strip().startswith("|"))
+
+
+def _adpr_rows_with_width(text: str, adpr: str, width: int) -> list[list[str]]:
+    matched: list[list[str]] = []
+    for line in text.splitlines():
+        cells = _markdown_cells(line)
+        if len(cells) != width:
             continue
-        headers = [_normalized_cell(cell) for cell in _markdown_cells(line)]
-        if not required_headers.issubset(headers):
-            continue
-        if index + 1 >= len(lines):
-            return [], []
-        delimiter = _markdown_cells(lines[index + 1])
-        if len(delimiter) != len(headers) or not all(TABLE_DELIMITER_RE.fullmatch(cell) for cell in delimiter):
-            return [], []
-
-        rows: list[list[str]] = []
-        for candidate in lines[index + 2 :]:
-            if not candidate.strip().startswith("|"):
-                break
-            cells = _markdown_cells(candidate)
-            if len(cells) == len(headers):
-                rows.append(cells)
-        return headers, rows
-    return [], []
-
-
-def _adpr_rows(headers: list[str], rows: list[list[str]], adpr: str) -> list[dict[str, str]]:
-    matched: list[dict[str, str]] = []
-    for row in rows:
-        record = dict(zip(headers, row, strict=True))
-        if re.search(rf"(?i)\b{re.escape(adpr)}\b", _normalized_cell(record.get("adpr", ""))):
-            matched.append(record)
+        if re.search(rf"(?i)\b{re.escape(adpr)}\b", _normalized_cell(cells[0])):
+            matched.append(cells)
     return matched
 
 
@@ -86,26 +75,17 @@ def validate_architecture_index(
     """Validate the known lifecycle/runtime consistency invariant from ADPR-0009 case 14."""
     errors: list[str] = []
 
-    decision_headers, decision_rows = _table_rows(
-        _section(text, "## Decision Registry"),
-        {"adpr", "status"},
-    )
-    if not decision_headers:
-        errors.append("Decision Registry must contain a rendered ADPR/Status table.")
+    if not _schema_present(text, DECISION_HEADERS):
+        errors.append("Decision Registry must contain the canonical ADPR/Status table schema.")
         return errors
-
-    approved_headers, approved_rows = _table_rows(
-        _section(text, "## Approved and Implemented Records"),
-        {"adpr", "status", "implementation"},
-    )
-    if not approved_headers:
+    if not _schema_present(text, APPROVED_HEADERS):
         errors.append(
             "Approved and Implemented Records must separate ADPR lifecycle Status from downstream Implementation."
         )
         return errors
 
-    decision_matches = _adpr_rows(decision_headers, decision_rows, ADPR_0006)
-    approved_matches = _adpr_rows(approved_headers, approved_rows, ADPR_0006)
+    decision_matches = _adpr_rows_with_width(text, ADPR_0006, len(DECISION_HEADERS))
+    approved_matches = _adpr_rows_with_width(text, ADPR_0006, len(APPROVED_HEADERS))
     if len(decision_matches) != 1:
         errors.append(f"Decision Registry must contain exactly one {ADPR_0006} row; found {len(decision_matches)}.")
         return errors
@@ -115,8 +95,8 @@ def validate_architecture_index(
         )
         return errors
 
-    decision_status = _normalized_cell(decision_matches[0]["status"]).upper()
-    approved_status = _normalized_cell(approved_matches[0]["status"]).upper()
+    decision_status = _normalized_cell(decision_matches[0][2]).upper()
+    approved_status = _normalized_cell(approved_matches[0][2]).upper()
     if decision_status != "APPROVED":
         errors.append(f"{ADPR_0006} Decision Registry lifecycle status must remain APPROVED; found {decision_status!r}.")
     if approved_status != decision_status:
@@ -132,12 +112,10 @@ def validate_architecture_index(
         )
         return errors
 
-    implementation = _normalized_cell(approved_matches[0]["implementation"])
+    implementation_cell = approved_matches[0][3]
+    implementation = _normalized_cell(implementation_cell)
     if NEGATIVE_IMPLEMENTATION_RE.search(implementation):
-        errors.append(
-            f"{ADPR_0006} implementation state contradicts canonical runtime evidence: "
-            f"{approved_matches[0]['implementation']}"
-        )
+        errors.append(f"{ADPR_0006} implementation state contradicts canonical runtime evidence: {implementation_cell}")
     if "provider-free" not in implementation or "pre-model" not in implementation:
         errors.append(f"{ADPR_0006} implementation state must identify the provider-free pre-model runtime.")
     if "implemented" not in implementation or "current source" not in implementation:
