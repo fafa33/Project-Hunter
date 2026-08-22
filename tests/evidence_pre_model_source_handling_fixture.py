@@ -148,7 +148,15 @@ def source_handling_authority(
     field_map: Mapping[str, Sequence[str]] | None = None,
     safe_control_proofs: Mapping[str, object] | None = None,
     policy_authorization_rule_id: str = "AUTHORIZATION_RULE_V1",
+    durable_dispositions_override: Mapping[str, Mapping[str, str]] | None = None,
 ) -> EvidencePreModelSourceHandlingAuthority:
+    """Build a governed authority store for tests.
+
+    ``durable_dispositions_override``, when supplied, replaces the default per-category
+    disposition map verbatim. It exists so a caller can govern categories beyond
+    the pre-model defaults (for example content-derived request categories)
+    without duplicating this fixture.
+    """
     store = authority_store(provenance_resolver=_provenance_resolver)
 
     rule = copy.deepcopy(json.loads(_RULE_FIXTURE.read_text(encoding="utf-8")))
@@ -241,6 +249,8 @@ def source_handling_authority(
             "RECONSTRUCT": "ALLOW",
             "DELETE_OR_EXPIRE": "ALLOW",
         }
+    if durable_dispositions_override is not None:
+        durable_dispositions = {category: dict(values) for category, values in durable_dispositions_override.items()}
     policy_payload: dict[str, object] = {
         "scope": policy_scope,
         "field_category_registry_id": registry_id,
