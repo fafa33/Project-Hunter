@@ -9,6 +9,7 @@ authority.
 from __future__ import annotations
 
 import dataclasses
+import gc
 import json
 import socket
 import sqlite3
@@ -84,6 +85,7 @@ def _prepare(service: ModelAdapterService, **overrides):
         "build_record": build,
         "prompt_artifact": artifact,
         "capability": fixture.capability(),
+        "allocation": fixture.allocation(),
         "profile": fixture.execution_profile(),
         "attempt_authority": fixture.attempt_authority(),
         "build_cutoff": fixture.BUILD_CUTOFF,
@@ -481,6 +483,181 @@ def test_secret_material_cannot_reach_the_durable_attempt_or_handoff(
         assert value != sentinel
         if isinstance(value, str):
             assert not _SECRET_VALUE_PATTERN.search(value.strip()), value
+
+
+def test_benign_credential_slot_identity_is_accepted(service: ModelAdapterService) -> None:
+    """The modelled slot field names a slot; it must remain usable.
+
+    Regression: a generic field-name scan rejected `credential_slot_identity`
+    outright because the name contains "credential", making the modelled field
+    unusable and its value-shape check unreachable.
+    """
+    profile = fixture.execution_profile(credential_slot_identity="vault-slot:model-provider")
+
+    assert profile.credential_slot_identity == "vault-slot:model-provider"
+    prepared = _prepare(service, profile=profile)
+    assert prepared.handoff.execution_profile_identity == profile.profile_identity
+
+
+def test_secret_bearing_prohibited_capability_is_rejected() -> None:
+    """Regression: prohibited capabilities were exempt from secret screening.
+
+    They are hashed into `profile_identity`, which is persisted on the attempt and
+    handoff, so an unscreened entry became a durable credential-derived
+    representation despite the structural-exclusion guarantee.
+    """
+    with pytest.raises(SecretMaterialRejected):
+        fixture.execution_profile(prohibited_capabilities=("tool_use", "sk-live-abcdefghijklmnop"))
+
+    with pytest.raises(SecretMaterialRejected):
+        fixture.execution_profile(prohibited_capabilities=("Bearer abcdefghijklmnop",))
+
+
+def test_capability_must_be_the_one_recorded_by_the_governing_build(service: ModelAdapterService) -> None:
+    """Regression: the capability check compared two caller-supplied objects only.
+
+    A profile and capability that agree with each other, but not with the
+    allocation the build actually used, must not authorize a dispatch.
+    """
+    foreign = fixture.capability(version="99")
+
+    with pytest.raises(ModelAdapterError):
+        _prepare(
+            service,
+            capability=foreign,
+            profile=fixture.execution_profile(required_capability_identity=foreign.constraint_identity),
+        )
+
+
+def test_allocation_must_belong_to_the_governing_build(service: ModelAdapterService) -> None:
+    """Isolates the allocation-identity guard from the capability guard.
+
+    The substitute allocation records the *same* capability identity, so only the
+    allocation-to-build binding can reject it.
+    """
+    foreign = dataclasses.replace(fixture.allocation(), ledger_id="ledger:foreign")
+    assert foreign.capability_identity == fixture.allocation().capability_identity
+    assert foreign.allocation_id != fixture.allocation().allocation_id
+
+    with pytest.raises(ModelAdapterError):
+        _prepare(service, allocation=foreign)
+
+
+def test_persistence_rejects_durable_evidence_under_content_denying_authority(
+    repository: ModelAdapterPersistenceRepository, service: ModelAdapterService
+) -> None:
+    """Regression: persistence checked identity consistency, not permission.
+
+    A direct caller with genuine authority that denies content categories could
+    still persist forged `REQUEST_EVIDENCE_DURABLE` content, embedding the hash
+    and size in the durable payload.
+    """
+    denying = fixture.attempt_authority(request_content=False)
+    prepared = _prepare(service, attempt_authority=denying)
+    assert prepared.request_evidence.state == "REQUEST_EVIDENCE_UNAVAILABLE_BY_POLICY"
+
+    artifact = fixture.prompt_artifact()
+    forged = ProviderRequestEvidence(
+        state="REQUEST_EVIDENCE_DURABLE",
+        content_hash=artifact.content_hash,
+        measured_size_bytes=artifact.measured_size_bytes,
+        content_derived_identity="forged",
+    )
+    attempt = dataclasses.replace(
+        prepared.attempt,
+        request_evidence_identity=forged.request_evidence_identity,
+        request_evidence_state="REQUEST_EVIDENCE_DURABLE",
+    )
+    handoff = dataclasses.replace(
+        prepared.handoff,
+        attempt_id=attempt.attempt_id,
+        request_evidence_identity=forged.request_evidence_identity,
+    )
+
+    with pytest.raises(ModelAdapterAuthorityMismatch):
+        repository.persist_attempt_and_handoff(
+            attempt=attempt,
+            handoff=handoff,
+            request_evidence=forged,
+            attempt_authority=denying,
+        )
+
+
+def test_persistence_rejects_evidence_state_that_authority_does_not_permit(
+    repository: ModelAdapterPersistenceRepository, service: ModelAdapterService
+) -> None:
+    """Isolates the request-evidence check from the attempt-state check.
+
+    The attempt still records the permitted state and still references this
+    evidence identity, so only the evidence-object check can reject it.
+    """
+    denying = fixture.attempt_authority(request_content=False)
+    prepared = _prepare(service, attempt_authority=denying)
+
+    # Deliberately content-free: the separate "carries prohibited content" check
+    # must not be the thing that rejects this, or the state check would be
+    # redundant rather than load-bearing.
+    forged = ProviderRequestEvidence(state="REQUEST_EVIDENCE_DURABLE")
+    attempt = dataclasses.replace(prepared.attempt, request_evidence_identity=forged.request_evidence_identity)
+    handoff = dataclasses.replace(
+        prepared.handoff,
+        attempt_id=attempt.attempt_id,
+        request_evidence_identity=forged.request_evidence_identity,
+    )
+    assert attempt.request_evidence_state == "REQUEST_EVIDENCE_UNAVAILABLE_BY_POLICY"
+
+    with pytest.raises(ModelAdapterAuthorityMismatch):
+        repository.persist_attempt_and_handoff(
+            attempt=attempt,
+            handoff=handoff,
+            request_evidence=forged,
+            attempt_authority=denying,
+        )
+
+
+def test_persistence_rejects_attempt_state_that_authority_does_not_permit(
+    repository: ModelAdapterPersistenceRepository, service: ModelAdapterService
+) -> None:
+    """The paired case: only the attempt's recorded state is wrong."""
+    denying = fixture.attempt_authority(request_content=False)
+    prepared = _prepare(service, attempt_authority=denying)
+    attempt = dataclasses.replace(prepared.attempt, request_evidence_state="REQUEST_EVIDENCE_DURABLE")
+    handoff = dataclasses.replace(prepared.handoff, attempt_id=attempt.attempt_id)
+
+    with pytest.raises(ModelAdapterAuthorityMismatch):
+        repository.persist_attempt_and_handoff(
+            attempt=attempt,
+            handoff=handoff,
+            request_evidence=prepared.request_evidence,
+            attempt_authority=denying,
+        )
+
+
+def test_persistence_closes_every_connection_it_opens(
+    repository: ModelAdapterPersistenceRepository, service: ModelAdapterService
+) -> None:
+    """Regression: `with sqlite3.connect(...)` ends the transaction but never closes.
+
+    Leaked handles accumulate in a long-running process and can hold SQLite locks
+    until garbage collection.
+    """
+    prepared = _prepare(service)
+    repository.strict_known_attempt(prepared.attempt.attempt_id, fixture.later(60))
+    repository.strict_known_request_evidence(prepared.attempt.attempt_id, fixture.later(60))
+    repository.handoff_consumed_at(prepared.handoff.handoff_id)
+    repository.attempt_exists(prepared.attempt.attempt_id)
+
+    gc.collect()
+    leaked = [obj for obj in gc.get_objects() if isinstance(obj, sqlite3.Connection) and _is_open(obj)]
+    assert leaked == []
+
+
+def _is_open(connection: sqlite3.Connection) -> bool:
+    try:
+        connection.execute("SELECT 1")
+    except sqlite3.ProgrammingError:
+        return False
+    return True
 
 
 # --------------------------------------------------------------------------

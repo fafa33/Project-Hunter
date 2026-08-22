@@ -16,6 +16,7 @@ from evidence_pre_model_source_handling_fixture import source_handling_authority
 from hunter.evidence_intelligence.model_adapter import ModelExecutionProfile
 from hunter.evidence_intelligence.pre_model import (
     EvidenceCapabilityConstraint,
+    EvidenceContextAllocationResult,
     EvidencePreModelBuildRecord,
     EvidencePromptArtifact,
 )
@@ -95,6 +96,21 @@ def capability(*, version: str = "1") -> EvidenceCapabilityConstraint:
     )
 
 
+def allocation(*, capability_identity: str | None = None) -> EvidenceContextAllocationResult:
+    """The build's own allocation, which records the governing capability."""
+    return EvidenceContextAllocationResult(
+        ledger_id="ledger:v1",
+        capability_identity=capability_identity or capability().constraint_identity,
+        prompt_specification_identity="spec:v1",
+        outcome="READY",
+        included_span_ids=("span:1",),
+        budget_excluded_span_ids=(),
+        preflight_size_bytes=22,
+        available_input_bytes=capability().available_input_bytes,
+        reason_codes=(),
+    )
+
+
 def prompt_artifact(content: str = "canonical prompt bytes") -> EvidencePromptArtifact:
     encoded = content.encode("utf-8")
     return EvidencePromptArtifact(
@@ -112,12 +128,17 @@ def prompt_artifact(content: str = "canonical prompt bytes") -> EvidencePromptAr
     )
 
 
-def build_record(artifact: EvidencePromptArtifact) -> EvidencePreModelBuildRecord:
+def build_record(
+    artifact: EvidencePromptArtifact,
+    *,
+    allocation_result: EvidenceContextAllocationResult | None = None,
+) -> EvidencePreModelBuildRecord:
+    resolved_allocation = allocation_result or allocation()
     return EvidencePreModelBuildRecord(
         execution_owner_id="pipeline-run:1",
         intent_id="intent:v1",
         ledger_id=artifact.ledger_id,
-        allocation_id=artifact.allocation_id,
+        allocation_id=resolved_allocation.allocation_id,
         package_id=artifact.package_id,
         prompt_plan_id=artifact.plan_id,
         prompt_artifact_id=artifact.artifact_id,

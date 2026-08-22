@@ -97,7 +97,7 @@ This is proven, not asserted: one test monkeypatches `socket.socket`, `socket.cr
 
 ## Test coverage
 
-60 tests in `tests/test_model_adapter_phase_a.py`, written as paired negative/positive fixtures so a removed guard fails a test rather than silently widening authority.
+68 tests in `tests/test_model_adapter_phase_a.py`, written as paired negative/positive fixtures so a removed guard fails a test rather than silently widening authority.
 
 Every reusable guard was verified non-vacuous by deliberately weakening it in source and confirming the corresponding regression fails. All ten guards are detected:
 
@@ -113,6 +113,15 @@ Every reusable guard was verified non-vacuous by deliberately weakening it in so
 | One-handoff-per-attempt | yes |
 | Rederived-authority verification at persistence | yes |
 | Strict-known cutoff filter | yes |
+| Build-bound capability identity | yes |
+| Allocation belongs to the governing build | yes |
+| Prohibited-capability secret screening | yes |
+| Persistence request-evidence re-derivation | yes |
+
+Two rounds of mutation testing were required. The first exposed one vacuously
+covered guard (top-level retention denial); the second, run after review fixes,
+exposed two more where an overlapping check masked the guard under test. Each was
+isolated with a case only that guard can reject.
 
 ## Defects found by hostile self-review
 
@@ -125,6 +134,33 @@ Single-use was enforced per handoff. Two handoffs differing only in expiry share
 ### `MA-002` — the repository was a public authority bypass
 
 `persist_attempt_and_handoff` validated internal lineage but not authority, so a caller who never went through `ModelAdapterService` could fabricate an attempt and handoff with entirely forged Source Handling identities and dispatch them. Fixed by applying ADR 0033's persistence invariant: persistence independently re-resolves the attempt authority and rejects any handoff whose bound fact, policy, registry, rule, disposition, or cutoff identities disagree. This is verification, not decision-making — the layer recomputes the outcome the authority already produced and refuses disagreement.
+
+## Defects found by independent review
+
+Independent review of the first head found six further real defects, each verified
+against the code before fixing and each now carrying its own regression:
+
+| Finding | Severity | Defect | Fix |
+|---|---|---|---|
+| `credential_slot_identity` unusable | Critical | The generic field-name scan matched the substring `credential`, so the modelled slot field could never be set and its value-shape check was unreachable — the documented contract was not implementable. | The one legitimately named field is exempt from name-based rejection and value-checked instead. |
+| Secrets via `prohibited_capabilities` | P1 | That tuple was exempt from secret screening, yet it is hashed into `profile_identity`, which is persisted on the attempt and handoff — a durable credential-derived representation. | Every entry is screened before normalization. |
+| Capability not bound to the build | P1 | The check compared two caller-supplied objects, so a profile and capability agreeing with each other but not with the build's own allocation could authorize a dispatch. | The governing allocation is now required and verified against the build, and the capability against the allocation. |
+| Request evidence not re-derived at persistence | P1 | Persistence verified identity consistency but not permission, so a direct caller with content-denying authority could persist forged durable content. | Persistence independently derives the permitted state and rejects disagreement, including any prohibited content-derived material. |
+| Authority verified outside the write transaction | P1 | Re-resolution happened before `BEGIN IMMEDIATE`, leaving an unbounded window. | Re-resolution moved inside the write transaction; the residual cross-substrate window is documented rather than papered over — see below. |
+| Connections never closed | Major | `sqlite3.Connection.__exit__` ends the transaction but does not close, leaking handles and holding locks until garbage collection. | A context manager closes deterministically. |
+
+### Residual limitation, stated plainly
+
+The Source Handling authority store and the evidence database are separate
+substrates, so `BEGIN IMMEDIATE` cannot also lock the authority store. Verifying
+inside the write transaction narrows the exposure to that transaction, but a
+restrictive successor backdated to at or before the attempt cutoff and published
+within that window would not be observed. ADR 0034 makes an equivalent atomic
+snapshot-to-handoff guarantee a precondition for provider **activation**, which
+Phase A does not perform. Closing it fully requires a governed cross-substrate
+commit primitive that does not exist yet, and inventing one inside an
+implementation PR is exactly what Issue #303 forbids. It is recorded here as a
+hard gate for the phase that introduces transport.
 
 ## Verification
 

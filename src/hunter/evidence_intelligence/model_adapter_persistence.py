@@ -20,10 +20,11 @@ single-use consumption.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import sqlite3
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import asdict
 from datetime import UTC, datetime
 from typing import Any
@@ -33,6 +34,7 @@ from hunter.evidence_intelligence.model_adapter import (
     ModelHandoffRecord,
     ProviderRequestEvidence,
     _disposition_identity,
+    permitted_request_evidence_state,
 )
 from hunter.evidence_intelligence.pre_model import (
     EvidencePreModelSourceHandlingAuthority,
@@ -109,7 +111,6 @@ class ModelAdapterPersistenceRepository:
         Re-persisting identical bytes is idempotent; re-using an identity with
         different bytes is a conflict rather than a silent overwrite.
         """
-        self._verify_against_rederived_authority(handoff=handoff, attempt_authority=attempt_authority)
         if handoff.attempt_id != attempt.attempt_id:
             raise ModelAdapterPersistenceError("handoff does not belong to the supplied attempt")
         if handoff.request_evidence_identity != attempt.request_evidence_identity:
@@ -133,6 +134,16 @@ class ModelAdapterPersistenceRepository:
 
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
+            # Re-resolved *inside* the write transaction, so the window between
+            # verifying authority and committing the handoff is the transaction
+            # itself rather than an unbounded gap. See the residual-window note on
+            # `_verify_against_rederived_authority`.
+            self._verify_against_rederived_authority(
+                attempt=attempt,
+                handoff=handoff,
+                request_evidence=request_evidence,
+                attempt_authority=attempt_authority,
+            )
             existing_attempt = connection.execute(
                 "SELECT payload_hash FROM model_attempt_records WHERE attempt_id = ?",
                 (attempt.attempt_id,),
@@ -194,10 +205,23 @@ class ModelAdapterPersistenceRepository:
     def _verify_against_rederived_authority(
         self,
         *,
+        attempt: ModelAttemptRecord,
         handoff: ModelHandoffRecord,
+        request_evidence: ProviderRequestEvidence,
         attempt_authority: EvidencePreModelSourceHandlingAuthority,
     ) -> None:
-        """Independently rederive the decision and reject any disagreement."""
+        """Independently rederive the decision and reject any disagreement.
+
+        Residual window, stated honestly: the Source Handling authority store and
+        this evidence database are separate substrates, so `BEGIN IMMEDIATE` cannot
+        also lock the authority store. Re-resolving here narrows the exposure to
+        the write transaction, but a restrictive successor backdated to at or
+        before the attempt cutoff and published inside that window would not be
+        observed. ADR 0034 makes an equivalent atomic snapshot-to-handoff guarantee
+        a precondition for provider *activation*, which Phase A does not perform;
+        closing it fully requires a governed cross-substrate commit primitive that
+        does not exist yet and is not invented here.
+        """
         if handoff.attempt_cutoff != attempt_authority.cutoff.astimezone(UTC):
             raise ModelAdapterAuthorityMismatch("handoff cutoff does not match the supplied attempt authority")
         try:
@@ -222,6 +246,31 @@ class ModelAdapterPersistenceRepository:
         if handoff.durable_disposition_identity != _disposition_identity(decision):
             raise ModelAdapterAuthorityMismatch(
                 "handoff durable-disposition identity does not match independently rederived authority"
+            )
+
+        # Independently derive what request evidence this authority permits, rather
+        # than accepting a supplied object merely because its identities are
+        # internally consistent.
+        permitted = permitted_request_evidence_state(decision)
+        if request_evidence.state != permitted:
+            raise ModelAdapterAuthorityMismatch(
+                f"request evidence state {request_evidence.state} is not the state "
+                f"{permitted} authorized by independently rederived authority"
+            )
+        if attempt.request_evidence_state != permitted:
+            raise ModelAdapterAuthorityMismatch(
+                "attempt request-evidence state does not match independently rederived authority"
+            )
+        if permitted == "REQUEST_EVIDENCE_UNAVAILABLE_BY_POLICY" and any(
+            value is not None
+            for value in (
+                request_evidence.content_hash,
+                request_evidence.measured_size_bytes,
+                request_evidence.content_derived_identity,
+            )
+        ):
+            raise ModelAdapterAuthorityMismatch(
+                "request evidence carries content-derived material the rederived authority prohibits"
             )
 
     # -- single-use consumption ---------------------------------------------
@@ -357,11 +406,22 @@ class ModelAdapterPersistenceRepository:
                 """
             )
 
-    def _connect(self) -> sqlite3.Connection:
+    @contextlib.contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
+        """Open a connection that is committed/rolled back *and* closed.
+
+        `sqlite3.Connection.__exit__` only ends the transaction; it does not close
+        the connection, so a bare `with sqlite3.connect(...)` leaks handles and can
+        hold locks until garbage collection.
+        """
         connection = sqlite3.connect(self.path, timeout=30.0)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
-        return connection
+        try:
+            with connection:
+                yield connection
+        finally:
+            connection.close()
 
 
 def _attempt_from_payload(payload: Mapping[str, Any]) -> ModelAttemptRecord:

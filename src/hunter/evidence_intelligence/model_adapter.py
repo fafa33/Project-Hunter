@@ -37,6 +37,7 @@ from typing import Any, Literal
 
 from hunter.evidence_intelligence.pre_model import (
     EvidenceCapabilityConstraint,
+    EvidenceContextAllocationResult,
     EvidencePreModelBuildRecord,
     EvidencePreModelSourceHandlingAuthority,
     EvidencePromptArtifact,
@@ -74,6 +75,11 @@ CONTENT_DERIVED_CATEGORIES = ("SOURCE_BYTES", "SOURCE_DERIVED_TEXT", "CONTENT_DE
 # The single-use dispatch capability is opaque and not content-derived, so it is
 # governed as operational metadata rather than as a content category.
 DISPATCH_CAPABILITY_CATEGORY = "OPERATIONAL_METADATA"
+
+# The one field whose *name* legitimately contains "credential": it names a slot,
+# and is value-checked instead. Without this exemption the modelled field would be
+# unusable and its value-shape check unreachable.
+CREDENTIAL_SLOT_FIELD = "credential_slot_identity"
 
 # Field names that carry, or plausibly carry, credential material. These are
 # rejected structurally at construction rather than redacted at write time:
@@ -142,9 +148,9 @@ def _identity(kind: str, value: object) -> str:
     return f"{kind}:{digest}"
 
 
-def _reject_secret_material(where: str, key: str, value: object) -> None:
+def _reject_secret_material(where: str, key: str, value: object, *, check_name: bool = True) -> None:
     """Structurally refuse credential material on a durable Model Adapter surface."""
-    if _SECRET_FIELD_PATTERN.search(key):
+    if check_name and _SECRET_FIELD_PATTERN.search(key):
         raise SecretMaterialRejected(f"{where} may not carry credential-bearing field {key!r}")
     if isinstance(value, str) and _SECRET_VALUE_PATTERN.search(value.strip()):
         raise SecretMaterialRejected(f"{where} field {key!r} carries credential-shaped material")
@@ -209,10 +215,22 @@ class ModelExecutionProfile:
                 continue
             if value is None:
                 continue
-            _reject_secret_material("execution profile", name, value)
+            _reject_secret_material(
+                "execution profile",
+                name,
+                value,
+                check_name=name != CREDENTIAL_SLOT_FIELD,
+            )
         if self.idempotency_capability not in ("SUPPORTED", "UNAVAILABLE", "UNKNOWN"):
             raise ModelAdapterError("idempotency capability classification is invalid")
         object.__setattr__(self, "parameters", _screen_parameters("execution profile", self.parameters))
+        # These entries are hashed into `profile_identity`, which is persisted on
+        # the attempt and handoff, so an unscreened entry would become a durable
+        # credential-derived representation.
+        for capability_name in self.prohibited_capabilities:
+            if not isinstance(capability_name, str):
+                raise ModelAdapterError("prohibited capabilities must be strings")
+            _reject_secret_material("execution profile", "prohibited_capability", capability_name)
         object.__setattr__(self, "prohibited_capabilities", tuple(sorted(set(self.prohibited_capabilities))))
         if self.credential_slot_identity is not None:
             slot = self.credential_slot_identity
@@ -426,6 +444,19 @@ def _category_persist_allowed(decision: Mapping[str, Any], category: str) -> boo
     return category_dispositions.get("PERSIST") == "ALLOW"
 
 
+def permitted_request_evidence_state(decision: Mapping[str, Any]) -> RequestEvidenceState:
+    """The only request-evidence state this decision authorizes.
+
+    Shared by the adapter and by persistence so both derive the same answer from
+    the same authority rather than trusting a supplied object.
+    """
+    if decision.get("retention_decision") != "ALLOW" or not all(
+        _category_persist_allowed(decision, category) for category in CONTENT_DERIVED_CATEGORIES
+    ):
+        return "REQUEST_EVIDENCE_UNAVAILABLE_BY_POLICY"
+    return "REQUEST_EVIDENCE_DURABLE"
+
+
 def derive_request_evidence(
     *,
     resolved: ResolvedPreModelSourceHandling,
@@ -438,9 +469,7 @@ def derive_request_evidence(
     an authorized send can still produce explicitly unavailable request evidence.
     """
     decision = resolved.decision
-    if decision.get("retention_decision") != "ALLOW" or not all(
-        _category_persist_allowed(decision, category) for category in CONTENT_DERIVED_CATEGORIES
-    ):
+    if permitted_request_evidence_state(decision) == "REQUEST_EVIDENCE_UNAVAILABLE_BY_POLICY":
         return ProviderRequestEvidence(
             state="REQUEST_EVIDENCE_UNAVAILABLE_BY_POLICY",
             reason_code=REQUEST_EVIDENCE_UNAVAILABLE_REASON,
@@ -485,6 +514,7 @@ class ModelAdapterService:
         build_record: EvidencePreModelBuildRecord,
         prompt_artifact: EvidencePromptArtifact,
         capability: EvidenceCapabilityConstraint,
+        allocation: EvidenceContextAllocationResult,
         profile: ModelExecutionProfile,
         attempt_authority: EvidencePreModelSourceHandlingAuthority,
         build_cutoff: datetime,
@@ -517,6 +547,13 @@ class ModelAdapterService:
             raise ModelAdapterAuthorityError("supplied handling decision must be a mapping when present")
 
         # 1. Capability compatibility fails closed before anything durable exists.
+        #    The constraint is bound to the build's own allocation, not merely to a
+        #    caller-supplied pair: a profile and capability that agree with each
+        #    other but not with the governing build must not authorize a dispatch.
+        if allocation.allocation_id != build_record.allocation_id:
+            raise ModelAdapterError("supplied allocation does not belong to the governing pre-model build")
+        if allocation.capability_identity != capability.constraint_identity:
+            raise ModelAdapterError("supplied capability is not the constraint recorded by the build's allocation")
         if not profile.satisfies(capability):
             raise PreDispatchRefused(
                 "CAPABILITY_UNSUPPORTED",
