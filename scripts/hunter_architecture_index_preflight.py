@@ -43,19 +43,43 @@ def _normalized_cells(line: str) -> tuple[str, ...]:
     return tuple(_normalized_cell(cell) for cell in _markdown_cells(line))
 
 
-def _schema_present(text: str, headers: tuple[str, ...]) -> bool:
-    return any(_normalized_cells(line) == headers for line in text.splitlines() if line.strip().startswith("|"))
+def _section(text: str, heading: str) -> str:
+    lines = text.splitlines()
+    try:
+        start = next(index for index, line in enumerate(lines) if line.strip() == heading)
+    except StopIteration:
+        return ""
+    body: list[str] = []
+    for line in lines[start + 1 :]:
+        if line.startswith("## "):
+            break
+        body.append(line)
+    return "\n".join(body)
 
 
-def _adpr_rows_with_width(text: str, adpr: str, width: int) -> list[list[str]]:
-    matched: list[list[str]] = []
-    for line in text.splitlines():
-        cells = _markdown_cells(line)
-        if len(cells) != width:
+def _canonical_table(section: str, headers: tuple[str, ...]) -> list[list[str]] | None:
+    lines = section.splitlines()
+    for index, line in enumerate(lines):
+        if _normalized_cells(line) != headers:
             continue
-        if re.search(rf"(?i)\b{re.escape(adpr)}\b", _normalized_cell(cells[0])):
-            matched.append(cells)
-    return matched
+        if index + 1 >= len(lines):
+            return None
+        delimiter = _markdown_cells(lines[index + 1])
+        if len(delimiter) != len(headers) or not all(re.fullmatch(r":?-{3,}:?", cell) for cell in delimiter):
+            return None
+        rows: list[list[str]] = []
+        for candidate in lines[index + 2 :]:
+            if not candidate.strip().startswith("|"):
+                break
+            cells = _markdown_cells(candidate)
+            if len(cells) == len(headers):
+                rows.append(cells)
+        return rows
+    return None
+
+
+def _adpr_rows(rows: list[list[str]], adpr: str) -> list[list[str]]:
+    return [row for row in rows if re.search(rf"(?i)\b{re.escape(adpr)}\b", _normalized_cell(row[0]))]
 
 
 def _display_path(path: Path) -> str:
@@ -73,17 +97,19 @@ def validate_architecture_index(
     """Validate the known lifecycle/runtime consistency invariant from ADPR-0009 case 14."""
     errors: list[str] = []
 
-    if not _schema_present(text, DECISION_HEADERS):
+    decision_table = _canonical_table(_section(text, "## Decision Registry"), DECISION_HEADERS)
+    if decision_table is None:
         errors.append("Decision Registry must contain the canonical ADPR/Status table schema.")
         return errors
-    if not _schema_present(text, APPROVED_HEADERS):
+    approved_table = _canonical_table(_section(text, "## Approved and Implemented Records"), APPROVED_HEADERS)
+    if approved_table is None:
         errors.append(
             "Approved and Implemented Records must separate ADPR lifecycle Status from downstream Implementation."
         )
         return errors
 
-    decision_matches = _adpr_rows_with_width(text, ADPR_0006, len(DECISION_HEADERS))
-    approved_matches = _adpr_rows_with_width(text, ADPR_0006, len(APPROVED_HEADERS))
+    decision_matches = _adpr_rows(decision_table, ADPR_0006)
+    approved_matches = _adpr_rows(approved_table, ADPR_0006)
     if len(decision_matches) != 1:
         errors.append(f"Decision Registry must contain exactly one {ADPR_0006} row; found {len(decision_matches)}.")
         return errors
