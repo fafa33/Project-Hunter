@@ -6,7 +6,7 @@ import os
 from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, Protocol
 
 from hunter.persistence.models import QuerySpec
 from hunter.persistence.sql import RepositoryFactory, SessionFactory, create_sqlite_engine
@@ -18,15 +18,28 @@ from hunter.valuation_methodology.models import (
     REQUIRED_CORRELATION_GROUP,
     REQUIRED_HORIZON_DAYS,
     VALUATION_METHODOLOGY_SCHEMA_VERSION,
+    MethodologyEvidenceInputContract,
     ValuationMethodologySnapshot,
 )
 from hunter.valuation_methodology.repository import (
     ValuationMethodologyIntegrityError,
     ValuationMethodologyRepository,
+    methodology_contract_snapshot,
     methodology_snapshot,
 )
 
 _APPLICATION_ROOT_ENV = "HUNTER_APPLICATION_ROOT"
+
+
+class MethodologyContractAuthority(Protocol):
+    def strict_known_contract(
+        self,
+        *,
+        contract_id: str,
+        contract_version: str,
+        known_by: datetime,
+        effective_as_of: datetime | None = None,
+    ) -> MethodologyEvidenceInputContract | None: ...
 
 
 class CanonicalValuationMethodologyAuthorityError(ValueError):
@@ -34,7 +47,7 @@ class CanonicalValuationMethodologyAuthorityError(ValueError):
 
 
 class CanonicalValuationMethodologyAuthority:
-    """Service-owned authority boundary for ValuationMethodologySnapshot.
+    """Service-owned authority boundary for ValuationMethodologySnapshot and MethodologyEvidenceInputContract.
 
     Authority model (see PR body / architecture note for the full pre-implementation
     analysis): this reuses the operator-attested, HUNTER_APPLICATION_ROOT-gated pattern
@@ -83,6 +96,7 @@ class CanonicalValuationMethodologyAuthority:
         effective_at: datetime,
         recorded_at: datetime,
         known_at: datetime,
+        accepts_assembled_evidence: bool = False,
         supersedes_record_id: str | None = None,
         correction_reason: str = "",
     ) -> ValuationMethodologySnapshot:
@@ -111,6 +125,7 @@ class CanonicalValuationMethodologyAuthority:
             correlation_group=REQUIRED_CORRELATION_GROUP,
             authorizing_adr_reference=AUTHORIZING_ADR_REFERENCE,
             authorized_by=CANONICAL_AUTHORITY_ID,
+            accepts_assembled_evidence=accepts_assembled_evidence,
             supersedes_record_id=supersedes_record_id,
             correction_reason=correction_reason,
         )
@@ -139,11 +154,97 @@ class CanonicalValuationMethodologyAuthority:
             engine.dispose()
         return record
 
+    def persist_contract(
+        self,
+        *,
+        contract_id: str,
+        contract_version: str,
+        accepts_assembled_evidence: bool,
+        accepted_shape_ids: tuple[str, ...],
+        accepted_assembly_rule_versions: tuple[str, ...],
+        accounting_window_start: datetime,
+        accounting_window_end: datetime,
+        entity_id: str,
+        representation_id: str,
+        currency: str,
+        unit: str,
+        effective_at: datetime,
+        recorded_at: datetime,
+        known_at: datetime,
+        exact_gap_free_non_overlapping_coverage_required: bool = True,
+        allow_representation_boundary_crossing: bool = False,
+        allow_pathway_boundary_crossing: bool = False,
+        allow_supply_basis_boundary_crossing: bool = False,
+        provenance_content_hash_required: bool = True,
+        conflict_policy: Literal["reject"] = "reject",
+        minimum_quality_state: Literal["accepted"] = "accepted",
+        missingness_behavior: Literal["unavailable"] = "unavailable",
+        strict_known_required: bool = True,
+        supersedes_contract_version: str | None = None,
+        correction_reason: str = "",
+    ) -> MethodologyEvidenceInputContract:
+        contract = MethodologyEvidenceInputContract(
+            contract_id=contract_id,
+            contract_version=contract_version,
+            accepts_assembled_evidence=accepts_assembled_evidence,
+            accepted_shape_ids=accepted_shape_ids,
+            accepted_assembly_rule_versions=accepted_assembly_rule_versions,
+            accounting_window_start=accounting_window_start,
+            accounting_window_end=accounting_window_end,
+            exact_gap_free_non_overlapping_coverage_required=exact_gap_free_non_overlapping_coverage_required,
+            allow_representation_boundary_crossing=allow_representation_boundary_crossing,
+            allow_pathway_boundary_crossing=allow_pathway_boundary_crossing,
+            allow_supply_basis_boundary_crossing=allow_supply_basis_boundary_crossing,
+            provenance_content_hash_required=provenance_content_hash_required,
+            conflict_policy=conflict_policy,
+            minimum_quality_state=minimum_quality_state,
+            entity_id=entity_id,
+            representation_id=representation_id,
+            currency=currency,
+            unit=unit,
+            missingness_behavior=missingness_behavior,
+            strict_known_required=strict_known_required,
+            effective_at=effective_at,
+            recorded_at=recorded_at,
+            known_at=known_at,
+            quality_state="accepted",
+            conflict_state="none",
+            content_hash="pending",
+            supersedes_contract_version=supersedes_contract_version,
+            correction_reason=correction_reason,
+        )
+        contract = _normalize_contract(contract)
+
+        engine = create_sqlite_engine(self.repository.path)
+        session = SessionFactory(engine).create()
+        try:
+            session.connection().exec_driver_sql("BEGIN IMMEDIATE")
+            snapshots = RepositoryFactory(session).snapshots()
+            _authorize_contract_correction(snapshots, contract)
+            snapshots.save(methodology_contract_snapshot(contract))
+            session.commit()
+        except PersistenceIdentityConflictError as exc:
+            session.rollback()
+            raise ValuationMethodologyIntegrityError(str(exc)) from exc
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+            engine.dispose()
+        return contract
+
     def get(self, record_id: str) -> ValuationMethodologySnapshot | None:
         return self.repository.get(record_id)
 
+    def get_contract(self, contract_id: str, contract_version: str) -> MethodologyEvidenceInputContract | None:
+        return self.repository.get_contract(contract_id, contract_version)
+
     def methodology_history(self, logical_id: str) -> tuple[ValuationMethodologySnapshot, ...]:
         return self.repository.methodology_history(logical_id)
+
+    def contract_history(self, contract_id: str) -> tuple[MethodologyEvidenceInputContract, ...]:
+        return self.repository.contract_history(contract_id)
 
     def strict_known_methodology(
         self,
@@ -153,6 +254,34 @@ class CanonicalValuationMethodologyAuthority:
     ) -> ValuationMethodologySnapshot | None:
         return _strict_known(self.repository.records(), effective_as_of=effective_as_of, known_by=known_by)
 
+    def strict_known_contract(
+        self,
+        *,
+        contract_id: str,
+        contract_version: str,
+        known_by: datetime,
+        effective_as_of: datetime | None = None,
+    ) -> MethodologyEvidenceInputContract | None:
+        if effective_as_of is None:
+            effective_as_of = known_by
+
+        # ADR 0028 rule: strict_known_contract requires the governing snapshot
+        # in force at those coordinates to have accepts_assembled_evidence == True.
+        governing_snapshot = self.strict_known_methodology(
+            effective_as_of=effective_as_of,
+            known_by=known_by,
+        )
+        if governing_snapshot is None or not governing_snapshot.accepts_assembled_evidence:
+            return None
+
+        return _strict_known_contract(
+            self.repository.contracts(),
+            contract_id=contract_id,
+            contract_version=contract_version,
+            effective_as_of=effective_as_of,
+            known_by=known_by,
+        )
+
     def unresolved_conflicts(self) -> tuple[ValuationMethodologySnapshot, ...]:
         return _unresolved_conflicts(self.repository.records())
 
@@ -160,13 +289,6 @@ class CanonicalValuationMethodologyAuthority:
 def _authorize_correction(snapshots: Any, record: ValuationMethodologySnapshot) -> None:
     predecessor_id = record.supersedes_record_id
     if predecessor_id is None:
-        # A second, independent "root" record for the same logical_id would bypass the
-        # correction mechanism entirely (branching without ever setting
-        # supersedes_record_id). ADR 0022 authorizes exactly one methodology for the
-        # first supported entity class, so unlike hunter.value_capture's provider-fact
-        # conflict-flagging (appropriate for genuinely divergent external observations),
-        # a second root record here is rejected outright rather than merely flagged --
-        # any amendment must go through supersedes_record_id.
         existing_root = next(
             (
                 item
@@ -193,10 +315,6 @@ def _authorize_correction(snapshots: Any, record: ValuationMethodologySnapshot) 
         raise ValuationMethodologyIntegrityError("correction recorded_at must follow predecessor")
     if datetime.fromisoformat(str(prior_payload["known_at"])) >= record.known_at:
         raise ValuationMethodologyIntegrityError("correction known_at must follow predecessor")
-    # A retried, byte-identical correction (same content-addressed record_id) is an
-    # idempotent no-op, not a branch -- excluded here and handled by the ordinary
-    # save()-time canonical-hash upsert below. Only a *different* record claiming the
-    # same predecessor is a genuine branching correction.
     competing_successor = next(
         (
             item
@@ -209,6 +327,52 @@ def _authorize_correction(snapshots: Any, record: ValuationMethodologySnapshot) 
     )
     if competing_successor is not None:
         raise ValuationMethodologyIntegrityError("branching correction lineage is prohibited")
+
+
+def _authorize_contract_correction(snapshots: Any, record: MethodologyEvidenceInputContract) -> None:
+    predecessor_version = record.supersedes_contract_version
+    target_id = f"{record.contract_id}:{record.contract_version}"
+    if predecessor_version is None:
+        existing_root = next(
+            (
+                item
+                for item in snapshots.query(QuerySpec(record_kind="snapshot"))
+                if item.snapshot_type == "methodology-evidence-input-contract"
+                and item.payload.get("contract_id") == record.contract_id
+                and item.id != target_id
+            ),
+            None,
+        )
+        if existing_root is not None:
+            raise ValuationMethodologyIntegrityError(
+                "a root contract already exists for this contract_id; use a correction "
+                "(supersedes_contract_version) instead of a second independent root contract"
+            )
+        return
+    predecessor_target_id = f"{record.contract_id}:{predecessor_version}"
+    prior_snapshot = snapshots.load(predecessor_target_id)
+    if prior_snapshot is None or prior_snapshot.snapshot_type != "methodology-evidence-input-contract":
+        raise ValuationMethodologyIntegrityError("contract correction predecessor does not exist")
+    prior_payload = prior_snapshot.payload
+    if str(prior_payload.get("contract_id")) != record.contract_id:
+        raise ValuationMethodologyIntegrityError("contract correction must preserve contract_id")
+    if datetime.fromisoformat(str(prior_payload["recorded_at"])) >= record.recorded_at:
+        raise ValuationMethodologyIntegrityError("contract correction recorded_at must follow predecessor")
+    if datetime.fromisoformat(str(prior_payload["known_at"])) >= record.known_at:
+        raise ValuationMethodologyIntegrityError("contract correction known_at must follow predecessor")
+    competing_successor = next(
+        (
+            item
+            for item in snapshots.query(QuerySpec(record_kind="snapshot"))
+            if item.snapshot_type == "methodology-evidence-input-contract"
+            and item.payload.get("supersedes_contract_version") == predecessor_version
+            and item.payload.get("contract_id") == record.contract_id
+            and item.id != target_id
+        ),
+        None,
+    )
+    if competing_successor is not None:
+        raise ValuationMethodologyIntegrityError("branching contract correction lineage is prohibited")
 
 
 def _strict_known(
@@ -228,6 +392,50 @@ def _strict_known(
     superseded = {item.supersedes_record_id for item in eligible if item.supersedes_record_id is not None}
     current = [item for item in eligible if item.record_id not in superseded]
     current.sort(key=lambda item: (item.effective_at, item.recorded_at, item.known_at, item.record_id), reverse=True)
+    return current[0] if current else None
+
+
+def _strict_known_contract(
+    contracts: tuple[MethodologyEvidenceInputContract, ...],
+    *,
+    contract_id: str,
+    contract_version: str,
+    effective_as_of: datetime,
+    known_by: datetime,
+) -> MethodologyEvidenceInputContract | None:
+    effective_as_of = _aware(effective_as_of)
+    known_by = _aware(known_by)
+    eligible = [
+        item
+        for item in contracts
+        if item.contract_id == contract_id
+        and item.contract_version == contract_version
+        and item.effective_at <= effective_as_of
+        and item.recorded_at <= known_by
+        and item.known_at <= known_by
+        and item.quality_state == "accepted"
+        and item.conflict_state in {"none", "resolved"}
+    ]
+    eligible_all_versions = [
+        item
+        for item in contracts
+        if item.contract_id == contract_id
+        and item.effective_at <= effective_as_of
+        and item.recorded_at <= known_by
+        and item.known_at <= known_by
+        and item.quality_state == "accepted"
+        and item.conflict_state in {"none", "resolved"}
+    ]
+    superseded = {
+        item.supersedes_contract_version
+        for item in eligible_all_versions
+        if item.supersedes_contract_version is not None
+    }
+    current = [item for item in eligible if item.contract_version not in superseded]
+    current.sort(
+        key=lambda item: (item.effective_at, item.recorded_at, item.known_at, item.contract_version),
+        reverse=True,
+    )
     return current[0] if current else None
 
 
@@ -254,12 +462,12 @@ def _normalize(record: ValuationMethodologySnapshot) -> ValuationMethodologySnap
     return replace(record, logical_id=logical_id, content_hash=content_hash, record_id=record_id)
 
 
+def _normalize_contract(contract: MethodologyEvidenceInputContract) -> MethodologyEvidenceInputContract:
+    content_hash = _contract_content_hash(contract)
+    return replace(contract, content_hash=content_hash)
+
+
 def _logical_id(record: ValuationMethodologySnapshot) -> str:
-    # A correction's logical identity is the (model, entity-class-criteria) pair it
-    # governs, not the specific parameter values -- a discount-rate-policy revision is a
-    # correction of the *same* methodology; a different model or entity-class-criteria
-    # id is a materially different methodology family (a new logical_id), never a
-    # correction chain of this one.
     raw = "|".join((record.permitted_model_identifier, record.entity_class_criteria_id))
     return hashlib.sha256(raw.encode()).hexdigest()
 
@@ -270,6 +478,12 @@ _CONTENT_HASH_EXCLUDED_FIELDS = frozenset({"record_id", "logical_id", "content_h
 def _content_hash(record: ValuationMethodologySnapshot, *, logical_id: str) -> str:
     payload = {key: value for key, value in asdict(record).items() if key not in _CONTENT_HASH_EXCLUDED_FIELDS}
     payload["logical_id"] = logical_id
+    raw = json.dumps(_json_safe(payload), sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _contract_content_hash(contract: MethodologyEvidenceInputContract) -> str:
+    payload = {key: value for key, value in asdict(contract).items() if key != "content_hash"}
     raw = json.dumps(_json_safe(payload), sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(raw).hexdigest()
 
@@ -285,11 +499,6 @@ def _json_safe(value: Any) -> Any:
 
 
 def _authorized_application_root(application_root: Path | None) -> Path:
-    """The sole authorization boundary for this service: mirrors, unmodified in
-    substance, the identical `_application_root()` check already accepted and running in
-    hunter.committee.command and hunter.valuation_evidence.command. Enforced here at
-    service-construction time (rather than only at a CLI entry point) so that
-    unauthorized/unattested construction fails closed regardless of caller."""
     if application_root is None:
         configured = os.environ.get(_APPLICATION_ROOT_ENV, "").strip()
         if not configured:

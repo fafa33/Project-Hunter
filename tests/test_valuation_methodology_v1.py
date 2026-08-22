@@ -447,3 +447,141 @@ def test_persisting_methodology_does_not_activate_valuation_in_market_validation
     rejected = next(item for item in result.engine_sources if item.engine == "valuation")
     assert rejected.status == "UNAVAILABLE"
     assert rejected.warnings == ("contract_unavailable:valuation",)
+
+
+# 15. Methodology Contract Authority tests (Issue #194) ----------------------------------------
+
+
+def contract_payload(**overrides: object) -> dict[str, object]:
+    base: dict[str, object] = {
+        "contract_id": "test-contract-v1",
+        "contract_version": "1.0.0",
+        "accepts_assembled_evidence": True,
+        "accepted_shape_ids": ("shape-quarterly-v1", "shape-annual-v1"),
+        "accepted_assembly_rule_versions": ("lossless-exact-coverage-v1",),
+        "accounting_window_start": NOW,
+        "accounting_window_end": NOW + timedelta(days=365),
+        "entity_id": "entity-btc",
+        "representation_id": "rep-spot",
+        "currency": "usd",
+        "unit": "usd_amount",
+        "effective_at": NOW,
+        "recorded_at": NOW,
+        "known_at": NOW,
+    }
+    base.update(overrides)
+    return base
+
+
+def test_persist_and_get_contract_round_trip(tmp_path: Path) -> None:
+    service, repository = setup(tmp_path)
+    contract = service.persist_contract(**contract_payload())
+    assert contract.contract_id == "test-contract-v1"
+    assert contract.contract_version == "1.0.0"
+    assert contract.accepts_assembled_evidence is True
+
+    fetched = service.get_contract("test-contract-v1", "1.0.0")
+    assert fetched == contract
+    assert repository.get_contract("test-contract-v1", "1.0.0") == contract
+    assert repository.count("valuation_methodology_contracts") == 1
+
+
+def test_strict_known_contract_returns_unavailable_when_governing_snapshot_does_not_accept_assembly(
+    tmp_path: Path,
+) -> None:
+    service, _ = setup(tmp_path)
+    # Methodology snapshot created without accepts_assembled_evidence (default False)
+    service.persist_methodology(**payload())
+    service.persist_contract(**contract_payload())
+
+    # Should return None because governing snapshot has accepts_assembled_evidence = False
+    assert service.strict_known_contract(contract_id="test-contract-v1", contract_version="1.0.0", known_by=NOW) is None
+
+
+def test_strict_known_contract_returns_contract_when_governing_snapshot_accepts_assembly(tmp_path: Path) -> None:
+    service, _ = setup(tmp_path)
+    # Methodology snapshot created with accepts_assembled_evidence = True
+    service.persist_methodology(**payload(accepts_assembled_evidence=True))
+    contract = service.persist_contract(**contract_payload())
+
+    result = service.strict_known_contract(contract_id="test-contract-v1", contract_version="1.0.0", known_by=NOW)
+    assert result == contract
+
+
+def test_contract_correction_lineage_append_only(tmp_path: Path) -> None:
+    service, _ = setup(tmp_path)
+    service.persist_methodology(**payload(accepts_assembled_evidence=True))
+    v1 = service.persist_contract(**contract_payload())
+
+    later = NOW + timedelta(days=10)
+    v2 = service.persist_contract(
+        **contract_payload(
+            contract_version="1.1.0",
+            recorded_at=later,
+            known_at=later,
+        ),
+        supersedes_contract_version="1.0.0",
+        correction_reason="Updated accepted shape IDs",
+    )
+
+    history = service.contract_history("test-contract-v1")
+    assert history == (v1, v2)
+
+    # Historical cutoff before v2 returns v1
+    assert service.strict_known_contract(contract_id="test-contract-v1", contract_version="1.0.0", known_by=NOW) == v1
+    # Historical cutoff after v2 returns v2 when queried for version 1.1.0
+    assert service.strict_known_contract(contract_id="test-contract-v1", contract_version="1.1.0", known_by=later) == v2
+
+
+def test_contract_correction_non_advancing_clock_rejected(tmp_path: Path) -> None:
+    service, _ = setup(tmp_path)
+    service.persist_contract(**contract_payload())
+    with pytest.raises(ValuationMethodologyIntegrityError, match="recorded_at must follow predecessor"):
+        service.persist_contract(
+            **contract_payload(contract_version="1.1.0"),
+            supersedes_contract_version="1.0.0",
+            correction_reason="Non-advancing correction",
+        )
+
+
+def test_contract_second_root_and_branching_rejected(tmp_path: Path) -> None:
+    service, _ = setup(tmp_path)
+    service.persist_contract(**contract_payload())
+
+    # Second root contract for same contract_id is rejected
+    with pytest.raises(ValuationMethodologyIntegrityError, match="root contract already exists"):
+        service.persist_contract(**contract_payload(contract_version="2.0.0"))
+
+    # Branching correction (two successors pointing to 1.0.0) is rejected
+    service.persist_contract(
+        **contract_payload(
+            contract_version="1.1.0", recorded_at=NOW + timedelta(days=1), known_at=NOW + timedelta(days=1)
+        ),
+        supersedes_contract_version="1.0.0",
+        correction_reason="First successor",
+    )
+    with pytest.raises(ValuationMethodologyIntegrityError, match="branching contract correction lineage is prohibited"):
+        service.persist_contract(
+            **contract_payload(
+                contract_version="1.2.0", recorded_at=NOW + timedelta(days=2), known_at=NOW + timedelta(days=2)
+            ),
+            supersedes_contract_version="1.0.0",
+            correction_reason="Competing successor",
+        )
+
+
+def test_no_reverse_dependency_from_methodology_to_evidence_assembly() -> None:
+    import sys
+
+    # Clear both methodology and evidence_assembly from sys.modules
+    for mod in list(sys.modules.keys()):
+        if mod.startswith("hunter.valuation_methodology") or mod.startswith("hunter.evidence_assembly"):
+            sys.modules.pop(mod, None)
+
+    import hunter.valuation_methodology
+
+    assert hunter.valuation_methodology.__file__ is not None
+
+    # Check that hunter.evidence_assembly is NOT imported by hunter.valuation_methodology
+    assembly_loaded = any(mod.startswith("hunter.evidence_assembly") for mod in sys.modules)
+    assert not assembly_loaded, "hunter.valuation_methodology must not import hunter.evidence_assembly"
