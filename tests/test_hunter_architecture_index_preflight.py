@@ -57,7 +57,7 @@ def test_known_not_started_contradiction_is_rejected() -> None:
         _fixture(implementation="Provider-free pre-model runtime is not started or authorized."),
     )
 
-    assert any("contradicts canonical runtime evidence" in error for error in errors), errors
+    assert any("must explicitly assert" in error for error in errors), errors
 
 
 def test_lifecycle_status_must_agree_across_canonical_tables() -> None:
@@ -101,6 +101,58 @@ def test_same_width_decoy_rows_outside_canonical_tables_cannot_satisfy_guard() -
     errors = hunter_architecture_index_preflight.validate_architecture_index(text)
 
     assert any("Decision Registry must contain exactly one ADPR-0006 row; found 0" in error for error in errors), errors
+
+
+def test_commented_out_canonical_tables_cannot_satisfy_guard() -> None:
+    text = _fixture()
+    text = text.replace(
+        "## Decision Registry\n\n| ADPR | Title | Status | Epic | Issue | ADR | Implementation PR | Merge Commit | Release | Supersedes | Superseded By |",
+        "<!--\n## Decision Registry\n\n| ADPR | Title | Status | Epic | Issue | ADR | Implementation PR | Merge Commit | Release | Supersedes | Superseded By |",
+    )
+    text = text.replace(
+        "| [ADPR-0006](example.md) | AI Context | APPROVED | none | #1 | ADR 0031 | #2 | abc123 | v3.6.0 | none | none |\n\n## Approved and Implemented Records",
+        "| [ADPR-0006](example.md) | AI Context | APPROVED | none | #1 | ADR 0031 | #2 | abc123 | v3.6.0 | none | none |\n-->\n\n## Approved and Implemented Records",
+    )
+
+    errors = hunter_architecture_index_preflight.validate_architecture_index(text)
+
+    assert any("Decision Registry must contain the rendered canonical" in error for error in errors), errors
+
+
+def test_fenced_canonical_tables_cannot_satisfy_guard() -> None:
+    text = _fixture()
+    start = text.index("## Decision Registry")
+    end = text.index("## ADR Mapping")
+    fenced = text[:start] + "```markdown\n" + text[start:end] + "```\n\n" + text[end:]
+
+    errors = hunter_architecture_index_preflight.validate_architecture_index(fenced)
+
+    assert any("Decision Registry must contain the rendered canonical" in error for error in errors), errors
+
+
+def test_stale_runtime_claim_that_was_later_removed_is_rejected() -> None:
+    errors = hunter_architecture_index_preflight.validate_architecture_index(
+        _fixture(
+            implementation=(
+                "Provider-free pre-model runtime is implemented in current source but has since been removed."
+            )
+        ),
+    )
+
+    assert any("revokes or contradicts" in error for error in errors), errors
+
+
+def test_separate_provider_invocation_not_authorized_does_not_negate_runtime() -> None:
+    errors = hunter_architecture_index_preflight.validate_architecture_index(
+        _fixture(
+            implementation=(
+                "Provider-free pre-model runtime is implemented in current source; "
+                "separate provider invocation remains not authorized."
+            )
+        ),
+    )
+
+    assert errors == []
 
 
 def test_runtime_evidence_disappearance_fails_closed(tmp_path: Path) -> None:
