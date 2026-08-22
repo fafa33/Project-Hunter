@@ -829,10 +829,10 @@ After independent architecture audit returns an ADR-ready verdict, create propos
 - Preparation working document: this ADPR serves as the permanent preparation record; no separate working file created
 - Checklist review: author self-assessment completed against preparation guide and quality standard; initial Codex P1 findings and subsequent CodeRabbit major findings on PR #288 remediated; independent architecture audit remains required
 - ADPR: `docs/architecture-records/ADPR-0009-evidence-intelligence-model-adapter.md`
-- ADR: proposed ADR 0034, not yet created
+- ADR: [ADR 0034](../ADR/0034-evidence-intelligence-model-adapter-provider-attempt-boundary.md) drafted under Issue #299; `Proposed`, not yet accepted
 - Implementation plan: not yet created; blocked on ADR acceptance
 - PR: #288
-- Merge commit: not yet created
+- Merge commit: `cd1ef1981975f15dd26d48031b00c8b55c28f3d5`
 - Release: not yet assigned
 
 ## Immutability and Supersession
