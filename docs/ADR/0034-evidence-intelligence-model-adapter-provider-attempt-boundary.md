@@ -18,7 +18,7 @@ This ADR formalizes the architecture ADPR-0009 recommended and the audit validat
 
 The repository owner accepted ADR 0034 under Issue #301, after the architecture-only drafting contribution merged through PR #300 as commit `164449a0ccfbbfd32ed8ec4ca7791dc4c60827b8`. Acceptance was a separate lifecycle from drafting: every substantive review finding raised on PR #300 was resolved before that merge, and the acceptance contribution changed no architectural decision in this record.
 
-This lifecycle transition makes the decision binding architecture. Per `docs/ADR/README.md`, accepted architecture does not imply completed implementation and does not authorize runtime implementation. Runtime state is recorded separately under `Implementation Status`, which remains not started and not activated.
+This lifecycle transition makes the decision binding architecture. Per `docs/ADR/README.md`, accepted architecture does not imply completed implementation and does not authorize runtime implementation. Runtime state is recorded separately under `Implementation Status`, which remains not activated.
 
 ## Context
 
