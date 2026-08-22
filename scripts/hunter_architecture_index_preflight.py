@@ -159,9 +159,7 @@ def validate_architecture_index(
     if decision_table is None:
         errors.append("Decision Registry must contain the rendered canonical ADPR/Status table schema.")
         return errors
-    approved_table = _canonical_table(
-        _section(semantic_text, "## Approved and Implemented Records"), APPROVED_HEADERS
-    )
+    approved_table = _canonical_table(_section(semantic_text, "## Approved and Implemented Records"), APPROVED_HEADERS)
     if approved_table is None:
         errors.append(
             "Approved and Implemented Records must contain the rendered canonical table with separate ADPR lifecycle Status and downstream Implementation."

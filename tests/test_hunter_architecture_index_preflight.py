@@ -166,6 +166,148 @@ def test_runtime_evidence_disappearance_fails_closed(tmp_path: Path) -> None:
     assert any("runtime evidence is missing" in error for error in errors), errors
 
 
+def _fixture_row(prefix: str) -> str:
+    """Read a canonical ADPR-0006 row out of the fixture so the two cannot drift."""
+    return next(line for line in _fixture().splitlines() if line.startswith(prefix))
+
+
+DECISION_ROW = _fixture_row("| [ADPR-0006](example.md) | AI Context |")
+APPROVED_ROW = _fixture_row("| [ADPR-0006](example.md) | ADR 0031 |")
+
+
+def test_tilde_fenced_canonical_tables_cannot_satisfy_guard() -> None:
+    """`~~~` opens a fenced block just as `` ``` `` does."""
+    text = _fixture()
+    start = text.index("## Decision Registry")
+    end = text.index("## ADR Mapping")
+    fenced = text[:start] + "~~~markdown\n" + text[start:end] + "~~~\n\n" + text[end:]
+
+    errors = hunter_architecture_index_preflight.validate_architecture_index(fenced)
+
+    assert any("Decision Registry must contain the rendered canonical" in error for error in errors), errors
+
+
+def test_multiline_html_comment_around_the_approved_row_is_not_rendered() -> None:
+    """A commented-out row does not render, so it cannot supply the ADPR-0006 record."""
+    text = _fixture().replace(APPROVED_ROW, f"<!--\n{APPROVED_ROW}\n-->")
+
+    errors = hunter_architecture_index_preflight.validate_architecture_index(text)
+
+    assert any(
+        "Approved and Implemented Records must contain exactly one ADPR-0006 row; found 0" in error for error in errors
+    ), errors
+
+
+def test_multiline_html_comment_around_the_whole_approved_table_is_not_rendered() -> None:
+    approved_table = "| ADPR | ADR | Status | Implementation | Validation |\n" "|---|---|---|---|---|\n" + APPROVED_ROW
+    text = _fixture().replace(approved_table, f"<!--\n{approved_table}\n-->")
+
+    errors = hunter_architecture_index_preflight.validate_architecture_index(text)
+
+    assert any("separate ADPR lifecycle Status" in error for error in errors), errors
+
+
+def test_decoy_table_with_exact_canonical_headers_outside_the_section_is_ignored() -> None:
+    """Row discovery is bound to the canonical section, not to a matching schema."""
+    text = _fixture().replace(DECISION_ROW, DECISION_ROW.replace("ADPR-0006", "ADPR-0005"))
+    text += (
+        "\n\n## Unrelated Evidence\n\n"
+        "| ADPR | Title | Status | Epic | Issue | ADR | Implementation PR | Merge Commit "
+        "| Release | Supersedes | Superseded By |\n"
+        "|---|---|---|---|---|---|---|---|---|---|---|\n" + DECISION_ROW + "\n"
+    )
+
+    errors = hunter_architecture_index_preflight.validate_architecture_index(text)
+
+    assert any("exactly one ADPR-0006 row; found 0" in error for error in errors), errors
+
+
+def test_decoy_approved_table_outside_the_section_cannot_supply_the_runtime_claim() -> None:
+    text = _fixture().replace(APPROVED_ROW, APPROVED_ROW.replace("ADPR-0006", "ADPR-0005"))
+    text += (
+        "\n\n## Unrelated Evidence\n\n"
+        "| ADPR | ADR | Status | Implementation | Validation |\n"
+        "|---|---|---|---|---|\n" + APPROVED_ROW + "\n"
+    )
+
+    errors = hunter_architecture_index_preflight.validate_architecture_index(text)
+
+    assert any(
+        "Approved and Implemented Records must contain exactly one ADPR-0006 row; found 0" in error for error in errors
+    ), errors
+
+
+def test_prose_decoy_outside_canonical_sections_does_not_interfere() -> None:
+    text = _fixture() + (
+        "\n\n## Notes\n\nADPR-0006 is APPROVED and the provider-free pre-model runtime "
+        "is implemented in current source, as discussed above.\n"
+    )
+
+    assert hunter_architecture_index_preflight.validate_architecture_index(text) == []
+
+
+def test_past_tense_runtime_claim_that_was_since_removed_is_rejected() -> None:
+    """`was implemented ... but has since been removed` asserts a revoked state."""
+    errors = hunter_architecture_index_preflight.validate_architecture_index(
+        _fixture(implementation="Provider-free pre-model runtime was implemented but has since been removed."),
+    )
+
+    assert errors, "stale past-tense runtime claim must not satisfy the current-state assertion"
+
+
+def test_revocation_wordings_are_rejected_deterministically() -> None:
+    wordings = (
+        "Provider-free pre-model runtime is no longer implemented.",
+        "Provider-free pre-model runtime is not implemented.",
+        "Provider-free pre-model runtime is unimplemented.",
+        "Provider-free pre-model runtime is disabled.",
+        "Provider-free pre-model runtime is absent.",
+        "Provider-free pre-model runtime was removed.",
+        "Provider-free pre-model runtime is removed.",
+    )
+    for wording in wordings:
+        errors = hunter_architecture_index_preflight.validate_architecture_index(
+            _fixture(implementation=wording),
+        )
+        assert errors, wording
+
+
+def test_asserted_runtime_with_revocation_clause_is_rejected() -> None:
+    errors = hunter_architecture_index_preflight.validate_architecture_index(
+        _fixture(
+            implementation=(
+                "Provider-free pre-model runtime is implemented in current source, " "however the runtime is disabled."
+            )
+        ),
+    )
+
+    assert any("revokes or contradicts" in error for error in errors), errors
+
+
+def test_duplicate_adpr_0006_rows_are_rejected_in_both_canonical_tables() -> None:
+    duplicated_decision = _fixture().replace(DECISION_ROW, f"{DECISION_ROW}\n{DECISION_ROW}")
+    errors = hunter_architecture_index_preflight.validate_architecture_index(duplicated_decision)
+    assert any("Decision Registry must contain exactly one ADPR-0006 row; found 2" in e for e in errors), errors
+
+    duplicated_approved = _fixture().replace(APPROVED_ROW, f"{APPROVED_ROW}\n{APPROVED_ROW}")
+    errors = hunter_architecture_index_preflight.validate_architecture_index(duplicated_approved)
+    assert any(
+        "Approved and Implemented Records must contain exactly one ADPR-0006 row; found 2" in e for e in errors
+    ), errors
+
+
+def test_missing_adpr_0006_rows_are_rejected_in_both_canonical_tables() -> None:
+    missing_decision = _fixture().replace(DECISION_ROW + "\n", "")
+    errors = hunter_architecture_index_preflight.validate_architecture_index(missing_decision)
+    assert any("Decision Registry must contain exactly one ADPR-0006 row; found 0" in e for e in errors), errors
+
+    missing_approved = _fixture().replace(APPROVED_ROW + "\n", "")
+    errors = hunter_architecture_index_preflight.validate_architecture_index(missing_approved)
+    assert any(
+        "Approved and Implemented Records must contain exactly one ADPR-0006 row; found 0" in e for e in errors
+    ), errors
+
+
 def test_case_14_defect_class_is_permanently_registered() -> None:
     registry = json.loads((ROOT / "docs" / "DEFECT_REGISTRY.json").read_text(encoding="utf-8"))
     matching = [item for item in registry["defects"] if item.get("id") == "ARCH-AUD-008"]
