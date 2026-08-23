@@ -844,6 +844,41 @@ def test_a_complete_listing_is_not_reported_as_truncated(monkeypatch: pytest.Mon
     assert len(observed.changed_paths) == 3
 
 
+def test_an_unpinned_base_still_requires_base_commit_evidence() -> None:
+    """`base_sha` is optional; having *no* base commit at all is missing evidence."""
+
+    _assert_scope_mismatch(
+        _scope_report(
+            contract=_contract(base_sha=""),
+            observation=_in_scope_observation(base_sha=""),
+        ),
+        because="no base commit",
+    )
+
+
+def test_an_unpinned_base_accepts_a_present_base_commit_and_says_so() -> None:
+    """An assignment that pins only the branch must not reject a newer base."""
+
+    report = _scope_report(contract=_contract(base_sha=""), observation=_in_scope_observation(base_sha="f" * 40))
+
+    _assert_in_scope(report)
+    assert "assignment pins no commit" in report.findings[0].detail
+
+
+def test_a_pinned_base_names_the_commit_it_matched() -> None:
+    report = _scope_report()
+
+    _assert_in_scope(report)
+    assert f"base pinned to {ASSIGNED_BASE[:10]}" in report.findings[0].detail
+
+
+def test_a_pinned_base_rejects_a_pull_request_with_no_base_commit() -> None:
+    _assert_scope_mismatch(
+        _scope_report(observation=_in_scope_observation(base_sha="")),
+        because="is not the assigned base",
+    )
+
+
 def test_an_empty_allowed_path_entry_matches_nothing_rather_than_everything() -> None:
     _assert_scope_mismatch(
         _scope_report(contract=_contract(allowed_paths=("",))),

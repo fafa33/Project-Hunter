@@ -181,6 +181,13 @@ class TaskScopeContract:
     task_id: str
     branch_pattern: str
     base_ref: str = "main"
+    # Optional on purpose. `base_ref` is the required base *relationship*;
+    # pinning an exact commit as well is available for an assignment that wants
+    # it, but is not demanded of every contract: the base branch moves, so a
+    # mandatory commit pin would reject a PR branched from a newer main -- work
+    # that is exactly the assignment -- and a guard that rejects valid state is
+    # itself a defect (docs/DEFECT_REGISTRY.json, PRH-009). When it is omitted
+    # the base commit must still be present in the evidence.
     base_sha: str = ""
     allowed_paths: tuple[str, ...] = ()
     prohibited_paths: tuple[str, ...] = ()
@@ -309,10 +316,20 @@ def evaluate_task_scope(
     if observation.base_ref != contract.base_ref:
         return mismatch(f"base branch {observation.base_ref!r} is not the assigned base {contract.base_ref!r}")
 
-    if contract.base_sha and observation.base_sha != contract.base_sha:
-        return mismatch(
-            f"base commit {observation.base_sha[:10] or '(none)'} is not the assigned base " f"{contract.base_sha[:10]}"
-        )
+    if contract.base_sha:
+        if observation.base_sha != contract.base_sha:
+            return mismatch(
+                f"base commit {observation.base_sha[:10] or '(none)'} is not the assigned base "
+                f"{contract.base_sha[:10]}"
+            )
+        base_detail = f"base pinned to {contract.base_sha[:10]}"
+    elif not observation.base_sha:
+        # The assignment pins the base branch rather than a commit, which is a
+        # deliberate choice (see below). It still requires the evidence to exist:
+        # an absent base commit is missing evidence, like an absent head branch.
+        return mismatch("pull request evidence carries no base commit")
+    else:
+        base_detail = f"base branch {contract.base_ref} (assignment pins no commit)"
 
     prohibited = tuple(
         path
@@ -334,7 +351,7 @@ def evaluate_task_scope(
         state,
         True,
         SCOPE,
-        f"in scope for task {contract.task_id!r}: branch {observation.head_ref}, "
+        f"in scope for task {contract.task_id!r}: branch {observation.head_ref}, {base_detail}, "
         f"{len(observation.changed_paths)} changed path(s) within the assigned scope",
     )
 
