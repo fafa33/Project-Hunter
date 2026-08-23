@@ -8,7 +8,20 @@ from hunter.evidence_assembly.models import (
     EvidenceShape,
     MethodologyEvidenceInputContract,
 )
-from hunter.evidence_assembly.registry import EvidenceShapeRegistry, EvidenceShapeRegistryError
+from hunter.evidence_assembly.registry import (
+    AUTHORIZING_ADR_REFERENCE,
+    CANONICAL_REGISTRY_AUTHORITY_ID,
+    DEFAULT_EVIDENCE_SHAPE_REGISTRY_DB,
+    EVIDENCE_SHAPE_REGISTRY_MIGRATION_ID,
+    EVIDENCE_SHAPE_REGISTRY_SCHEMA_VERSION,
+    REGISTRY_LOGICAL_ID,
+    CanonicalEvidenceShapeRegistryAuthority,
+    CanonicalEvidenceShapeRegistryAuthorityError,
+    EvidenceShapeRegistry,
+    EvidenceShapeRegistryError,
+    EvidenceShapeRegistryIntegrityError,
+    EvidenceShapeRegistryRepository,
+)
 from hunter.evidence_assembly.repository import (
     EVIDENCE_ASSEMBLY_MIGRATION_ID,
     AssembledEvidenceRepository,
@@ -32,7 +45,17 @@ __all__ = [
     "CanonicalEvidenceAssemblyService",
     "EvidenceAssemblyPersistenceError",
     "EvidenceShape",
+    "AUTHORIZING_ADR_REFERENCE",
+    "CANONICAL_REGISTRY_AUTHORITY_ID",
+    "CanonicalEvidenceShapeRegistryAuthority",
+    "CanonicalEvidenceShapeRegistryAuthorityError",
+    "DEFAULT_EVIDENCE_SHAPE_REGISTRY_DB",
+    "EVIDENCE_SHAPE_REGISTRY_MIGRATION_ID",
+    "EVIDENCE_SHAPE_REGISTRY_SCHEMA_VERSION",
     "EvidenceShapeRegistry",
     "EvidenceShapeRegistryError",
+    "EvidenceShapeRegistryIntegrityError",
+    "EvidenceShapeRegistryRepository",
     "MethodologyEvidenceInputContract",
+    "REGISTRY_LOGICAL_ID",
 ]

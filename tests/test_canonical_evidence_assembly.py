@@ -104,12 +104,18 @@ def _constituent(record: FundamentalEvidenceRecord, **changes: str) -> AssemblyC
 @pytest.fixture
 def registry() -> EvidenceShapeRegistry:
     return EvidenceShapeRegistry(
+        record_id="registry-record-v1",
+        logical_id="canonical-evidence-shape-registry",
+        schema_version="evidence-shape-registry-v1",
+        semantic_version="1.0.0",
         version="registry-v1",
         effective_at=DAY,
         recorded_at=DAY,
         known_at=DAY,
         quality_state="accepted",
         conflict_state="none",
+        authorizing_adr_reference="ADR-0025",
+        authorized_by="canonical-evidence-shape-registry-authority-v1",
         content_hash="registry-hash",
         shapes=(
             EvidenceShape(
@@ -539,6 +545,10 @@ def test_registry_itself_rejects_version_mismatch() -> None:
     )
     with pytest.raises(EvidenceShapeRegistryError, match="version"):
         EvidenceShapeRegistry(
+            record_id="registry-record-v1",
+            logical_id="canonical-evidence-shape-registry",
+            schema_version="evidence-shape-registry-v1",
+            semantic_version="1.0.0",
             version="registry-v1",
             shapes=(shape,),
             effective_at=DAY,
@@ -546,6 +556,8 @@ def test_registry_itself_rejects_version_mismatch() -> None:
             known_at=DAY,
             quality_state="accepted",
             conflict_state="none",
+            authorizing_adr_reference="ADR-0025",
+            authorized_by="canonical-evidence-shape-registry-authority-v1",
             content_hash="registry-hash",
         )
 
