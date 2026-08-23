@@ -11,7 +11,8 @@ import json
 import os
 import sys
 from dataclasses import dataclass
-from typing import Any
+from functools import cached_property
+from typing import Any, Protocol
 
 import hunter_github_transport as transport
 
@@ -164,33 +165,114 @@ def open_prs_for_head(sha: str) -> tuple[int, ...]:
     return tuple(sorted(set(numbers)))
 
 
-def decide(pr_number: int) -> tuple[str, Decision] | None:
-    pr = request_json("GET", f"pulls/{pr_number}")
-    if not isinstance(pr, dict) or pr.get("state") != "open":
-        return None
+class ReadinessObservation(Protocol):
+    """Current GitHub state for one open PR.
 
-    head_sha = str((pr.get("head") or {}).get("sha") or "").strip()
-    if not head_sha:
-        return "", Decision("pending", "Waiting: current PR head SHA is unavailable.")
+    Separating the observation from the decision keeps a single merge-readiness
+    definition: any other consumer evaluates the same `evaluate()` below against
+    its own observation instead of restating the rules.
 
-    if bool(pr.get("draft")):
-        return head_sha, Decision("pending", "Waiting for Ready for Review (PR is Draft).")
+    `evaluate()` reads these in blocker order and returns at the first one that
+    decides, so a lazy implementation performs only the reads that decision
+    actually needed.
+    """
 
-    mergeable = pr.get("mergeable")
+    @property
+    def draft(self) -> bool: ...
+
+    @property
+    def mergeable(self) -> bool | None: ...
+
+    @property
+    def unresolved_review_threads(self) -> tuple[str, ...]: ...
+
+    @property
+    def changes_requested(self) -> tuple[str, ...]: ...
+
+    @property
+    def check_runs(self) -> tuple[dict[str, Any], ...]: ...
+
+    @property
+    def governance_status(self) -> dict[str, Any] | None: ...
+
+    @property
+    def shared_open_prs(self) -> tuple[int, ...]: ...
+
+
+@dataclass(frozen=True)
+class StaticReadinessObservation:
+    """Eagerly supplied observation, for callers that already hold the state."""
+
+    draft: bool = False
+    mergeable: bool | None = True
+    unresolved_review_threads: tuple[str, ...] = ()
+    changes_requested: tuple[str, ...] = ()
+    check_runs: tuple[dict[str, Any], ...] = ()
+    governance_status: dict[str, Any] | None = None
+    shared_open_prs: tuple[int, ...] = ()
+
+
+class LiveReadinessObservation:
+    """Observation that reads each signal from GitHub only when consulted."""
+
+    def __init__(self, pr_number: int, pr: dict[str, Any], head_sha: str) -> None:
+        self._pr_number = int(pr_number)
+        self._pr = pr
+        self._head_sha = head_sha
+
+    @property
+    def draft(self) -> bool:
+        return bool(self._pr.get("draft"))
+
+    @property
+    def mergeable(self) -> bool | None:
+        return self._pr.get("mergeable")
+
+    @cached_property
+    def unresolved_review_threads(self) -> tuple[str, ...]:
+        return unresolved_review_threads(self._pr_number)
+
+    @cached_property
+    def changes_requested(self) -> tuple[str, ...]:
+        return changes_requested_reviewers(self._pr_number)
+
+    @cached_property
+    def check_runs(self) -> tuple[dict[str, Any], ...]:
+        return tuple(all_check_runs(self._head_sha))
+
+    @cached_property
+    def governance_status(self) -> dict[str, Any] | None:
+        return latest_status(self._head_sha, GOVERNANCE_CONTEXT)
+
+    @cached_property
+    def shared_open_prs(self) -> tuple[int, ...]:
+        return tuple(number for number in open_prs_for_head(self._head_sha) if number != self._pr_number)
+
+
+def evaluate(observation: ReadinessObservation) -> Decision:
+    """Canonical merge-readiness decision over current GitHub state.
+
+    This is the only merge-readiness definition in the repository. It consumes
+    current state only: no process history, PR prose, or agent-supplied claim is
+    an input.
+    """
+
+    if observation.draft:
+        return Decision("pending", "Waiting for Ready for Review (PR is Draft).")
+
+    mergeable = observation.mergeable
     if mergeable is False:
-        return head_sha, Decision("failure", "Merge conflict detected; update or resolve the branch.")
+        return Decision("failure", "Merge conflict detected; update or resolve the branch.")
     if mergeable is None:
-        return head_sha, Decision("pending", "Waiting for GitHub to resolve current mergeability.")
+        return Decision("pending", "Waiting for GitHub to resolve current mergeability.")
 
-    threads = unresolved_review_threads(pr_number)
-    if threads:
-        return head_sha, Decision("failure", f"Unresolved review threads remain: {len(threads)}.")
+    if observation.unresolved_review_threads:
+        return Decision("failure", f"Unresolved review threads remain: {len(observation.unresolved_review_threads)}.")
 
-    reviewers = changes_requested_reviewers(pr_number)
-    if reviewers:
-        return head_sha, Decision("failure", "Changes requested by: " + ", ".join(reviewers))
+    if observation.changes_requested:
+        return Decision("failure", "Changes requested by: " + ", ".join(observation.changes_requested))
 
-    runs = all_check_runs(head_sha)
+    runs = list(observation.check_runs)
     missing: list[str] = []
     pending: list[str] = []
     failed: list[str] = []
@@ -210,7 +292,7 @@ def decide(pr_number: int) -> tuple[str, Decision] | None:
         else:
             pending.append(name)
 
-    governance = latest_status(head_sha, GOVERNANCE_CONTEXT)
+    governance = observation.governance_status
     if governance is None:
         missing.append(GOVERNANCE_CONTEXT)
     else:
@@ -221,27 +303,38 @@ def decide(pr_number: int) -> tuple[str, Decision] | None:
             failed.append(f"{GOVERNANCE_CONTEXT}={state}")
         elif state == "pending" and mergeable is True:
             # The lightweight governance controller can publish pending only while
-            # GitHub mergeability is unresolved. We already re-read the live PR
-            # above and observed mergeable=True, so an older pending status is
-            # stale and must not become a permanent merge lock.
+            # GitHub mergeability is unresolved. The caller re-read the live PR
+            # and observed mergeable=True, so an older pending status is stale and
+            # must not become a permanent merge lock.
             pass
         else:
             pending.append(GOVERNANCE_CONTEXT)
 
     if failed:
-        return head_sha, Decision("failure", "Merge prerequisite failed: " + ", ".join(failed))
+        return Decision("failure", "Merge prerequisite failed: " + ", ".join(failed))
     if missing or pending:
-        return head_sha, Decision("pending", "Waiting for current-head checks: " + ", ".join(missing + pending))
+        return Decision("pending", "Waiting for current-head checks: " + ", ".join(missing + pending))
 
-    shared = tuple(number for number in open_prs_for_head(head_sha) if number != int(pr_number))
-    if shared:
-        others = ", ".join(f"#{number}" for number in shared)
-        return head_sha, Decision("pending", f"Head is shared with open PR {others}; waiting for unique attribution.")
+    if observation.shared_open_prs:
+        others = ", ".join(f"#{number}" for number in observation.shared_open_prs)
+        return Decision("pending", f"Head is shared with open PR {others}; waiting for unique attribution.")
 
-    return head_sha, Decision(
+    return Decision(
         "success",
         "Ready to merge: code/security checks pass and no active review blocker remains.",
     )
+
+
+def decide(pr_number: int) -> tuple[str, Decision] | None:
+    pr = request_json("GET", f"pulls/{pr_number}")
+    if not isinstance(pr, dict) or pr.get("state") != "open":
+        return None
+
+    head_sha = str((pr.get("head") or {}).get("sha") or "").strip()
+    if not head_sha:
+        return "", Decision("pending", "Waiting: current PR head SHA is unavailable.")
+
+    return head_sha, evaluate(LiveReadinessObservation(pr_number, pr, head_sha))
 
 
 def publish(sha: str, decision: Decision) -> None:

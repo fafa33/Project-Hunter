@@ -14,6 +14,8 @@ The trusted default branch provides three lightweight surfaces:
 
 Required code/security checks are `Quality Gates`, `dependency-review`, and `CodeQL`.
 
+Alongside those, `scripts/hunter_workflow_state.py` lets an agent check its own reported progress against current GitHub state (`docs/AGENT_WORKFLOW_STATE_ENFORCEMENT.md`). It publishes no status and is not a merge gate; it consumes the merge-readiness definition above rather than restating it.
+
 ## What is not enforced
 
 The active path does not make these authoritative:
