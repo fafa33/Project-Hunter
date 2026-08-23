@@ -84,6 +84,13 @@ def _assemble_manifest(seeded: dict, **overrides: object) -> dict[str, object]:
     return manifest
 
 
+def _manifest_constituents(manifest: dict[str, object]) -> list[dict[str, object]]:
+    value = manifest["constituents"]
+    assert isinstance(value, list)
+    assert all(isinstance(item, dict) for item in value)
+    return [dict(item) for item in value]
+
+
 def _status_manifest(logical_id: object, *, known_by=None) -> dict[str, object]:
     if known_by is None:
         known_by = _dt(2026, 3, 2)
@@ -279,7 +286,7 @@ def test_manifest_cannot_override_authoritative_semantics(
 ) -> None:
     seeded = _seed(monkeypatch, tmp_path)
     manifest = _assemble_manifest(seeded)
-    constituents = list(manifest["constituents"])
+    constituents = _manifest_constituents(manifest)
     second = dict(constituents[1])
     second["currency"] = "EUR"
     constituents[1] = second
@@ -301,7 +308,7 @@ def test_unknown_native_record_id_fails_closed(
 ) -> None:
     seeded = _seed(monkeypatch, tmp_path)
     manifest = _assemble_manifest(seeded)
-    constituents = list(manifest["constituents"])
+    constituents = _manifest_constituents(manifest)
     first = dict(constituents[0])
     first["record_id"] = "forged-record-id"
     constituents[0] = first
