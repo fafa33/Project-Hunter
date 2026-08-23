@@ -241,15 +241,14 @@ def _optional_string_field(payload: dict[str, Any], field: str, *, prefix: str) 
         return ""
     value = payload[field]
     if not isinstance(value, str):
-        raise ValueError(f"evidence-assembly manifest field {prefix}.{field!r} must be a string when provided")
+        qualified = f"{prefix}.{field}"
+        raise ValueError(f"evidence-assembly manifest field {qualified!r} must be a string when provided")
     return value
 
 
 def _accounting_meaning(value: Any, field: str) -> AccountingMeaning:
-    if value not in {"period_specific", "cumulative", "event"}:
-        raise ValueError(
-            f"evidence-assembly manifest field {field!r} must be period_specific, cumulative, or event"
-        )
+    if not isinstance(value, str) or value not in {"period_specific", "cumulative", "event"}:
+        raise ValueError(f"evidence-assembly manifest field {field!r} must be period_specific, cumulative, or event")
     return cast(AccountingMeaning, value)
 
 
