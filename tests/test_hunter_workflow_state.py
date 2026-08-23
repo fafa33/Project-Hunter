@@ -657,6 +657,39 @@ def test_an_agent_declaring_the_assigned_task_cannot_waive_contradicting_evidenc
     )
 
 
+def test_declining_to_state_a_task_does_not_evade_the_gate() -> None:
+    """The task check is the only declaration-based one, so omitting it must grant nothing.
+
+    Every other comparison is evidence-derived, and those are what caught the
+    PR #309 shape independently of anything the agent said.
+    """
+
+    _assert_scope_mismatch(
+        _scope_report(
+            declared_task_id="",
+            head_ref="claude/policy-correction-semantics-pr308-ngd28p",
+            changed_paths=("tests/test_evidence_semantics_authority.py", "docs/DEFECT_REGISTRY.json"),
+        ),
+        because="does not match the assigned pattern",
+    )
+
+    # ...and with a branch that happens to match, the paths still bind.
+    _assert_scope_mismatch(
+        _scope_report(
+            declared_task_id="",
+            changed_paths=("tests/test_evidence_semantics_authority.py",),
+        ),
+        because="outside the assigned scope",
+    )
+
+
+def test_an_empty_allowed_path_entry_matches_nothing_rather_than_everything() -> None:
+    _assert_scope_mismatch(
+        _scope_report(contract=_contract(allowed_paths=("",))),
+        because="outside the assigned scope",
+    )
+
+
 @pytest.mark.parametrize("claim", list(workflow.ENFORCED_STATES))
 def test_no_workflow_claim_can_lift_a_scope_mismatch(claim: WorkflowState) -> None:
     report = _scope_report(claimed=claim, head_ref="some/other-branch")
