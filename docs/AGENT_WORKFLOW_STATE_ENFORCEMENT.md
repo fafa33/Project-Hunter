@@ -21,8 +21,8 @@ A claim is never an input to the derivation. The evaluator derives the state cur
 ## States
 
 ```text
-IMPLEMENTED -> TESTED -> PREFLIGHT_PASSED -> PR_OPEN
-    -> REVIEWED -> ZERO_OPEN_FINDINGS -> ALL_CHECKS_GREEN -> MERGE_READY
+IMPLEMENTED -> TESTED -> PREFLIGHT_PASSED -> PR_OPEN ->
+    REVIEWED -> ZERO_OPEN_FINDINGS -> ALL_CHECKS_GREEN -> MERGE_READY
 ```
 
 The states are ordered. The derived state is the furthest stage whose predecessors are *all* established, so a later stage holding in isolation does not advance the contribution. A green PR nobody has reviewed is `PR_OPEN`, not `ALL_CHECKS_GREEN` — unless review is not required for it, which is a declaration, not a derivation (see **Proportional review**).

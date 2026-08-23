@@ -9,8 +9,8 @@ evidence does not support.
 The workflow states are:
 
 ```text
-IMPLEMENTED -> TESTED -> PREFLIGHT_PASSED -> PR_OPEN
-    -> REVIEWED -> ZERO_OPEN_FINDINGS -> ALL_CHECKS_GREEN -> MERGE_READY
+IMPLEMENTED -> TESTED -> PREFLIGHT_PASSED -> PR_OPEN ->
+    REVIEWED -> ZERO_OPEN_FINDINGS -> ALL_CHECKS_GREEN -> MERGE_READY
 ```
 
 Scope boundary
