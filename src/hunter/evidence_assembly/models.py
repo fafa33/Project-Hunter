@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Literal
 
+from hunter.valuation_methodology.models import MethodologyEvidenceInputContract as MethodologyEvidenceInputContract
 from hunter.value_capture.models import EconomicClaimIdentity, FundamentalEvidenceRecord
 
 ASSEMBLED_EVIDENCE_SCHEMA_VERSION = "assembled-fundamental-evidence-v1"
@@ -93,55 +94,6 @@ class AuthoritativeEvidenceSemantics:
         object.__setattr__(self, "effective_at", _utc(self.effective_at))
         object.__setattr__(self, "recorded_at", _utc(self.recorded_at))
         object.__setattr__(self, "known_at", _utc(self.known_at))
-
-
-@dataclass(frozen=True)
-class MethodologyEvidenceInputContract:
-    contract_id: str
-    contract_version: str
-    accepts_assembled_evidence: bool
-    accepted_shape_ids: tuple[str, ...]
-    accepted_assembly_rule_versions: tuple[str, ...]
-    accounting_window_start: datetime
-    accounting_window_end: datetime
-    exact_gap_free_non_overlapping_coverage_required: bool
-    allow_representation_boundary_crossing: bool
-    allow_pathway_boundary_crossing: bool
-    allow_supply_basis_boundary_crossing: bool
-    provenance_content_hash_required: bool
-    conflict_policy: Literal["reject"]
-    minimum_quality_state: Literal["accepted"]
-    entity_id: str
-    representation_id: str
-    currency: str
-    unit: str
-    missingness_behavior: Literal["unavailable"]
-    strict_known_required: bool
-    effective_at: datetime
-    recorded_at: datetime
-    known_at: datetime
-    quality_state: Literal["accepted"]
-    conflict_state: Literal["none", "resolved"]
-    content_hash: str
-
-    def __post_init__(self) -> None:
-        _required(
-            self,
-            "contract_id",
-            "contract_version",
-            "entity_id",
-            "representation_id",
-            "currency",
-            "unit",
-            "content_hash",
-        )
-        object.__setattr__(self, "accounting_window_start", _utc(self.accounting_window_start))
-        object.__setattr__(self, "accounting_window_end", _utc(self.accounting_window_end))
-        object.__setattr__(self, "effective_at", _utc(self.effective_at))
-        object.__setattr__(self, "recorded_at", _utc(self.recorded_at))
-        object.__setattr__(self, "known_at", _utc(self.known_at))
-        if self.accounting_window_start >= self.accounting_window_end:
-            raise ValueError("methodology contract accounting window must have positive duration")
 
 
 @dataclass(frozen=True)

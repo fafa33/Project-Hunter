@@ -316,6 +316,7 @@ class CoordinatedFixture:
             accounting_window_end=NOW,
             entity_id=self.target_evidence.identity.entity_id,
             representation_id=self.target_evidence.identity.representation_id,
+            value_capture_pathway_id=self.target_evidence.attribution_rule_id,
             currency="usd",
             unit="usd",
             effective_at=NOW - timedelta(days=730),

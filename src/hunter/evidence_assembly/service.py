@@ -40,7 +40,12 @@ class NativeEvidenceQuery(Protocol):
 
 class MethodologyContractAuthority(Protocol):
     def strict_known_contract(
-        self, *, contract_id: str, contract_version: str, known_by: datetime
+        self,
+        *,
+        contract_id: str,
+        contract_version: str,
+        effective_as_of: datetime,
+        known_by: datetime,
     ) -> MethodologyEvidenceInputContract | None: ...
 
 
@@ -104,6 +109,7 @@ class CanonicalEvidenceAssemblyService:
         methodology_contract = self.methodology_contract_authority.strict_known_contract(
             contract_id=methodology_contract_id,
             contract_version=methodology_contract_version,
+            effective_as_of=accounting_window_end,
             known_by=replay_cutoff,
         )
         if methodology_contract is None:
@@ -373,6 +379,10 @@ class CanonicalEvidenceAssemblyService:
             raise CanonicalEvidenceAssemblyError("methodology contract entity mismatch")
         if contract.representation_id != first.record.identity.representation_id:
             raise CanonicalEvidenceAssemblyError("methodology contract representation mismatch")
+        if contract.value_capture_pathway_id != first.pathway_id or any(
+            item.pathway_id != contract.value_capture_pathway_id for item in constituents
+        ):
+            raise CanonicalEvidenceAssemblyError("methodology contract pathway mismatch")
         if contract.currency.casefold() != first.currency.casefold() or contract.unit != first.raw_unit:
             raise CanonicalEvidenceAssemblyError("methodology contract currency or unit mismatch")
         if any(

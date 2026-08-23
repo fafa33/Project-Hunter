@@ -204,6 +204,7 @@ def _contract(**changes: object) -> MethodologyEvidenceInputContract:
     values: dict[str, object] = {
         "contract_id": "future-contract",
         "contract_version": "1.0.0",
+        "methodology_logical_id": "methodology-logical-alpha",
         "accepts_assembled_evidence": True,
         "accepted_shape_ids": ("official-period-specific-v1",),
         "accepted_assembly_rule_versions": ("lossless-exact-coverage-v1",),
@@ -218,6 +219,7 @@ def _contract(**changes: object) -> MethodologyEvidenceInputContract:
         "minimum_quality_state": "accepted",
         "entity_id": "entity:alpha",
         "representation_id": "representation:alpha",
+        "value_capture_pathway_id": "pathway:fees",
         "currency": "USD",
         "unit": "USD",
         "missingness_behavior": "unavailable",
@@ -305,6 +307,104 @@ def test_methodology_must_explicitly_opt_in(service: CanonicalEvidenceAssemblySe
     service.methodology_contract_authority.contract = _contract(accepts_assembled_evidence=False)  # type: ignore[attr-defined]
     with pytest.raises(CanonicalEvidenceAssemblyError, match="not opted"):
         _assemble(service)
+
+
+def test_methodology_contract_pathway_mismatch_fails_assembly(service: CanonicalEvidenceAssemblyService) -> None:
+    # Contract pathway differs from constituents' pathway ("pathway:fees")
+    service.methodology_contract_authority.contract = _contract(value_capture_pathway_id="pathway:other")  # type: ignore[attr-defined]
+    with pytest.raises(CanonicalEvidenceAssemblyError, match="methodology contract pathway mismatch"):
+        _assemble(service)
+
+    # Contract pathway matching constituents' pathway succeeds
+    service.methodology_contract_authority.contract = _contract(value_capture_pathway_id="pathway:fees")  # type: ignore[attr-defined]
+    record = _assemble(service)
+    assert record.value_capture_pathway_id == "pathway:fees"
+
+
+def test_assembly_uses_accounting_window_end_for_contract_effective_as_of(
+    repository: AssembledEvidenceRepository,
+    registry: EvidenceShapeRegistry,
+    native_query: _NativeEvidenceQuery,
+) -> None:
+    recorded_calls: list[dict[str, object]] = []
+
+    class _SpyContractAuthority:
+        def strict_known_contract(
+            self, *, contract_id: str, contract_version: str, effective_as_of: datetime, known_by: datetime
+        ) -> MethodologyEvidenceInputContract | None:
+            recorded_calls.append(
+                {
+                    "contract_id": contract_id,
+                    "contract_version": contract_version,
+                    "effective_as_of": effective_as_of,
+                    "known_by": known_by,
+                }
+            )
+            return _contract()
+
+    spy_service = CanonicalEvidenceAssemblyService(
+        repository=repository,
+        native_evidence_query=native_query,
+        methodology_contract_authority=_SpyContractAuthority(),
+        evidence_shape_registry_authority=_RegistryAuthority(registry),
+        evidence_semantics_authority=_SemanticsAuthority(),
+    )
+
+    window_end = DAY + timedelta(days=4)
+    replay = DAY + timedelta(days=10)
+    _assemble(
+        spy_service,
+        accounting_window_start=DAY,
+        accounting_window_end=window_end,
+        replay_cutoff=replay,
+    )
+
+    assert len(recorded_calls) == 1
+    call = recorded_calls[0]
+    assert call["effective_as_of"] == window_end
+    assert call["known_by"] == replay
+
+
+def test_assembly_delayed_historical_replay_resolves_historically_correct_contract(
+    repository: AssembledEvidenceRepository,
+    registry: EvidenceShapeRegistry,
+    native_query: _NativeEvidenceQuery,
+) -> None:
+    v1 = _contract(contract_version="1.0.0", effective_at=DAY, recorded_at=DAY, known_at=DAY)
+    v2 = _contract(
+        contract_version="2.0.0",
+        effective_at=DAY + timedelta(days=10),
+        recorded_at=DAY + timedelta(days=10),
+        known_at=DAY + timedelta(days=10),
+    )
+
+    class _BitemporalContractAuthority:
+        def strict_known_contract(
+            self, *, contract_id: str, contract_version: str, effective_as_of: datetime, known_by: datetime
+        ) -> MethodologyEvidenceInputContract | None:
+            if effective_as_of < DAY + timedelta(days=10):
+                return v1 if contract_version == "1.0.0" else None
+            return v2 if contract_version == "2.0.0" else None
+
+    bitemporal_service = CanonicalEvidenceAssemblyService(
+        repository=repository,
+        native_evidence_query=native_query,
+        methodology_contract_authority=_BitemporalContractAuthority(),
+        evidence_shape_registry_authority=_RegistryAuthority(registry),
+        evidence_semantics_authority=_SemanticsAuthority(),
+    )
+
+    # Assembly for historical accounting window [DAY, DAY + 4] at replay cutoff DAY + 12
+    # MUST resolve contract v1 (effective_as_of = DAY + 4)
+    record = _assemble(
+        bitemporal_service,
+        accounting_window_start=DAY,
+        accounting_window_end=DAY + timedelta(days=4),
+        methodology_contract_id="future-contract",
+        methodology_contract_version="1.0.0",
+        replay_cutoff=DAY + timedelta(days=12),
+    )
+    assert record.methodology_contract_version == "1.0.0"
 
 
 def test_forged_constituent_semantics_are_rejected(service: CanonicalEvidenceAssemblyService) -> None:
