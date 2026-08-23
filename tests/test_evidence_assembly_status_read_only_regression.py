@@ -11,9 +11,7 @@ from hunter.evidence_assembly import command as evidence_assembly_command
 
 def _schema_snapshot(db_path: Path) -> tuple[tuple[str, str, str | None], ...]:
     with sqlite3.connect(db_path) as connection:
-        rows = connection.execute(
-            "SELECT type, name, sql FROM sqlite_master ORDER BY type, name"
-        ).fetchall()
+        rows = connection.execute("SELECT type, name, sql FROM sqlite_master ORDER BY type, name").fetchall()
     return tuple((str(row[0]), str(row[1]), None if row[2] is None else str(row[2])) for row in rows)
 
 
