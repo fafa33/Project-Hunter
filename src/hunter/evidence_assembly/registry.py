@@ -48,8 +48,8 @@ class EvidenceShapeRegistry:
     effective_at: datetime
     recorded_at: datetime
     known_at: datetime
-    quality_state: Literal["accepted", "stale", "partial", "ambiguous", "unavailable", "unsupported"]
-    conflict_state: Literal["none", "open", "contested", "resolved"]
+    quality_state: Literal["accepted"]
+    conflict_state: Literal["none", "resolved"]
     authorizing_adr_reference: str
     authorized_by: str
     content_hash: str
@@ -157,7 +157,7 @@ class EvidenceShapeRegistryRepository:
         for snapshot in self._snapshots():
             try:
                 records.append(_from_payload(snapshot.payload))
-            except (EvidenceShapeRegistryIntegrityError, ValueError, KeyError):
+            except (EvidenceShapeRegistryIntegrityError, ValueError, KeyError, TypeError, AttributeError):
                 continue
         return tuple(records)
 
@@ -218,8 +218,8 @@ class CanonicalEvidenceShapeRegistryAuthority:
         effective_at: datetime,
         recorded_at: datetime,
         known_at: datetime,
-        quality_state: Literal["accepted", "stale", "partial", "ambiguous", "unavailable", "unsupported"] = "accepted",
-        conflict_state: Literal["none", "open", "contested", "resolved"] = "none",
+        quality_state: Literal["accepted"] = "accepted",
+        conflict_state: Literal["none", "resolved"] = "none",
         supersedes_version: str | None = None,
         supersedes_record_id: str | None = None,
         correction_reason: str = "",
@@ -463,6 +463,8 @@ def _registry_content_hash(record: EvidenceShapeRegistry) -> str:
 
 
 def _from_payload(payload: dict[str, Any]) -> EvidenceShapeRegistry:
+    if not isinstance(payload, dict):
+        raise EvidenceShapeRegistryIntegrityError("registry payload must be a mapping")
     required_fields = (
         "record_id",
         "logical_id",
@@ -485,18 +487,27 @@ def _from_payload(payload: dict[str, Any]) -> EvidenceShapeRegistry:
             "legacy evidence shape registry snapshot is missing required fields: " + ",".join(missing)
         )
     result = dict(payload)
-    shapes_list = []
-    for s in result.get("shapes", []):
-        if isinstance(s, dict):
-            shapes_list.append(EvidenceShape(**s))
-        elif isinstance(s, EvidenceShape):
-            shapes_list.append(s)
-    result["shapes"] = tuple(shapes_list)
-    for name in ("effective_at", "recorded_at", "known_at"):
-        result[name] = datetime.fromisoformat(str(result[name])).astimezone(UTC)
+    try:
+        shapes_raw = result.get("shapes")
+        if not isinstance(shapes_raw, (list, tuple)):
+            raise EvidenceShapeRegistryIntegrityError("shapes must be an iterable sequence")
+        shapes_list = []
+        for s in shapes_raw:
+            if isinstance(s, dict):
+                shapes_list.append(EvidenceShape(**s))
+            elif isinstance(s, EvidenceShape):
+                shapes_list.append(s)
+            else:
+                raise EvidenceShapeRegistryIntegrityError(f"invalid shape item: {s!r}")
+        result["shapes"] = tuple(shapes_list)
+        for name in ("effective_at", "recorded_at", "known_at"):
+            result[name] = datetime.fromisoformat(str(result[name])).astimezone(UTC)
+
+        deserialized = EvidenceShapeRegistry(**result)
+    except (TypeError, AttributeError, ValueError) as exc:
+        raise EvidenceShapeRegistryIntegrityError(f"malformed evidence shape registry payload: {exc}") from exc
 
     # Re-verify content hash and derived record_id integrity
-    deserialized = EvidenceShapeRegistry(**result)
     expected_content_hash = _registry_content_hash(deserialized)
     if deserialized.content_hash != expected_content_hash:
         raise EvidenceShapeRegistryIntegrityError(

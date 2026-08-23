@@ -388,6 +388,7 @@ def test_14_malformed_persisted_registry_row_does_not_break_access_to_valid_rows
     )
 
     # Insert a malformed snapshot directly into SQL persistence
+    from hunter.evidence_assembly.registry import _REGISTRY_SNAPSHOT_TYPE
     from hunter.persistence.records import SnapshotRecord
     from hunter.persistence.sql import RepositoryFactory, SessionFactory, create_sqlite_engine
 
@@ -395,11 +396,11 @@ def test_14_malformed_persisted_registry_row_does_not_break_access_to_valid_rows
     session = SessionFactory(engine).create()
     try:
         malformed = SnapshotRecord(
-            id="canonical-evidence-shape-registry:bad-version",
+            id=f"{REGISTRY_LOGICAL_ID}:bad-version",
             created_at=DAY,
             effective_at=DAY,
-            snapshot_type="evidence-shape-registry-snapshot",
-            target_id="canonical-evidence-shape-registry",
+            snapshot_type=_REGISTRY_SNAPSHOT_TYPE,
+            target_id=REGISTRY_LOGICAL_ID,
             record_ids=("bad-record",),
             payload={"version": "bad-version", "corrupted": True},
             metadata={},
