@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import dataclasses
+import json
+from pathlib import Path
+
 import hunter_merge_readiness_v2 as readiness
 import hunter_workflow_state as workflow
 import pytest
@@ -446,6 +450,365 @@ def test_a_waiver_does_not_reach_any_other_state() -> None:
     assert draft.derived is WorkflowState.ALL_CHECKS_GREEN
 
 
+# --- starting-scope gate ----------------------------------------------------
+#
+# The failure this gate exists to catch: an agent assigned one task works on a
+# different one. PR #309 is the concrete instance -- the assignment was the
+# workflow-state MVP, the agent produced an Issue #196 evidence-semantics
+# follow-up on an unrelated branch.
+
+ASSIGNED_BASE = "b" * 40
+
+
+def _contract(**overrides: object) -> workflow.TaskScopeContract:
+    base: dict[str, object] = {
+        "task_id": "agent-workflow-state-enforcement-mvp",
+        "branch_pattern": "governance/agent-workflow-state-*",
+        "base_ref": "main",
+        "base_sha": ASSIGNED_BASE,
+        "allowed_paths": (
+            "scripts/hunter_workflow_state.py",
+            "scripts/hunter_merge_readiness_v2.py",
+            "tests/test_hunter_workflow_state.py",
+            "tests/test_hunter_merge_readiness_v2.py",
+            "docs/AGENT_WORKFLOW_STATE_ENFORCEMENT.md",
+        ),
+        "prohibited_paths": ("src/", "alembic/", ".github/workflows/"),
+    }
+    base.update(overrides)
+    return workflow.TaskScopeContract(**base)  # type: ignore[arg-type]
+
+
+def _in_scope_observation(**overrides: object) -> PullRequestObservation:
+    defaults: dict[str, object] = {
+        "head_ref": "governance/agent-workflow-state-enforcement-mvp",
+        "base_sha": ASSIGNED_BASE,
+        "changed_paths": ("scripts/hunter_workflow_state.py", "tests/test_hunter_workflow_state.py"),
+    }
+    defaults.update(overrides)
+    return _observation(**defaults)
+
+
+def _scope_report(
+    *,
+    contract: workflow.TaskScopeContract | None = None,
+    declared_task_id: str = "",
+    claimed: WorkflowState | None = WorkflowState.IMPLEMENTED,
+    observation: PullRequestObservation | None = None,
+    **overrides: object,
+) -> workflow.WorkflowStateReport:
+    return evaluate_workflow_state(
+        observation=_in_scope_observation(**overrides) if observation is None else observation,
+        scope_contract=_contract() if contract is None else contract,
+        declared_task_id=declared_task_id,
+        claimed=claimed,
+    )
+
+
+def _assert_in_scope(report: workflow.WorkflowStateReport) -> None:
+    """IMPLEMENTED is established by the scope gate, so derivation may continue."""
+
+    implemented = report.findings[0]
+    assert implemented.state is WorkflowState.IMPLEMENTED
+    assert implemented.established is True
+    assert implemented.authority == workflow.SCOPE
+    assert report.derived >= WorkflowState.IMPLEMENTED
+
+
+def _assert_scope_mismatch(report: workflow.WorkflowStateReport, *, because: str) -> None:
+    assert report.derived is WorkflowState.UNVERIFIED
+    assert report.verdict == Verdict.DEMOTED
+    blocker = report.blocker
+    assert blocker is not None
+    assert blocker.state is WorkflowState.IMPLEMENTED
+    assert blocker.authority == workflow.SCOPE
+    assert blocker.detail.startswith(workflow.SCOPE_MISMATCH)
+    assert because in blocker.detail
+
+
+# 1. exact valid task contract + valid changes => IMPLEMENTED may advance
+
+
+def test_matching_scope_allows_implemented_to_advance() -> None:
+    report = _scope_report()
+
+    _assert_in_scope(report)
+    assert report.claim_upheld is True
+    assert "in scope for task" in report.findings[0].detail
+
+
+# 2. wrong branch => rejected
+
+
+def test_wrong_branch_is_a_scope_mismatch() -> None:
+    _assert_scope_mismatch(
+        _scope_report(head_ref="claude/policy-correction-semantics-pr308-ngd28p"),
+        because="does not match the assigned pattern",
+    )
+
+
+# 3. prohibited path => rejected
+
+
+def test_prohibited_path_is_a_scope_mismatch() -> None:
+    _assert_scope_mismatch(
+        _scope_report(changed_paths=("scripts/hunter_workflow_state.py", "src/hunter/evidence_assembly/semantics.py")),
+        because="prohibited path(s) changed: src/hunter/evidence_assembly/semantics.py",
+    )
+
+
+# 4. outside allowed path => rejected
+
+
+def test_path_outside_the_assigned_scope_is_a_scope_mismatch() -> None:
+    _assert_scope_mismatch(
+        _scope_report(changed_paths=("scripts/hunter_workflow_state.py", "docs/HUNTER_ROADMAP.md")),
+        because="outside the assigned scope changed: docs/HUNTER_ROADMAP.md",
+    )
+
+
+# 5. wrong task/issue => rejected
+
+
+def test_working_a_different_task_is_a_scope_mismatch() -> None:
+    _assert_scope_mismatch(
+        _scope_report(declared_task_id="issue-196-evidence-semantics"),
+        because="but the assigned task is",
+    )
+
+
+# 6. stale/wrong base => rejected
+
+
+def test_wrong_base_commit_is_a_scope_mismatch() -> None:
+    _assert_scope_mismatch(_scope_report(base_sha="c" * 40), because="is not the assigned base")
+
+
+def test_wrong_base_branch_is_a_scope_mismatch() -> None:
+    _assert_scope_mismatch(
+        _scope_report(observation=_in_scope_observation(base_ref="release")),
+        because="is not the assigned base 'main'",
+    )
+
+
+# 7. missing required contract evidence => rejected (fail closed)
+
+
+@pytest.mark.parametrize(
+    ("overrides", "because"),
+    [
+        ({"task_id": ""}, "missing task_id"),
+        ({"branch_pattern": ""}, "missing branch_pattern"),
+        ({"base_ref": ""}, "missing base_ref"),
+        ({"allowed_paths": ()}, "declares no allowed_paths"),
+    ],
+)
+def test_an_incomplete_contract_fails_closed(overrides: dict[str, object], because: str) -> None:
+    _assert_scope_mismatch(_scope_report(contract=_contract(**overrides)), because=because)
+
+
+@pytest.mark.parametrize(
+    ("overrides", "because"),
+    [
+        ({"changed_paths": ()}, "no changed paths"),
+        ({"head_ref": ""}, "no head branch"),
+    ],
+)
+def test_missing_scope_evidence_fails_closed(overrides: dict[str, object], because: str) -> None:
+    _assert_scope_mismatch(_scope_report(**overrides), because=because)
+
+
+def test_a_contract_with_no_pull_request_to_check_fails_closed() -> None:
+    report = evaluate_workflow_state(
+        observation=None,
+        local_evidence=LocalEvidence(changed_files=9, pytest_passed=True, preflight_passed=True),
+        scope_contract=_contract(),
+        claimed=WorkflowState.PREFLIGHT_PASSED,
+    )
+
+    _assert_scope_mismatch(report, because="no open pull request to check")
+
+
+def test_an_unreadable_contract_field_is_refused_rather_than_partly_enforced() -> None:
+    with pytest.raises(ValueError, match="unknown field"):
+        workflow.TaskScopeContract.from_dict(
+            {
+                "task_id": "t",
+                "branch_pattern": "b*",
+                "allowed_paths": ["scripts/"],
+                "alowed_paths": ["everything/"],
+            }
+        )
+
+
+# 8. agent says "correct scope" but evidence disagrees => rejected
+
+
+def test_an_agent_declaring_the_assigned_task_cannot_waive_contradicting_evidence() -> None:
+    """Naming the right task does not make the work match it."""
+
+    _assert_scope_mismatch(
+        _scope_report(
+            declared_task_id="agent-workflow-state-enforcement-mvp",
+            head_ref="claude/policy-correction-semantics-pr308-ngd28p",
+            changed_paths=("tests/test_evidence_semantics_authority.py",),
+        ),
+        because="does not match the assigned pattern",
+    )
+
+
+@pytest.mark.parametrize("claim", list(workflow.ENFORCED_STATES))
+def test_no_workflow_claim_can_lift_a_scope_mismatch(claim: WorkflowState) -> None:
+    report = _scope_report(claimed=claim, head_ref="some/other-branch")
+
+    assert report.derived is WorkflowState.UNVERIFIED
+    assert report.verdict == Verdict.DEMOTED
+
+
+# 9. PR body claims correct task but evidence disagrees => rejected
+
+
+def test_pull_request_prose_is_not_an_input_to_scope() -> None:
+    """The observation has nowhere to carry a title or body, so prose cannot authorize scope."""
+
+    carried = {item.name for item in dataclasses.fields(PullRequestObservation)}
+    assert carried.isdisjoint({"title", "body", "description", "commit_messages", "comments"})
+
+
+def test_a_pull_request_describing_the_right_task_is_still_rejected_on_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    body = "This PR implements the agent-workflow-state-enforcement-mvp exactly as assigned."
+    payload = _pr_payload(
+        body=body,
+        title="feat(governance): agent workflow state enforcement MVP",
+        head={"sha": HEAD, "ref": "claude/policy-correction-semantics-pr308-ngd28p"},
+        base={"ref": "main", "sha": ASSIGNED_BASE},
+    )
+    _install_github(monkeypatch, payload, files=[{"filename": "tests/test_evidence_semantics_authority.py"}])
+
+    observed = workflow.observe_pull_request(501)
+
+    assert observed is not None
+    report = evaluate_workflow_state(
+        observation=observed, scope_contract=_contract(), claimed=WorkflowState.IMPLEMENTED
+    )
+    _assert_scope_mismatch(report, because="does not match the assigned pattern")
+
+
+# 10. the exact PR #309-style mismatch
+
+
+def test_the_pr_309_mismatch_is_mechanically_rejected() -> None:
+    """Assigned the workflow-state MVP; produced an Issue #196 evidence-semantics follow-up."""
+
+    report = _scope_report(
+        declared_task_id="issue-196-evidence-semantics",
+        head_ref="claude/policy-correction-semantics-pr308-ngd28p",
+        changed_paths=("tests/test_evidence_semantics_authority.py", "docs/DEFECT_REGISTRY.json"),
+        claimed=WorkflowState.MERGE_READY,
+    )
+
+    _assert_scope_mismatch(report, because="but the assigned task is")
+
+    # Every later state is unreachable: the ordered derivation stops before
+    # IMPLEMENTED, so a MERGE_READY claim is rejected even though this PR's own
+    # checks, reviews and mergeability would otherwise support it.
+    assert report.derived is WorkflowState.UNVERIFIED
+    assert report.claim_upheld is False
+    assert {finding.state for finding in report.findings if finding.established}.issubset(
+        set(workflow.ENFORCED_STATES) - {WorkflowState.IMPLEMENTED}
+    )
+
+
+# 11. valid scope preserves the existing behaviour of every later state
+
+
+def test_valid_scope_preserves_existing_merge_ready_behaviour() -> None:
+    observation = _in_scope_observation()
+
+    with_contract = evaluate_workflow_state(
+        observation=observation, scope_contract=_contract(), claimed=WorkflowState.MERGE_READY
+    )
+    without_contract = evaluate_workflow_state(observation=observation, claimed=WorkflowState.MERGE_READY)
+
+    assert with_contract.derived is WorkflowState.MERGE_READY
+    assert with_contract.verdict == Verdict.CONFIRMED
+    assert without_contract.derived is WorkflowState.MERGE_READY
+    # Only IMPLEMENTED's authority differs; every later finding is identical.
+    assert [(f.state, f.established) for f in with_contract.findings] == [
+        (f.state, f.established) for f in without_contract.findings
+    ]
+    assert [f.detail for f in with_contract.findings[1:]] == [f.detail for f in without_contract.findings[1:]]
+
+
+def test_no_contract_leaves_the_gate_disengaged() -> None:
+    """Existing callers keep their behaviour exactly."""
+
+    observation = _observation()
+    assert evaluate_workflow_state(observation=observation).derived is WorkflowState.MERGE_READY
+    assert evaluate_workflow_state(observation=observation).findings[0].authority == workflow.GITHUB
+
+
+def test_an_in_scope_but_empty_pull_request_is_still_not_implemented() -> None:
+    """Matching the assignment is necessary, not sufficient."""
+
+    report = _scope_report(observation=_in_scope_observation(changed_files=0))
+
+    assert report.derived is WorkflowState.UNVERIFIED
+    blocker = report.blocker
+    assert blocker is not None
+    assert "no changed files" in blocker.detail
+
+
+def test_scope_entries_match_by_directory_prefix_and_glob() -> None:
+    contract = _contract(allowed_paths=("scripts/", "tests/test_hunter_*.py"), prohibited_paths=("scripts/secret/",))
+
+    _assert_in_scope(
+        _scope_report(
+            contract=contract,
+            changed_paths=("scripts/hunter_workflow_state.py", "tests/test_hunter_workflow_state.py"),
+        )
+    )
+
+    _assert_scope_mismatch(
+        _scope_report(contract=contract, changed_paths=("scripts/secret/keys.py",)),
+        because="prohibited path(s) changed",
+    )
+    _assert_scope_mismatch(
+        _scope_report(contract=contract, changed_paths=("tests/test_other_thing.py",)),
+        because="outside the assigned scope",
+    )
+
+
+def test_cli_loads_the_contract_and_reports_the_mismatch(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    contract_path = tmp_path / "scope.json"
+    contract_path.write_text(
+        json.dumps(
+            {
+                "task_id": "agent-workflow-state-enforcement-mvp",
+                "branch_pattern": "governance/agent-workflow-state-*",
+                "base_ref": "main",
+                "allowed_paths": ["scripts/hunter_workflow_state.py"],
+                "prohibited_paths": ["src/"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        workflow,
+        "observe_pull_request",
+        lambda _number: _in_scope_observation(head_ref="claude/policy-correction-semantics-pr308-ngd28p"),
+    )
+
+    exit_code = workflow.main(["--pr", "501", "--claim", "MERGE_READY", "--scope-contract", str(contract_path)])
+
+    assert exit_code == 1
+    assert workflow.SCOPE_MISMATCH in capsys.readouterr().out
+
+
 # --- the parsing boundary ---------------------------------------------------
 #
 # observe_pull_request maps GitHub's payloads into the observation every state is
@@ -456,8 +819,15 @@ def test_a_waiver_does_not_reach_any_other_state() -> None:
 
 def _install_github(monkeypatch: pytest.MonkeyPatch, pr: dict[str, object], **overrides: object) -> None:
     monkeypatch.setattr(workflow.readiness, "request_json", lambda _method, _path: pr)
+
+    reviews = overrides.get("paged", [])
+    files = overrides.get("files", [])
+
+    def _paged(path: str) -> object:
+        return files if path.endswith("/files") else reviews
+
+    monkeypatch.setattr(workflow.readiness, "paged", _paged)
     for name, value in (
-        ("paged", overrides.get("paged", [])),
         ("unresolved_review_threads", overrides.get("threads", ())),
         ("changes_requested_reviewers", overrides.get("changes_requested", ())),
         ("all_check_runs", overrides.get("check_runs", [])),

@@ -23,6 +23,10 @@ helpers. `docs/DEVELOPMENT_GOVERNANCE.md` remains the owner of merge-readiness
 semantics; this module only reports which lifecycle stage current evidence
 supports.
 
+A `TaskScopeContract` may be supplied alongside the evidence. It is the assigned
+starting scope, and work that does not match it never reaches IMPLEMENTED, so no
+later state is reachable either -- see `docs/AGENT_WORKFLOW_STATE_ENFORCEMENT.md`.
+
 It publishes no commit status and adds no required check. It is an evaluator an
 agent runs against itself, not a new merge gate.
 """
@@ -32,8 +36,10 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from enum import IntEnum
+from fnmatch import fnmatch
+from pathlib import Path
 from typing import Any
 
 import hunter_merge_readiness_v2 as readiness
@@ -51,6 +57,9 @@ GITHUB = "github"
 LOCAL = "local"
 DECLARED = "declared"
 NONE = "none"
+SCOPE = "scope-contract"
+
+SCOPE_MISMATCH = "SCOPE_MISMATCH"
 
 
 class WorkflowState(IntEnum):
@@ -108,8 +117,11 @@ class PullRequestObservation:
     is_open: bool
     head_sha: str
     author: str
+    head_ref: str = ""
     base_ref: str = "main"
+    base_sha: str = ""
     changed_files: int = 0
+    changed_paths: tuple[str, ...] = ()
     draft: bool = False
     mergeable: bool | None = None
     reviews: tuple[Review, ...] = ()
@@ -147,6 +159,146 @@ class PullRequestObservation:
             governance_status=self.governance_status,
             shared_open_prs=(),
         )
+
+
+@dataclass(frozen=True)
+class TaskScopeContract:
+    """The starting scope an agent was assigned, as machine-readable fields.
+
+    This is the *assignment*, not the agent's account of it. It is owner-authored
+    and supplied to the evaluator; nothing the agent writes -- prose, PR body,
+    commit message, comment, or claim -- can widen, waive, or override it.
+
+    Every field is compared against repository and pull-request evidence. A
+    disagreement is a `SCOPE_MISMATCH`, which prevents IMPLEMENTED and therefore
+    every later state.
+    """
+
+    task_id: str
+    branch_pattern: str
+    base_ref: str = "main"
+    base_sha: str = ""
+    allowed_paths: tuple[str, ...] = ()
+    prohibited_paths: tuple[str, ...] = ()
+
+    def incompleteness(self) -> str:
+        """Why this contract cannot be enforced, or "" when it can.
+
+        A contract missing the fields the gate compares cannot detect anything,
+        so an incomplete one fails closed rather than passing vacuously. An empty
+        `allowed_paths` is incomplete for the same reason: it would either admit
+        every path or none, and neither is a scope statement.
+        """
+
+        for name in ("task_id", "branch_pattern", "base_ref"):
+            if not str(getattr(self, name) or "").strip():
+                return f"scope contract is missing {name}"
+        if not self.allowed_paths:
+            return "scope contract declares no allowed_paths"
+        return ""
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> TaskScopeContract:
+        if not isinstance(payload, dict):
+            raise ValueError("scope contract must be a JSON object")
+        known = {item.name for item in fields(cls)}
+        unknown = sorted(set(payload) - known)
+        if unknown:
+            # An unreadable field is a scope statement the gate would silently
+            # ignore, so refuse the contract rather than enforce part of it.
+            raise ValueError("scope contract has unknown field(s): " + ", ".join(unknown))
+        return cls(
+            task_id=str(payload.get("task_id") or ""),
+            branch_pattern=str(payload.get("branch_pattern") or ""),
+            base_ref=str(payload.get("base_ref") or "main"),
+            base_sha=str(payload.get("base_sha") or ""),
+            allowed_paths=tuple(str(item) for item in payload.get("allowed_paths") or ()),
+            prohibited_paths=tuple(str(item) for item in payload.get("prohibited_paths") or ()),
+        )
+
+
+def _path_matches(path: str, entry: str) -> bool:
+    """A changed path is covered by a scope entry by directory prefix or glob."""
+
+    entry = entry.strip()
+    if not entry:
+        return False
+    if path == entry or fnmatch(path, entry):
+        return True
+    return path.startswith(entry.rstrip("/") + "/")
+
+
+def evaluate_task_scope(
+    contract: TaskScopeContract | None,
+    observation: PullRequestObservation | None,
+    *,
+    declared_task_id: str = "",
+) -> StateFinding | None:
+    """Compare assigned scope with the evidence, or None when nothing is assigned.
+
+    Returning None means no contract was supplied and the gate is not engaged;
+    IMPLEMENTED is then decided on its own evidence exactly as before.
+    """
+
+    state = WorkflowState.IMPLEMENTED
+    if contract is None:
+        return None
+
+    def mismatch(reason: str) -> StateFinding:
+        return StateFinding(state, False, SCOPE, f"{SCOPE_MISMATCH}: {reason}")
+
+    incomplete = contract.incompleteness()
+    if incomplete:
+        return mismatch(incomplete)
+
+    # An agent may state which task it is working on. That statement is checked
+    # against the assignment; it never becomes the assignment.
+    if declared_task_id and declared_task_id != contract.task_id:
+        return mismatch(f"agent is working task {declared_task_id!r}, but the assigned task is {contract.task_id!r}")
+
+    if observation is None or not observation.is_open:
+        return mismatch(f"no open pull request to check against task {contract.task_id!r}")
+    if not observation.head_ref:
+        return mismatch("pull request evidence carries no head branch")
+    if not observation.changed_paths:
+        return mismatch("pull request evidence carries no changed paths to check against allowed scope")
+
+    if not fnmatch(observation.head_ref, contract.branch_pattern):
+        return mismatch(
+            f"branch {observation.head_ref!r} does not match the assigned pattern {contract.branch_pattern!r}"
+        )
+
+    if observation.base_ref != contract.base_ref:
+        return mismatch(f"base branch {observation.base_ref!r} is not the assigned base {contract.base_ref!r}")
+
+    if contract.base_sha and observation.base_sha != contract.base_sha:
+        return mismatch(
+            f"base commit {observation.base_sha[:10] or '(none)'} is not the assigned base " f"{contract.base_sha[:10]}"
+        )
+
+    prohibited = tuple(
+        path
+        for path in observation.changed_paths
+        if any(_path_matches(path, entry) for entry in contract.prohibited_paths)
+    )
+    if prohibited:
+        return mismatch("prohibited path(s) changed: " + ", ".join(sorted(prohibited)))
+
+    outside = tuple(
+        path
+        for path in observation.changed_paths
+        if not any(_path_matches(path, entry) for entry in contract.allowed_paths)
+    )
+    if outside:
+        return mismatch("path(s) outside the assigned scope changed: " + ", ".join(sorted(outside)))
+
+    return StateFinding(
+        state,
+        True,
+        SCOPE,
+        f"in scope for task {contract.task_id!r}: branch {observation.head_ref}, "
+        f"{len(observation.changed_paths)} changed path(s) within the assigned scope",
+    )
 
 
 @dataclass(frozen=True)
@@ -233,8 +385,21 @@ def _check_conclusion(observation: PullRequestObservation, name: str) -> tuple[b
     return False, f"{name}={conclusion or 'no conclusion'} on head {head}"
 
 
-def _implemented(observation: PullRequestObservation | None, local: LocalEvidence) -> StateFinding:
+def _implemented(
+    observation: PullRequestObservation | None,
+    local: LocalEvidence,
+    scope: StateFinding | None,
+) -> StateFinding:
     state = WorkflowState.IMPLEMENTED
+    if scope is not None:
+        # A scope contract was assigned. Whatever else the evidence shows, work
+        # that does not match the assignment does not become IMPLEMENTED, and the
+        # ordered derivation therefore stops before every later state.
+        if not scope.established:
+            return scope
+        if observation is not None and observation.is_open and observation.changed_files <= 0:
+            return StateFinding(state, False, GITHUB, f"PR #{observation.number} contains no changed files")
+        return scope
     if observation is not None and observation.is_open:
         if observation.changed_files > 0:
             return StateFinding(
@@ -351,6 +516,8 @@ def evaluate_workflow_state(
     local_evidence: LocalEvidence | None = None,
     claimed: WorkflowState | None = None,
     review_required: bool = True,
+    scope_contract: TaskScopeContract | None = None,
+    declared_task_id: str = "",
 ) -> WorkflowStateReport:
     """Derive the workflow state current evidence supports, and judge the claim.
 
@@ -366,11 +533,17 @@ def evaluate_workflow_state(
     default, and it can only ever excuse a *missing* review: it cannot suppress
     a real one, and it reaches no other state -- unresolved threads and current
     `CHANGES_REQUESTED` still block at ZERO_OPEN_FINDINGS.
+
+    `scope_contract` is the assigned starting scope. When one is supplied, work
+    that does not match it never reaches IMPLEMENTED, so no later state is
+    reachable either. When none is supplied the gate is not engaged and
+    IMPLEMENTED is decided on its own evidence, unchanged.
     """
 
     local = local_evidence or LocalEvidence()
+    scope = evaluate_task_scope(scope_contract, observation, declared_task_id=declared_task_id)
     findings = (
-        _implemented(observation, local),
+        _implemented(observation, local, scope),
         _tested(observation, local),
         _preflight_passed(observation, local),
         _pr_open(observation),
@@ -419,6 +592,17 @@ def submitted_reviews(pr_number: int) -> tuple[Review, ...]:
     return tuple(reviews)
 
 
+def changed_paths(pr_number: int) -> tuple[str, ...]:
+    paths: list[str] = []
+    for item in readiness.paged(f"pulls/{pr_number}/files"):
+        if not isinstance(item, dict):
+            continue
+        filename = str(item.get("filename") or "").strip()
+        if filename:
+            paths.append(filename)
+    return tuple(paths)
+
+
 def observe_pull_request(pr_number: int) -> PullRequestObservation | None:
     """Read the current GitHub state for one PR."""
 
@@ -434,7 +618,9 @@ def observe_pull_request(pr_number: int) -> PullRequestObservation | None:
             is_open=False,
             head_sha=head_sha,
             author=str((pr.get("user") or {}).get("login") or ""),
+            head_ref=str((pr.get("head") or {}).get("ref") or ""),
             base_ref=str((pr.get("base") or {}).get("ref") or ""),
+            base_sha=str((pr.get("base") or {}).get("sha") or ""),
         )
 
     return PullRequestObservation(
@@ -442,8 +628,11 @@ def observe_pull_request(pr_number: int) -> PullRequestObservation | None:
         is_open=True,
         head_sha=head_sha,
         author=str((pr.get("user") or {}).get("login") or ""),
+        head_ref=str((pr.get("head") or {}).get("ref") or ""),
         base_ref=str((pr.get("base") or {}).get("ref") or ""),
+        base_sha=str((pr.get("base") or {}).get("sha") or ""),
         changed_files=int(pr.get("changed_files") or 0),
+        changed_paths=changed_paths(pr_number),
         draft=bool(pr.get("draft")),
         mergeable=pr.get("mergeable"),
         reviews=submitted_reviews(pr_number),
@@ -496,6 +685,20 @@ def build_parser() -> argparse.ArgumentParser:
             "rule; excuses a missing review only, and never suppresses one that exists"
         ),
     )
+    parser.add_argument(
+        "--scope-contract",
+        type=Path,
+        default=None,
+        help=(
+            "path to the assigned TaskScopeContract as JSON; when supplied, work that does not match "
+            "the assignment never reaches IMPLEMENTED"
+        ),
+    )
+    parser.add_argument(
+        "--task",
+        default="",
+        help="task/issue identifier the agent states it is working on; checked against the contract",
+    )
     parser.add_argument("--json", action="store_true", help="emit the report as JSON")
     return parser
 
@@ -507,6 +710,10 @@ def main(argv: list[str] | None = None) -> int:
     # "claim demoted", so letting an evaluation or rendering error reach the
     # interpreter would make a crash indistinguishable from a rejected claim.
     try:
+        scope_contract = None
+        if args.scope_contract is not None:
+            scope_contract = TaskScopeContract.from_dict(json.loads(args.scope_contract.read_text(encoding="utf-8")))
+
         observation = None
         if args.pr is not None:
             # Without --pr there is nothing to read: that is the pre-PR case,
@@ -522,6 +729,8 @@ def main(argv: list[str] | None = None) -> int:
             ),
             claimed=args.claim,
             review_required=not args.review_not_required,
+            scope_contract=scope_contract,
+            declared_task_id=args.task,
         )
         rendered = json.dumps(report.as_dict(), indent=2) if args.json else report.render()
     except readiness.transport.GitHubUnavailable as exc:

@@ -31,7 +31,7 @@ The states are ordered. The derived state is the furthest stage whose predecesso
 
 | State | Authority |
 | --- | --- |
-| `IMPLEMENTED` | the open PR changes at least one file |
+| `IMPLEMENTED` | the open PR changes at least one file, and — when a scope contract is assigned — the change matches it |
 | `TESTED` | exact-head `Quality Gates`, which runs the canonical preflight and contains the Pytest gate |
 | `PREFLIGHT_PASSED` | exact-head `Quality Gates`, which *is* `scripts/hunter_pr_preflight.py --mode normal` |
 | `PR_OPEN` | an open PR targeting `main` |
@@ -41,6 +41,39 @@ The states are ordered. The derived state is the furthest stage whose predecesso
 | `MERGE_READY` | the canonical decision, unmodified |
 
 `MERGE_READY` is exactly `scripts/hunter_merge_readiness_v2.evaluate()` returning `success`. `ALL_CHECKS_GREEN` evaluates that same function against an observation with every non-check blocker neutralised, so it inherits the required-check set and the stale-governance-pending allowance instead of restating them. There is one merge-readiness definition in this repository, and it is not here.
+
+## Starting-scope gate
+
+An agent can do careful, well-tested, fully green work on the wrong task. Every state below is about *how far along* a contribution is; none of them asks whether it is the contribution that was asked for. `TaskScopeContract` is that question, and it gates `IMPLEMENTED`.
+
+The contract is the **assignment**, owner-authored and supplied to the evaluator. It is not the agent's account of the assignment: nothing the agent writes — prose, PR body, title, commit message, comment, or workflow-state claim — can widen, waive, or override it. The observation deliberately has nowhere to carry a PR title or body, so prose cannot reach the decision at all.
+
+```json
+{
+  "task_id": "agent-workflow-state-enforcement-mvp",
+  "branch_pattern": "governance/agent-workflow-state-*",
+  "base_ref": "main",
+  "base_sha": "1fa0d66aa6d4c3672911e78f5275c34840c0268e",
+  "allowed_paths": ["scripts/hunter_workflow_state.py", "tests/test_hunter_workflow_state.py"],
+  "prohibited_paths": ["src/", ".github/workflows/"]
+}
+```
+
+Each field is compared against repository and pull-request evidence. Any disagreement is a `SCOPE_MISMATCH`:
+
+| Evidence | Mismatch when |
+| --- | --- |
+| head branch | it does not match `branch_pattern` |
+| declared task | the agent states it is working a different `task_id` |
+| changed paths | any touches `prohibited_paths` |
+| changed paths | any falls outside `allowed_paths` |
+| base branch / commit | it is not the assigned `base_ref` / `base_sha` |
+
+`SCOPE_MISMATCH` leaves `IMPLEMENTED` unestablished, and because the states are ordered, every later state becomes unreachable — a mismatched contribution cannot derive `MERGE_READY` however green its checks, reviews, and mergeability are.
+
+The gate fails closed. A contract missing `task_id`, `branch_pattern`, `base_ref`, or `allowed_paths` cannot detect anything, so it is refused rather than passing vacuously; so is a contract carrying a field the gate does not understand, since silently ignoring it would enforce only part of the assignment. Evidence the gate needs but does not have — no changed paths, no head branch, no open PR — is a mismatch, not a pass.
+
+Supplying no contract leaves the gate disengaged and `IMPLEMENTED` decided on its own evidence, exactly as it was before.
 
 ## Proportional review
 
@@ -83,6 +116,12 @@ python scripts/hunter_workflow_state.py --pr <number> --claim MERGE_READY
 
 Exit codes: `0` when the claim is upheld or absent, `1` when it is demoted, `2` when GitHub state could not be read. Infrastructure failure is never converted into a verdict about the claim. `--json` emits the same report as a machine-readable object.
 
+With an assignment to check against:
+
+```text
+python scripts/hunter_workflow_state.py --pr <number> --scope-contract scope.json --task <task-id> --claim MERGE_READY
+```
+
 Before a PR exists there is no PR number to supply, so `--pr` is omitted and no GitHub read happens at all:
 
 ```text
@@ -99,6 +138,7 @@ The following are not inputs, in keeping with `docs/GOVERNANCE_ENFORCEMENT.md`:
 - Issue identity, branch naming, commit-message formatting;
 - top-level comments, reactions, owner acknowledgements;
 - an agent's own progress report, completion claim, or execution state — the workflow-state claim itself is compared with the derivation, never fed into it;
+- an agent's account of its own assignment — the scope contract comes from the assignment, and a stated `task_id` is checked against it rather than becoming it;
 - superseded historical workflow runs.
 
 ## Namespace separation
