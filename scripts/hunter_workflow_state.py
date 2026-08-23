@@ -213,21 +213,23 @@ class WorkflowStateReport:
         return "\n".join(lines)
 
 
-def _check_conclusion(observation: PullRequestObservation, name: str) -> tuple[str, str]:
-    """Return (verdict, detail) for one exact-head check run.
+def _check_conclusion(observation: PullRequestObservation, name: str) -> tuple[bool, str]:
+    """Report whether one exact-head check succeeded, and why not when it did not.
 
-    verdict is "success", "failed", "pending", or "missing".
+    Anything other than a completed success -- missing, still running, failed,
+    cancelled -- leaves the state unestablished.
     """
 
+    head = observation.head_sha[:10]
     run = readiness.latest_check(list(observation.check_runs), name)
     if run is None:
-        return "missing", f"{name} has not reported on head {observation.head_sha[:10]}"
+        return False, f"{name} has not reported on head {head}"
     if run.get("status") != "completed":
-        return "pending", f"{name} is still running on head {observation.head_sha[:10]}"
+        return False, f"{name} is still running on head {head}"
     conclusion = str(run.get("conclusion") or "")
     if conclusion == "success":
-        return "success", f"{name} succeeded on head {observation.head_sha[:10]}"
-    return "failed", f"{name}={conclusion or 'no conclusion'} on head {observation.head_sha[:10]}"
+        return True, f"{name} succeeded on head {head}"
+    return False, f"{name}={conclusion or 'no conclusion'} on head {head}"
 
 
 def _implemented(observation: PullRequestObservation | None, local: LocalEvidence) -> StateFinding:
@@ -244,10 +246,8 @@ def _implemented(observation: PullRequestObservation | None, local: LocalEvidenc
 
 
 def _from_canonical_preflight(observation: PullRequestObservation, state: WorkflowState, subject: str) -> StateFinding:
-    verdict, detail = _check_conclusion(observation, CANONICAL_PREFLIGHT_CHECK)
-    if verdict == "success":
-        return StateFinding(state, True, GITHUB, f"{subject}: {detail}")
-    return StateFinding(state, False, GITHUB, detail)
+    succeeded, detail = _check_conclusion(observation, CANONICAL_PREFLIGHT_CHECK)
+    return StateFinding(state, succeeded, GITHUB, f"{subject}: {detail}" if succeeded else detail)
 
 
 def _tested(observation: PullRequestObservation | None, local: LocalEvidence) -> StateFinding:
