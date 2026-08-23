@@ -503,31 +503,35 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
-    observation = None
-    if args.pr is not None:
-        # Without --pr there is nothing to read: that is the pre-PR case, where
-        # no PR number exists to supply and GitHub has nothing to say yet.
-        try:
+    # Everything that can fail belongs inside this guard. Exit 1 already means
+    # "claim demoted", so letting an evaluation or rendering error reach the
+    # interpreter would make a crash indistinguishable from a rejected claim.
+    try:
+        observation = None
+        if args.pr is not None:
+            # Without --pr there is nothing to read: that is the pre-PR case,
+            # where no PR number exists to supply and GitHub has nothing to say.
             observation = observe_pull_request(args.pr)
-        except readiness.transport.GitHubUnavailable as exc:
-            print(f"Workflow-state infrastructure unavailable: {exc}", file=sys.stderr)
-            return 2
-        except Exception as exc:
-            print(f"Workflow-state evaluation failed: {type(exc).__name__}: {exc}", file=sys.stderr)
-            return 2
 
-    report = evaluate_workflow_state(
-        observation=observation,
-        local_evidence=LocalEvidence(
-            changed_files=args.changed_files,
-            pytest_passed=args.local_tests_passed,
-            preflight_passed=args.local_preflight_passed,
-        ),
-        claimed=args.claim,
-        review_required=not args.review_not_required,
-    )
+        report = evaluate_workflow_state(
+            observation=observation,
+            local_evidence=LocalEvidence(
+                changed_files=args.changed_files,
+                pytest_passed=args.local_tests_passed,
+                preflight_passed=args.local_preflight_passed,
+            ),
+            claimed=args.claim,
+            review_required=not args.review_not_required,
+        )
+        rendered = json.dumps(report.as_dict(), indent=2) if args.json else report.render()
+    except readiness.transport.GitHubUnavailable as exc:
+        print(f"Workflow-state infrastructure unavailable: {exc}", file=sys.stderr)
+        return 2
+    except Exception as exc:
+        print(f"Workflow-state evaluation failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 2
 
-    print(json.dumps(report.as_dict(), indent=2) if args.json else report.render())
+    print(rendered)
     return 0 if report.claim_upheld else 1
 
 

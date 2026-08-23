@@ -446,6 +446,122 @@ def test_a_waiver_does_not_reach_any_other_state() -> None:
     assert draft.derived is WorkflowState.ALL_CHECKS_GREEN
 
 
+# --- the parsing boundary ---------------------------------------------------
+#
+# observe_pull_request maps GitHub's payloads into the observation every state is
+# derived from. A mapping regression here would change every derived state
+# without failing any of the tests above, all of which construct the observation
+# directly.
+
+
+def _install_github(monkeypatch: pytest.MonkeyPatch, pr: dict[str, object], **overrides: object) -> None:
+    monkeypatch.setattr(workflow.readiness, "request_json", lambda _method, _path: pr)
+    for name, value in (
+        ("paged", overrides.get("paged", [])),
+        ("unresolved_review_threads", overrides.get("threads", ())),
+        ("changes_requested_reviewers", overrides.get("changes_requested", ())),
+        ("all_check_runs", overrides.get("check_runs", [])),
+        ("latest_status", overrides.get("governance_status", None)),
+        ("open_prs_for_head", overrides.get("open_prs", ())),
+    ):
+        monkeypatch.setattr(workflow.readiness, name, lambda *_a, _v=value, **_k: _v)
+
+
+def _pr_payload(**overrides: object) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "number": 501,
+        "state": "open",
+        "draft": False,
+        "mergeable": True,
+        "changed_files": 4,
+        "head": {"sha": HEAD},
+        "base": {"ref": "main"},
+        "user": {"login": "author"},
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_observation_maps_the_current_pull_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    _install_github(
+        monkeypatch,
+        _pr_payload(),
+        paged=[{"user": {"login": "reviewer"}, "state": "approved"}],
+        threads=("t1",),
+        changes_requested=("blocker",),
+        check_runs=[{"id": 1, "name": "Quality Gates", "status": "completed", "conclusion": "success"}],
+        governance_status={"id": 9, "state": "success"},
+        open_prs=(501, 777),
+    )
+
+    observed = workflow.observe_pull_request(501)
+
+    assert observed is not None
+    assert (observed.number, observed.is_open, observed.head_sha) == (501, True, HEAD)
+    assert (observed.author, observed.base_ref) == ("author", "main")
+    assert (observed.changed_files, observed.draft, observed.mergeable) == (4, False, True)
+    assert observed.reviews == (Review(author="reviewer", state="APPROVED"),)
+    assert observed.unresolved_review_threads == ("t1",)
+    assert observed.changes_requested == ("blocker",)
+    assert observed.governance_status == {"id": 9, "state": "success"}
+    assert len(observed.check_runs) == 1
+    # The evaluated PR is not a competing claimant on its own head.
+    assert observed.shared_open_prs == (777,)
+
+
+def test_a_missing_pull_request_is_not_an_observation(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(workflow.readiness, "request_json", lambda _method, _path: None)
+    assert workflow.observe_pull_request(501) is None
+
+    monkeypatch.setattr(workflow.readiness, "request_json", lambda _method, _path: {"message": "Not Found"})
+    assert workflow.observe_pull_request(501) is None
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [{"state": "closed"}, {"head": {"sha": ""}}, {"head": {}}],
+    ids=["closed", "empty-head-sha", "no-head-sha"],
+)
+def test_a_closed_or_headless_pull_request_reads_no_further_state(
+    monkeypatch: pytest.MonkeyPatch, overrides: dict[str, object]
+) -> None:
+    def _unexpected(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("state beyond the PR itself was read for a closed or headless PR")
+
+    monkeypatch.setattr(workflow.readiness, "request_json", lambda _method, _path: _pr_payload(**overrides))
+    for name in (
+        "paged",
+        "unresolved_review_threads",
+        "changes_requested_reviewers",
+        "all_check_runs",
+        "latest_status",
+        "open_prs_for_head",
+    ):
+        monkeypatch.setattr(workflow.readiness, name, _unexpected)
+
+    observed = workflow.observe_pull_request(501)
+
+    assert observed is not None
+    assert observed.is_open is False
+    assert evaluate_workflow_state(observation=observed).derived is WorkflowState.UNVERIFIED
+
+
+def test_review_parsing_drops_unusable_entries_and_normalises_state(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        workflow.readiness,
+        "paged",
+        lambda _path: [
+            {"user": {"login": "reviewer"}, "state": "changes_requested"},
+            {"user": {"login": ""}, "state": "APPROVED"},
+            {"user": {}, "state": "APPROVED"},
+            {"user": {"login": "nostate"}, "state": ""},
+            "not-a-review",
+        ],
+    )
+
+    assert workflow.submitted_reviews(501) == (Review(author="reviewer", state="CHANGES_REQUESTED"),)
+
+
 # --- CLI --------------------------------------------------------------------
 
 
@@ -492,3 +608,29 @@ def test_cli_infrastructure_failure_is_not_a_claim_verdict(monkeypatch: pytest.M
     monkeypatch.setattr(workflow, "observe_pull_request", _unavailable)
 
     assert workflow.main(["--pr", "501", "--claim", "MERGE_READY"]) == 2
+
+
+def test_an_evaluation_failure_is_not_reported_as_a_demoted_claim(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Exit 1 means the claim was rejected. A crash must not borrow that meaning."""
+
+    def _boom(**_kwargs: object) -> object:
+        raise RuntimeError("evaluator defect")
+
+    monkeypatch.setattr(workflow, "observe_pull_request", lambda _number: _observation())
+    monkeypatch.setattr(workflow, "evaluate_workflow_state", _boom)
+
+    assert workflow.main(["--pr", "501", "--claim", "MERGE_READY"]) == 2
+
+
+def test_a_rendering_failure_is_not_reported_as_a_demoted_claim(monkeypatch: pytest.MonkeyPatch) -> None:
+    original = workflow.WorkflowStateReport.render
+
+    def _boom(self: workflow.WorkflowStateReport) -> str:
+        raise RuntimeError("rendering defect")
+
+    monkeypatch.setattr(workflow, "observe_pull_request", lambda _number: _observation())
+    monkeypatch.setattr(workflow.WorkflowStateReport, "render", _boom)
+    try:
+        assert workflow.main(["--pr", "501", "--claim", "MERGE_READY"]) == 2
+    finally:
+        monkeypatch.setattr(workflow.WorkflowStateReport, "render", original)
