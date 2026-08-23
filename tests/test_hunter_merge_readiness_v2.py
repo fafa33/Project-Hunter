@@ -162,6 +162,46 @@ def test_required_checks_match_repository_jobs():
     assert core.REQUIRED_CHECKS == ("Quality Gates", "dependency-review", "CodeQL")
 
 
+def test_an_early_blocker_reads_no_review_or_check_state(monkeypatch):
+    """The decision short-circuits, so a Draft sweep costs one API call, not six."""
+
+    def _must_not_be_called(*_args, **_kwargs):
+        raise AssertionError("decided state was read after an earlier blocker already decided")
+
+    _install_green(monkeypatch, _pr(draft=True))
+    for name in (
+        "unresolved_review_threads",
+        "changes_requested_reviewers",
+        "all_check_runs",
+        "latest_status",
+        "open_prs_for_head",
+    ):
+        monkeypatch.setattr(core, name, _must_not_be_called)
+
+    _sha, decision = core.decide(501)
+
+    assert decision.state == "pending"
+    assert "Draft" in decision.description
+
+
+def test_a_supplied_observation_decides_identically_to_the_live_one(monkeypatch):
+    """Callers reusing this definition must not need a second implementation."""
+
+    _install_green(monkeypatch)
+    _sha, live = core.decide(501)
+
+    supplied = core.evaluate(
+        core.StaticReadinessObservation(
+            draft=False,
+            mergeable=True,
+            check_runs=tuple(_green_check(name, index) for index, name in enumerate(core.REQUIRED_CHECKS, start=1)),
+            governance_status={"id": 99, "state": "success"},
+        )
+    )
+
+    assert supplied == live
+
+
 def test_sweep_isolates_failure_to_one_pull_request(monkeypatch):
     published = []
     monkeypatch.setattr(core, "candidate_prs", lambda: (501, 502))
