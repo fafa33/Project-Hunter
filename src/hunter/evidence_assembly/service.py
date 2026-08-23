@@ -315,6 +315,16 @@ class CanonicalEvidenceAssemblyService:
                     "constituent metadata does not match authoritative strict-known evidence semantics"
                 )
 
+            # Validate representation continuity proof if asserted by authoritative semantics
+            if semantics.representation_continuity_asserted:
+                if (
+                    item.representation_continuity_proof_id
+                    and item.representation_continuity_proof_id != semantics.representation_continuity_proof_id
+                ):
+                    raise CanonicalEvidenceAssemblyError(
+                        "constituent representation continuity proof mismatch against authoritative semantics"
+                    )
+
     def strict_known(
         self, *, logical_id: str, effective_as_of: datetime, known_by: datetime
     ) -> AssembledFundamentalEvidenceRecord | None:

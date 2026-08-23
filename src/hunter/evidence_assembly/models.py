@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
-from typing import Literal
+from typing import Any, Literal
 
 from hunter.valuation_methodology.models import MethodologyEvidenceInputContract as MethodologyEvidenceInputContract
 from hunter.value_capture.models import EconomicClaimIdentity, FundamentalEvidenceRecord
@@ -78,6 +78,15 @@ class AuthoritativeEvidenceSemantics:
     quality_state: Literal["accepted"]
     conflict_state: Literal["none", "resolved"]
     content_hash: str
+    evidence_semantic_input_record_id: str = ""
+    evidence_semantic_input_record_version: str = ""
+    evidence_semantic_input_record_content_hash: str = ""
+    policy_snapshot_id: str = ""
+    policy_snapshot_version: str = ""
+    policy_snapshot_content_hash: str = ""
+    representation_continuity_asserted: bool = False
+    representation_continuity_proof_id: str = ""
+    semantic_dimensions: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         _required(
