@@ -25,8 +25,10 @@ from hunter.value_capture.repository import SupplyAndValueCaptureRepository
 from hunter.value_capture.service import SupplyAndValueCaptureService
 
 _APPLICATION_ROOT_ENV = "HUNTER_APPLICATION_ROOT"
-_KEY_ID_ENV = "HUNTER_VALUE_CAPTURE_KEY_ID"
-_KEY_SECRET_ENV = "HUNTER_VALUE_CAPTURE_KEY_SECRET"
+_SIGNING_KEY_ID_ENV = "HUNTER_VALUE_CAPTURE_SIGNING_KEY_ID"
+_SIGNING_KEY_ENV = "HUNTER_VALUE_CAPTURE_SIGNING_KEY"
+_LEGACY_KEY_ID_ENV = "HUNTER_VALUE_CAPTURE_KEY_ID"
+_LEGACY_KEY_SECRET_ENV = "HUNTER_VALUE_CAPTURE_KEY_SECRET"
 
 
 class ProductionEvidenceAssemblyCompositionError(ValueError):
@@ -47,16 +49,41 @@ def _authorized_application_root(application_root: Path | None) -> Path:
 
 
 def _resolve_verification_keys() -> ValueCaptureVerificationKeyRegistry:
-    key_id = os.environ.get(_KEY_ID_ENV, "").strip()
-    key_secret_raw = os.environ.get(_KEY_SECRET_ENV, "").strip()
-    if not key_id or not key_secret_raw:
+    """Load the Value Capture producer key using its established production contract.
+
+    The canonical acquisition path signs receipts with
+    HUNTER_VALUE_CAPTURE_SIGNING_KEY_ID/HUNTER_VALUE_CAPTURE_SIGNING_KEY, where the key is a
+    hex-encoded byte string. The older KEY_ID/KEY_SECRET names are retained only as a
+    compatibility fallback for callers created during the Issue #197 branch and are interpreted
+    as literal secret bytes.
+    """
+    key_id = os.environ.get(_SIGNING_KEY_ID_ENV, "").strip()
+    key_hex = os.environ.get(_SIGNING_KEY_ENV, "").strip()
+    if key_id or key_hex:
+        if not key_id or not key_hex:
+            raise ProductionEvidenceAssemblyCompositionError(
+                f"production Value Capture verification keys require {_SIGNING_KEY_ID_ENV} and {_SIGNING_KEY_ENV}"
+            )
+        try:
+            key_bytes = bytes.fromhex(key_hex)
+        except ValueError as exc:
+            raise ProductionEvidenceAssemblyCompositionError(
+                f"{_SIGNING_KEY_ENV} must be a hex-encoded byte string"
+            ) from exc
+        if len(key_bytes) < 32:
+            raise ProductionEvidenceAssemblyCompositionError(f"{_SIGNING_KEY_ENV} must decode to at least 32 bytes")
+        return ValueCaptureVerificationKeyRegistry(keys={key_id: key_bytes})
+
+    legacy_key_id = os.environ.get(_LEGACY_KEY_ID_ENV, "").strip()
+    legacy_secret = os.environ.get(_LEGACY_KEY_SECRET_ENV, "").strip()
+    if not legacy_key_id or not legacy_secret:
         raise ProductionEvidenceAssemblyCompositionError(
-            f"production Value Capture verification keys require {_KEY_ID_ENV} and {_KEY_SECRET_ENV}"
+            f"production Value Capture verification keys require {_SIGNING_KEY_ID_ENV} and {_SIGNING_KEY_ENV}"
         )
-    key_bytes = key_secret_raw.encode("utf-8")
-    if len(key_bytes) < 32:
-        raise ProductionEvidenceAssemblyCompositionError(f"{_KEY_SECRET_ENV} must be at least 32 bytes")
-    return ValueCaptureVerificationKeyRegistry(keys={key_id: key_bytes})
+    legacy_key_bytes = legacy_secret.encode("utf-8")
+    if len(legacy_key_bytes) < 32:
+        raise ProductionEvidenceAssemblyCompositionError(f"{_LEGACY_KEY_SECRET_ENV} must be at least 32 bytes")
+    return ValueCaptureVerificationKeyRegistry(keys={legacy_key_id: legacy_key_bytes})
 
 
 def build_production_evidence_assembly_service(
