@@ -629,6 +629,79 @@ def test_a_contract_with_no_pull_request_to_check_fails_closed() -> None:
     _assert_scope_mismatch(report, because="no open pull request to check")
 
 
+@pytest.mark.parametrize("field", ["allowed_paths", "prohibited_paths"])
+def test_a_path_field_given_as_a_string_is_refused_rather_than_split_into_characters(field: str) -> None:
+    """`"prohibited_paths": "src/"` would become ('s','r','c','/') and enforce nothing.
+
+    Iterating a JSON string silently turns one path into four entries that match
+    nothing: a prohibition list stops prohibiting, and an allow list rejects
+    every real path. A single mistyped bracket must not disable the gate.
+    """
+
+    payload: dict[str, object] = {
+        "task_id": "t",
+        "branch_pattern": "b*",
+        "base_ref": "main",
+        "allowed_paths": ["scripts/"],
+        "prohibited_paths": ["src/"],
+    }
+    payload[field] = "src/"
+
+    with pytest.raises(ValueError, match=f"{field}.*must be an array of paths"):
+        workflow.TaskScopeContract.from_dict(payload)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"allowed_paths": {"scripts/": True}},
+        {"allowed_paths": [{"path": "scripts/"}]},
+        {"prohibited_paths": [1, 2]},
+        {"task_id": ["t"]},
+        {"branch_pattern": {"pattern": "b*"}},
+        {"base_sha": 12345},
+    ],
+)
+def test_a_mistyped_contract_field_is_refused(payload: dict[str, object]) -> None:
+    base: dict[str, object] = {
+        "task_id": "t",
+        "branch_pattern": "b*",
+        "base_ref": "main",
+        "allowed_paths": ["scripts/"],
+    }
+    base.update(payload)
+
+    with pytest.raises(ValueError, match="scope contract field"):
+        workflow.TaskScopeContract.from_dict(base)
+
+
+def test_a_well_formed_contract_still_loads() -> None:
+    """The type checks must not reject a valid owner-authored assignment."""
+
+    contract = workflow.TaskScopeContract.from_dict(
+        {
+            "task_id": "t",
+            "branch_pattern": "governance/*",
+            "base_ref": "main",
+            "base_sha": "a" * 40,
+            "allowed_paths": ["scripts/", "tests/"],
+            "prohibited_paths": ["src/"],
+        }
+    )
+
+    assert contract.allowed_paths == ("scripts/", "tests/")
+    assert contract.prohibited_paths == ("src/",)
+    assert contract.incompleteness() == ""
+
+    # Omitted optional fields keep their documented defaults.
+    minimal = workflow.TaskScopeContract.from_dict(
+        {"task_id": "t", "branch_pattern": "b*", "allowed_paths": ["scripts/"]}
+    )
+    assert minimal.base_ref == "main"
+    assert minimal.base_sha == ""
+    assert minimal.prohibited_paths == ()
+
+
 def test_an_unreadable_contract_field_is_refused_rather_than_partly_enforced() -> None:
     with pytest.raises(ValueError, match="unknown field"):
         workflow.TaskScopeContract.from_dict(

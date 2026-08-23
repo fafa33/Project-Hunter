@@ -207,13 +207,39 @@ class TaskScopeContract:
             # An unreadable field is a scope statement the gate would silently
             # ignore, so refuse the contract rather than enforce part of it.
             raise ValueError("scope contract has unknown field(s): " + ", ".join(unknown))
+
+        def text(name: str, default: str = "") -> str:
+            value = payload.get(name)
+            if value is None:
+                return default
+            if not isinstance(value, str):
+                raise ValueError(f"scope contract field {name!r} must be a string")
+            return value or default
+
+        def path_tuple(name: str) -> tuple[str, ...]:
+            value = payload.get(name)
+            if value is None:
+                return ()
+            # A JSON string is iterable, so "src/" would silently become
+            # ('s', 'r', 'c', '/'): four entries that match no real path, which
+            # disables a prohibition list entirely and rejects every path in an
+            # allow list. Refuse it, for the same reason an unknown field is
+            # refused -- an owner-authored assignment is enforced whole or not
+            # at all.
+            if isinstance(value, str) or not isinstance(value, (list, tuple)):
+                raise ValueError(f"scope contract field {name!r} must be an array of paths")
+            for item in value:
+                if not isinstance(item, str):
+                    raise ValueError(f"scope contract field {name!r} must contain only path strings")
+            return tuple(value)
+
         return cls(
-            task_id=str(payload.get("task_id") or ""),
-            branch_pattern=str(payload.get("branch_pattern") or ""),
-            base_ref=str(payload.get("base_ref") or "main"),
-            base_sha=str(payload.get("base_sha") or ""),
-            allowed_paths=tuple(str(item) for item in payload.get("allowed_paths") or ()),
-            prohibited_paths=tuple(str(item) for item in payload.get("prohibited_paths") or ()),
+            task_id=text("task_id"),
+            branch_pattern=text("branch_pattern"),
+            base_ref=text("base_ref", "main"),
+            base_sha=text("base_sha"),
+            allowed_paths=path_tuple("allowed_paths"),
+            prohibited_paths=path_tuple("prohibited_paths"),
         )
 
 

@@ -114,7 +114,7 @@ This is deliberate. A new merge-blocking check needs a demonstrated merge risk t
 python scripts/hunter_workflow_state.py --pr <number> --claim MERGE_READY
 ```
 
-Exit codes: `0` when the claim is upheld or absent, `1` when it is demoted, `2` when GitHub state could not be read. Infrastructure failure is never converted into a verdict about the claim. `--json` emits the same report as a machine-readable object.
+Exit codes: `0` when the claim is upheld or absent, `1` when it is demoted, `2` when the evaluation did not complete — GitHub state could not be read, the scope contract could not be loaded, or the evaluation or rendering itself failed. Neither infrastructure failure nor an evaluator defect is ever converted into a verdict about the claim. `--json` emits the same report as a machine-readable object.
 
 With an assignment to check against:
 
