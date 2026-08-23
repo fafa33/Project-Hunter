@@ -301,5 +301,5 @@ Acceptance of this ADR authorizes architecture only. It does not implement or po
 - PR #198 (head `f712af8a62b40fbd80b6c213d2fe3f9562d0f72e` against base `0f1e6dda4d6f7acdaf6a8e91383d4e61203425c5`) received GitHub review approval (APPROVED by `fafa33`, submitted 2026-08-05T20:47:48Z); the PR review decision is APPROVED.
 - Architecture: Accepted.
 - Implementation: Incomplete.
-- Outstanding implementation sequence: Issues #194, #195, #196, and #197 are complete; Issue #197 verified production constructibility and concluded `IMPLEMENTABLE`.
+- Completed implementation sequence: Issues #194, #195, #196, and #197 are complete; Issue #197 verified production constructibility and concluded `IMPLEMENTABLE`.
 - No production activation, CLI dispatch, scheduler wiring, or automation is authorized by this acceptance contribution.

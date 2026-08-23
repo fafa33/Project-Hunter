@@ -24,14 +24,14 @@ Issues #194, #195, and #196 have delivered all required production-backed author
 5. **Native Evidence Query:** `SupplyAndValueCaptureService` in `hunter.value_capture.service` backed by `SupplyAndValueCaptureRepository`.
 6. **Assembled Evidence Repository:** `AssembledEvidenceRepository` in `hunter.evidence_assembly.repository`.
 
-Issue #197 has established `build_production_evidence_assembly_service` in `hunter.evidence_assembly.composition` to compose `CanonicalEvidenceAssemblyService` using exclusively production-backed collaborators.
+Issue #197 has established `build_production_evidence_assembly_service` in `hunter.evidence_assembly.composition` to compose `CanonicalEvidenceAssemblyService` using exclusively production-backed collaborators constructed internally from `HUNTER_APPLICATION_ROOT` and environment configuration (`HUNTER_VALUE_CAPTURE_KEY_ID` and `HUNTER_VALUE_CAPTURE_KEY_SECRET`), with zero collaborator override parameters.
 
 ## Required Proofs Verification
 
 | Proof ID | Criterion | Audit Result | Verification Evidence |
 |---|---|---|---|
-| P-01 | Production-backed construction | PASS | `build_production_evidence_assembly_service` constructs `CanonicalEvidenceAssemblyService` with 100% production classes in `tests/test_evidence_assembly_production_constructibility.py` (`test_proof_1_and_13_production_construction`). |
-| P-02 | Methodology strict-known availability | PASS | Fails closed with `CanonicalEvidenceAssemblyError` when contract is missing or `accepts_assembled_evidence==False` (`test_proof_2_methodology_strict_known_availability`). |
+| P-01 | Production-backed construction | PASS | `build_production_evidence_assembly_service` constructs `CanonicalEvidenceAssemblyService` with 100% production classes constructed internally (`test_proof_1_and_13_production_construction`). |
+| P-02 | Methodology strict-known availability | PASS | Fails closed with `CanonicalEvidenceAssemblyError` when contract is missing or `accepts_assembled_evidence==False` (`test_proof_2_methodology_strict_known_availability`, `test_proof_2_methodology_contract_rejects_assembled_evidence`). |
 | P-03 | Shape registry strict-known availability | PASS | Fails closed with `CanonicalEvidenceAssemblyError` when shape registry version is missing at cutoff (`test_proof_3_shape_registry_strict_known_availability`). |
 | P-04 | Semantics strict-known availability | PASS | Fails closed with `CanonicalEvidenceAssemblyError` when authoritative semantics record is missing or metadata diverges (`test_proof_4_semantics_strict_known_availability`). |
 | P-05 | Assembly write and read | PASS | `assemble()` creates and persists `AssembledFundamentalEvidenceRecord`; `strict_known()` retrieves exact record (`test_proof_5_assembly_write_and_read`). |
@@ -40,15 +40,17 @@ Issue #197 has established `build_production_evidence_assembly_service` in `hunt
 | P-08 | Provenance continuity | PASS | Preserves exact constituent record IDs, logical IDs, content hashes, and shape IDs (`test_proof_8_provenance_continuity`). |
 | P-09 | Historical / strict-known replay | PASS | Pre-recording replay yields `None`; exact cutoff replay yields historical record (`test_proof_9_historical_strict_known_replay`). |
 | P-10 | Separate production repositories isolation | PASS | Distinct SQLite paths operate independently without cross-database leakage (`test_proof_10_separate_repositories_isolation`). |
-| P-11 | Read-only operations create no records | PASS | `strict_known()`, `is_superseded()`, and `unresolved_assembly_conflicts()` create no database records (`test_proof_11_and_12_readonly_operations_no_writes`). |
-| P-12 | Read-only operations mutate no persistence | PASS | Read-only operations leave database contents and counts byte-identical (`test_proof_11_and_12_readonly_operations_no_writes`). |
-| P-13 | No fake/stub/placeholder in production composition | PASS | Inspected composition contains zero fakes or placeholders; hostile fake-authority substitution fails closed (`test_hostile_fake_authority_substitution`). |
-| P-14 | Dependency graph remains acyclic | PASS | `hunter.evidence_assembly` consumes upstream packages with no circular imports (`test_proof_14_dependency_graph_acyclic`). |
+| P-11 | Read-only operations create no records | PASS | `strict_known()`, `is_superseded()`, and `unresolved_assembly_conflicts()` create no database records (`test_proof_11_12_readonly_operations_no_writes_and_upstream_immutability`). |
+| P-12 | Read-only operations mutate no persistence | PASS | Read-only operations leave database contents, snapshot counts, and upstream repositories byte-identical (`test_proof_11_12_readonly_operations_no_writes_and_upstream_immutability`). |
+| P-13 | No fake/stub/placeholder in production composition | PASS | Inspected composition contains zero fakes or placeholders; unconfigured or short verification keys fail closed (`test_production_composition_fails_closed_when_key_unconfigured`, `test_production_composition_fails_closed_when_key_secret_too_short`, `test_hostile_fake_authority_substitution`). |
+| P-14 | Dependency graph remains acyclic | PASS | AST analysis of all upstream packages (`hunter.value_capture`, `hunter.valuation_methodology`, `hunter.evidence_semantic_inputs`) confirms zero imports of `hunter.evidence_assembly` (`test_proof_14_dependency_graph_acyclic_ast_analysis`). |
 | P-15 | Authority ownership remains singular | PASS | Evidence Assembly service owns only assembly records and conflict records, with no write path into methodology or semantics authorities (`test_proof_15_authority_ownership_singular`). |
 
 ## Hostile Test Verification
 
 Hostile tests verified fail-closed behavior across:
+- Unconfigured / missing verification keys (`test_production_composition_fails_closed_when_key_unconfigured`)
+- Insufficient key secret length (`test_production_composition_fails_closed_when_key_secret_too_short`)
 - Fake authority substitution (`test_hostile_fake_authority_substitution`)
 - Constituent metadata caller override (`test_hostile_caller_override_of_canonical_authority`)
 - Provenance content-hash tampering (`test_hostile_inconsistent_provenance_hash_tampering`)

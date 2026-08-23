@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import os
@@ -9,7 +10,10 @@ from pathlib import Path
 
 import pytest
 
-from hunter.evidence_assembly.composition import build_production_evidence_assembly_service
+from hunter.evidence_assembly.composition import (
+    ProductionEvidenceAssemblyCompositionError,
+    build_production_evidence_assembly_service,
+)
 from hunter.evidence_assembly.models import (
     ASSEMBLY_RULE_VERSION,
     AssemblyConstituent,
@@ -147,6 +151,7 @@ def _create_and_persist_evidence(
 
 def _seed_production_environment(
     *,
+    monkeypatch: pytest.MonkeyPatch,
     db_path: Path,
     app_root: Path,
     entity_id: str = "entity-test",
@@ -162,7 +167,8 @@ def _seed_production_environment(
     end_2: datetime | None = None,
     recorded_at: datetime | None = None,
     known_at: datetime | None = None,
-    accepts_assembled_evidence: bool = True,
+    methodology_accepts_assembled_evidence: bool = True,
+    contract_accepts_assembled_evidence: bool = True,
     contract_id: str = "contract-test-1",
     contract_version: str = "1.0.0",
     registry_version: str = "1.0.0",
@@ -183,7 +189,9 @@ def _seed_production_environment(
     if known_at is None:
         known_at = _dt(2026, 3, 2)
 
-    os.environ["HUNTER_APPLICATION_ROOT"] = str(app_root)
+    monkeypatch.setenv("HUNTER_APPLICATION_ROOT", str(app_root))
+    monkeypatch.setenv("HUNTER_VALUE_CAPTURE_KEY_ID", "key-test-1")
+    monkeypatch.setenv("HUNTER_VALUE_CAPTURE_KEY_SECRET", "0123456789abcdef0123456789abcdef")
 
     # 1. Native Value Capture
     vc_repo = SupplyAndValueCaptureRepository(db_path)
@@ -234,14 +242,14 @@ def _seed_production_environment(
         effective_at=start_1,
         recorded_at=recorded_at,
         known_at=known_at,
-        accepts_assembled_evidence=accepts_assembled_evidence,
+        accepts_assembled_evidence=methodology_accepts_assembled_evidence,
     )
 
     contract = meth_auth.persist_contract(
         contract_id=contract_id,
         contract_version=contract_version,
         methodology_logical_id=meth_snapshot.logical_id,
-        accepts_assembled_evidence=accepts_assembled_evidence,
+        accepts_assembled_evidence=contract_accepts_assembled_evidence,
         accepted_shape_ids=("monthly-revenue-shape",),
         accepted_assembly_rule_versions=(ASSEMBLY_RULE_VERSION,),
         accounting_window_start=start_1,
@@ -339,7 +347,7 @@ def _seed_production_environment(
     vc_service = SupplyAndValueCaptureService(
         repository=vc_repo,
         registry=ValueCaptureSourceRegistry(sources=()),
-        verification_keys=ValueCaptureVerificationKeyRegistry(keys={"default-key": b"0" * 32}),
+        verification_keys=ValueCaptureVerificationKeyRegistry(keys={"key-test-1": b"0" * 32}),
     )
 
     return {
@@ -353,6 +361,9 @@ def _seed_production_environment(
         "sem_1": sem_rec_1,
         "sem_2": sem_rec_2,
         "vc_repo": vc_repo,
+        "meth_repo": meth_repo,
+        "reg_repo": reg_repo,
+        "sem_repo": sem_repo,
         "vc_service": vc_service,
         "meth_auth": meth_auth,
         "reg_auth": reg_auth,
@@ -361,13 +372,15 @@ def _seed_production_environment(
     }
 
 
-# --- PROOF 1 & 13: Production Construction & No Fake/Stub Collaborator ---
+# --- PROOF 1 & 13: Production Construction & Verification Key Enforcement ---
 
 
-def test_proof_1_and_13_production_construction(tmp_path: Path) -> None:
+def test_proof_1_and_13_production_construction(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     db_path = tmp_path / "data_ops.sqlite"
     app_root = tmp_path
-    os.environ["HUNTER_APPLICATION_ROOT"] = str(app_root)
+    monkeypatch.setenv("HUNTER_APPLICATION_ROOT", str(app_root))
+    monkeypatch.setenv("HUNTER_VALUE_CAPTURE_KEY_ID", "key-test-1")
+    monkeypatch.setenv("HUNTER_VALUE_CAPTURE_KEY_SECRET", "0123456789abcdef0123456789abcdef")
 
     service = build_production_evidence_assembly_service(
         db_path=db_path,
@@ -382,16 +395,48 @@ def test_proof_1_and_13_production_construction(tmp_path: Path) -> None:
     assert isinstance(service.evidence_semantics_authority, CanonicalEvidenceSemanticsAuthority)
 
 
+def test_production_composition_fails_closed_when_key_unconfigured(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    app_root = tmp_path
+    monkeypatch.setenv("HUNTER_APPLICATION_ROOT", str(app_root))
+    monkeypatch.delenv("HUNTER_VALUE_CAPTURE_KEY_ID", raising=False)
+    monkeypatch.delenv("HUNTER_VALUE_CAPTURE_KEY_SECRET", raising=False)
+
+    with pytest.raises(
+        ProductionEvidenceAssemblyCompositionError,
+        match="production Value Capture verification keys require",
+    ):
+        build_production_evidence_assembly_service(application_root=app_root)
+
+
+def test_production_composition_fails_closed_when_key_secret_too_short(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    app_root = tmp_path
+    monkeypatch.setenv("HUNTER_APPLICATION_ROOT", str(app_root))
+    monkeypatch.setenv("HUNTER_VALUE_CAPTURE_KEY_ID", "key-test-1")
+    monkeypatch.setenv("HUNTER_VALUE_CAPTURE_KEY_SECRET", "short_secret")
+
+    with pytest.raises(
+        ProductionEvidenceAssemblyCompositionError,
+        match="must be at least 32 bytes",
+    ):
+        build_production_evidence_assembly_service(application_root=app_root)
+
+
 # --- PROOF 2: Methodology Strict-Known Available / Unavailable ---
 
 
-def test_proof_2_methodology_strict_known_availability(tmp_path: Path) -> None:
+def test_proof_2_methodology_strict_known_availability(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     db_path = tmp_path / "data_ops.sqlite"
     app_root = tmp_path
     seeded = _seed_production_environment(
+        monkeypatch=monkeypatch,
         db_path=db_path,
         app_root=app_root,
-        accepts_assembled_evidence=True,
+        methodology_accepts_assembled_evidence=True,
+        contract_accepts_assembled_evidence=True,
     )
 
     service = build_production_evidence_assembly_service(db_path=db_path, application_root=app_root)
@@ -415,7 +460,6 @@ def test_proof_2_methodology_strict_known_availability(tmp_path: Path) -> None:
         pathway_id="pathway-test",
     )
 
-    # Available: assemble succeeds
     record = service.assemble(
         constituents=(constituent_1, constituent_2),
         accounting_window_start=_dt(2026, 1, 1),
@@ -428,27 +472,19 @@ def test_proof_2_methodology_strict_known_availability(tmp_path: Path) -> None:
     )
     assert record.record_id.startswith("assembled-evidence:")
 
-    # Unavailable: missing methodology contract
-    with pytest.raises(CanonicalEvidenceAssemblyError, match="no exact strict-known methodology evidence contract"):
-        service.assemble(
-            constituents=(constituent_1, constituent_2),
-            accounting_window_start=_dt(2026, 1, 1),
-            accounting_window_end=_dt(2026, 3, 1),
-            recorded_at=_dt(2026, 3, 2),
-            replay_cutoff=_dt(2026, 3, 2),
-            methodology_contract_id="nonexistent-contract",
-            methodology_contract_version="1.0.0",
-            evidence_shape_registry_version="1.0.0",
-        )
 
-
-def test_proof_2_methodology_unaccepted_assembled_evidence(tmp_path: Path) -> None:
+def test_proof_2_methodology_contract_rejects_assembled_evidence(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Methodology snapshot allows assembled evidence, but contract rejects it."""
     db_path = tmp_path / "data_ops.sqlite"
     app_root = tmp_path
     seeded = _seed_production_environment(
+        monkeypatch=monkeypatch,
         db_path=db_path,
         app_root=app_root,
-        accepts_assembled_evidence=False,  # Unaccepted!
+        methodology_accepts_assembled_evidence=True,  # Snapshot allows!
+        contract_accepts_assembled_evidence=False,  # Contract rejects!
     )
 
     service = build_production_evidence_assembly_service(db_path=db_path, application_root=app_root)
@@ -472,7 +508,10 @@ def test_proof_2_methodology_unaccepted_assembled_evidence(tmp_path: Path) -> No
         pathway_id="pathway-test",
     )
 
-    with pytest.raises(CanonicalEvidenceAssemblyError, match="no exact strict-known methodology evidence contract"):
+    with pytest.raises(
+        CanonicalEvidenceAssemblyError,
+        match="methodology contract has not opted into assembled evidence",
+    ):
         service.assemble(
             constituents=(constituent_1, constituent_2),
             accounting_window_start=_dt(2026, 1, 1),
@@ -488,10 +527,10 @@ def test_proof_2_methodology_unaccepted_assembled_evidence(tmp_path: Path) -> No
 # --- PROOF 3: Shape Registry Strict-Known Available / Unavailable ---
 
 
-def test_proof_3_shape_registry_strict_known_availability(tmp_path: Path) -> None:
+def test_proof_3_shape_registry_strict_known_availability(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     db_path = tmp_path / "data_ops.sqlite"
     app_root = tmp_path
-    seeded = _seed_production_environment(db_path=db_path, app_root=app_root)
+    seeded = _seed_production_environment(monkeypatch=monkeypatch, db_path=db_path, app_root=app_root)
 
     service = build_production_evidence_assembly_service(db_path=db_path, application_root=app_root)
 
@@ -523,21 +562,20 @@ def test_proof_3_shape_registry_strict_known_availability(tmp_path: Path) -> Non
             replay_cutoff=_dt(2026, 3, 2),
             methodology_contract_id="contract-test-1",
             methodology_contract_version="1.0.0",
-            evidence_shape_registry_version="9.9.9",  # Nonexistent version
+            evidence_shape_registry_version="9.9.9",
         )
 
 
 # --- PROOF 4: Semantics Strict-Known Available / Unavailable ---
 
 
-def test_proof_4_semantics_strict_known_availability(tmp_path: Path) -> None:
+def test_proof_4_semantics_strict_known_availability(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     db_path = tmp_path / "data_ops.sqlite"
     app_root = tmp_path
-    seeded = _seed_production_environment(db_path=db_path, app_root=app_root)
+    seeded = _seed_production_environment(monkeypatch=monkeypatch, db_path=db_path, app_root=app_root)
 
     service = build_production_evidence_assembly_service(db_path=db_path, application_root=app_root)
 
-    # Unpersisted fake evidence record
     fake_ev = FundamentalEvidenceRecord(
         record_id="fake-ev-999",
         logical_id="fake-logical",
@@ -605,10 +643,10 @@ def test_proof_4_semantics_strict_known_availability(tmp_path: Path) -> None:
 # --- PROOF 5: Assembly Write / Read ---
 
 
-def test_proof_5_assembly_write_and_read(tmp_path: Path) -> None:
+def test_proof_5_assembly_write_and_read(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     db_path = tmp_path / "data_ops.sqlite"
     app_root = tmp_path
-    seeded = _seed_production_environment(db_path=db_path, app_root=app_root)
+    seeded = _seed_production_environment(monkeypatch=monkeypatch, db_path=db_path, app_root=app_root)
 
     service = build_production_evidence_assembly_service(db_path=db_path, application_root=app_root)
 
@@ -659,10 +697,10 @@ def test_proof_5_assembly_write_and_read(tmp_path: Path) -> None:
 # --- PROOF 6: Correction Behavior & Lineage Protection ---
 
 
-def test_proof_6_correction_behavior_and_branching_prohibition(tmp_path: Path) -> None:
+def test_proof_6_correction_behavior_and_branching_prohibition(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     db_path = tmp_path / "data_ops.sqlite"
     app_root = tmp_path
-    seeded = _seed_production_environment(db_path=db_path, app_root=app_root)
+    seeded = _seed_production_environment(monkeypatch=monkeypatch, db_path=db_path, app_root=app_root)
 
     service = build_production_evidence_assembly_service(db_path=db_path, application_root=app_root)
 
@@ -696,14 +734,13 @@ def test_proof_6_correction_behavior_and_branching_prohibition(tmp_path: Path) -
         evidence_shape_registry_version="1.0.0",
     )
 
-    # Correct ev2 natively
     vc_repo = seeded["vc_repo"]
     ev2_corrected = _create_and_persist_evidence(
         vc_repo,
         identity=seeded["ev1"].identity,
         accounting_period_start=_dt(2026, 2, 1),
         accounting_period_end=_dt(2026, 3, 1),
-        amount="160.00",  # Corrected amount
+        amount="160.00",
         unit="USD",
         source_reference="ref-2",
         supersedes_record_id=seeded["ev2"].record_id,
@@ -733,7 +770,6 @@ def test_proof_6_correction_behavior_and_branching_prohibition(tmp_path: Path) -
         pathway_id="pathway-test",
     )
 
-    # Successor correction
     corrected = service.assemble(
         constituents=(c1, c2_corr),
         accounting_window_start=_dt(2026, 1, 1),
@@ -751,7 +787,6 @@ def test_proof_6_correction_behavior_and_branching_prohibition(tmp_path: Path) -
     assert service.is_superseded(initial.record_id)
     assert not service.is_superseded(corrected.record_id)
 
-    # Branching correction attempt (second correction pointing to initial) fails closed
     with pytest.raises(CanonicalEvidenceAssemblyError, match="branching correction lineage is prohibited"):
         service.assemble(
             constituents=(c1, c2_corr),
@@ -770,14 +805,15 @@ def test_proof_6_correction_behavior_and_branching_prohibition(tmp_path: Path) -
 # --- PROOF 7: Conflict Behavior & Query ---
 
 
-def test_proof_7_conflict_behavior_qualifying_native_precedence(tmp_path: Path) -> None:
+def test_proof_7_conflict_behavior_qualifying_native_precedence(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     db_path = tmp_path / "data_ops.sqlite"
     app_root = tmp_path
-    seeded = _seed_production_environment(db_path=db_path, app_root=app_root)
+    seeded = _seed_production_environment(monkeypatch=monkeypatch, db_path=db_path, app_root=app_root)
 
     vc_repo = seeded["vc_repo"]
 
-    # Persist a native evidence record that covers the FULL window (Jan 1 to Mar 1)
     full_ev = _create_and_persist_evidence(
         vc_repo,
         identity=seeded["ev1"].identity,
@@ -788,7 +824,6 @@ def test_proof_7_conflict_behavior_qualifying_native_precedence(tmp_path: Path) 
         source_reference="ref-full",
     )
 
-    # Seed semantics for full_ev as well
     si_rec_full = seeded["si_auth"].derive_and_persist_input(
         evidence_record=full_ev,
         policy_snapshot=seeded["policy"],
@@ -842,10 +877,10 @@ def test_proof_7_conflict_behavior_qualifying_native_precedence(tmp_path: Path) 
 # --- PROOF 8: Provenance Continuity ---
 
 
-def test_proof_8_provenance_continuity(tmp_path: Path) -> None:
+def test_proof_8_provenance_continuity(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     db_path = tmp_path / "data_ops.sqlite"
     app_root = tmp_path
-    seeded = _seed_production_environment(db_path=db_path, app_root=app_root)
+    seeded = _seed_production_environment(monkeypatch=monkeypatch, db_path=db_path, app_root=app_root)
 
     service = build_production_evidence_assembly_service(db_path=db_path, application_root=app_root)
 
@@ -888,10 +923,10 @@ def test_proof_8_provenance_continuity(tmp_path: Path) -> None:
 # --- PROOF 9: Historical / Strict-Known Replay ---
 
 
-def test_proof_9_historical_strict_known_replay(tmp_path: Path) -> None:
+def test_proof_9_historical_strict_known_replay(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     db_path = tmp_path / "data_ops.sqlite"
     app_root = tmp_path
-    seeded = _seed_production_environment(db_path=db_path, app_root=app_root)
+    seeded = _seed_production_environment(monkeypatch=monkeypatch, db_path=db_path, app_root=app_root)
 
     service = build_production_evidence_assembly_service(db_path=db_path, application_root=app_root)
 
@@ -925,7 +960,6 @@ def test_proof_9_historical_strict_known_replay(tmp_path: Path) -> None:
         evidence_shape_registry_version="1.0.0",
     )
 
-    # Replay prior to recorded_at yields None
     prior_replay = service.strict_known(
         logical_id=assembled.logical_id,
         effective_as_of=_dt(2026, 3, 1),
@@ -933,7 +967,6 @@ def test_proof_9_historical_strict_known_replay(tmp_path: Path) -> None:
     )
     assert prior_replay is None
 
-    # Replay at/after recorded_at yields assembled record
     exact_replay = service.strict_known(
         logical_id=assembled.logical_id,
         effective_as_of=_dt(2026, 3, 1),
@@ -946,11 +979,12 @@ def test_proof_9_historical_strict_known_replay(tmp_path: Path) -> None:
 # --- PROOF 10: Separate Production Repositories Isolation ---
 
 
-def test_proof_10_separate_repositories_isolation(tmp_path: Path) -> None:
+def test_proof_10_separate_repositories_isolation(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     app_root = tmp_path
-    os.environ["HUNTER_APPLICATION_ROOT"] = str(app_root)
+    monkeypatch.setenv("HUNTER_APPLICATION_ROOT", str(app_root))
+    monkeypatch.setenv("HUNTER_VALUE_CAPTURE_KEY_ID", "key-test-1")
+    monkeypatch.setenv("HUNTER_VALUE_CAPTURE_KEY_SECRET", "0123456789abcdef0123456789abcdef")
 
-    # Use distinct SQLite databases for each repository
     db_assembly = tmp_path / "assembly.sqlite"
     db_vc = tmp_path / "vc.sqlite"
     db_meth = tmp_path / "meth.sqlite"
@@ -963,7 +997,7 @@ def test_proof_10_separate_repositories_isolation(tmp_path: Path) -> None:
     vc_service = SupplyAndValueCaptureService(
         repository=vc_repo,
         registry=ValueCaptureSourceRegistry(sources=()),
-        verification_keys=ValueCaptureVerificationKeyRegistry(keys={"default-key": b"0" * 32}),
+        verification_keys=ValueCaptureVerificationKeyRegistry(keys={"key-test-1": b"0" * 32}),
     )
     meth_repo = ValuationMethodologyRepository(db_meth)
     meth_auth = CanonicalValuationMethodologyAuthority(repository=meth_repo, application_root=app_root)
@@ -987,24 +1021,29 @@ def test_proof_10_separate_repositories_isolation(tmp_path: Path) -> None:
     )
 
     assert isinstance(service, CanonicalEvidenceAssemblyService)
-    # Check that database files are distinct and created
     for path in (db_assembly, db_vc, db_meth, db_reg, db_si, db_sem):
         assert path.exists()
 
 
-# --- PROOF 11 & 12: Read-Only Operations Create No Records & Mutate No Persistence ---
+# --- PROOF 11 & 12: Read-Only Operations Create No Records & Mutate No Persistence & Repository Snapshot ---
 
 
-def test_proof_11_and_12_readonly_operations_no_writes(tmp_path: Path) -> None:
+def test_proof_11_12_readonly_operations_no_writes_and_upstream_immutability(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     db_path = tmp_path / "data_ops.sqlite"
     app_root = tmp_path
-    _seed_production_environment(db_path=db_path, app_root=app_root)
+    seeded = _seed_production_environment(monkeypatch=monkeypatch, db_path=db_path, app_root=app_root)
 
     service = build_production_evidence_assembly_service(db_path=db_path, application_root=app_root)
 
-    initial_count = len(service.repository.conflict_records())
+    initial_assembly_conflicts = len(service.repository.conflict_records())
 
-    # Perform read-only operations
+    meth_records_before = len(seeded["meth_repo"].records())
+    reg_records_before = len(seeded["reg_repo"].records())
+    sem_records_before = len(seeded["sem_repo"].records())
+    vc_records_before = len(seeded["vc_repo"].evidence_records())
+
     result = service.strict_known(
         logical_id="nonexistent-logical",
         effective_as_of=_dt(2026, 3, 1),
@@ -1015,37 +1054,91 @@ def test_proof_11_and_12_readonly_operations_no_writes(tmp_path: Path) -> None:
     assert not service.is_superseded("nonexistent-record")
     conflicts = service.unresolved_assembly_conflicts()
 
-    assert len(conflicts) == initial_count
-    assert len(service.repository.conflict_records()) == initial_count
+    assert len(conflicts) == initial_assembly_conflicts
+    assert len(service.repository.conflict_records()) == initial_assembly_conflicts
+
+    c1 = AssemblyConstituent(
+        record=seeded["ev1"],
+        shape_id="monthly-revenue-shape",
+        currency="USD",
+        raw_unit="USD",
+        accounting_meaning="period_specific",
+        supply_basis_id="supply-basis-test",
+        pathway_id="pathway-test",
+    )
+    c2 = AssemblyConstituent(
+        record=seeded["ev2"],
+        shape_id="monthly-revenue-shape",
+        currency="USD",
+        raw_unit="USD",
+        accounting_meaning="period_specific",
+        supply_basis_id="supply-basis-test",
+        pathway_id="pathway-test",
+    )
+
+    service.assemble(
+        constituents=(c1, c2),
+        accounting_window_start=_dt(2026, 1, 1),
+        accounting_window_end=_dt(2026, 3, 1),
+        recorded_at=_dt(2026, 3, 2),
+        replay_cutoff=_dt(2026, 3, 2),
+        methodology_contract_id="contract-test-1",
+        methodology_contract_version="1.0.0",
+        evidence_shape_registry_version="1.0.0",
+    )
+
+    assert len(seeded["meth_repo"].records()) == meth_records_before
+    assert len(seeded["reg_repo"].records()) == reg_records_before
+    assert len(seeded["sem_repo"].records()) == sem_records_before
+    assert len(seeded["vc_repo"].evidence_records()) == vc_records_before
 
 
-# --- PROOF 14: Dependency Graph Remains Acyclic ---
+# --- PROOF 14: Dependency Graph Remains Acyclic (AST Analysis) ---
 
 
-def test_proof_14_dependency_graph_acyclic() -> None:
-    import hunter.evidence_assembly
-    import hunter.evidence_semantic_inputs
-    import hunter.valuation_methodology
-    import hunter.value_capture
+def test_proof_14_dependency_graph_acyclic_ast_analysis() -> None:
+    """Parse AST of all upstream modules to prove none of them import hunter.evidence_assembly."""
+    upstream_packages = (
+        "hunter.value_capture",
+        "hunter.valuation_methodology",
+        "hunter.evidence_semantic_inputs",
+    )
 
-    # Verify no reverse imports
-    assert not hasattr(hunter.value_capture, "CanonicalEvidenceAssemblyService")
-    assert not hasattr(hunter.evidence_semantic_inputs, "CanonicalEvidenceAssemblyService")
-    assert not hasattr(hunter.valuation_methodology, "CanonicalEvidenceAssemblyService")
+    repo_root = Path(__file__).resolve().parent.parent / "src"
+
+    for pkg_name in upstream_packages:
+        pkg_path = repo_root / pkg_name.replace(".", "/")
+        assert pkg_path.is_dir(), f"package directory missing: {pkg_path}"
+
+        for root_dir, _, files in os.walk(pkg_path):
+            for file in files:
+                if file.endswith(".py"):
+                    full_path = Path(root_dir) / file
+                    tree = ast.parse(full_path.read_text(encoding="utf-8"), filename=str(full_path))
+
+                    for node in ast.walk(tree):
+                        if isinstance(node, ast.Import):
+                            for alias in node.names:
+                                assert not alias.name.startswith(
+                                    "hunter.evidence_assembly"
+                                ), f"upstream file {full_path} contains forbidden import: {alias.name}"
+                        elif isinstance(node, ast.ImportFrom):
+                            if node.module:
+                                assert not node.module.startswith(
+                                    "hunter.evidence_assembly"
+                                ), f"upstream file {full_path} contains forbidden import from: {node.module}"
 
 
 # --- PROOF 15: Authority Ownership Remains Singular ---
 
 
-def test_proof_15_authority_ownership_singular(tmp_path: Path) -> None:
+def test_proof_15_authority_ownership_singular(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     db_path = tmp_path / "data_ops.sqlite"
     app_root = tmp_path
-    _seed_production_environment(db_path=db_path, app_root=app_root)
+    _seed_production_environment(monkeypatch=monkeypatch, db_path=db_path, app_root=app_root)
 
     service = build_production_evidence_assembly_service(db_path=db_path, application_root=app_root)
 
-    # Verify that Evidence Assembly service cannot create or mutate methodology contracts,
-    # shape registries, or evidence semantics records directly.
     assert not hasattr(service, "persist_contract")
     assert not hasattr(service, "persist_registry")
     assert not hasattr(service, "register_semantics")
@@ -1054,15 +1147,14 @@ def test_proof_15_authority_ownership_singular(tmp_path: Path) -> None:
 # --- HOSTILE TESTS ---
 
 
-def test_hostile_caller_override_of_canonical_authority(tmp_path: Path) -> None:
+def test_hostile_caller_override_of_canonical_authority(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Caller attempts to supply declared constituent metadata that differs from authoritative semantics."""
     db_path = tmp_path / "data_ops.sqlite"
     app_root = tmp_path
-    seeded = _seed_production_environment(db_path=db_path, app_root=app_root)
+    seeded = _seed_production_environment(monkeypatch=monkeypatch, db_path=db_path, app_root=app_root)
 
     service = build_production_evidence_assembly_service(db_path=db_path, application_root=app_root)
 
-    # Constituent with override supply_basis_id ("fake-supply-basis" instead of "supply-basis-test")
     override_c1 = AssemblyConstituent(
         record=seeded["ev1"],
         shape_id="monthly-revenue-shape",
@@ -1097,15 +1189,15 @@ def test_hostile_caller_override_of_canonical_authority(tmp_path: Path) -> None:
         )
 
 
-def test_hostile_fake_authority_substitution(tmp_path: Path) -> None:
+def test_hostile_fake_authority_substitution(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Attempt passing a fake/stub authority object to production service assembly."""
     db_path = tmp_path / "data_ops.sqlite"
     app_root = tmp_path
-    seeded = _seed_production_environment(db_path=db_path, app_root=app_root)
+    seeded = _seed_production_environment(monkeypatch=monkeypatch, db_path=db_path, app_root=app_root)
 
     class FakeSemanticsAuthority:
         def strict_known_semantics(self, **kwargs):
-            return None  # Fake returning None
+            return None
 
     repo = AssembledEvidenceRepository(db_path)
     service = CanonicalEvidenceAssemblyService(
@@ -1148,15 +1240,15 @@ def test_hostile_fake_authority_substitution(tmp_path: Path) -> None:
         )
 
 
-def test_hostile_inconsistent_provenance_hash_tampering(tmp_path: Path) -> None:
+def test_hostile_inconsistent_provenance_hash_tampering(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Constituent with tampered content hash fails closed."""
     db_path = tmp_path / "data_ops.sqlite"
     app_root = tmp_path
-    seeded = _seed_production_environment(db_path=db_path, app_root=app_root)
+    seeded = _seed_production_environment(monkeypatch=monkeypatch, db_path=db_path, app_root=app_root)
 
     service = build_production_evidence_assembly_service(db_path=db_path, application_root=app_root)
 
-    tampered_ev1 = replace(seeded["ev1"], content_hash="")  # Empty content hash!
+    tampered_ev1 = replace(seeded["ev1"], content_hash="")
 
     c1_tampered = AssemblyConstituent(
         record=tampered_ev1,
