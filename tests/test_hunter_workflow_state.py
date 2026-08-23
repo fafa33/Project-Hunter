@@ -376,6 +376,103 @@ def test_parse_state_rejects_an_unknown_state() -> None:
         workflow.parse_state("READY_TO_MERGE")
 
 
+# --- proportional review ----------------------------------------------------
+
+
+def test_review_is_required_by_default() -> None:
+    """The fail-closed direction is the default."""
+
+    assert evaluate_workflow_state(observation=_observation(reviews=())).derived is WorkflowState.PR_OPEN
+
+
+def test_a_declared_waiver_lets_an_unreviewed_low_risk_change_reach_merge_ready() -> None:
+    """docs/DEVELOPMENT_GOVERNANCE.md requires review for substantive changes only.
+
+    Forcing every green cleanup to stop at PR_OPEN would reject a canonically
+    valid MERGE_READY.
+    """
+
+    report = evaluate_workflow_state(
+        observation=_observation(reviews=()),
+        review_required=False,
+        claimed=WorkflowState.MERGE_READY,
+    )
+
+    assert report.derived is WorkflowState.MERGE_READY
+    assert report.verdict == Verdict.CONFIRMED
+    reviewed = {finding.state: finding for finding in report.findings}[WorkflowState.REVIEWED]
+    assert reviewed.authority == workflow.DECLARED
+    assert "does not require one" in reviewed.detail
+
+
+def test_a_waiver_never_hides_a_review_that_happened() -> None:
+    report = evaluate_workflow_state(observation=_observation(), review_required=False)
+
+    reviewed = {finding.state: finding for finding in report.findings}[WorkflowState.REVIEWED]
+    assert reviewed.authority == workflow.GITHUB
+    assert "reviewer" in reviewed.detail
+
+
+def test_a_waiver_does_not_reach_any_other_state() -> None:
+    """It excuses a missing review; GitHub still decides everything else."""
+
+    with_threads = evaluate_workflow_state(
+        observation=_observation(reviews=(), unresolved_review_threads=("t1",)),
+        review_required=False,
+        claimed=WorkflowState.MERGE_READY,
+    )
+    assert with_threads.derived is WorkflowState.REVIEWED
+    assert with_threads.verdict == Verdict.DEMOTED
+
+    with_changes_requested = evaluate_workflow_state(
+        observation=_observation(reviews=(), changes_requested=("reviewer",)),
+        review_required=False,
+        claimed=WorkflowState.MERGE_READY,
+    )
+    assert with_changes_requested.derived is WorkflowState.REVIEWED
+
+    with_red_ci = evaluate_workflow_state(
+        observation=_observation(reviews=(), check_runs=()),
+        review_required=False,
+        claimed=WorkflowState.MERGE_READY,
+    )
+    assert with_red_ci.derived is WorkflowState.IMPLEMENTED
+
+    draft = evaluate_workflow_state(
+        observation=_observation(reviews=(), draft=True),
+        review_required=False,
+        claimed=WorkflowState.MERGE_READY,
+    )
+    assert draft.derived is WorkflowState.ALL_CHECKS_GREEN
+
+
+# --- CLI --------------------------------------------------------------------
+
+
+def test_local_only_evaluation_needs_no_pr_number(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Before the first PR there is no PR number to supply, and nothing to read."""
+
+    def _must_not_be_called(_number: int) -> PullRequestObservation:
+        raise AssertionError("GitHub was read for a local-only evaluation")
+
+    monkeypatch.setattr(workflow, "observe_pull_request", _must_not_be_called)
+
+    assert (
+        workflow.main(
+            ["--changed-files", "3", "--local-tests-passed", "--local-preflight-passed", "--claim", "PREFLIGHT_PASSED"]
+        )
+        == 0
+    )
+    assert workflow.main(["--changed-files", "3", "--claim", "PR_OPEN"]) == 1
+
+
+def test_cli_review_waiver_reaches_the_evaluation(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(workflow, "observe_pull_request", lambda _number: _observation(reviews=()))
+
+    assert workflow.main(["--pr", "501", "--claim", "MERGE_READY"]) == 1
+    assert workflow.main(["--pr", "501", "--claim", "MERGE_READY", "--review-not-required"]) == 0
+
+
 def test_cli_exit_code_reflects_claim_rejection(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(workflow, "observe_pull_request", lambda _number: _observation(draft=True))
 

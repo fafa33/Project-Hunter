@@ -49,6 +49,7 @@ CANONICAL_PREFLIGHT_CHECK = "Quality Gates"
 
 GITHUB = "github"
 LOCAL = "local"
+DECLARED = "declared"
 NONE = "none"
 
 
@@ -284,19 +285,32 @@ def _pr_open(observation: PullRequestObservation | None) -> StateFinding:
     return StateFinding(state, True, GITHUB, f"PR #{observation.number} is open against main{draft_note}")
 
 
-def _reviewed(observation: PullRequestObservation | None) -> StateFinding:
+def _reviewed(observation: PullRequestObservation | None, review_required: bool) -> StateFinding:
     state = WorkflowState.REVIEWED
     if observation is None or not observation.is_open:
         return StateFinding(state, False, NONE, "no open pull request to carry a review")
+
     independent = tuple(
         review
         for review in observation.reviews
         if review.author and review.author != observation.author and review.state.upper() != "PENDING"
     )
-    if not independent:
-        return StateFinding(state, False, GITHUB, "no submitted review by anyone other than the PR author")
-    reviewers = ", ".join(sorted({review.author for review in independent}))
-    return StateFinding(state, True, GITHUB, f"submitted review(s) by {reviewers}")
+    if independent:
+        # Real review evidence always decides, whatever was declared about the
+        # requirement: a waiver may excuse a missing review, never hide one.
+        reviewers = ", ".join(sorted({review.author for review in independent}))
+        return StateFinding(state, True, GITHUB, f"submitted review(s) by {reviewers}")
+
+    if not review_required:
+        return StateFinding(
+            state,
+            True,
+            DECLARED,
+            "no independent review; caller declared this change does not require one under the "
+            "proportional-review rule in docs/DEVELOPMENT_GOVERNANCE.md",
+        )
+
+    return StateFinding(state, False, GITHUB, "no submitted review by anyone other than the PR author")
 
 
 def _zero_open_findings(observation: PullRequestObservation | None) -> StateFinding:
@@ -336,12 +350,22 @@ def evaluate_workflow_state(
     observation: PullRequestObservation | None = None,
     local_evidence: LocalEvidence | None = None,
     claimed: WorkflowState | None = None,
+    review_required: bool = True,
 ) -> WorkflowStateReport:
     """Derive the workflow state current evidence supports, and judge the claim.
 
     The claim is never an input to the derivation. It is compared with the
     derived state afterwards, so an agent cannot advance itself by asserting a
     state it has not reached.
+
+    `review_required` is the one judgement this evaluator does not derive.
+    `docs/DEVELOPMENT_GOVERNANCE.md` requires independent review for substantive
+    changes and forbids forcing a small cleanup through the same review volume,
+    and that is a judgement about changed behaviour rather than anything GitHub
+    reports. It defaults to required, so the fail-closed direction is the
+    default, and it can only ever excuse a *missing* review: it cannot suppress
+    a real one, and it reaches no other state -- unresolved threads and current
+    `CHANGES_REQUESTED` still block at ZERO_OPEN_FINDINGS.
     """
 
     local = local_evidence or LocalEvidence()
@@ -350,7 +374,7 @@ def evaluate_workflow_state(
         _tested(observation, local),
         _preflight_passed(observation, local),
         _pr_open(observation),
-        _reviewed(observation),
+        _reviewed(observation, review_required),
         _zero_open_findings(observation),
         _all_checks_green(observation),
         _merge_ready(observation),
@@ -436,7 +460,12 @@ def build_parser() -> argparse.ArgumentParser:
         prog="hunter_workflow_state",
         description="Derive an agent's workflow state from current GitHub state and judge its claim.",
     )
-    parser.add_argument("--pr", type=int, required=True, help="pull request number to evaluate")
+    parser.add_argument(
+        "--pr",
+        type=int,
+        default=None,
+        help="pull request number to evaluate; omit before the PR exists to evaluate local evidence only",
+    )
     parser.add_argument(
         "--claim",
         type=parse_state,
@@ -459,6 +488,14 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="agent reports a passing local canonical preflight (used only when no open PR exists)",
     )
+    parser.add_argument(
+        "--review-not-required",
+        action="store_true",
+        help=(
+            "declare that this change does not require independent review under the proportional-review "
+            "rule; excuses a missing review only, and never suppresses one that exists"
+        ),
+    )
     parser.add_argument("--json", action="store_true", help="emit the report as JSON")
     return parser
 
@@ -466,14 +503,18 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
-    try:
-        observation = observe_pull_request(args.pr)
-    except readiness.transport.GitHubUnavailable as exc:
-        print(f"Workflow-state infrastructure unavailable: {exc}", file=sys.stderr)
-        return 2
-    except Exception as exc:
-        print(f"Workflow-state evaluation failed: {type(exc).__name__}: {exc}", file=sys.stderr)
-        return 2
+    observation = None
+    if args.pr is not None:
+        # Without --pr there is nothing to read: that is the pre-PR case, where
+        # no PR number exists to supply and GitHub has nothing to say yet.
+        try:
+            observation = observe_pull_request(args.pr)
+        except readiness.transport.GitHubUnavailable as exc:
+            print(f"Workflow-state infrastructure unavailable: {exc}", file=sys.stderr)
+            return 2
+        except Exception as exc:
+            print(f"Workflow-state evaluation failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+            return 2
 
     report = evaluate_workflow_state(
         observation=observation,
@@ -483,6 +524,7 @@ def main(argv: list[str] | None = None) -> int:
             preflight_passed=args.local_preflight_passed,
         ),
         claimed=args.claim,
+        review_required=not args.review_not_required,
     )
 
     print(json.dumps(report.as_dict(), indent=2) if args.json else report.render())
