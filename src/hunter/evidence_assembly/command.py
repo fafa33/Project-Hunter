@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -9,12 +10,24 @@ from typing import Any, cast
 
 from hunter.evidence_assembly.composition import build_production_evidence_assembly_service
 from hunter.evidence_assembly.models import AccountingMeaning, AssemblyConstituent
+from hunter.evidence_assembly.repository import EVIDENCE_ASSEMBLY_MIGRATION_ID
 from hunter.evidence_assembly.service import CanonicalEvidenceAssemblyService
 from hunter.value_capture.repository import SupplyAndValueCaptureRepository
 
 _APPLICATION_ROOT_ENV = "HUNTER_APPLICATION_ROOT"
 _CANONICAL_PERSISTENCE_DATABASE = Path("data/data_ops.sqlite")
 _OPERATIONS = ("assemble", "status")
+_ASSEMBLY_SCHEMA_OBJECTS = frozenset(
+    {
+        "evidence_assembly_schema_migrations",
+        "assembled_fundamental_evidence_records",
+        "evidence_assembly_conflicts",
+        "ix_assembled_evidence_logical_history",
+        "ix_assembled_evidence_strict_known",
+        "ux_assembled_evidence_successor",
+        "ix_evidence_assembly_conflicts",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -126,7 +139,7 @@ def _status(manifest: dict[str, Any], application_root: Path) -> dict[str, Any]:
     known_by = _datetime(_required_value(manifest, "known_by"), "known_by")
     persistence_path = _canonical_path(application_root, _CANONICAL_PERSISTENCE_DATABASE)
 
-    if not persistence_path.exists():
+    if not persistence_path.exists() or not _assembly_schema_initialized(persistence_path):
         return {
             "operation": "status",
             "persistence_database": str(persistence_path),
@@ -147,6 +160,31 @@ def _status(manifest: dict[str, Any], application_root: Path) -> dict[str, Any]:
         "available": True,
         "record": _json_safe(asdict(record)),
     }
+
+
+def _assembly_schema_initialized(persistence_path: Path) -> bool:
+    """Inspect Evidence Assembly initialization without mutating the shared SQLite DB."""
+    try:
+        connection = sqlite3.connect(f"{persistence_path.as_uri()}?mode=ro", uri=True)
+    except sqlite3.Error:
+        return False
+    try:
+        placeholders = ",".join("?" for _ in _ASSEMBLY_SCHEMA_OBJECTS)
+        rows = connection.execute(
+            f"SELECT name FROM sqlite_master WHERE name IN ({placeholders})",
+            tuple(sorted(_ASSEMBLY_SCHEMA_OBJECTS)),
+        ).fetchall()
+        if {str(row[0]) for row in rows} != _ASSEMBLY_SCHEMA_OBJECTS:
+            return False
+        migration = connection.execute(
+            "SELECT 1 FROM evidence_assembly_schema_migrations WHERE migration_id = ?",
+            (EVIDENCE_ASSEMBLY_MIGRATION_ID,),
+        ).fetchone()
+        return migration is not None
+    except sqlite3.Error:
+        return False
+    finally:
+        connection.close()
 
 
 def _service(application_root: Path) -> tuple[CanonicalEvidenceAssemblyService, Path]:
