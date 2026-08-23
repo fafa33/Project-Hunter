@@ -784,6 +784,112 @@ def test_policy_branching_correction_rejected(
         )
 
 
+def test_policy_correction_re_derivation_lifecycle(
+    semantic_input_authority: CanonicalEvidenceSemanticInputAuthority,
+    value_capture_repo: SupplyAndValueCaptureRepository,
+) -> None:
+    # 1. Initial Policy v1.0.0
+    policy_v1 = semantic_input_authority.persist_policy(
+        version="1.0.0",
+        rules=_rules(),
+        effective_at=DAY,
+        recorded_at=DAY,
+        known_at=DAY,
+    )
+    ev_record = _evidence_record("evidence:1")
+    _persist_native_evidence(value_capture_repo, ev_record)
+
+    # Derive initial input v1
+    input_v1 = semantic_input_authority.derive_and_persist_input(
+        evidence_record=ev_record,
+        policy_snapshot=policy_v1,
+        recorded_at=DAY + timedelta(days=2),
+        known_at=DAY + timedelta(days=2),
+    )
+
+    # State A: Before policy correction => predecessor input resolves
+    fetched_a = semantic_input_authority.strict_known_input(
+        evidence_record_id="evidence:1",
+        evidence_record_version="1.0.0",
+        effective_as_of=DAY + timedelta(days=3),
+        known_by=DAY + timedelta(days=3),
+    )
+    assert fetched_a is not None
+    assert fetched_a.record_id == input_v1.record_id
+    assert fetched_a.policy_record_id == policy_v1.record_id
+
+    # 2. Corrected Policy v1.1.0 at DAY + 5
+    corrected_rules = (
+        EvidenceSemanticInputRule(
+            rule_id="rule-official-fees-corrected",
+            match_evidence_type="official_disclosure",
+            match_attribution_rule_id="pathway:fees",
+            shape_id="official-period-specific-v1",
+            accounting_meaning="period_specific",
+            supply_basis_id="supply-basis:fdv",
+            pathway_id="pathway:fees",
+            asserts_representation_continuity=True,
+            currency="USD",
+            raw_unit="USD",
+            semantic_dimensions={"tier": "primary", "corrected": "true"},
+        ),
+    )
+    policy_v2 = semantic_input_authority.persist_policy(
+        version="1.1.0",
+        rules=corrected_rules,
+        effective_at=DAY,
+        recorded_at=DAY + timedelta(days=5),
+        known_at=DAY + timedelta(days=5),
+        supersedes_version="1.0.0",
+        supersedes_record_id=policy_v1.record_id,
+        correction_reason="updated classification rules",
+    )
+
+    # State B: After policy correction (at DAY + 6) but BEFORE successor input derivation => explicit unavailable (None)
+    fetched_b = semantic_input_authority.strict_known_input(
+        evidence_record_id="evidence:1",
+        evidence_record_version="1.0.0",
+        effective_as_of=DAY + timedelta(days=6),
+        known_by=DAY + timedelta(days=6),
+    )
+    assert fetched_b is None
+
+    # 3. Derive Successor Input v2 under corrected Policy v1.1.0 at DAY + 7
+    input_v2 = semantic_input_authority.derive_and_persist_input(
+        evidence_record=ev_record,
+        policy_snapshot=policy_v2,
+        recorded_at=DAY + timedelta(days=7),
+        known_at=DAY + timedelta(days=7),
+        supersedes_record_id=input_v1.record_id,
+        correction_reason="re-derivation under corrected policy v1.1.0",
+    )
+    assert input_v2.supersedes_record_id == input_v1.record_id
+    assert input_v2.policy_record_id == policy_v2.record_id
+
+    # State C: After successor input derivation (at DAY + 8) => successor input resolves
+    fetched_c = semantic_input_authority.strict_known_input(
+        evidence_record_id="evidence:1",
+        evidence_record_version="1.0.0",
+        effective_as_of=DAY + timedelta(days=8),
+        known_by=DAY + timedelta(days=8),
+    )
+    assert fetched_c is not None
+    assert fetched_c.record_id == input_v2.record_id
+    assert fetched_c.policy_record_id == policy_v2.record_id
+    assert fetched_c.semantic_dimensions == {"tier": "primary", "corrected": "true"}
+
+    # State D: Historical cutoff before correction (e.g., cutoff = DAY + 3) still returns predecessor input_v1
+    fetched_d = semantic_input_authority.strict_known_input(
+        evidence_record_id="evidence:1",
+        evidence_record_version="1.0.0",
+        effective_as_of=DAY + timedelta(days=3),
+        known_by=DAY + timedelta(days=3),
+    )
+    assert fetched_d is not None
+    assert fetched_d.record_id == input_v1.record_id
+    assert fetched_d.policy_record_id == policy_v1.record_id
+
+
 def test_semantics_authority_registration_and_strict_known_lookup(
     semantic_input_authority: CanonicalEvidenceSemanticInputAuthority,
     semantics_authority: CanonicalEvidenceSemanticsAuthority,
@@ -824,6 +930,16 @@ def test_semantics_authority_registration_and_strict_known_lookup(
     assert semantics.shape_id == "official-period-specific-v1"
     assert semantics.accounting_meaning == "period_specific"
     assert semantics.pathway_id == "pathway:fees"
+    assert semantics.content_hash == registered.content_hash
+    assert semantics.evidence_semantic_input_record_id == input_rec.record_id
+    assert semantics.evidence_semantic_input_record_version == input_rec.semantic_version
+    assert semantics.evidence_semantic_input_record_content_hash == input_rec.content_hash
+    assert semantics.policy_snapshot_id == policy.record_id
+    assert semantics.policy_snapshot_version == policy.version
+    assert semantics.policy_snapshot_content_hash == policy.content_hash
+    assert semantics.representation_continuity_asserted is True
+    assert semantics.representation_continuity_proof_id == policy.record_id
+    assert semantics.semantic_dimensions == {"tier": "primary"}
 
 
 def test_end_to_end_assembly_with_semantics_authority(
