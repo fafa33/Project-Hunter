@@ -1,3 +1,7 @@
+from hunter.evidence_assembly.composition import (
+    ProductionEvidenceAssemblyCompositionError,
+    build_production_evidence_assembly_service,
+)
 from hunter.evidence_assembly.models import (
     ASSEMBLED_EVIDENCE_SCHEMA_VERSION,
     ASSEMBLY_RULE_VERSION,
@@ -44,6 +48,8 @@ from hunter.evidence_assembly.service import (
 )
 
 __all__ = [
+    "ProductionEvidenceAssemblyCompositionError",
+    "build_production_evidence_assembly_service",
     "ASSEMBLED_EVIDENCE_SCHEMA_VERSION",
     "ASSEMBLY_RULE_VERSION",
     "EVIDENCE_ASSEMBLY_MIGRATION_ID",

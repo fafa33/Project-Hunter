@@ -23,6 +23,7 @@ IMPLEMENTATION_AUDIT = Path("docs/ARCHITECTURE_AUDITS/v3.5.0-supply-basis-value-
 HISTORICAL_IMPLEMENTATION_AUDITS = (
     "issue-166-valuation-family-blocker-remediation.md",
     "issue-190-evidence-assembly-authority-gap.md",
+    "issue-197-evidence-assembly-production-constructibility.md",
     "v3.5.0-final-main-audit.md",
     "v3.5.0-final-remediation-audit.md",
     "v3.5.0-post-merge-final-audit.md",

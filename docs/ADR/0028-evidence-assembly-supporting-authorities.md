@@ -6,7 +6,7 @@ Accepted. Revision 9. Binding architectural decision. This acceptance accepts an
 
 Governing preparation record: [ADPR-0005](../architecture-records/ADPR-0005-evidence-assembly-supporting-authorities.md). Related issues: [#190](https://github.com/fafa33/Project-Hunter/issues/190), completed preparation issue [#191](https://github.com/fafa33/Project-Hunter/issues/191), and acceptance issue [#193](https://github.com/fafa33/Project-Hunter/issues/193). Merged PR: [#192](https://github.com/fafa33/Project-Hunter/pull/192), merge commit `89a2c2c9c2714aa2391c1fb3f26de5ab3e36eb32`. Historical Issue #193 acceptance contribution: PR #198, commit `a71af2420ee0527ba7bf845068da675c7c3d0f82`; current substantive ADR-bearing commit: `1fdffad39e4beee0990d3680980ba31583813885`.
 
-Issue #190 remains blocked. Acceptance of this ADR does not authorize production implementation, activation, runtime wiring, persistence, migration, CLI, scheduler, or automation changes, or any changes to `src/` or `tests/`. Implementation requires its own governed issue lifecycle and authority.
+Issue #190 is unblocked following verification of production constructibility under Issue #197 (`IMPLEMENTABLE`). Acceptance of this ADR does not authorize production implementation, activation, runtime wiring, persistence, migration, CLI, scheduler, or automation changes, or any changes to `src/` or `tests/`. Implementation requires its own governed issue lifecycle and authority.
 
 ## Context
 
@@ -269,7 +269,7 @@ Repositories remain mechanical under ADR 0009. Every selection is strict-known u
 
 ## Current availability decision
 
-Acceptance of this ADR authorizes architecture only. It does not implement or populate any authority, activate assembled evidence, or dispatch a command. Production implementation remains incomplete and is tracked by Issues #194, #195, #196, and #197. Issue #190 remains BLOCKED until #197 verifies production constructibility and concludes `IMPLEMENTABLE` after #194, #195, and #196 are complete.
+Acceptance of this ADR authorizes architecture only. It does not implement or populate any authority, activate assembled evidence, or dispatch a command. Production constructibility has been verified under Issue #197, which concluded `IMPLEMENTABLE` after Issues #194, #195, and #196 delivered production collaborators. Issue #190 is unblocked.
 
 ## Consequences
 
@@ -291,7 +291,7 @@ Acceptance of this ADR authorizes architecture only. It does not implement or po
 ## Traceability
 
 - Acceptance state: Accepted, revision 9.
-- Issue #190 remains blocked.
+- Issue #190 is unblocked following Issue #197 verification (`IMPLEMENTABLE`).
 - Issue #191 is the completed architecture-preparation issue.
 - ADPR-0005 records the evidence and option analysis.
 - Issue #193 governs acceptance of ADR 0028.
@@ -301,5 +301,5 @@ Acceptance of this ADR authorizes architecture only. It does not implement or po
 - PR #198 (head `f712af8a62b40fbd80b6c213d2fe3f9562d0f72e` against base `0f1e6dda4d6f7acdaf6a8e91383d4e61203425c5`) received GitHub review approval (APPROVED by `fafa33`, submitted 2026-08-05T20:47:48Z); the PR review decision is APPROVED.
 - Architecture: Accepted.
 - Implementation: Incomplete.
-- Outstanding implementation sequence: #194, #195, and #196 remain outstanding; #197 must verify production constructibility and conclude `IMPLEMENTABLE` before #190 can proceed.
+- Completed implementation sequence: Issues #194, #195, #196, and #197 are complete; Issue #197 verified production constructibility and concluded `IMPLEMENTABLE`.
 - No production activation, CLI dispatch, scheduler wiring, or automation is authorized by this acceptance contribution.
