@@ -756,6 +756,94 @@ def test_declining_to_state_a_task_does_not_evade_the_gate() -> None:
     )
 
 
+def test_a_rename_out_of_a_prohibited_path_is_still_a_scope_mismatch() -> None:
+    """A rename modifies both paths; only the destination being allowed is not enough."""
+
+    _assert_scope_mismatch(
+        _scope_report(
+            changed_paths=(
+                "docs/AGENT_WORKFLOW_STATE_ENFORCEMENT.md",
+                "src/hunter/evidence_assembly/semantics.py",
+            )
+        ),
+        because="prohibited path(s) changed: src/hunter/evidence_assembly/semantics.py",
+    )
+
+
+def test_the_observation_records_both_ends_of_a_rename(monkeypatch: pytest.MonkeyPatch) -> None:
+    _install_github(
+        monkeypatch,
+        _pr_payload(
+            changed_files=1,
+            head={"sha": HEAD, "ref": "governance/agent-workflow-state-enforcement-mvp"},
+            base={"ref": "main", "sha": ASSIGNED_BASE},
+        ),
+        files=[
+            {
+                "filename": "docs/AGENT_WORKFLOW_STATE_ENFORCEMENT.md",
+                "previous_filename": "src/hunter/secret.py",
+                "status": "renamed",
+            }
+        ],
+    )
+
+    observed = workflow.observe_pull_request(501)
+
+    assert observed is not None
+    assert set(observed.changed_paths) == {
+        "docs/AGENT_WORKFLOW_STATE_ENFORCEMENT.md",
+        "src/hunter/secret.py",
+    }
+    assert observed.changed_paths_complete is True
+
+    # ...and the gate therefore sees the prohibited source.
+    _assert_scope_mismatch(
+        evaluate_workflow_state(observation=observed, scope_contract=_contract(), claimed=WorkflowState.IMPLEMENTED),
+        because="prohibited path(s) changed: src/hunter/secret.py",
+    )
+
+
+def test_a_truncated_file_listing_fails_closed() -> None:
+    """GitHub caps the file listing; the omitted file is where a prohibited path hides."""
+
+    _assert_scope_mismatch(
+        _scope_report(observation=_in_scope_observation(changed_files=3001, changed_paths_complete=False)),
+        because="file listing is incomplete",
+    )
+
+
+def test_the_observation_marks_a_short_file_listing_incomplete(monkeypatch: pytest.MonkeyPatch) -> None:
+    _install_github(
+        monkeypatch,
+        _pr_payload(changed_files=4),
+        files=[{"filename": "scripts/hunter_workflow_state.py"}],
+    )
+
+    observed = workflow.observe_pull_request(501)
+
+    assert observed is not None
+    assert observed.changed_paths_complete is False
+
+
+def test_a_complete_listing_is_not_reported_as_truncated(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A rename yields more paths than entries; that must not read as complete-by-accident."""
+
+    _install_github(
+        monkeypatch,
+        _pr_payload(changed_files=2),
+        files=[
+            {"filename": "scripts/hunter_workflow_state.py"},
+            {"filename": "tests/test_hunter_workflow_state.py", "previous_filename": "tests/old_name.py"},
+        ],
+    )
+
+    observed = workflow.observe_pull_request(501)
+
+    assert observed is not None
+    assert observed.changed_paths_complete is True
+    assert len(observed.changed_paths) == 3
+
+
 def test_an_empty_allowed_path_entry_matches_nothing_rather_than_everything() -> None:
     _assert_scope_mismatch(
         _scope_report(contract=_contract(allowed_paths=("",))),
@@ -788,6 +876,7 @@ def test_a_pull_request_describing_the_right_task_is_still_rejected_on_evidence(
     payload = _pr_payload(
         body=body,
         title="feat(governance): agent workflow state enforcement MVP",
+        changed_files=1,
         head={"sha": HEAD, "ref": "claude/policy-correction-semantics-pr308-ngd28p"},
         base={"ref": "main", "sha": ASSIGNED_BASE},
     )

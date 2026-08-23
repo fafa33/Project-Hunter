@@ -65,13 +65,13 @@ Each field is compared against repository and pull-request evidence. Any disagre
 | --- | --- |
 | head branch | it does not match `branch_pattern` |
 | declared task | the agent states it is working a different `task_id` |
-| changed paths | any touches `prohibited_paths` |
+| changed paths | any touches `prohibited_paths` (a rename counts both its source and destination) |
 | changed paths | any falls outside `allowed_paths` |
 | base branch / commit | it is not the assigned `base_ref` / `base_sha` |
 
 `SCOPE_MISMATCH` leaves `IMPLEMENTED` unestablished, and because the states are ordered, every later state becomes unreachable — a mismatched contribution cannot derive `MERGE_READY` however green its checks, reviews, and mergeability are.
 
-The gate fails closed. A contract missing `task_id`, `branch_pattern`, `base_ref`, or `allowed_paths` cannot detect anything, so it is refused rather than passing vacuously; so is a contract carrying a field the gate does not understand, since silently ignoring it would enforce only part of the assignment. Evidence the gate needs but does not have — no changed paths, no head branch, no open PR — is a mismatch, not a pass.
+The gate fails closed. A contract missing `task_id`, `branch_pattern`, `base_ref`, or `allowed_paths` cannot detect anything, so it is refused rather than passing vacuously; so is a contract carrying a field the gate does not understand, or one whose path fields are not arrays of strings, since silently ignoring or mis-reading a field would enforce only part of the assignment. Evidence the gate needs but does not have — no changed paths, no head branch, no open PR — is a mismatch, not a pass, and so is a truncated file listing: GitHub caps that endpoint, and the omitted file is exactly where a prohibited path would hide.
 
 Supplying no contract leaves the gate disengaged and `IMPLEMENTED` decided on its own evidence, exactly as it was before.
 

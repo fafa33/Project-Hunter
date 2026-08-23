@@ -122,6 +122,10 @@ class PullRequestObservation:
     base_sha: str = ""
     changed_files: int = 0
     changed_paths: tuple[str, ...] = ()
+    # Whether `changed_paths` is the whole listing. `observe_pull_request()`
+    # derives it by comparing GitHub's file entries against the PR's own
+    # changed-file count; a caller supplying its own evidence asserts it.
+    changed_paths_complete: bool = True
     draft: bool = False
     mergeable: bool | None = None
     reviews: tuple[Review, ...] = ()
@@ -288,6 +292,14 @@ def evaluate_task_scope(
         return mismatch("pull request evidence carries no head branch")
     if not observation.changed_paths:
         return mismatch("pull request evidence carries no changed paths to check against allowed scope")
+    if not observation.changed_paths_complete:
+        # A truncated listing is not evidence that the omitted files were in
+        # scope, and the omitted one is exactly where a prohibited path would
+        # hide.
+        return mismatch(
+            f"pull request file listing is incomplete ({len(observation.changed_paths)} path(s) for "
+            f"{observation.changed_files} changed file(s)); scope cannot be established"
+        )
 
     if not fnmatch(observation.head_ref, contract.branch_pattern):
         return mismatch(
@@ -618,15 +630,29 @@ def submitted_reviews(pr_number: int) -> tuple[Review, ...]:
     return tuple(reviews)
 
 
-def changed_paths(pr_number: int) -> tuple[str, ...]:
+def changed_paths(pr_number: int) -> tuple[tuple[str, ...], int]:
+    """Every path this PR touches, plus the number of file entries GitHub returned.
+
+    A rename reports the destination in `filename` and the source in
+    `previous_filename`. Both are paths the PR modifies, so a rename out of a
+    prohibited directory into an allowed one must not read as an allowed change.
+
+    The entry count is returned so the caller can tell a complete listing from a
+    truncated one: GitHub caps this endpoint, and a partial listing is not
+    evidence that the omitted files were in scope.
+    """
+
     paths: list[str] = []
+    entries = 0
     for item in readiness.paged(f"pulls/{pr_number}/files"):
         if not isinstance(item, dict):
             continue
-        filename = str(item.get("filename") or "").strip()
-        if filename:
-            paths.append(filename)
-    return tuple(paths)
+        entries += 1
+        for key in ("filename", "previous_filename"):
+            value = str(item.get(key) or "").strip()
+            if value and value not in paths:
+                paths.append(value)
+    return tuple(paths), entries
 
 
 def observe_pull_request(pr_number: int) -> PullRequestObservation | None:
@@ -649,6 +675,9 @@ def observe_pull_request(pr_number: int) -> PullRequestObservation | None:
             base_sha=str((pr.get("base") or {}).get("sha") or ""),
         )
 
+    observed_paths, path_entries = changed_paths(pr_number)
+    changed_file_count = int(pr.get("changed_files") or 0)
+
     return PullRequestObservation(
         number=int(pr["number"]),
         is_open=True,
@@ -657,8 +686,9 @@ def observe_pull_request(pr_number: int) -> PullRequestObservation | None:
         head_ref=str((pr.get("head") or {}).get("ref") or ""),
         base_ref=str((pr.get("base") or {}).get("ref") or ""),
         base_sha=str((pr.get("base") or {}).get("sha") or ""),
-        changed_files=int(pr.get("changed_files") or 0),
-        changed_paths=changed_paths(pr_number),
+        changed_files=changed_file_count,
+        changed_paths=observed_paths,
+        changed_paths_complete=path_entries >= changed_file_count,
         draft=bool(pr.get("draft")),
         mergeable=pr.get("mergeable"),
         reviews=submitted_reviews(pr_number),
