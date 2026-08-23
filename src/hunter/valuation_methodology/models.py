@@ -137,6 +137,7 @@ def _member(name: str, value: str, allowed: frozenset[str]) -> None:
 class MethodologyEvidenceInputContract:
     contract_id: str
     contract_version: str
+    methodology_logical_id: str
     accepts_assembled_evidence: bool
     accepted_shape_ids: tuple[str, ...]
     accepted_assembly_rule_versions: tuple[str, ...]
@@ -151,6 +152,7 @@ class MethodologyEvidenceInputContract:
     minimum_quality_state: Literal["accepted"]
     entity_id: str
     representation_id: str
+    value_capture_pathway_id: str
     currency: str
     unit: str
     missingness_behavior: Literal["unavailable"]
@@ -169,8 +171,10 @@ class MethodologyEvidenceInputContract:
             self,
             "contract_id",
             "contract_version",
+            "methodology_logical_id",
             "entity_id",
             "representation_id",
+            "value_capture_pathway_id",
             "currency",
             "unit",
             "content_hash",
@@ -179,9 +183,7 @@ class MethodologyEvidenceInputContract:
             self, "accounting_window_start", _utc("accounting_window_start", self.accounting_window_start)
         )
         object.__setattr__(self, "accounting_window_end", _utc("accounting_window_end", self.accounting_window_end))
-        object.__setattr__(self, "effective_at", _utc("effective_at", self.effective_at))
-        object.__setattr__(self, "recorded_at", _utc("recorded_at", self.recorded_at))
-        object.__setattr__(self, "known_at", _utc("known_at", self.known_at))
+        _normalize_chronology(self)
         if self.accounting_window_start >= self.accounting_window_end:
             raise ValueError("methodology contract accounting window must have positive duration")
         if self.supersedes_contract_version is None and self.correction_reason.strip():

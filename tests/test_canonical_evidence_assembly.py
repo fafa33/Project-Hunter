@@ -204,6 +204,7 @@ def _contract(**changes: object) -> MethodologyEvidenceInputContract:
     values: dict[str, object] = {
         "contract_id": "future-contract",
         "contract_version": "1.0.0",
+        "methodology_logical_id": "methodology-logical-alpha",
         "accepts_assembled_evidence": True,
         "accepted_shape_ids": ("official-period-specific-v1",),
         "accepted_assembly_rule_versions": ("lossless-exact-coverage-v1",),
@@ -218,6 +219,7 @@ def _contract(**changes: object) -> MethodologyEvidenceInputContract:
         "minimum_quality_state": "accepted",
         "entity_id": "entity:alpha",
         "representation_id": "representation:alpha",
+        "value_capture_pathway_id": "pathway:fees",
         "currency": "USD",
         "unit": "USD",
         "missingness_behavior": "unavailable",

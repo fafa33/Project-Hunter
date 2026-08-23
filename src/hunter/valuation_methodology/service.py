@@ -37,8 +37,8 @@ class MethodologyContractAuthority(Protocol):
         *,
         contract_id: str,
         contract_version: str,
+        effective_as_of: datetime,
         known_by: datetime,
-        effective_as_of: datetime | None = None,
     ) -> MethodologyEvidenceInputContract | None: ...
 
 
@@ -159,6 +159,7 @@ class CanonicalValuationMethodologyAuthority:
         *,
         contract_id: str,
         contract_version: str,
+        methodology_logical_id: str,
         accepts_assembled_evidence: bool,
         accepted_shape_ids: tuple[str, ...],
         accepted_assembly_rule_versions: tuple[str, ...],
@@ -166,6 +167,7 @@ class CanonicalValuationMethodologyAuthority:
         accounting_window_end: datetime,
         entity_id: str,
         representation_id: str,
+        value_capture_pathway_id: str,
         currency: str,
         unit: str,
         effective_at: datetime,
@@ -186,6 +188,7 @@ class CanonicalValuationMethodologyAuthority:
         contract = MethodologyEvidenceInputContract(
             contract_id=contract_id,
             contract_version=contract_version,
+            methodology_logical_id=methodology_logical_id,
             accepts_assembled_evidence=accepts_assembled_evidence,
             accepted_shape_ids=accepted_shape_ids,
             accepted_assembly_rule_versions=accepted_assembly_rule_versions,
@@ -200,6 +203,7 @@ class CanonicalValuationMethodologyAuthority:
             minimum_quality_state=minimum_quality_state,
             entity_id=entity_id,
             representation_id=representation_id,
+            value_capture_pathway_id=value_capture_pathway_id,
             currency=currency,
             unit=unit,
             missingness_behavior=missingness_behavior,
@@ -259,28 +263,32 @@ class CanonicalValuationMethodologyAuthority:
         *,
         contract_id: str,
         contract_version: str,
+        effective_as_of: datetime,
         known_by: datetime,
-        effective_as_of: datetime | None = None,
     ) -> MethodologyEvidenceInputContract | None:
-        if effective_as_of is None:
-            effective_as_of = known_by
-
-        # ADR 0028 rule: strict_known_contract requires the governing snapshot
-        # in force at those coordinates to have accepts_assembled_evidence == True.
-        governing_snapshot = self.strict_known_methodology(
-            effective_as_of=effective_as_of,
-            known_by=known_by,
-        )
-        if governing_snapshot is None or not governing_snapshot.accepts_assembled_evidence:
-            return None
-
-        return _strict_known_contract(
+        contract = _strict_known_contract(
             self.repository.contracts(),
             contract_id=contract_id,
             contract_version=contract_version,
             effective_as_of=effective_as_of,
             known_by=known_by,
         )
+        if contract is None:
+            return None
+
+        # ADR 0028 rule: strict_known_contract requires the exact governing snapshot
+        # bound to THIS contract's methodology_logical_id in force at those
+        # coordinates to have accepts_assembled_evidence == True.
+        governing_snapshot = _strict_known_methodology_for_logical_id(
+            self.repository.records(),
+            logical_id=contract.methodology_logical_id,
+            effective_as_of=effective_as_of,
+            known_by=known_by,
+        )
+        if governing_snapshot is None or not governing_snapshot.accepts_assembled_evidence:
+            return None
+
+        return contract
 
     def unresolved_conflicts(self) -> tuple[ValuationMethodologySnapshot, ...]:
         return _unresolved_conflicts(self.repository.records())
@@ -384,6 +392,17 @@ def _authorize_correction(snapshots: Any, record: ValuationMethodologySnapshot) 
     )
     if competing_successor is not None:
         raise ValuationMethodologyIntegrityError("branching correction lineage is prohibited")
+
+
+def _strict_known_methodology_for_logical_id(
+    records: tuple[ValuationMethodologySnapshot, ...],
+    *,
+    logical_id: str,
+    effective_as_of: datetime,
+    known_by: datetime,
+) -> ValuationMethodologySnapshot | None:
+    matching = [r for r in records if r.logical_id == logical_id]
+    return _strict_known(tuple(matching), effective_as_of=effective_as_of, known_by=known_by)
 
 
 def _strict_known(
