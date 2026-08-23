@@ -165,10 +165,11 @@ class EvidenceShapeRegistryRepository:
         engine = create_sqlite_engine(self.path)
         session = SessionFactory(engine).create()
         try:
-            snapshot = RepositoryFactory(session).snapshots().load(record_id)
-            if snapshot is None or snapshot.snapshot_type != _REGISTRY_SNAPSHOT_TYPE:
-                return None
-            return snapshot
+            snapshots = RepositoryFactory(session).snapshots().query(QuerySpec(record_kind="snapshot"))
+            for snapshot in snapshots:
+                if snapshot.snapshot_type == _REGISTRY_SNAPSHOT_TYPE and snapshot.payload.get("record_id") == record_id:
+                    return snapshot
+            return None
         finally:
             session.close()
             engine.dispose()
@@ -325,7 +326,24 @@ def _authorize_registry_correction(snapshots: Any, record: EvidenceShapeRegistry
     target_id = f"{record.logical_id}:{record.version}"
 
     if predecessor_id is None and predecessor_version is None:
-        # Check if root record for version already exists
+        # Once a root snapshot exists for this registry logical identity, another version
+        # cannot be persisted as an independent root.
+        existing_root = next(
+            (
+                item
+                for item in snapshots.query(QuerySpec(record_kind="snapshot"))
+                if item.snapshot_type == _REGISTRY_SNAPSHOT_TYPE
+                and item.payload.get("logical_id") == record.logical_id
+                and item.id != target_id
+            ),
+            None,
+        )
+        if existing_root is not None:
+            raise EvidenceShapeRegistryIntegrityError(
+                f"a root registry record already exists for logical_id {record.logical_id!r}; "
+                "use a correction (supersedes_version and supersedes_record_id) instead of a second independent root"
+            )
+
         existing_version = snapshots.load(target_id)
         if existing_version is not None and existing_version.snapshot_type == _REGISTRY_SNAPSHOT_TYPE:
             raise EvidenceShapeRegistryIntegrityError(
@@ -476,7 +494,23 @@ def _from_payload(payload: dict[str, Any]) -> EvidenceShapeRegistry:
     result["shapes"] = tuple(shapes_list)
     for name in ("effective_at", "recorded_at", "known_at"):
         result[name] = datetime.fromisoformat(str(result[name])).astimezone(UTC)
-    return EvidenceShapeRegistry(**result)
+
+    # Re-verify content hash and derived record_id integrity
+    deserialized = EvidenceShapeRegistry(**result)
+    expected_content_hash = _registry_content_hash(deserialized)
+    if deserialized.content_hash != expected_content_hash:
+        raise EvidenceShapeRegistryIntegrityError(
+            f"persisted registry content hash mismatch: expected {expected_content_hash!r}, got {deserialized.content_hash!r}"
+        )
+    expected_record_id = hashlib.sha256(
+        f"{deserialized.logical_id}:{deserialized.version}:{expected_content_hash}".encode()
+    ).hexdigest()
+    if deserialized.record_id != expected_record_id:
+        raise EvidenceShapeRegistryIntegrityError(
+            f"persisted registry record_id mismatch: expected {expected_record_id!r}, got {deserialized.record_id!r}"
+        )
+
+    return deserialized
 
 
 def _payload(value: Any) -> dict[str, Any]:

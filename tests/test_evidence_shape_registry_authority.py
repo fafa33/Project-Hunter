@@ -207,15 +207,79 @@ def test_8_second_independent_root_rejected(authority: CanonicalEvidenceShapeReg
         recorded_at=DAY,
         known_at=DAY,
     )
-    # Trying to persist v1 again without correction
-    with pytest.raises(EvidenceShapeRegistryIntegrityError, match="already exists"):
+    # Trying to persist a second independent root v2 for the same registry identity without supersedes_* lineage
+    with pytest.raises(EvidenceShapeRegistryIntegrityError, match="root registry record already exists"):
         authority.persist_registry(
-            version="v1",
-            shapes=_shapes("v1"),
+            version="v2",
+            shapes=_shapes("v2"),
             effective_at=DAY,
             recorded_at=DAY + timedelta(days=1),
             known_at=DAY + timedelta(days=1),
         )
+
+
+def test_finding_2_get_by_record_id(authority: CanonicalEvidenceShapeRegistryAuthority) -> None:
+    v1 = authority.persist_registry(
+        version="v1",
+        shapes=_shapes("v1"),
+        effective_at=DAY,
+        recorded_at=DAY,
+        known_at=DAY,
+    )
+    # get(persisted.record_id) returns the exact record
+    retrieved = authority.get(v1.record_id)
+    assert retrieved is not None
+    assert retrieved.record_id == v1.record_id
+    assert retrieved.version == "v1"
+
+    # Unknown record_id returns None
+    assert authority.get("nonexistent-record-id") is None
+
+
+def test_finding_3_persisted_hash_and_record_id_tamper_protection(
+    authority: CanonicalEvidenceShapeRegistryAuthority,
+    repository: EvidenceShapeRegistryRepository,
+    repo_path: Path,
+) -> None:
+    authority.persist_registry(
+        version="v1",
+        shapes=_shapes("v1"),
+        effective_at=DAY,
+        recorded_at=DAY,
+        known_at=DAY,
+    )
+
+    # Tamper case A: mutate shape in payload in database while retaining old content_hash/record_id
+    import sqlite3
+
+    with sqlite3.connect(repo_path) as conn:
+        row = conn.execute(
+            "SELECT payload FROM persistence_records WHERE id = ?", (f"{REGISTRY_LOGICAL_ID}:v1",)
+        ).fetchone()
+        assert row is not None
+        import json
+
+        payload_data = json.loads(row[0])
+        payload_data["fields"]["payload"]["shapes"][0]["cadence"] = "tampered-cadence"
+        conn.execute(
+            "UPDATE persistence_records SET payload = ? WHERE id = ?",
+            (json.dumps(payload_data), f"{REGISTRY_LOGICAL_ID}:v1"),
+        )
+        conn.commit()
+
+    # Direct load/deserialization fails closed with EvidenceShapeRegistryIntegrityError
+    snapshot = repository._load_version("v1")
+    assert snapshot is not None
+    from hunter.evidence_assembly.registry import _from_payload
+
+    with pytest.raises(EvidenceShapeRegistryIntegrityError, match="content hash mismatch"):
+        _from_payload(snapshot.payload)
+
+    # Repository fault isolation: records() skips the malformed/tampered record
+    assert repository.records() == ()
+
+    # strict_known_registry never returns a tampered row
+    assert authority.strict_known_registry(version="v1", known_by=DAY + timedelta(days=10)) is None
 
 
 def test_9_branching_correction_rejected(authority: CanonicalEvidenceShapeRegistryAuthority) -> None:
