@@ -10,24 +10,43 @@ from typing import Any, cast
 
 from hunter.evidence_assembly.composition import build_production_evidence_assembly_service
 from hunter.evidence_assembly.models import AccountingMeaning, AssemblyConstituent
-from hunter.evidence_assembly.repository import EVIDENCE_ASSEMBLY_MIGRATION_ID
+from hunter.evidence_assembly.repository import (
+    EVIDENCE_ASSEMBLY_MIGRATION_ID,
+    AssembledEvidenceRepository,
+)
 from hunter.evidence_assembly.service import CanonicalEvidenceAssemblyService
 from hunter.value_capture.repository import SupplyAndValueCaptureRepository
 
 _APPLICATION_ROOT_ENV = "HUNTER_APPLICATION_ROOT"
 _CANONICAL_PERSISTENCE_DATABASE = Path("data/data_ops.sqlite")
 _OPERATIONS = ("assemble", "status")
-_ASSEMBLY_SCHEMA_OBJECTS = frozenset(
+_REQUIRED_ASSEMBLY_TABLES = frozenset(
     {
         "evidence_assembly_schema_migrations",
         "assembled_fundamental_evidence_records",
-        "evidence_assembly_conflicts",
-        "ix_assembled_evidence_logical_history",
-        "ix_assembled_evidence_strict_known",
-        "ux_assembled_evidence_successor",
-        "ix_evidence_assembly_conflicts",
     }
 )
+
+
+class _ReadOnlyAssembledEvidenceRepository(AssembledEvidenceRepository):
+    """Reuse canonical deserialization/history through a SQLite read-only connection."""
+
+    def __init__(self, path: Path) -> None:
+        # Intentionally do not call AssembledEvidenceRepository.__init__ because it
+        # owns schema initialization. Status must never initialize or migrate state.
+        self.path = path
+
+    def _connect(self) -> sqlite3.Connection:
+        return sqlite3.connect(f"{self.path.as_uri()}?mode=ro", uri=True)
+
+
+class _ReadOnlyEvidenceAssemblyStatusService(CanonicalEvidenceAssemblyService):
+    """Expose the canonical strict-known algorithm without write-side composition."""
+
+    def __init__(self, repository: AssembledEvidenceRepository) -> None:
+        # CanonicalEvidenceAssemblyService.strict_known() depends only on repository.
+        # Avoid constructing unrelated write-side authorities for a status request.
+        self.repository = repository
 
 
 @dataclass(frozen=True)
@@ -146,7 +165,8 @@ def _status(manifest: dict[str, Any], application_root: Path) -> dict[str, Any]:
             "available": False,
         }
 
-    service, persistence_path = _service(application_root)
+    repository = _ReadOnlyAssembledEvidenceRepository(persistence_path)
+    service = _ReadOnlyEvidenceAssemblyStatusService(repository)
     record = service.strict_known(logical_id=logical_id, effective_as_of=effective_as_of, known_by=known_by)
     if record is None:
         return {
@@ -163,26 +183,21 @@ def _status(manifest: dict[str, Any], application_root: Path) -> dict[str, Any]:
 
 
 def _assembly_schema_initialized(persistence_path: Path) -> bool:
-    """Inspect Evidence Assembly initialization without mutating the shared SQLite DB."""
+    """Inspect only the canonical assembly read schema without mutating SQLite."""
+    connection = sqlite3.connect(f"{persistence_path.as_uri()}?mode=ro", uri=True)
     try:
-        connection = sqlite3.connect(f"{persistence_path.as_uri()}?mode=ro", uri=True)
-    except sqlite3.Error:
-        return False
-    try:
-        placeholders = ",".join("?" for _ in _ASSEMBLY_SCHEMA_OBJECTS)
+        placeholders = ",".join("?" for _ in _REQUIRED_ASSEMBLY_TABLES)
         rows = connection.execute(
-            f"SELECT name FROM sqlite_master WHERE name IN ({placeholders})",
-            tuple(sorted(_ASSEMBLY_SCHEMA_OBJECTS)),
+            f"SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ({placeholders})",
+            tuple(sorted(_REQUIRED_ASSEMBLY_TABLES)),
         ).fetchall()
-        if {str(row[0]) for row in rows} != _ASSEMBLY_SCHEMA_OBJECTS:
+        if {str(row[0]) for row in rows} != _REQUIRED_ASSEMBLY_TABLES:
             return False
         migration = connection.execute(
             "SELECT 1 FROM evidence_assembly_schema_migrations WHERE migration_id = ?",
             (EVIDENCE_ASSEMBLY_MIGRATION_ID,),
         ).fetchone()
         return migration is not None
-    except sqlite3.Error:
-        return False
     finally:
         connection.close()
 
