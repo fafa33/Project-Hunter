@@ -13,6 +13,7 @@ from hunter.persistence.records import SnapshotRecord
 from hunter.persistence.sql import RepositoryFactory, SessionFactory, create_schema, create_sqlite_engine
 from hunter.persistence.sql.exceptions import PersistenceIdentityConflictError
 from hunter.value_capture.models import FundamentalEvidenceRecord
+from hunter.value_capture.repository import SupplyAndValueCaptureRepository
 
 DEFAULT_EVIDENCE_SEMANTIC_INPUTS_DB = Path("data/data_ops.sqlite")
 EVIDENCE_SEMANTIC_INPUTS_MIGRATION_ID = "generic-sql-evidence-semantic-inputs-snapshot-v1"
@@ -311,9 +312,11 @@ class CanonicalEvidenceSemanticInputAuthority:
         self,
         *,
         repository: EvidenceSemanticInputRepository,
+        value_capture_repository: SupplyAndValueCaptureRepository | None = None,
         application_root: Path | None = None,
     ) -> None:
         self.repository = repository
+        self.value_capture_repository = value_capture_repository or SupplyAndValueCaptureRepository(repository.path)
         self._application_root = _authorized_application_root(application_root)
 
     def persist_policy(
@@ -392,6 +395,62 @@ class CanonicalEvidenceSemanticInputAuthority:
         supersedes_record_id: str | None = None,
         correction_reason: str = "",
     ) -> EvidenceSemanticInputRecord:
+        recorded_at = _aware(recorded_at)
+        known_at = _aware(known_at)
+
+        # 1. Load exact persisted native evidence record and verify agreement
+        persisted_evidence = self.value_capture_repository.evidence(evidence_record.record_id)
+        if persisted_evidence is None:
+            raise EvidenceSemanticInputError(
+                f"unpersisted evidence record: {evidence_record.record_id!r} does not exist in value capture repository"
+            )
+        if (
+            persisted_evidence.record_id != evidence_record.record_id
+            or persisted_evidence.semantic_version != evidence_record.semantic_version
+            or persisted_evidence.content_hash != evidence_record.content_hash
+            or persisted_evidence != evidence_record
+        ):
+            raise EvidenceSemanticInputError("caller-supplied evidence record does not match persisted record")
+        if (
+            persisted_evidence.effective_at > known_at
+            or persisted_evidence.recorded_at > known_at
+            or persisted_evidence.known_at > known_at
+        ):
+            raise EvidenceSemanticInputError("evidence record is not strict-known at derivation cutoff")
+
+        # 2. Load exact persisted policy snapshot and verify agreement
+        persisted_policy = self.repository.get_policy_version(policy_snapshot.version)
+        if persisted_policy is None or persisted_policy.record_id != policy_snapshot.record_id:
+            persisted_policy = self.repository.get_policy(policy_snapshot.record_id)
+        if persisted_policy is None:
+            raise EvidenceSemanticInputError(
+                f"unpersisted policy snapshot: {policy_snapshot.record_id!r} version {policy_snapshot.version!r} does not exist"
+            )
+        if (
+            persisted_policy.record_id != policy_snapshot.record_id
+            or persisted_policy.version != policy_snapshot.version
+            or persisted_policy.content_hash != policy_snapshot.content_hash
+            or persisted_policy != policy_snapshot
+        ):
+            raise EvidenceSemanticInputError("caller-supplied policy snapshot does not match persisted record")
+        if (
+            persisted_policy.effective_at > known_at
+            or persisted_policy.recorded_at > known_at
+            or persisted_policy.known_at > known_at
+        ):
+            raise EvidenceSemanticInputError("policy snapshot is not strict-known at derivation cutoff")
+
+        # Verify policy snapshot is strict-known tip at cutoff
+        strict_policy = self.strict_known_policy(
+            policy_logical_id=policy_snapshot.logical_id,
+            effective_as_of=evidence_record.effective_at,
+            known_by=known_at,
+        )
+        if strict_policy is None or strict_policy.record_id != policy_snapshot.record_id:
+            raise EvidenceSemanticInputError(
+                "specified policy snapshot is not the strict-known tip at requested cutoff"
+            )
+
         if evidence_record.quality_state != "accepted" or evidence_record.conflict_state not in {"none", "resolved"}:
             raise EvidenceSemanticInputError("evidence record is not authoritative")
         if policy_snapshot.quality_state != "accepted" or policy_snapshot.conflict_state not in {"none", "resolved"}:

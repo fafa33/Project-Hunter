@@ -8,6 +8,7 @@ import pytest
 from hunter.evidence_assembly import (
     AssembledEvidenceRepository,
     AssemblyConstituent,
+    CanonicalEvidenceAssemblyError,
     CanonicalEvidenceAssemblyService,
     CanonicalEvidenceSemanticsAuthority,
     CanonicalEvidenceSemanticsAuthorityError,
@@ -22,10 +23,12 @@ from hunter.evidence_semantic_inputs import (
     CanonicalEvidenceSemanticInputAuthorityError,
     EvidenceSemanticInputError,
     EvidenceSemanticInputIntegrityError,
+    EvidenceSemanticInputPolicySnapshot,
     EvidenceSemanticInputRepository,
     EvidenceSemanticInputRule,
 )
 from hunter.value_capture.models import EconomicClaimIdentity, FundamentalEvidenceRecord
+from hunter.value_capture.repository import SupplyAndValueCaptureRepository, record_snapshot
 
 DAY = datetime(2026, 1, 1, tzinfo=UTC)
 CUTOFF = DAY + timedelta(days=10)
@@ -91,6 +94,24 @@ def _evidence_record(rec_id: str = "evidence:1", start_day: int = 0, duration: i
     )
 
 
+def _persist_native_evidence(repo: SupplyAndValueCaptureRepository, record: FundamentalEvidenceRecord) -> None:
+    from hunter.persistence.sql import RepositoryFactory, SessionFactory, create_sqlite_engine
+
+    engine = create_sqlite_engine(repo.path)
+    session = SessionFactory(engine).create()
+    try:
+        RepositoryFactory(session).snapshots().save(record_snapshot(record))
+        session.commit()
+    finally:
+        session.close()
+        engine.dispose()
+
+
+@pytest.fixture
+def value_capture_repo(tmp_path: Path) -> SupplyAndValueCaptureRepository:
+    return SupplyAndValueCaptureRepository(tmp_path / "value_capture.sqlite")
+
+
 @pytest.fixture
 def semantic_input_repo(tmp_path: Path) -> EvidenceSemanticInputRepository:
     return EvidenceSemanticInputRepository(tmp_path / "semantic_inputs.sqlite")
@@ -98,10 +119,16 @@ def semantic_input_repo(tmp_path: Path) -> EvidenceSemanticInputRepository:
 
 @pytest.fixture
 def semantic_input_authority(
-    semantic_input_repo: EvidenceSemanticInputRepository, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    semantic_input_repo: EvidenceSemanticInputRepository,
+    value_capture_repo: SupplyAndValueCaptureRepository,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> CanonicalEvidenceSemanticInputAuthority:
     monkeypatch.setenv("HUNTER_APPLICATION_ROOT", str(tmp_path.resolve()))
-    return CanonicalEvidenceSemanticInputAuthority(repository=semantic_input_repo)
+    return CanonicalEvidenceSemanticInputAuthority(
+        repository=semantic_input_repo,
+        value_capture_repository=value_capture_repo,
+    )
 
 
 @pytest.fixture
@@ -165,6 +192,7 @@ def test_policy_persistence_and_strict_known_lookup(
 
 def test_derive_and_persist_input(
     semantic_input_authority: CanonicalEvidenceSemanticInputAuthority,
+    value_capture_repo: SupplyAndValueCaptureRepository,
 ) -> None:
     policy = semantic_input_authority.persist_policy(
         version="1.0.0",
@@ -174,6 +202,8 @@ def test_derive_and_persist_input(
         known_at=DAY,
     )
     ev_record = _evidence_record("evidence:1")
+    _persist_native_evidence(value_capture_repo, ev_record)
+
     input_rec = semantic_input_authority.derive_and_persist_input(
         evidence_record=ev_record,
         policy_snapshot=policy,
@@ -196,8 +226,92 @@ def test_derive_and_persist_input(
     assert fetched.content_hash == input_rec.content_hash
 
 
+def test_unpersisted_evidence_object_rejected(
+    semantic_input_authority: CanonicalEvidenceSemanticInputAuthority,
+) -> None:
+    policy = semantic_input_authority.persist_policy(
+        version="1.0.0",
+        rules=_rules(),
+        effective_at=DAY,
+        recorded_at=DAY,
+        known_at=DAY,
+    )
+    ev_record = _evidence_record("evidence:unpersisted")
+    with pytest.raises(EvidenceSemanticInputError, match="unpersisted evidence record"):
+        semantic_input_authority.derive_and_persist_input(
+            evidence_record=ev_record,
+            policy_snapshot=policy,
+            recorded_at=DAY + timedelta(days=2),
+            known_at=DAY + timedelta(days=2),
+        )
+
+
+def test_unpersisted_policy_snapshot_rejected(
+    semantic_input_authority: CanonicalEvidenceSemanticInputAuthority,
+    value_capture_repo: SupplyAndValueCaptureRepository,
+) -> None:
+    ev_record = _evidence_record("evidence:1")
+    _persist_native_evidence(value_capture_repo, ev_record)
+
+    # Construct an unpersisted policy snapshot with valid content hash / record_id
+    temp_policy = EvidenceSemanticInputPolicySnapshot(
+        record_id="pending",
+        logical_id=POLICY_LOGICAL_ID,
+        schema_version="evidence-semantic-input-policy-v1",
+        semantic_version="1.0.0",
+        version="9.9.9",
+        rules=_rules(),
+        effective_at=DAY,
+        recorded_at=DAY,
+        known_at=DAY,
+        quality_state="accepted",
+        conflict_state="none",
+        authorizing_adr_reference="ADR-0028",
+        authorized_by="canonical-evidence-semantic-input-authority-v1",
+        content_hash="pending",
+    )
+    from hunter.evidence_semantic_inputs import _normalize_policy
+
+    policy = _normalize_policy(temp_policy)
+
+    with pytest.raises(EvidenceSemanticInputError, match="unpersisted policy snapshot"):
+        semantic_input_authority.derive_and_persist_input(
+            evidence_record=ev_record,
+            policy_snapshot=policy,
+            recorded_at=DAY + timedelta(days=2),
+            known_at=DAY + timedelta(days=2),
+        )
+
+
+def test_future_policy_not_strict_known_rejected(
+    semantic_input_authority: CanonicalEvidenceSemanticInputAuthority,
+    value_capture_repo: SupplyAndValueCaptureRepository,
+) -> None:
+    ev_record = _evidence_record("evidence:1")
+    _persist_native_evidence(value_capture_repo, ev_record)
+
+    # Persist policy that becomes known in the future (DAY + 10)
+    future_policy = semantic_input_authority.persist_policy(
+        version="1.0.0",
+        rules=_rules(),
+        effective_at=DAY + timedelta(days=10),
+        recorded_at=DAY + timedelta(days=10),
+        known_at=DAY + timedelta(days=10),
+    )
+
+    # Attempt derivation at cutoff DAY + 2 -> should reject future policy
+    with pytest.raises(EvidenceSemanticInputError, match="not strict-known at derivation cutoff"):
+        semantic_input_authority.derive_and_persist_input(
+            evidence_record=ev_record,
+            policy_snapshot=future_policy,
+            recorded_at=DAY + timedelta(days=2),
+            known_at=DAY + timedelta(days=2),
+        )
+
+
 def test_no_matching_rule_raises(
     semantic_input_authority: CanonicalEvidenceSemanticInputAuthority,
+    value_capture_repo: SupplyAndValueCaptureRepository,
 ) -> None:
     policy = semantic_input_authority.persist_policy(
         version="1.0.0",
@@ -238,6 +352,8 @@ def test_no_matching_rule_raises(
         content_hash="b" * 64,
         acquisition_id="acq1",
     )
+    _persist_native_evidence(value_capture_repo, unmatched_record)
+
     with pytest.raises(EvidenceSemanticInputError, match="no policy rule matched"):
         semantic_input_authority.derive_and_persist_input(
             evidence_record=unmatched_record,
@@ -249,6 +365,7 @@ def test_no_matching_rule_raises(
 
 def test_conflicting_multiple_matching_rules_raises(
     semantic_input_authority: CanonicalEvidenceSemanticInputAuthority,
+    value_capture_repo: SupplyAndValueCaptureRepository,
 ) -> None:
     conflicting_rules = (
         EvidenceSemanticInputRule(
@@ -280,12 +397,195 @@ def test_conflicting_multiple_matching_rules_raises(
         known_at=DAY,
     )
     ev_record = _evidence_record("evidence:1")
+    _persist_native_evidence(value_capture_repo, ev_record)
+
     with pytest.raises(EvidenceSemanticInputError, match="conflict: multiple non-equivalent policy rules"):
         semantic_input_authority.derive_and_persist_input(
             evidence_record=ev_record,
             policy_snapshot=policy,
             recorded_at=DAY + timedelta(days=2),
             known_at=DAY + timedelta(days=2),
+        )
+
+
+def test_p1_finding_2_no_semantics_record_fails_closed(
+    semantic_input_authority: CanonicalEvidenceSemanticInputAuthority,
+    semantics_authority: CanonicalEvidenceSemanticsAuthority,
+    value_capture_repo: SupplyAndValueCaptureRepository,
+) -> None:
+    policy = semantic_input_authority.persist_policy(
+        version="1.0.0",
+        rules=_rules(),
+        effective_at=DAY,
+        recorded_at=DAY,
+        known_at=DAY,
+    )
+    ev_record = _evidence_record("evidence:1")
+    _persist_native_evidence(value_capture_repo, ev_record)
+
+    # Upstream input exists
+    input_rec = semantic_input_authority.derive_and_persist_input(
+        evidence_record=ev_record,
+        policy_snapshot=policy,
+        recorded_at=DAY + timedelta(days=2),
+        known_at=DAY + timedelta(days=2),
+    )
+    assert input_rec is not None
+
+    # But NO AuthoritativeEvidenceSemanticsRecord is registered!
+    # P1 Finding 2: strict_known_semantics MUST return None (fail closed)
+    semantics = semantics_authority.strict_known_semantics(
+        evidence_record_id="evidence:1",
+        evidence_record_version="1.0.0",
+        known_by=DAY + timedelta(days=5),
+    )
+    assert semantics is None
+
+
+def test_p1_finding_3_continuity_proof_mismatch_raises(
+    semantic_input_authority: CanonicalEvidenceSemanticInputAuthority,
+    semantics_authority: CanonicalEvidenceSemanticsAuthority,
+    value_capture_repo: SupplyAndValueCaptureRepository,
+    tmp_path: Path,
+) -> None:
+    # 1. Setup registry
+    from hunter.evidence_assembly import EvidenceShapeRegistryRepository
+
+    registry_auth = CanonicalEvidenceShapeRegistryAuthority(
+        repository=EvidenceShapeRegistryRepository(tmp_path / "registry.sqlite"),
+        application_root=tmp_path,
+    )
+    registry_auth.persist_registry(
+        version="reg-v1",
+        shapes=(
+            EvidenceShape(
+                shape_id="official-period-specific-v1",
+                registry_version="reg-v1",
+                evidence_type="official_disclosure",
+                accounting_meaning="period_specific",
+                cadence="interval",
+                composition_operation="exact_sum",
+                active=True,
+            ),
+        ),
+        effective_at=DAY,
+        recorded_at=DAY,
+        known_at=DAY,
+    )
+
+    policy = semantic_input_authority.persist_policy(
+        version="1.0.0",
+        rules=_rules(),
+        effective_at=DAY,
+        recorded_at=DAY,
+        known_at=DAY,
+    )
+    ev1 = _evidence_record("ev:1", start_day=0, duration=2)
+    ev2 = _evidence_record("ev:2", start_day=2, duration=2)
+    _persist_native_evidence(value_capture_repo, ev1)
+    _persist_native_evidence(value_capture_repo, ev2)
+
+    input1 = semantic_input_authority.derive_and_persist_input(
+        evidence_record=ev1,
+        policy_snapshot=policy,
+        recorded_at=DAY + timedelta(days=2),
+        known_at=DAY + timedelta(days=2),
+    )
+    input2 = semantic_input_authority.derive_and_persist_input(
+        evidence_record=ev2,
+        policy_snapshot=policy,
+        recorded_at=DAY + timedelta(days=4),
+        known_at=DAY + timedelta(days=4),
+    )
+
+    semantics_authority.register_semantics(
+        semantic_input_record=input1,
+        recorded_at=DAY + timedelta(days=2),
+        known_at=DAY + timedelta(days=2),
+    )
+    semantics_authority.register_semantics(
+        semantic_input_record=input2,
+        recorded_at=DAY + timedelta(days=4),
+        known_at=DAY + timedelta(days=4),
+    )
+
+    class _NativeQuery:
+        def overlapping_evidence(self, **_: object) -> tuple[FundamentalEvidenceRecord, ...]:
+            return (ev1, ev2)
+
+    class _ContractAuth:
+        def strict_known_contract(self, **_: object) -> MethodologyEvidenceInputContract | None:
+            return MethodologyEvidenceInputContract(
+                contract_id="contract-1",
+                contract_version="1.0.0",
+                methodology_logical_id="m-logical",
+                accepts_assembled_evidence=True,
+                accepted_shape_ids=("official-period-specific-v1",),
+                accepted_assembly_rule_versions=("lossless-exact-coverage-v1",),
+                accounting_window_start=DAY,
+                accounting_window_end=DAY + timedelta(days=4),
+                exact_gap_free_non_overlapping_coverage_required=True,
+                allow_representation_boundary_crossing=False,
+                allow_pathway_boundary_crossing=False,
+                allow_supply_basis_boundary_crossing=False,
+                provenance_content_hash_required=True,
+                conflict_policy="reject",
+                minimum_quality_state="accepted",
+                entity_id="entity:alpha",
+                representation_id="representation:alpha",
+                value_capture_pathway_id="pathway:fees",
+                currency="USD",
+                unit="USD",
+                missingness_behavior="unavailable",
+                strict_known_required=True,
+                effective_at=DAY,
+                recorded_at=DAY,
+                known_at=DAY,
+                quality_state="accepted",
+                conflict_state="none",
+                content_hash="contract-hash",
+            )
+
+    # Caller supplies mismatching representation_continuity_proof_id
+    c1_bad = AssemblyConstituent(
+        record=ev1,
+        shape_id="official-period-specific-v1",
+        currency="USD",
+        raw_unit="USD",
+        accounting_meaning="period_specific",
+        supply_basis_id="supply-basis:fdv",
+        pathway_id="pathway:fees",
+        representation_continuity_proof_id="WRONG_PROOF_ID",
+    )
+    c2 = AssemblyConstituent(
+        record=ev2,
+        shape_id="official-period-specific-v1",
+        currency="USD",
+        raw_unit="USD",
+        accounting_meaning="period_specific",
+        supply_basis_id="supply-basis:fdv",
+        pathway_id="pathway:fees",
+    )
+
+    assembly_repo = AssembledEvidenceRepository(tmp_path / "assembly.sqlite")
+    assembly_service = CanonicalEvidenceAssemblyService(
+        repository=assembly_repo,
+        native_evidence_query=_NativeQuery(),
+        methodology_contract_authority=_ContractAuth(),
+        evidence_shape_registry_authority=registry_auth,
+        evidence_semantics_authority=semantics_authority,
+    )
+
+    with pytest.raises(CanonicalEvidenceAssemblyError, match="representation continuity proof mismatch"):
+        assembly_service.assemble(
+            constituents=(c1_bad, c2),
+            accounting_window_start=DAY,
+            accounting_window_end=DAY + timedelta(days=4),
+            recorded_at=DAY + timedelta(days=6),
+            replay_cutoff=DAY + timedelta(days=10),
+            methodology_contract_id="contract-1",
+            methodology_contract_version="1.0.0",
+            evidence_shape_registry_version="reg-v1",
         )
 
 
@@ -345,6 +645,7 @@ def test_policy_branching_correction_rejected(
 def test_semantics_authority_registration_and_strict_known_lookup(
     semantic_input_authority: CanonicalEvidenceSemanticInputAuthority,
     semantics_authority: CanonicalEvidenceSemanticsAuthority,
+    value_capture_repo: SupplyAndValueCaptureRepository,
 ) -> None:
     policy = semantic_input_authority.persist_policy(
         version="1.0.0",
@@ -354,6 +655,8 @@ def test_semantics_authority_registration_and_strict_known_lookup(
         known_at=DAY,
     )
     ev_record = _evidence_record("evidence:1")
+    _persist_native_evidence(value_capture_repo, ev_record)
+
     input_rec = semantic_input_authority.derive_and_persist_input(
         evidence_record=ev_record,
         policy_snapshot=policy,
@@ -384,6 +687,7 @@ def test_semantics_authority_registration_and_strict_known_lookup(
 def test_end_to_end_assembly_with_semantics_authority(
     semantic_input_authority: CanonicalEvidenceSemanticInputAuthority,
     semantics_authority: CanonicalEvidenceSemanticsAuthority,
+    value_capture_repo: SupplyAndValueCaptureRepository,
     tmp_path: Path,
 ) -> None:
     # 1. Evidence Shape Registry
@@ -422,6 +726,8 @@ def test_end_to_end_assembly_with_semantics_authority(
     )
     ev1 = _evidence_record("ev:1", start_day=0, duration=2)
     ev2 = _evidence_record("ev:2", start_day=2, duration=2)
+    _persist_native_evidence(value_capture_repo, ev1)
+    _persist_native_evidence(value_capture_repo, ev2)
 
     input1 = semantic_input_authority.derive_and_persist_input(
         evidence_record=ev1,

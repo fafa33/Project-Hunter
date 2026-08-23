@@ -109,7 +109,7 @@ class AuthoritativeEvidenceSemanticsRecord:
         _normalize_chronology(self)
         _validate_correction(self)
 
-    def to_legacy_semantics(self) -> AuthoritativeEvidenceSemantics:
+    def to_authoritative_semantics(self) -> AuthoritativeEvidenceSemantics:
         return AuthoritativeEvidenceSemantics(
             evidence_record_id=self.evidence_record_id,
             evidence_record_version=self.evidence_record_version,
@@ -125,6 +125,15 @@ class AuthoritativeEvidenceSemanticsRecord:
             quality_state=self.quality_state,
             conflict_state=self.conflict_state,
             content_hash=self.content_hash,
+            evidence_semantic_input_record_id=self.evidence_semantic_input_record_id,
+            evidence_semantic_input_record_version=self.evidence_semantic_input_record_version,
+            evidence_semantic_input_record_content_hash=self.evidence_semantic_input_record_content_hash,
+            policy_snapshot_id=self.policy_snapshot_id,
+            policy_snapshot_version=self.policy_snapshot_version,
+            policy_snapshot_content_hash=self.policy_snapshot_content_hash,
+            representation_continuity_asserted=self.representation_continuity_asserted,
+            representation_continuity_proof_id=self.representation_continuity_proof_id,
+            semantic_dimensions=self.semantic_dimensions,
         )
 
 
@@ -308,24 +317,10 @@ class CanonicalEvidenceSemanticsAuthority:
             and r.conflict_state in {"none", "resolved"}
         ]
         if not eligible:
-            # If semantics has not been registered yet, auto-derive or check if upstream is valid
-            # In production pipeline, strict_known_semantics returns matching record
-            return AuthoritativeEvidenceSemantics(
-                evidence_record_id=upstream.evidence_record_id,
-                evidence_record_version=upstream.evidence_record_version,
-                shape_id=upstream.shape_id,
-                currency=upstream.currency,
-                raw_unit=upstream.raw_unit,
-                accounting_meaning=upstream.accounting_meaning,
-                supply_basis_id=upstream.supply_basis_id,
-                pathway_id=upstream.pathway_id,
-                effective_at=upstream.effective_at,
-                recorded_at=upstream.recorded_at,
-                known_at=upstream.known_at,
-                quality_state=upstream.quality_state,
-                conflict_state=upstream.conflict_state,
-                content_hash=upstream.content_hash,
-            )
+            # P1 Finding 2: Remove fallback that manufactures semantics result from upstream input.
+            # strict-known semantics lookup must return unavailable / None unless an eligible
+            # persisted AuthoritativeEvidenceSemanticsRecord exists.
+            return None
 
         superseded = {r.supersedes_record_id for r in eligible if r.supersedes_record_id is not None}
         current = [r for r in eligible if r.record_id not in superseded]
@@ -353,7 +348,7 @@ class CanonicalEvidenceSemanticsAuthority:
             # Divergence or mismatch fails closed
             return None
 
-        return selected.to_legacy_semantics()
+        return selected.to_authoritative_semantics()
 
 
 def semantics_snapshot(record: AuthoritativeEvidenceSemanticsRecord) -> SnapshotRecord:
