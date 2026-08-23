@@ -156,17 +156,21 @@ class EvidenceSemanticsRepository:
     def records(self) -> tuple[AuthoritativeEvidenceSemanticsRecord, ...]:
         return tuple(
             sorted(
-                self._records_skipping_malformed(),
+                self._records_verifying_integrity(),
                 key=lambda item: (item.logical_id, item.effective_at, item.recorded_at, item.known_at, item.record_id),
             )
         )
 
-    def _records_skipping_malformed(self) -> tuple[AuthoritativeEvidenceSemanticsRecord, ...]:
+    def _records_verifying_integrity(self) -> tuple[AuthoritativeEvidenceSemanticsRecord, ...]:
         records = []
         for snapshot in self._snapshots():
             try:
                 records.append(_from_payload(snapshot.payload))
-            except (EvidenceSemanticsIntegrityError, ValueError, KeyError, TypeError, AttributeError):
+            except EvidenceSemanticsIntegrityError as exc:
+                raise EvidenceSemanticsIntegrityError(
+                    f"integrity verification failed for semantics record: {exc}"
+                ) from exc
+            except (ValueError, KeyError, TypeError, AttributeError):
                 continue
         return tuple(records)
 
@@ -248,7 +252,7 @@ class CanonicalEvidenceSemanticsAuthority:
             pathway_id=semantic_input_record.pathway_id,
             representation_continuity_asserted=semantic_input_record.representation_continuity_asserted,
             representation_continuity_proof_id=semantic_input_record.representation_continuity_proof_id,
-            semantic_dimensions=semantic_input_record.semantic_dimensions,
+            semantic_dimensions=dict(semantic_input_record.semantic_dimensions),
             effective_at=semantic_input_record.effective_at,
             recorded_at=recorded_at,
             known_at=known_at,

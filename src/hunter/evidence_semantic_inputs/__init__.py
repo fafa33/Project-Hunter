@@ -215,7 +215,7 @@ class EvidenceSemanticInputRepository:
     def policy_history(self, logical_id: str = POLICY_LOGICAL_ID) -> tuple[EvidenceSemanticInputPolicySnapshot, ...]:
         if not logical_id.strip():
             raise ValueError("logical_id must not be blank")
-        records = [record for record in self._policies_skipping_malformed() if record.logical_id == logical_id]
+        records = [record for record in self._policies_verifying_integrity() if record.logical_id == logical_id]
         records.sort(
             key=lambda item: (item.effective_at, item.recorded_at, item.known_at, item.record_id),
         )
@@ -224,7 +224,7 @@ class EvidenceSemanticInputRepository:
     def policy_records(self) -> tuple[EvidenceSemanticInputPolicySnapshot, ...]:
         return tuple(
             sorted(
-                self._policies_skipping_malformed(),
+                self._policies_verifying_integrity(),
                 key=lambda item: (item.logical_id, item.effective_at, item.recorded_at, item.known_at, item.record_id),
             )
         )
@@ -232,26 +232,32 @@ class EvidenceSemanticInputRepository:
     def input_records(self) -> tuple[EvidenceSemanticInputRecord, ...]:
         return tuple(
             sorted(
-                self._records_skipping_malformed(),
+                self._records_verifying_integrity(),
                 key=lambda item: (item.logical_id, item.effective_at, item.recorded_at, item.known_at, item.record_id),
             )
         )
 
-    def _policies_skipping_malformed(self) -> tuple[EvidenceSemanticInputPolicySnapshot, ...]:
+    def _policies_verifying_integrity(self) -> tuple[EvidenceSemanticInputPolicySnapshot, ...]:
         records = []
         for snapshot in self._snapshots(_POLICY_SNAPSHOT_TYPE):
             try:
                 records.append(_policy_from_payload(snapshot.payload))
-            except (EvidenceSemanticInputIntegrityError, ValueError, KeyError, TypeError, AttributeError):
+            except EvidenceSemanticInputIntegrityError as exc:
+                raise EvidenceSemanticInputIntegrityError(
+                    f"integrity verification failed for policy snapshot: {exc}"
+                ) from exc
+            except (ValueError, KeyError, TypeError, AttributeError):
                 continue
         return tuple(records)
 
-    def _records_skipping_malformed(self) -> tuple[EvidenceSemanticInputRecord, ...]:
+    def _records_verifying_integrity(self) -> tuple[EvidenceSemanticInputRecord, ...]:
         records = []
         for snapshot in self._snapshots(_RECORD_SNAPSHOT_TYPE):
             try:
                 records.append(_record_from_payload(snapshot.payload))
-            except (EvidenceSemanticInputIntegrityError, ValueError, KeyError, TypeError, AttributeError):
+            except EvidenceSemanticInputIntegrityError:
+                raise
+            except (ValueError, KeyError, TypeError, AttributeError):
                 continue
         return tuple(records)
 
@@ -509,7 +515,7 @@ class CanonicalEvidenceSemanticInputAuthority:
             evidence_record_content_hash=evidence_record.content_hash,
             policy_record_id=policy_snapshot.record_id,
             policy_logical_id=policy_snapshot.logical_id,
-            policy_semantic_version=policy_snapshot.semantic_version,
+            policy_semantic_version=policy_snapshot.version,
             policy_content_hash=policy_snapshot.content_hash,
             shape_id=selected_rule.shape_id,
             accounting_meaning=selected_rule.accounting_meaning,
@@ -780,6 +786,15 @@ def _strict_known_input(
 ) -> EvidenceSemanticInputRecord | None:
     effective_as_of = _aware(effective_as_of)
     known_by = _aware(known_by)
+
+    # Re-verify content hash and record_id integrity on retrieved input records
+    for item in records:
+        expected_hash = _record_content_hash(item)
+        if item.content_hash != expected_hash:
+            raise EvidenceSemanticInputIntegrityError(
+                f"persisted input record content hash mismatch: expected {expected_hash!r}, got {item.content_hash!r}"
+            )
+
     eligible = [
         item
         for item in records

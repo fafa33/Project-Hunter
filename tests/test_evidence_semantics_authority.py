@@ -246,6 +246,148 @@ def test_unpersisted_evidence_object_rejected(
         )
 
 
+def test_equivalent_multiple_matching_rules_succeeds(
+    semantic_input_authority: CanonicalEvidenceSemanticInputAuthority,
+    value_capture_repo: SupplyAndValueCaptureRepository,
+) -> None:
+    equivalent_rules = (
+        EvidenceSemanticInputRule(
+            rule_id="rule-a",
+            match_evidence_type="official_disclosure",
+            shape_id="official-period-specific-v1",
+            accounting_meaning="period_specific",
+            supply_basis_id="supply-basis:fdv",
+            pathway_id="pathway:fees",
+            currency="USD",
+            raw_unit="USD",
+            semantic_dimensions={"tier": "primary"},
+        ),
+        EvidenceSemanticInputRule(
+            rule_id="rule-b",
+            match_evidence_type="official_disclosure",
+            match_attribution_rule_id="pathway:fees",
+            shape_id="official-period-specific-v1",
+            accounting_meaning="period_specific",
+            supply_basis_id="supply-basis:fdv",
+            pathway_id="pathway:fees",
+            currency="USD",
+            raw_unit="USD",
+            semantic_dimensions={"tier": "primary"},
+        ),
+    )
+    policy = semantic_input_authority.persist_policy(
+        version="1.0.0",
+        rules=equivalent_rules,
+        effective_at=DAY,
+        recorded_at=DAY,
+        known_at=DAY,
+    )
+    ev_record = _evidence_record("evidence:1")
+    _persist_native_evidence(value_capture_repo, ev_record)
+
+    input_rec = semantic_input_authority.derive_and_persist_input(
+        evidence_record=ev_record,
+        policy_snapshot=policy,
+        recorded_at=DAY + timedelta(days=2),
+        known_at=DAY + timedelta(days=2),
+    )
+    assert input_rec is not None
+    assert input_rec.matched_rule_id == "rule-a"
+
+
+def test_tamper_detection_surfaces_integrity_error(
+    semantic_input_authority: CanonicalEvidenceSemanticInputAuthority,
+    semantic_input_repo: EvidenceSemanticInputRepository,
+    value_capture_repo: SupplyAndValueCaptureRepository,
+    tmp_path: Path,
+) -> None:
+    policy = semantic_input_authority.persist_policy(
+        version="1.0.0",
+        rules=_rules(),
+        effective_at=DAY,
+        recorded_at=DAY,
+        known_at=DAY,
+    )
+    ev_record = _evidence_record("evidence:1")
+    _persist_native_evidence(value_capture_repo, ev_record)
+
+    semantic_input_authority.derive_and_persist_input(
+        evidence_record=ev_record,
+        policy_snapshot=policy,
+        recorded_at=DAY + timedelta(days=2),
+        known_at=DAY + timedelta(days=2),
+    )
+
+    # Tamper with the persisted input record payload in SQLite
+    import json
+    import sqlite3
+
+    with sqlite3.connect(semantic_input_repo.path) as conn:
+        rows = conn.execute("SELECT id, payload FROM persistence_records").fetchall()
+        assert rows
+        for row_id, payload_str in rows:
+            outer_payload = json.loads(payload_str)
+            inner_payload = outer_payload.get("fields", {}).get("payload", {})
+            if inner_payload.get("currency") == "USD":
+                inner_payload["currency"] = "TAMPERED_CURRENCY"
+                conn.execute(
+                    "UPDATE persistence_records SET payload = ? WHERE id = ?", (json.dumps(outer_payload), row_id)
+                )
+        conn.commit()
+
+    # CodeRabbit Finding 3 / 6: strict_known_input must fail closed with EvidenceSemanticInputIntegrityError
+    with pytest.raises(EvidenceSemanticInputIntegrityError, match="content hash mismatch"):
+        semantic_input_authority.strict_known_input(
+            evidence_record_id="evidence:1",
+            evidence_record_version="1.0.0",
+            effective_as_of=DAY + timedelta(days=5),
+            known_by=DAY + timedelta(days=5),
+        )
+
+
+def test_mutable_semantic_dimensions_alias_safety(
+    semantic_input_authority: CanonicalEvidenceSemanticInputAuthority,
+    semantics_authority: CanonicalEvidenceSemanticsAuthority,
+    value_capture_repo: SupplyAndValueCaptureRepository,
+) -> None:
+    policy = semantic_input_authority.persist_policy(
+        version="1.0.0",
+        rules=_rules(),
+        effective_at=DAY,
+        recorded_at=DAY,
+        known_at=DAY,
+    )
+    ev_record = _evidence_record("evidence:1")
+    _persist_native_evidence(value_capture_repo, ev_record)
+
+    input_rec = semantic_input_authority.derive_and_persist_input(
+        evidence_record=ev_record,
+        policy_snapshot=policy,
+        recorded_at=DAY + timedelta(days=2),
+        known_at=DAY + timedelta(days=2),
+    )
+
+    registered = semantics_authority.register_semantics(
+        semantic_input_record=input_rec,
+        recorded_at=DAY + timedelta(days=3),
+        known_at=DAY + timedelta(days=3),
+    )
+
+    # CodeRabbit Finding 1: Mutate original input_rec.semantic_dimensions
+    input_rec.semantic_dimensions["tier"] = "MUTATED"
+
+    # Registered semantics record must remain unchanged
+    assert registered.semantic_dimensions == {"tier": "primary"}
+
+    fetched = semantics_authority.strict_known_semantics(
+        evidence_record_id="evidence:1",
+        evidence_record_version="1.0.0",
+        known_by=DAY + timedelta(days=5),
+    )
+    assert fetched is not None
+    assert fetched.semantic_dimensions == {"tier": "primary"}
+
+
 def test_unpersisted_policy_snapshot_rejected(
     semantic_input_authority: CanonicalEvidenceSemanticInputAuthority,
     value_capture_repo: SupplyAndValueCaptureRepository,
