@@ -24,7 +24,7 @@ Issues #194, #195, and #196 have delivered all required production-backed author
 5. **Native Evidence Query:** `SupplyAndValueCaptureService` in `hunter.value_capture.service` backed by `SupplyAndValueCaptureRepository`.
 6. **Assembled Evidence Repository:** `AssembledEvidenceRepository` in `hunter.evidence_assembly.repository`.
 
-Issue #197 has established `build_production_evidence_assembly_service` in `hunter.evidence_assembly.composition` to compose `CanonicalEvidenceAssemblyService` using exclusively production-backed collaborators constructed internally from `HUNTER_APPLICATION_ROOT` and environment configuration (`HUNTER_VALUE_CAPTURE_KEY_ID` and `HUNTER_VALUE_CAPTURE_KEY_SECRET`), with zero collaborator override parameters.
+Issue #197 has established `build_production_evidence_assembly_service` in `hunter.evidence_assembly.composition` to compose `CanonicalEvidenceAssemblyService` using exclusively production-backed collaborators constructed internally from `HUNTER_APPLICATION_ROOT` and the established Value Capture producer signing-key contract (`HUNTER_VALUE_CAPTURE_SIGNING_KEY_ID` and hex-encoded `HUNTER_VALUE_CAPTURE_SIGNING_KEY`), with zero collaborator override parameters.
 
 ## Required Proofs Verification
 
@@ -42,7 +42,7 @@ Issue #197 has established `build_production_evidence_assembly_service` in `hunt
 | P-10 | Separate production repositories isolation | PASS | Distinct SQLite paths operate independently without cross-database leakage (`test_proof_10_separate_repositories_isolation`). |
 | P-11 | Read-only operations create no records | PASS | `strict_known()`, `is_superseded()`, and `unresolved_assembly_conflicts()` create no database records (`test_proof_11_12_readonly_operations_no_writes_and_upstream_immutability`). |
 | P-12 | Read-only operations mutate no persistence | PASS | Read-only operations leave database contents, snapshot counts, and upstream repositories byte-identical (`test_proof_11_12_readonly_operations_no_writes_and_upstream_immutability`). |
-| P-13 | No fake/stub/placeholder in production composition | PASS | Inspected composition contains zero fakes or placeholders; unconfigured or short verification keys fail closed (`test_production_composition_fails_closed_when_key_unconfigured`, `test_production_composition_fails_closed_when_key_secret_too_short`, `test_hostile_fake_authority_substitution`). |
+| P-13 | No fake/stub/placeholder in production composition | PASS | Inspected composition contains zero fakes or placeholders; established producer signing-key ID/hex contract is reused and fails closed on missing, malformed, or short decoded keys (`tests/test_evidence_assembly_production_key_contract.py`, `test_production_composition_fails_closed_when_key_unconfigured`, `test_production_composition_fails_closed_when_key_secret_too_short`, `test_hostile_fake_authority_substitution`). |
 | P-14 | Dependency graph remains acyclic | PASS | AST analysis of all upstream packages (`hunter.value_capture`, `hunter.valuation_methodology`, `hunter.evidence_semantic_inputs`) confirms zero imports of `hunter.evidence_assembly` (`test_proof_14_dependency_graph_acyclic_ast_analysis`). |
 | P-15 | Authority ownership remains singular | PASS | Evidence Assembly service owns only assembly records and conflict records, with no write path into methodology or semantics authorities (`test_proof_15_authority_ownership_singular`). |
 
@@ -50,7 +50,8 @@ Issue #197 has established `build_production_evidence_assembly_service` in `hunt
 
 Hostile tests verified fail-closed behavior across:
 - Unconfigured / missing verification keys (`test_production_composition_fails_closed_when_key_unconfigured`)
-- Insufficient key secret length (`test_production_composition_fails_closed_when_key_secret_too_short`)
+- Malformed or insufficient established producer signing keys (`tests/test_evidence_assembly_production_key_contract.py`)
+- Insufficient legacy compatibility key secret length (`test_production_composition_fails_closed_when_key_secret_too_short`)
 - Fake authority substitution (`test_hostile_fake_authority_substitution`)
 - Constituent metadata caller override (`test_hostile_caller_override_of_canonical_authority`)
 - Provenance content-hash tampering (`test_hostile_inconsistent_provenance_hash_tampering`)
