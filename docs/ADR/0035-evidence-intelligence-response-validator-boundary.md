@@ -259,8 +259,8 @@ This ADR does not authorize or design:
 
 ## Implementation Status
 
-**Not implemented. Acceptance does not authorize runtime implementation.**
+**Architecture accepted. Phase A foundation is implemented under the separately authorized Issue #332 contribution and is not activated in production.**
 
-The current governed runtime stops at the previously accepted Model Adapter/response-capture boundary. No production `ResponseValidator`, canonical `ResponseValidationProfileAuthority`, validation-event/correction allocator, validator success/refusal attestation path, or validation persistence/replay surface is activated by this ADR acceptance.
+Phase A adds the provider-independent canonical `ResponseValidationProfileAuthority` publication/history/resolution contracts, strict-known profile resolution, atomic base-validation and explicit re-validation event allocation, allocator-owned `validation_event_id` and `validation_cutoff`, retry/join semantics, and the closed ADR 0035 validation-state vocabulary and precedence. The implementation is confined to `hunter.evidence_intelligence.response_validator` and its mechanical persistence boundary, with deterministic/adversarial tests.
 
-Runtime implementation may begin only through a later, separately scoped and owner-authorized lifecycle.
+No semantic validation worker, parser/schema engine, validation authorization, success/refusal attestation, terminal `ResponseValidationRecord` persistence, `validation_recorded_at`, correction allocation/CAS, transient response-byte handoff, downstream extraction or promotion, provider routing/fallback, live provider invocation, or production activation is implemented by Phase A. Those surfaces remain separately governed and deferred.
