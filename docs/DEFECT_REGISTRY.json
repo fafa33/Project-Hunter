@@ -291,6 +291,36 @@
       "guard": "authoritative_outcome() resolves the head of the supersession chain — the outcome that no other outcome KNOWN AT THE SAME CUTOFF supersedes — and strict_known_response_artifact() returns the artifact attached to that governing outcome, falling back to the most recent earlier artifact when the correction records no new response evidence. Both remain strict-known, so a correction recorded after the cutoff does not retroactively govern an earlier read and the superseded original is preserved rather than overwritten. The general rule: wherever a record family admits append-only corrections, a historical read must follow the supersession chain, because neither the earliest row nor a blind latest row is the authoritative one",
       "test": "tests/test_model_adapter_phase_b.py::test_a_superseding_correction_is_what_a_later_replay_reads",
       "status": "guarded"
+    },
+    {
+      "id": "MA-010",
+      "class": "persisted-record-referencing-evidence-that-was-never-written",
+      "source": "PR #314 independent review (CodeRabbit, Major): append_outcome cross-checked attempt, handoff, and profile lineage between an outcome and its response artifact but never compared outcome.response_artifact_identity with the artifact's own computed identity, and never rejected an outcome claiming a response-artifact identity while supplying no artifact. Because the artifact row is keyed by its own computed identity, a bypassing caller could persist an outcome referencing an identity absent from the store",
+      "classification": "systemic",
+      "guard_boundary": "Model Adapter persistence linkage verification in append_outcome",
+      "guard": "append_outcome verifies the outcome's declared response_artifact_identity against the supplied artifact's own computed identity, and rejects an outcome that declares such an identity while no artifact is supplied; both absent remains valid. The general rule: where one durable record names another by a content-derived identity, persistence must verify that the named identity is the identity of the record actually being written, not merely that the two objects agree on their other lineage fields",
+      "test": "tests/test_model_adapter_phase_b.py::test_persistence_rejects_an_outcome_naming_a_different_response_artifact",
+      "status": "guarded"
+    },
+    {
+      "id": "MA-011",
+      "class": "post-send-adapter-error-discarding-the-lineage-of-a-completed-invocation",
+      "source": "PR #314 independent review (CodeRabbit, Minor) and hostile self-review: a transport may report a result-class/delivery-certainty pairing the outcome family forbids (for example RESPONSE_RECEIVED with UNKNOWN certainty). ModelAttemptOutcomeRecord correctly refuses to construct that record, but the resulting ModelAdapterError propagated out of dispatch after the handoff was consumed and the provider was invoked, so no outcome was written at all for a send that really happened",
+      "classification": "systemic",
+      "guard_boundary": "Model Adapter dispatch, every path after the handoff is consumed",
+      "guard": "once a send has occurred, every inconsistency is recorded rather than raised. dispatch validates the classified outcome/certainty pairing against _REQUIRED_DELIVERY_CERTAINTY and records INTERNAL_ADAPTER_ERROR with honest UNKNOWN certainty instead of letting record construction raise, joining the existing fallbacks for a non-canonical transport result and a transport identity or version mismatch. The general rule: after an external invocation, an adapter-internal contradiction is itself evidence and must be persisted with truthful uncertainty; raising would destroy the only record that the invocation happened",
+      "test": "tests/test_model_adapter_phase_b.py::test_a_contradictory_transport_classification_is_recorded_not_raised",
+      "status": "guarded"
+    },
+    {
+      "id": "MA-012",
+      "class": "recorded-outcome-asserting-stronger-evidence-than-the-transport-observed",
+      "source": "PR #314 independent review (CodeRabbit, Major): _record_capture_persistence_failure hardcoded execution_evidence PROVIDER_RETURNED_COMPLETION, but that path runs whenever any response text was captured, including a MALFORMED_RESPONSE whose transport observation is UNKNOWN. The record therefore claimed the provider returned a completion when the transport had established no such thing, contradicting the truthful-classification invariant this phase exists to uphold. Separately, a malformed numeric profile parameter made body construction fail inside transport.send after the handoff was consumed, and was recorded as uncertain delivery even though no request byte had been offered",
+      "classification": "systemic",
+      "guard_boundary": "Model Adapter outcome construction and transport-level result normalization",
+      "guard": "every recorded axis carries the observation rather than an assumption in either direction. _record_capture_persistence_failure takes the transport's observed execution_evidence through as a parameter (UNKNOWN where no result exists) instead of asserting a completion, and the OpenAI transport converts a request-body construction failure into CONFIRMED_NOT_DELIVERED with NO_EXECUTION_ESTABLISHED, because a body that was never built means no byte was ever offered. The general rule: an outcome field must record what was established, never the strongest or the safest value that would fit -- overstating certainty and overstating uncertainty are both untruthful",
+      "test": "tests/test_model_adapter_phase_b.py::test_a_persistence_failure_after_a_malformed_response_does_not_assert_a_completion",
+      "status": "guarded"
     }
   ]
 }

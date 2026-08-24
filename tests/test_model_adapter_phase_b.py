@@ -121,6 +121,18 @@ def dispatch(
     )
 
 
+def _without_response_evidence(outcome: ModelAttemptOutcomeRecord) -> ModelAttemptOutcomeRecord:
+    """Strip the response-evidence linkage from an outcome.
+
+    Persistence refuses an outcome that names a response artifact while none is
+    supplied, which is correct: such a record would point at evidence that was
+    never written. A correction recording no new response evidence genuinely
+    carries no response identity, so these tests express that rather than working
+    around the check.
+    """
+    return dataclasses.replace(outcome, response_artifact_identity=None, response_evidence_state=None)
+
+
 def persisted_scalars(database: Path) -> list[object]:
     """Every scalar value actually written to the Phase B durable tables."""
     values: list[object] = []
@@ -394,7 +406,9 @@ def test_repository_rejects_correlation_metadata_its_own_authority_prohibits(
 
     denying = fixture.attempt_authority(dispatch_capability=False)
     with pytest.raises(ModelAdapterAuthorityMismatch):
-        repository.append_outcome(outcome=outcome, response_artifact=None, attempt_authority=denying)
+        repository.append_outcome(
+            outcome=_without_response_evidence(outcome), response_artifact=None, attempt_authority=denying
+        )
 
 
 # --- 6. credentials ----------------------------------------------------------
@@ -716,7 +730,7 @@ def test_an_outcome_record_is_immutable_and_appended_not_rewritten(
         result.outcome.outcome = "PROVIDER_REFUSED"  # type: ignore[misc]
 
     # A second outcome that does not supersede is a conflict, not an append.
-    rewritten = dataclasses.replace(result.outcome, reason_code="SILENT_REWRITE")
+    rewritten = _without_response_evidence(dataclasses.replace(result.outcome, reason_code="SILENT_REWRITE"))
     with pytest.raises(ModelAdapterPersistenceConflict):
         repository.append_outcome(
             outcome=rewritten,
@@ -732,11 +746,13 @@ def test_a_correction_appends_a_superseding_record_and_preserves_the_original(
     prepared = prepare(service)
     original = dispatch(service, prepared, fixture.FakeTransport(fixture.transport_result())).outcome
 
-    correction = dataclasses.replace(
-        original,
-        reason_code="CORRECTED_AFTER_RECONCILIATION",
-        recorded_at=fixture.later(40),
-        supersedes_outcome_id=original.outcome_id,
+    correction = _without_response_evidence(
+        dataclasses.replace(
+            original,
+            reason_code="CORRECTED_AFTER_RECONCILIATION",
+            recorded_at=fixture.later(40),
+            supersedes_outcome_id=original.outcome_id,
+        )
     )
     repository.append_outcome(
         outcome=correction,
@@ -757,11 +773,13 @@ def test_a_superseding_outcome_must_reference_a_real_predecessor(
 ) -> None:
     prepared = prepare(service)
     original = dispatch(service, prepared, fixture.FakeTransport(fixture.transport_result())).outcome
-    bogus = dataclasses.replace(
-        original,
-        reason_code="CORRECTION",
-        recorded_at=fixture.later(40),
-        supersedes_outcome_id="model-attempt-outcome:does-not-exist",
+    bogus = _without_response_evidence(
+        dataclasses.replace(
+            original,
+            reason_code="CORRECTION",
+            recorded_at=fixture.later(40),
+            supersedes_outcome_id="model-attempt-outcome:does-not-exist",
+        )
     )
     with pytest.raises(ModelAdapterPersistenceError):
         repository.append_outcome(
@@ -1760,7 +1778,7 @@ def test_dropping_the_attempt_outcome_conflict_check_would_permit_a_silent_rewri
 
     with pytest.raises(ModelAdapterPersistenceConflict):
         repository.append_outcome(
-            outcome=dataclasses.replace(original, reason_code="REWRITTEN"),
+            outcome=_without_response_evidence(dataclasses.replace(original, reason_code="REWRITTEN")),
             response_artifact=None,
             attempt_authority=fixture.attempt_authority(),
         )
@@ -2251,11 +2269,13 @@ def test_the_authoritative_outcome_is_the_head_of_the_supersession_chain(
 ) -> None:
     prepared = prepare(service)
     original = dispatch(service, prepared, fixture.FakeTransport(fixture.transport_result())).outcome
-    correction = dataclasses.replace(
-        original,
-        reason_code="FIRST_CORRECTION",
-        recorded_at=fixture.later(40),
-        supersedes_outcome_id=original.outcome_id,
+    correction = _without_response_evidence(
+        dataclasses.replace(
+            original,
+            reason_code="FIRST_CORRECTION",
+            recorded_at=fixture.later(40),
+            supersedes_outcome_id=original.outcome_id,
+        )
     )
     repository.append_outcome(outcome=correction, response_artifact=None, attempt_authority=fixture.attempt_authority())
 
@@ -2307,3 +2327,235 @@ def test_a_prompt_artifact_whose_declared_size_contradicts_its_bytes_is_refused(
             concluded_at=fixture.CONCLUDED_AT,
         )
     assert transport.sends == []
+
+
+def _pending_attempt(service: ModelAdapterService) -> PreparedModelAttempt:
+    """A second prepared attempt that has no outcome yet.
+
+    Necessary because the append-only conflict check fires before the linkage
+    checks below: reusing an attempt that already carries an outcome would make
+    those tests pass for the wrong reason.
+    """
+    return prepare(service, execution_owner_id="pipeline-run:pending")
+
+
+def _artifact_for(prepared: PreparedModelAttempt, **overrides: Any) -> ProviderResponseArtifact:
+    fields: dict[str, Any] = {
+        "attempt_id": prepared.attempt.attempt_id,
+        "handoff_id": prepared.handoff.handoff_id,
+        "execution_profile_identity": prepared.attempt.execution_profile_identity,
+        "request_evidence_identity": prepared.attempt.request_evidence_identity,
+        "request_evidence_state": prepared.attempt.request_evidence_state,
+        "response_protocol_identity": "response-protocol:phase-b-fake",
+        "response_protocol_version": "1",
+        "transport_identity": fixture.FAKE_TRANSPORT_IDENTITY,
+        "transport_version": fixture.FAKE_TRANSPORT_VERSION,
+        "state": "RESPONSE_EVIDENCE_DURABLE",
+        "recorded_at": fixture.CONCLUDED_AT,
+        "content": "captured",
+        "content_hash": hashlib.sha256(b"captured").hexdigest(),
+        "measured_size_bytes": len(b"captured"),
+        "content_derived_identity": "provider-response-content:abc",
+    }
+    fields.update(overrides)
+    return ProviderResponseArtifact(**fields)
+
+
+def _outcome_for(prepared: PreparedModelAttempt, **overrides: Any) -> ModelAttemptOutcomeRecord:
+    fields: dict[str, Any] = {
+        "build_record_id": prepared.attempt.build_record_id,
+        "prompt_artifact_id": prepared.attempt.prompt_artifact_id,
+        "execution_profile_identity": prepared.attempt.execution_profile_identity,
+        "transport_identity": fixture.FAKE_TRANSPORT_IDENTITY,
+        "transport_version": fixture.FAKE_TRANSPORT_VERSION,
+        "outcome": "SUCCEEDED_TRANSPORT",
+        "delivery_certainty": "ANSWERED",
+        "execution_evidence": "PROVIDER_RETURNED_COMPLETION",
+        "retry_authorization": "RETRY_NOT_APPLICABLE",
+        "attempt_cutoff": prepared.attempt.attempt_cutoff,
+        "recorded_at": fixture.CONCLUDED_AT,
+        "reason_code": "TRANSPORT_RESPONSE_RECEIVED",
+        "attempt_id": prepared.attempt.attempt_id,
+        "handoff_id": prepared.handoff.handoff_id,
+    }
+    fields.update(overrides)
+    return ModelAttemptOutcomeRecord(**fields)
+
+
+def test_persistence_rejects_an_outcome_naming_a_different_response_artifact(
+    service: ModelAdapterService,
+    repository: ModelAdapterPersistenceRepository,
+) -> None:
+    """An outcome may not point at response evidence that was never written.
+
+    The artifact row is keyed by its own computed identity, so a bypassing caller
+    pairing an outcome with a different artifact object would leave the persisted
+    outcome referencing an identity absent from the store.
+    """
+    pending = _pending_attempt(service)
+    artifact = _artifact_for(pending)
+    outcome = _outcome_for(
+        pending,
+        response_artifact_identity="provider-response-artifact:names-something-else",
+        response_evidence_state="RESPONSE_EVIDENCE_DURABLE",
+    )
+    assert outcome.response_artifact_identity != artifact.response_artifact_identity
+
+    with pytest.raises(ModelAdapterPersistenceError, match="response-artifact identity"):
+        repository.append_outcome(
+            outcome=outcome,
+            response_artifact=artifact,
+            attempt_authority=fixture.attempt_authority(),
+        )
+
+
+def test_persistence_accepts_an_outcome_naming_its_own_response_artifact(
+    service: ModelAdapterService,
+    repository: ModelAdapterPersistenceRepository,
+) -> None:
+    """Paired positive: the honest pairing must still persist."""
+    pending = _pending_attempt(service)
+    artifact = _artifact_for(pending)
+    outcome = _outcome_for(
+        pending,
+        response_artifact_identity=artifact.response_artifact_identity,
+        response_evidence_state="RESPONSE_EVIDENCE_DURABLE",
+    )
+    repository.append_outcome(
+        outcome=outcome,
+        response_artifact=artifact,
+        attempt_authority=fixture.attempt_authority(),
+    )
+    stored = repository.strict_known_response_artifact(pending.attempt.attempt_id, fixture.later(30))
+    assert stored is not None
+    assert stored.response_artifact_identity == artifact.response_artifact_identity
+
+
+def test_persistence_rejects_an_outcome_claiming_evidence_that_is_absent(
+    service: ModelAdapterService,
+    repository: ModelAdapterPersistenceRepository,
+) -> None:
+    """An outcome cannot claim durable response evidence while supplying none."""
+    pending = _pending_attempt(service)
+    outcome = _outcome_for(
+        pending,
+        response_artifact_identity="provider-response-artifact:never-written",
+        response_evidence_state="RESPONSE_EVIDENCE_DURABLE",
+    )
+    with pytest.raises(ModelAdapterPersistenceError, match="no response artifact was supplied"):
+        repository.append_outcome(
+            outcome=outcome,
+            response_artifact=None,
+            attempt_authority=fixture.attempt_authority(),
+        )
+
+
+def test_a_contradictory_transport_classification_is_recorded_not_raised(
+    service: ModelAdapterService,
+    repository: ModelAdapterPersistenceRepository,
+) -> None:
+    """A pairing the outcome family forbids must not discard the send's lineage."""
+    prepared = prepare(service)
+    contradictory = fixture.FakeTransport(
+        fixture.transport_result(delivery_certainty="UNKNOWN", execution_evidence="UNKNOWN")
+    )
+    # The transport itself accepts this pairing, so only the adapter can catch it.
+    assert classify_transport_result(
+        fixture.transport_result(delivery_certainty="UNKNOWN", execution_evidence="UNKNOWN")
+    ) == ("SUCCEEDED_TRANSPORT", "UNKNOWN")
+
+    result = dispatch(service, prepared, contradictory)
+
+    assert len(contradictory.sends) == 1
+    assert result.outcome.outcome == "INTERNAL_ADAPTER_ERROR"
+    assert result.outcome.reason_code == "TRANSPORT_RESULT_CERTAINTY_CONTRADICTS_RESULT_CLASS"
+    assert repository.strict_known_outcomes(prepared.attempt.attempt_id, fixture.later(30))
+
+
+def test_a_persistence_failure_after_a_malformed_response_does_not_assert_a_completion(
+    service: ModelAdapterService,
+    repository: ModelAdapterPersistenceRepository,
+) -> None:
+    """The persistence-failure record carries observed evidence, never a stronger claim."""
+    prepared = prepare(service)
+    calls: list[int] = []
+    real_append = repository.append_outcome
+
+    def failing_once(**kwargs: Any) -> None:
+        calls.append(1)
+        if len(calls) == 1:
+            raise ModelAdapterPersistenceError("simulated terminal persistence failure")
+        real_append(**kwargs)
+
+    repository.append_outcome = failing_once  # type: ignore[method-assign]
+    result = dispatch(
+        service,
+        prepared,
+        fixture.FakeTransport(
+            fixture.transport_result(
+                result_class="MALFORMED_RESPONSE",
+                execution_evidence="UNKNOWN",
+                response_text="not json at all",
+                reason_code="RESPONSE_BODY_NOT_VALID_JSON",
+            )
+        ),
+    )
+
+    assert result.outcome.outcome == "RESPONSE_CAPTURED_PERSISTENCE_FAILED"
+    assert result.outcome.delivery_certainty == "ANSWERED"
+    # The transport observed no completion, so the record must not claim one.
+    assert result.outcome.execution_evidence == "UNKNOWN"
+
+
+def test_a_persistence_failure_after_a_real_completion_still_records_the_completion(
+    service: ModelAdapterService,
+    repository: ModelAdapterPersistenceRepository,
+) -> None:
+    """Paired positive: the observed completion is carried through, not erased."""
+    prepared = prepare(service)
+    calls: list[int] = []
+    real_append = repository.append_outcome
+
+    def failing_once(**kwargs: Any) -> None:
+        calls.append(1)
+        if len(calls) == 1:
+            raise ModelAdapterPersistenceError("simulated terminal persistence failure")
+        real_append(**kwargs)
+
+    repository.append_outcome = failing_once  # type: ignore[method-assign]
+    result = dispatch(service, prepared, fixture.FakeTransport(fixture.transport_result()))
+
+    assert result.outcome.outcome == "RESPONSE_CAPTURED_PERSISTENCE_FAILED"
+    assert result.outcome.execution_evidence == "PROVIDER_RETURNED_COMPLETION"
+
+
+def test_a_malformed_numeric_provider_parameter_is_proven_non_delivery() -> None:
+    """A body that cannot be built means no request byte was ever offered."""
+    transport = OpenAIChatCompletionsTransport(
+        endpoint_url="https://api.openai.invalid/v1",
+        opener=lambda request, timeout: pytest.fail("no request may be sent"),
+    )
+    request = dataclasses.replace(_request(), parameters=(("temperature", "not-a-number"),))
+
+    result = transport.send(request, authorization=_authorization(), credential=fixture.credential())
+
+    assert result.delivery_certainty == "CONFIRMED_NOT_DELIVERED"
+    assert result.reason_code.startswith("REQUEST_BODY_NOT_CONSTRUCTED_")
+    # And it therefore does not needlessly block a later attempt.
+    outcome, certainty = classify_transport_result(result)
+    assert outcome == "TIMEOUT_CONFIRMED_NO_DELIVERY"
+    assert (
+        derive_retry_authorization(
+            outcome=outcome, delivery_certainty=certainty, execution_evidence=result.execution_evidence
+        )
+        == "RETRY_REQUIRES_NEW_ATTEMPT"
+    )
+
+
+def test_a_valid_numeric_provider_parameter_is_still_converted() -> None:
+    """Paired positive: the guard must not reject legitimate numeric parameters."""
+    body = openai_request_body(
+        dataclasses.replace(_request(), parameters=(("temperature", "0.7"), ("max_tokens", "256")))
+    )
+    assert body["temperature"] == 0.7
+    assert body["max_tokens"] == 256

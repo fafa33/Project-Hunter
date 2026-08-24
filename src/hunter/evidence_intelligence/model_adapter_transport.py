@@ -307,10 +307,13 @@ def openai_request_body(request: TransportRequest) -> dict[str, Any]:
 
 
 def _openai_parameter_value(name: str, value: str) -> Any:
-    if name in _OPENAI_FLOAT_PARAMETERS:
-        return float(value)
-    if name in _OPENAI_INT_PARAMETERS:
-        return int(value)
+    try:
+        if name in _OPENAI_FLOAT_PARAMETERS:
+            return float(value)
+        if name in _OPENAI_INT_PARAMETERS:
+            return int(value)
+    except ValueError as error:
+        raise ProviderTransportError(f"numeric provider parameter {name!r} is not a valid number") from error
     if name in _OPENAI_BOOL_PARAMETERS:
         if value not in ("true", "false"):
             raise ProviderTransportError(f"boolean provider parameter {name!r} must be 'true' or 'false'")
@@ -431,7 +434,18 @@ class OpenAIChatCompletionsTransport:
         if not isinstance(credential, TransportCredential):
             raise TransportAuthorityError("a provider send requires a non-durable transport credential")
 
-        body = json.dumps(openai_request_body(request)).encode("utf-8")
+        try:
+            body = json.dumps(openai_request_body(request)).encode("utf-8")
+        except ProviderTransportError as error:
+            # The body could not be built, so no request byte was ever offered to
+            # the network. That is provable non-delivery; reporting it as
+            # uncertain would overstate what happened and needlessly block retry.
+            return self._result(
+                "CONNECTION_FAILED",
+                "CONFIRMED_NOT_DELIVERED",
+                "NO_EXECUTION_ESTABLISHED",
+                reason_code=f"REQUEST_BODY_NOT_CONSTRUCTED_{type(error).__name__}",
+            )
         headers = {
             "Content-Type": "application/json",
             # The only place the secret exists on this path, and it is written

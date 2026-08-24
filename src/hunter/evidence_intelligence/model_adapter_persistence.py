@@ -345,6 +345,21 @@ class ModelAdapterPersistenceRepository:
                 raise ModelAdapterPersistenceError("response artifact handoff lineage does not match the outcome")
             if response_artifact.execution_profile_identity != outcome.execution_profile_identity:
                 raise ModelAdapterPersistenceError("response artifact profile lineage does not match the outcome")
+            # The artifact row is keyed by its *own* computed identity, so without
+            # this an outcome could name one response artifact while a different
+            # object was stored under that attempt -- an outcome pointing at
+            # evidence that was never written.
+            if (
+                outcome.response_artifact_identity is not None
+                and outcome.response_artifact_identity != response_artifact.response_artifact_identity
+            ):
+                raise ModelAdapterPersistenceError(
+                    "outcome response-artifact identity does not match the supplied response artifact"
+                )
+        elif outcome.response_artifact_identity is not None:
+            raise ModelAdapterPersistenceError(
+                "outcome claims a response-artifact identity but no response artifact was supplied"
+            )
 
         outcome_payload = _canonical_json(_jsonable(asdict(outcome)))
         outcome_hash = _sha256(outcome_payload)

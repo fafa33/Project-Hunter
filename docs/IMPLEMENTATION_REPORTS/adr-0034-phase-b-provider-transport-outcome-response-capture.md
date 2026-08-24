@@ -67,11 +67,11 @@ PreparedModelAttempt (Phase A: durable attempt + single-use handoff)
 | `src/hunter/evidence_intelligence/model_adapter.py` | Adds the outcome and response record families, classification, retry derivation, capture gate, and the `dispatch` path. Phase A behaviour is unchanged apart from the retry precondition below. |
 | `src/hunter/evidence_intelligence/model_adapter_persistence.py` | Adds insert-only outcome and response tables, `append_outcome`, independent authority re-verification for both, and strict-known reads. |
 | `tests/model_adapter_fixture.py` | Adds the Phase B field-map surfaces, the single configured profile, and a deterministic transport double. |
-| `tests/test_model_adapter_phase_b.py` | New. 111 adversarial regressions. |
+| `tests/test_model_adapter_phase_b.py` | New. 119 adversarial regressions. |
 | `tests/test_model_adapter_phase_a.py` | Two retry tests now durably record the predecessor outcome the new retry gate requires. Strengthened, not weakened — they exercise the real retry path instead of bypassing it, and a fabricated record no longer satisfies the gate. |
 | `docs/ADR/0034-...md` | `Implementation Status` only. No architectural decision changed. |
 | `docs/architecture-index.md` | Truthful runtime-state rows for Issue #313. |
-| `docs/DEFECT_REGISTRY.json` | Six new guarded classes, `MA-004`–`MA-009`, plus a strengthened `MA-006`. |
+| `docs/DEFECT_REGISTRY.json` | Nine new guarded classes, `MA-004`–`MA-012`, plus a strengthened `MA-006`. |
 
 ### New record families
 
@@ -116,7 +116,7 @@ The gate is shape-based, not keyword-based, so an ordinary model answer that dis
 
 ## Test coverage
 
-111 new Phase B regressions plus the 68 Phase A regressions, all deterministic. Every required adversarial case in Issue #313 is covered; the numbering below is the Issue's.
+119 new Phase B regressions plus the 68 Phase A regressions, all deterministic. Every required adversarial case in Issue #313 is covered; the numbering below is the Issue's.
 
 | # | Requirement | Regression |
 |---|---|---|
@@ -144,7 +144,7 @@ Each negative case is paired with the positive it must not break. The whole Phas
 
 ## Mutation verification
 
-Thirty guards were deliberately weakened one at a time and the named regression re-run. Every one failed under mutation and passed clean — the guard is proven against the specific defect its name asserts, not merely against the suite being green.
+Thirty-five guards were deliberately weakened one at a time and the named regression re-run. Every one failed under mutation and passed clean — the guard is proven against the specific defect its name asserts, not merely against the suite being green.
 
 Two of them only became genuine proofs after the first attempt failed to isolate them, which is the point of running the mutation rather than assuming it. The prompt content-hash check initially "passed" its mutation because the test's replacement content differed in length, so the measured-size check accounted for the refusal; it now uses a same-length replacement, which only the hash check can catch. The measured-size check was then unreachable by substitution at all, because `measured_size_bytes` feeds `artifact_id` and the identity check fires first — so its regression was rewritten onto the case where only it can fire: an artifact that self-declares an inconsistent size and is used consistently throughout.
 
@@ -180,6 +180,11 @@ Two of them only became genuine proofs after the first attempt failed to isolate
 | Prompt declared size vs. bytes | `test_a_prompt_artifact_whose_declared_size_contradicts_its_bytes_is_refused` |
 | Transport version binding | `test_a_transport_reporting_a_different_version_is_refused` |
 | Supersession-aware historical replay | `test_a_superseding_correction_is_what_a_later_replay_reads` |
+| Outcome/response-artifact identity match | `test_persistence_rejects_an_outcome_naming_a_different_response_artifact` |
+| Outcome claiming absent evidence | `test_persistence_rejects_an_outcome_claiming_evidence_that_is_absent` |
+| Contradictory classification recorded, not raised | `test_a_contradictory_transport_classification_is_recorded_not_raised` |
+| Observed execution evidence on persistence failure | `test_a_persistence_failure_after_a_malformed_response_does_not_assert_a_completion` |
+| Body-construction failure is proven non-delivery | `test_a_malformed_numeric_provider_parameter_is_proven_non_delivery` |
 
 ## Defects found by hostile self-review
 
@@ -225,11 +230,34 @@ This is a recurrence of an already-understood class rather than a new one-off: t
 
 The post-send consistency check compared `transport_identity` but not `transport_version`, so a transport misreporting its version had that version persisted even though the attempt and profile were bound to another exact one, making recorded lineage contradict the durable execution profile. Version mismatch is now treated identically to identity mismatch, and the recorded outcome carries the profile's bound version.
 
+### Second review round — CodeRabbit
+
+CodeRabbit reviewed the same head and raised six findings. One duplicated the Codex retry P1 above and was already fixed by it. Four more were verified, confirmed, fixed, and mutation-verified:
+
+- **An outcome could name response evidence that was never written** (`MA-010`). `append_outcome` compared attempt, handoff, and profile lineage between an outcome and its artifact, but never the artifact identity the outcome declares — and never rejected an outcome claiming an identity while supplying no artifact. Since the artifact row is keyed by its own computed identity, a bypassing caller could persist an outcome referencing an identity absent from the store.
+- **A post-send contradiction discarded the lineage of a completed invocation** (`MA-011`). A transport may report a pairing the outcome family forbids, such as `RESPONSE_RECEIVED` with `UNKNOWN` certainty. Record construction correctly refuses it, but the resulting error propagated out of `dispatch` *after* the handoff was consumed and the provider invoked, so no outcome was written for a send that really happened. It is now recorded as `INTERNAL_ADAPTER_ERROR` with honest uncertainty, joining the existing post-send fallbacks.
+- **A persistence-failure record asserted a completion the transport never observed** (`MA-012`). `_record_capture_persistence_failure` hardcoded `PROVIDER_RETURNED_COMPLETION`, but that path also runs for a malformed response whose observation is `UNKNOWN`. The observed evidence is now carried through.
+- **A malformed numeric profile parameter became uncertain delivery** (also `MA-012`). Body construction fails inside `transport.send`, after the handoff is consumed, and was recorded as uncertain even though no request byte had been offered. The transport now reports that as proven non-delivery — overstating uncertainty is as untruthful as overstating certainty, and needlessly blocks a later attempt.
+
+Two of these mutation runs initially reported "proven" falsely because the append-only conflict check fired before the linkage checks under test; both regressions were rewritten against an attempt carrying no prior outcome so only the guard under test can account for the refusal.
+
+### Raised, not implemented — pre-dispatch refusal persistence
+
+CodeRabbit additionally observed that `prepare_attempt` raises `PreDispatchRefused` and **no service path persists that refusal**, so the CO-23 coverage here proves representability (such a record is constructible and round-trips with no attempt or handoff identity) rather than a persisted round trip.
+
+The observation is correct and the gap is real. It is **not fixed in this PR**, for two reasons stated plainly rather than waved away:
+
+1. It concerns the *refusal* path, decided inside Phase A's `prepare_attempt`, not the dispatch path Issue #313 scopes. Phase B made such a record representable for the first time by introducing the outcome family; it did not create the gap.
+2. Persisting one requires verification semantics that do not yet exist. `append_outcome` re-resolves the attempt authority and rejects what it cannot resolve — which is precisely the state a `SOURCE_HANDLING_BLOCKED` refusal records. Persisting a refusal therefore needs a governed rule for how persistence re-verifies a record whose authority is *by definition* unresolvable, and inventing that here would be exactly the kind of unauthorized persistence semantic `CLAUDE.md` and Issue #313 forbid.
+
+Recommended as a separate, narrowly scoped follow-up issue against CO-23, with the design question — how persistence re-verifies a BLOCKED-authority record — settled first.
+
 ## Known limitations
 
 - **Residual cross-substrate window.** The Source Handling authority store and the evidence database are separate substrates, so `BEGIN IMMEDIATE` cannot also lock the authority store. Re-resolution inside the write transaction narrows the exposure to that transaction, but a restrictive successor backdated to at or before the attempt cutoff and published inside that window would not be observed. This is inherited from Phase A, unchanged by Phase B, and closing it requires a governed cross-substrate commit primitive that does not exist and was not invented here.
 - **An expired handoff raises rather than recording an outcome.** The attempt then remains nonterminal and recovery reports it as uncertain, even though nothing was transmitted. This is over-conservative in the safe direction — it can never cause a duplicate invocation — and closing it out is a governed operator action rather than an adapter inference.
 - **Reconciliation is classification, not an API call.** The profile classifies idempotency capability and blocks retry accordingly. Actively querying a provider's status or idempotency endpoint to resolve an uncertain attempt is not implemented, so an uncertain attempt stays uncertain and retry stays blocked, exactly as ADR 0034 requires.
+- **Pre-dispatch refusals are representable but not persisted by any service path.** See the section above; recommended as a follow-up against CO-23 rather than designed here.
 - **Activation obligations remain open.** Production endpoint configuration, credential provisioning, and live provider idempotency and reconciliation behaviour can only be discharged against a real deployment and are not claimed here.
 
 ## Provider and network operational notes

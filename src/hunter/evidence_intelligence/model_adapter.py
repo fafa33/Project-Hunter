@@ -1349,6 +1349,26 @@ class ModelAdapterService:
 
         # 8. Classification, governed capture, immutable outcome.
         outcome, certainty = classify_transport_result(result)
+        allowed = _REQUIRED_DELIVERY_CERTAINTY.get(outcome)
+        if allowed is not None and certainty not in allowed:
+            # A transport can report a pairing the outcome family forbids -- for
+            # example a received response with unknown delivery. Constructing that
+            # record raises, and raising here would discard the lineage of a send
+            # that already happened, so the contradiction is recorded instead.
+            return self._record_outcome(
+                prepared=prepared,
+                profile=profile,
+                attempt_authority=attempt_authority,
+                outcome="INTERNAL_ADAPTER_ERROR",
+                delivery_certainty="UNKNOWN",
+                execution_evidence="UNKNOWN",
+                reason_code="TRANSPORT_RESULT_CERTAINTY_CONTRADICTS_RESULT_CLASS",
+                recorded_at=concluded_at,
+                dispatched_at=dispatched_at,
+                transport_identity=profile.transport_identity,
+                transport_version=profile.transport_version,
+                handoff_id=handoff.handoff_id,
+            )
         return self._record_outcome(
             prepared=prepared,
             profile=profile,
@@ -1620,6 +1640,7 @@ class ModelAdapterService:
                 transport_identity=transport_identity,
                 transport_version=transport_version,
                 handoff_id=handoff_id,
+                execution_evidence=result.execution_evidence if result is not None else "UNKNOWN",
                 cause=error,
             )
 
@@ -1636,6 +1657,7 @@ class ModelAdapterService:
         transport_identity: str,
         transport_version: str,
         handoff_id: str | None,
+        execution_evidence: ProviderExecutionEvidence,
         cause: Exception,
     ) -> ModelDispatchOutcome:
         """Record that a response was captured but its governed persistence failed.
@@ -1653,8 +1675,13 @@ class ModelAdapterService:
             transport_identity=transport_identity,
             transport_version=transport_version,
             outcome="RESPONSE_CAPTURED_PERSISTENCE_FAILED",
+            # `ANSWERED` is sound: a `TransportResult` cannot carry response text
+            # while claiming non-delivery. Execution evidence is *not* asserted --
+            # this path also runs for a malformed response, where the transport
+            # observed no completion, so the observation is carried through rather
+            # than upgraded.
             delivery_certainty="ANSWERED",
-            execution_evidence="PROVIDER_RETURNED_COMPLETION",
+            execution_evidence=execution_evidence,
             retry_authorization="RETRY_BLOCKED_RECONCILIATION_REQUIRED",
             attempt_cutoff=attempt.attempt_cutoff,
             recorded_at=recorded_at.astimezone(UTC),
