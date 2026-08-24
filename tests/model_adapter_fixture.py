@@ -1,4 +1,4 @@
-"""Shared Phase A Model Adapter fixtures.
+"""Shared Model Adapter fixtures for ADR 0034 Phases A and B.
 
 Builds a real governed Source Handling authority store and a real ADR 0031
 pre-model build, so the Model Adapter tests exercise the actual authority
@@ -17,6 +17,12 @@ from evidence_pre_model_source_handling_fixture import (
 )
 
 from hunter.evidence_intelligence.model_adapter import ModelExecutionProfile
+from hunter.evidence_intelligence.model_adapter_transport import (
+    DispatchAuthorization,
+    TransportCredential,
+    TransportRequest,
+    TransportResult,
+)
 from hunter.evidence_intelligence.pre_model import (
     EvidenceCapabilityConstraint,
     EvidenceContextAllocationResult,
@@ -44,16 +50,32 @@ _DENY = {
 
 # Every durable surface the Model Adapter writes, plus the content-derived and
 # operational-metadata categories ADR 0034 governs independently.
+#
+# Phase B adds the outcome, response-content, and provider-correlation surfaces.
+# Response content maps to the same content-derived categories as request content
+# because it is content of the same kind; the two are still governed
+# independently, because the *decision* is per attempt and per category, and a
+# fixture can deny either surface without touching the other.
 FIELD_MAP: Mapping[str, list[str]] = {
     "model_attempt": ["AUDIT_FIELD"],
     "model_handoff": ["AUDIT_FIELD"],
+    "model_attempt_outcome": ["AUDIT_FIELD"],
     "provider_request_content": ["SOURCE_BYTES", "SOURCE_DERIVED_TEXT", "CONTENT_DERIVED_ID"],
+    "provider_response_content": ["SOURCE_BYTES", "SOURCE_DERIVED_TEXT", "CONTENT_DERIVED_ID"],
     "dispatch_capability": ["OPERATIONAL_METADATA"],
+    "provider_correlation": ["OPERATIONAL_METADATA"],
 }
 
 
 def dispositions(*, request_content: bool = True, dispatch_capability: bool = True) -> dict[str, dict[str, str]]:
-    """Per-category durable dispositions for a Phase A authority store."""
+    """Per-category durable dispositions for a governed authority store.
+
+    `request_content` names the content-derived categories, which govern request
+    *and* response content alike: they are the same categories, so denying them
+    denies both. That is the honest shape of the registry rather than a
+    test-only convenience, and Phase B relies on it to prove that an authorized
+    send can still be forbidden to retain a single response byte.
+    """
     content = dict(_ALLOW) if request_content else dict(_DENY)
     return {
         "AUDIT_FIELD": dict(_ALLOW),
@@ -209,3 +231,120 @@ def deny_successor(
             dispatch_capability=dispatch_capability,
         ),
     )
+
+
+# --- Phase B ----------------------------------------------------------------
+
+PHASE_B_ENDPOINT_CLASS = "endpoint-class:phase-b-fake"
+PHASE_B_ENDPOINTS = {PHASE_B_ENDPOINT_CLASS: "https://fake.invalid/v1/chat/completions"}
+DISPATCHED_AT = datetime(2026, 8, 22, 12, 10, tzinfo=UTC)
+CONCLUDED_AT = datetime(2026, 8, 22, 12, 11, tzinfo=UTC)
+
+FAKE_TRANSPORT_IDENTITY = "transport:phase-b-fake"
+FAKE_TRANSPORT_VERSION = "1"
+# A second fake with a materially different wire shape, so CO-02 provider
+# neutrality is exercised rather than asserted.
+ALTERNATE_TRANSPORT_IDENTITY = "transport:phase-b-fake-alternate"
+ALTERNATE_TRANSPORT_VERSION = "2"
+
+
+def phase_b_profile(
+    *,
+    transport_identity: str = FAKE_TRANSPORT_IDENTITY,
+    transport_version: str = FAKE_TRANSPORT_VERSION,
+    idempotency_capability: str = "SUPPORTED",
+    **overrides,
+) -> ModelExecutionProfile:
+    """The single explicitly configured Phase B execution profile."""
+    defaults: dict[str, object] = {
+        "profile_name": "phase-b-single",
+        "endpoint_class_identity": PHASE_B_ENDPOINT_CLASS,
+        "transport_identity": transport_identity,
+        "transport_version": transport_version,
+        "idempotency_capability": idempotency_capability,
+    }
+    defaults.update(overrides)
+    return execution_profile(**defaults)  # type: ignore[arg-type]
+
+
+class FakeTransport:
+    """A deterministic transport double for the Model Adapter contract.
+
+    Harness fidelity (`docs/HUNTER_IMPLEMENTATION_CONTRACT.md`): this reproduces
+    the external semantics the adapter actually depends on, and no more. It
+
+    * requires the same `DispatchAuthorization` the real transport requires, so a
+      test cannot dispatch without one where production could not;
+    * requires a real `TransportCredential`, so credential handling is exercised;
+    * returns a `TransportResult` with the same three-axis shape — result class,
+      delivery certainty, execution evidence — and never a cleaner one, so it
+      cannot resolve an ambiguity the real transport leaves ambiguous;
+    * records every send, so "exactly once" is observed rather than assumed.
+
+    It deliberately does *not* filter, order, or de-duplicate anything, because
+    the real transport does not either.
+    """
+
+    def __init__(
+        self,
+        result: TransportResult | None = None,
+        *,
+        raises: BaseException | None = None,
+        transport_identity: str = FAKE_TRANSPORT_IDENTITY,
+        transport_version: str = FAKE_TRANSPORT_VERSION,
+    ) -> None:
+        self.transport_identity = transport_identity
+        self.transport_version = transport_version
+        self._result = result
+        self._raises = raises
+        self.sends: list[tuple[TransportRequest, DispatchAuthorization]] = []
+        self.seen_credentials: list[object] = []
+
+    def send(
+        self,
+        request: TransportRequest,
+        *,
+        authorization: DispatchAuthorization,
+        credential: TransportCredential,
+    ) -> TransportResult:
+        if not isinstance(authorization, DispatchAuthorization):
+            raise AssertionError("the adapter must supply a dispatch authorization")
+        if not isinstance(credential, TransportCredential):
+            raise AssertionError("the adapter must supply a non-durable transport credential")
+        self.sends.append((request, authorization))
+        self.seen_credentials.append(credential)
+        if self._raises is not None:
+            raise self._raises
+        assert self._result is not None
+        return self._result
+
+
+def transport_result(
+    *,
+    result_class: str = "RESPONSE_RECEIVED",
+    delivery_certainty: str = "ANSWERED",
+    execution_evidence: str = "PROVIDER_RETURNED_COMPLETION",
+    response_text: str | None = '{"choices": [{"message": {"content": "ok"}}]}',
+    provider_status_metadata: tuple[tuple[str, str], ...] = (("http_status", "200"),),
+    correlation_identity: str | None = "req_abc123",
+    transport_identity: str = FAKE_TRANSPORT_IDENTITY,
+    transport_version: str = FAKE_TRANSPORT_VERSION,
+    reason_code: str = "",
+) -> TransportResult:
+    return TransportResult(
+        result_class=result_class,  # type: ignore[arg-type]
+        delivery_certainty=delivery_certainty,  # type: ignore[arg-type]
+        execution_evidence=execution_evidence,  # type: ignore[arg-type]
+        transport_identity=transport_identity,
+        transport_version=transport_version,
+        response_protocol_identity="response-protocol:phase-b-fake",
+        response_protocol_version="1",
+        response_text=response_text,
+        provider_status_metadata=provider_status_metadata,
+        correlation_identity=correlation_identity,
+        reason_code=reason_code,
+    )
+
+
+def credential(secret: str = "sk-fake-phase-b-secret-value") -> TransportCredential:
+    return TransportCredential(secret, slot_identity="slot:phase-b")

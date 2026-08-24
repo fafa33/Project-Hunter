@@ -1,4 +1,4 @@
-"""ADR 0034 Phase A — mechanical durability for Model Adapter pre-dispatch records.
+"""ADR 0034 Phases A and B — mechanical durability for Model Adapter records.
 
 ADR 0009 separation is the point of this module: it stores and reads, and it
 decides nothing. It does not resolve Source Handling, does not judge whether
@@ -12,6 +12,14 @@ The two guarantees this layer *does* own are storage guarantees:
   handoff can never exist without its durable attempt; and
 * a handoff is consumable at most once, enforced by a conditional compare-and-set
   inside an immediate transaction rather than by a read-then-write race.
+
+Phase B adds two more storage guarantees of the same kind:
+
+* an outcome and its governed response artifact commit in one transaction, so a
+  durable response can never exist without the outcome that attributes it; and
+* the outcome family is insert-only. There is no `UPDATE` statement against it
+  anywhere in this module, so a correction has to be a new superseding record
+  rather than a rewrite, and the pre-send attempt is never touched again.
 
 Histories are append-only. Records are never updated into a different state; the
 sole mutation in the schema is the one-way `consumed_at` claim that implements
@@ -30,11 +38,16 @@ from datetime import UTC, datetime
 from typing import Any
 
 from hunter.evidence_intelligence.model_adapter import (
+    DISPATCH_CAPABILITY_CATEGORY,
+    ModelAttemptOutcomeRecord,
     ModelAttemptRecord,
     ModelHandoffRecord,
     ProviderRequestEvidence,
+    ProviderResponseArtifact,
+    category_persist_allowed,
     disposition_identity,
     permitted_request_evidence_state,
+    permitted_response_evidence_state,
 )
 from hunter.evidence_intelligence.pre_model import (
     EvidencePreModelSourceHandlingAuthority,
@@ -303,6 +316,204 @@ class ModelAdapterPersistenceRepository:
             if cursor.rowcount != 1:
                 raise ModelAdapterPersistenceError(f"handoff {handoff_id} has already been consumed")
 
+    # -- append-only outcome and governed response capture -------------------
+
+    def append_outcome(
+        self,
+        *,
+        outcome: ModelAttemptOutcomeRecord,
+        response_artifact: ProviderResponseArtifact | None,
+        attempt_authority: EvidencePreModelSourceHandlingAuthority,
+    ) -> None:
+        """Append one outcome, and its governed response artifact, in one transaction.
+
+        Insert-only. This method contains no `UPDATE`, so an existing outcome
+        cannot be rewritten through it, and the pre-send attempt row is never
+        touched. A second outcome for an attempt is admitted only when it
+        explicitly supersedes an existing one, which is how ADR 0034 requires a
+        correction to be expressed.
+
+        Like `persist_attempt_and_handoff`, the authority is re-resolved here, so a
+        caller who bypasses `ModelAdapterService` still cannot persist an outcome
+        or a response artifact whose governed state disagrees with the authority
+        that actually applies at the attempt cutoff.
+        """
+        if response_artifact is not None:
+            if outcome.attempt_id is None or response_artifact.attempt_id != outcome.attempt_id:
+                raise ModelAdapterPersistenceError("response artifact does not belong to the supplied outcome")
+            if outcome.handoff_id is not None and response_artifact.handoff_id != outcome.handoff_id:
+                raise ModelAdapterPersistenceError("response artifact handoff lineage does not match the outcome")
+            if response_artifact.execution_profile_identity != outcome.execution_profile_identity:
+                raise ModelAdapterPersistenceError("response artifact profile lineage does not match the outcome")
+            # The artifact row is keyed by its *own* computed identity, so without
+            # this an outcome could name one response artifact while a different
+            # object was stored under that attempt -- an outcome pointing at
+            # evidence that was never written.
+            if (
+                outcome.response_artifact_identity is not None
+                and outcome.response_artifact_identity != response_artifact.response_artifact_identity
+            ):
+                raise ModelAdapterPersistenceError(
+                    "outcome response-artifact identity does not match the supplied response artifact"
+                )
+        elif outcome.response_artifact_identity is not None:
+            raise ModelAdapterPersistenceError(
+                "outcome claims a response-artifact identity but no response artifact was supplied"
+            )
+
+        outcome_payload = _canonical_json(_jsonable(asdict(outcome)))
+        outcome_hash = _sha256(outcome_payload)
+        response_payload = (
+            _canonical_json(_jsonable(asdict(response_artifact))) if response_artifact is not None else None
+        )
+
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._verify_outcome_against_rederived_authority(
+                outcome=outcome,
+                response_artifact=response_artifact,
+                attempt_authority=attempt_authority,
+            )
+            if outcome.attempt_id is not None:
+                attempt_row = connection.execute(
+                    "SELECT 1 FROM model_attempt_records WHERE attempt_id = ?",
+                    (outcome.attempt_id,),
+                ).fetchone()
+                if attempt_row is None:
+                    raise ModelAdapterPersistenceError(
+                        f"outcome references attempt {outcome.attempt_id}, which is not durably recorded"
+                    )
+
+            existing = connection.execute(
+                "SELECT payload_hash FROM model_attempt_outcome_records WHERE outcome_id = ?",
+                (outcome.outcome_id,),
+            ).fetchone()
+            if existing is not None:
+                if str(existing["payload_hash"]) != outcome_hash:
+                    raise ModelAdapterPersistenceConflict(
+                        f"conflicting payload for existing outcome {outcome.outcome_id}"
+                    )
+                return
+
+            if outcome.attempt_id is not None:
+                prior = connection.execute(
+                    "SELECT outcome_id FROM model_attempt_outcome_records WHERE attempt_id = ?",
+                    (outcome.attempt_id,),
+                ).fetchall()
+                if prior and outcome.supersedes_outcome_id is None:
+                    raise ModelAdapterPersistenceConflict(
+                        f"attempt {outcome.attempt_id} already has a recorded outcome; "
+                        "a correction must supersede it explicitly rather than append silently"
+                    )
+                if outcome.supersedes_outcome_id is not None:
+                    known = {str(row["outcome_id"]) for row in prior}
+                    if outcome.supersedes_outcome_id not in known:
+                        raise ModelAdapterPersistenceError(
+                            "a superseding outcome must reference an existing outcome for the same attempt"
+                        )
+
+            connection.execute(
+                """
+                INSERT INTO model_attempt_outcome_records (
+                    outcome_id, attempt_id, handoff_id, recorded_at, attempt_cutoff,
+                    supersedes_outcome_id, payload_hash, payload_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    outcome.outcome_id,
+                    outcome.attempt_id,
+                    outcome.handoff_id,
+                    outcome.recorded_at.astimezone(UTC).isoformat(),
+                    outcome.attempt_cutoff.astimezone(UTC).isoformat(),
+                    outcome.supersedes_outcome_id,
+                    outcome_hash,
+                    outcome_payload,
+                ),
+            )
+
+            if response_artifact is not None and response_payload is not None:
+                identity = response_artifact.response_artifact_identity
+                existing_response = connection.execute(
+                    "SELECT payload_hash FROM provider_response_artifacts WHERE response_artifact_id = ?",
+                    (identity,),
+                ).fetchone()
+                response_hash = _sha256(response_payload)
+                if existing_response is None:
+                    connection.execute(
+                        """
+                        INSERT INTO provider_response_artifacts (
+                            response_artifact_id, attempt_id, outcome_id, recorded_at,
+                            evidence_state, payload_hash, payload_json
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            identity,
+                            response_artifact.attempt_id,
+                            outcome.outcome_id,
+                            response_artifact.recorded_at.astimezone(UTC).isoformat(),
+                            response_artifact.state,
+                            response_hash,
+                            response_payload,
+                        ),
+                    )
+                elif str(existing_response["payload_hash"]) != response_hash:
+                    raise ModelAdapterPersistenceConflict(
+                        f"conflicting payload for existing response artifact {identity}"
+                    )
+
+    def _verify_outcome_against_rederived_authority(
+        self,
+        *,
+        outcome: ModelAttemptOutcomeRecord,
+        response_artifact: ProviderResponseArtifact | None,
+        attempt_authority: EvidencePreModelSourceHandlingAuthority,
+    ) -> None:
+        """Rederive the governing decision and reject any durable state it forbids."""
+        if outcome.attempt_cutoff != attempt_authority.cutoff.astimezone(UTC):
+            raise ModelAdapterAuthorityMismatch("outcome cutoff does not match the supplied attempt authority")
+        try:
+            resolved = resolve_pre_model_source_handling(attempt_authority)
+        except SourceHandlingBlockedError as error:
+            raise ModelAdapterAuthorityMismatch(
+                f"attempt authority cannot be independently resolved at persistence: {error}"
+            ) from error
+        decision = resolved.decision
+
+        # Correlation and idempotency identifiers are operational metadata. They
+        # persist only where that category is authorized; a record carrying them
+        # under a denying authority is rejected rather than quietly stripped,
+        # because silently dropping a field would hide the disagreement.
+        metadata_permitted = category_persist_allowed(decision, DISPATCH_CAPABILITY_CATEGORY)
+        if not metadata_permitted and (
+            outcome.correlation_identity is not None or outcome.idempotency_identity is not None
+        ):
+            raise ModelAdapterAuthorityMismatch(
+                "outcome carries provider correlation or idempotency metadata the rederived authority prohibits"
+            )
+
+        if response_artifact is None:
+            return
+
+        permitted = permitted_response_evidence_state(decision)
+        if response_artifact.state == "RESPONSE_EVIDENCE_DURABLE" and permitted != "RESPONSE_EVIDENCE_DURABLE":
+            raise ModelAdapterAuthorityMismatch(
+                "durable response evidence is not authorized by independently rederived authority"
+            )
+        if response_artifact.state != "RESPONSE_EVIDENCE_DURABLE" and any(
+            value is not None
+            for value in (
+                response_artifact.content,
+                response_artifact.content_hash,
+                response_artifact.measured_size_bytes,
+                response_artifact.content_derived_identity,
+            )
+        ):
+            raise ModelAdapterAuthorityMismatch(
+                "response artifact carries content-derived material its own recorded state prohibits"
+            )
+        if outcome.response_evidence_state != response_artifact.state:
+            raise ModelAdapterAuthorityMismatch("outcome response-evidence state does not match the response artifact")
+
     # -- strict-known historical reads ---------------------------------------
 
     def strict_known_attempt(self, attempt_id: str, cutoff: datetime) -> ModelAttemptRecord | None:
@@ -362,6 +573,148 @@ class ModelAdapterPersistenceRepository:
             return None
         return _parse_time(str(row["consumed_at"]))
 
+    def terminal_outcome_exists(self, attempt_id: str) -> bool:
+        """Whether this attempt already has any recorded outcome.
+
+        An attempt with an outcome is over, including an uncertain one. ADR 0034
+        requires a further try to be a *new* attempt, so this is the check that
+        stops one attempt being dispatched again after its outcome was recorded.
+        """
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT 1 FROM model_attempt_outcome_records WHERE attempt_id = ? LIMIT 1",
+                (attempt_id,),
+            ).fetchone()
+        return row is not None
+
+    def attempts_without_outcome(self, *, cutoff: datetime) -> tuple[str, ...]:
+        """Durable attempts recorded at `cutoff` that carry no outcome.
+
+        Crash-recovery evidence, read strict-known. These are uncertain by
+        construction: ADR 0034 forbids rewriting them into success or failure, so
+        this reports identities and nothing more.
+        """
+        _aware("cutoff", cutoff)
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT a.attempt_id FROM model_attempt_records AS a
+                WHERE a.recorded_at <= ?
+                  AND NOT EXISTS (
+                      SELECT 1 FROM model_attempt_outcome_records AS o
+                      WHERE o.attempt_id = a.attempt_id AND o.recorded_at <= ?
+                  )
+                ORDER BY a.recorded_at, a.attempt_id
+                """,
+                (cutoff.astimezone(UTC).isoformat(), cutoff.astimezone(UTC).isoformat()),
+            ).fetchall()
+        return tuple(str(row["attempt_id"]) for row in rows)
+
+    def strict_known_outcomes(self, attempt_id: str, cutoff: datetime) -> tuple[ModelAttemptOutcomeRecord, ...]:
+        """Every outcome for an attempt that was already recorded at the cutoff."""
+        _aware("cutoff", cutoff)
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT payload_hash, payload_json FROM model_attempt_outcome_records
+                WHERE attempt_id = ? AND recorded_at <= ?
+                ORDER BY recorded_at, outcome_id
+                """,
+                (attempt_id, cutoff.astimezone(UTC).isoformat()),
+            ).fetchall()
+        outcomes: list[ModelAttemptOutcomeRecord] = []
+        for row in rows:
+            payload_json = str(row["payload_json"])
+            if _sha256(payload_json) != str(row["payload_hash"]):
+                raise ModelAdapterPersistenceCorruption("persisted outcome hash mismatch")
+            outcomes.append(_outcome_from_payload(json.loads(payload_json)))
+        return tuple(outcomes)
+
+    def authoritative_outcome(self, attempt_id: str, cutoff: datetime) -> ModelAttemptOutcomeRecord | None:
+        """The outcome that currently governs this attempt, as known at the cutoff.
+
+        `append_outcome` admits a correction as a new record carrying
+        `supersedes_outcome_id`, so an attempt can hold a chain of outcomes. The
+        governing one is the head of that chain: the outcome that no other outcome
+        *known at this cutoff* supersedes. Reading the earliest row instead would
+        make a correction invisible forever, and reading the latest row blindly
+        would promote a superseded record the moment ordering wobbled.
+
+        Strict-known throughout: a correction recorded after the cutoff does not
+        retroactively govern an earlier read.
+        """
+        _aware("cutoff", cutoff)
+        moment = cutoff.astimezone(UTC).isoformat()
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT o.payload_hash, o.payload_json FROM model_attempt_outcome_records AS o
+                WHERE o.attempt_id = ? AND o.recorded_at <= ?
+                  AND NOT EXISTS (
+                      SELECT 1 FROM model_attempt_outcome_records AS s
+                      WHERE s.attempt_id = o.attempt_id
+                        AND s.recorded_at <= ?
+                        AND s.supersedes_outcome_id = o.outcome_id
+                  )
+                ORDER BY o.recorded_at DESC, o.outcome_id DESC
+                LIMIT 1
+                """,
+                (attempt_id, moment, moment),
+            ).fetchone()
+        if row is None:
+            return None
+        payload_json = str(row["payload_json"])
+        if _sha256(payload_json) != str(row["payload_hash"]):
+            raise ModelAdapterPersistenceCorruption("persisted outcome hash mismatch")
+        return _outcome_from_payload(json.loads(payload_json))
+
+    def strict_known_response_artifact(self, attempt_id: str, cutoff: datetime) -> ProviderResponseArtifact | None:
+        """Return exactly the response evidence durably authorized at the cutoff.
+
+        Where response retention was prohibited, or the capture gate refused the
+        content, this returns the governed unavailability state that was recorded
+        then. It never reconstructs bytes, hash, size, or a derived identity from
+        current policy, and it never re-invokes the provider to fill the gap.
+
+        Follows supersession: the artifact returned is the one attached to the
+        outcome that governs the attempt at this cutoff, so a correction that
+        attaches revised response evidence is what a later read sees. Where the
+        governing outcome carries no artifact of its own, the most recent earlier
+        artifact known at the cutoff stands, because a correction that records no
+        new response evidence does not erase the evidence already captured.
+        """
+        _aware("cutoff", cutoff)
+        moment = cutoff.astimezone(UTC).isoformat()
+        governing = self.authoritative_outcome(attempt_id, cutoff)
+        with self._connect() as connection:
+            row = None
+            if governing is not None:
+                row = connection.execute(
+                    """
+                    SELECT payload_hash, payload_json FROM provider_response_artifacts
+                    WHERE attempt_id = ? AND outcome_id = ? AND recorded_at <= ?
+                    ORDER BY recorded_at DESC, response_artifact_id DESC
+                    LIMIT 1
+                    """,
+                    (attempt_id, governing.outcome_id, moment),
+                ).fetchone()
+            if row is None:
+                row = connection.execute(
+                    """
+                    SELECT payload_hash, payload_json FROM provider_response_artifacts
+                    WHERE attempt_id = ? AND recorded_at <= ?
+                    ORDER BY recorded_at DESC, response_artifact_id DESC
+                    LIMIT 1
+                    """,
+                    (attempt_id, moment),
+                ).fetchone()
+        if row is None:
+            return None
+        payload_json = str(row["payload_json"])
+        if _sha256(payload_json) != str(row["payload_hash"]):
+            raise ModelAdapterPersistenceCorruption("persisted response artifact hash mismatch")
+        return _response_artifact_from_payload(json.loads(payload_json))
+
     def attempt_exists(self, attempt_id: str) -> bool:
         with self._connect() as connection:
             row = connection.execute(
@@ -403,6 +756,36 @@ class ModelAdapterPersistenceRepository:
                 -- to a database created before this invariant existed.
                 CREATE UNIQUE INDEX IF NOT EXISTS model_handoff_attempt_unique_idx
                     ON model_handoff_records(attempt_id);
+                -- Append-only. `attempt_id` and `handoff_id` are nullable because a
+                -- pre-dispatch refusal is decided before either record exists, and
+                -- ADR 0034 requires such an outcome to carry exactly the lineage
+                -- that actually existed rather than a fabricated placeholder.
+                CREATE TABLE IF NOT EXISTS model_attempt_outcome_records (
+                    outcome_id TEXT PRIMARY KEY,
+                    attempt_id TEXT,
+                    handoff_id TEXT,
+                    recorded_at TEXT NOT NULL,
+                    attempt_cutoff TEXT NOT NULL,
+                    supersedes_outcome_id TEXT,
+                    payload_hash TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    FOREIGN KEY (attempt_id) REFERENCES model_attempt_records(attempt_id)
+                );
+                CREATE INDEX IF NOT EXISTS model_attempt_outcome_attempt_idx
+                    ON model_attempt_outcome_records(attempt_id, recorded_at);
+                CREATE TABLE IF NOT EXISTS provider_response_artifacts (
+                    response_artifact_id TEXT PRIMARY KEY,
+                    attempt_id TEXT NOT NULL,
+                    outcome_id TEXT NOT NULL,
+                    recorded_at TEXT NOT NULL,
+                    evidence_state TEXT NOT NULL,
+                    payload_hash TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    FOREIGN KEY (attempt_id) REFERENCES model_attempt_records(attempt_id),
+                    FOREIGN KEY (outcome_id) REFERENCES model_attempt_outcome_records(outcome_id)
+                );
+                CREATE INDEX IF NOT EXISTS provider_response_attempt_idx
+                    ON provider_response_artifacts(attempt_id, recorded_at);
                 """
             )
 
@@ -422,6 +805,23 @@ class ModelAdapterPersistenceRepository:
                 yield connection
         finally:
             connection.close()
+
+
+def _outcome_from_payload(payload: Mapping[str, Any]) -> ModelAttemptOutcomeRecord:
+    item = dict(payload)
+    for name in ("attempt_cutoff", "recorded_at"):
+        item[name] = _parse_time(str(item[name]))
+    if item.get("dispatched_at") is not None:
+        item["dispatched_at"] = _parse_time(str(item["dispatched_at"]))
+    return ModelAttemptOutcomeRecord(**item)
+
+
+def _response_artifact_from_payload(payload: Mapping[str, Any]) -> ProviderResponseArtifact:
+    item = dict(payload)
+    item["recorded_at"] = _parse_time(str(item["recorded_at"]))
+    metadata = item.get("provider_status_metadata") or ()
+    item["provider_status_metadata"] = tuple(tuple(entry) for entry in metadata)
+    return ProviderResponseArtifact(**item)
 
 
 def _attempt_from_payload(payload: Mapping[str, Any]) -> ModelAttemptRecord:
