@@ -1418,13 +1418,23 @@ def test_an_unavailable_provider_never_triggers_an_alternate_attempt(
     assert result.outcome.outcome == "PROVIDER_UNAVAILABLE"
     assert service.recover_nonterminal_attempts(cutoff=fixture.later(60)) == ()
 
-    source = Path(ModelAdapterService.__module__.replace(".", "/")).name
-    assert source
-    adapter_source = Path("src/hunter/evidence_intelligence/model_adapter.py").read_text(encoding="utf-8")
-    for token in ("fallback", "failover", "select_profile", "choose_provider", "ranking", "load_balanc", "hedge"):
-        assert token not in adapter_source.lower().replace("no fallback", "").replace(
-            "routing, ranking, fallback", ""
-        ), token
+    # Structural, not textual. The earlier form grepped the source and stripped
+    # two exact prose fragments first, so it passed only while the docstring
+    # wording stayed byte-identical -- a text-presence proxy for a semantic
+    # invariant, which is the guarded defect class PRH-011, and a rewording would
+    # have produced exactly the false-positive blockage PRH-009 forbids.
+    forbidden = ("fallback", "failover", "select_profile", "choose_provider", "ranking", "load_balanc", "hedge")
+    tree = ast.parse(Path("src/hunter/evidence_intelligence/model_adapter.py").read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            assert not any(token in node.name.lower() for token in forbidden), node.name
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            names = [alias.name for alias in node.names] + [getattr(node, "module", "") or ""]
+            assert not any(token in name.lower() for name in names for token in forbidden), names
+        if isinstance(node, ast.Name):
+            assert not any(token in node.id.lower() for token in forbidden), node.id
+        if isinstance(node, ast.Attribute):
+            assert not any(token in node.attr.lower() for token in forbidden), node.attr
 
 
 # --- OpenAI transport, deterministic --------------------------------------
@@ -2559,3 +2569,50 @@ def test_a_valid_numeric_provider_parameter_is_still_converted() -> None:
     )
     assert body["temperature"] == 0.7
     assert body["max_tokens"] == 256
+
+
+def test_a_request_endpoint_disagreeing_with_the_transport_is_refused() -> None:
+    """The transport's configured endpoint is not a silent second source of truth.
+
+    `send` builds the wire request from the request's endpoint, so an unchecked
+    transport field would let a deployment configure one endpoint and transmit a
+    credential to another without any signal.
+    """
+    transport = OpenAIChatCompletionsTransport(
+        endpoint_url="https://api.openai.invalid/v1",
+        opener=lambda request, timeout: pytest.fail("no request may be sent"),
+    )
+    elsewhere = dataclasses.replace(_request(), endpoint_url="https://somewhere.else.invalid/v1")
+
+    with pytest.raises(ProviderTransportError, match="endpoint"):
+        transport.send(elsewhere, authorization=_authorization(), credential=fixture.credential())
+
+
+def test_a_matching_request_endpoint_is_accepted() -> None:
+    """Paired positive: the agreeing endpoint must still send."""
+    transport = _openai_transport_with(
+        lambda request, timeout: _FakeHttpResponse(
+            200, json.dumps({"choices": [{"message": {"content": "x"}}]}).encode("utf-8")
+        )
+    )
+    result = transport.send(_request(), authorization=_authorization(), credential=fixture.credential())
+    assert result.result_class == "RESPONSE_RECEIVED"
+
+
+@pytest.mark.parametrize("header_name", ["x-request-id", "X-Request-Id", "X-REQUEST-ID", "X-Request-ID"])
+def test_the_correlation_identity_is_found_regardless_of_header_casing(header_name: str) -> None:
+    """A provider may spell the header any way; the identity must not be lost."""
+    body = json.dumps({"choices": [{"message": {"content": "hi"}}]}).encode("utf-8")
+    transport = _openai_transport_with(
+        lambda request, timeout: _FakeHttpResponse(200, body, {header_name: "req_cased"})
+    )
+    result = transport.send(_request(), authorization=_authorization(), credential=fixture.credential())
+    assert result.correlation_identity == "req_cased"
+
+
+def test_an_absent_correlation_header_yields_no_identity() -> None:
+    """Paired negative: nothing is invented when the provider sends no such header."""
+    body = json.dumps({"choices": [{"message": {"content": "hi"}}]}).encode("utf-8")
+    transport = _openai_transport_with(lambda request, timeout: _FakeHttpResponse(200, body, {"date": "now"}))
+    result = transport.send(_request(), authorization=_authorization(), credential=fixture.credential())
+    assert result.correlation_identity is None

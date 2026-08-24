@@ -67,7 +67,7 @@ PreparedModelAttempt (Phase A: durable attempt + single-use handoff)
 | `src/hunter/evidence_intelligence/model_adapter.py` | Adds the outcome and response record families, classification, retry derivation, capture gate, and the `dispatch` path. Phase A behaviour is unchanged apart from the retry precondition below. |
 | `src/hunter/evidence_intelligence/model_adapter_persistence.py` | Adds insert-only outcome and response tables, `append_outcome`, independent authority re-verification for both, and strict-known reads. |
 | `tests/model_adapter_fixture.py` | Adds the Phase B field-map surfaces, the single configured profile, and a deterministic transport double. |
-| `tests/test_model_adapter_phase_b.py` | New. 119 adversarial regressions. |
+| `tests/test_model_adapter_phase_b.py` | New. 125 adversarial regressions. |
 | `tests/test_model_adapter_phase_a.py` | Two retry tests now durably record the predecessor outcome the new retry gate requires. Strengthened, not weakened — they exercise the real retry path instead of bypassing it, and a fabricated record no longer satisfies the gate. |
 | `docs/ADR/0034-...md` | `Implementation Status` only. No architectural decision changed. |
 | `docs/architecture-index.md` | Truthful runtime-state rows for Issue #313. |
@@ -116,7 +116,7 @@ The gate is shape-based, not keyword-based, so an ordinary model answer that dis
 
 ## Test coverage
 
-119 new Phase B regressions plus the 68 Phase A regressions, all deterministic. Every required adversarial case in Issue #313 is covered; the numbering below is the Issue's.
+125 new Phase B regressions plus the 68 Phase A regressions, all deterministic. Every required adversarial case in Issue #313 is covered; the numbering below is the Issue's.
 
 | # | Requirement | Regression |
 |---|---|---|
@@ -144,7 +144,7 @@ Each negative case is paired with the positive it must not break. The whole Phas
 
 ## Mutation verification
 
-Thirty-five guards were deliberately weakened one at a time and the named regression re-run. Every one failed under mutation and passed clean — the guard is proven against the specific defect its name asserts, not merely against the suite being green.
+Thirty-eight guards were deliberately weakened one at a time and the named regression re-run. Every one failed under mutation and passed clean — the guard is proven against the specific defect its name asserts, not merely against the suite being green.
 
 Two of them only became genuine proofs after the first attempt failed to isolate them, which is the point of running the mutation rather than assuming it. The prompt content-hash check initially "passed" its mutation because the test's replacement content differed in length, so the measured-size check accounted for the refusal; it now uses a same-length replacement, which only the hash check can catch. The measured-size check was then unreachable by substitution at all, because `measured_size_bytes` feeds `artifact_id` and the identity check fires first — so its regression was rewritten onto the case where only it can fire: an artifact that self-declares an inconsistent size and is used consistently throughout.
 
@@ -185,6 +185,9 @@ Two of them only became genuine proofs after the first attempt failed to isolate
 | Contradictory classification recorded, not raised | `test_a_contradictory_transport_classification_is_recorded_not_raised` |
 | Observed execution evidence on persistence failure | `test_a_persistence_failure_after_a_malformed_response_does_not_assert_a_completion` |
 | Body-construction failure is proven non-delivery | `test_a_malformed_numeric_provider_parameter_is_proven_non_delivery` |
+| Request/transport endpoint agreement | `test_a_request_endpoint_disagreeing_with_the_transport_is_refused` |
+| Case-insensitive correlation lookup | `test_the_correlation_identity_is_found_regardless_of_header_casing` |
+| Routing-deferral structural check | `test_an_unavailable_provider_never_triggers_an_alternate_attempt` |
 
 ## Defects found by hostile self-review
 
@@ -240,6 +243,16 @@ CodeRabbit reviewed the same head and raised six findings. One duplicated the Co
 - **A malformed numeric profile parameter became uncertain delivery** (also `MA-012`). Body construction fails inside `transport.send`, after the handoff is consumed, and was recorded as uncertain even though no request byte had been offered. The transport now reports that as proven non-delivery — overstating uncertainty is as untruthful as overstating certainty, and needlessly blocks a later attempt.
 
 Two of these mutation runs initially reported "proven" falsely because the append-only conflict check fired before the linkage checks under test; both regressions were rewritten against an attempt carrying no prior outcome so only the guard under test can account for the refusal.
+
+### Third round — two latent transport bugs and a proxy guard of my own
+
+- **`endpoint_url` on the transport was a silent second source of truth.** `send` builds the wire request from `request.endpoint_url`, which the adapter derives from the profile's endpoint class, so the transport's own field had no effect: a deployment configuring `OpenAIChatCompletionsTransport(endpoint_url=...)` would have transmitted a credential to the adapter-configured endpoint instead, with no signal. The two must now agree.
+- **Correlation identity was lost to header casing.** `dict(...)` over the response headers drops the case-insensitive lookup `http.client.HTTPMessage` provides, and the lookup enumerated three spellings, so `X-Request-ID` returned `None` even where the category was authorized. Header names are normalized instead.
+- **One of my own regressions was a text-presence proxy.** The routing-deferral test grepped adapter source and stripped two exact prose fragments before scanning, so it held only while a docstring stayed byte-identical — a recurrence of the guarded class `PRH-011`, and a rewording would have produced exactly the false-positive blockage `PRH-009` forbids. It now walks the AST over definition, import, name, and attribute identifiers.
+
+That last one is worth stating plainly rather than burying: the defect was in a guard I wrote, in a repository that already carries a registered defect class for precisely that mistake. `PRH-011` is annotated with the recurrence. No new automated guard is added for it — that class's boundary is the governed-artifact Markdown parser and cannot reach test code, and adding a merge-blocking check merely because it is automatable is the overreach `PRH-009` warns against.
+
+Its mutation proof needed the counterfactual planted in the *source* rather than the test, since it is an absence assertion: a planted `_select_profile_fallback` symbol makes it fail, and a reworded docstring — which broke the previous version — no longer does.
 
 ### Raised, not implemented — pre-dispatch refusal persistence
 

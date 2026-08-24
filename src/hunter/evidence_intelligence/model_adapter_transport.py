@@ -393,11 +393,17 @@ def _openai_status_metadata(status: int, payload: object) -> tuple[tuple[str, st
 
 
 def _openai_correlation_identity(headers: Mapping[str, str] | None) -> str | None:
+    """The provider's correlation identifier, found regardless of header casing.
+
+    `send` converts the response headers with `dict(...)`, which drops the
+    case-insensitive lookup `http.client.HTTPMessage` provides. Enumerating
+    spellings would silently lose the identity for any casing not listed, so the
+    names are normalized instead.
+    """
     if not headers:
         return None
-    for name in ("x-request-id", "X-Request-Id", "x-request-Id"):
-        value = headers.get(name)
-        if isinstance(value, str) and value:
+    for name, value in headers.items():
+        if isinstance(name, str) and name.lower() == "x-request-id" and isinstance(value, str) and value:
             return value
     return None
 
@@ -433,6 +439,13 @@ class OpenAIChatCompletionsTransport:
             raise TransportAuthorityError("a provider send requires a Model Adapter dispatch authorization")
         if not isinstance(credential, TransportCredential):
             raise TransportAuthorityError("a provider send requires a non-durable transport credential")
+        if request.endpoint_url != self.endpoint_url:
+            # `send` builds the wire request from `request.endpoint_url`, which the
+            # adapter derives from the profile's endpoint class. Leaving this field
+            # unchecked would make it a silent second source of truth for where a
+            # credential is transmitted: a deployment configuring the transport
+            # endpoint would send somewhere else and never know.
+            raise ProviderTransportError("the request endpoint is not the endpoint this transport is configured for")
 
         try:
             body = json.dumps(openai_request_body(request)).encode("utf-8")
