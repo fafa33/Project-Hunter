@@ -158,6 +158,8 @@ Under `docs/ARCHITECTURE_AUDIT_PROTOCOL.md`, `READY_FOR_ADR` applies when no mat
 
 - `READY_FOR_ADR`
 
+### Progression semantics
+
 ADPR-0010 v1.5 at exact merged baseline `7ee04b4319aaf1eab961b59d61cbef735fdb3aa4` is ready to proceed to ADR drafting.
 
 This verdict does not accept the ADR, authorize runtime implementation, authorize Issue #315 work, promote PR #327, or authorize merge.
