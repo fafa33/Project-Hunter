@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed.
+Accepted.
 
 ## Date
 
@@ -16,11 +16,11 @@ The preparation lineage has three distinct coordinates that must not be conflate
 
 - `8ee6fd57577fa322b87cba21bd381d05770edd29` is the profile-authority correction merge from PR #321 and is the intermediate correction baseline named inside ADPR-0010's v1.5 preparation history;
 - `7ee04b4319aaf1eab961b59d61cbef735fdb3aa4` is the exact merged v1.5 correction baseline reviewed by the targeted independent re-audit after the replay/chronology hardening merged through PR #325;
-- `3ecbecc2e54b492427b0e2f02ae80a12a34da87f` is the later squash merge of PR #327 that added the completed targeted audit report to `main`; it is the `main` baseline from which this ADR drafting branch was opened.
+- `3ecbecc2e54b492427b0e2f02ae80a12a34da87f` is the later squash merge of PR #327 that added the completed targeted audit report to `main`; it is the `main` baseline from which the ADR drafting lifecycle began.
 
-The targeted independent re-audit in `docs/ARCHITECTURE_AUDITS/adpr-0010-response-validator-targeted-reaudit.md` returned `READY_FOR_ADR` for exact audited baseline `7ee04b4319aaf1eab961b59d61cbef735fdb3aa4`, closed original PR #319 finding `F-001`, and identified no new material blocker in the v1.5 correction lineage. This drafting lifecycle is tracked by Issue #328.
+The targeted independent re-audit in `docs/ARCHITECTURE_AUDITS/adpr-0010-response-validator-targeted-reaudit.md` returned `READY_FOR_ADR` for exact audited baseline `7ee04b4319aaf1eab961b59d61cbef735fdb3aa4`, closed original PR #319 finding `F-001`, and identified no new material blocker in the v1.5 correction lineage. The drafting lifecycle was tracked by Issue #328 and merged through PR #329 as `42ea611e9fcc99b3dd06adee1879da1278a5e21a`.
 
-This ADR is a faithful formalization of the audited preparation basis. It introduces no materially new architecture, does not accept itself, and does not authorize runtime implementation.
+The repository owner accepted ADR 0035 under Issue #330 as a separate lifecycle after drafting review was clean. This acceptance changes no architectural decision in the drafted record, introduces no materially new architecture, and does not authorize runtime implementation.
 
 ## Context
 
@@ -242,7 +242,7 @@ The legacy `AIExtractionProvider` / `SecureAIProviderRunner` path predates this 
 
 No synthetic backfill may fabricate validation events, profile resolutions, Source Handling resolutions, attestations, trusted cutoffs, durable-acceptance timestamps, or correction lineage for legacy provider artifacts. Historical absence remains explicit.
 
-Migration to runtime implementation, if later authorized, must be additive and gated by separate implementation scope, tests, persistence/schema changes, replay conformance, and activation controls. This Proposed ADR itself changes no runtime behavior.
+Migration to runtime implementation, if later authorized, must be additive and gated by separate implementation scope, tests, persistence/schema changes, replay conformance, and activation controls. Acceptance of this ADR changes no runtime behavior.
 
 ## Non-Goals
 
@@ -259,8 +259,8 @@ This ADR does not authorize or design:
 
 ## Implementation Status
 
-**Not implemented and not authorized by this drafting contribution.**
+**Not implemented. Acceptance does not authorize runtime implementation.**
 
-The current governed runtime stops at the previously accepted Model Adapter/response-capture boundary. No production `ResponseValidator`, canonical `ResponseValidationProfileAuthority`, validation-event/correction allocator, validator success/refusal attestation path, or validation persistence/replay surface is activated by this ADR draft.
+The current governed runtime stops at the previously accepted Model Adapter/response-capture boundary. No production `ResponseValidator`, canonical `ResponseValidationProfileAuthority`, validation-event/correction allocator, validator success/refusal attestation path, or validation persistence/replay surface is activated by this ADR acceptance.
 
-Runtime implementation may begin only through a later, separately scoped and owner-authorized lifecycle after ADR 0035 is accepted. Acceptance itself must remain a separate lifecycle from this drafting PR.
+Runtime implementation may begin only through a later, separately scoped and owner-authorized lifecycle.
