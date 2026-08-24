@@ -8,6 +8,7 @@
 - Audit type: `TARGETED`
 - Auditor: independent architecture re-audit agent
 - Audit date: `2026-08-24`
+- Evidence cutoff: `2026-08-24T18:58:17+02:00`
 - Governing protocol: `docs/ARCHITECTURE_AUDIT_PROTOCOL.md`
 - Governing issue: #322
 - Correction issue: #320
@@ -104,11 +105,11 @@ No new authority, persistence, lineage, privacy, or downstream-promotion transfe
 | Canonical consistency | PASS | ADR 0031/0032/0033/0034, ADR 0020, ADR 0016, and ADR 0009 boundaries remain intact. | — |
 | Evidence integrity | PASS | Review is pinned to exact merged baseline `7ee04b4319aaf1eab961b59d61cbef735fdb3aa4` and canonical repository evidence. | — |
 | Assumption discipline | PASS | The corrected design does not assume caller timestamps, current authority, persistence policy authority, or transport success as semantic validity. | — |
-| Option completeness | PASS | Five materially distinct profile-authority ownership models are explicitly evaluated. | F-001-CLOSED |
-| Option normalization | PASS | Ownership options are evaluated against common criteria rather than incomparable narrative treatment. | F-001-CLOSED |
-| Comparative fairness | PASS | Benefits, costs, governance impact, migration, replay, and authority risks are represented for all materially distinct ownership models. | F-001-CLOSED |
-| Falsifiability | PASS | The retained dedicated-authority recommendation includes explicit falsification/reconsideration conditions. | F-001-CLOSED |
-| Authority and ownership | PASS | Profile-rule publication, validation execution, Source Handling, persistence, Model Adapter, extraction, and promotion remain separated. | F-001-CLOSED |
+| Option completeness | PASS | Five materially distinct profile-authority ownership models are explicitly evaluated. | F-001 |
+| Option normalization | PASS | Ownership options are evaluated against common criteria rather than incomparable narrative treatment. | F-001 |
+| Comparative fairness | PASS | Benefits, costs, governance impact, migration, replay, and authority risks are represented for all materially distinct ownership models. | F-001 |
+| Falsifiability | PASS | The retained dedicated-authority recommendation includes explicit falsification/reconsideration conditions. | F-001 |
+| Authority and ownership | PASS | Profile-rule publication, validation execution, Source Handling, persistence, Model Adapter, extraction, and promotion remain separated. | F-001 |
 | Persistence and replay | PASS | Base and correction durable-acceptance timestamps, trusted cutoffs, chronology verification, and strict-known filtering are explicit and fail-closed. | — |
 | Evidence and provenance | PASS | Base/correction records remain bound to exact historical authority, decision, lineage, and durable-knowability coordinates. | — |
 | Implementation impact | PASS | Architecture obligations are explicit without authorizing runtime implementation. | — |
@@ -122,39 +123,40 @@ No new authority, persistence, lineage, privacy, or downstream-promotion transfe
 
 ## Findings
 
-### F-001-CLOSED — Original profile-authority ownership gap is closed
+### F-001 — Original profile-authority ownership gap is closed
 
 - **Evidence:** ADPR-0010 v1.5 separates profile-authority ownership from execution placement; evaluates dedicated, validator-owned, upstream-owner, persistence-owned, and shared/generic ownership under common criteria; gives explicit recommendation rationale; and states falsification conditions.
 - **Location:** `docs/architecture-records/ADPR-0010-evidence-intelligence-response-validator.md`, `## Decision Dimension B — Canonical Validation-Profile Ownership`, options B1-B5, normalized comparison, recommendation rationale, and falsification conditions.
-- **Category:** Option completeness / Option normalization / Comparative fairness / Authority and ownership / Falsifiability.
-- **Severity:** Original finding was `C`; current status is `CLOSED` with no unresolved severity.
-- **Decision impact:** The previously missing authority-topology comparison is now present, so ADR drafting no longer risks canonizing a dedicated profile authority without materially evaluating distinct viable ownership alternatives.
-- **Consequence if ignored:** Not applicable after correction; the original consequence has been neutralized by the completed option analysis.
-- **Required action:** None for `F-001`.
+- **Category:** Prior-finding closure / Option completeness / Authority and ownership.
+- **Severity:** `A`
+- **Decision impact:** None remaining. This record documents closure of the prior Class C finding; it does not identify a current material deficiency.
+- **Consequence if ignored:** The closure evidence would be less explicit in the re-audit record, but the corrected architecture decision basis would be unchanged.
+- **Required action:** None. Original PR #319 `F-001` is closed on the reviewed revision.
 - **Blocks ADR:** `NO`
 
-No new substantiated Class A, B, C, or D finding was identified within the authorized targeted regression surface.
+No new substantiated Class B, C, or D finding was identified within the authorized targeted regression surface.
 
 ## Findings Matrix
 
 | Finding | Class | Decision impact | Consequence if ignored | Blocks ADR | Evidence |
 |---|---|---|---|---|---|
-| `F-001-CLOSED` | CLOSED (originally C) | Original profile-authority ownership decision gap is neutralized by complete, normalized alternative analysis and falsifiable recommendation | None remaining on the corrected baseline | NO | ADPR-0010 v1.5 Decision Dimension B, B1-B5, normalized comparison, recommendation rationale, falsification conditions |
+| `F-001` | A | None remaining; prior Class C blocker is closed | Closure evidence would be less explicit, without changing the corrected decision basis | NO | ADPR-0010 v1.5 Decision Dimension B, B1-B5, normalized comparison, recommendation rationale, falsification conditions |
 
 ## Verdict Derivation
 
-- Highest unresolved severity: `None`.
+- Highest unresolved severity: `Class A`.
+- Trivial: yes. `F-001` is retained only as a closure/traceability record for the prior blocker and has no current material decision impact.
 - Cumulative Class B materiality: `None`.
 - Blocking findings: `None`.
 - Original Class C finding `F-001`: `CLOSED`.
 - New material blockers introduced by v1.5 correction lineage: `None identified`.
 - Conditions required before ADR approval from this targeted audit: `None`.
 
-Under `docs/ARCHITECTURE_AUDIT_PROTOCOL.md`, `READY_FOR_ADR` is required when no material deficiencies remain. The targeted audit finds the original Class C blocker closed and no new Class C or D defect in the authorized regression surface.
+Under `docs/ARCHITECTURE_AUDIT_PROTOCOL.md`, `READY_FOR_ADR` applies when no material deficiencies remain and trivial Class A findings may be recorded. The targeted audit finds the original Class C blocker closed and no new Class C or D defect in the authorized regression surface.
 
 ## Final Verdict
 
-`READY_FOR_ADR`
+- `READY_FOR_ADR`
 
 ADPR-0010 v1.5 at exact merged baseline `7ee04b4319aaf1eab961b59d61cbef735fdb3aa4` is ready to proceed to ADR drafting.
 
