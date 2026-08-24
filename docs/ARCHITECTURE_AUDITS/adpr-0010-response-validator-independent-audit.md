@@ -1,8 +1,6 @@
 # Independent Architecture Audit — ADPR-0010 ResponseValidator Boundary
 
 > Status: `COMPLETED`
->
-> Final Verdict: `READY_FOR_ADR`
 
 ## Metadata
 
@@ -145,7 +143,6 @@ The review history leading to ADPR-0010 v1.3 materially strengthened profile aut
 
 | Finding | Class | Decision impact | Consequence if ignored | Blocks ADR | Evidence |
 |---|---|---|---|---|---|
-| None | — | None | None | NO | FULL audit found no unresolved material deficiency at `f843ff300f8e84d43a588850ec4f3ffa6d2cdcee` |
 
 ## Verdict Derivation
 
@@ -158,7 +155,7 @@ Under `docs/ARCHITECTURE_AUDIT_PROTOCOL.md`, `READY_FOR_ADR` is required when no
 
 ## Final Verdict
 
-`READY_FOR_ADR`
+- `READY_FOR_ADR`
 
 ADPR-0010 is sufficiently complete, internally consistent, evidenced, falsifiable, and authority-safe to support a dedicated ResponseValidator ADR drafting lifecycle.
 
