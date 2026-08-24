@@ -155,7 +155,7 @@ Under `docs/ARCHITECTURE_AUDIT_PROTOCOL.md`, `READY_FOR_ADR` is required when no
 
 ## Final Verdict
 
-- `READY_FOR_ADR`
+`READY_FOR_ADR`
 
 ADPR-0010 is sufficiently complete, internally consistent, evidenced, falsifiable, and authority-safe to support a dedicated ResponseValidator ADR drafting lifecycle.
 
