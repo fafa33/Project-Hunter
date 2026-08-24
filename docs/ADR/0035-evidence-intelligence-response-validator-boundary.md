@@ -20,7 +20,7 @@ The preparation lineage has three distinct coordinates that must not be conflate
 
 The targeted independent re-audit in `docs/ARCHITECTURE_AUDITS/adpr-0010-response-validator-targeted-reaudit.md` returned `READY_FOR_ADR` for exact audited baseline `7ee04b4319aaf1eab961b59d61cbef735fdb3aa4`, closed original PR #319 finding `F-001`, and identified no new material blocker in the v1.5 correction lineage. The drafting lifecycle was tracked by Issue #328 and merged through PR #329 as `42ea611e9fcc99b3dd06adee1879da1278a5e21a`.
 
-The repository owner accepted ADR 0035 under Issue #330 as a separate lifecycle after drafting review was clean. This acceptance changes no architectural decision in the drafted record, introduces no materially new architecture, and does not authorize runtime implementation.
+ADR 0035's acceptance transition is carried by owner-authorized Issue #330 and PR #331. It becomes binding only when the repository owner merges PR #331; before that merge, the `Proposed` state already on `main` remains authoritative. This acceptance contribution changes no architectural decision in the drafted record, introduces no materially new architecture, and does not authorize runtime implementation.
 
 ## Context
 
