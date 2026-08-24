@@ -4,51 +4,53 @@
 
 - ADPR ID: `ADPR-0010`
 - Status: `READY_FOR_REVIEW`
-- Version: 1.3
+- Version: 1.4
 - Author: OpenAI GPT-5.6 Sol — architecture preparation agent
-- Reviewers: independent architecture audit required
+- Reviewers: targeted independent architecture re-audit required
 - Created: 2026-08-24
 - Revised: 2026-08-24
 - Approved: not yet approved
 - Related Issue: #316
+- Correction Issue: #320
+- Blocking audit finding addressed by this revision: PR #319 `F-001` (Class C)
 - Related follow-up: #315 (separate, non-blocking unless a concrete dependency is later proven)
 - Planned ADR: Evidence Intelligence ResponseValidator Boundary
 
 ## Executive Summary
 
-ADR 0034 Phase B gives Hunter a governed path through durable model-attempt lineage, a single-use handoff, one provider transport, append-only attempt outcomes, and governed provider-response capture. That architecture deliberately stops before semantic response validation. Hunter therefore has evidence of what a provider returned, but no accepted authority that may decide whether that response conforms to the exact requested output contract, validation rules, lineage constraints, or response-validation policy.
+ADR 0034 Phase B gives Hunter a governed path through durable model-attempt lineage, single-use handoff, one provider transport, append-only outcomes, and governed response capture, and deliberately stops before semantic response validation. Hunter therefore needs a separate authority that may decide whether an answered provider response conforms to the exact requested-output contract and exact historical validation policy without turning transport success into semantic validity or canonical truth.
 
-This preparation recommends a **separate Hunter Evidence Intelligence `ResponseValidator` service boundary**, downstream of the Model Adapter and upstream of any extraction or knowledge-proposal lifecycle. It additionally introduces a distinct **`ResponseValidationProfileAuthority`** as the canonical owner of validation-profile publication, applicability, version history, and supersession. `ResponseValidator` owns response-validity decisions but does not own profile policy history, transport execution, Source Handling, extraction, canonical truth, or promotion.
+This preparation recommends a separate Hunter Evidence Intelligence `ResponseValidator` downstream of the Model Adapter and upstream of extraction/knowledge proposal. `ResponseValidator` owns response-validity decisions, event allocation, validation authorization, and success/refusal attestations. ADR 0033 Source Handling remains the sole processing/durability authority. Persistence remains mechanical and non-authoritative. Extraction and promotion remain separate downstream authorities.
 
-Every validation or re-validation performs an independent strict-known Source Handling resolution at its own `validation_cutoff`. Attempt-time Source Handling authorization is never reusable for validation. Validation may use durable response bytes or a single-use transient live view when processing is allowed but retention is prohibited. Base validation concurrency is deduplicated **before** a per-event cutoff is assigned: the validator atomically allocates one canonical validation event from a stable cutoff-free base key, and all ordinary retries join that event. Persistence cannot forge `VALID`: successful semantic records require a validator-issued, non-caller-mintable success attestation. Fail-closed states caused by unavailable profile or Source Handling authority use a separate validator-issued refusal attestation that proves the failed/blocked resolution attempt without pretending the missing authority resolved successfully.
+Version 1.4 closes audit finding `F-001` by treating **canonical validation-profile ownership as an independent decision dimension** rather than an incidental property of validator placement. The materially distinct ownership models are now explicitly compared: a dedicated `ResponseValidationProfileAuthority`, validator-owned profile history, reuse/delegation to the upstream requested-output/schema owner, persistence-owned registry authority, and a future generic/shared profile authority. The recommendation remains a dedicated Hunter `ResponseValidationProfileAuthority`, but only after the normalized comparison below.
 
-The recommendation is `READY_FOR_ADR` only after independent architecture audit confirms the revised authority, Source Handling, event-allocation, persistence, refusal, failure-state, evidence, and quality contracts below.
+Progression to `READY_FOR_ADR` is prohibited until a targeted independent re-audit verifies that `F-001` is closed on the exact merged correction revision.
 
 ## Problem Statement
 
 ### Current condition
 
-Baseline `main` is `b43be1007566faf5b0274c7bf3c8bb05a743ab10`, the merge of PR #314. Current runtime explicitly ends the Model Adapter boundary after governed provider-response capture. There is no canonical `ResponseValidator`, semantic response validation, extraction promotion, or knowledge promotion in that path.
+The merged architecture baseline before this correction is `main` at `5840849d81039ba4bd3dff5910db2907c1ff2780`. Runtime still ends the Model Adapter boundary after governed provider-response capture. There is no accepted `ResponseValidator`, semantic response validation, extraction promotion, or knowledge promotion in that path.
 
-The legacy `SecureAIProviderRunner` directly turns provider output into `ExtractionProposal` after limited screening. That path predates ADR 0031/0033/0034 lineage and cannot be re-labelled as the new validator.
+The legacy `SecureAIProviderRunner` directly turns provider output into `ExtractionProposal` after limited screening. That path predates ADR 0031/0033/0034 lineage and cannot be relabelled as the new validator.
 
 ### Decision required
 
 This lifecycle must decide:
 
 1. who owns response-validity decisions;
-2. who owns canonical validation-profile and rule history;
-3. which exact response, contract, profile, Source Handling, and historical coordinates are authoritative;
+2. who owns canonical validation-profile publication, rule identity, applicability, correction, supersession, and historical resolution;
+3. which response, contract, profile, Source Handling, and historical coordinates are authoritative;
 4. how non-retainable but processable response content reaches validation without being persisted;
-5. how a validation event is allocated before execution, identified, deduplicated, corrected, replayed, and made non-forgeable;
-6. how failure records remain attestable when canonical profile or Source Handling resolution itself is unavailable;
+5. how a validation event is allocated before execution, deduplicated, corrected, replayed, and made non-forgeable;
+6. how refusal evidence remains attestable when profile or Source Handling authority is unavailable;
 7. which closed outcome states exist and how simultaneous failures are reduced deterministically;
 8. where validation stops before extraction or canonical promotion.
 
 ### In scope
 
 - response-validity authority;
-- validation-profile/rule authority and lifecycle;
+- canonical validation-profile/rule authority and lifecycle;
 - validation-time Source Handling re-resolution;
 - durable and transient validation inputs;
 - atomic validation-event allocation and idempotency;
@@ -56,70 +58,49 @@ This lifecycle must decide:
 - concurrency, correction, replay, persistence anti-bypass;
 - success and refusal attestation contracts;
 - closed failure/missingness states and deterministic precedence;
-- authority/ownership handoffs;
 - downstream validated-response boundary;
 - adversarial conformance obligations.
 
 ### Out of scope
 
 - runtime implementation;
-- provider routing, fallback, ranking, second provider, or dynamic model selection;
+- provider routing, fallback, ranking, second provider, dynamic model selection, load balancing, or hedging;
 - canonical source/claim/valuation truth;
 - extraction or knowledge promotion;
-- valuation, mispricing, asymmetry, ranking, opportunity, timing, portfolio, or recommendation authority;
-- Dashboard, scheduler, or governance redesign;
+- valuation, ranking, opportunity, timing, portfolio, recommendation, Dashboard, or scheduler work;
 - Issue #315 implementation;
+- governance redesign;
 - synthetic validation backfill for legacy provider artifacts.
 
-## Governance Evidence and Review Coordinates
+## Governing Evidence and Coordinates
 
-Canonical sources checked:
+This preparation is constrained by:
 
+- `docs/PROJECT_CONSTITUTION.md`
+- `docs/CANONICAL_ARCHITECTURE_MAP.md`
 - `docs/HUNTER_IMPLEMENTATION_CONTRACT.md`
 - `docs/ARCHITECTURE_AUDIT_PROTOCOL.md`
-- `docs/DEVELOPMENT_GOVERNANCE.md`
-- `docs/DEFECT_REGISTRY.json`
+- `docs/ARCHITECTURE_AUDIT_TEMPLATE.md`
 - `docs/ARCHITECTURE_DECISION_PREPARATION_GUIDE.md`
 - `docs/ARCHITECTURE_DECISION_QUALITY_STANDARD.md`
-- `docs/ADR/0034-evidence-intelligence-model-adapter-provider-attempt-boundary.md`
-- `docs/ADR/0033-source-handling-classification-authority.md`
-- `docs/ADR/0031-ai-context-prompt-intelligence-foundation.md`
-- `docs/ADR/0032-project-agnostic-prompt-intelligence-core.md`
-- `docs/ADR/0020-historical-replay-and-strict-known-semantics.md` if present under the canonical ADR 0020 path recorded by the repository index; the accepted ADR 0020 identity is authoritative even where filename spelling is repository-defined
-- accepted ADR 0016 and ADR 0009 at their canonical repository paths
-- `src/hunter/evidence_intelligence/model_adapter.py`
-- `src/hunter/evidence_intelligence/provider.py`
-- `docs/architecture-index.md`
-- Issue #315 and Issue #316
+- `docs/DEVELOPMENT_GOVERNANCE.md`
+- ADR 0034 — Model Adapter/provider attempt boundary
+- ADR 0033 — Source Handling classification authority
+- ADR 0031 — prompt/requested-output authority
+- ADR 0032 — project-agnostic prompt-intelligence core admission gate
+- ADR 0020 — historical replay and strict-known semantics
+- ADR 0016 and ADR 0009 — authority/repository separation
+- current Model Adapter/provider runtime
+- Issue #315, Issue #316, Issue #318, Issue #320
+- PR #317 preparation history and PR #319 independent-audit finding history
 
-Preparation/review coordinates:
+Correction coordinates:
 
-- base: `main` at `b43be1007566faf5b0274c7bf3c8bb05a743ab10`
-- branch: `architecture/316-response-validator-preparation`
-- review-start HEAD: `aa8c6fbd6db8a49cdf7ab36afe8dae2766ab7bc0`
-- first substantive correction: `8d9ec785dfdcdaa2d874656beb536006c58c7815`
-- traceability correction: `ce5806e05b7b523afcee1c60a3ced4efdd0162dd`
-- v1.2 correction: `e953ca288ac375f45e9087a223d03aa824cae1dc`
-- PR: #317, Ready for Review after the corrective Draft cycle
-- exact-head hosted checks on review-start HEAD passed before review findings were raised, including CI/Quality Gates, Dependency Review, CodeQL, and Hunter Governance Review.
-- Earlier green results are historical evidence only. Final readiness requires fresh hosted checks on the current exact head; no earlier green result may be substituted.
-
-### Auditable evidence coordinates
-
-| Evidence | Exact repository coordinate | Material claim supported | Limitation |
-|---|---|---|---|
-| ADR 0034 | `docs/ADR/0034-evidence-intelligence-model-adapter-provider-attempt-boundary.md` at base `b43be1007566faf5b0274c7bf3c8bb05a743ab10` | Model Adapter owns execution/response capture and stops before ResponseValidator; transport success is not semantic validity | Binding architecture; later accepted amendments would supersede only if explicitly recorded |
-| ADR 0033 | `docs/ADR/0033-source-handling-classification-authority.md` at base `b43be1007566faf5b0274c7bf3c8bb05a743ab10` | Source Handling is exclusive authority for processing/durability and must be resolved under historical coordinates | Binding architecture |
-| ADR 0031 | `docs/ADR/0031-ai-context-prompt-intelligence-foundation.md` at base `b43be1007566faf5b0274c7bf3c8bb05a743ab10` | prompt/build and requested-output contract are upstream-owned; response validation remained deferred | Binding architecture |
-| ADR 0032 | `docs/ADR/0032-project-agnostic-prompt-intelligence-core.md` at base `b43be1007566faf5b0274c7bf3c8bb05a743ab10` | no shared generic validator ownership without independent multi-consumer evidence | Binding architecture |
-| Model Adapter runtime | `src/hunter/evidence_intelligence/model_adapter.py` at base `b43be1007566faf5b0274c7bf3c8bb05a743ab10` | Phase B ends after governed response capture; no ResponseValidator exists | Runtime evidence, not architecture authority |
-| Legacy provider runtime | `src/hunter/evidence_intelligence/provider.py` at base `b43be1007566faf5b0274c7bf3c8bb05a743ab10` | legacy runner couples provider result to extraction proposal and cannot be re-labelled as canonical validator | Runtime evidence, legacy path only |
-| Governance contract | `docs/HUNTER_IMPLEMENTATION_CONTRACT.md` at base `b43be1007566faf5b0274c7bf3c8bb05a743ab10` | architecture-only contribution and exact-head discipline | Governance authority |
-| Audit protocol | `docs/ARCHITECTURE_AUDIT_PROTOCOL.md` at base `b43be1007566faf5b0274c7bf3c8bb05a743ab10` | independent audit/materiality/readiness protocol | Governance authority |
-| Quality standard | `docs/ARCHITECTURE_DECISION_QUALITY_STANDARD.md` at base `b43be1007566faf5b0274c7bf3c8bb05a743ab10`, especially Rating Scale, Quality Dimensions, Mandatory Decision Gate, Assessment Record | exact self-assessment scale and 17 mandatory dimensions | Governs preparation self-assessment, not independent audit verdict |
-| Review evidence | PR #317 review comments on `aa8c6fbd...`, `e953ca28...`, and later exact heads | Codex/CodeRabbit findings that drove v1.1-v1.3 revisions | Each review is exact-head evidence only; final audit must review current head |
-
-Where a canonical ADR filename is not asserted above, the repository's architecture index is the navigation authority. No abbreviated invented path is used as primary evidence.
+- merged audit/correction baseline: `5840849d81039ba4bd3dff5910db2907c1ff2780`
+- correction branch: `architecture/320-profile-authority-correction`
+- correction PR: #321
+- governing correction Issue: #320
+- targeted finding: PR #319 `F-001`, Class C, `Blocks ADR = YES`
 
 ## Existing Architecture
 
@@ -135,277 +116,239 @@ Upstream lineage remains:
 
 The Model Adapter owns execution and response-capture lineage. It does not own semantic response validity or validation policy.
 
-## Authority and Ownership Diagram
+## Authority and Ownership
 
 ```text
 ADR 0033 Source Handling Authority
-  owns: source-handling facts + policy + strict-known resolution
-  permits -> processing/durability decisions at validation_cutoff
+  owns processing/durability facts + policy + strict-known resolution
                     |
                     v
 ResponseValidationProfileAuthority
-  owns: canonical profile publication, applicability, version history,
-        activation/supersession, rule-set identity
-  permits -> exact profile resolution at validation_cutoff
+  owns canonical validation-profile publication, applicability,
+  version history, correction/supersession, and rule-set identity
                     |
                     v
 ResponseValidator event allocator
-  owns: stable cutoff-free validation key, atomic base-event creation,
-        one canonical event_id + validation_cutoff per base validation
+  owns stable cutoff-free base key and atomic event/cutoff allocation
                     |
                     v
 Model Adapter ------------------------------+
-  owns: attempt/outcome/response-capture    |
-        lineage and exact live response     |
-  may carry bytes but may NOT select        |
-  validation profile or Source Handling     |
-                    |                       |
-                    +---- matching capture -+
+  owns attempt/outcome/response capture     |
+  may carry exact matching transient bytes  |
+  but cannot select validation policy       |
                                             v
                                   ResponseValidator
-                                  owns: response-validity decision,
-                                        validation authorization,
-                                        success/refusal attestation
+                                  owns response-validity decision,
+                                  authorization, success/refusal attestation
                                             |
                                             v
                                   Validation Persistence
-                                  owns: mechanical append-only storage,
-                                        existence/lineage checks,
-                                        attestation verification,
-                                        uniqueness/CAS enforcement
+                                  mechanical append-only storage,
+                                  existence/lineage/attestation/CAS checks only
                                             |
                                             v
                                   Validated-response handoff
                                             |
                                             v
-                                  Future Extraction/Knowledge Proposal
-                                  consumes validation identity only
+                                  Future extraction/knowledge proposal
                                             |
                                             v
-                                  Separate Canonical Promotion Authority
+                                  Separate canonical promotion authority
 ```
 
 Forbidden authority edges:
 
-- provider/transport or Model Adapter → MUST NOT choose validation rules or mint validity;
-- caller → MUST NOT mint canonical profile/rules, validation event identity, validation authorization, success/refusal attestation, or `VALID`;
-- worker → MUST NOT choose its own validation cutoff for an already allocated base event;
-- persistence → MUST NOT select profile/rules, re-run validation, or infer validity;
-- `ResponseValidator` → MUST NOT override Source Handling or promote to canonical truth;
-- downstream extraction/knowledge code → MUST NOT reinterpret transport success as validity or mint validation records;
-- canonical promotion authority → remains separate and downstream; validation alone never grants promotion.
+- provider/transport or Model Adapter must not choose validation rules or mint validity;
+- caller must not mint canonical profile/rules, event identity, authorization, attestation, or `VALID`;
+- worker must not choose a new cutoff for an already allocated event;
+- persistence must not select policy, rerun validation, infer validity, or become profile authority;
+- `ResponseValidator` must not override Source Handling or promote to canonical truth;
+- downstream extraction/knowledge must not reinterpret transport success as validity or mint validation records;
+- validation never grants canonical-promotion authority.
 
-## Candidate Options
+## Decision Dimension A — Validation Execution Placement
 
-### Option 1 — Separate Evidence Intelligence ResponseValidator — RECOMMENDED
+### Option A1 — Separate Evidence Intelligence `ResponseValidator` — RECOMMENDED
 
-A Hunter-owned validator consumes exact governed response-capture lineage, an exact canonical validation profile resolved by `ResponseValidationProfileAuthority`, and an independent validation-time Source Handling decision. A validator-owned atomic event allocator deduplicates base validation before assigning its canonical cutoff. The validator emits append-only success or refusal evidence and stops before extraction/promotion.
+Consumes governed response-capture lineage, independently resolved validation policy, and validation-time Source Handling. Owns event allocation, semantic validity decision, and validator attestations. Stops before extraction/promotion.
 
-Advantages: strongest authority separation, deterministic validation, replayable profile history, support for non-retainable live content, concurrency-safe event identity, explicit anti-forgery and fail-closed refusal boundaries.
+Advantages: strongest separation from transport and downstream consumers; deterministic replay/idempotency; supports transient non-retainable validation; explicit anti-forgery and refusal boundaries.
 
-Costs: introduces one validator service, one canonical profile authority, one event-allocation primitive, and transient authorization/attestation contracts.
+Costs: adds one validator service and event-allocation/attestation contracts.
 
-Falsification: reject this option if the required validity semantics demonstrably cannot be separated from provider execution without losing correctness, if profile authority cannot be made independent of callers/persistence, or if stable event allocation cannot prevent duplicate base validation under concurrency. No such evidence is currently present.
+### Option A2 — Embed validation in Model Adapter — REJECTED
 
-### Option 2 — Embed validation in Model Adapter — REJECTED
+Simpler and local to response capture, but conflicts with ADR 0034's deliberate stop before semantic validation and collapses transport evidence into semantic authority.
 
-Benefit: simplest implementation and direct access to capture lineage. Cost: authority concentration. Rejected because ADR 0034 deliberately ends Model Adapter authority before semantic validation and this option would collapse transport evidence and validity.
+### Option A3 — Let extraction/knowledge layer validate — REJECTED
 
-### Option 3 — Let extraction/knowledge layer validate — REJECTED
+Reduces intermediate components but makes the downstream consumer judge its own input and couples validation to promotion.
 
-Benefit: fewer intermediate components. Cost: consumer self-validation and promotion coupling. Rejected because a downstream consumer must not become authority over whether its own input is valid.
+### Option A4 — Generic shared validator core — DEFERRED
 
-### Option 4 — Generic shared validator core — DEFERRED
+Potential future reuse, but ADR 0032 requires independent multi-consumer evidence before extracting a shared generic authority.
 
-Benefit: future reuse. Cost: premature abstraction and ownership ambiguity. Viable only after ADR 0032's independent multi-consumer evidence gate is satisfied. Hunter-specific authority stays local now.
+### Option A5 — Provider-specific validation — REJECTED
 
-### Option 5 — Provider-specific validation — REJECTED
+Keeps provider-specific schema knowledge local but creates provider lock-in and lets transport/provider code acquire canonical Hunter validity authority.
 
-Benefit: provider-specific schema knowledge is local. Cost: provider lock-in and authority laundering. Rejected because provider transports cannot acquire canonical Hunter response-validity authority.
-
-### Comparative analysis
-
-| Criterion | Option 1 | Option 2 | Option 3 | Option 4 | Option 5 |
+| Criterion | A1 Separate validator | A2 Model Adapter | A3 downstream | A4 shared core | A5 provider-specific |
 |---|---|---|---|---|---|
-| Authority separation | strongest | weak | weak | strong if admitted | unacceptable |
-| Compatibility with ADR 0034 | additive | conflicts | indirect conflict | additive if later admitted | conflicts |
-| Replay clarity | strong | coupled to execution | coupled to promotion | strong | provider-dependent |
-| Concurrency/idempotency clarity | explicit atomic event allocation | implicit/coupled | weak | possible | provider-dependent |
-| Non-retainable live validation | explicit | possible but authority-coupled | awkward | possible | provider-specific |
-| Implementation complexity | medium | low | low | high | medium |
+| Authority separation | strong | weak | weak | strong if admitted | unacceptable |
+| ADR 0034 compatibility | additive | conflicts | indirect conflict | additive if later admitted | conflicts |
+| Replay clarity | strong | execution-coupled | promotion-coupled | strong | provider-dependent |
+| Idempotency clarity | explicit allocator | coupled | weak | possible | provider-dependent |
+| Non-retainable live validation | explicit | possible but coupled | awkward | possible | provider-specific |
+| Complexity | medium | low | low | high | medium |
 | Migration risk | low/additive | high | high | medium | high |
-| Reversibility before activation | high | medium/low | low | medium | low |
+| Reversibility | high pre-activation | medium/low | low | medium | low |
 
-The recommendation is not based on implementation convenience; it is based on authority separation, accepted ADR compatibility, replay, idempotency, and anti-bypass properties.
+## Decision Dimension B — Canonical Validation-Profile Ownership
+
+This is a separate authority decision from where validation executes. A profile contains policy that is broader than the upstream requested-output schema: parser/canonicalization identity, structural evidence-reference checks, bounded resource policy, validator capability/security checks where assigned here, required dimensions, and the closed result/reason vocabulary. The owner must support append-only publication, applicability intervals or equivalent strict-known coordinates, correction/supersession, and deterministic historical resolution.
+
+### Option B1 — Dedicated Hunter `ResponseValidationProfileAuthority` — RECOMMENDED
+
+A distinct Evidence Intelligence authority owns immutable profile versions, rule-set identity, applicability, correction/supersession, and historical resolution. `ResponseValidator` consumes its resolution but cannot publish or select policy ad hoc.
+
+Benefits:
+
+- separates rule-making from rule execution;
+- prevents validator self-authorization and caller/persistence policy injection;
+- gives profile history one canonical append-only owner with strict-known replay semantics;
+- keeps upstream requested-output contracts as inputs rather than expanding their authority into validator-only concerns;
+- permits profile lifecycle to evolve independently while preserving exact historical resolution.
+
+Costs:
+
+- adds a narrow service/authority boundary and profile-history persistence surface;
+- requires explicit coordination with requested-output contract identities and validator implementation-contract identities.
+
+### Option B2 — `ResponseValidator` owns profile publication/history — REJECTED
+
+The validator would both define the rules and issue the validity result. This reduces components and can simplify deployment, but materially concentrates semantic authority: the same boundary could change policy, select the changed policy, and attest its own result. Replay also becomes coupled to validator deployment/history rather than an independently governed policy lineage.
+
+Rejected because Hunter already separates evidence authority from execution where authority laundering is possible. Mechanical anti-forgery at persistence would not cure rule-maker/judge concentration.
+
+### Option B3 — Reuse/delegate to upstream requested-output/schema owner — REJECTED FOR CURRENT SCOPE
+
+ADR 0031 upstream ownership correctly controls the requested-output contract and schema expectations that validation consumes. Reusing that owner would reduce new authority surfaces and keep request/response shape close together.
+
+However, the canonical validation profile also owns validator-specific policy that the upstream requested-output owner does not currently own: parser/canonicalization contract, evidence-reference structural rules, validator capability/security checks where applicable, bounded validation resource policy, required validation dimensions, and closed result/reason vocabulary. Giving those concerns to the upstream owner would silently widen ADR 0031 authority and couple prompt/request construction to downstream semantic-validation policy.
+
+Delegation remains allowed only for immutable **inputs** already canonically owned upstream. The profile authority must reference those exact identities; it must not duplicate or override them.
+
+### Option B4 — Validation Persistence owns the profile registry — REJECTED
+
+This can make lookup/storage implementation simple, but violates ADR 0009-style repository/authority separation. Persistence must verify and store already-authorized profile/history records; it must not decide which profile is canonical or applicable. Otherwise direct repository usage becomes a policy-authority bypass.
+
+### Option B5 — Generic/shared profile authority — DEFERRED
+
+A cross-project or project-agnostic profile authority could become attractive if multiple independent consumers need the same validation-policy lifecycle. Today that evidence is absent and ADR 0032 explicitly blocks premature shared-core authority. Hunter-specific profile ownership therefore remains local. Future admission requires a new governed decision and must preserve existing historical profile identities.
+
+### Normalized comparison
+
+| Criterion | B1 Dedicated authority | B2 Validator-owned | B3 Upstream owner | B4 Persistence-owned | B5 Shared authority |
+|---|---|---|---|---|---|
+| Rule-maker vs executor separation | strongest | poor | medium | poor | strong if admitted |
+| Canonical rule ownership fit | exact/local | conflated with execution | partial; schema only | invalid authority placement | plausible only with future evidence |
+| Append-only profile history | explicit owner | validator-coupled | would widen upstream owner | storage-centric and bypass-prone | explicit if later governed |
+| Strict-known replay | independent profile lineage | deployment/history coupled | mixes request and validation policy histories | repository state risks authority laundering | strong if future identity migration is governed |
+| Correction/supersession | dedicated append-only lifecycle | coupled to validator release | would require new upstream semantics | repository would decide policy | possible after new ADR |
+| Caller anti-forgery | strong | strong only if validator uncompromised; policy self-selection remains | strong for schema inputs, incomplete for validator policy | weak authority boundary | strong if admitted |
+| Governance impact | narrow new authority | concentrates existing validator authority | materially widens ADR 0031 owner | conflicts with repository separation | materially widens shared-core authority |
+| Implementation complexity | medium | low | medium | low | high |
+| Migration | additive | additive but coupled | requires upstream contract expansion | unsafe semantic migration | future migration decision required |
+| Reversibility | high before activation | medium | medium/low after widening | low | medium |
+
+### Recommendation rationale
+
+B1 is selected because it is the only current option that simultaneously preserves ADR 0031 requested-output ownership, ADR 0032's shared-core admission gate, ADR 0033 Source Handling exclusivity, ADR 0034 Model Adapter limits, repository non-authority, strict-known historical replay, and separation between rule publication and rule execution.
+
+B1 does **not** duplicate upstream authority. The requested-output/schema owner remains authoritative for its own exact contract identity; `ResponseValidationProfileAuthority` composes that identity with validation-only policy identities. If the requested-output contract is unresolved, the profile authority cannot fabricate it.
+
+### Falsification conditions for B1
+
+The dedicated authority recommendation must be reconsidered through a new governed revision if any of the following is proven before activation:
+
+1. the canonical validation profile contains no policy beyond an already-governed upstream requested-output contract, making the separate authority semantically empty;
+2. rule publication and historical applicability cannot be separated from validator execution without losing correctness or deterministic replay;
+3. a previously accepted authority already owns the full validation-policy lifecycle, including validator-specific rules, without widening its charter;
+4. independent multi-consumer evidence satisfies ADR 0032 and demonstrates that a shared profile authority is materially safer and simpler while preserving historical identities;
+5. the dedicated boundary creates an unresolvable split-brain in which two authorities can canonically select conflicting profiles for the same cutoff.
+
+Absent such evidence, convenience or fewer services is insufficient reason to collapse rule publication into execution, upstream request ownership, or persistence.
 
 ## Recommended Contract
 
 ### 1. Response-validity owner
 
-`ResponseValidator` is the sole owner of response-validity decisions. `VALID` means only: **conforms to this exact canonical validation contract under these exact historical coordinates**. It never means true, correct, authoritative, canonical, or promoted.
+`ResponseValidator` is the sole owner of response-validity decisions. `VALID` means only **conforms to this exact canonical validation contract under these exact historical coordinates**. It never means true, authoritative, canonical, or promoted.
 
 ### 2. Canonical validation-profile authority
 
-A Hunter Evidence Intelligence `ResponseValidationProfileAuthority` is the sole owner of canonical `ResponseValidationProfile` publication and historical rule applicability.
-
-Its responsibilities are limited to:
+`ResponseValidationProfileAuthority` solely owns:
 
 - append-only publication of immutable profile versions;
-- exact rule-set identity and profile identity;
+- exact profile and rule-set identity;
 - activation/applicability intervals or equivalent strict-known coordinates;
-- append-only supersession/correction of profile metadata;
+- append-only correction/supersession metadata;
 - deterministic resolution of the exact profile applicable at a validation cutoff.
 
-It does **not** validate provider responses and does not own Source Handling.
+It does not validate responses, own Source Handling, own requested-output/schema truth, or perform persistence. Upstream requested-output identities remain authoritative inputs. Caller-provided profile IDs, schemas, or rules are requests/evidence only.
 
-A profile identity binds at least:
+A profile binds at least:
 
 - profile schema/version;
 - validator implementation-contract identity/version;
 - requested-output-contract identity/version;
-- schema/shape rule identity;
-- canonicalization/parser contract identity/version;
+- syntax/schema/shape rule identity;
+- parser/canonicalization contract identity/version;
 - evidence-reference structural-validation rule identity/version;
 - bounded resource/size policy identity;
-- prohibited-capability/security validation rule identity where applicable;
+- prohibited-capability/security validation rule identity where assigned;
 - required validation dimensions;
 - closed result/reason vocabulary version.
 
-Caller-provided profile IDs, schemas, or rules are requests/evidence only. The validator resolves the canonical applicable profile through `ResponseValidationProfileAuthority`; neither caller nor persistence may choose the semantic policy.
-
-Historical replay binds the profile resolution identity and profile history knowable at the recorded validation cutoff. Current/latest profile state cannot substitute.
+Historical replay binds profile history knowable at the recorded cutoff; current/latest state cannot substitute.
 
 ### 3. Atomic validation-event allocation and cutoff ownership
 
-Base-validation deduplication occurs **before** a validation cutoff is assigned and before semantic worker execution begins.
+Base-validation deduplication occurs before a cutoff is assigned and before semantic worker execution. A stable `base_validation_key` excludes per-run cutoff and binds response-capture identity, requested-output-contract identity/version, requested canonical profile selector/family, and purpose `BASE_RESPONSE_VALIDATION`.
 
-The stable `base_validation_key` excludes any per-run cutoff and is deterministically derived from:
+`ResponseValidator` atomically create-if-absent allocates exactly one canonical `validation_event_id` and one `validation_cutoff` for a base key. Concurrent workers join the same event. The allocator records the requested profile selector but cannot invent/admit a canonical profile; applicability is resolved by `ResponseValidationProfileAuthority` at the event cutoff.
 
-- exact response-capture identity;
-- requested-output-contract identity/version;
-- canonical validation-profile selector/family identity requested for this validation purpose;
-- validation-purpose identity (`BASE_RESPONSE_VALIDATION`).
-
-`ResponseValidator` owns an atomic event-allocation primitive. For one `base_validation_key`, it performs create-if-absent and returns exactly one canonical `validation_event_id` plus exactly one `validation_cutoff`. Concurrent workers presenting the same base key therefore join the same allocated event; they do not receive independent cutoffs and cannot create distinct subjects by racing.
-
-The event allocator records the requested canonical profile selector/family identity, but semantic profile applicability is still resolved by `ResponseValidationProfileAuthority` at the allocator-assigned `validation_cutoff`. The allocator cannot invent or admit a profile.
-
-Ordinary retries/restarts after local worker loss reuse the existing event identity and cutoff and may only resume the same event under its persisted state machine. They are not re-validation.
-
-An explicit **re-validation** is a different event family. It requires the exact predecessor validation record/event identity and an atomically claimed next `revalidation_generation`; that new generation receives a new event ID and new cutoff. Two concurrent attempts to create the same next generation are compare-and-set competitors, so at most one succeeds.
+Worker retry/restart resumes the same event/cutoff. Explicit re-validation requires exact predecessor plus atomically claimed next `revalidation_generation` and receives a new event/cutoff.
 
 ### 4. Validation-time Source Handling
 
-Every allocated validation or re-validation event has its own canonical `validation_cutoff`.
+Every validation/re-validation independently resolves ADR 0033 Source Handling at its event-owned cutoff before content is processed. Attempt-time/capture-time `ALLOW` is never reusable authorization.
 
-Before any validation content is accessed or processed, `ResponseValidator` independently resolves ADR 0033 Source Handling using the strict-known facts and policy applicable at that **event-owned validation cutoff**. Attempt-time or capture-time `ALLOW` is never reusable authorization.
+A successful resolution binds cutoff, fact identity/version, policy identity/version, resolution identity, processing decision, and durable-category decisions. Restrictive or unresolved authority yields governed refusal evidence without fabricated `ALLOW` or fabricated resolution identity.
 
-A successful Source Handling resolution binds at least:
+### 5. Validation authorization and transient input
 
-- validation cutoff;
-- Source Handling fact identity/version;
-- Source Handling policy identity/version;
-- Source Handling resolution identity;
-- processing decision;
-- durable-category decisions for any validation-derived field.
+Only after event allocation and successful semantic-processing prerequisites may `ResponseValidator` issue a single-use, non-caller-mintable `ResponseValidationAuthorization` bound to event/cutoff, canonical profile resolution, requested-output contract, successful Source Handling resolution, capture/attempt lineage, and input mode `DURABLE` or `TRANSIENT_NOT_RETAINED`.
 
-If processing is prohibited, the restrictive resolution is evidence for `SOURCE_HANDLING_BLOCKED`. If historical Source Handling authority cannot be resolved under strict-known rules, the failed resolution attempt itself is recorded as governed refusal evidence; Hunter must not fabricate a successful resolution identity.
+Model Adapter may carry the authorization and exact matching credential-screened transient bytes; it cannot select/alter profile, event, cutoff, or Source Handling. Mismatch fails closed. Transient bytes are never persisted merely because validation occurred.
 
-### 5. Validation authorization and transient handoff
+### 6. Validation subject and idempotency
 
-Only after the event exists and required authorities resolve successfully for semantic processing does `ResponseValidator` issue a single-use opaque `ResponseValidationAuthorization`.
-
-That authorization binds:
-
-- canonical validation event ID and event-owned cutoff;
-- exact canonical profile resolution;
-- requested-output-contract identity;
-- successful Source Handling resolution identity;
-- exact response-capture/attempt lineage expected;
-- input mode (`DURABLE` or `TRANSIENT_NOT_RETAINED`).
-
-The authorization is service-owned and non-caller-mintable. The Model Adapter may **carry** this authorization when delivering matching transient response bytes, but it cannot choose, modify, or attest profile/cutoff/policy values.
-
-For transient validation:
-
-1. validator atomically obtains or joins the canonical event;
-2. profile authority and Source Handling are resolved at that event cutoff;
-3. validator issues the authorization only if semantic processing is authorized;
-4. Model Adapter supplies only the exact matching credential-screened bytes plus immutable response-capture lineage;
-5. validator atomically consumes the authorization once;
-6. transient bytes are never persisted merely because validation occurred.
-
-A mismatched capture, profile, cutoff, contract, Source Handling resolution, or event identity fails closed.
-
-### 6. Canonical validation event, subject, and idempotency
-
-`validation_event_id` is the canonical execution identity allocated atomically before work. `validation_subject_id` is a deterministic content-independent identity derived from the already allocated event plus its governed semantic authorities; it is **not** used to deduplicate concurrent workers before event allocation.
-
-For a base event, `validation_subject_id` binds:
-
-- canonical `validation_event_id`;
-- response-capture identity;
-- resolved canonical `ResponseValidationProfile` identity/version, or explicit profile-resolution-failure marker for a refusal record;
-- requested-output-contract identity/version;
-- event-owned validation cutoff;
-- successful Source Handling resolution identity, restrictive resolution identity, or explicit Source Handling-resolution-failure marker as appropriate.
-
-Idempotency rules:
-
-- one `base_validation_key` has at most one canonical base `validation_event_id`;
-- one event has at most one accepted base terminal validation/refusal record;
-- repeated workers/retries for the same event return or resume the existing event rather than allocate a new cutoff;
-- conflicting terminal submissions for one event are rejected as a validation consistency failure, never stored as parallel history;
-- persistence enforces event and terminal-record uniqueness atomically.
+`validation_subject_id` derives from the already allocated event plus governed semantic coordinates and is not used to deduplicate workers before allocation. One base key has at most one base event; one event has at most one accepted base terminal validation/refusal record. Conflicting terminal submissions are rejected, not stored as parallel history.
 
 ### 7. Immutable `ResponseValidationRecord`
 
-The append-only record binds at least:
+The append-only record binds event/subject, response capture, attempt/handoff/execution-profile/prompt lineage, requested-output contract, event cutoff/time, closed state, authorized per-dimension outcomes, input-availability mode, authorized diagnostics, and correction/revalidation predecessor/generation where applicable.
 
-- record identity/schema version;
-- canonical validation event identity;
-- validation subject identity;
-- response-capture identity;
-- `ModelAttemptOutcomeRecord`, attempt, handoff, execution-profile, prompt/build lineage;
-- requested-output-contract identity/version;
-- event-owned validation cutoff and creation time;
-- closed overall state;
-- per-dimension closed states/reason codes where semantic evaluation occurred;
-- input availability mode;
-- durable diagnostics only where independently authorized;
-- supersedes identity and correction/revalidation generation when applicable.
+State-specific authority fields are conditional: semantic states require successful profile and Source Handling resolution; `RULE_UNAVAILABLE` carries profile-resolution refusal evidence without a fake profile; `SOURCE_HANDLING_BLOCKED` carries restrictive/unresolved Source Handling evidence without fake `ALLOW`.
 
-Authority-specific fields are conditional on state:
+### 8. Closed validation vocabulary and precedence
 
-- semantic-success/semantic-invalid states bind successful canonical profile resolution and successful Source Handling processing authorization;
-- `RULE_UNAVAILABLE` binds the governed profile-resolution attempt/refusal evidence and MUST NOT invent a successful profile resolution;
-- `SOURCE_HANDLING_BLOCKED` binds either the exact restrictive Source Handling resolution or governed unresolved-authority attempt evidence, and MUST NOT invent an `ALLOW` resolution;
-- `VALIDATOR_CAPABILITY_UNKNOWN`/`VALIDATOR_ERROR` bind the exact event and available authority coordinates plus governed failure evidence; unavailable coordinates remain explicitly absent.
+Canonical top-level states are exactly:
 
-### 8. Closed validation outcome vocabulary and precedence
+`VALID`, `INVALID_SYNTAX`, `INVALID_SCHEMA`, `INVALID_OUTPUT_CONTRACT`, `INVALID_LINEAGE`, `INVALID_EVIDENCE_REFERENCE_STRUCTURE`, `PARTIAL_RESPONSE`, `INPUT_UNAVAILABLE`, `RULE_UNAVAILABLE`, `VALIDATOR_CAPABILITY_UNKNOWN`, `EVIDENCE_AMBIGUOUS`, `SOURCE_HANDLING_BLOCKED`, `SECURITY_BLOCKED`, `VALIDATOR_ERROR`.
 
-The persisted top-level state vocabulary is **exactly**:
-
-- `VALID`
-- `INVALID_SYNTAX`
-- `INVALID_SCHEMA`
-- `INVALID_OUTPUT_CONTRACT`
-- `INVALID_LINEAGE`
-- `INVALID_EVIDENCE_REFERENCE_STRUCTURE`
-- `PARTIAL_RESPONSE`
-- `INPUT_UNAVAILABLE`
-- `RULE_UNAVAILABLE`
-- `VALIDATOR_CAPABILITY_UNKNOWN`
-- `EVIDENCE_AMBIGUOUS`
-- `SOURCE_HANDLING_BLOCKED`
-- `SECURITY_BLOCKED`
-- `VALIDATOR_ERROR`
-
-No other top-level value is canonical. Unknown/unrecognized values are rejected at persistence and cannot be interpreted downstream.
-
-`VALIDATOR_ERROR` is operational failure. `VALIDATOR_CAPABILITY_UNKNOWN` is inability to establish a required validator capability. `EVIDENCE_AMBIGUOUS` is evidence insufficient to select a more specific deterministic result.
-
-When multiple conditions apply to one validation event, the overall state is selected by this deterministic precedence, highest first:
+Unknown states are rejected. Deterministic highest-first precedence is:
 
 1. `SECURITY_BLOCKED`
 2. `SOURCE_HANDLING_BLOCKED`
@@ -422,263 +365,181 @@ When multiple conditions apply to one validation event, the overall state is sel
 13. `PARTIAL_RESPONSE`
 14. `VALID`
 
-Per-dimension outcomes are preserved when semantic evaluation occurred so the top-level precedence does not erase evidence. Reason codes are from a closed, versioned registry where a canonical profile is available; pre-profile refusal reason codes belong to a separate closed validator-refusal vocabulary. Free-form diagnostics are non-authority metadata only when durability is permitted.
-
 ### 9. Non-forgeable success and refusal persistence
 
-There are two validator-issued, single-use persistence capabilities; persistence never substitutes one for the other.
+Semantic results require a validator-issued single-use `ResponseValidationAttestation` bound to exact record payload, event/subject, canonical profile resolution, successful validation-time Source Handling resolution, state, and correction/revalidation lineage.
 
-#### Successful-resolution attestation
+Pre-semantic refusal requires a distinct `ResponseValidationRefusalAttestation` bound to event/cutoff, available capture/requested-output lineage, exact authority-resolution attempt, attempted authority type, stable refusal state/reason, restrictive resolution if available or explicit governed `resolution_unavailable`, and canonical refusal payload.
 
-For records whose state required a successful canonical profile resolution and successful Source Handling processing authority, `ResponseValidator` produces `ResponseValidationAttestation` bound to:
-
-- exact `ResponseValidationRecord` identity and canonical payload digest;
-- canonical validation event and subject;
-- canonical profile resolution;
-- successful validation-time Source Handling resolution;
-- final closed validation state;
-- correction/revalidation predecessor and generation when applicable.
-
-This attestation is mandatory for `VALID` and every semantic content-validity result. A caller that constructs a structurally correct `VALID` record with genuine canonical identities but lacks the validator-issued attestation is rejected.
-
-#### Refusal attestation
-
-When semantic validation cannot lawfully start because profile authority or Source Handling authority is unavailable/blocked, `ResponseValidator` issues a distinct `ResponseValidationRefusalAttestation`. It binds:
-
-- canonical validation event ID and cutoff;
-- response-capture/requested-output-contract lineage available before the failed step;
-- exact authority-resolution attempt identity;
-- authority type attempted (`PROFILE` or `SOURCE_HANDLING`);
-- stable refusal state/reason (`RULE_UNAVAILABLE`, `SOURCE_HANDLING_BLOCKED`, or another explicitly authorized pre-semantic failure);
-- successful restrictive resolution identity when one exists, otherwise an explicit `resolution_unavailable` marker plus governed provenance of the failed strict-known lookup;
-- canonical payload digest of the refusal record.
-
-A refusal attestation MUST NOT contain or imply a canonical profile resolution when profile resolution failed, and MUST NOT contain or imply Source Handling `ALLOW` when Source Handling was restrictive or unresolved. It authorizes persistence of the refusal evidence only; it grants no semantic-validity authority and can never attest `VALID`.
-
-Persistence verifies and atomically consumes the attestation type required by the record state. It also mechanically verifies lineage existence/matching, event uniqueness, available authority coordinates, durable-field authorization, correction predecessor claims, and record structure. Missing authority is verified as explicit governed missingness, not treated as successful resolution.
+The two attestations are non-substitutable. Persistence verifies and atomically consumes the required capability and mechanically checks lineage, uniqueness, available authority coordinates or explicit governed missingness, durability authorization, correction predecessor, and structure.
 
 ### 10. Replay and re-validation
 
-Historical replay selects recorded append-only validation history under strict-known coordinates. It never calls a provider and never substitutes current profile or Source Handling state for historical state.
+Historical replay never invokes a provider or substitutes current profile/Source Handling state. Transient content that was not retainable replays only the recorded validation result plus `TRANSIENT_NOT_RETAINED`.
 
-If a validation result was produced live from transient content that was not retainable, replay returns the recorded result plus `TRANSIENT_NOT_RETAINED`; it does not regenerate or fetch bytes.
-
-Worker retry/restart for an unfinished event is not re-validation and does not get a new cutoff. Explicit re-validation atomically creates the next revalidation generation from the exact predecessor, receives a new event ID and cutoff, performs fresh canonical profile and Source Handling resolution, and obtains fresh success/refusal capabilities as applicable. It never rewrites an earlier result.
+Ordinary worker retry is not re-validation. Explicit re-validation receives a new event/cutoff and fresh profile and Source Handling resolution and fresh capabilities; it never rewrites history.
 
 ### 11. Correction and concurrent supersession
 
-Corrections are append-only and non-branching within a validation event/result lineage.
-
-A correction:
-
-- names the exact current predecessor record;
-- increments a monotonic correction generation;
-- has a new correction cutoff/creation time where the correction itself requires a new governed decision;
-- receives the attestation type appropriate to its corrected state.
-
-Persistence performs an atomic compare-and-set against the currently accepted predecessor. If two corrections race, at most one may claim that predecessor. The loser must re-resolve the current head and cannot create a sibling branch.
-
-Strict-known historical reads choose the highest correction generation whose correction coordinates were knowable at the requested cutoff. Generation is primary ordering; record identity is only an integrity/tie check, not semantic precedence.
+Corrections are append-only and non-branching. Each names the exact current predecessor, increments a monotonic generation, and uses atomic compare-and-set so concurrent siblings cannot both succeed. Strict-known reads choose the highest correction generation knowable at the requested cutoff.
 
 ### 12. Validation dimensions
 
-The validator may decide only dimensions encoded by the canonical profile and supported by available evidence, including:
+The validator may decide only profile-encoded and evidence-supported dimensions such as syntax, schema/shape, requested-output conformance, required/forbidden fields, bounded type/range/enum constraints, lineage consistency, evidence-reference structural integrity, partial/missing response classification, and explicitly assigned forbidden-capability structure checks.
 
-- syntax/parse validity;
-- top-level shape and schema conformance;
-- requested-output-contract conformance;
-- required/forbidden fields;
-- bounded type/range/enum constraints;
-- lineage consistency;
-- evidence-reference structural integrity, not claim truth;
-- partial/missing response classification;
-- forbidden capability/action-request structure when validation policy assigns that check here.
+It cannot decide source truth, claim truth, valuation truth, ranking, opportunity, recommendation, or canonical promotion.
 
-It cannot decide source truth, claim truth, valuation truth, ranking, opportunity, recommendation, or canonical knowledge promotion.
+### 13. Downstream stop boundary
 
-### 13. Downstream boundary
+A later extraction/knowledge-proposal service may consume only states allowed by its own separately governed contract, normally `VALID`, while carrying exact validation identity/lineage. `ResponseValidator` creates no extraction proposal and performs no canonical promotion.
 
-A later extraction/knowledge-proposal service may consume only validation states explicitly accepted by its own separately governed contract, normally `VALID`. It must carry exact validation identity and lineage. `ResponseValidator` creates no extraction proposal and performs no canonical promotion.
-
-## Falsification Results
+## Falsification and Hostile Cases
 
 | Scenario | Required result |
 |---|---|
-| Caller supplies permissive validation rules | rejected as authority; canonical profile authority resolves policy |
-| Current profile differs from historical profile | historical resolution remains bound to historical cutoff |
-| Source Handling became restrictive after attempt | validation-time re-resolution blocks/reclassifies validation; attempt ALLOW is ignored |
-| Two workers start same base validation simultaneously | atomic cutoff-free base key returns one event ID and one cutoff; both cannot create distinct subjects |
-| Worker crashes and retries unfinished validation | retry joins/resumes same event and cutoff; no accidental re-validation |
-| Model Adapter tries to choose profile/cutoff | rejected; it supplies only capture lineage/bytes and may carry validator authorization |
-| Profile resolution unavailable | `RULE_UNAVAILABLE` refusal record persists via refusal attestation without fake profile resolution |
-| Source Handling restrictive | `SOURCE_HANDLING_BLOCKED` refusal binds restrictive resolution; no semantic authorization is issued |
-| Source Handling strict-known lookup unresolved | refusal binds failed lookup provenance and explicit missingness; no fake ALLOW/resolution identity |
-| Two corrections or re-validations race for same predecessor generation | compare-and-set permits one successor/event; no branching |
-| Direct repo write submits canonical-looking `VALID` | rejected without successful-resolution validator attestation |
-| Refusal attestation is presented for `VALID` | rejected by attestation/state compatibility rule |
-| Provider returned valid JSON but wrong contract | deterministic invalid contract state |
-| Validator capability cannot be established | `VALIDATOR_CAPABILITY_UNKNOWN` with governed available-coordinate failure evidence |
-| Evidence is ambiguous | `EVIDENCE_AMBIGUOUS` |
-| Multiple failures occur | closed precedence selects one top-level state while available per-dimension states remain recorded |
-| Exact bytes were transient only | recorded validation may replay, bytes do not regenerate |
-| Validation fails | no provider retry authority is created |
+| Caller supplies permissive rules | rejected; canonical profile authority resolves policy |
+| Validator tries to publish/select its own ungoverned profile | rejected; rule publication belongs to profile authority |
+| Upstream requested-output owner tries to define validator-only policy without new authority | rejected; upstream identity remains an input only |
+| Persistence marks a profile canonical/applicable | rejected; storage is non-authoritative |
+| Current profile differs from historical profile | replay uses historical cutoff resolution |
+| Source Handling became restrictive after attempt | validation-time re-resolution blocks/reclassifies; attempt `ALLOW` ignored |
+| Two workers start the same base validation | one event ID and cutoff; both cannot create distinct subjects |
+| Worker crashes/retries | rejoins the same event/cutoff |
+| Profile resolution unavailable | `RULE_UNAVAILABLE` refusal without fake profile resolution |
+| Source Handling restrictive/unresolved | `SOURCE_HANDLING_BLOCKED` with restrictive/failed-resolution provenance, no fake `ALLOW` |
+| Direct repository write submits canonical-looking `VALID` | rejected without validator success attestation |
+| Refusal attestation is used for `VALID` | rejected |
+| Later profile/Source Handling substituted into replay | rejected |
+| Two corrections race | CAS permits at most one successor |
+| Transport succeeds with wrong output contract | deterministic semantic invalid state, never implicit `VALID` |
+| Validation succeeds | grants no canonical truth or promotion authority |
 | Legacy artifact is presented as validated | rejected; no synthetic relabelling/backfill |
-| #315 is assumed solved | rejected; remains separate unless completed explicitly |
+| #315 is assumed solved | rejected; remains separate |
 
 ## Mandatory Conformance Cases
 
-A future ADR and implementation must make these deterministic and adversarially testable:
+A future ADR and implementation must mechanically prove at minimum:
 
-1. `SUCCEEDED_TRANSPORT` alone cannot produce `VALID`.
-2. Caller-supplied schemas/rules cannot become canonical profile authority.
-3. `ResponseValidationProfileAuthority` alone publishes/resolves canonical profile history.
-4. Current profile/rules cannot substitute for historical profile resolution.
-5. Base validation concurrency is deduplicated using a stable key that excludes per-run cutoff.
-6. Concurrent workers for one base key receive one canonical event ID and one canonical validation cutoff.
-7. Worker retry/restart resumes the same unfinished event; it cannot silently mint a new cutoff.
-8. Explicit re-validation requires exact predecessor + next generation and atomically creates a new event/cutoff.
-9. Every validation/re-validation event independently re-resolves Source Handling at its event-owned cutoff.
-10. Attempt-time/capture-time Source Handling `ALLOW` cannot authorize later validation.
-11. Successful semantic validation records bind exact Source Handling fact/policy/resolution identities.
-12. A restrictive Source Handling resolution produces fail-closed refusal evidence and never semantic authorization.
-13. An unresolved strict-known Source Handling lookup persists explicit governed missingness without fabricated resolution identity.
-14. `RULE_UNAVAILABLE` persists through a refusal attestation that contains no fake canonical profile resolution.
-15. A validator-issued `ResponseValidationAuthorization` is single-use and non-caller-mintable and is issued only after semantic-processing prerequisites succeed.
-16. Model Adapter supplies only matching transient bytes/capture lineage and cannot select/alter profile, cutoff, event, or Source Handling policy.
-17. Transient validation persists zero prohibited response bytes/hash/size/content-derived IDs.
-18. Mismatched transient capture/authorization/event fails closed.
-19. One canonical event has at most one accepted base terminal validation/refusal record.
-20. Conflicting duplicate terminal results for one event cannot branch history.
-21. `VALIDATOR_ERROR`, `VALIDATOR_CAPABILITY_UNKNOWN`, and `EVIDENCE_AMBIGUOUS` remain distinct.
-22. Only the closed top-level vocabulary is accepted; unknown state/reason code cannot be interpreted as `VALID`.
-23. Simultaneous failures use the canonical precedence deterministically.
-24. A structurally correct direct repository write using genuine canonical identities but no validator success attestation is rejected.
-25. A refusal attestation cannot attest `VALID` or any state requiring successful semantic authority.
-26. Success/refusal attestation reuse, record substitution, event substitution, or subject substitution is rejected.
-27. Persistence conditionally verifies successful authority coordinates or explicit governed missingness according to state; it never requires unavailable authority to have resolved successfully.
-28. Correction is append-only, names exact predecessor, and increments generation.
-29. Concurrent corrections cannot create sibling successors from one predecessor.
-30. Strict-known replay selects latest applicable correction generation at cutoff, never oldest/current unconditionally.
-31. Historical replay never invokes provider/network or regenerates prohibited bytes.
-32. Explicit re-validation creates a new event/cutoff/profile resolution/Source Handling resolution and new capabilities; ordinary worker retry does not.
-33. `VALID` grants no canonical truth or promotion authority and cannot itself create an extraction proposal.
-34. Malformed/partial/contract-invalid responses cannot cross a downstream handoff that requires `VALID`.
-35. Provider-specific transport cannot mint validation records, profiles, event IDs, authorization, or attestation.
-36. Legacy `ExtractionProposal` / `AIProviderArtifact` cannot be retroactively accepted as `ResponseValidationRecord`.
-37. Hunter Governance Review and Merge Readiness acquire no provider/credential dependency from this architecture.
-38. Issue #315 remains separately unresolved unless explicitly completed.
-39. Deliberately weakening each reusable authority, replay, event-allocation, idempotency, Source Handling, durability, precedence, or attestation guard causes its named regression to fail.
+1. transport success alone cannot produce `VALID`;
+2. caller-supplied profile/schema/rules cannot become canonical validation policy;
+3. only `ResponseValidationProfileAuthority` publishes/resolves canonical profile history;
+4. `ResponseValidator` cannot publish an ungoverned profile and then attest under it;
+5. upstream requested-output/schema authority remains authoritative only for its own contract and cannot acquire validator-only policy by delegation without a new governed decision;
+6. persistence cannot select profile applicability or become a policy bypass;
+7. current profile/rules cannot substitute for historical resolution;
+8. base concurrency yields one event and cutoff;
+9. worker retry resumes the same event; explicit re-validation creates a new governed generation/event/cutoff;
+10. every validation/re-validation independently resolves Source Handling at its event cutoff;
+11. attempt-time `ALLOW` cannot authorize validation;
+12. restrictive/unresolved Source Handling and unresolved profile authority persist truthful refusal evidence without fabricated successful identities;
+13. validator authorization is single-use and non-caller-mintable;
+14. transient validation persists zero prohibited response bytes/hash/size/content-derived IDs;
+15. one event has at most one accepted base terminal record;
+16. unknown validation states are rejected and simultaneous failures use canonical precedence;
+17. canonical-looking direct persistence without the state-compatible validator attestation is rejected;
+18. attestation reuse, record/event/subject substitution, or success/refusal substitution is rejected;
+19. corrections are append-only and CAS prevents sibling successors;
+20. strict-known replay never invokes provider/network or substitutes current authority;
+21. `VALID` grants no truth/promotion authority and cannot create extraction proposal;
+22. legacy artifacts cannot be retroactively accepted as validation records;
+23. Issue #315 remains independently unresolved unless explicitly completed;
+24. deliberately weakening each reusable authority, replay, event-allocation, Source Handling, durability, precedence, or attestation guard makes its named regression fail.
 
 ## Persistence, Security, and Privacy
 
-Validation-derived excerpts, diagnostics, normalized values, hashes, sizes, and content-derived identifiers are independently governed durability categories. Processing permission never grants persistence permission.
+Validation-derived excerpts, diagnostics, normalized values, hashes, sizes, and content-derived identifiers are independently governed durability categories. Processing permission never grants persistence permission. Credential-bearing response material rejected by Phase B cannot be laundered into durable validation evidence.
 
-Credential-bearing response content rejected by Phase B cannot be laundered into durable validation evidence. The validator also fails closed if credential safety of a durable derived field cannot be established.
+Profile/event/authorization/attestation records are operational authority artifacts, not content-retention workarounds. They may bind identities, decisions, or governed missingness but may not encode prohibited response content.
 
-Authorization, event-allocation records, success attestations, and refusal attestations are operational authority artifacts, not content-retention workarounds. They bind identities, attempts, decisions, or governed missingness but may not encode prohibited response content.
+## Legacy, Migration, and Rollback
 
-## Legacy and Migration
+Legacy provider/extraction history remains explicitly unvalidated. No backfill may fabricate profile resolutions, Source Handling decisions, events, authorization, attestations, or validation records.
 
-The existing legacy provider/extraction path remains historical. No backfill may fabricate validation records, profile resolutions, Source Handling decisions, event allocations, authorization, or attestations for old artifacts. Downstream consumers must distinguish legacy/unvalidated data explicitly.
+Migration is additive. Existing Model Adapter identity does not change. Before activation, downstream consumers that require validated responses must opt into the new validated-response handoff and reject legacy-unvalidated state.
 
-Migration is additive: no existing Model Adapter identity changes. Before activation, downstream consumers that require validated responses must explicitly switch to the new validation record/handoff and reject legacy-unvalidated state.
-
-Rollback before activation is straightforward: do not activate the consumer handoff. After append-only validation history exists, rollback disables new production use but never deletes or rewrites historical validation records.
+Before activation, rollback is simply non-activation. After append-only validation history exists, rollback stops new production use but never deletes or rewrites history.
 
 ## Operational Quality
 
-Validation is local and provider-free. A validator failure records `VALIDATOR_ERROR` or another closed state where evidence supports it; it never triggers network retry. Atomic event allocation ensures local worker restarts do not accidentally become re-validation. Observability may report counts/latency/reason codes only within Source Handling and credential-safety constraints. Availability failure remains explicit and cannot default to `VALID`.
+Validation is local and provider-free. Validator failure remains an explicit closed state and never creates provider retry authority. Atomic event allocation prevents worker restarts from accidentally becoming re-validation. Observability is bounded by Source Handling and credential safety. Availability failure cannot default to `VALID`.
 
 ## Open Questions
 
-Non-blocking for architecture selection, but required before activation where applicable:
+Non-blocking implementation details include exact parser/schema library, physical database schema/indexes for allocation/CAS, durable diagnostic category mapping, concrete opaque/cryptographic capability mechanism, and future shared-core admission if ADR 0032 later obtains independent multi-consumer evidence.
 
-- exact parser/schema library;
-- exact database schema and indexes implementing event allocation/CAS;
-- exact durable diagnostic field-category mapping;
-- exact cryptographic/opaque implementation mechanism for non-caller-mintable capabilities while preserving the authority contract;
-- whether forbidden-capability structural checks remain duplicated as independent capture and semantic-validation gates;
-- future generic-core admission if ADR 0032 later obtains independent multi-consumer evidence.
-
-The **top-level validation state vocabulary, precedence, canonical profile authority, event-before-cutoff rule, validation-time Source Handling requirement, idempotency rule, and state-compatible success/refusal attestation split are not open questions** in this preparation.
+The canonical top-level vocabulary, precedence, dedicated profile authority recommendation, event-before-cutoff rule, validation-time Source Handling, retry/re-validation distinction, and state-compatible success/refusal attestation split are not implementation defaults; they are architecture decisions subject to targeted independent re-audit before ADR drafting.
 
 ## Constitution and Governance Review
 
-The recommendation is evidence-first and fail-closed. Unknown validity remains unknown; provider output is never promoted merely because it arrived; prohibited evidence is never reconstructed. Unresolved authority is recorded as explicit governed missingness rather than fabricated success. No trading, portfolio, recommendation, or autonomous-action authority is introduced.
+The design remains evidence-first and fail-closed. Unknown validity remains unknown; provider output is not promoted because it arrived; prohibited evidence is not reconstructed; unresolved authority is recorded as explicit missingness. No trading, portfolio, recommendation, or autonomous-action authority is introduced.
 
-This contribution remains architecture preparation only. No runtime code or accepted ADR is modified. PR #317 is Ready for Review; any new exact-head finding or failed check blocks progression. Independent architecture audit is mandatory before ADR drafting. Merge remains owner-only.
+This contribution is architecture preparation only. It changes no runtime code and accepts no ADR. PR #321 is the correction contribution for Issue #320. Exact-head checks and independent review must be green before merge. After merge, targeted independent re-audit of `F-001` is mandatory before ADR drafting. Merge remains owner-only.
 
 ## Quality Assessment
 
-Ratings use only the scale from `docs/ARCHITECTURE_DECISION_QUALITY_STANDARD.md`: `EXCELLENT`, `GOOD`, `ACCEPTABLE`, `NEEDS_IMPROVEMENT`, `UNACCEPTABLE`.
+Ratings use the repository scale: `EXCELLENT`, `GOOD`, `ACCEPTABLE`, `NEEDS_IMPROVEMENT`, `UNACCEPTABLE`.
 
 | Dimension | Rating | Evidence and rationale | Blocking limitation |
 |---|---|---|---|
-| Problem correctness | EXCELLENT | Gap is explicitly left after ADR 0034 response capture and confirmed by current Model Adapter runtime | None identified |
-| Scope completeness | GOOD | In/out scope, dependencies, stop boundaries, #315 separation, downstream boundary are explicit | Physical implementation details intentionally deferred |
-| Canonical consistency | GOOD | ADR 0031/0032/0033/0034/0020/0016/0009 and governance boundaries are reconciled; no accepted ADR is amended by this preparation | Independent audit still required |
-| Evidence integrity | GOOD | Full repository paths, baseline SHA, review heads, evidence types, and limitations are recorded | Final exact-head checks/audit must use latest head |
-| Assumption discipline | GOOD | Key assumptions are converted into falsification/conformance cases and authority constraints rather than hidden defaults | Provider-independent parser choice remains deferred |
-| Option completeness | GOOD | Separate validator, embedded adapter, downstream owner, generic core, provider-specific owner are considered | No additional materially distinct owner found |
-| Comparative fairness | GOOD | Same authority, compatibility, replay, complexity, migration, reversibility criteria applied across options; benefits as well as costs recorded | Quantitative cost is not meaningful at architecture-prep stage |
-| Falsifiability | EXCELLENT | Falsification table plus 39 adversarial conformance obligations covers authority, replay, Source Handling, event allocation, concurrency, refusal, anti-forgery, precedence | Runtime mutation proof belongs to implementation |
-| Authority and ownership clarity | EXCELLENT | Ownership diagram and forbidden edges distinguish Source Handling, profile authority, event allocation, Model Adapter, validator, persistence, downstream, promotion | Independent audit must challenge new profile/event authority boundaries |
-| Persistence and replay quality | EXCELLENT | cutoff-free event key, atomic event allocation, idempotency, state-compatible attestations, CAS correction/revalidation, generation ordering, strict-known replay, transient non-retention are explicit | Physical schema/index choice deferred |
-| Evidence and provenance quality | GOOD | exact capture/attempt/build/event/profile/Source Handling coordinates and explicit resolution missingness are required | Domain claim provenance is correctly out of validator scope |
-| Operational quality | GOOD | local/provider-free validation, fail-closed availability, worker-restart semantics, no retry authority, observability constraints, rollback posture recorded | Concrete SLOs are implementation/operations work |
-| Implementation and migration impact | GOOD | additive migration, no legacy backfill, downstream opt-in, rollback semantics, new authority/event/record/capability boundaries identified | Effort estimate not fixed before ADR/implementation plan |
-| Testability and validation | EXCELLENT | 39 deterministic adversarial cases define acceptance surface, including same-key concurrent allocation and unresolved-authority refusal tests | Actual tests wait for implementation authority |
-| Maintainability and extensibility | GOOD | Hunter-owned now, shared-core deferred by ADR 0032 gate, provider-neutral separation avoids hidden coupling | Future second-consumer evidence may justify later extraction |
-| Risk quality | GOOD | material authority, privacy, replay, event race, refusal, legacy, operational and premature-abstraction risks have explicit mitigations throughout contract | Residual implementation mistakes require regression/mutation testing |
-| Traceability | GOOD | Issue #316, #315, ADPR-0010, PR #317, base, review/correction commits, current lifecycle are explicit | ADR/merge/release remain legitimately unset |
+| Problem correctness | EXCELLENT | ResponseValidator gap remains explicitly downstream of ADR 0034 capture | None identified |
+| Scope completeness | GOOD | validation, profile ownership, replay, persistence, transient input, refusal, downstream stop, #315 separation explicit | runtime details deferred |
+| Canonical consistency | GOOD | ADR 0031/0032/0033/0034/0020/0016/0009 reconciled without widening their owners | targeted re-audit required |
+| Evidence integrity | GOOD | exact merged correction baseline and governing issues/PRs recorded | final review must bind exact head |
+| Assumption discipline | GOOD | profile-owner choice now has explicit alternatives and falsification conditions | future shared-core evidence may change recommendation |
+| Option completeness | GOOD | execution placement and profile ownership are separate decision dimensions; B1-B5 cover dedicated, validator, upstream, persistence, and shared authority models | targeted auditor must confirm no material owner class omitted |
+| Comparative fairness | GOOD | all profile-owner models use authority separation, ownership fit, history, replay, correction, anti-forgery, governance, complexity, migration, reversibility | quantitative cost not meaningful here |
+| Falsifiability | EXCELLENT | dedicated-authority recommendation has explicit disconfirming conditions and hostile cases | runtime mutation proof waits for implementation |
+| Authority and ownership clarity | EXCELLENT | rule-maker, executor, Source Handling, transport, persistence, and promotion are separated | targeted audit must close F-001 |
+| Persistence and replay quality | EXCELLENT | append-only profile history, strict-known resolution, event allocation, CAS, attestation, transient non-retention explicit | physical schema deferred |
+| Evidence and provenance quality | GOOD | capture/attempt/build/event/profile/Source Handling coordinates required | claim truth remains correctly out of scope |
+| Operational quality | GOOD | provider-free local validation, fail-closed availability, retry/re-validation distinction | SLOs deferred |
+| Implementation and migration impact | GOOD | additive migration and explicit new authority/event/record/capability surfaces | effort estimate deferred |
+| Testability and validation | EXCELLENT | hostile cases cover profile-owner bypasses plus prior concurrency/replay/attestation cases | implementation tests not yet authorized |
+| Maintainability and extensibility | GOOD | Hunter-local authority now; shared extraction deferred by ADR 0032 | future consumer evidence may justify supersession |
+| Risk quality | GOOD | authority concentration, upstream widening, repository laundering, replay, privacy, race, and premature abstraction risks explicitly mitigated | residual implementation risk remains |
+| Traceability | GOOD | #316, #318, #319 F-001, #320, PR #321, and merged baseline are explicit | ADR not yet created |
 
-No mandatory dimension is below `ACCEPTABLE`; Constitution/Governance-related consistency and authority dimensions are at least `GOOD`; evidence integrity, option completeness, comparative fairness, and falsifiability are at least `ACCEPTABLE`. Self-assessment therefore permits `READY_FOR_ADR` **only after** independent audit of the current exact head finds no blocking issue.
+No mandatory quality dimension is below `ACCEPTABLE`. This self-assessment permits **targeted re-audit**, not ADR drafting.
 
 ## Architecture Readiness
 
-- Outcome: `READY`, subject to independent audit of v1.3.
-- Canonical ownership is explicit: profile history belongs to `ResponseValidationProfileAuthority`; validity decisions and atomic validation-event allocation belong to `ResponseValidator`; Source Handling remains ADR 0033-owned; persistence is mechanical; promotion remains downstream and separate.
-- Base validation is deduplicated before cutoff assignment, so concurrent workers cannot create distinct subjects merely by racing cutoffs.
-- Worker retry/restart is distinguished from explicit re-validation.
-- Validation-time authorization cannot reuse attempt-time Source Handling.
-- Unavailable profile/Source Handling authority remains persistable through state-compatible refusal attestation without fabricated successful resolution.
-- Persistence cannot mint `VALID` without validator success attestation.
-- Closed top-level failure states and deterministic precedence are defined.
-- Evidence coordinates and all mandatory quality dimensions are recorded.
+- Outcome: `READY_FOR_REVIEW` for v1.4 correction.
+- The previously omitted profile-authority option space is explicit and normalized.
+- Dedicated `ResponseValidationProfileAuthority` remains recommended after comparison, not by assumption.
+- Source Handling remains ADR 0033-owned; Model Adapter remains transport/capture-only; persistence remains non-authoritative; promotion remains downstream.
+- Event-before-cutoff allocation, retry vs re-validation, truthful unresolved-authority refusal, anti-forgery attestation, closed vocabulary, and strict-known replay remain unchanged.
 
 ## ADR Readiness
 
-- Outcome: `READY_FOR_ADR` only if independent architecture audit returns no blocking finding on the exact current head.
-- Proposed ADR title: Evidence Intelligence ResponseValidator Boundary.
-- ADR must preserve every authority, event-allocation, cutoff, subject, success/refusal attestation, replay, precedence, and closed-state invariant in this v1.3 preparation.
-- Parser/library choice, capability mechanism, and physical database schema remain implementation details.
+- Outcome: `TARGETED_REAUDIT_REQUIRED`.
+- ADR drafting is prohibited until a targeted independent audit verifies `F-001` is closed on the exact merged v1.4 correction and returns the canonical readiness verdict permitted by the audit protocol.
+- Proposed ADR title remains: Evidence Intelligence ResponseValidator Boundary.
 
 ## Decision History
 
 | Date | State | Change | Author or reviewer |
 |---|---|---|---|
-| 2026-08-24 | READY_FOR_REVIEW | Initial preparation completed from post-PR #314 `main` | OpenAI GPT-5.6 Sol |
-| 2026-08-24 | READY_FOR_REVIEW | v1.1 resolves canonical profile authority, validation-time Source Handling, ownership diagram, transient authorization, subject/idempotency/correction, closed outcome vocabulary, non-forgeable validator attestation, and governance evidence | OpenAI GPT-5.6 Sol |
-| 2026-08-24 | READY_FOR_REVIEW | v1.2 completes auditable repository coordinates, freezes deterministic outcome precedence, completes all 17 mandatory quality ratings, and synchronizes PR #317 traceability | OpenAI GPT-5.6 Sol |
-| 2026-08-24 | READY_FOR_REVIEW | v1.3 closes exact-head Codex findings by allocating/deduplicating validation events before cutoff assignment and splitting successful-resolution attestation from attestable unresolved-authority refusal evidence | OpenAI GPT-5.6 Sol |
+| 2026-08-24 | READY_FOR_REVIEW | Initial preparation from post-PR #314 architecture | OpenAI GPT-5.6 Sol |
+| 2026-08-24 | READY_FOR_REVIEW | v1.1 established profile authority, validation-time Source Handling, transient authorization, closed outcomes, and persistence anti-forgery | OpenAI GPT-5.6 Sol |
+| 2026-08-24 | READY_FOR_REVIEW | v1.2 completed auditable coordinates, precedence, quality ratings, and traceability | OpenAI GPT-5.6 Sol |
+| 2026-08-24 | READY_FOR_REVIEW | v1.3 allocated/deduplicated validation events before cutoff and split success from unresolved-authority refusal attestation | OpenAI GPT-5.6 Sol |
+| 2026-08-24 | READY_FOR_REVIEW | v1.4 closes the preparation-side scope of PR #319 F-001 by independently evaluating and normalizing materially distinct profile-authority ownership models; progression remains blocked on targeted re-audit | OpenAI GPT-5.6 Sol |
 
 ## Traceability
 
-- Issue: #316
-- Follow-up: #315 (separate)
-- ADPR: `ADPR-0010`
-- PR: #317 (Ready for Review; merge remains owner-only)
-- Base: `b43be1007566faf5b0274c7bf3c8bb05a743ab10`
-- Review-start HEAD: `aa8c6fbd6db8a49cdf7ab36afe8dae2766ab7bc0`
-- First corrective commit: `8d9ec785dfdcdaa2d874656beb536006c58c7815`
-- Architecture-index traceability commit: `ce5806e05b7b523afcee1c60a3ced4efdd0162dd`
-- v1.2 commit: `e953ca288ac375f45e9087a223d03aa824cae1dc`
-- Current v1.3 commit: established by the commit containing this revision; fresh hosted exact-head checks and review must bind that SHA
+- Preparation Issue: #316
+- Independent audit Issue: #318
+- Blocking audit contribution: PR #319, merged at `5840849d81039ba4bd3dff5910db2907c1ff2780`
+- Blocking finding: `F-001`, Class C
+- Correction Issue: #320
+- Correction PR: #321
+- Related follow-up: #315 (separate)
+- ADPR: `ADPR-0010` v1.4
+- Correction baseline: `5840849d81039ba4bd3dff5910db2907c1ff2780`
 - ADR: not yet created
-- Implementation: not authorized by this record
-- Merge commit: not yet created
-- Release: not yet assigned
+- Runtime implementation: not authorized
+- Release: not assigned
 
 ## Immutability and Supersession
 
-After `APPROVED`, this record becomes historical evidence. Substantive later changes require a new ADPR that explicitly supersedes it. Non-substantive link completion and typographical corrections must remain auditable.
+After `APPROVED`, this record becomes historical evidence. Substantive later changes require a governed superseding decision. Until approval, corrections remain auditable through version, issue, PR, commit, and independent-audit lineage.
