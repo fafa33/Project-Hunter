@@ -615,6 +615,44 @@ class ModelAdapterPersistenceRepository:
             outcomes.append(_outcome_from_payload(json.loads(payload_json)))
         return tuple(outcomes)
 
+    def authoritative_outcome(self, attempt_id: str, cutoff: datetime) -> ModelAttemptOutcomeRecord | None:
+        """The outcome that currently governs this attempt, as known at the cutoff.
+
+        `append_outcome` admits a correction as a new record carrying
+        `supersedes_outcome_id`, so an attempt can hold a chain of outcomes. The
+        governing one is the head of that chain: the outcome that no other outcome
+        *known at this cutoff* supersedes. Reading the earliest row instead would
+        make a correction invisible forever, and reading the latest row blindly
+        would promote a superseded record the moment ordering wobbled.
+
+        Strict-known throughout: a correction recorded after the cutoff does not
+        retroactively govern an earlier read.
+        """
+        _aware("cutoff", cutoff)
+        moment = cutoff.astimezone(UTC).isoformat()
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT o.payload_hash, o.payload_json FROM model_attempt_outcome_records AS o
+                WHERE o.attempt_id = ? AND o.recorded_at <= ?
+                  AND NOT EXISTS (
+                      SELECT 1 FROM model_attempt_outcome_records AS s
+                      WHERE s.attempt_id = o.attempt_id
+                        AND s.recorded_at <= ?
+                        AND s.supersedes_outcome_id = o.outcome_id
+                  )
+                ORDER BY o.recorded_at DESC, o.outcome_id DESC
+                LIMIT 1
+                """,
+                (attempt_id, moment, moment),
+            ).fetchone()
+        if row is None:
+            return None
+        payload_json = str(row["payload_json"])
+        if _sha256(payload_json) != str(row["payload_hash"]):
+            raise ModelAdapterPersistenceCorruption("persisted outcome hash mismatch")
+        return _outcome_from_payload(json.loads(payload_json))
+
     def strict_known_response_artifact(self, attempt_id: str, cutoff: datetime) -> ProviderResponseArtifact | None:
         """Return exactly the response evidence durably authorized at the cutoff.
 
@@ -622,18 +660,39 @@ class ModelAdapterPersistenceRepository:
         content, this returns the governed unavailability state that was recorded
         then. It never reconstructs bytes, hash, size, or a derived identity from
         current policy, and it never re-invokes the provider to fill the gap.
+
+        Follows supersession: the artifact returned is the one attached to the
+        outcome that governs the attempt at this cutoff, so a correction that
+        attaches revised response evidence is what a later read sees. Where the
+        governing outcome carries no artifact of its own, the most recent earlier
+        artifact known at the cutoff stands, because a correction that records no
+        new response evidence does not erase the evidence already captured.
         """
         _aware("cutoff", cutoff)
+        moment = cutoff.astimezone(UTC).isoformat()
+        governing = self.authoritative_outcome(attempt_id, cutoff)
         with self._connect() as connection:
-            row = connection.execute(
-                """
-                SELECT payload_hash, payload_json FROM provider_response_artifacts
-                WHERE attempt_id = ? AND recorded_at <= ?
-                ORDER BY recorded_at, response_artifact_id
-                LIMIT 1
-                """,
-                (attempt_id, cutoff.astimezone(UTC).isoformat()),
-            ).fetchone()
+            row = None
+            if governing is not None:
+                row = connection.execute(
+                    """
+                    SELECT payload_hash, payload_json FROM provider_response_artifacts
+                    WHERE attempt_id = ? AND outcome_id = ? AND recorded_at <= ?
+                    ORDER BY recorded_at DESC, response_artifact_id DESC
+                    LIMIT 1
+                    """,
+                    (attempt_id, governing.outcome_id, moment),
+                ).fetchone()
+            if row is None:
+                row = connection.execute(
+                    """
+                    SELECT payload_hash, payload_json FROM provider_response_artifacts
+                    WHERE attempt_id = ? AND recorded_at <= ?
+                    ORDER BY recorded_at DESC, response_artifact_id DESC
+                    LIMIT 1
+                    """,
+                    (attempt_id, moment),
+                ).fetchone()
         if row is None:
             return None
         payload_json = str(row["payload_json"])

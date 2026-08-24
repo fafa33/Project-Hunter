@@ -255,11 +255,11 @@
     {
       "id": "MA-006",
       "class": "retry-authorized-by-caller-intent-rather-than-by-predecessor-outcome-evidence",
-      "source": "Issue #313 ADR 0034 Phase B hostile self-review: prepare_attempt accepted attempt_ordinal > 1 with only a predecessor attempt identity, so a caller could prepare and dispatch a second attempt after an uncertain first attempt whose request the provider may already have accepted",
+      "source": "Issue #313 ADR 0034 Phase B hostile self-review: prepare_attempt accepted attempt_ordinal > 1 with only a predecessor attempt identity, so a caller could prepare and dispatch a second attempt after an uncertain first attempt whose request the provider may already have accepted. Recurrence on PR #314 independent review (Codex P1): the first guard derived its decision from the caller-supplied predecessor ModelAttemptOutcomeRecord, so a fabricated record naming the predecessor and claiming RETRY_REQUIRES_NEW_ATTEMPT defeated the gate entirely while the repository held an uncertain outcome or none at all — the prior hardening was insufficient because it checked the shape of the evidence instead of resolving the authority",
       "classification": "systemic",
       "guard_boundary": "ModelAdapterService.prepare_attempt, before any authority resolution or durable write",
-      "guard": "a retry requires the predecessor attempt's own recorded ModelAttemptOutcomeRecord, checked before Source Handling is resolved and before anything durable exists, and admitted only when its retry_authorization is RETRY_REQUIRES_NEW_ATTEMPT. derive_retry_authorization() grants that only where the transport proved non-delivery or the provider established it rejected the request instead of executing it; a rate limit, a server error, and every uncertain state block retry, and an attempt with no recorded outcome is treated as uncertain rather than as retryable. An authorized retry still gets a new attempt, new cutoff, fresh Source Handling resolution, new handoff, and a new idempotency key, and terminal_outcome_exists() prevents an attempt that already has an outcome from being dispatched again",
-      "test": "tests/test_model_adapter_phase_b.py::test_uncertain_delivery_blocks_a_retry_from_being_prepared_at_all",
+      "guard": "a retry requires the predecessor attempt's own DURABLE outcome, resolved from persistence via authoritative_outcome() strict-known at the new attempt's cutoff and following the supersession chain, checked before Source Handling is resolved and before anything durable exists. A caller-supplied record is evidence only: it is compared against the durable one and a mismatch is rejected, never used in its place — the same treatment prepare_attempt already gives a caller-supplied Source Handling decision and the ADR 0033 persistence invariant requires generally. Retry is admitted only when the durable outcome's retry_authorization is RETRY_REQUIRES_NEW_ATTEMPT, which derive_retry_authorization() grants only where the transport proved non-delivery or the provider established it rejected the request instead of executing it; an attempt with no durable outcome is uncertain and blocks retry. An authorized retry still gets a new attempt, cutoff, Source Handling resolution, handoff, and idempotency key, and terminal_outcome_exists() prevents re-dispatching an attempt that already has an outcome",
+      "test": "tests/test_model_adapter_phase_b.py::test_a_fabricated_predecessor_outcome_cannot_authorize_a_retry",
       "status": "guarded"
     },
     {
@@ -270,6 +270,26 @@
       "guard_boundary": "provider transport send contract and Model Adapter dispatch path",
       "guard": "every send requires a DispatchAuthorization, which refuses construction without a module-private mint held only by the Model Adapter and is created only after consume_handoff_once has already claimed the handoff by compare-and-set, so a dispatch authorization cannot exist unless a durable attempt and an unconsumed handoff existed a moment earlier. The adapter additionally binds the dispatch to exactly the profile the attempt was prepared against and to exactly the transport identity and version that profile names, so there is no selection input and no supported path by which a different transport, profile, or provider can be substituted",
       "test": "tests/test_model_adapter_phase_b.py::test_a_direct_transport_call_cannot_mint_its_own_authorization",
+      "status": "guarded"
+    },
+    {
+      "id": "MA-008",
+      "class": "caller-substituted-payload-transmitted-under-another-records-lineage",
+      "source": "PR #314 independent review (Codex P1): ModelAdapterService.dispatch used the caller-supplied EvidencePromptArtifact's content to build the wire request without binding it to the prepared attempt, so a substituted prompt could be transmitted while durable lineage still named the prepared one. EvidencePromptArtifact.artifact_id excludes content and the dataclass does not self-verify its declared hash, so an identity check alone would still have admitted arbitrary bytes under the prepared identity",
+      "classification": "systemic",
+      "guard_boundary": "Model Adapter dispatch, before the handoff is consumed",
+      "guard": "the payload whose bytes reach the provider is bound to the attempt on both axes before any send: prompt_artifact.artifact_id must equal attempt.prompt_artifact_id, and _verify_prompt_content_matches_declared_identity() must confirm that sha256(content) equals the declared content_hash and that the encoded length equals the declared measured_size_bytes. Identity equality alone proves only that the claims match; the second check proves the bytes behind those claims do too. Both run before consume_handoff_once, so a refusal transmits nothing and leaves the handoff unconsumed. The general rule this encodes: where a canonical identity is derived from declared metadata rather than from the payload itself, a consumer that transmits or persists that payload must re-verify the payload against the declaration rather than trusting the identity",
+      "test": "tests/test_model_adapter_phase_b.py::test_a_prompt_artifact_keeping_its_identity_but_swapping_content_is_refused",
+      "status": "guarded"
+    },
+    {
+      "id": "MA-009",
+      "class": "historical-read-pinned-to-earliest-row-ignoring-supersession",
+      "source": "PR #314 independent review (Codex P2): strict_known_response_artifact ordered ascending with LIMIT 1, so once append_outcome admitted a superseding correction carrying revised response evidence, every later strict-known read returned the original artifact permanently and the correction was invisible",
+      "classification": "systemic",
+      "guard_boundary": "Model Adapter persistence strict-known historical reads",
+      "guard": "authoritative_outcome() resolves the head of the supersession chain — the outcome that no other outcome KNOWN AT THE SAME CUTOFF supersedes — and strict_known_response_artifact() returns the artifact attached to that governing outcome, falling back to the most recent earlier artifact when the correction records no new response evidence. Both remain strict-known, so a correction recorded after the cutoff does not retroactively govern an earlier read and the superseded original is preserved rather than overwritten. The general rule: wherever a record family admits append-only corrections, a historical read must follow the supersession chain, because neither the earliest row nor a blind latest row is the authoritative one",
+      "test": "tests/test_model_adapter_phase_b.py::test_a_superseding_correction_is_what_a_later_replay_reads",
       "status": "guarded"
     }
   ]

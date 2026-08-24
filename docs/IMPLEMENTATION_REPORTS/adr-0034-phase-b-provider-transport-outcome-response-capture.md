@@ -67,11 +67,11 @@ PreparedModelAttempt (Phase A: durable attempt + single-use handoff)
 | `src/hunter/evidence_intelligence/model_adapter.py` | Adds the outcome and response record families, classification, retry derivation, capture gate, and the `dispatch` path. Phase A behaviour is unchanged apart from the retry precondition below. |
 | `src/hunter/evidence_intelligence/model_adapter_persistence.py` | Adds insert-only outcome and response tables, `append_outcome`, independent authority re-verification for both, and strict-known reads. |
 | `tests/model_adapter_fixture.py` | Adds the Phase B field-map surfaces, the single configured profile, and a deterministic transport double. |
-| `tests/test_model_adapter_phase_b.py` | New. 101 adversarial regressions. |
-| `tests/test_model_adapter_phase_a.py` | Two retry tests now supply the predecessor outcome the new retry gate requires. Strengthened, not weakened — they exercise the real retry path instead of bypassing it. |
+| `tests/test_model_adapter_phase_b.py` | New. 111 adversarial regressions. |
+| `tests/test_model_adapter_phase_a.py` | Two retry tests now durably record the predecessor outcome the new retry gate requires. Strengthened, not weakened — they exercise the real retry path instead of bypassing it, and a fabricated record no longer satisfies the gate. |
 | `docs/ADR/0034-...md` | `Implementation Status` only. No architectural decision changed. |
 | `docs/architecture-index.md` | Truthful runtime-state rows for Issue #313. |
-| `docs/DEFECT_REGISTRY.json` | Four new guarded classes, `MA-004` through `MA-007`. |
+| `docs/DEFECT_REGISTRY.json` | Six new guarded classes, `MA-004`–`MA-009`, plus a strengthened `MA-006`. |
 
 ### New record families
 
@@ -97,7 +97,7 @@ Two axes are kept separate because collapsing them is how ambiguity becomes a du
 
 `derive_retry_authorization` grants `RETRY_REQUIRES_NEW_ATTEMPT` only where the transport proved non-delivery or the provider established it rejected the request instead of executing it. Everything else blocks: uncertainty yields `RETRY_BLOCKED_DELIVERY_UNCERTAIN`, and an answered error that does not establish non-execution yields `RETRY_BLOCKED_RECONCILIATION_REQUIRED`.
 
-`prepare_attempt` now requires the predecessor's own recorded outcome for any `attempt_ordinal > 1`, checked **before** authority is resolved and before anything durable is written. An attempt with no recorded outcome is treated as uncertain and blocks retry. An authorized retry still gets a new attempt, a new cutoff, a fresh strict-known Source Handling resolution, a new handoff, and a new attempt-scoped idempotency key; nothing is inherited from the predecessor.
+`prepare_attempt` now requires the predecessor's own **durable** outcome for any `attempt_ordinal > 1`, resolved from persistence via `authoritative_outcome()` strict-known at the new attempt's cutoff, checked **before** authority is resolved and before anything durable is written. A caller-supplied record is evidence only and is compared against the durable one. An attempt with no durable outcome is treated as uncertain and blocks retry. An authorized retry still gets a new attempt, a new cutoff, a fresh strict-known Source Handling resolution, a new handoff, and a new attempt-scoped idempotency key; nothing is inherited from the predecessor.
 
 ## Governed response capture
 
@@ -116,7 +116,7 @@ The gate is shape-based, not keyword-based, so an ordinary model answer that dis
 
 ## Test coverage
 
-101 new Phase B regressions plus the 68 Phase A regressions, all deterministic. Every required adversarial case in Issue #313 is covered; the numbering below is the Issue's.
+111 new Phase B regressions plus the 68 Phase A regressions, all deterministic. Every required adversarial case in Issue #313 is covered; the numbering below is the Issue's.
 
 | # | Requirement | Regression |
 |---|---|---|
@@ -144,7 +144,9 @@ Each negative case is paired with the positive it must not break. The whole Phas
 
 ## Mutation verification
 
-Twenty-four guards were deliberately weakened one at a time and the named regression re-run. Every one failed under mutation and passed clean — the guard is proven against the specific defect its name asserts, not merely against the suite being green.
+Thirty guards were deliberately weakened one at a time and the named regression re-run. Every one failed under mutation and passed clean — the guard is proven against the specific defect its name asserts, not merely against the suite being green.
+
+Two of them only became genuine proofs after the first attempt failed to isolate them, which is the point of running the mutation rather than assuming it. The prompt content-hash check initially "passed" its mutation because the test's replacement content differed in length, so the measured-size check accounted for the refusal; it now uses a same-length replacement, which only the hash check can catch. The measured-size check was then unreachable by substitution at all, because `measured_size_bytes` feeds `artifact_id` and the identity check fires first — so its regression was rewritten onto the case where only it can fire: an artifact that self-declares an inconsistent size and is used consistently throughout.
 
 | Guard | Named regression |
 |---|---|
@@ -172,6 +174,12 @@ Twenty-four guards were deliberately weakened one at a time and the named regres
 | Transport-result self-consistency | `test_the_transport_result_refuses_a_self_contradictory_observation` |
 | Reserved provider body keys | `test_a_provider_parameter_cannot_override_the_model_or_the_prompt` |
 | Post-send lineage preservation | `test_a_transport_result_from_a_different_transport_still_records_lineage` |
+| Retry from the durable predecessor outcome | `test_a_fabricated_predecessor_outcome_cannot_authorize_a_retry` |
+| Prompt identity binding at dispatch | `test_a_substituted_prompt_artifact_cannot_be_transmitted` |
+| Prompt content vs. declared hash | `test_a_prompt_artifact_keeping_its_identity_but_swapping_content_is_refused` |
+| Prompt declared size vs. bytes | `test_a_prompt_artifact_whose_declared_size_contradicts_its_bytes_is_refused` |
+| Transport version binding | `test_a_transport_reporting_a_different_version_is_refused` |
+| Supersession-aware historical replay | `test_a_superseding_correction_is_what_a_later_replay_reads` |
 
 ## Defects found by hostile self-review
 
@@ -194,6 +202,28 @@ Per-category authorization alone would have licensed persisting credential-beari
 A `send()` taking only a request could be called directly, producing a real invocation with no durable attempt, no handoff consumption, and no attributable outcome. Fixed by requiring a `DispatchAuthorization` that cannot be minted through any public API and is created only after the compare-and-set has claimed the handoff.
 
 Three further holes were closed in the same pass without needing a new defect class, since each is an instance of an already-guarded boundary: dispatch-time authority substitution, a post-send raise that would have lost the lineage the send created, and a provider parameter able to override the request body's `model` or `messages`.
+
+## Defects found by independent review
+
+Codex reviewed commit `5a5e8509e4` on PR #314 and raised two P1 and two P2 findings. All four were verified against the code, confirmed genuine, and fixed; each is small, local to code this PR introduced, and now carries a mutation-verified regression.
+
+### P1 — retry authorization derived from caller-supplied state
+
+`_require_retry_authorization` checked only the fields of the `ModelAttemptOutcomeRecord` the caller handed in, so a fabricated record naming the predecessor and claiming `RETRY_REQUIRES_NEW_ATTEMPT` defeated the gate entirely while the repository held an uncertain outcome or none at all — precisely the blind duplicate invocation `MA-006` exists to prevent.
+
+This is a recurrence of an already-understood class rather than a new one-off: the repository's own governing rule is that caller-supplied state is evidence to re-verify, never authority to trust, and `prepare_attempt` already applies exactly that treatment to a supplied Source Handling decision. The first `MA-006` hardening checked the *shape* of the evidence instead of resolving the authority. Per `docs/HUNTER_IMPLEMENTATION_CONTRACT.md`, `MA-006` has been **strengthened in place** rather than supplemented with a new entry: the gate now resolves the predecessor's durable outcome from persistence, strict-known at the new attempt's cutoff and following the supersession chain, and rejects a supplied record that disagrees.
+
+### P1 — the transmitted prompt was not bound to the prepared attempt
+
+`dispatch` built the wire request from the caller's `EvidencePromptArtifact` without checking it against `attempt.prompt_artifact_id`. Worse, `EvidencePromptArtifact.artifact_id` excludes `content` and the dataclass performs no self-check, so even an artifact retaining the prepared identity could carry arbitrary bytes while durable lineage still named the prepared prompt — defeating the ADR 0034 guarantee that a response is attributable to an exact canonical prompt. Registered as `MA-008`. Both axes are now verified before the handoff is consumed: identity equality, and the bytes actually hashing and measuring to what that identity was derived from.
+
+### P2 — historical response reads ignored supersession
+
+`strict_known_response_artifact` ordered ascending with `LIMIT 1`, so once `append_outcome` admitted a superseding correction carrying revised response evidence, every later strict-known read returned the original permanently. Registered as `MA-009`. `authoritative_outcome()` now resolves the head of the supersession chain — the outcome no other outcome *known at the same cutoff* supersedes — and the response read follows it, while the superseded original is preserved rather than overwritten.
+
+### P2 — a transport version mismatch was accepted
+
+The post-send consistency check compared `transport_identity` but not `transport_version`, so a transport misreporting its version had that version persisted even though the attempt and profile were bound to another exact one, making recorded lineage contradict the durable execution profile. Version mismatch is now treated identically to identity mismatch, and the recorded outcome carries the profile's bound version.
 
 ## Known limitations
 

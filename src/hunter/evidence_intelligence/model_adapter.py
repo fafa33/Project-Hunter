@@ -888,6 +888,34 @@ def derive_retry_authorization(
     return "RETRY_BLOCKED_RECONCILIATION_REQUIRED"
 
 
+def _verify_prompt_content_matches_declared_identity(prompt_artifact: EvidencePromptArtifact) -> None:
+    """Refuse a prompt artifact whose bytes do not match its own declared identity.
+
+    ADR 0031 derives `artifact_id` from the declared `content_hash` and
+    `measured_size_bytes` with `content` excluded, and the artifact performs no
+    self-check. Identity equality therefore proves only that the *claims* match;
+    this proves the bytes behind those claims do too. Without it, durable lineage
+    could name the prepared prompt while entirely different content went to the
+    provider.
+
+    Read-only: the upstream artifact is never mutated or re-canonicalized.
+    """
+    try:
+        encoded = prompt_artifact.content.encode(prompt_artifact.encoding)
+    except (LookupError, UnicodeEncodeError) as error:
+        raise ModelAdapterAuthorityError(
+            f"prompt artifact content cannot be encoded as {prompt_artifact.encoding!r}"
+        ) from error
+    if hashlib.sha256(encoded).hexdigest() != prompt_artifact.content_hash:
+        raise ModelAdapterAuthorityError(
+            "prompt artifact content does not match the content hash its identity is derived from"
+        )
+    if len(encoded) != prompt_artifact.measured_size_bytes:
+        raise ModelAdapterAuthorityError(
+            "prompt artifact content does not match the measured size its identity is derived from"
+        )
+
+
 def attempt_idempotency_identity(attempt: ModelAttemptRecord) -> str | None:
     """One stable, opaque, attempt-scoped idempotency key, where the profile supports it.
 
@@ -966,6 +994,7 @@ class ModelAdapterService:
             self._require_retry_authorization(
                 predecessor_attempt_id=predecessor_attempt_id,
                 predecessor_outcome=predecessor_outcome,
+                cutoff=attempt_authority.cutoff,
             )
         elif predecessor_outcome is not None:
             raise ModelAdapterError("a first attempt has no predecessor outcome")
@@ -1136,17 +1165,18 @@ class ModelAdapterService:
 
         1. verify the bound profile and its transport — there is no selection here;
         2. verify the supplied authority is the one this attempt was prepared under;
-        3. verify no terminal outcome already closed this attempt;
-        4. build the transient wire representation locally;
-        5. atomically consume the single-use handoff, minting the only dispatch
+        3. verify the supplied prompt is the prepared one, bytes included;
+        4. verify no terminal outcome already closed this attempt;
+        5. build the transient wire representation locally;
+        6. atomically consume the single-use handoff, minting the only dispatch
            authorization the transport will accept;
-        6. send exactly once;
-        7. classify truthfully, capture governed response evidence, append an
+        7. send exactly once;
+        8. classify truthfully, capture governed response evidence, append an
            immutable outcome.
 
-        A failure at step 4 is a local pre-send failure: the handoff is not
+        A failure at step 5 is a local pre-send failure: the handoff is not
         consumed, nothing is transmitted, and the recorded outcome says so. A
-        failure at or after step 6 can never claim non-delivery it cannot prove.
+        failure at or after step 7 can never claim non-delivery it cannot prove.
         """
         for name, value in (("dispatched_at", dispatched_at), ("concluded_at", concluded_at)):
             if not isinstance(value, datetime) or value.tzinfo is None:
@@ -1189,7 +1219,21 @@ class ModelAdapterService:
                 "the authority supplied to dispatch is not the authority this attempt was prepared under"
             )
 
-        # 3. An attempt that already has an outcome is over. Without this, a local
+        # 3. The prompt whose bytes go on the wire must be the prompt this attempt
+        #    was prepared against. Matching `artifact_id` alone is not enough:
+        #    ADR 0031 derives that identity from the *declared* hash and size with
+        #    `content` excluded, and the artifact does not self-verify, so an
+        #    artifact retaining the prepared identity could still carry arbitrary
+        #    bytes. Both the identity and the bytes behind it are checked, before
+        #    the handoff is consumed, so durable lineage cannot name one prompt
+        #    while another was transmitted.
+        if prompt_artifact.artifact_id != attempt.prompt_artifact_id:
+            raise ModelAdapterAuthorityError(
+                "the supplied prompt artifact is not the artifact this attempt was prepared against"
+            )
+        _verify_prompt_content_matches_declared_identity(prompt_artifact)
+
+        # 4. An attempt that already has an outcome is over. Without this, a local
         #    pre-send failure -- which correctly leaves the handoff unconsumed --
         #    would leave the attempt re-dispatchable.
         if self._repository.terminal_outcome_exists(attempt.attempt_id):
@@ -1197,7 +1241,7 @@ class ModelAdapterService:
                 "this attempt already has a recorded outcome; a further attempt requires a new attempt record"
             )
 
-        # 4. Local pre-send transformation. Nothing has been transmitted yet, and
+        # 5. Local pre-send transformation. Nothing has been transmitted yet, and
         #    the handoff is deliberately still unconsumed.
         idempotency_identity = attempt_idempotency_identity(attempt)
         try:
@@ -1226,7 +1270,7 @@ class ModelAdapterService:
                 handoff_id=handoff.handoff_id,
             )
 
-        # 5. Atomic single-use consumption. This is the only place a dispatch
+        # 6. Atomic single-use consumption. This is the only place a dispatch
         #    authorization is minted, and it is minted only after the compare-and-set
         #    has already claimed the handoff, so at most one caller can proceed.
         if handoff.is_expired_at(dispatched_at):
@@ -1240,7 +1284,7 @@ class ModelAdapterService:
             consumed_at=dispatched_at.astimezone(UTC).isoformat(),
         )
 
-        # 6. Exactly one provider invocation.
+        # 7. Exactly one provider invocation.
         try:
             result = transport.send(request, authorization=authorization, credential=credential)
         except Exception as error:  # noqa: BLE001 - a transport that raises must not lose lineage
@@ -1277,7 +1321,14 @@ class ModelAdapterService:
                 transport_version=profile.transport_version,
                 handoff_id=handoff.handoff_id,
             )
-        if result.transport_identity != profile.transport_identity:
+        if result.transport_identity != profile.transport_identity or (
+            result.transport_version != profile.transport_version
+        ):
+            # Version mismatch is treated exactly like identity mismatch: the
+            # attempt and profile are bound to one exact transport version, so
+            # persisting a different reported version would make the recorded
+            # response lineage contradict the durable execution profile.
+            #
             # The send already happened, so raising here would lose the lineage
             # that invocation created. It is recorded as an adapter-internal
             # condition with honest uncertainty instead.
@@ -1288,7 +1339,7 @@ class ModelAdapterService:
                 outcome="INTERNAL_ADAPTER_ERROR",
                 delivery_certainty="UNKNOWN",
                 execution_evidence="UNKNOWN",
-                reason_code="TRANSPORT_RESULT_ATTRIBUTED_TO_A_DIFFERENT_TRANSPORT",
+                reason_code="TRANSPORT_RESULT_ATTRIBUTED_TO_A_DIFFERENT_TRANSPORT_IDENTITY_OR_VERSION",
                 recorded_at=concluded_at,
                 dispatched_at=dispatched_at,
                 transport_identity=profile.transport_identity,
@@ -1296,7 +1347,7 @@ class ModelAdapterService:
                 handoff_id=handoff.handoff_id,
             )
 
-        # 7. Classification, governed capture, immutable outcome.
+        # 8. Classification, governed capture, immutable outcome.
         outcome, certainty = classify_transport_result(result)
         return self._record_outcome(
             prepared=prepared,
@@ -1332,18 +1383,46 @@ class ModelAdapterService:
         *,
         predecessor_attempt_id: str | None,
         predecessor_outcome: ModelAttemptOutcomeRecord | None,
+        cutoff: datetime,
     ) -> None:
-        if predecessor_outcome is None:
+        """Authorize a retry only from the predecessor's own *durable* outcome.
+
+        A caller-supplied `ModelAttemptOutcomeRecord` is evidence, never authority.
+        Deriving the decision from it would let a caller construct a record naming
+        the predecessor and claiming `RETRY_REQUIRES_NEW_ATTEMPT` while the
+        repository holds an uncertain outcome or none at all — exactly the blind
+        duplicate invocation this gate exists to prevent. So the governing outcome
+        is resolved from persistence, strict-known at this attempt's cutoff, and a
+        supplied record is only ever compared against it.
+
+        This mirrors the treatment `prepare_attempt` already gives a
+        caller-supplied Source Handling decision, and the ADR 0033 persistence
+        invariant generally: rederive, then reject disagreement.
+        """
+        if not predecessor_attempt_id:
+            raise RetryNotAuthorized("a retry requires the predecessor attempt identity")
+
+        durable = self._repository.authoritative_outcome(predecessor_attempt_id, cutoff)
+        if durable is None:
             raise RetryNotAuthorized(
-                "a retry requires the predecessor attempt's recorded outcome; "
+                "the predecessor attempt has no outcome durably recorded at this cutoff; "
                 "an attempt with no recorded outcome is uncertain and blocks retry"
             )
-        if predecessor_outcome.attempt_id != predecessor_attempt_id:
-            raise RetryNotAuthorized("the supplied predecessor outcome does not belong to the predecessor attempt")
-        if predecessor_outcome.retry_authorization != "RETRY_REQUIRES_NEW_ATTEMPT":
+        if durable.attempt_id != predecessor_attempt_id:
+            raise RetryNotAuthorized("the durable predecessor outcome does not belong to the predecessor attempt")
+
+        # A supplied record may not disagree with the durable one. Rejecting the
+        # mismatch rather than ignoring the argument keeps a caller that believes
+        # something false from proceeding on a silently different basis.
+        if predecessor_outcome is not None and predecessor_outcome.outcome_id != durable.outcome_id:
             raise RetryNotAuthorized(
-                f"predecessor outcome {predecessor_outcome.outcome} carries "
-                f"{predecessor_outcome.retry_authorization} and does not authorize a further attempt"
+                "the supplied predecessor outcome does not match the outcome durably recorded for that attempt"
+            )
+
+        if durable.retry_authorization != "RETRY_REQUIRES_NEW_ATTEMPT":
+            raise RetryNotAuthorized(
+                f"predecessor outcome {durable.outcome} carries "
+                f"{durable.retry_authorization} and does not authorize a further attempt"
             )
 
     def _endpoint_url(self, profile: ModelExecutionProfile) -> str:

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import ast
 import dataclasses
+import hashlib
 import json
 import pickle
 import socket
@@ -1724,17 +1725,28 @@ def test_dropping_the_retry_gate_would_allow_a_blind_retry_after_uncertainty(
         service._require_retry_authorization(  # noqa: SLF001 - the guard itself is under test
             predecessor_attempt_id=first.attempt.attempt_id,
             predecessor_outcome=uncertain,
+            cutoff=fixture.later(30),
         )
-    # The same guard admits the authorized case, so it is not vacuously strict.
+    # ... and admits the authorized case, so it is not vacuously strict. The
+    # authorizing outcome is appended as a real correction, because the gate now
+    # reads durable state rather than the argument it is handed.
     authorized = dataclasses.replace(
         uncertain,
         delivery_certainty="CONFIRMED_NOT_DELIVERED",
         outcome="TIMEOUT_CONFIRMED_NO_DELIVERY",
         retry_authorization="RETRY_REQUIRES_NEW_ATTEMPT",
+        recorded_at=fixture.later(20),
+        supersedes_outcome_id=uncertain.outcome_id,
+    )
+    service._repository.append_outcome(  # noqa: SLF001
+        outcome=authorized,
+        response_artifact=None,
+        attempt_authority=fixture.attempt_authority(),
     )
     service._require_retry_authorization(  # noqa: SLF001
         predecessor_attempt_id=first.attempt.attempt_id,
         predecessor_outcome=authorized,
+        cutoff=fixture.later(30),
     )
 
 
@@ -1983,3 +1995,315 @@ def test_a_transport_result_from_a_different_transport_still_records_lineage(
     assert result.outcome.delivery_certainty == "UNKNOWN"
     assert result.outcome.attempt_id == prepared.attempt.attempt_id
     assert repository.strict_known_outcomes(prepared.attempt.attempt_id, fixture.later(30))
+
+
+# --- independent-review findings (Codex on PR #314) --------------------------
+
+
+def test_a_fabricated_predecessor_outcome_cannot_authorize_a_retry(
+    service: ModelAdapterService,
+) -> None:
+    """P1: retry authorization must come from durable state, not the caller's object.
+
+    The predecessor really did end uncertain. A caller hands in a record naming
+    that attempt and claiming retry is authorized; the gate must resolve the
+    predecessor's own durable outcome and refuse anyway.
+    """
+    first = prepare(service)
+    uncertain = dispatch(
+        service,
+        first,
+        fixture.FakeTransport(
+            fixture.transport_result(
+                result_class="TIMEOUT",
+                delivery_certainty="UNKNOWN",
+                execution_evidence="UNKNOWN",
+                response_text=None,
+                correlation_identity=None,
+                reason_code="READ_TIMEOUT",
+            )
+        ),
+    ).outcome
+    assert uncertain.retry_authorization == "RETRY_BLOCKED_DELIVERY_UNCERTAIN"
+
+    forged = dataclasses.replace(
+        uncertain,
+        outcome="TIMEOUT_CONFIRMED_NO_DELIVERY",
+        delivery_certainty="CONFIRMED_NOT_DELIVERED",
+        execution_evidence="NO_EXECUTION_ESTABLISHED",
+        retry_authorization="RETRY_REQUIRES_NEW_ATTEMPT",
+    )
+    with pytest.raises(RetryNotAuthorized):
+        prepare(
+            service,
+            authority=fixture.attempt_authority(cutoff=fixture.later(30)),
+            attempt_ordinal=2,
+            predecessor_attempt_id=first.attempt.attempt_id,
+            predecessor_outcome=forged,
+            recorded_at=fixture.later(31),
+        )
+
+
+def test_a_retry_is_refused_when_the_predecessor_outcome_is_not_yet_durable(
+    service: ModelAdapterService,
+) -> None:
+    """A record that exists only in memory authorizes nothing."""
+    first = prepare(service)
+    never_persisted = ModelAttemptOutcomeRecord(
+        build_record_id=first.attempt.build_record_id,
+        prompt_artifact_id=first.attempt.prompt_artifact_id,
+        execution_profile_identity=first.attempt.execution_profile_identity,
+        transport_identity=fixture.FAKE_TRANSPORT_IDENTITY,
+        transport_version=fixture.FAKE_TRANSPORT_VERSION,
+        outcome="TIMEOUT_CONFIRMED_NO_DELIVERY",
+        delivery_certainty="CONFIRMED_NOT_DELIVERED",
+        execution_evidence="NO_EXECUTION_ESTABLISHED",
+        retry_authorization="RETRY_REQUIRES_NEW_ATTEMPT",
+        attempt_cutoff=first.attempt.attempt_cutoff,
+        recorded_at=fixture.CONCLUDED_AT,
+        reason_code="NEVER_PERSISTED",
+        attempt_id=first.attempt.attempt_id,
+    )
+    with pytest.raises(RetryNotAuthorized):
+        prepare(
+            service,
+            authority=fixture.attempt_authority(cutoff=fixture.later(30)),
+            attempt_ordinal=2,
+            predecessor_attempt_id=first.attempt.attempt_id,
+            predecessor_outcome=never_persisted,
+            recorded_at=fixture.later(31),
+        )
+
+
+def test_a_retry_is_authorized_from_durable_state_without_a_supplied_record(
+    service: ModelAdapterService,
+) -> None:
+    """The paired positive: durable state alone is sufficient and is what governs."""
+    first = prepare(service)
+    dispatch(
+        service,
+        first,
+        fixture.FakeTransport(
+            fixture.transport_result(
+                result_class="PROVIDER_REFUSED",
+                execution_evidence="NO_EXECUTION_ESTABLISHED",
+                response_text=None,
+                correlation_identity=None,
+                reason_code="PROVIDER_HTTP_400",
+            )
+        ),
+    )
+
+    retry = prepare(
+        service,
+        authority=fixture.attempt_authority(cutoff=fixture.later(30)),
+        attempt_ordinal=2,
+        predecessor_attempt_id=first.attempt.attempt_id,
+        recorded_at=fixture.later(31),
+    )
+    assert retry.attempt.predecessor_attempt_id == first.attempt.attempt_id
+
+
+def test_a_substituted_prompt_artifact_cannot_be_transmitted(
+    service: ModelAdapterService,
+) -> None:
+    """P1: the bytes on the wire must be the prompt the attempt was prepared against."""
+    prepared = prepare(service)
+    other = fixture.prompt_artifact("entirely different prompt content")
+    transport = fixture.FakeTransport(fixture.transport_result())
+
+    with pytest.raises(ModelAdapterAuthorityError):
+        service.dispatch(
+            prepared=prepared,
+            profile=fixture.phase_b_profile(),
+            transport=transport,
+            credential=fixture.credential(),
+            prompt_artifact=other,
+            attempt_authority=fixture.attempt_authority(),
+            dispatched_at=fixture.DISPATCHED_AT,
+            concluded_at=fixture.CONCLUDED_AT,
+        )
+    assert transport.sends == []
+    assert service._repository.handoff_consumed_at(prepared.handoff.handoff_id) is None  # noqa: SLF001
+
+
+def test_a_prompt_artifact_keeping_its_identity_but_swapping_content_is_refused(
+    service: ModelAdapterService,
+) -> None:
+    """The sharper half of the same P1.
+
+    `EvidencePromptArtifact.artifact_id` excludes `content` and the artifact does
+    not self-verify, so an identity match alone would let arbitrary bytes through
+    while durable lineage still named the prepared prompt.
+    """
+    prepared = prepare(service)
+    original = fixture.prompt_artifact()
+    # Deliberately the *same byte length* as the original, so the measured-size
+    # check cannot account for the refusal and only the content-hash check can.
+    # A differing length would let this test pass with the hash check removed,
+    # which would make it evidence of nothing.
+    smuggled = dataclasses.replace(original, content="malicious prompt bytes")
+    assert len(smuggled.content.encode("utf-8")) == original.measured_size_bytes
+    assert smuggled.content != original.content
+
+    # The identity is genuinely unchanged -- this is what makes the check necessary.
+    assert smuggled.artifact_id == original.artifact_id == prepared.attempt.prompt_artifact_id
+
+    transport = fixture.FakeTransport(fixture.transport_result())
+    with pytest.raises(ModelAdapterAuthorityError):
+        service.dispatch(
+            prepared=prepared,
+            profile=fixture.phase_b_profile(),
+            transport=transport,
+            credential=fixture.credential(),
+            prompt_artifact=smuggled,
+            attempt_authority=fixture.attempt_authority(),
+            dispatched_at=fixture.DISPATCHED_AT,
+            concluded_at=fixture.CONCLUDED_AT,
+        )
+    assert transport.sends == []
+
+
+def test_the_prepared_prompt_artifact_is_still_accepted(service: ModelAdapterService) -> None:
+    """Paired positive: the honest artifact must not be rejected."""
+    prepared = prepare(service)
+    transport = fixture.FakeTransport(fixture.transport_result())
+    result = dispatch(service, prepared, transport)
+
+    assert len(transport.sends) == 1
+    assert transport.sends[0][0].prompt_content == fixture.prompt_artifact().content
+    assert result.outcome.outcome == "SUCCEEDED_TRANSPORT"
+
+
+def test_a_transport_reporting_a_different_version_is_refused(
+    service: ModelAdapterService,
+    repository: ModelAdapterPersistenceRepository,
+) -> None:
+    """P2: identity alone is not the binding; the exact version is bound too."""
+    prepared = prepare(service)
+    misreporting = fixture.FakeTransport(
+        fixture.transport_result(transport_version="99"),
+    )
+    result = dispatch(service, prepared, misreporting)
+
+    assert len(misreporting.sends) == 1
+    assert result.outcome.outcome == "INTERNAL_ADAPTER_ERROR"
+    # The recorded lineage carries the profile's bound version, never the misreported one.
+    assert result.outcome.transport_version == fixture.FAKE_TRANSPORT_VERSION
+    stored = repository.strict_known_outcomes(prepared.attempt.attempt_id, fixture.later(30))
+    assert [record.transport_version for record in stored] == [fixture.FAKE_TRANSPORT_VERSION]
+
+
+def test_a_superseding_correction_is_what_a_later_replay_reads(
+    service: ModelAdapterService,
+    repository: ModelAdapterPersistenceRepository,
+) -> None:
+    """P2: historical reads follow supersession instead of pinning the earliest row."""
+    prepared = prepare(service)
+    original = dispatch(
+        service,
+        prepared,
+        fixture.FakeTransport(fixture.transport_result(response_text='{"choices": [{"text": "original"}]}')),
+    )
+    assert original.response_artifact is not None
+    assert original.response_artifact.content == '{"choices": [{"text": "original"}]}'
+
+    corrected_outcome = dataclasses.replace(
+        original.outcome,
+        reason_code="CORRECTED_AFTER_RECONCILIATION",
+        recorded_at=fixture.later(40),
+        supersedes_outcome_id=original.outcome.outcome_id,
+        response_artifact_identity=None,
+        response_evidence_state="RESPONSE_EVIDENCE_UNAVAILABLE_BY_POLICY",
+    )
+    corrected_artifact = dataclasses.replace(
+        original.response_artifact,
+        state="RESPONSE_EVIDENCE_UNAVAILABLE_BY_POLICY",
+        reason_code="RESPONSE_CONTENT_RETENTION_PROHIBITED",
+        content=None,
+        content_hash=None,
+        measured_size_bytes=None,
+        content_derived_identity=None,
+        recorded_at=fixture.later(40),
+    )
+    repository.append_outcome(
+        outcome=corrected_outcome,
+        response_artifact=corrected_artifact,
+        attempt_authority=fixture.attempt_authority(),
+    )
+
+    # Before the correction, the original still governs.
+    early = repository.strict_known_response_artifact(prepared.attempt.attempt_id, fixture.later(30))
+    assert early is not None
+    assert early.content == '{"choices": [{"text": "original"}]}'
+
+    # After it, the correction does -- and the original is still preserved.
+    late = repository.strict_known_response_artifact(prepared.attempt.attempt_id, fixture.later(60))
+    assert late is not None
+    assert late.state == "RESPONSE_EVIDENCE_UNAVAILABLE_BY_POLICY"
+    assert late.content is None
+    assert len(repository.strict_known_outcomes(prepared.attempt.attempt_id, fixture.later(60))) == 2
+
+
+def test_the_authoritative_outcome_is_the_head_of_the_supersession_chain(
+    service: ModelAdapterService,
+    repository: ModelAdapterPersistenceRepository,
+) -> None:
+    prepared = prepare(service)
+    original = dispatch(service, prepared, fixture.FakeTransport(fixture.transport_result())).outcome
+    correction = dataclasses.replace(
+        original,
+        reason_code="FIRST_CORRECTION",
+        recorded_at=fixture.later(40),
+        supersedes_outcome_id=original.outcome_id,
+    )
+    repository.append_outcome(outcome=correction, response_artifact=None, attempt_authority=fixture.attempt_authority())
+
+    assert repository.authoritative_outcome(prepared.attempt.attempt_id, fixture.later(30)) == original
+    assert repository.authoritative_outcome(prepared.attempt.attempt_id, fixture.later(60)) == correction
+    assert repository.authoritative_outcome("model-attempt:unknown", fixture.later(60)) is None
+
+
+def test_a_prompt_artifact_whose_declared_size_contradicts_its_bytes_is_refused(
+    service: ModelAdapterService,
+) -> None:
+    """The size half of the same binding, on the case where only it can fire.
+
+    A *substituted* wrong size changes `artifact_id`, so the identity check would
+    catch that and this test would prove nothing. The reachable case is an
+    artifact that self-declares an inconsistent size and is used consistently
+    throughout: identity matches, the content hash matches, and only the measured
+    size contradicts the bytes.
+    """
+    original = fixture.prompt_artifact()
+    inconsistent = dataclasses.replace(original, measured_size_bytes=original.measured_size_bytes + 1)
+    build = fixture.build_record(inconsistent)
+
+    prepared = service.prepare_attempt(
+        execution_owner_id="pipeline-run:1",
+        build_record=build,
+        prompt_artifact=inconsistent,
+        capability=fixture.capability(),
+        allocation=fixture.allocation(),
+        profile=fixture.phase_b_profile(),
+        attempt_authority=fixture.attempt_authority(),
+        build_cutoff=fixture.BUILD_CUTOFF,
+        recorded_at=fixture.RECORDED_AT,
+    )
+    # Identity and hash both agree; only the declared size is wrong.
+    assert prepared.attempt.prompt_artifact_id == inconsistent.artifact_id
+    assert hashlib.sha256(inconsistent.content.encode("utf-8")).hexdigest() == inconsistent.content_hash
+
+    transport = fixture.FakeTransport(fixture.transport_result())
+    with pytest.raises(ModelAdapterAuthorityError):
+        service.dispatch(
+            prepared=prepared,
+            profile=fixture.phase_b_profile(),
+            transport=transport,
+            credential=fixture.credential(),
+            prompt_artifact=inconsistent,
+            attempt_authority=fixture.attempt_authority(),
+            dispatched_at=fixture.DISPATCHED_AT,
+            concluded_at=fixture.CONCLUDED_AT,
+        )
+    assert transport.sends == []
