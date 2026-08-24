@@ -25,7 +25,7 @@ This preparation recommends a separate Hunter Evidence Intelligence `ResponseVal
 
 Version 1.4 closes audit finding `F-001` by treating **canonical validation-profile ownership as an independent decision dimension** rather than an incidental property of validator placement. The materially distinct ownership models are explicitly compared: a dedicated `ResponseValidationProfileAuthority`, validator-owned profile history, reuse/delegation to the upstream requested-output/schema owner, persistence-owned registry authority, and a future generic/shared profile authority. The recommendation remains a dedicated Hunter `ResponseValidationProfileAuthority`, but only after the normalized comparison below.
 
-Version 1.5 restores and hardens the replay invariant caught by exact-head review after PR #321 merged. The initial/base validation record receives a persistence-assigned immutable `validation_recorded_at` in the same atomic durable-acceptance operation that appends it. Every correction receives a persistence-assigned immutable `correction_recorded_at` in the same way. Whenever a correction changes any `ResponseValidationRecord` field, it is a governed correction decision: before any correction-time authority resolution or worker execution, the trusted `ResponseValidator` correction allocator atomically claims the exact predecessor/next generation and allocates an immutable `correction_decision_id` plus `correction_cutoff`. There is no correction-without-decision path for the validation record itself; non-semantic administrative annotations, if ever needed, live outside the immutable validation-record correction chain and cannot alter validation meaning. Persistence mechanically verifies trusted allocation and predecessor/decision/acceptance chronology. Strict-known replay therefore filters by trusted decision and durable-knowability coordinates before generation ordering and cannot leak a later correction backward in time.
+Version 1.5 restores and hardens the replay invariant caught by exact-head review after PR #321 merged. The initial/base validation record receives a persistence-assigned immutable `validation_recorded_at` in the same atomic durable-acceptance operation that appends it, and persistence must reject the append unless the trusted allocator-issued `validation_cutoff` is chronologically at or before that durable-acceptance coordinate. Every correction receives a persistence-assigned immutable `correction_recorded_at` in the same way. Whenever a correction changes any `ResponseValidationRecord` field, it is a governed correction decision: before any correction-time authority resolution or worker execution, the trusted `ResponseValidator` correction allocator atomically claims the exact predecessor/next generation and allocates an immutable `correction_decision_id` plus `correction_cutoff`. There is no correction-without-decision path for the validation record itself; non-semantic administrative annotations, if ever needed, live outside the immutable validation-record correction chain and cannot alter validation meaning. Persistence mechanically verifies trusted allocation and base/predecessor decision/acceptance chronology. Strict-known replay therefore filters by trusted decision and durable-knowability coordinates before generation ordering and cannot expose a base or corrected result before the governing decision occurred.
 
 Progression to `READY_FOR_ADR` is prohibited until a targeted independent re-audit verifies that `F-001` is closed on the exact merged correction revision and that this post-merge replay correction preserves the audited contract.
 
@@ -168,7 +168,7 @@ Forbidden authority edges:
 - provider/transport or Model Adapter must not choose validation rules or mint validity;
 - caller must not mint canonical profile/rules, event identity, correction-decision identity/cutoff, durable-acceptance timestamps, authorization, attestation, or `VALID`;
 - worker must not choose a new cutoff for an already allocated event or correction decision;
-- persistence must not select policy, rerun validation, infer validity, or become profile authority; its timestamp authority is limited to mechanical durable-acceptance facts;
+- persistence must not select policy, rerun validation, infer validity, or become profile authority; its timestamp authority is limited to mechanical durable-acceptance facts and chronology verification against trusted allocator cutoffs;
 - `ResponseValidator` must not override Source Handling or promote to canonical truth;
 - downstream extraction/knowledge must not reinterpret transport success as validity or mint validation records;
 - validation never grants canonical-promotion authority.
@@ -323,7 +323,7 @@ Historical replay binds profile history knowable at the recorded cutoff; current
 
 Base-validation deduplication occurs before a cutoff is assigned and before semantic worker execution. A stable `base_validation_key` excludes per-run cutoff and binds response-capture identity, requested-output-contract identity/version, requested canonical profile selector/family, and purpose `BASE_RESPONSE_VALIDATION`.
 
-`ResponseValidator` atomically create-if-absent allocates exactly one canonical `validation_event_id` and one `validation_cutoff` for a base key. Concurrent workers join the same event. The allocator records the requested profile selector but cannot invent/admit a canonical profile; applicability is resolved by `ResponseValidationProfileAuthority` at the event cutoff.
+`ResponseValidator` atomically create-if-absent allocates exactly one canonical `validation_event_id` and one `validation_cutoff` for a base key from its trusted decision clock. Concurrent workers join the same event. The allocator records the requested profile selector but cannot invent/admit a canonical profile; applicability is resolved by `ResponseValidationProfileAuthority` at the event cutoff. The validation allocator and persistence durable-acceptance clock must produce coordinates in the same governed comparable time domain (or through an accepted monotonic ordering contract); if their ordering cannot be mechanically compared, base persistence fails closed rather than inferring chronology.
 
 Worker retry/restart resumes the same event/cutoff. Explicit re-validation requires exact predecessor plus atomically claimed next `revalidation_generation` and receives a new event/cutoff.
 
@@ -351,7 +351,7 @@ Model Adapter may carry the authorization and exact matching credential-screened
 
 ### 7. Immutable `ResponseValidationRecord`
 
-The append-only base record binds event/subject, response capture, attempt/handoff/execution-profile/prompt lineage, requested-output contract, event cutoff/time, closed state, authorized per-dimension outcomes, input-availability mode, authorized diagnostics, and revalidation lineage where applicable. The base proposal and its success/refusal attestation do **not** supply an authoritative durable-known time. At the same atomic operation that successfully appends the initial/base terminal record, persistence assigns immutable `validation_recorded_at` from its trusted durable-acceptance clock and writes it into the durable record. Caller-, worker-, or attestation-supplied alternatives are rejected. `validation_recorded_at` is only a trusted storage/knowability fact; it is not semantic decision time and cannot replace the event-owned `validation_cutoff`.
+The append-only base record binds event/subject, response capture, attempt/handoff/execution-profile/prompt lineage, requested-output contract, event cutoff/time, closed state, authorized per-dimension outcomes, input-availability mode, authorized diagnostics, and revalidation lineage where applicable. The base proposal and its success/refusal attestation do **not** supply an authoritative durable-known time. At the same atomic operation that successfully appends the initial/base terminal record, persistence assigns immutable `validation_recorded_at` from its trusted durable-acceptance clock and writes it into the durable record. Caller-, worker-, or attestation-supplied alternatives are rejected. Before accepting the append, persistence mechanically requires the trusted allocator-issued `validation_cutoff <= validation_recorded_at` in the governed comparable time domain; if the coordinates are not comparable or the inequality is inverted, the append fails closed. `validation_recorded_at` is only a trusted storage/knowability fact; it is not semantic decision time and cannot replace the event-owned `validation_cutoff`.
 
 For every **correction**, the submitted successor names the exact predecessor and generation and must bind the exact allocator-issued `correction_decision_id` and `correction_cutoff`; the successor never supplies a caller/worker-chosen cutoff. The proposal never supplies an authoritative `correction_recorded_at`. At successful append, persistence atomically verifies predecessor/CAS, state-compatible attestation, and trusted correction allocation, assigns `correction_recorded_at` from its trusted durable-acceptance clock, and writes that timestamp into the immutable successor record in the same transaction. Any caller-, worker-, validator-, or attestation-supplied proposed cutoff/recorded-at value outside the trusted allocation contract is rejected rather than trusted or copied.
 
@@ -384,17 +384,17 @@ Unknown states are rejected. Deterministic highest-first precedence is:
 
 ### 9. Non-forgeable success and refusal persistence
 
-Base semantic results require a validator-issued single-use `ResponseValidationAttestation` bound to exact proposed semantic payload, event/subject, canonical profile resolution, successful validation-time Source Handling resolution, state, and revalidation lineage. Base pre-semantic refusals require the distinct state-compatible refusal attestation. Neither attestation chooses `validation_recorded_at`; both bind the rule that persistence stamps that trusted coordinate only upon successful atomic append.
+Base semantic results require a validator-issued single-use `ResponseValidationAttestation` bound to exact proposed semantic payload, event/subject, canonical profile resolution, successful validation-time Source Handling resolution, state, and revalidation lineage. Base pre-semantic refusals require the distinct state-compatible refusal attestation. Neither attestation chooses `validation_recorded_at`; both bind the allocator-issued `validation_cutoff` and the rule that persistence stamps the trusted durable-acceptance coordinate only upon successful atomic append and must reject `validation_recorded_at < validation_cutoff`.
 
 Every correction requires a state-compatible validator-issued success or refusal attestation bound to exact proposed corrected payload, exact predecessor/generation, and the exact allocator-issued `correction_decision_id` and `correction_cutoff`. A correction attestation cannot mint, choose, alter, or backdate that cutoff and cannot authorize a correction that lacks the trusted allocation. It also binds the rule that `correction_recorded_at` is persistence-assigned at atomic durable acceptance and therefore cannot contain an authoritative pre-persistence value.
 
-The success and refusal attestations are non-substitutable. Persistence verifies and atomically consumes the required capability, checks lineage/uniqueness/authority coordinates/durability authorization, verifies exact correction allocation and predecessor/generation, enforces chronology, and stamps the applicable durable-acceptance coordinate (`validation_recorded_at` for base, `correction_recorded_at` for correction) only as part of successful append. This keeps persistence mechanical: it verifies trusted decision-time lineage and supplies trusted storage facts, but it does not choose semantic decision time, policy, or validity.
+The success and refusal attestations are non-substitutable. Persistence verifies and atomically consumes the required capability, checks lineage/uniqueness/authority coordinates/durability authorization, verifies exact base/correction allocation and predecessor/generation as applicable, enforces base and correction chronology, and stamps the applicable durable-acceptance coordinate (`validation_recorded_at` for base, `correction_recorded_at` for correction) only as part of successful append. This keeps persistence mechanical: it verifies trusted decision-time lineage and supplies trusted storage facts, but it does not choose semantic decision time, policy, or validity.
 
 ### 10. Replay and re-validation
 
 Historical replay never invokes a provider or substitutes current profile/Source Handling state. Transient content that was not retainable replays only the recorded validation result plus `TRANSIENT_NOT_RETAINED`.
 
-A base validation record is historically knowable only at or after its persistence-assigned `validation_recorded_at`; before that coordinate the durable base result is absent/unknown even if its event cutoff is earlier. For a historical replay cutoff after the base record is knowable, a correction is eligible only if its persistence-assigned `correction_recorded_at` is at or before that replay cutoff and its governed decision/authority lineage matches the allocator-issued `correction_decision_id`/`correction_cutoff`. A delayed worker, attestation, or submission retains the original trusted correction cutoff but cannot make the successor visible before later atomic durable acceptance. Replay first filters by trusted durable-knowability and correction-decision coordinates and only then chooses the highest eligible generation. Current wall-clock time, proposal time, attestation time, caller/worker-provided timestamps, substituted cutoffs, or latest repository state can never substitute for accepted coordinates.
+A base validation record is eligible for historical replay only when both its allocator-issued `validation_cutoff` and its persistence-assigned `validation_recorded_at` are at or before the requested replay cutoff, with persistence having already enforced `validation_cutoff <= validation_recorded_at` at append. Before either coordinate, the durable base result is absent/unknown; durable acceptance alone can never expose a result before its governing validation decision/authority cutoff. For a historical replay cutoff after the base record is eligible, a correction is eligible only if both its allocator-issued `correction_cutoff` and persistence-assigned `correction_recorded_at` are at or before that replay cutoff and its governed decision/authority lineage matches the allocator-issued `correction_decision_id`/`correction_cutoff`. A delayed worker, attestation, or submission retains the original trusted correction cutoff but cannot make the successor visible before later atomic durable acceptance. Replay first filters by trusted decision and durable-knowability coordinates and only then chooses the highest eligible generation. Current wall-clock time, proposal time, attestation time, caller/worker-provided timestamps, substituted cutoffs, or latest repository state can never substitute for accepted coordinates.
 
 Ordinary worker retry is not re-validation. Explicit re-validation receives a new event/cutoff and fresh profile and Source Handling resolution and fresh capabilities; it never rewrites history.
 
@@ -402,7 +402,7 @@ Ordinary worker retry is not re-validation. Explicit re-validation receives a ne
 
 Corrections are append-only, governed, and non-branching. Each names the exact current predecessor and next generation and must first use the trusted correction allocator to claim that predecessor/generation and receive exactly one `correction_decision_id`/`correction_cutoff`; concurrent workers cannot create sibling cutoffs for the same claimed generation. Workers may only resume the allocated decision. The state-compatible success or refusal attestation binds the allocation but cannot choose or change it. Any attempt to mutate a `ResponseValidationRecord` without this correction allocation is rejected; non-semantic operational annotations remain outside this chain.
 
-Persistence uses atomic compare-and-set so concurrent sibling successors cannot both succeed and, in that same successful append, assigns immutable trusted `correction_recorded_at`. The first correction uses the base record's `validation_recorded_at` as predecessor durable acceptance; later corrections use the predecessor's `correction_recorded_at`. Strict-known historical reads first exclude records not durably known by the requested replay cutoff and successors whose decision/authority lineage does not match the allocator-issued correction cutoff; only then do they choose the highest eligible correction generation. Thus generation orders eligible successors but never proves historical knowability by itself.
+Persistence uses atomic compare-and-set so concurrent sibling successors cannot both succeed and, in that same successful append, assigns immutable trusted `correction_recorded_at`. The first correction uses the base record's `validation_recorded_at` as predecessor durable acceptance; later corrections use the predecessor's `correction_recorded_at`. Strict-known historical reads first exclude base/correction records whose trusted decision cutoff or durable-acceptance coordinate is later than the requested replay cutoff and successors whose decision/authority lineage does not match the allocator-issued correction cutoff; only then do they choose the highest eligible correction generation. Thus generation orders eligible successors but never proves historical knowability by itself.
 
 ### 12. Validation dimensions
 
@@ -432,7 +432,9 @@ A later extraction/knowledge-proposal service may consume only states allowed by
 | Refusal attestation is used for `VALID` | rejected |
 | Later profile/Source Handling substituted into replay | rejected |
 | Caller/attestation supplies base `validation_recorded_at` | rejected; persistence assigns it only at successful atomic base append |
-| Base record is replayed before `validation_recorded_at` | absent/unknown; event cutoff alone does not prove durable knowability |
+| Validation allocator cutoff is later than base durable acceptance | append rejected; `validation_cutoff <= validation_recorded_at` is mandatory |
+| Validation allocator and persistence clocks are not mechanically comparable | base append fails closed; no inferred chronology |
+| Base record is replayed before `validation_cutoff` or `validation_recorded_at` | absent/unknown; both trusted coordinates must be at or before replay cutoff |
 | First correction lacks a durably persisted base acceptance coordinate | rejected; predecessor chronology is unprovable |
 | First correction cutoff predates base `validation_recorded_at` | allocation/append fails closed |
 | Worker/caller proposes a correction cutoff | rejected; correction cutoffs come only from trusted correction allocator |
@@ -477,24 +479,25 @@ A future ADR and implementation must mechanically prove at minimum:
 17. canonical-looking direct persistence without state-compatible validator attestation is rejected;
 18. attestation reuse, record/event/subject substitution, or success/refusal substitution is rejected;
 19. base terminal append atomically stamps persistence-owned immutable `validation_recorded_at`; caller/validator/attestation values cannot become authoritative;
-20. strict-known replay excludes a base record before its `validation_recorded_at`;
-21. first-correction predecessor durable acceptance is exactly the base `validation_recorded_at`; later corrections use predecessor `correction_recorded_at`;
-22. every correction to `ResponseValidationRecord` requires exactly one trusted allocator-issued `correction_decision_id` and `correction_cutoff` before authority resolution/worker execution; no clerical/no-decision record mutation is accepted;
-23. retry/restart of same correction decision resumes same allocation, while genuinely new correction requires new predecessor/generation claim and cutoff;
-24. every correction receives `correction_recorded_at` only from same trusted atomic durable append; proposed timestamps cannot become authoritative;
-25. delayed execution/submission cannot change allocated correction cutoff and cannot make correction knowable before durable acceptance;
-26. persistence enforces `predecessor durable-acceptance <= allocated correction_cutoff <= correction_recorded_at` and exact allocation/predecessor/generation equality;
-27. substituting different correction cutoff into authority resolution, authorization, attestation, record, or replay is rejected;
-28. state, per-dimension outcomes, authority coordinates, lineage coordinates, input mode, durability meaning, or downstream eligibility cannot change outside governed correction allocation;
-29. non-semantic administrative annotations cannot mutate `ResponseValidationRecord` or its correction chain;
-30. successor durably recorded after replay cutoff is excluded even when it has highest generation;
-31. correction-time current authority cannot substitute for authority knowable at allocator-issued correction cutoff;
-32. corrections are append-only and allocation plus CAS prevents sibling decision/successor branches;
-33. strict-known replay never invokes provider/network or substitutes current authority;
-34. `VALID` grants no truth/promotion authority and cannot create extraction proposal;
-35. legacy artifacts cannot be retroactively accepted as validation records;
-36. Issue #315 remains independently unresolved unless explicitly completed;
-37. deliberately weakening each reusable authority, replay, event allocation, base durable acceptance, trusted correction cutoff allocation, correction durable acceptance, correction chronology, semantic-correction enforcement, Source Handling, durability, precedence, or attestation guard makes its named regression fail.
+20. persistence mechanically enforces comparable trusted base chronology `validation_cutoff <= validation_recorded_at` and fails closed if the coordinate order is inverted or unprovable;
+21. strict-known replay excludes a base record until both `validation_cutoff` and `validation_recorded_at` are at or before the replay cutoff;
+22. first-correction predecessor durable acceptance is exactly the base `validation_recorded_at`; later corrections use predecessor `correction_recorded_at`;
+23. every correction to `ResponseValidationRecord` requires exactly one trusted allocator-issued `correction_decision_id` and `correction_cutoff` before authority resolution/worker execution; no clerical/no-decision record mutation is accepted;
+24. retry/restart of same correction decision resumes same allocation, while genuinely new correction requires new predecessor/generation claim and cutoff;
+25. every correction receives `correction_recorded_at` only from same trusted atomic durable append; proposed timestamps cannot become authoritative;
+26. delayed execution/submission cannot change allocated correction cutoff and cannot make correction knowable before durable acceptance;
+27. persistence enforces `predecessor durable-acceptance <= allocated correction_cutoff <= correction_recorded_at` and exact allocation/predecessor/generation equality;
+28. substituting different correction cutoff into authority resolution, authorization, attestation, record, or replay is rejected;
+29. state, per-dimension outcomes, authority coordinates, lineage coordinates, input mode, durability meaning, or downstream eligibility cannot change outside governed correction allocation;
+30. non-semantic administrative annotations cannot mutate `ResponseValidationRecord` or its correction chain;
+31. successor durably recorded after replay cutoff is excluded even when it has highest generation;
+32. correction-time current authority cannot substitute for authority knowable at allocator-issued correction cutoff;
+33. corrections are append-only and allocation plus CAS prevents sibling decision/successor branches;
+34. strict-known replay never invokes provider/network or substitutes current authority;
+35. `VALID` grants no truth/promotion authority and cannot create extraction proposal;
+36. legacy artifacts cannot be retroactively accepted as validation records;
+37. Issue #315 remains independently unresolved unless explicitly completed;
+38. deliberately weakening each reusable authority, replay, event allocation, base cutoff/acceptance chronology, trusted correction cutoff allocation, correction durable acceptance, correction chronology, semantic-correction enforcement, Source Handling, durability, precedence, or attestation guard makes its named regression fail.
 
 ## Persistence, Security, and Privacy
 
@@ -512,13 +515,13 @@ Before activation, rollback is simply non-activation. After append-only validati
 
 ## Operational Quality
 
-Validation is local and provider-free. Validator failure remains an explicit closed state and never creates provider retry authority. Atomic base/correction allocation prevents worker restarts from accidentally becoming re-validation or silently selecting a new historical cutoff. Persistence-owned base/correction acceptance timestamps make strict-known durability mechanically testable from the first generation onward. Observability is bounded by Source Handling and credential safety. Availability failure cannot default to `VALID`.
+Validation is local and provider-free. Validator failure remains an explicit closed state and never creates provider retry authority. Atomic base/correction allocation prevents worker restarts from accidentally becoming re-validation or silently selecting a new historical cutoff. Persistence-owned base/correction acceptance timestamps plus explicit base/correction chronology make strict-known durability mechanically testable from the first generation onward. Observability is bounded by Source Handling and credential safety. Availability failure cannot default to `VALID`.
 
 ## Open Questions
 
 Non-blocking implementation details include exact parser/schema library, physical database schema/indexes for allocation/CAS, durable diagnostic category mapping, concrete opaque/cryptographic capability mechanism, and future shared-core admission if ADR 0032 later obtains independent multi-consumer evidence.
 
-The canonical top-level vocabulary, precedence, dedicated profile authority recommendation, event-before-cutoff rule, persistence-owned base durable-acceptance coordinate, trusted correction-decision cutoff allocation, governed-only validation-record correction rule, validation-time Source Handling, retry/re-validation distinction, persistence-owned correction knowability/chronology, and state-compatible success/refusal attestation split are architecture decisions subject to targeted independent re-audit before ADR drafting.
+The canonical top-level vocabulary, precedence, dedicated profile authority recommendation, event-before-cutoff rule, persistence-owned base durable-acceptance coordinate and base chronology, trusted correction-decision cutoff allocation, governed-only validation-record correction rule, validation-time Source Handling, retry/re-validation distinction, persistence-owned correction knowability/chronology, and state-compatible success/refusal attestation split are architecture decisions subject to targeted independent re-audit before ADR drafting.
 
 ## Constitution and Governance Review
 
@@ -541,13 +544,13 @@ Ratings use repository scale: `EXCELLENT`, `GOOD`, `ACCEPTABLE`, `NEEDS_IMPROVEM
 | Comparative fairness | GOOD | all profile-owner models use common criteria | quantitative cost not meaningful here |
 | Falsifiability | EXCELLENT | profile authority and temporal correction semantics have explicit adversarial cases | runtime mutation proof waits for implementation |
 | Authority and ownership clarity | EXCELLENT | rule-maker, executor, allocator, Source Handling, persistence timestamp facts, transport, and promotion are separated | targeted audit must close F-001 |
-| Persistence and replay quality | EXCELLENT | base/correction durable acceptance, strict-known resolution, allocation, chronology, CAS, attestation, transient non-retention explicit | physical schema deferred |
-| Evidence and provenance quality | GOOD | capture/attempt/build/event/profile/Source Handling/base acceptance/correction-decision/correction-acceptance coordinates required | claim truth remains out of scope |
+| Persistence and replay quality | EXCELLENT | base/correction durable acceptance, trusted cutoff chronology, strict-known resolution, allocation, CAS, attestation, transient non-retention explicit | physical schema deferred |
+| Evidence and provenance quality | GOOD | capture/attempt/build/event/profile/Source Handling/base cutoff/acceptance/correction-decision/correction-acceptance coordinates required | claim truth remains out of scope |
 | Operational quality | GOOD | provider-free local validation, fail-closed availability, retry/revalidation/correction-resume distinction | SLOs deferred |
 | Implementation and migration impact | GOOD | additive authority/event/allocation/record/capability surfaces | effort estimate deferred |
-| Testability and validation | EXCELLENT | hostile cases cover base knowability, clerical bypass, cutoff forgery, delayed leakage, chronology, concurrency, replay, attestation | implementation tests not yet authorized |
+| Testability and validation | EXCELLENT | hostile cases cover base chronology/knowability, clerical bypass, cutoff forgery, delayed leakage, correction chronology, concurrency, replay, attestation | implementation tests not yet authorized |
 | Maintainability and extensibility | GOOD | Hunter-local authority now; shared extraction deferred by ADR 0032 | future consumer evidence may justify supersession |
-| Risk quality | GOOD | authority concentration, repository laundering, temporal replay leakage, cutoff forgery, correction bypass, privacy, race, premature abstraction mitigated | residual implementation risk remains |
+| Risk quality | GOOD | authority concentration, repository laundering, temporal replay leakage, clock inversion, cutoff forgery, correction bypass, privacy, race, premature abstraction mitigated | residual implementation risk remains |
 | Traceability | GOOD | #316, #318, #319 F-001, #320, PR #321, PR #325, merged baseline, and exact-head P1 lineage explicit | ADR not yet created |
 
 No mandatory quality dimension is below `ACCEPTABLE`. This self-assessment permits **targeted re-audit**, not ADR drafting.
@@ -557,11 +560,11 @@ No mandatory quality dimension is below `ACCEPTABLE`. This self-assessment permi
 - Outcome: `READY_FOR_REVIEW` for v1.5 correction.
 - The previously omitted profile-authority option space remains explicit and normalized.
 - Dedicated `ResponseValidationProfileAuthority` remains recommended after comparison, not by assumption.
-- Base records now receive persistence-owned `validation_recorded_at` at atomic durable acceptance, giving generation 0 a trusted historical-knowability coordinate.
+- Base records receive persistence-owned `validation_recorded_at` at atomic durable acceptance, persistence requires trusted comparable `validation_cutoff <= validation_recorded_at`, and replay requires both coordinates before generation 0 is visible.
 - Every validation-record correction is a governed correction decision with allocator-issued ID/cutoff; there is no clerical record-mutation bypass.
 - Correction records receive persistence-owned atomic durable-acceptance timestamps; proposed/backdated timestamps cannot substitute.
 - Correction chronology is mechanically constrained against predecessor durable acceptance, allocator-issued decision cutoff, and durable acceptance.
-- Source Handling remains ADR 0033-owned; Model Adapter remains transport/capture-only; persistence remains non-authoritative except for mechanical trusted storage-time facts; promotion remains downstream.
+- Source Handling remains ADR 0033-owned; Model Adapter remains transport/capture-only; persistence remains non-authoritative except for mechanical trusted storage-time facts and chronology checks; promotion remains downstream.
 - Event-before-cutoff allocation, retry vs revalidation/correction-resume, truthful unresolved-authority refusal, anti-forgery attestation, closed vocabulary, and strict-known replay remain explicit.
 
 ## ADR Readiness
@@ -579,7 +582,7 @@ No mandatory quality dimension is below `ACCEPTABLE`. This self-assessment permi
 | 2026-08-24 | READY_FOR_REVIEW | v1.2 completed auditable coordinates, precedence, quality ratings, and traceability | OpenAI GPT-5.6 Sol |
 | 2026-08-24 | READY_FOR_REVIEW | v1.3 allocated/deduplicated validation events before cutoff and split success from unresolved-authority refusal attestation | OpenAI GPT-5.6 Sol |
 | 2026-08-24 | READY_FOR_REVIEW | v1.4 independently evaluated/normalized profile-authority ownership models to address PR #319 F-001 | OpenAI GPT-5.6 Sol |
-| 2026-08-24 | READY_FOR_REVIEW | v1.5 restores replay coordinates and hardens base/correction durable knowability, trusted correction cutoff allocation, and governed-only validation-record correction semantics after PR #321/PR #325 exact-head review | OpenAI GPT-5.6 Sol |
+| 2026-08-24 | READY_FOR_REVIEW | v1.5 restores replay coordinates and hardens base/correction durable knowability, base cutoff/acceptance chronology, trusted correction cutoff allocation, and governed-only validation-record correction semantics after PR #321/PR #325 exact-head review | OpenAI GPT-5.6 Sol |
 
 ## Traceability
 
@@ -591,7 +594,7 @@ No mandatory quality dimension is below `ACCEPTABLE`. This self-assessment permi
 - Profile-authority correction PR: #321, merged at `8ee6fd57577fa322b87cba21bd381d05770edd29`
 - Replay-coordinate correction PR: #325
 - Post-merge review finding: PR #321 P1 — restore correction time coordinates for strict-known replay
-- Follow-up exact-head review findings on PR #325: persistence-owned durable-acceptance time/chronology; trusted correction-cutoff allocation; governed-only correction semantics; base durable-acceptance coordinate
+- Follow-up exact-head review findings on PR #325: persistence-owned durable-acceptance time/chronology; trusted correction-cutoff allocation; governed-only correction semantics; base durable-acceptance coordinate; base cutoff-before-acceptance chronology
 - Related follow-up: #315 (separate)
 - ADPR: `ADPR-0010` v1.5
 - ADR: not yet created
