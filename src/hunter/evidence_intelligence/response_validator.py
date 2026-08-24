@@ -329,6 +329,16 @@ class ResponseValidationProfileAuthority:
     def __init__(self, repository: Any, *, clock: Clock | None = None) -> None:
         self._repository = repository
         self._clock = clock or SystemClock()
+        self.__persistence_capability: object | None = None
+        self._repository._bind_profile_authority(  # noqa: SLF001 - one-time authority capability binding
+            self,
+            self.__install_persistence_capability,
+        )
+
+    def __install_persistence_capability(self, capability: object) -> None:
+        if self.__persistence_capability is not None:
+            raise ResponseValidationProfileError("profile persistence capability is immutable once installed")
+        self.__persistence_capability = capability
 
     def publish_profile(self, spec: ResponseValidationProfileSpec) -> ResponseValidationProfile:
         """Publish a genesis profile; authority supplies identity, version, and time."""
@@ -348,6 +358,7 @@ class ResponseValidationProfileAuthority:
             )
 
         return self._repository._publish_profile_authorized(  # noqa: SLF001 - authority-only persistence seam
+            authority_capability=self.__persistence_capability,
             applicability_key=spec.applicability_key,
             factory=build,
         )
@@ -384,6 +395,7 @@ class ResponseValidationProfileAuthority:
             )
 
         return self._repository._publish_profile_authorized(  # noqa: SLF001 - authority-only persistence seam
+            authority_capability=self.__persistence_capability,
             applicability_key=spec.applicability_key,
             factory=build,
         )
@@ -472,6 +484,16 @@ class ResponseValidatorFoundation:
         self._repository = repository
         self._profile_authority = profile_authority
         self._clock = clock or SystemClock()
+        self.__persistence_capability: object | None = None
+        self._repository._bind_event_allocator(  # noqa: SLF001 - one-time allocator capability binding
+            self,
+            self.__install_persistence_capability,
+        )
+
+    def __install_persistence_capability(self, capability: object) -> None:
+        if self.__persistence_capability is not None:
+            raise ValidationEventAllocationError("event-allocation persistence capability is immutable once installed")
+        self.__persistence_capability = capability
 
     def allocate_base_validation(self, key: BaseValidationKey) -> ValidationEventAllocation:
         """Atomically create or join the one canonical base event for ``key``."""
@@ -485,6 +507,7 @@ class ResponseValidatorFoundation:
             )
 
         return self._repository._allocate_base_event_authorized(  # noqa: SLF001 - authority-only persistence seam
+            authority_capability=self.__persistence_capability,
             key=key,
             factory=build,
         )
@@ -505,6 +528,7 @@ class ResponseValidatorFoundation:
             )
 
         return self._repository._allocate_revalidation_event_authorized(  # noqa: SLF001
+            authority_capability=self.__persistence_capability,
             predecessor_validation_event_id=predecessor_validation_event_id,
             factory=build,
         )

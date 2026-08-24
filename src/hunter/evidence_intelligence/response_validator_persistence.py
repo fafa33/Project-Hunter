@@ -22,8 +22,10 @@ from hunter.evidence_intelligence.repository import EvidenceIntelligenceReposito
 from hunter.evidence_intelligence.response_validator import (
     BaseValidationKey,
     ResponseValidationProfile,
+    ResponseValidationProfileAuthority,
     ResponseValidationProfileError,
     ResponseValidationProfileSpec,
+    ResponseValidatorFoundation,
     ValidationEventAllocation,
     ValidationEventAllocationError,
 )
@@ -50,21 +52,77 @@ class ResponseValidatorPersistenceRepository:
 
     def __init__(self, evidence_repository: EvidenceIntelligenceRepository) -> None:
         self.path = evidence_repository.path
+        self.__profile_authority_owner: ResponseValidationProfileAuthority | None = None
+        self.__profile_authority_capability: object | None = None
+        self.__event_allocator_owner: ResponseValidatorFoundation | None = None
+        self.__event_allocator_capability: object | None = None
         self._initialize()
 
-    def direct_write(self, *, table: str, record: Mapping[str, Any]) -> None:
-        del table, record
-        raise ResponseValidatorDirectWriteForbidden(
-            "direct ResponseValidator writes are forbidden; use the owning authority/service"
-        )
+    def _bind_profile_authority(
+        self,
+        owner: object,
+        installer: Callable[[object], None],
+    ) -> None:
+        """Install one opaque write capability into the exact profile authority."""
+        expected_installer = vars(ResponseValidationProfileAuthority)[
+            "_ResponseValidationProfileAuthority__install_persistence_capability"
+        ]
+        if (
+            type(owner) is not ResponseValidationProfileAuthority
+            or getattr(owner, "_repository", None) is not self
+            or getattr(installer, "__self__", None) is not owner
+            or getattr(installer, "__func__", None) is not expected_installer
+        ):
+            raise ResponseValidatorDirectWriteForbidden("profile persistence capability owner is not canonical")
+        if self.__profile_authority_owner is not None:
+            raise ResponseValidatorDirectWriteForbidden("profile persistence capability is already bound")
+        capability = object()
+        self.__profile_authority_owner = owner
+        self.__profile_authority_capability = capability
+        installer(capability)
+
+    def _bind_event_allocator(
+        self,
+        owner: object,
+        installer: Callable[[object], None],
+    ) -> None:
+        """Install one opaque write capability into the exact event allocator."""
+        expected_installer = vars(ResponseValidatorFoundation)[
+            "_ResponseValidatorFoundation__install_persistence_capability"
+        ]
+        if (
+            type(owner) is not ResponseValidatorFoundation
+            or getattr(owner, "_repository", None) is not self
+            or getattr(installer, "__self__", None) is not owner
+            or getattr(installer, "__func__", None) is not expected_installer
+        ):
+            raise ResponseValidatorDirectWriteForbidden(
+                "event-allocation persistence capability owner is not canonical"
+            )
+        if self.__event_allocator_owner is not None:
+            raise ResponseValidatorDirectWriteForbidden("event-allocation persistence capability is already bound")
+        capability = object()
+        self.__event_allocator_owner = owner
+        self.__event_allocator_capability = capability
+        installer(capability)
+
+    def _require_profile_authority_capability(self, capability: object | None) -> None:
+        if capability is None or capability is not self.__profile_authority_capability:
+            raise ResponseValidatorDirectWriteForbidden("profile persistence requires its owning authority capability")
+
+    def _require_event_allocator_capability(self, capability: object | None) -> None:
+        if capability is None or capability is not self.__event_allocator_capability:
+            raise ResponseValidatorDirectWriteForbidden("event allocation requires its owning service capability")
 
     def _publish_profile_authorized(
         self,
         *,
+        authority_capability: object | None = None,
         applicability_key: str,
         factory: Callable[[ResponseValidationProfile | None], ResponseValidationProfile],
     ) -> ResponseValidationProfile:
         """Append a service-created profile while holding the history claim."""
+        self._require_profile_authority_capability(authority_capability)
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             history = self._profile_history(connection, applicability_key)
@@ -121,7 +179,10 @@ class ResponseValidatorPersistenceRepository:
     ) -> tuple[ResponseValidationProfile, ...]:
         rows = connection.execute(
             """
-            SELECT payload_hash, payload_json FROM response_validation_profiles
+            SELECT publication_id, applicability_key, profile_version,
+                   applicable_from, published_at, known_at,
+                   supersedes_publication_id, payload_hash, payload_json
+            FROM response_validation_profiles
             WHERE applicability_key = ?
             ORDER BY known_at, profile_version, publication_id
             """,
@@ -132,15 +193,20 @@ class ResponseValidatorPersistenceRepository:
     def _allocate_base_event_authorized(
         self,
         *,
+        authority_capability: object | None = None,
         key: BaseValidationKey,
         factory: Callable[[], ValidationEventAllocation],
     ) -> ValidationEventAllocation:
         """Create the base allocation once; concurrent/repeated callers join it."""
+        self._require_event_allocator_capability(authority_capability)
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             existing = connection.execute(
                 """
-                SELECT payload_hash, payload_json FROM response_validation_event_allocations
+                SELECT validation_event_id, base_validation_key_id,
+                       revalidation_generation, predecessor_validation_event_id,
+                       validation_cutoff, payload_hash, payload_json
+                FROM response_validation_event_allocations
                 WHERE base_validation_key_id = ? AND revalidation_generation = 0
                 """,
                 (key.base_validation_key_id,),
@@ -160,15 +226,20 @@ class ResponseValidatorPersistenceRepository:
     def _allocate_revalidation_event_authorized(
         self,
         *,
+        authority_capability: object | None = None,
         predecessor_validation_event_id: str,
         factory: Callable[[ValidationEventAllocation], ValidationEventAllocation],
     ) -> ValidationEventAllocation:
         """Create or join the unique child allocation of the exact predecessor."""
+        self._require_event_allocator_capability(authority_capability)
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             predecessor_row = connection.execute(
                 """
-                SELECT payload_hash, payload_json FROM response_validation_event_allocations
+                SELECT validation_event_id, base_validation_key_id,
+                       revalidation_generation, predecessor_validation_event_id,
+                       validation_cutoff, payload_hash, payload_json
+                FROM response_validation_event_allocations
                 WHERE validation_event_id = ?
                 """,
                 (predecessor_validation_event_id,),
@@ -179,7 +250,10 @@ class ResponseValidatorPersistenceRepository:
 
             existing_child = connection.execute(
                 """
-                SELECT payload_hash, payload_json FROM response_validation_event_allocations
+                SELECT validation_event_id, base_validation_key_id,
+                       revalidation_generation, predecessor_validation_event_id,
+                       validation_cutoff, payload_hash, payload_json
+                FROM response_validation_event_allocations
                 WHERE predecessor_validation_event_id = ?
                 """,
                 (predecessor_validation_event_id,),
@@ -201,7 +275,10 @@ class ResponseValidatorPersistenceRepository:
         with self._connect() as connection:
             row = connection.execute(
                 """
-                SELECT payload_hash, payload_json FROM response_validation_event_allocations
+                SELECT validation_event_id, base_validation_key_id,
+                       revalidation_generation, predecessor_validation_event_id,
+                       validation_cutoff, payload_hash, payload_json
+                FROM response_validation_event_allocations
                 WHERE validation_event_id = ?
                 """,
                 (validation_event_id,),
@@ -212,7 +289,10 @@ class ResponseValidatorPersistenceRepository:
         with self._connect() as connection:
             rows = connection.execute(
                 """
-                SELECT payload_hash, payload_json FROM response_validation_event_allocations
+                SELECT validation_event_id, base_validation_key_id,
+                       revalidation_generation, predecessor_validation_event_id,
+                       validation_cutoff, payload_hash, payload_json
+                FROM response_validation_event_allocations
                 WHERE base_validation_key_id = ?
                 ORDER BY revalidation_generation, validation_event_id
                 """,
@@ -338,6 +418,19 @@ def _profile_from_row(row: sqlite3.Row) -> ResponseValidationProfile:
         raise ResponseValidatorPersistenceCorruption("profile payload is not canonical") from error
     if profile.publication_id != publication_id or profile.spec.content_hash != content_hash:
         raise ResponseValidatorPersistenceCorruption("profile identity or content hash mismatch")
+    _require_row_metadata(
+        row,
+        {
+            "applicability_key": profile.spec.applicability_key,
+            "publication_id": profile.publication_id,
+            "profile_version": profile.profile_version,
+            "applicable_from": profile.applicable_from.isoformat(),
+            "published_at": profile.published_at.isoformat(),
+            "known_at": profile.known_at.isoformat(),
+            "supersedes_publication_id": profile.supersedes_publication_id,
+        },
+        record_kind="profile",
+    )
     return profile
 
 
@@ -368,7 +461,36 @@ def _allocation_from_row(row: sqlite3.Row) -> ValidationEventAllocation:
         raise ResponseValidatorPersistenceCorruption("validation event identity mismatch")
     if allocation.base_validation_key.base_validation_key_id != base_validation_key_id:
         raise ResponseValidatorPersistenceCorruption("base-validation key identity mismatch")
+    _require_row_metadata(
+        row,
+        {
+            "validation_event_id": allocation.validation_event_id,
+            "base_validation_key_id": allocation.base_validation_key.base_validation_key_id,
+            "revalidation_generation": allocation.revalidation_generation,
+            "predecessor_validation_event_id": allocation.predecessor_validation_event_id,
+            "validation_cutoff": allocation.validation_cutoff.isoformat(),
+        },
+        record_kind="validation allocation",
+    )
     return allocation
+
+
+def _require_row_metadata(
+    row: sqlite3.Row,
+    expected: Mapping[str, object],
+    *,
+    record_kind: str,
+) -> None:
+    """Fail closed when indexed SQL coordinates diverge from canonical bytes."""
+    for name, expected_value in expected.items():
+        try:
+            actual_value = row[name]
+        except (IndexError, KeyError) as error:
+            raise ResponseValidatorPersistenceCorruption(f"{record_kind} SQL metadata is incomplete") from error
+        if actual_value != expected_value:
+            raise ResponseValidatorPersistenceCorruption(
+                f"{record_kind} SQL metadata does not match canonical payload: {name}"
+            )
 
 
 def _canonical_json(value: object) -> str:

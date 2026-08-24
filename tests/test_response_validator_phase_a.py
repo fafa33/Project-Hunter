@@ -22,6 +22,7 @@ from hunter.evidence_intelligence.response_validator import (
     ResponseValidationProfileSpec,
     ResponseValidatorFoundation,
     UnknownValidationStateError,
+    ValidationEventAllocation,
     ValidationEventAllocationError,
     ValidationState,
     canonical_validation_state,
@@ -218,16 +219,123 @@ def test_caller_cannot_forge_profile_publication_identity_or_history(tmp_path: P
     authority = ResponseValidationProfileAuthority(store, clock=SequenceClock(T1))
     canonical = authority.publish_profile(profile_spec())
 
-    with pytest.raises(ResponseValidatorDirectWriteForbidden):
-        store.direct_write(
-            table="response_validation_profiles",
-            record={"publication_id": "caller-chosen", "profile_version": 999},
-        )
-
     signature = inspect.signature(authority.publish_profile)
     for forbidden in ("publication_id", "profile_version", "known_at", "published_at", "applicable_from"):
         assert forbidden not in signature.parameters
     assert canonical.publication_id.startswith("response-validation-profile-publication:")
+
+
+def test_direct_repository_caller_cannot_publish_canonical_profile(tmp_path: Path) -> None:
+    store = repository(tmp_path)
+    forged = ResponseValidationProfile(
+        spec=profile_spec(),
+        profile_version=1,
+        applicable_from=T4,
+        published_at=T4,
+        known_at=T4,
+    )
+    factory_called = False
+
+    def caller_factory(_predecessor: ResponseValidationProfile | None) -> ResponseValidationProfile:
+        nonlocal factory_called
+        factory_called = True
+        return forged
+
+    with pytest.raises(ResponseValidatorDirectWriteForbidden, match="owning authority capability"):
+        store._publish_profile_authorized(  # noqa: SLF001 - adversarial boundary test
+            applicability_key=forged.spec.applicability_key,
+            factory=caller_factory,
+        )
+
+    assert not factory_called
+    assert store.profile_history(forged.spec.applicability_key) == ()
+
+
+def test_direct_repository_caller_cannot_allocate_base_validation_event(tmp_path: Path) -> None:
+    store = repository(tmp_path)
+    forged = ValidationEventAllocation(base_validation_key=base_key(), validation_cutoff=T4)
+    factory_called = False
+
+    def caller_factory() -> ValidationEventAllocation:
+        nonlocal factory_called
+        factory_called = True
+        return forged
+
+    with pytest.raises(ResponseValidatorDirectWriteForbidden, match="owning service capability"):
+        store._allocate_base_event_authorized(  # noqa: SLF001 - adversarial boundary test
+            key=base_key(),
+            factory=caller_factory,
+        )
+
+    assert not factory_called
+    assert store.validation_events(base_key().base_validation_key_id) == ()
+
+
+def test_direct_repository_caller_cannot_allocate_revalidation_event(tmp_path: Path) -> None:
+    store = repository(tmp_path)
+    factory_called = False
+
+    def caller_factory(predecessor: ValidationEventAllocation) -> ValidationEventAllocation:
+        nonlocal factory_called
+        factory_called = True
+        return dataclasses.replace(
+            predecessor,
+            validation_cutoff=T4,
+            revalidation_generation=predecessor.revalidation_generation + 1,
+            predecessor_validation_event_id=predecessor.validation_event_id,
+        )
+
+    with pytest.raises(ResponseValidatorDirectWriteForbidden, match="owning service capability"):
+        store._allocate_revalidation_event_authorized(  # noqa: SLF001 - adversarial boundary test
+            predecessor_validation_event_id="response-validation-event:caller-chosen",
+            factory=caller_factory,
+        )
+
+    assert not factory_called
+
+
+def test_forged_or_substituted_authority_capability_is_rejected(tmp_path: Path) -> None:
+    store = repository(tmp_path)
+    authority = ResponseValidationProfileAuthority(store, clock=SequenceClock(T1))
+    authority.publish_profile(profile_spec())
+    validator = ResponseValidatorFoundation(store, authority, clock=SequenceClock(T2))
+    profile_capability = vars(authority)["_ResponseValidationProfileAuthority__persistence_capability"]
+    event_capability = vars(validator)["_ResponseValidatorFoundation__persistence_capability"]
+
+    with pytest.raises(ResponseValidatorDirectWriteForbidden):
+        store._publish_profile_authorized(  # noqa: SLF001 - forged capability test
+            authority_capability=object(),
+            applicability_key=profile_spec(validator_version="2").applicability_key,
+            factory=lambda _predecessor: pytest.fail("forged profile factory must not run"),
+        )
+    with pytest.raises(ResponseValidatorDirectWriteForbidden):
+        store._allocate_base_event_authorized(  # noqa: SLF001 - cross-scope substitution test
+            authority_capability=profile_capability,
+            key=base_key(),
+            factory=lambda: pytest.fail("substituted base factory must not run"),
+        )
+    with pytest.raises(ResponseValidatorDirectWriteForbidden):
+        store._publish_profile_authorized(  # noqa: SLF001 - cross-scope substitution test
+            authority_capability=event_capability,
+            applicability_key=profile_spec(validator_version="2").applicability_key,
+            factory=lambda _predecessor: pytest.fail("substituted profile factory must not run"),
+        )
+
+
+def test_legitimate_owning_authority_and_allocator_paths_still_succeed(tmp_path: Path) -> None:
+    store = repository(tmp_path)
+    authority = ResponseValidationProfileAuthority(store, clock=SequenceClock(T1))
+    profile = authority.publish_profile(profile_spec())
+    validator = ResponseValidatorFoundation(store, authority, clock=SequenceClock(T2, T3))
+    base = validator.allocate_base_validation(base_key())
+    revalidation = validator.allocate_revalidation(predecessor_validation_event_id=base.validation_event_id)
+
+    assert authority.profile_history(
+        profile_selector=profile.spec.profile_selector,
+        requested_output_contract_identity=profile.spec.requested_output_contract_identity,
+        requested_output_contract_version=profile.spec.requested_output_contract_version,
+    ) == (profile,)
+    assert store.validation_events(base.base_validation_key.base_validation_key_id) == (base, revalidation)
 
 
 def test_same_base_key_joins_same_event_and_cutoff_without_resampling_clock(tmp_path: Path) -> None:
@@ -405,6 +513,89 @@ def test_forged_profile_identity_adversarial_case_fails_closed(tmp_path: Path) -
             requested_output_contract_identity="extraction-schema",
             requested_output_contract_version="1",
         )
+
+
+def test_corrupted_profile_applicability_index_with_intact_payload_fails_closed(tmp_path: Path) -> None:
+    store = repository(tmp_path)
+    authority = ResponseValidationProfileAuthority(store, clock=SequenceClock(T1))
+    canonical = authority.publish_profile(profile_spec())
+    corrupted_key = "response-validation-profile-applicability:corrupted"
+    with sqlite3.connect(store.path) as connection:
+        connection.execute(
+            "UPDATE response_validation_profiles SET applicability_key = ? WHERE publication_id = ?",
+            (corrupted_key, canonical.publication_id),
+        )
+
+    with pytest.raises(ResponseValidatorPersistenceCorruption, match="applicability_key"):
+        store.profile_history(corrupted_key)
+
+
+@pytest.mark.parametrize(
+    ("column", "corrupted_value"),
+    (
+        ("publication_id", "response-validation-profile-publication:corrupted"),
+        ("profile_version", 99),
+        ("applicable_from", T4.isoformat()),
+        ("published_at", T4.isoformat()),
+        ("known_at", T4.isoformat()),
+        ("supersedes_publication_id", "response-validation-profile-publication:corrupted-predecessor"),
+    ),
+)
+def test_corrupted_profile_identity_or_chronology_metadata_with_intact_payload_fails_closed(
+    tmp_path: Path,
+    column: str,
+    corrupted_value: object,
+) -> None:
+    store = repository(tmp_path)
+    authority = ResponseValidationProfileAuthority(store, clock=SequenceClock(T1))
+    canonical = authority.publish_profile(profile_spec())
+    with sqlite3.connect(store.path) as connection:
+        connection.execute(
+            f"UPDATE response_validation_profiles SET {column} = ? WHERE publication_id = ?",
+            (corrupted_value, canonical.publication_id),
+        )
+
+    with pytest.raises(ResponseValidatorPersistenceCorruption, match=column):
+        authority.profile_history(
+            profile_selector=canonical.spec.profile_selector,
+            requested_output_contract_identity=canonical.spec.requested_output_contract_identity,
+            requested_output_contract_version=canonical.spec.requested_output_contract_version,
+        )
+
+
+@pytest.mark.parametrize(
+    ("column", "corrupted_value"),
+    (
+        ("validation_event_id", "response-validation-event:corrupted"),
+        ("base_validation_key_id", "base-validation-key:corrupted"),
+        ("revalidation_generation", 99),
+        ("predecessor_validation_event_id", "response-validation-event:corrupted-predecessor"),
+        ("validation_cutoff", T4.isoformat()),
+    ),
+)
+def test_corrupted_allocation_index_metadata_with_intact_payload_fails_closed(
+    tmp_path: Path,
+    column: str,
+    corrupted_value: object,
+) -> None:
+    store = repository(tmp_path)
+    authority = ResponseValidationProfileAuthority(store, clock=SequenceClock(T1))
+    authority.publish_profile(profile_spec())
+    validator = ResponseValidatorFoundation(store, authority, clock=SequenceClock(T2))
+    canonical = validator.allocate_base_validation(base_key())
+    with sqlite3.connect(store.path) as connection:
+        connection.execute(
+            f"UPDATE response_validation_event_allocations SET {column} = ? WHERE validation_event_id = ?",
+            (corrupted_value, canonical.validation_event_id),
+        )
+
+    with pytest.raises(ResponseValidatorPersistenceCorruption, match=column):
+        if column == "validation_event_id":
+            store.validation_event(str(corrupted_value))
+        elif column == "base_validation_key_id":
+            store.validation_events(str(corrupted_value))
+        else:
+            store.validation_event(canonical.validation_event_id)
 
 
 def test_substituted_cutoff_adversarial_case_fails_closed(tmp_path: Path) -> None:
