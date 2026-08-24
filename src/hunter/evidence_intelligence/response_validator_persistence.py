@@ -23,9 +23,9 @@ from hunter.evidence_intelligence.response_validator import (
     BaseValidationKey,
     ResponseValidationProfile,
     ResponseValidationProfileAuthority,
-    ResponseValidationProfileError,
     ResponseValidationProfileSpec,
     ResponseValidatorFoundation,
+    ResponseValidatorFoundationError,
     ValidationEventAllocation,
     ValidationEventAllocationError,
 )
@@ -414,7 +414,7 @@ def _profile_from_row(row: sqlite3.Row) -> ResponseValidationProfile:
         for name in ("applicable_from", "published_at", "known_at"):
             item[name] = _parse_time(str(item[name]))
         profile = ResponseValidationProfile(spec=spec, **item)
-    except (KeyError, TypeError, ValueError, ResponseValidationProfileError) as error:
+    except (KeyError, TypeError, ValueError, ResponseValidatorFoundationError) as error:
         raise ResponseValidatorPersistenceCorruption("profile payload is not canonical") from error
     if profile.publication_id != publication_id or profile.spec.content_hash != content_hash:
         raise ResponseValidatorPersistenceCorruption("profile identity or content hash mismatch")
@@ -455,7 +455,7 @@ def _allocation_from_row(row: sqlite3.Row) -> ValidationEventAllocation:
         key = BaseValidationKey(**item.pop("base_validation_key"))
         item["validation_cutoff"] = _parse_time(str(item["validation_cutoff"]))
         allocation = ValidationEventAllocation(base_validation_key=key, **item)
-    except (KeyError, TypeError, ValueError, ValidationEventAllocationError) as error:
+    except (KeyError, TypeError, ValueError, ResponseValidatorFoundationError) as error:
         raise ResponseValidatorPersistenceCorruption("validation allocation payload is not canonical") from error
     if allocation.validation_event_id != validation_event_id:
         raise ResponseValidatorPersistenceCorruption("validation event identity mismatch")

@@ -32,6 +32,7 @@ from hunter.evidence_intelligence.response_validator_persistence import (
     ResponseValidatorDirectWriteForbidden,
     ResponseValidatorPersistenceCorruption,
     ResponseValidatorPersistenceRepository,
+    _allocation_payload,
     _profile_payload,
 )
 
@@ -513,6 +514,80 @@ def test_forged_profile_identity_adversarial_case_fails_closed(tmp_path: Path) -
             requested_output_contract_identity="extraction-schema",
             requested_output_contract_version="1",
         )
+
+
+def test_tampered_profile_required_text_is_normalized_to_persistence_corruption(tmp_path: Path) -> None:
+    store = repository(tmp_path)
+    authority = ResponseValidationProfileAuthority(store, clock=SequenceClock(T1))
+    canonical = authority.publish_profile(profile_spec())
+    payload = json.loads(_profile_payload(canonical))
+    payload["spec"]["profile_selector"] = ""
+    tampered = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    with sqlite3.connect(store.path) as connection:
+        connection.execute(
+            "UPDATE response_validation_profiles SET payload_hash = ?, payload_json = ? WHERE publication_id = ?",
+            (hashlib.sha256(tampered.encode()).hexdigest(), tampered, canonical.publication_id),
+        )
+
+    with pytest.raises(ResponseValidatorPersistenceCorruption, match="profile payload is not canonical"):
+        store.profile_history(canonical.spec.applicability_key)
+
+
+def test_tampered_profile_non_aware_timestamp_is_persistence_corruption(tmp_path: Path) -> None:
+    store = repository(tmp_path)
+    authority = ResponseValidationProfileAuthority(store, clock=SequenceClock(T1))
+    canonical = authority.publish_profile(profile_spec())
+    payload = json.loads(_profile_payload(canonical))
+    payload["known_at"] = T1.replace(tzinfo=None).isoformat()
+    tampered = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    with sqlite3.connect(store.path) as connection:
+        connection.execute(
+            "UPDATE response_validation_profiles SET payload_hash = ?, payload_json = ? WHERE publication_id = ?",
+            (hashlib.sha256(tampered.encode()).hexdigest(), tampered, canonical.publication_id),
+        )
+
+    with pytest.raises(ResponseValidatorPersistenceCorruption, match="timestamp must be timezone-aware"):
+        store.profile_history(canonical.spec.applicability_key)
+
+
+def test_tampered_allocation_required_field_is_normalized_to_persistence_corruption(tmp_path: Path) -> None:
+    store = repository(tmp_path)
+    authority = ResponseValidationProfileAuthority(store, clock=SequenceClock(T1))
+    authority.publish_profile(profile_spec())
+    validator = ResponseValidatorFoundation(store, authority, clock=SequenceClock(T2))
+    canonical = validator.allocate_base_validation(base_key())
+    payload = json.loads(_allocation_payload(canonical))
+    payload["base_validation_key"]["response_capture_identity"] = ""
+    tampered = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    with sqlite3.connect(store.path) as connection:
+        connection.execute(
+            """
+            UPDATE response_validation_event_allocations
+            SET payload_hash = ?, payload_json = ? WHERE validation_event_id = ?
+            """,
+            (hashlib.sha256(tampered.encode()).hexdigest(), tampered, canonical.validation_event_id),
+        )
+
+    with pytest.raises(ResponseValidatorPersistenceCorruption, match="allocation payload is not canonical"):
+        store.validation_event(canonical.validation_event_id)
+
+
+def test_valid_profile_row_still_decodes_successfully(tmp_path: Path) -> None:
+    store = repository(tmp_path)
+    authority = ResponseValidationProfileAuthority(store, clock=SequenceClock(T1))
+    canonical = authority.publish_profile(profile_spec())
+
+    assert store.profile_history(canonical.spec.applicability_key) == (canonical,)
+
+
+def test_valid_allocation_row_still_decodes_successfully(tmp_path: Path) -> None:
+    store = repository(tmp_path)
+    authority = ResponseValidationProfileAuthority(store, clock=SequenceClock(T1))
+    authority.publish_profile(profile_spec())
+    validator = ResponseValidatorFoundation(store, authority, clock=SequenceClock(T2))
+    canonical = validator.allocate_base_validation(base_key())
+
+    assert store.validation_event(canonical.validation_event_id) == canonical
 
 
 def test_corrupted_profile_applicability_index_with_intact_payload_fails_closed(tmp_path: Path) -> None:
