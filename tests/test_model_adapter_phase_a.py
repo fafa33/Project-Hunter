@@ -26,6 +26,7 @@ from hunter.evidence_intelligence.model_adapter import (
     ModelAdapterAuthorityError,
     ModelAdapterError,
     ModelAdapterService,
+    ModelAttemptOutcomeRecord,
     ModelAttemptRecord,
     ModelExecutionProfile,
     ModelHandoffRecord,
@@ -66,6 +67,32 @@ def _persisted_field_values(database: Path) -> list[object]:
     for row in rows:
         walk(json.loads(str(row[0])))
     return values
+
+
+def _retry_authorizing_outcome(attempt_id: str) -> ModelAttemptOutcomeRecord:
+    """A predecessor outcome that genuinely permits a further attempt.
+
+    ADR 0034 Phase B makes an authorized retry require the predecessor's own
+    recorded outcome, so these Phase A retry tests supply the one outcome class
+    that establishes no provider execution occurred. Anything weaker -- an
+    uncertain outcome, or no outcome at all -- is refused, which
+    `tests/test_model_adapter_phase_b.py` proves separately.
+    """
+    return ModelAttemptOutcomeRecord(
+        build_record_id="evidence-pre-model-build:phase-a",
+        prompt_artifact_id="evidence-prompt-artifact:phase-a",
+        execution_profile_identity="model-execution-profile:phase-a",
+        transport_identity="transport:no-network",
+        transport_version="1",
+        outcome="TIMEOUT_CONFIRMED_NO_DELIVERY",
+        delivery_certainty="CONFIRMED_NOT_DELIVERED",
+        execution_evidence="NO_EXECUTION_ESTABLISHED",
+        retry_authorization="RETRY_REQUIRES_NEW_ATTEMPT",
+        attempt_cutoff=fixture.ATTEMPT_CUTOFF,
+        recorded_at=fixture.RECORDED_AT,
+        reason_code="CONNECTION_NOT_ESTABLISHED_ConnectionRefusedError",
+        attempt_id=attempt_id,
+    )
 
 
 @pytest.fixture
@@ -163,6 +190,7 @@ def test_prior_attempt_allow_cannot_authorize_a_retry(
             attempt_authority=fixture.attempt_authority(cutoff=fixture.later(60), processing="DENY"),
             attempt_ordinal=2,
             predecessor_attempt_id=first.attempt.attempt_id,
+            predecessor_outcome=_retry_authorizing_outcome(first.attempt.attempt_id),
         )
 
     assert error.value.refusal == "SOURCE_HANDLING_BLOCKED"
@@ -688,6 +716,7 @@ def test_retry_creates_a_new_attempt_cutoff_resolution_and_handoff(
         attempt_authority=fixture.attempt_authority(cutoff=retry_cutoff),
         attempt_ordinal=2,
         predecessor_attempt_id=first.attempt.attempt_id,
+        predecessor_outcome=_retry_authorizing_outcome(first.attempt.attempt_id),
         recorded_at=retry_cutoff + timedelta(minutes=1),
     )
 

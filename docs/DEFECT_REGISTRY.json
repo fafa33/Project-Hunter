@@ -231,6 +231,46 @@
       "guard": "An invariant test must be mutation-verified against the specific bug its name asserts, not merely against any weakening of a nearby guard; where the invariant is that an earlier permissive decision does not carry forward, the permissive head must be reachable in the same authority store handed to the code under test. evidence_pre_model_source_handling_fixture.publish_policy_successor and model_adapter_fixture.deny_successor publish a restrictive successor into an existing lineage so one store carries both decisions and only the cutoff separates them",
       "test": "tests/test_model_adapter_phase_a.py::test_build_time_allow_cannot_authorize_an_attempt",
       "status": "guarded"
+    },
+    {
+      "id": "MA-004",
+      "class": "ambiguous-transport-failure-classified-as-known-non-delivery",
+      "source": "Issue #313 ADR 0034 Phase B hostile self-review: a transport-class lookup table mapped TIMEOUT directly to TIMEOUT_CONFIRMED_NO_DELIVERY, so a read timeout after the request was already on the wire would have been recorded as proven non-delivery and would then have authorized a retry that could duplicate a billable provider execution",
+      "classification": "systemic",
+      "guard_boundary": "Model Adapter transport-result classification and ModelAttemptOutcomeRecord construction",
+      "guard": "two independent boundaries, neither sufficient alone. classify_transport_result() resolves TIMEOUT and CONNECTION_FAILED from the transport's reported delivery certainty rather than from the failure class, so a proven non-delivery is required before TIMEOUT_CONFIRMED_NO_DELIVERY can be produced; and _REQUIRED_DELIVERY_CERTAINTY is enforced in ModelAttemptOutcomeRecord.__post_init__, so no code path anywhere can construct an outcome whose certainty contradicts its own semantics, alongside the paired invariant that an outcome with UNKNOWN certainty may never carry RETRY_REQUIRES_NEW_ATTEMPT. Transports report CONFIRMED_NOT_DELIVERED only for failures that provably precede request acceptance (connection refused, name resolution failure); a mid-flight reset stays uncertain",
+      "test": "tests/test_model_adapter_phase_b.py::test_ambiguous_network_failure_is_never_labelled_confirmed_non_delivery",
+      "status": "guarded"
+    },
+    {
+      "id": "MA-005",
+      "class": "provider-response-content-persisted-without-a-pre-construction-credential-gate",
+      "source": "Issue #313 ADR 0034 Phase B hostile self-review: a provider response is untrusted external content that may echo an API key, bearer token, or cookie irrespective of which durable categories are authorized, so per-category Source Handling authorization alone would have licensed persisting credential-bearing bytes and a hash derived from them",
+      "classification": "systemic",
+      "guard_boundary": "Model Adapter response capture, before ProviderResponseArtifact construction",
+      "guard": "response_content_credential_risk() runs as a second, independent gate after the per-category durability decision and before the canonical record is constructed, so the boundary is structural rather than a post-hoc scan of an already-built record. On refusal the artifact records RESPONSE_EVIDENCE_UNAVAILABLE_CREDENTIAL_RISK with a stable reason code and carries no bytes, hash, measured size, or content-derived identity, because a digest of credential-bearing material is itself a credential-derived representation; the transport outcome is still recorded. The gate is shape-based rather than keyword-based, so an ordinary model answer discussing authentication remains retainable and the guard does not reject canonically valid output (PRH-009)",
+      "test": "tests/test_model_adapter_phase_b.py::test_credential_bearing_response_is_refused_before_artifact_construction",
+      "status": "guarded"
+    },
+    {
+      "id": "MA-006",
+      "class": "retry-authorized-by-caller-intent-rather-than-by-predecessor-outcome-evidence",
+      "source": "Issue #313 ADR 0034 Phase B hostile self-review: prepare_attempt accepted attempt_ordinal > 1 with only a predecessor attempt identity, so a caller could prepare and dispatch a second attempt after an uncertain first attempt whose request the provider may already have accepted",
+      "classification": "systemic",
+      "guard_boundary": "ModelAdapterService.prepare_attempt, before any authority resolution or durable write",
+      "guard": "a retry requires the predecessor attempt's own recorded ModelAttemptOutcomeRecord, checked before Source Handling is resolved and before anything durable exists, and admitted only when its retry_authorization is RETRY_REQUIRES_NEW_ATTEMPT. derive_retry_authorization() grants that only where the transport proved non-delivery or the provider established it rejected the request instead of executing it; a rate limit, a server error, and every uncertain state block retry, and an attempt with no recorded outcome is treated as uncertain rather than as retryable. An authorized retry still gets a new attempt, new cutoff, fresh Source Handling resolution, new handoff, and a new idempotency key, and terminal_outcome_exists() prevents an attempt that already has an outcome from being dispatched again",
+      "test": "tests/test_model_adapter_phase_b.py::test_uncertain_delivery_blocks_a_retry_from_being_prepared_at_all",
+      "status": "guarded"
+    },
+    {
+      "id": "MA-007",
+      "class": "provider-transport-acting-as-its-own-dispatch-authority",
+      "source": "Issue #313 ADR 0034 Phase B hostile self-review: a transport whose send() took only a request could be called directly, producing a real provider invocation with no durable attempt, no handoff consumption, and no attributable outcome",
+      "classification": "systemic",
+      "guard_boundary": "provider transport send contract and Model Adapter dispatch path",
+      "guard": "every send requires a DispatchAuthorization, which refuses construction without a module-private mint held only by the Model Adapter and is created only after consume_handoff_once has already claimed the handoff by compare-and-set, so a dispatch authorization cannot exist unless a durable attempt and an unconsumed handoff existed a moment earlier. The adapter additionally binds the dispatch to exactly the profile the attempt was prepared against and to exactly the transport identity and version that profile names, so there is no selection input and no supported path by which a different transport, profile, or provider can be substituted",
+      "test": "tests/test_model_adapter_phase_b.py::test_a_direct_transport_call_cannot_mint_its_own_authorization",
+      "status": "guarded"
     }
   ]
 }
