@@ -44,7 +44,12 @@ import threading
 from array import array
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime
+try:
+    from datetime import UTC
+except ImportError:
+    from datetime import timezone as _tz
+    UTC = _tz.utc
 from typing import Any, Literal
 
 from hunter.evidence_intelligence.model_adapter_transport import (

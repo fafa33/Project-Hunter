@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Union
 
-MetadataValue = str | int | float | bool | None
+MetadataValue = Union[str, int, float, bool, None]
 
 
 @dataclass(frozen=True)

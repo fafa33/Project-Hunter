@@ -5,7 +5,12 @@ import json
 import urllib.parse
 import urllib.request
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import datetime
+try:
+    from datetime import UTC
+except ImportError:
+    from datetime import timezone as _tz
+    UTC = _tz.utc
 from io import StringIO
 from typing import Any, Protocol
 from urllib.error import HTTPError, URLError

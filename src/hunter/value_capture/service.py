@@ -4,7 +4,12 @@ import hashlib
 import json
 from collections.abc import Callable
 from dataclasses import asdict, replace
-from datetime import UTC, datetime
+from datetime import datetime
+try:
+    from datetime import UTC
+except ImportError:
+    from datetime import timezone as _tz
+    UTC = _tz.utc
 from typing import Any, cast
 
 from hunter.market_facts.repository import ObservedMarketFactRepository

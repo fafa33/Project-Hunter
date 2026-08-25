@@ -5,7 +5,12 @@ import json
 import sqlite3
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, replace
-from datetime import UTC, datetime
+from datetime import datetime
+try:
+    from datetime import UTC
+except ImportError:
+    from datetime import timezone as _tz
+    UTC = _tz.utc
 from typing import Any, Literal
 
 from hunter.evidence_intelligence.models import EvidenceSpan, evidence_text_digest

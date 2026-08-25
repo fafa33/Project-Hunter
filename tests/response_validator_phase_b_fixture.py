@@ -6,7 +6,7 @@ import json
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime, timedelta
+from datetime import timezone; UTC = timezone.utc; from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 

@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime
+try:
+    from datetime import UTC
+except ImportError:
+    from datetime import timezone as _tz
+    UTC = _tz.utc
 from types import MappingProxyType
 from typing import Any, Literal
 

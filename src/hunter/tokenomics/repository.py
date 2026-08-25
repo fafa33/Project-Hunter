@@ -3,7 +3,12 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Iterable
 from dataclasses import fields, is_dataclass
-from datetime import UTC, datetime
+from datetime import datetime
+try:
+    from datetime import UTC
+except ImportError:
+    from datetime import timezone as _tz
+    UTC = _tz.utc
 from pathlib import Path
 from typing import Any
 

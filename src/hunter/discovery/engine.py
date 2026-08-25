@@ -1,7 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import datetime
+try:
+    from datetime import UTC
+except ImportError:
+    from datetime import timezone as _tz
+    UTC = _tz.utc
 
 from hunter.acquisition.exceptions import ProviderUnavailableError
 from hunter.acquisition.project_identifiers import ProjectIdentifier, load_project_identifiers

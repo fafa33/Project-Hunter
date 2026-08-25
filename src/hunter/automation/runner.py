@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import datetime
+try:
+    from datetime import UTC
+except ImportError:
+    from datetime import timezone as _tz
+    UTC = _tz.utc
 
 from hunter.automation.contracts import AutomationRepositoryFactoryProtocol, ClockFn, PipelineExecutor
 from hunter.automation.execution import AutomationPipelineExecutor

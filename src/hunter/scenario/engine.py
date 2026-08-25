@@ -1,7 +1,12 @@
 from __future__ import annotations
 
 from collections import defaultdict, deque
-from datetime import UTC, datetime
+from datetime import datetime
+try:
+    from datetime import UTC
+except ImportError:
+    from datetime import timezone as _tz
+    UTC = _tz.utc
 
 from hunter.economic.models import EconomicEdge, EconomicGraph
 from hunter.economic.repository import EconomicGraphRepository

@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import datetime
+try:
+    from datetime import UTC
+except ImportError:
+    from datetime import timezone as _tz
+    UTC = _tz.utc
 
 from hunter.committee.configuration import InvestmentCommitteeConfig
 from hunter.committee.metrics import approval_score, conflict_score, consensus_score, evidence_robustness

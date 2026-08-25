@@ -3,7 +3,11 @@ from __future__ import annotations
 import json
 import math
 from dataclasses import fields, is_dataclass
-from datetime import UTC, datetime
+try:
+    from datetime import UTC
+except ImportError:
+    from datetime import timezone as _tz
+    UTC = _tz.utc
 from decimal import Decimal
 from enum import Enum
 from pathlib import Path

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Mapping
-from datetime import UTC, datetime, timedelta
+from datetime import timezone; UTC = timezone.utc; from datetime import datetime, timedelta
 
 from evidence_pre_model_source_handling_fixture import (
     publish_policy_successor,

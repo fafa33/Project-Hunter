@@ -7,7 +7,12 @@ import threading
 import typing
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
+try:
+    from datetime import UTC
+except ImportError:
+    from datetime import timezone as _tz
+    UTC = _tz.utc
 
 AUTHORITY_COMPONENT_ID = "EVIDENCE_INTELLIGENCE_SOURCE_HANDLING_AUTHORITY"
 GENESIS_RULE_ID = "AUTHORIZATION_RULE_V1"

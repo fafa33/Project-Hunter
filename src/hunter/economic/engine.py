@@ -4,7 +4,12 @@ import json
 import math
 import re
 from collections import defaultdict, deque
-from datetime import UTC, datetime
+from datetime import datetime
+try:
+    from datetime import UTC
+except ImportError:
+    from datetime import timezone as _tz
+    UTC = _tz.utc
 
 from hunter.acquisition.models import NormalizedEvidence
 from hunter.acquisition.repositories import FileAcquisitionRepository, InMemoryAcquisitionRepository

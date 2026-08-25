@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime
+try:
+    from datetime import UTC
+except ImportError:
+    from datetime import timezone as _tz
+    UTC = _tz.utc
 from typing import Literal
 
 from hunter.intelligence.fusion.models import FrozenFloatMap, FrozenScalarMap

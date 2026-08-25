@@ -25,7 +25,12 @@ import json
 import threading
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass, fields
-from datetime import UTC, datetime
+from datetime import datetime
+try:
+    from datetime import UTC
+except ImportError:
+    from datetime import timezone as _tz
+    UTC = _tz.utc
 from decimal import Decimal, InvalidOperation
 from enum import Enum, StrEnum
 from typing import Any
