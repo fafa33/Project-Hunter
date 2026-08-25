@@ -7,8 +7,9 @@ import hashlib
 import inspect
 import json
 import logging
-import socket
+import os
 import sqlite3
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from pathlib import Path
@@ -675,11 +676,11 @@ def test_transient_reservation_survives_validator_restart_and_body_loss(tmp_path
 def test_reserved_transient_body_loss_before_execute_returns_input_unavailable(tmp_path: Path) -> None:
     harness = fixture.make_harness(tmp_path, transient=True)
     authorization = _authorize(harness)
-    consumer = harness.validator._ResponseValidator__transient_response_consumer  # noqa: SLF001
+    boundary = harness.transient_response_vault
     coordinates = authorization.coordinates
     response_artifact = harness.dispatch_result.response_artifact
     assert response_artifact is not None
-    consumer.discard_authorized(
+    boundary.discard_authorized(
         response_capture_identity=coordinates.response_capture_identity,
         attempt_id=coordinates.attempt_id,
         handoff_id=coordinates.handoff_id,
@@ -699,7 +700,7 @@ def test_reserved_transient_body_loss_before_execute_returns_input_unavailable(t
     assert result.outcome.findings[0].reason_code == "TRANSIENT_RESPONSE_ACCESS_UNAVAILABLE"
 
 
-def test_transient_response_is_consumed_once_without_persistence_or_logging(
+def test_transient_response_is_consumed_inside_os_protected_worker_without_caller_body_surface(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -713,26 +714,29 @@ def test_transient_response_is_consumed_once_without_persistence_or_logging(
     assert harness.dispatch_result.response_artifact.content is None
     assert not hasattr(harness.dispatch_result, "transient_response_access")
     vault_state = vars(harness.transient_response_vault)
-    assert "_TransientResponseHandoffVault__entries" not in vault_state
-    assert "_TransientResponseHandoffVault__consumer_endpoint" not in vault_state
-    assert not any("owner" in name for name in vault_state)
     assert marker not in repr(vault_state)
     assert marker not in repr(vars(harness.adapter))
-    producer = vault_state["_TransientResponseHandoffVault__producer_endpoint"]
-    with pytest.raises(BlockingIOError):
-        producer.recv(1, socket.MSG_DONTWAIT)
+    assert marker not in repr(vars(harness.validator))
+    assert "_TransientResponseHandoffVault__worker_entry" in vault_state
+    assert vault_state["_TransientResponseHandoffVault__worker_entry"] is None
+    sessions = vault_state["_TransientResponseHandoffVault__sessions"]
+    assert len(sessions) == 1
+    session = next(iter(sessions.values()))
+    assert session.pid != os.getpid()
+    assert session.hardening in {"linux-prctl-nondumpable", "darwin-pt-deny-attach"}
+    if sys.platform.startswith("linux"):
+        with pytest.raises(OSError):
+            open(f"/proc/{session.pid}/mem", "rb", buffering=0)
 
     authorization = _authorize(harness)
-    consumer = harness.validator._ResponseValidator__transient_response_consumer  # noqa: SLF001
-    assert marker not in repr(vars(consumer))
     result = harness.validator.execute(authorization)
     retry = harness.validator.execute(authorization)
 
     assert result is retry
     assert result.outcome.state is ValidationState.VALID
-    assert consumer._TransientResponseConsumer__entries == {}  # noqa: SLF001
     assert marker not in caplog.text
     assert marker.encode() not in harness.database.read_bytes()
+    assert vars(harness.transient_response_vault)["_TransientResponseHandoffVault__sessions"] == {}
 
 
 def test_empty_transient_response_reaches_semantic_syntax_validation(tmp_path: Path) -> None:
@@ -744,14 +748,22 @@ def test_empty_transient_response_reaches_semantic_syntax_validation(tmp_path: P
     assert result.outcome.state is ValidationState.INVALID_SYNTAX
 
 
-def test_caller_has_no_transient_response_consume_surface(tmp_path: Path) -> None:
+def test_caller_control_channel_has_no_body_read_operation(tmp_path: Path) -> None:
     harness = fixture.make_harness(tmp_path, transient=True)
 
     assert not hasattr(harness.dispatch_result, "transient_response_access")
-    assert not hasattr(harness.transient_response_vault, "consume_authorized")
-    assert not hasattr(harness.transient_response_vault, "available_for_validation")
     assert "_VALIDATION_RESPONSE_CONSUME_MINT" not in vars(model_adapter)
     assert "transient_response_access" not in inspect.signature(harness.validator.authorize_event).parameters
+    vault_state = vars(harness.transient_response_vault)
+    assert vault_state["_TransientResponseHandoffVault__worker_entry"] is None
+    sessions = vault_state["_TransientResponseHandoffVault__sessions"]
+    assert len(sessions) == 1
+    session = next(iter(sessions.values()))
+    session.endpoint.sendall((len(b'{"op":"BODY"}')).to_bytes(4, "big") + b'{"op":"BODY"}')
+    size = int.from_bytes(session.endpoint.recv(4), "big")
+    reply = json.loads(session.endpoint.recv(size).decode())
+    assert reply["kind"] == "REFUSAL"
+    assert "body" not in json.dumps(reply).lower()
 
 
 def test_missing_transient_handoff_refuses_without_waiting_or_current_substitution(tmp_path: Path) -> None:

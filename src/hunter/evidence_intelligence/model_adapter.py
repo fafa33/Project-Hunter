@@ -36,11 +36,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
-import socket
-import threading
-from array import array
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
@@ -70,6 +66,7 @@ from hunter.evidence_intelligence.source_handling import (
     _string_sequence,
     validate_durable_payload,
 )
+from hunter.evidence_intelligence.transient_worker import TransientResponseHandoffVault
 
 IdempotencyCapability = Literal["SUPPORTED", "UNAVAILABLE", "UNKNOWN"]
 
@@ -285,197 +282,6 @@ class _TransientResponseEntry:
     transport_identity: str
     transport_version: str
     content: str = field(repr=False, compare=False)
-
-
-@dataclass(frozen=True)
-class _TransientResponseEnvelope:
-    response_capture_identity: str
-    attempt_id: str
-    handoff_id: str
-    outcome_id: str
-    execution_profile_identity: str
-    response_protocol_identity: str
-    response_protocol_version: str
-    transport_identity: str
-    transport_version: str
-
-
-class _TransientResponseConsumer:
-    """Validator-only receiver for anonymous, descriptor-backed response bytes."""
-
-    def __init__(self, endpoint: socket.socket) -> None:
-        self.__endpoint = endpoint
-        self.__entries: dict[str, tuple[_TransientResponseEnvelope, int]] = {}
-        self.__lock = threading.Lock()
-
-    def available_for_validation(self, **coordinates: str) -> bool:
-        with self.__lock:
-            self.__receive_until(coordinates["response_capture_identity"], block=False)
-            item = self.__entries.get(coordinates["response_capture_identity"])
-            return item is not None and self.__matches(item[0], coordinates)
-
-    def consume_authorized(self, **coordinates: str) -> str:
-        with self.__lock:
-            capture_identity = coordinates["response_capture_identity"]
-            self.__receive_until(capture_identity)
-            item = self.__entries.get(capture_identity)
-            if item is None or not self.__matches(item[0], coordinates):
-                raise TransientResponseAccessError("transient response lineage does not match authorization")
-            del self.__entries[capture_identity]
-            descriptor = item[1]
-        try:
-            with os.fdopen(descriptor, "rb") as response_file:
-                return response_file.read().decode("utf-8")
-        except (OSError, UnicodeError) as error:
-            raise TransientResponseAccessError("transient response material is unreadable") from error
-
-    def discard_authorized(self, **coordinates: str) -> None:
-        with self.__lock:
-            response_capture_identity = coordinates["response_capture_identity"]
-            self.__receive_until(response_capture_identity, block=False)
-            item = self.__entries.get(response_capture_identity)
-            if item is None or not self.__matches(item[0], coordinates):
-                return
-            del self.__entries[response_capture_identity]
-        if item is not None:
-            os.close(item[1])
-
-    def __receive_until(self, response_capture_identity: str, *, block: bool = True) -> bool:
-        while response_capture_identity not in self.__entries:
-            descriptor_items = array("i")
-            try:
-                payload, ancillary, flags, _address = self.__endpoint.recvmsg(
-                    16_384,
-                    socket.CMSG_SPACE(descriptor_items.itemsize),
-                    0 if block else socket.MSG_DONTWAIT,
-                )
-            except BlockingIOError:
-                return False
-            except OSError as error:
-                raise TransientResponseAccessError("transient response handoff is unavailable") from error
-            descriptors: list[int] = []
-            for level, kind, data in ancillary:
-                if level == socket.SOL_SOCKET and kind == socket.SCM_RIGHTS:
-                    received = array("i")
-                    received.frombytes(data[: len(data) - (len(data) % received.itemsize)])
-                    descriptors.extend(received)
-            if flags & (socket.MSG_TRUNC | socket.MSG_CTRUNC) or len(descriptors) != 1:
-                for descriptor in descriptors:
-                    os.close(descriptor)
-                raise TransientResponseAccessError("transient response handoff frame is malformed")
-            descriptor = descriptors[0]
-            try:
-                decoded = json.loads(payload.decode("utf-8"))
-                envelope = _TransientResponseEnvelope(**decoded)
-            except (TypeError, ValueError, UnicodeError, json.JSONDecodeError) as error:
-                os.close(descriptor)
-                raise TransientResponseAccessError("transient response handoff metadata is malformed") from error
-            if envelope.response_capture_identity in self.__entries:
-                os.close(descriptor)
-                raise TransientResponseAccessError("transient response capture is already pending")
-            self.__entries[envelope.response_capture_identity] = (envelope, descriptor)
-        return True
-
-    @staticmethod
-    def __matches(entry: _TransientResponseEnvelope, coordinates: Mapping[str, str]) -> bool:
-        return all(getattr(entry, name) == value for name, value in coordinates.items())
-
-
-class TransientResponseHandoffVault:
-    """Adapter-only sender half of the single-use ADR 0035 transient handoff."""
-
-    def __init__(self) -> None:
-        self.__producer_endpoint: socket.socket | None = None
-        self.__model_adapter_bound = False
-        self.__model_adapter_capability: object | None = None
-        self.__response_validator_bound = False
-        self.__lock = threading.Lock()
-
-    def _bind_model_adapter(self, owner: object, installer: Any) -> None:
-        expected = vars(ModelAdapterService)["_ModelAdapterService__install_transient_handoff_capability"]
-        if (
-            type(owner) is not ModelAdapterService
-            or getattr(owner, "_transient_response_vault", None) is not self
-            or getattr(installer, "__self__", None) is not owner
-            or getattr(installer, "__func__", None) is not expected
-            or self.__model_adapter_bound
-        ):
-            raise TransientResponseAccessError("transient handoff producer owner is not canonical")
-        capability = object()
-        self.__model_adapter_bound = True
-        self.__model_adapter_capability = capability
-        installer(capability)
-
-    def _bind_response_validator(self, owner: object, installer: Any) -> None:
-        from hunter.evidence_intelligence.response_validator import ResponseValidator
-
-        expected = vars(ResponseValidator)["_ResponseValidator__install_transient_response_consumer"]
-        if (
-            type(owner) is not ResponseValidator
-            or getattr(owner, "_transient_response_vault", None) is not self
-            or getattr(installer, "__self__", None) is not owner
-            or getattr(installer, "__func__", None) is not expected
-            or self.__response_validator_bound
-            or self.__producer_endpoint is not None
-        ):
-            raise TransientResponseAccessError("transient handoff consumer owner is not canonical")
-        producer_endpoint, consumer_endpoint = socket.socketpair(socket.AF_UNIX, socket.SOCK_DGRAM)
-        producer_endpoint.set_inheritable(False)
-        consumer_endpoint.set_inheritable(False)
-        consumer = _TransientResponseConsumer(consumer_endpoint)
-        try:
-            installer(consumer)
-        except Exception:
-            producer_endpoint.close()
-            consumer_endpoint.close()
-            raise
-        self.__producer_endpoint = producer_endpoint
-        self.__response_validator_bound = True
-
-    def _deposit_authorized(self, capability: object | None, *, entry: _TransientResponseEntry) -> None:
-        if capability is None or capability is not self.__model_adapter_capability:
-            raise TransientResponseAccessError("transient response deposit requires Model Adapter authority")
-        if not self.__response_validator_bound:
-            raise TransientResponseAccessError("transient response handoff has no canonical ResponseValidator owner")
-        producer_endpoint = self.__producer_endpoint
-        if producer_endpoint is None:
-            raise TransientResponseAccessError("transient response producer endpoint is unavailable")
-        envelope = _TransientResponseEnvelope(
-            response_capture_identity=entry.response_capture_identity,
-            attempt_id=entry.attempt_id,
-            handoff_id=entry.handoff_id,
-            outcome_id=entry.outcome_id,
-            execution_profile_identity=entry.execution_profile_identity,
-            response_protocol_identity=entry.response_protocol_identity,
-            response_protocol_version=entry.response_protocol_version,
-            transport_identity=entry.transport_identity,
-            transport_version=entry.transport_version,
-        )
-        payload = _canonical_json(asdict(envelope))
-        with self.__lock:
-            read_descriptor, write_descriptor = os.pipe()
-            try:
-                encoded = entry.content.encode("utf-8")
-                offset = 0
-                while offset < len(encoded):
-                    written = os.write(write_descriptor, encoded[offset:])
-                    if written <= 0:
-                        raise OSError("transient response pipe write made no progress")
-                    offset += written
-                os.close(write_descriptor)
-                write_descriptor = -1
-                sent = producer_endpoint.sendmsg(
-                    [payload],
-                    [(socket.SOL_SOCKET, socket.SCM_RIGHTS, array("i", [read_descriptor]))],
-                )
-            except (OSError, UnicodeError) as error:
-                raise TransientResponseAccessError("transient response handoff failed") from error
-            finally:
-                if write_descriptor >= 0:
-                    os.close(write_descriptor)
-                os.close(read_descriptor)
-            if sent != len(payload):
-                raise TransientResponseAccessError("transient response handoff frame was incomplete")
 
 
 def _canonical_json(value: object) -> bytes:
@@ -1496,6 +1302,14 @@ class ModelAdapterService:
                 handoff_id=handoff.handoff_id,
             )
 
+        transient_requires_protected_worker = (
+            permitted_response_evidence_state(prepared.resolved_authority.decision) != "RESPONSE_EVIDENCE_DURABLE"
+        )
+        if transient_requires_protected_worker and (
+            self._transient_response_vault is None or not self._transient_response_vault.protected_worker_supported()
+        ):
+            raise ModelAdapterAuthorityError("TRANSIENT_NOT_RETAINED dispatch requires an accepted OS-protected worker")
+
         # 6. Atomic single-use consumption. This is the only place a dispatch
         #    authorization is minted, and it is minted only after the compare-and-set
         #    has already claimed the handoff, so at most one caller can proceed.
@@ -1510,106 +1324,131 @@ class ModelAdapterService:
             consumed_at=dispatched_at.astimezone(UTC).isoformat(),
         )
 
-        # 7. Exactly one provider invocation.
-        try:
-            result = transport.send(request, authorization=authorization, credential=credential)
-        except Exception as error:  # noqa: BLE001 - a transport that raises must not lose lineage
-            # The handoff is already consumed, so bytes may well have gone out.
-            # Claiming non-delivery here would be exactly the fabrication ADR 0034
-            # prohibits; the attempt stays attributable and uncertain instead.
+        def finish_dispatch() -> ModelDispatchOutcome:
+            # 7. Exactly one provider invocation.
+            try:
+                result = transport.send(request, authorization=authorization, credential=credential)
+            except Exception as error:  # noqa: BLE001 - a transport that raises must not lose lineage
+                # The handoff is already consumed, so bytes may well have gone out.
+                # Claiming non-delivery here would be exactly the fabrication ADR 0034
+                # prohibits; the attempt stays attributable and uncertain instead.
+                return self._record_outcome(
+                    prepared=prepared,
+                    profile=profile,
+                    attempt_authority=attempt_authority,
+                    outcome="INTERNAL_ADAPTER_ERROR",
+                    delivery_certainty="UNKNOWN",
+                    execution_evidence="UNKNOWN",
+                    reason_code=f"TRANSPORT_RAISED_{type(error).__name__}",
+                    recorded_at=concluded_at,
+                    dispatched_at=dispatched_at,
+                    transport_identity=profile.transport_identity,
+                    transport_version=profile.transport_version,
+                    handoff_id=handoff.handoff_id,
+                )
+
+            if not isinstance(result, TransportResult):
+                return self._record_outcome(
+                    prepared=prepared,
+                    profile=profile,
+                    attempt_authority=attempt_authority,
+                    outcome="INTERNAL_ADAPTER_ERROR",
+                    delivery_certainty="UNKNOWN",
+                    execution_evidence="UNKNOWN",
+                    reason_code="TRANSPORT_RETURNED_NON_CANONICAL_RESULT",
+                    recorded_at=concluded_at,
+                    dispatched_at=dispatched_at,
+                    transport_identity=profile.transport_identity,
+                    transport_version=profile.transport_version,
+                    handoff_id=handoff.handoff_id,
+                )
+            if result.transport_identity != profile.transport_identity or (
+                result.transport_version != profile.transport_version
+            ):
+                # Version mismatch is treated exactly like identity mismatch: the
+                # attempt and profile are bound to one exact transport version, so
+                # persisting a different reported version would make the recorded
+                # response lineage contradict the durable execution profile.
+                #
+                # The send already happened, so raising here would lose the lineage
+                # that invocation created. It is recorded as an adapter-internal
+                # condition with honest uncertainty instead.
+                return self._record_outcome(
+                    prepared=prepared,
+                    profile=profile,
+                    attempt_authority=attempt_authority,
+                    outcome="INTERNAL_ADAPTER_ERROR",
+                    delivery_certainty="UNKNOWN",
+                    execution_evidence="UNKNOWN",
+                    reason_code="TRANSPORT_RESULT_ATTRIBUTED_TO_A_DIFFERENT_TRANSPORT_IDENTITY_OR_VERSION",
+                    recorded_at=concluded_at,
+                    dispatched_at=dispatched_at,
+                    transport_identity=profile.transport_identity,
+                    transport_version=profile.transport_version,
+                    handoff_id=handoff.handoff_id,
+                )
+
+            # 8. Classification, governed capture, immutable outcome.
+            outcome, certainty = classify_transport_result(result)
+            allowed = _REQUIRED_DELIVERY_CERTAINTY.get(outcome)
+            if allowed is not None and certainty not in allowed:
+                # A transport can report a pairing the outcome family forbids -- for
+                # example a received response with unknown delivery. Constructing that
+                # record raises, and raising here would discard the lineage of a send
+                # that already happened, so the contradiction is recorded instead.
+                return self._record_outcome(
+                    prepared=prepared,
+                    profile=profile,
+                    attempt_authority=attempt_authority,
+                    outcome="INTERNAL_ADAPTER_ERROR",
+                    delivery_certainty="UNKNOWN",
+                    execution_evidence="UNKNOWN",
+                    reason_code="TRANSPORT_RESULT_CERTAINTY_CONTRADICTS_RESULT_CLASS",
+                    recorded_at=concluded_at,
+                    dispatched_at=dispatched_at,
+                    transport_identity=profile.transport_identity,
+                    transport_version=profile.transport_version,
+                    handoff_id=handoff.handoff_id,
+                )
             return self._record_outcome(
                 prepared=prepared,
                 profile=profile,
                 attempt_authority=attempt_authority,
-                outcome="INTERNAL_ADAPTER_ERROR",
-                delivery_certainty="UNKNOWN",
-                execution_evidence="UNKNOWN",
-                reason_code=f"TRANSPORT_RAISED_{type(error).__name__}",
+                outcome=outcome,
+                delivery_certainty=certainty,
+                execution_evidence=result.execution_evidence,
+                reason_code=result.reason_code or f"TRANSPORT_{result.result_class}",
                 recorded_at=concluded_at,
                 dispatched_at=dispatched_at,
-                transport_identity=profile.transport_identity,
-                transport_version=profile.transport_version,
+                transport_identity=result.transport_identity,
+                transport_version=result.transport_version,
                 handoff_id=handoff.handoff_id,
+                result=result,
             )
 
-        if not isinstance(result, TransportResult):
-            return self._record_outcome(
-                prepared=prepared,
-                profile=profile,
-                attempt_authority=attempt_authority,
-                outcome="INTERNAL_ADAPTER_ERROR",
-                delivery_certainty="UNKNOWN",
-                execution_evidence="UNKNOWN",
-                reason_code="TRANSPORT_RETURNED_NON_CANONICAL_RESULT",
-                recorded_at=concluded_at,
-                dispatched_at=dispatched_at,
-                transport_identity=profile.transport_identity,
-                transport_version=profile.transport_version,
-                handoff_id=handoff.handoff_id,
+        if transient_requires_protected_worker:
+            vault = self._transient_response_vault
+            if vault is None:
+                raise ModelAdapterAuthorityError("protected transient worker is unavailable")
+            metadata = vault._dispatch_authorized(  # noqa: SLF001 - capability-checked protected boundary
+                self.__transient_handoff_capability,
+                operation=finish_dispatch,
             )
-        if result.transport_identity != profile.transport_identity or (
-            result.transport_version != profile.transport_version
-        ):
-            # Version mismatch is treated exactly like identity mismatch: the
-            # attempt and profile are bound to one exact transport version, so
-            # persisting a different reported version would make the recorded
-            # response lineage contradict the durable execution profile.
-            #
-            # The send already happened, so raising here would lose the lineage
-            # that invocation created. It is recorded as an adapter-internal
-            # condition with honest uncertainty instead.
-            return self._record_outcome(
-                prepared=prepared,
-                profile=profile,
-                attempt_authority=attempt_authority,
-                outcome="INTERNAL_ADAPTER_ERROR",
-                delivery_certainty="UNKNOWN",
-                execution_evidence="UNKNOWN",
-                reason_code="TRANSPORT_RESULT_ATTRIBUTED_TO_A_DIFFERENT_TRANSPORT_IDENTITY_OR_VERSION",
-                recorded_at=concluded_at,
-                dispatched_at=dispatched_at,
-                transport_identity=profile.transport_identity,
-                transport_version=profile.transport_version,
-                handoff_id=handoff.handoff_id,
-            )
+            durable_outcome = self._repository.authoritative_outcome(attempt.attempt_id, concluded_at)
+            if durable_outcome is None or durable_outcome.outcome_id != metadata.get("outcome_id"):
+                raise TransientResponseAccessError("protected dispatch outcome did not rederive from persistence")
+            capture_identity = metadata.get("response_capture_identity")
+            response_artifact = None
+            if capture_identity is not None:
+                if not isinstance(capture_identity, str) or not capture_identity:
+                    raise TransientResponseAccessError("protected dispatch returned an invalid capture identity")
+                capture = self._repository.strict_known_response_capture(capture_identity, concluded_at)
+                if capture is None or capture[1].outcome_id != durable_outcome.outcome_id:
+                    raise TransientResponseAccessError("protected response capture did not rederive from persistence")
+                response_artifact = capture[0]
+            return ModelDispatchOutcome(outcome=durable_outcome, response_artifact=response_artifact)
 
-        # 8. Classification, governed capture, immutable outcome.
-        outcome, certainty = classify_transport_result(result)
-        allowed = _REQUIRED_DELIVERY_CERTAINTY.get(outcome)
-        if allowed is not None and certainty not in allowed:
-            # A transport can report a pairing the outcome family forbids -- for
-            # example a received response with unknown delivery. Constructing that
-            # record raises, and raising here would discard the lineage of a send
-            # that already happened, so the contradiction is recorded instead.
-            return self._record_outcome(
-                prepared=prepared,
-                profile=profile,
-                attempt_authority=attempt_authority,
-                outcome="INTERNAL_ADAPTER_ERROR",
-                delivery_certainty="UNKNOWN",
-                execution_evidence="UNKNOWN",
-                reason_code="TRANSPORT_RESULT_CERTAINTY_CONTRADICTS_RESULT_CLASS",
-                recorded_at=concluded_at,
-                dispatched_at=dispatched_at,
-                transport_identity=profile.transport_identity,
-                transport_version=profile.transport_version,
-                handoff_id=handoff.handoff_id,
-            )
-        return self._record_outcome(
-            prepared=prepared,
-            profile=profile,
-            attempt_authority=attempt_authority,
-            outcome=outcome,
-            delivery_certainty=certainty,
-            execution_evidence=result.execution_evidence,
-            reason_code=result.reason_code or f"TRANSPORT_{result.result_class}",
-            recorded_at=concluded_at,
-            dispatched_at=dispatched_at,
-            transport_identity=result.transport_identity,
-            transport_version=result.transport_version,
-            handoff_id=handoff.handoff_id,
-            result=result,
-        )
+        return finish_dispatch()
 
     def recover_nonterminal_attempts(self, *, cutoff: datetime) -> tuple[str, ...]:
         """Attempt identities durably recorded at `cutoff` with no outcome.

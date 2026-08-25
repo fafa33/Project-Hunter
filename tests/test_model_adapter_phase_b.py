@@ -531,47 +531,36 @@ def test_an_ordinary_answer_discussing_authentication_is_still_retainable(
 # --- 7. processing allowed, response durability denied -----------------------
 
 
-def test_processing_allowed_with_response_content_denied_persists_no_content(
+def test_processing_allowed_with_response_content_denied_requires_protected_worker(
     service: ModelAdapterService,
     repository: ModelAdapterPersistenceRepository,
 ) -> None:
     authority = fixture.attempt_authority(request_content=False)
     prepared = prepare(service, authority=authority)
     body = '{"choices": [{"message": {"content": "protected source content echoed back"}}]}'
+    transport = fixture.FakeTransport(fixture.transport_result(response_text=body))
 
-    result = dispatch(
-        service,
-        prepared,
-        fixture.FakeTransport(fixture.transport_result(response_text=body)),
-        authority=authority,
-    )
+    with pytest.raises(ModelAdapterAuthorityError, match="accepted OS-protected worker"):
+        dispatch(service, prepared, transport, authority=authority)
 
-    # The send was authorized and happened.
-    assert result.outcome.outcome == "SUCCEEDED_TRANSPORT"
-    artifact = result.response_artifact
-    assert artifact is not None
-    assert artifact.state == "RESPONSE_EVIDENCE_UNAVAILABLE_BY_POLICY"
-    assert artifact.reason_code == "RESPONSE_CONTENT_RETENTION_PROHIBITED"
-    assert (artifact.content, artifact.content_hash, artifact.measured_size_bytes) == (None, None, None)
-    assert artifact.content_derived_identity is None
-
-    # And nothing content-derived reached the durable file.
+    assert transport.sends == []
     values = persisted_scalars(Path(repository.path))
     assert not any(isinstance(value, str) and "protected source content" in value for value in values)
 
 
-def test_denied_response_durability_does_not_fabricate_a_substitute_identity(
+def test_denied_response_durability_without_worker_creates_no_response_artifact(
     service: ModelAdapterService,
     repository: ModelAdapterPersistenceRepository,
 ) -> None:
     authority = fixture.attempt_authority(request_content=False)
     prepared = prepare(service, authority=authority)
-    dispatch(service, prepared, fixture.FakeTransport(fixture.transport_result()), authority=authority)
+    transport = fixture.FakeTransport(fixture.transport_result())
 
-    stored = repository.strict_known_response_artifact(prepared.attempt.attempt_id, fixture.later(30))
-    assert stored is not None
-    assert stored.state == "RESPONSE_EVIDENCE_UNAVAILABLE_BY_POLICY"
-    assert stored.content_derived_identity is None
+    with pytest.raises(ModelAdapterAuthorityError, match="accepted OS-protected worker"):
+        dispatch(service, prepared, transport, authority=authority)
+
+    assert transport.sends == []
+    assert repository.strict_known_response_artifact(prepared.attempt.attempt_id, fixture.later(30)) is None
 
 
 def test_a_response_artifact_cannot_claim_unavailable_while_carrying_content() -> None:
@@ -1207,28 +1196,21 @@ def test_a_prior_attempt_time_authorization_cannot_authorize_a_retry(
 # --- 15. historical replay ---------------------------------------------------
 
 
-def test_later_authority_cannot_be_substituted_into_a_historical_response_replay(
+def test_transient_historical_response_cannot_be_created_without_protected_worker(
     service: ModelAdapterService,
     repository: ModelAdapterPersistenceRepository,
 ) -> None:
     denying = fixture.attempt_authority(request_content=False)
     prepared = prepare(service, authority=denying)
-    dispatch(
-        service,
-        prepared,
-        fixture.FakeTransport(fixture.transport_result(response_text='{"choices": [{"text": "historical"}]}')),
-        authority=denying,
-    )
+    transport = fixture.FakeTransport(fixture.transport_result(response_text='{"choices": [{"text": "historical"}]}'))
 
-    # Current authority is fully permissive; the historical read must not use it.
+    with pytest.raises(ModelAdapterAuthorityError, match="accepted OS-protected worker"):
+        dispatch(service, prepared, transport, authority=denying)
+
     permissive = fixture.attempt_authority(cutoff=fixture.later(60))
     assert permissive is not None
-
-    replayed = repository.strict_known_response_artifact(prepared.attempt.attempt_id, fixture.later(90))
-    assert replayed is not None
-    assert replayed.state == "RESPONSE_EVIDENCE_UNAVAILABLE_BY_POLICY"
-    assert replayed.content is None
-    assert replayed.content_hash is None
+    assert transport.sends == []
+    assert repository.strict_known_response_artifact(prepared.attempt.attempt_id, fixture.later(90)) is None
 
 
 def test_a_historical_read_before_the_outcome_existed_returns_nothing(
@@ -1973,23 +1955,18 @@ def test_dispatch_refuses_an_authority_the_attempt_was_not_prepared_under(
     assert transport.sends == []
 
 
-def test_the_dispatch_outcome_never_carries_raw_response_bytes_past_the_boundary(
+def test_direct_transient_dispatch_never_exposes_raw_response_bytes_without_worker(
     service: ModelAdapterService,
 ) -> None:
-    """Response content leaves the adapter only through the governed artifact."""
     denying = fixture.attempt_authority(request_content=False)
     prepared = prepare(service, authority=denying)
     secret_ish = '{"choices": [{"message": {"content": "protected content the caller must not receive"}}]}'
-    result = dispatch(
-        service,
-        prepared,
-        fixture.FakeTransport(fixture.transport_result(response_text=secret_ish)),
-        authority=denying,
-    )
+    transport = fixture.FakeTransport(fixture.transport_result(response_text=secret_ish))
 
-    assert not hasattr(result, "transport_result")
-    rendered = json.dumps(dataclasses.asdict(result), default=str)
-    assert "protected content the caller must not receive" not in rendered
+    with pytest.raises(ModelAdapterAuthorityError, match="accepted OS-protected worker"):
+        dispatch(service, prepared, transport, authority=denying)
+
+    assert transport.sends == []
 
 
 def test_a_provider_parameter_cannot_override_the_model_or_the_prompt() -> None:

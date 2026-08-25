@@ -1087,16 +1087,14 @@ class ResponseValidator:
         self._source_handling_store = source_handling_store
         self._runtime = runtime
         self._transient_response_vault = transient_response_vault
-        self.__transient_response_consumer: Any | None = None
         if transient_response_vault is not None:
-            transient_response_vault._bind_response_validator(  # noqa: SLF001 - capability installation boundary
+            transient_response_vault._bind_response_validator(  # noqa: SLF001 - protected-worker owner binding
                 self,
-                self.__install_transient_response_consumer,
+                self.__install_transient_response_boundary,
             )
-            self._transient_response_vault = None
         self._issued_authorizations: dict[str, ResponseValidationAuthorization] = {}
         self._issued_inputs: dict[str, _CanonicalAuthorizationInputs] = {}
-        self._execution_results: dict[str, ResponseValidationExecutionResult] = {}
+        self._execution_results: dict[str, ResponseValidationExecutionResult | ResponseValidationRefusalResult] = {}
         self._event_authorization_ids: dict[str, str] = {}
         self._state_lock = threading.Lock()
 
@@ -1105,10 +1103,9 @@ class ResponseValidator:
             raise ResponseValidationAuthorizationError("transient reservation persistence capability is immutable")
         self.__reservation_persistence_capability = capability
 
-    def __install_transient_response_consumer(self, consumer: Any) -> None:
-        if self.__transient_response_consumer is not None:
-            raise ResponseValidationAuthorizationError("transient response consumer is immutable")
-        self.__transient_response_consumer = consumer
+    def __install_transient_response_boundary(self, boundary: Any) -> None:
+        if boundary is not self._transient_response_vault:
+            raise ResponseValidationAuthorizationError("transient protected-worker boundary was substituted")
 
     def authorize_event(
         self,
@@ -1205,7 +1202,9 @@ class ResponseValidator:
                 "asserted authority coordinates do not match canonical state: " + ", ".join(mismatches)
             )
 
-    def execute(self, authorization: ResponseValidationAuthorization) -> ResponseValidationExecutionResult:
+    def execute(
+        self, authorization: ResponseValidationAuthorization
+    ) -> ResponseValidationExecutionResult | ResponseValidationRefusalResult:
         """Consume one issued authorization and produce one deterministic result.
 
         An ordinary retry after completion returns the exact cached outcome and
@@ -1215,7 +1214,9 @@ class ResponseValidator:
         with self._state_lock:
             return self._execute_once(authorization)
 
-    def _execute_once(self, authorization: ResponseValidationAuthorization) -> ResponseValidationExecutionResult:
+    def _execute_once(
+        self, authorization: ResponseValidationAuthorization
+    ) -> ResponseValidationExecutionResult | ResponseValidationRefusalResult:
         canonical = self._require_issued_authorization(authorization)
         cached = self._execution_results.get(canonical.authorization_id)
         if cached is not None:
@@ -1236,59 +1237,128 @@ class ResponseValidator:
         if rederived.coordinates != canonical.coordinates:
             raise ResponseValidationExecutionError("authorization coordinates no longer match canonical authority")
 
-        response_text: str
+        def evaluate_text(response_text: str) -> tuple[ResponseValidationFinding, ...]:
+            try:
+                return tuple(
+                    self._runtime.evaluate(
+                        response_text=response_text,
+                        coordinates=canonical.coordinates,
+                        output_contract=rederived.output_contract,
+                        evidence_inputs=rederived.evidence_inputs,
+                        provider_status_metadata=rederived.provider_status_metadata,
+                        required_dimensions=rederived.required_dimensions,
+                    )
+                )
+            except ResponseValidationRuleUnavailable:
+                return (
+                    ResponseValidationFinding(
+                        "RULE_AVAILABILITY",
+                        ValidationState.RULE_UNAVAILABLE,
+                        "EXECUTABLE_VALIDATION_RULE_UNAVAILABLE",
+                    ),
+                )
+            except Exception:  # noqa: BLE001 - semantic failure maps to the closed validator state
+                return (
+                    ResponseValidationFinding(
+                        "VALIDATOR_EXECUTION",
+                        ValidationState.VALIDATOR_ERROR,
+                        "VALIDATOR_EXECUTION_FAILED",
+                    ),
+                )
+
         if canonical.coordinates.input_mode is ValidationInputMode.DURABLE:
             content = rederived.response_artifact.content
             if content is None:
                 raise ResponseValidationExecutionError("durable authorization has no canonical response content")
-            response_text = content
+            findings = evaluate_text(content)
         else:
-            consumer = self.__transient_response_consumer
-            if consumer is None:
-                raise ResponseValidationExecutionError("transient authorization has no bound handoff consumer")
-            try:
-                response_text = consumer.consume_authorized(
-                    response_capture_identity=canonical.coordinates.response_capture_identity,
-                    attempt_id=canonical.coordinates.attempt_id,
-                    handoff_id=canonical.coordinates.handoff_id,
-                    outcome_id=canonical.coordinates.outcome_id,
-                    execution_profile_identity=canonical.coordinates.execution_profile_identity,
-                    response_protocol_identity=rederived.response_artifact.response_protocol_identity,
-                    response_protocol_version=rederived.response_artifact.response_protocol_version,
-                    transport_identity=rederived.response_artifact.transport_identity,
-                    transport_version=rederived.response_artifact.transport_version,
+            boundary = self._transient_response_vault
+            if boundary is None:
+                refusal_result = self._refusal_result(
+                    allocation=inputs.allocation,
+                    state=ValidationState.INPUT_UNAVAILABLE,
+                    reason_code="PROTECTED_TRANSIENT_WORKER_UNAVAILABLE",
+                    available_authority=(("validation_event_id", inputs.allocation.validation_event_id),),
                 )
-            except TransientResponseAccessError:
-                return self._presemantic_execution_refusal(
-                    canonical,
-                    reason_code="TRANSIENT_RESPONSE_ACCESS_UNAVAILABLE",
+                assert refusal_result.refusal is not None
+                self._execution_results[canonical.authorization_id] = refusal_result.refusal
+                return refusal_result.refusal
+            if boundary._in_protected_worker():  # noqa: SLF001 - exact protected-worker execution seam
+                try:
+                    content = boundary.consume_authorized(
+                        response_capture_identity=canonical.coordinates.response_capture_identity,
+                        attempt_id=canonical.coordinates.attempt_id,
+                        handoff_id=canonical.coordinates.handoff_id,
+                        outcome_id=canonical.coordinates.outcome_id,
+                        execution_profile_identity=canonical.coordinates.execution_profile_identity,
+                        response_protocol_identity=rederived.response_artifact.response_protocol_identity,
+                        response_protocol_version=rederived.response_artifact.response_protocol_version,
+                        transport_identity=rederived.response_artifact.transport_identity,
+                        transport_version=rederived.response_artifact.transport_version,
+                    )
+                except TransientResponseAccessError as error:
+                    raise _AuthorizationRefusalSignal(
+                        ValidationState.INPUT_UNAVAILABLE,
+                        "TRANSIENT_RESPONSE_ACCESS_UNAVAILABLE",
+                        (("validation_event_id", inputs.allocation.validation_event_id),),
+                    ) from error
+                findings = evaluate_text(content)
+            else:
+                try:
+                    worker_result = boundary.execute_canonical_event(
+                        response_capture_identity=canonical.coordinates.response_capture_identity,
+                        validation_event_id=canonical.coordinates.validation_event_id,
+                    )
+                except TransientResponseAccessError:
+                    refusal_result = self._refusal_result(
+                        allocation=inputs.allocation,
+                        state=ValidationState.INPUT_UNAVAILABLE,
+                        reason_code="TRANSIENT_RESPONSE_ACCESS_UNAVAILABLE",
+                        available_authority=(("validation_event_id", inputs.allocation.validation_event_id),),
+                    )
+                    assert refusal_result.refusal is not None
+                    self._execution_results[canonical.authorization_id] = refusal_result.refusal
+                    return refusal_result.refusal
+                if worker_result.get("kind") == "REFUSAL":
+                    try:
+                        refusal_state = ValidationState(str(worker_result.get("state")))
+                    except ValueError as error:
+                        raise ResponseValidationExecutionError(
+                            "protected worker returned an unknown refusal state"
+                        ) from error
+                    if refusal_state is not ValidationState.INPUT_UNAVAILABLE:
+                        raise ResponseValidationExecutionError(
+                            "protected worker returned a non-input refusal after authorization"
+                        )
+                    refusal_result = self._refusal_result(
+                        allocation=inputs.allocation,
+                        state=refusal_state,
+                        reason_code=str(worker_result.get("reason_code") or "TRANSIENT_RESPONSE_ACCESS_UNAVAILABLE"),
+                        available_authority=(("validation_event_id", inputs.allocation.validation_event_id),),
+                    )
+                    assert refusal_result.refusal is not None
+                    self._execution_results[canonical.authorization_id] = refusal_result.refusal
+                    return refusal_result.refusal
+                if worker_result.get("authorization_id") != canonical.authorization_id:
+                    raise ResponseValidationExecutionError("protected worker authorization identity mismatch")
+                raw_findings = worker_result.get("findings")
+                if not isinstance(raw_findings, list) or not raw_findings:
+                    raise ResponseValidationExecutionError("protected worker returned no semantic findings")
+                findings = tuple(
+                    ResponseValidationFinding(
+                        dimension=str(item["dimension"]),
+                        state=ValidationState(str(item["state"])),
+                        reason_code=str(item["reason_code"]),
+                    )
+                    for item in raw_findings
+                    if isinstance(item, dict)
                 )
-
-        try:
-            findings = self._runtime.evaluate(
-                response_text=response_text,
-                coordinates=canonical.coordinates,
-                output_contract=rederived.output_contract,
-                evidence_inputs=rederived.evidence_inputs,
-                provider_status_metadata=rederived.provider_status_metadata,
-                required_dimensions=rederived.required_dimensions,
-            )
-        except ResponseValidationRuleUnavailable:
-            findings = (
-                ResponseValidationFinding(
-                    "RULE_AVAILABILITY",
-                    ValidationState.RULE_UNAVAILABLE,
-                    "EXECUTABLE_VALIDATION_RULE_UNAVAILABLE",
-                ),
-            )
-        except Exception:  # noqa: BLE001 - validator failure becomes the closed deterministic state
-            findings = (
-                ResponseValidationFinding(
-                    "VALIDATOR_EXECUTION",
-                    ValidationState.VALIDATOR_ERROR,
-                    "VALIDATOR_EXECUTION_FAILED",
-                ),
-            )
+                if (
+                    not findings
+                    or str(worker_result.get("state"))
+                    != highest_precedence_validation_state(item.state for item in findings).value
+                ):
+                    raise ResponseValidationExecutionError("protected worker semantic state mismatch")
 
         state = highest_precedence_validation_state(item.state for item in findings)
         outcome = ResponseSemanticValidationOutcome(
@@ -1382,9 +1452,9 @@ class ResponseValidator:
         self,
         coordinates: tuple[tuple[str, str], ...] | None,
     ) -> None:
-        consumer = self.__transient_response_consumer
-        if consumer is not None and coordinates is not None:
-            consumer.discard_authorized(**dict(coordinates))
+        boundary = self._transient_response_vault
+        if boundary is not None and coordinates is not None:
+            boundary.discard_authorized(**dict(coordinates))
 
     def _canonical_authorization_inputs(
         self,
@@ -1608,8 +1678,8 @@ class ResponseValidator:
             input_mode = ValidationInputMode.DURABLE
         elif response_artifact.state == "RESPONSE_EVIDENCE_UNAVAILABLE_BY_POLICY":
             input_mode = ValidationInputMode.TRANSIENT_NOT_RETAINED
-            consumer = self.__transient_response_consumer
-            if consumer is None or not consumer.available_for_validation(
+            boundary = self._transient_response_vault
+            if boundary is None or not boundary.available_for_validation(
                 response_capture_identity=response_artifact.response_artifact_identity,
                 attempt_id=attempt.attempt_id,
                 handoff_id=handoff.handoff_id,
