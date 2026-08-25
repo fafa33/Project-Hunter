@@ -1,0 +1,85 @@
+name: PR335 fix new findings
+
+on:
+  push:
+    branches:
+      - codex/issue-334-response-validator-phase-b
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: codex/issue-334-response-validator-phase-b
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11.13'
+      - name: Install project
+        run: python -m pip install --disable-pip-version-check -c requirements/ci-constraints.txt -e '.[dev]'
+      - name: Apply targeted fixes
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          p = Path('src/hunter/evidence_intelligence/model_adapter.py')
+          s = p.read_text()
+          s = s.replace('import tempfile\n', '')
+          old = '''        with self.__lock:\n            try:\n                with tempfile.TemporaryFile() as response_file:\n                    response_file.write(entry.content.encode("utf-8"))\n                    response_file.flush()\n                    response_file.seek(0)\n                    sent = producer_endpoint.sendmsg(\n                        [payload],\n                        [(socket.SOL_SOCKET, socket.SCM_RIGHTS, array("i", [response_file.fileno()]))],\n                    )\n            except (OSError, UnicodeError) as error:\n                raise TransientResponseAccessError("transient response handoff failed") from error\n            if sent != len(payload):\n                raise TransientResponseAccessError("transient response handoff frame was incomplete")\n'''
+          new = '''        with self.__lock:\n            read_descriptor, write_descriptor = os.pipe()\n            try:\n                encoded = entry.content.encode("utf-8")\n                offset = 0\n                while offset < len(encoded):\n                    written = os.write(write_descriptor, encoded[offset:])\n                    if written <= 0:\n                        raise OSError("transient response pipe write made no progress")\n                    offset += written\n                os.close(write_descriptor)\n                write_descriptor = -1\n                sent = producer_endpoint.sendmsg(\n                    [payload],\n                    [(socket.SOL_SOCKET, socket.SCM_RIGHTS, array("i", [read_descriptor]))],\n                )\n            except (OSError, UnicodeError) as error:\n                raise TransientResponseAccessError("transient response handoff failed") from error\n            finally:\n                if write_descriptor >= 0:\n                    os.close(write_descriptor)\n                os.close(read_descriptor)\n            if sent != len(payload):\n                raise TransientResponseAccessError("transient response handoff frame was incomplete")\n'''
+          if old not in s:
+              raise SystemExit('model_adapter target not found')
+          p.write_text(s.replace(old, new))
+
+          p = Path('src/hunter/evidence_intelligence/response_validator.py')
+          s = p.read_text()
+          old = '''        try:\n            rederived = self._canonical_authorization_inputs(inputs.allocation)\n        except _AuthorizationRefusalSignal as signal:\n            raise ResponseValidationExecutionError(\n                f"authorization authority no longer rederives at its historical cutoff: {signal.reason_code}"\n            ) from signal\n'''
+          new = '''        try:\n            rederived = self._canonical_authorization_inputs(inputs.allocation)\n        except _AuthorizationRefusalSignal as signal:\n            if signal.state is ValidationState.INPUT_UNAVAILABLE:\n                return self._presemantic_execution_refusal(\n                    canonical,\n                    reason_code=signal.reason_code,\n                )\n            raise ResponseValidationExecutionError(\n                f"authorization authority no longer rederives at its historical cutoff: {signal.reason_code}"\n            ) from signal\n'''
+          if old not in s:
+              raise SystemExit('rederive target not found')
+          s = s.replace(old, new)
+          old = '''            except TransientResponseAccessError as error:\n                raise ResponseValidationExecutionError(\n                    "transient response lease was rejected before execution"\n                ) from error\n\n        try:\n'''
+          new = '''            except TransientResponseAccessError:\n                return self._presemantic_execution_refusal(\n                    canonical,\n                    reason_code="TRANSIENT_RESPONSE_ACCESS_UNAVAILABLE",\n                )\n\n        try:\n'''
+          if old not in s:
+              raise SystemExit('consume target not found')
+          s = s.replace(old, new)
+          marker = '''    def _require_issued_authorization(\n'''
+          helper = '''    def _presemantic_execution_refusal(\n        self,\n        canonical: ResponseValidationAuthorization,\n        *,\n        reason_code: str,\n    ) -> ResponseValidationExecutionResult:\n        finding = ResponseValidationFinding(\n            "INPUT_AVAILABILITY",\n            ValidationState.INPUT_UNAVAILABLE,\n            reason_code,\n        )\n        outcome = ResponseSemanticValidationOutcome(\n            authorization_id=canonical.authorization_id,\n            coordinates=canonical.coordinates,\n            state=ValidationState.INPUT_UNAVAILABLE,\n            findings=(finding,),\n            executed=False,\n        )\n        attestation = ResponseValidationAttestation(\n            _ATTESTATION_MINT,\n            kind=ValidationAttestationKind.REFUSAL,\n            decision_id=outcome.semantic_outcome_id,\n            validation_event_id=canonical.coordinates.validation_event_id,\n            state=ValidationState.INPUT_UNAVAILABLE,\n            authorization_id=None,\n        )\n        result = ResponseValidationExecutionResult(outcome=outcome, attestation=attestation)\n        self._execution_results[canonical.authorization_id] = result\n        return result\n\n'''
+          if marker not in s:
+              raise SystemExit('helper insertion point not found')
+          s = s.replace(marker, helper + marker, 1)
+          p.write_text(s)
+
+          p = Path('tests/test_response_validator_phase_b.py')
+          s = p.read_text()
+          marker = '''def test_transient_response_is_consumed_once_without_persistence_or_logging(\n'''
+          test = '''def test_reserved_transient_body_loss_before_execute_returns_input_unavailable(tmp_path: Path) -> None:\n    harness = fixture.make_harness(tmp_path, transient=True)\n    authorization = _authorize(harness)\n    consumer = harness.validator._ResponseValidator__transient_response_consumer  # noqa: SLF001\n    coordinates = authorization.coordinates\n    response_artifact = harness.dispatch_result.response_artifact\n    assert response_artifact is not None\n    consumer.discard_authorized(\n        response_capture_identity=coordinates.response_capture_identity,\n        attempt_id=coordinates.attempt_id,\n        handoff_id=coordinates.handoff_id,\n        outcome_id=coordinates.outcome_id,\n        execution_profile_identity=coordinates.execution_profile_identity,\n        response_protocol_identity=response_artifact.response_protocol_identity,\n        response_protocol_version=response_artifact.response_protocol_version,\n        transport_identity=response_artifact.transport_identity,\n        transport_version=response_artifact.transport_version,\n    )\n\n    result = harness.validator.execute(authorization)\n\n    assert result.outcome.state is ValidationState.INPUT_UNAVAILABLE\n    assert result.outcome.executed is False\n    assert result.attestation.kind is ValidationAttestationKind.REFUSAL\n    assert result.outcome.findings[0].reason_code == "TRANSIENT_RESPONSE_ACCESS_UNAVAILABLE"\n\n\n'''
+          if marker not in s:
+              raise SystemExit('test insertion point not found')
+          p.write_text(s.replace(marker, test + marker, 1))
+          PY
+      - name: Format and validate targeted suite
+        run: |
+          black src/hunter/evidence_intelligence/model_adapter.py \
+                src/hunter/evidence_intelligence/response_validator.py \
+                tests/test_response_validator_phase_b.py
+          ruff check src/hunter/evidence_intelligence/model_adapter.py \
+                     src/hunter/evidence_intelligence/response_validator.py \
+                     tests/test_response_validator_phase_b.py
+          pytest -q tests/test_response_validator_phase_b.py
+      - name: Remove temporary workflow and commit
+        run: |
+          rm .github/workflows/pr335-fix-new-findings.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/hunter/evidence_intelligence/model_adapter.py \
+                  src/hunter/evidence_intelligence/response_validator.py \
+                  tests/test_response_validator_phase_b.py \
+                  .github/workflows/pr335-fix-new-findings.yml
+          git commit -m 'Fix transient handoff and body-loss refusal'
+          git push origin HEAD:codex/issue-334-response-validator-phase-b
