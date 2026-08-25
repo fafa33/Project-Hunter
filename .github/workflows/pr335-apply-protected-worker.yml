@@ -21,40 +21,7 @@ jobs:
         with:
           python-version: '3.11'
       - name: Apply reviewed protected-worker implementation
-        shell: bash
-        run: |
-          set -euo pipefail
-          SOURCE_COMMIT=03fc330da15eb64451950977af849b3a0d184607
-          git show "$SOURCE_COMMIT:.github/workflows/pr335-isolation-fix.yml" > /tmp/pr335-source.yml
-          awk '
-            /^      - name: Apply protected-worker isolation fix$/ { in_step=1; next }
-            in_step && /^        run: \|$/ { in_run=1; next }
-            in_run && /^      - name: Install project$/ { exit }
-            in_run { sub(/^          /, ""); print }
-          ' /tmp/pr335-source.yml > /tmp/apply-protected-worker.sh
-          bash /tmp/apply-protected-worker.sh
-          python - <<'PY'
-          from pathlib import Path
-          path = Path('tests/test_response_validator_phase_b.py')
-          text = path.read_text()
-          old = '''    consumer = harness.validator._ResponseValidator__transient_response_consumer  # noqa: SLF001
-    coordinates = authorization.coordinates
-'''
-          new = '''    boundary = harness.transient_response_vault
-    coordinates = authorization.coordinates
-'''
-          if old not in text:
-              raise SystemExit('body-loss regression still expected old consumer reference')
-          text = text.replace(old, new, 1)
-          old = '''    consumer.discard_authorized(
-'''
-          new = '''    boundary.discard_authorized(
-'''
-          if old not in text:
-              raise SystemExit('body-loss regression discard call not found')
-          text = text.replace(old, new, 1)
-          path.write_text(text)
-          PY
+        run: python scripts/pr335_apply_protected_worker.py
       - name: Install project
         run: python -m pip install -e '.[dev]'
       - name: Targeted Phase B
@@ -72,7 +39,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git rm .github/workflows/pr335-apply-protected-worker.yml
+          git rm .github/workflows/pr335-apply-protected-worker.yml scripts/pr335_apply_protected_worker.py
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add src/hunter/evidence_intelligence/transient_worker.py \
@@ -82,5 +49,3 @@ jobs:
                   tests/test_response_validator_phase_b.py
           git commit -m 'Enforce ADR 0035 protected transient worker isolation'
           git push origin HEAD:codex/issue-334-response-validator-phase-b
-
-# trigger revision 2
