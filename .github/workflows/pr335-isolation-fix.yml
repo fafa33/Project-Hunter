@@ -1,0 +1,613 @@
+name: PR335 isolation fix
+
+on:
+  push:
+    branches:
+      - codex/issue-334-response-validator-phase-b
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: codex/issue-334-response-validator-phase-b
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Apply protected-worker isolation fix
+        shell: bash
+        run: |
+          cat > src/hunter/evidence_intelligence/transient_worker.py <<'PYMODULE'
+          """ADR 0035 protected worker for TRANSIENT_NOT_RETAINED validation.
+
+          Exact provider-response bytes are created, screened, and semantically
+          consumed only in the hardened child process.  The caller-facing process
+          owns only non-content metadata and a closed control channel whose protocol
+          can request one canonical validation event and can never return body bytes.
+          """
+
+          from __future__ import annotations
+
+          import ctypes
+          import faulthandler
+          import json
+          import logging
+          import os
+          import resource
+          import socket
+          import sys
+          import threading
+          import weakref
+          from dataclasses import dataclass, field
+          from typing import Any, Callable
+
+          _MAX_CONTROL_MESSAGE = 1_048_576
+          _PR_SET_DUMPABLE = 4
+          _PT_DENY_ATTACH = 31
+
+
+          def _access_error(message: str) -> Exception:
+              from hunter.evidence_intelligence.model_adapter import TransientResponseAccessError
+
+              return TransientResponseAccessError(message)
+
+
+          def _canonical_json(value: object) -> bytes:
+              return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+
+
+          def _send_message(endpoint: socket.socket, payload: dict[str, Any]) -> None:
+              encoded = _canonical_json(payload)
+              if len(encoded) > _MAX_CONTROL_MESSAGE:
+                  raise RuntimeError("protected-worker control message exceeds bound")
+              endpoint.sendall(len(encoded).to_bytes(4, "big") + encoded)
+
+
+          def _recv_exact(endpoint: socket.socket, size: int) -> bytes:
+              chunks: list[bytes] = []
+              remaining = size
+              while remaining:
+                  chunk = endpoint.recv(remaining)
+                  if not chunk:
+                      raise EOFError("protected-worker control channel closed")
+                  chunks.append(chunk)
+                  remaining -= len(chunk)
+              return b"".join(chunks)
+
+
+          def _recv_message(endpoint: socket.socket) -> dict[str, Any]:
+              size = int.from_bytes(_recv_exact(endpoint, 4), "big")
+              if size <= 0 or size > _MAX_CONTROL_MESSAGE:
+                  raise RuntimeError("protected-worker control frame is malformed")
+              decoded = json.loads(_recv_exact(endpoint, size).decode("utf-8"))
+              if not isinstance(decoded, dict):
+                  raise RuntimeError("protected-worker control payload must be an object")
+              return decoded
+
+
+          def _harden_worker() -> str:
+              """Establish the falsifiable OS inspection boundary before provider I/O."""
+              logging.disable(logging.CRITICAL)
+              try:
+                  faulthandler.disable()
+              except RuntimeError:
+                  pass
+              resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+              libc = ctypes.CDLL(None, use_errno=True)
+              if sys.platform.startswith("linux"):
+                  if libc.prctl(_PR_SET_DUMPABLE, 0, 0, 0, 0) != 0:
+                      raise OSError(ctypes.get_errno(), "PR_SET_DUMPABLE failed")
+                  return "linux-prctl-nondumpable"
+              if sys.platform == "darwin":
+                  if libc.ptrace(_PT_DENY_ATTACH, 0, None, 0) != 0:
+                      raise OSError(ctypes.get_errno(), "PT_DENY_ATTACH failed")
+                  return "darwin-pt-deny-attach"
+              raise OSError("platform has no accepted protected-worker hardening primitive")
+
+
+          @dataclass(frozen=True)
+          class _TransientResponseEnvelope:
+              response_capture_identity: str
+              attempt_id: str
+              handoff_id: str
+              outcome_id: str
+              execution_profile_identity: str
+              response_protocol_identity: str
+              response_protocol_version: str
+              transport_identity: str
+              transport_version: str
+
+              @classmethod
+              def from_entry(cls, entry: Any) -> "_TransientResponseEnvelope":
+                  return cls(
+                      response_capture_identity=entry.response_capture_identity,
+                      attempt_id=entry.attempt_id,
+                      handoff_id=entry.handoff_id,
+                      outcome_id=entry.outcome_id,
+                      execution_profile_identity=entry.execution_profile_identity,
+                      response_protocol_identity=entry.response_protocol_identity,
+                      response_protocol_version=entry.response_protocol_version,
+                      transport_identity=entry.transport_identity,
+                      transport_version=entry.transport_version,
+                  )
+
+              def matches(self, coordinates: dict[str, str]) -> bool:
+                  return all(getattr(self, name) == value for name, value in coordinates.items())
+
+
+          @dataclass
+          class _ProtectedWorkerSession:
+              pid: int
+              endpoint: socket.socket = field(repr=False, compare=False)
+              envelope: _TransientResponseEnvelope
+              hardening: str
+              lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
+              closed: bool = False
+
+
+          class TransientResponseHandoffVault:
+              """Split protected-worker coordinator containing no caller-readable body state."""
+
+              def __init__(self) -> None:
+                  self.__model_adapter_bound = False
+                  self.__model_adapter_capability: object | None = None
+                  self.__response_validator_bound = False
+                  self.__response_validator_ref: weakref.ReferenceType[Any] | None = None
+                  self.__sessions: dict[str, _ProtectedWorkerSession] = {}
+                  self.__worker_mode = False
+                  self.__worker_entry: Any | None = None
+                  self.__lock = threading.Lock()
+
+              @staticmethod
+              def protected_worker_supported() -> bool:
+                  return hasattr(os, "fork") and (sys.platform.startswith("linux") or sys.platform == "darwin")
+
+              def _bind_model_adapter(self, owner: object, installer: Any) -> None:
+                  from hunter.evidence_intelligence.model_adapter import ModelAdapterService
+
+                  expected = vars(ModelAdapterService)["_ModelAdapterService__install_transient_handoff_capability"]
+                  if (
+                      type(owner) is not ModelAdapterService
+                      or getattr(owner, "_transient_response_vault", None) is not self
+                      or getattr(installer, "__self__", None) is not owner
+                      or getattr(installer, "__func__", None) is not expected
+                      or self.__model_adapter_bound
+                  ):
+                      raise _access_error("protected transient worker producer owner is not canonical")
+                  capability = object()
+                  self.__model_adapter_bound = True
+                  self.__model_adapter_capability = capability
+                  installer(capability)
+
+              def _bind_response_validator(self, owner: object, installer: Any) -> None:
+                  from hunter.evidence_intelligence.response_validator import ResponseValidator
+
+                  expected = vars(ResponseValidator)["_ResponseValidator__install_transient_response_boundary"]
+                  if (
+                      type(owner) is not ResponseValidator
+                      or getattr(owner, "_transient_response_vault", None) is not self
+                      or getattr(installer, "__self__", None) is not owner
+                      or getattr(installer, "__func__", None) is not expected
+                      or self.__response_validator_bound
+                  ):
+                      raise _access_error("protected transient worker validator owner is not canonical")
+                  installer(self)
+                  self.__response_validator_ref = weakref.ref(owner)
+                  self.__response_validator_bound = True
+
+              def _deposit_authorized(self, capability: object | None, *, entry: Any) -> None:
+                  if capability is None or capability is not self.__model_adapter_capability:
+                      raise _access_error("transient response deposit requires Model Adapter authority")
+                  if not self.__worker_mode:
+                      raise _access_error("exact transient bytes may exist only inside the protected worker")
+                  if self.__worker_entry is not None:
+                      raise _access_error("protected worker already owns a pending transient capture")
+                  self.__worker_entry = entry
+
+              def _dispatch_authorized(
+                  self,
+                  capability: object | None,
+                  *,
+                  operation: Callable[[], Any],
+              ) -> dict[str, Any]:
+                  if capability is None or capability is not self.__model_adapter_capability:
+                      raise _access_error("protected dispatch requires Model Adapter authority")
+                  if not self.__response_validator_bound or self.__response_validator_ref is None:
+                      raise _access_error("protected dispatch requires the canonical ResponseValidator owner")
+                  if not self.protected_worker_supported():
+                      raise _access_error("no accepted OS-protected worker is available on this platform")
+
+                  parent_endpoint, worker_endpoint = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+                  parent_endpoint.set_inheritable(False)
+                  worker_endpoint.set_inheritable(False)
+                  pid = os.fork()
+                  if pid == 0:  # pragma: no cover - assertions observe the parent side
+                      try:
+                          parent_endpoint.close()
+                          self.__worker_mode = True
+                          self.__sessions = {}
+                          hardening = _harden_worker()
+                          _send_message(worker_endpoint, {"kind": "HARDENED", "mechanism": hardening})
+                          result = operation()
+                          response_artifact = getattr(result, "response_artifact", None)
+                          capture_identity = (
+                              getattr(response_artifact, "response_artifact_identity", None)
+                              if response_artifact is not None
+                              else None
+                          )
+                          ready = self.__worker_entry is not None
+                          _send_message(
+                              worker_endpoint,
+                              {
+                                  "kind": "DISPATCH_RESULT",
+                                  "outcome_id": result.outcome.outcome_id,
+                                  "response_capture_identity": capture_identity,
+                                  "validation_ready": ready,
+                              },
+                          )
+                          if ready:
+                              self.__serve_one_command(worker_endpoint)
+                      except BaseException:  # noqa: BLE001 - never serialize body/exception detail
+                          try:
+                              _send_message(
+                                  worker_endpoint,
+                                  {"kind": "WORKER_ERROR", "reason_code": "PROTECTED_WORKER_EXECUTION_FAILED"},
+                              )
+                          except BaseException:
+                              pass
+                      finally:
+                          self.__worker_entry = None
+                          try:
+                              worker_endpoint.close()
+                          except OSError:
+                              pass
+                          os._exit(0)
+
+                  worker_endpoint.close()
+                  try:
+                      hardened = _recv_message(parent_endpoint)
+                      if hardened.get("kind") != "HARDENED":
+                          raise _access_error("protected worker did not establish its isolation boundary")
+                      result = _recv_message(parent_endpoint)
+                      if result.get("kind") != "DISPATCH_RESULT":
+                          raise _access_error("protected worker failed before governed response capture")
+                      capture_identity = result.get("response_capture_identity")
+                      if result.get("validation_ready"):
+                          if not isinstance(capture_identity, str) or not capture_identity:
+                              raise _access_error("protected worker omitted canonical capture identity")
+                          entry_envelope = self._envelope_from_persistence_coordinates(capture_identity, result)
+                          session = _ProtectedWorkerSession(
+                              pid=pid,
+                              endpoint=parent_endpoint,
+                              envelope=entry_envelope,
+                              hardening=str(hardened.get("mechanism") or ""),
+                          )
+                          with self.__lock:
+                              if capture_identity in self.__sessions:
+                                  raise _access_error("protected worker session already exists for capture")
+                              self.__sessions[capture_identity] = session
+                      else:
+                          parent_endpoint.close()
+                          os.waitpid(pid, 0)
+                      return result
+                  except BaseException:
+                      try:
+                          parent_endpoint.close()
+                      except OSError:
+                          pass
+                      try:
+                          os.kill(pid, 9)
+                      except OSError:
+                          pass
+                      try:
+                          os.waitpid(pid, 0)
+                      except OSError:
+                          pass
+                      raise
+
+              def _envelope_from_persistence_coordinates(
+                  self,
+                  capture_identity: str,
+                  result: dict[str, Any],
+              ) -> _TransientResponseEnvelope:
+                  validator = self.__response_validator_ref() if self.__response_validator_ref is not None else None
+                  if validator is None:
+                      raise _access_error("canonical ResponseValidator owner disappeared")
+                  repository = validator._model_adapter_repository  # noqa: SLF001 - same protected boundary
+                  capture = repository.strict_known_response_capture(capture_identity, validator._foundation._clock.now())  # noqa: SLF001
+                  if capture is None:
+                      raise _access_error("protected capture is not durably knowable")
+                  artifact, outcome = capture
+                  if outcome.outcome_id != result.get("outcome_id"):
+                      raise _access_error("protected dispatch outcome identity mismatch")
+                  return _TransientResponseEnvelope(
+                      response_capture_identity=artifact.response_artifact_identity,
+                      attempt_id=str(outcome.attempt_id or ""),
+                      handoff_id=str(outcome.handoff_id or ""),
+                      outcome_id=outcome.outcome_id,
+                      execution_profile_identity=outcome.execution_profile_identity,
+                      response_protocol_identity=artifact.response_protocol_identity,
+                      response_protocol_version=artifact.response_protocol_version,
+                      transport_identity=artifact.transport_identity,
+                      transport_version=artifact.transport_version,
+                  )
+
+              def available_for_validation(self, **coordinates: str) -> bool:
+                  if self.__worker_mode:
+                      entry = self.__worker_entry
+                      return entry is not None and _TransientResponseEnvelope.from_entry(entry).matches(coordinates)
+                  capture_identity = coordinates.get("response_capture_identity")
+                  if not capture_identity:
+                      return False
+                  with self.__lock:
+                      session = self.__sessions.get(capture_identity)
+                  if session is None or session.closed or not session.envelope.matches(coordinates):
+                      return False
+                  try:
+                      os.kill(session.pid, 0)
+                  except OSError:
+                      return False
+                  return True
+
+              def consume_authorized(self, **coordinates: str) -> str:
+                  if not self.__worker_mode:
+                      raise _access_error("caller-facing process has no transient-body consume capability")
+                  entry = self.__worker_entry
+                  if entry is None or not _TransientResponseEnvelope.from_entry(entry).matches(coordinates):
+                      raise _access_error("transient response lineage does not match authorization")
+                  self.__worker_entry = None
+                  return entry.content
+
+              def execute_canonical_event(self, *, response_capture_identity: str, validation_event_id: str) -> dict[str, Any]:
+                  if self.__worker_mode:
+                      raise _access_error("worker cannot recursively invoke its caller control channel")
+                  with self.__lock:
+                      session = self.__sessions.get(response_capture_identity)
+                  if session is None or session.closed:
+                      raise _access_error("protected transient worker is unavailable")
+                  with session.lock:
+                      try:
+                          _send_message(
+                              session.endpoint,
+                              {"op": "EXECUTE", "validation_event_id": validation_event_id},
+                          )
+                          reply = _recv_message(session.endpoint)
+                      except (OSError, EOFError, RuntimeError, ValueError) as error:
+                          self._close_session(response_capture_identity, terminate=True)
+                          raise _access_error("protected transient worker disappeared before semantics") from error
+                      self._close_session(response_capture_identity, terminate=False)
+                  if reply.get("kind") not in {"EXECUTION_RESULT", "REFUSAL"}:
+                      raise _access_error("protected worker returned an invalid semantic message")
+                  return reply
+
+              def discard_authorized(self, **coordinates: str) -> None:
+                  if self.__worker_mode:
+                      entry = self.__worker_entry
+                      if entry is not None and _TransientResponseEnvelope.from_entry(entry).matches(coordinates):
+                          self.__worker_entry = None
+                      return
+                  capture_identity = coordinates.get("response_capture_identity")
+                  if not capture_identity:
+                      return
+                  with self.__lock:
+                      session = self.__sessions.get(capture_identity)
+                  if session is None or session.closed or not session.envelope.matches(coordinates):
+                      return
+                  with session.lock:
+                      try:
+                          _send_message(session.endpoint, {"op": "DISCARD"})
+                          _recv_message(session.endpoint)
+                      except BaseException:
+                          pass
+                      self._close_session(capture_identity, terminate=False)
+
+              def _in_protected_worker(self) -> bool:
+                  return self.__worker_mode
+
+              def _close_session(self, capture_identity: str, *, terminate: bool) -> None:
+                  with self.__lock:
+                      session = self.__sessions.pop(capture_identity, None)
+                  if session is None or session.closed:
+                      return
+                  session.closed = True
+                  try:
+                      session.endpoint.close()
+                  except OSError:
+                      pass
+                  if terminate:
+                      try:
+                          os.kill(session.pid, 9)
+                      except OSError:
+                          pass
+                  try:
+                      os.waitpid(session.pid, 0)
+                  except OSError:
+                      pass
+
+              def __serve_one_command(self, endpoint: socket.socket) -> None:
+                  command = _recv_message(endpoint)
+                  op = command.get("op")
+                  if op == "DISCARD":
+                      self.__worker_entry = None
+                      _send_message(endpoint, {"kind": "DISCARDED"})
+                      return
+                  if op != "EXECUTE":
+                      _send_message(endpoint, {"kind": "REFUSAL", "state": "INPUT_UNAVAILABLE", "reason_code": "PROTECTED_WORKER_COMMAND_REJECTED"})
+                      return
+                  validation_event_id = command.get("validation_event_id")
+                  if not isinstance(validation_event_id, str) or not validation_event_id:
+                      _send_message(endpoint, {"kind": "REFUSAL", "state": "INPUT_UNAVAILABLE", "reason_code": "VALIDATION_EVENT_UNAVAILABLE"})
+                      return
+                  validator = self.__response_validator_ref() if self.__response_validator_ref is not None else None
+                  if validator is None:
+                      _send_message(endpoint, {"kind": "REFUSAL", "state": "INPUT_UNAVAILABLE", "reason_code": "VALIDATOR_OWNER_UNAVAILABLE"})
+                      return
+                  allocation = validator._foundation._repository.validation_event(validation_event_id)  # noqa: SLF001
+                  if allocation is None:
+                      _send_message(endpoint, {"kind": "REFUSAL", "state": "INPUT_UNAVAILABLE", "reason_code": "VALIDATION_EVENT_UNAVAILABLE"})
+                      return
+                  authorization_result = validator.authorize_event(allocation)
+                  if authorization_result.refusal is not None:
+                      refusal = authorization_result.refusal.refusal
+                      _send_message(endpoint, {"kind": "REFUSAL", "state": refusal.state.value, "reason_code": refusal.reason_code})
+                      return
+                  authorization = authorization_result.authorization
+                  if authorization is None:
+                      _send_message(endpoint, {"kind": "REFUSAL", "state": "INPUT_UNAVAILABLE", "reason_code": "VALIDATION_AUTHORIZATION_UNAVAILABLE"})
+                      return
+                  execution = validator.execute(authorization)
+                  if not hasattr(execution, "outcome"):
+                      refusal = execution.refusal
+                      _send_message(endpoint, {"kind": "REFUSAL", "state": refusal.state.value, "reason_code": refusal.reason_code})
+                      return
+                  outcome = execution.outcome
+                  _send_message(
+                      endpoint,
+                      {
+                          "kind": "EXECUTION_RESULT",
+                          "authorization_id": outcome.authorization_id,
+                          "state": outcome.state.value,
+                          "findings": [
+                              {"dimension": item.dimension, "state": item.state.value, "reason_code": item.reason_code}
+                              for item in outcome.findings
+                          ],
+                      },
+                  )
+
+              def close(self) -> None:
+                  with self.__lock:
+                      identities = tuple(self.__sessions)
+                  for identity in identities:
+                      self._close_session(identity, terminate=True)
+
+              def __del__(self) -> None:
+                  try:
+                      self.close()
+                  except BaseException:
+                      pass
+          PYMODULE
+
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(text: str, old: str, new: str, label: str) -> str:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{label}: expected exactly one match, found {count}')
+              return text.replace(old, new, 1)
+
+          model = Path('src/hunter/evidence_intelligence/model_adapter.py')
+          text = model.read_text()
+          text = text.replace('import tempfile\n', '')
+          text = text.replace('from array import array\n', '')
+          text = replace_once(
+              text,
+              'from hunter.evidence_intelligence.pre_model import (\n',
+              'from hunter.evidence_intelligence.transient_worker import TransientResponseHandoffVault\nfrom hunter.evidence_intelligence.pre_model import (\n',
+              'protected worker import',
+          )
+          start = text.index('@dataclass(frozen=True)\nclass _TransientResponseEnvelope:')
+          end = text.index('\ndef _canonical_json(value: object) -> bytes:', start)
+          text = text[:start] + text[end + 1:]
+
+          step6 = '        # 6. Atomic single-use consumption. This is the only place a dispatch\n'
+          preflight = '''        transient_requires_protected_worker = (\n            permitted_response_evidence_state(prepared.resolved_authority.decision)\n            != "RESPONSE_EVIDENCE_DURABLE"\n        )\n        if transient_requires_protected_worker and (\n            self._transient_response_vault is None\n            or not self._transient_response_vault.protected_worker_supported()\n        ):\n            raise ModelAdapterAuthorityError(\n                "TRANSIENT_NOT_RETAINED dispatch requires an accepted OS-protected worker"\n            )\n\n'''
+          text = replace_once(text, step6, preflight + step6, 'protected worker preflight')
+
+          start = text.index('        # 7. Exactly one provider invocation.')
+          end = text.index('\n    def recover_nonterminal_attempts', start)
+          old_block = text[start:end]
+          nested_lines = []
+          for line in old_block.splitlines(True):
+              nested_lines.append(('    ' + line) if line.strip() else line)
+          replacement = '        def finish_dispatch() -> ModelDispatchOutcome:\n' + ''.join(nested_lines)
+          replacement += '''\n        if transient_requires_protected_worker:\n            vault = self._transient_response_vault\n            if vault is None:\n                raise ModelAdapterAuthorityError("protected transient worker is unavailable")\n            metadata = vault._dispatch_authorized(  # noqa: SLF001 - capability-checked protected boundary\n                self.__transient_handoff_capability,\n                operation=finish_dispatch,\n            )\n            durable_outcome = self._repository.authoritative_outcome(attempt.attempt_id, concluded_at)\n            if durable_outcome is None or durable_outcome.outcome_id != metadata.get("outcome_id"):\n                raise TransientResponseAccessError("protected dispatch outcome did not rederive from persistence")\n            capture_identity = metadata.get("response_capture_identity")\n            response_artifact = None\n            if capture_identity is not None:\n                if not isinstance(capture_identity, str) or not capture_identity:\n                    raise TransientResponseAccessError("protected dispatch returned an invalid capture identity")\n                capture = self._repository.strict_known_response_capture(capture_identity, concluded_at)\n                if capture is None or capture[1].outcome_id != durable_outcome.outcome_id:\n                    raise TransientResponseAccessError("protected response capture did not rederive from persistence")\n                response_artifact = capture[0]\n            return ModelDispatchOutcome(outcome=durable_outcome, response_artifact=response_artifact)\n\n        return finish_dispatch()\n'''
+          text = text[:start] + replacement + text[end:]
+          model.write_text(text)
+
+          validator = Path('src/hunter/evidence_intelligence/response_validator.py')
+          text = validator.read_text()
+          old = '''        self._runtime = runtime\n        self._transient_response_vault = transient_response_vault\n        self.__transient_response_consumer: Any | None = None\n        if transient_response_vault is not None:\n            transient_response_vault._bind_response_validator(  # noqa: SLF001 - capability installation boundary\n                self,\n                self.__install_transient_response_consumer,\n            )\n            self._transient_response_vault = None\n        self._issued_authorizations: dict[str, ResponseValidationAuthorization] = {}\n'''
+          new = '''        self._runtime = runtime\n        self._transient_response_vault = transient_response_vault\n        if transient_response_vault is not None:\n            transient_response_vault._bind_response_validator(  # noqa: SLF001 - protected-worker owner binding\n                self,\n                self.__install_transient_response_boundary,\n            )\n        self._issued_authorizations: dict[str, ResponseValidationAuthorization] = {}\n'''
+          text = replace_once(text, old, new, 'validator protected boundary binding')
+          old = '''    def __install_transient_response_consumer(self, consumer: Any) -> None:\n        if self.__transient_response_consumer is not None:\n            raise ResponseValidationAuthorizationError("transient response consumer is immutable")\n        self.__transient_response_consumer = consumer\n\n'''
+          new = '''    def __install_transient_response_boundary(self, boundary: Any) -> None:\n        if boundary is not self._transient_response_vault:\n            raise ResponseValidationAuthorizationError("transient protected-worker boundary was substituted")\n\n'''
+          text = replace_once(text, old, new, 'validator boundary installer')
+          text = text.replace(
+              '        self._execution_results: dict[str, ResponseValidationExecutionResult] = {}\n',
+              '        self._execution_results: dict[str, ResponseValidationExecutionResult | ResponseValidationRefusalResult] = {}\n',
+              1,
+          )
+          text = text.replace(
+              '    def execute(self, authorization: ResponseValidationAuthorization) -> ResponseValidationExecutionResult:\n',
+              '    def execute(\n        self, authorization: ResponseValidationAuthorization\n    ) -> ResponseValidationExecutionResult | ResponseValidationRefusalResult:\n',
+              1,
+          )
+          text = text.replace(
+              '    def _execute_once(self, authorization: ResponseValidationAuthorization) -> ResponseValidationExecutionResult:\n',
+              '    def _execute_once(\n        self, authorization: ResponseValidationAuthorization\n    ) -> ResponseValidationExecutionResult | ResponseValidationRefusalResult:\n',
+              1,
+          )
+
+          old = '''        try:\n            rederived = self._canonical_authorization_inputs(inputs.allocation)\n        except _AuthorizationRefusalSignal as signal:\n            raise ResponseValidationExecutionError(\n                f"authorization authority no longer rederives at its historical cutoff: {signal.reason_code}"\n            ) from signal\n'''
+          new = '''        try:\n            rederived = self._canonical_authorization_inputs(inputs.allocation)\n        except _AuthorizationRefusalSignal as signal:\n            if (\n                canonical.coordinates.input_mode is ValidationInputMode.TRANSIENT_NOT_RETAINED\n                and signal.state is ValidationState.INPUT_UNAVAILABLE\n            ):\n                refusal_result = self._refusal_result(\n                    allocation=inputs.allocation,\n                    state=ValidationState.INPUT_UNAVAILABLE,\n                    reason_code=signal.reason_code,\n                    available_authority=signal.available_authority,\n                )\n                assert refusal_result.refusal is not None\n                self._execution_results[canonical.authorization_id] = refusal_result.refusal\n                return refusal_result.refusal\n            raise ResponseValidationExecutionError(\n                f"authorization authority no longer rederives at its historical cutoff: {signal.reason_code}"\n            ) from signal\n'''
+          text = replace_once(text, old, new, 'presemantic body loss mapping')
+
+          start = text.index('        response_text: str\n', text.index('    def _execute_once('))
+          end = text.index('        state = highest_precedence_validation_state', start)
+          replacement = '''        def evaluate_text(response_text: str) -> tuple[ResponseValidationFinding, ...]:\n            try:\n                return tuple(\n                    self._runtime.evaluate(\n                        response_text=response_text,\n                        coordinates=canonical.coordinates,\n                        output_contract=rederived.output_contract,\n                        evidence_inputs=rederived.evidence_inputs,\n                        provider_status_metadata=rederived.provider_status_metadata,\n                        required_dimensions=rederived.required_dimensions,\n                    )\n                )\n            except ResponseValidationRuleUnavailable:\n                return (\n                    ResponseValidationFinding(\n                        "RULE_AVAILABILITY",\n                        ValidationState.RULE_UNAVAILABLE,\n                        "EXECUTABLE_VALIDATION_RULE_UNAVAILABLE",\n                    ),\n                )\n            except Exception:  # noqa: BLE001 - semantic failure maps to the closed validator state\n                return (\n                    ResponseValidationFinding(\n                        "VALIDATOR_EXECUTION",\n                        ValidationState.VALIDATOR_ERROR,\n                        "VALIDATOR_EXECUTION_FAILED",\n                    ),\n                )\n\n        if canonical.coordinates.input_mode is ValidationInputMode.DURABLE:\n            content = rederived.response_artifact.content\n            if content is None:\n                raise ResponseValidationExecutionError("durable authorization has no canonical response content")\n            findings = evaluate_text(content)\n        else:\n            boundary = self._transient_response_vault\n            if boundary is None:\n                refusal_result = self._refusal_result(\n                    allocation=inputs.allocation,\n                    state=ValidationState.INPUT_UNAVAILABLE,\n                    reason_code="PROTECTED_TRANSIENT_WORKER_UNAVAILABLE",\n                    available_authority=(("validation_event_id", inputs.allocation.validation_event_id),),\n                )\n                assert refusal_result.refusal is not None\n                self._execution_results[canonical.authorization_id] = refusal_result.refusal\n                return refusal_result.refusal\n            if boundary._in_protected_worker():  # noqa: SLF001 - exact protected-worker execution seam\n                try:\n                    content = boundary.consume_authorized(\n                        response_capture_identity=canonical.coordinates.response_capture_identity,\n                        attempt_id=canonical.coordinates.attempt_id,\n                        handoff_id=canonical.coordinates.handoff_id,\n                        outcome_id=canonical.coordinates.outcome_id,\n                        execution_profile_identity=canonical.coordinates.execution_profile_identity,\n                        response_protocol_identity=rederived.response_artifact.response_protocol_identity,\n                        response_protocol_version=rederived.response_artifact.response_protocol_version,\n                        transport_identity=rederived.response_artifact.transport_identity,\n                        transport_version=rederived.response_artifact.transport_version,\n                    )\n                except TransientResponseAccessError as error:\n                    raise _AuthorizationRefusalSignal(\n                        ValidationState.INPUT_UNAVAILABLE,\n                        "TRANSIENT_RESPONSE_ACCESS_UNAVAILABLE",\n                        (("validation_event_id", inputs.allocation.validation_event_id),),\n                    ) from error\n                findings = evaluate_text(content)\n            else:\n                try:\n                    worker_result = boundary.execute_canonical_event(\n                        response_capture_identity=canonical.coordinates.response_capture_identity,\n                        validation_event_id=canonical.coordinates.validation_event_id,\n                    )\n                except TransientResponseAccessError:\n                    refusal_result = self._refusal_result(\n                        allocation=inputs.allocation,\n                        state=ValidationState.INPUT_UNAVAILABLE,\n                        reason_code="TRANSIENT_RESPONSE_ACCESS_UNAVAILABLE",\n                        available_authority=(("validation_event_id", inputs.allocation.validation_event_id),),\n                    )\n                    assert refusal_result.refusal is not None\n                    self._execution_results[canonical.authorization_id] = refusal_result.refusal\n                    return refusal_result.refusal\n                if worker_result.get("kind") == "REFUSAL":\n                    try:\n                        refusal_state = ValidationState(str(worker_result.get("state")))\n                    except ValueError as error:\n                        raise ResponseValidationExecutionError("protected worker returned an unknown refusal state") from error\n                    if refusal_state is not ValidationState.INPUT_UNAVAILABLE:\n                        raise ResponseValidationExecutionError("protected worker returned a non-input refusal after authorization")\n                    refusal_result = self._refusal_result(\n                        allocation=inputs.allocation,\n                        state=refusal_state,\n                        reason_code=str(worker_result.get("reason_code") or "TRANSIENT_RESPONSE_ACCESS_UNAVAILABLE"),\n                        available_authority=(("validation_event_id", inputs.allocation.validation_event_id),),\n                    )\n                    assert refusal_result.refusal is not None\n                    self._execution_results[canonical.authorization_id] = refusal_result.refusal\n                    return refusal_result.refusal\n                if worker_result.get("authorization_id") != canonical.authorization_id:\n                    raise ResponseValidationExecutionError("protected worker authorization identity mismatch")\n                raw_findings = worker_result.get("findings")\n                if not isinstance(raw_findings, list) or not raw_findings:\n                    raise ResponseValidationExecutionError("protected worker returned no semantic findings")\n                findings = tuple(\n                    ResponseValidationFinding(\n                        dimension=str(item["dimension"]),\n                        state=ValidationState(str(item["state"])),\n                        reason_code=str(item["reason_code"]),\n                    )\n                    for item in raw_findings\n                    if isinstance(item, dict)\n                )\n                if not findings or str(worker_result.get("state")) != highest_precedence_validation_state(\n                    item.state for item in findings\n                ).value:\n                    raise ResponseValidationExecutionError("protected worker semantic state mismatch")\n\n'''
+          text = text[:start] + replacement + text[end:]
+
+          old = '''            consumer = self.__transient_response_consumer\n            if consumer is None or not consumer.available_for_validation(\n'''
+          new = '''            boundary = self._transient_response_vault\n            if boundary is None or not boundary.available_for_validation(\n'''
+          text = replace_once(text, old, new, 'transient availability boundary')
+          old = '''        consumer = self.__transient_response_consumer\n        if consumer is not None and coordinates is not None:\n            consumer.discard_authorized(**dict(coordinates))\n'''
+          new = '''        boundary = self._transient_response_vault\n        if boundary is not None and coordinates is not None:\n            boundary.discard_authorized(**dict(coordinates))\n'''
+          text = replace_once(text, old, new, 'transient discard boundary')
+          validator.write_text(text)
+
+          tests = Path('tests/test_response_validator_phase_b.py')
+          text = tests.read_text()
+          start = text.index('def test_transient_response_is_consumed_once_without_persistence_or_logging(')
+          end = text.index('\ndef test_empty_transient_response_reaches_semantic_syntax_validation', start)
+          new_test = '''def test_transient_response_is_consumed_inside_os_protected_worker_without_caller_body_surface(\n    tmp_path: Path,\n    caplog: pytest.LogCaptureFixture,\n) -> None:\n    marker = "TRANSIENT-RESPONSE-MARKER-0035"\n\n    def response(prepared: Any, span: Any) -> dict[str, Any]:\n        return {**fixture.valid_response(prepared, span), "answer": marker}\n\n    caplog.set_level(logging.DEBUG)\n    harness = fixture.make_harness(tmp_path, response_factory=response, transient=True)\n    assert harness.dispatch_result.response_artifact.content is None\n    assert not hasattr(harness.dispatch_result, "transient_response_access")\n    vault_state = vars(harness.transient_response_vault)\n    assert marker not in repr(vault_state)\n    assert marker not in repr(vars(harness.adapter))\n    assert marker not in repr(vars(harness.validator))\n    assert "_TransientResponseHandoffVault__worker_entry" in vault_state\n    assert vault_state["_TransientResponseHandoffVault__worker_entry"] is None\n    sessions = vault_state["_TransientResponseHandoffVault__sessions"]\n    assert len(sessions) == 1\n    session = next(iter(sessions.values()))\n    assert session.pid != os.getpid()\n    assert session.hardening in {"linux-prctl-nondumpable", "darwin-pt-deny-attach"}\n    if sys.platform.startswith("linux"):\n        with pytest.raises(OSError):\n            open(f"/proc/{session.pid}/mem", "rb", buffering=0)\n\n    authorization = _authorize(harness)\n    result = harness.validator.execute(authorization)\n    retry = harness.validator.execute(authorization)\n\n    assert result is retry\n    assert result.outcome.state is ValidationState.VALID\n    assert marker not in caplog.text\n    assert marker.encode() not in harness.database.read_bytes()\n    assert vars(harness.transient_response_vault)["_TransientResponseHandoffVault__sessions"] == {}\n\n'''
+          text = text[:start] + new_test + text[end + 1:]
+          start = text.index('def test_caller_has_no_transient_response_consume_surface(')
+          end = text.index('\ndef test_missing_transient_handoff_refuses_without_waiting_or_current_substitution', start)
+          new_test = '''def test_caller_control_channel_has_no_body_read_operation(tmp_path: Path) -> None:\n    harness = fixture.make_harness(tmp_path, transient=True)\n\n    assert not hasattr(harness.dispatch_result, "transient_response_access")\n    assert "_VALIDATION_RESPONSE_CONSUME_MINT" not in vars(model_adapter)\n    assert "transient_response_access" not in inspect.signature(harness.validator.authorize_event).parameters\n    vault_state = vars(harness.transient_response_vault)\n    assert vault_state["_TransientResponseHandoffVault__worker_entry"] is None\n    sessions = vault_state["_TransientResponseHandoffVault__sessions"]\n    assert len(sessions) == 1\n    session = next(iter(sessions.values()))\n    session.endpoint.sendall((len(b'{"op":"BODY"}')).to_bytes(4, "big") + b'{"op":"BODY"}')\n    size = int.from_bytes(session.endpoint.recv(4), "big")\n    reply = json.loads(session.endpoint.recv(size).decode())\n    assert reply["kind"] == "REFUSAL"\n    assert "body" not in json.dumps(reply).lower()\n\n'''
+          text = text[:start] + new_test + text[end + 1:]
+          if 'import os\n' not in text.split('\n', 25):
+              text = text.replace('import logging\n', 'import logging\nimport os\nimport sys\n', 1)
+          tests.write_text(text)
+          PY
+      - name: Install project
+        run: python -m pip install -e '.[dev]'
+      - name: Run targeted Phase B tests
+        run: python -m pytest -q tests/test_response_validator_phase_b.py
+      - name: Run adjacent boundary tests
+        run: python -m pytest -q tests/test_response_validator_phase_a.py tests/test_response_validator_phase_b.py tests/test_model_adapter_phase_a.py tests/test_model_adapter_phase_b.py
+      - name: Check Ruff and Black on touched Python
+        run: |
+          python -m ruff check src/hunter/evidence_intelligence/transient_worker.py src/hunter/evidence_intelligence/model_adapter.py src/hunter/evidence_intelligence/response_validator.py src/hunter/evidence_intelligence/response_validator_persistence.py tests/test_response_validator_phase_b.py
+          python -m black --check src/hunter/evidence_intelligence/transient_worker.py src/hunter/evidence_intelligence/model_adapter.py src/hunter/evidence_intelligence/response_validator.py src/hunter/evidence_intelligence/response_validator_persistence.py tests/test_response_validator_phase_b.py
+      - name: Check diff
+        run: git diff --check
+      - name: Commit clean isolation fix and remove runner
+        shell: bash
+        run: |
+          git rm .github/workflows/pr335-isolation-fix.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/hunter/evidence_intelligence/transient_worker.py \
+                  src/hunter/evidence_intelligence/model_adapter.py \
+                  src/hunter/evidence_intelligence/response_validator.py \
+                  src/hunter/evidence_intelligence/response_validator_persistence.py \
+                  tests/test_response_validator_phase_b.py
+          git commit -m 'Isolate PR #335 transient validation in protected worker'
+          git push origin HEAD:codex/issue-334-response-validator-phase-b
