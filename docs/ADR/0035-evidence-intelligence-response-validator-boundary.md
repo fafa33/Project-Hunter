@@ -5,10 +5,10 @@
 Accepted.
 
 The base decision remains Accepted. The transient-isolation and reservation
-amendment drafted under Issue #338 is **Proposed** and non-binding until a
-separate owner-authorized acceptance transition is merged. This drafting
-contribution does not mark that amendment Accepted and changes no runtime
-behavior.
+amendment governed by Issue #338 is **Accepted** through this owner-authorized
+acceptance transition on PR #339. It becomes binding when PR #339 is merged.
+This acceptance changes no runtime behavior and does not itself authorize
+implementation.
 
 ## Date
 
@@ -26,13 +26,13 @@ The preparation lineage has three distinct coordinates that must not be conflate
 
 The targeted independent re-audit in `docs/ARCHITECTURE_AUDITS/adpr-0010-response-validator-targeted-reaudit.md` returned `READY_FOR_ADR` for exact audited baseline `7ee04b4319aaf1eab961b59d61cbef735fdb3aa4`, closed original PR #319 finding `F-001`, and identified no new material blocker in the v1.5 correction lineage. The drafting lifecycle was tracked by Issue #328 and merged through PR #329 as `42ea611e9fcc99b3dd06adee1879da1278a5e21a`.
 
-ADR 0035's acceptance transition is carried by owner-authorized Issue #330 and PR #331. It becomes binding only when the repository owner merges PR #331; before that merge, the `Proposed` state already on `main` remains authoritative. This acceptance contribution changes no architectural decision in the drafted record, introduces no materially new architecture, and does not authorize runtime implementation.
+ADR 0035's base acceptance transition was carried by owner-authorized Issue #330 and PR #331 and merged at `5510277b60a852c77470418cb45c629af3bf6fe4`. That acceptance changed no architectural decision in the drafted record, introduced no materially new architecture, and did not authorize runtime implementation.
 
-### Proposed transient-isolation and reservation amendment lineage
+### Accepted transient-isolation and reservation amendment lineage
 
 [ADPR-0011](../architecture-records/ADPR-0011-adr-0035-transient-handoff-isolation-reservation.md), governed by Issue #336 and merged through PR #337 at `0cea851917afd9579aeaf3bb6261a8177d1e8153`, is the governing preparation for this narrow amendment. The final independent exact-head re-audit returned `READY_FOR_ADR` on `c26a1dae9f4635f51fd70c65748c760fcb335808` after verifying the protected-worker topology, non-durable transfer, ADR 0035-owned durable reservation, refusal semantics, Phase-A-compatible re-validation, and authority separation.
 
-Issue #338 and Draft PR #339 govern amendment drafting and transposition only. The amendment reaffirms and does not supersede the accepted base decision. PR #335 / Issue #334 remain blocked until the amendment receives a separate owner-authorized acceptance transition and runtime resumption is separately authorized.
+Issue #338 and PR #339 govern the amendment transposition and owner-authorized acceptance transition. The amendment reaffirms and does not supersede the accepted base decision. The exact-head targeted independent review returned `READY_FOR_ACCEPTANCE` on `8a5837ff2ec7c09ddd57829304f1f14905ab36b2`. The amendment becomes binding when PR #339 is merged. PR #335 / Issue #334 remain blocked until that merge and separate runtime resumption authorization.
 
 ## Context
 
@@ -509,7 +509,7 @@ Reconsideration must preserve historical profile identities, existing validation
 
 ## Compatibility and Migration
 
-This decision extends ADR 0034 after response capture and reaffirms ADR 0033 Source Handling exclusivity, ADR 0031 requested-output ownership, ADR 0032 shared-core admission gates, ADR 0020 strict-known replay, ADR 0016 promotion limits, and ADR 0009 repository/service separation. The proposed amendment co-locates ADR 0034 capture and ADR 0035 semantic consumption only as a protected execution topology; it transfers no authority and requires no ADR 0034 amendment. None is superseded by this ADR.
+This decision extends ADR 0034 after response capture and reaffirms ADR 0033 Source Handling exclusivity, ADR 0031 requested-output ownership, ADR 0032 shared-core admission gates, ADR 0020 strict-known replay, ADR 0016 promotion limits, and ADR 0009 repository/service separation. The accepted amendment co-locates ADR 0034 capture and ADR 0035 semantic consumption only as a protected execution topology; it transfers no authority and requires no ADR 0034 amendment. None is superseded by this ADR.
 
 ADR 0031 remains owner of requested-output and `ExtractionSchema` semantics;
 validation establishes conformance only and grants no canonical truth or
@@ -524,12 +524,12 @@ The legacy `AIExtractionProvider` / `SecureAIProviderRunner` path predates this 
 
 No synthetic backfill may fabricate validation events, profile resolutions, Source Handling resolutions, attestations, trusted cutoffs, durable-acceptance timestamps, or correction lineage for legacy provider artifacts. Historical absence remains explicit.
 
-Migration to runtime implementation, if later authorized, must be additive and gated by separate implementation scope, tests, persistence/schema changes, replay conformance, and activation controls. Acceptance of this ADR changes no runtime behavior.
+Migration to runtime implementation, if later authorized, must be additive and gated by separate implementation scope, tests, persistence/schema changes, replay conformance, and activation controls. Acceptance of this ADR amendment changes no runtime behavior.
 
-The proposed amendment is additive to the Phase-A event allocator. It does not
+The accepted amendment is additive to the Phase-A event allocator. It does not
 change base-key construction, re-validation identity, generation semantics, or
-correction CAS/replay. PR #335 remains blocked pending amendment acceptance and
-separate authorization to resume implementation.
+correction CAS/replay. PR #335 remains blocked until PR #339 merges and
+separate authorization to resume implementation is granted.
 
 ## Non-Goals
 
@@ -558,16 +558,16 @@ This ADR does not authorize or design:
 
 **Architecture accepted. Phase A foundation is implemented under the separately authorized Issue #332 contribution and is not activated in production.**
 
-**The Issue #338 transient-isolation and reservation amendment is Proposed,
-documentation-only, and not implemented or accepted by this drafting
-contribution.**
+**The Issue #338 transient-isolation and reservation amendment is Accepted by
+owner authorization on PR #339, documentation-only, and not implemented. It
+becomes binding when PR #339 merges; acceptance itself authorizes no runtime.**
 
 Phase A adds the provider-independent canonical `ResponseValidationProfileAuthority` publication/history/resolution contracts, strict-known profile resolution, atomic base-validation and explicit re-validation event allocation, allocator-owned `validation_event_id` and `validation_cutoff`, retry/join semantics, and the closed ADR 0035 validation-state vocabulary and precedence. The implementation is confined to `hunter.evidence_intelligence.response_validator` and its mechanical persistence boundary, with deterministic/adversarial tests.
 
 No semantic validation worker, parser/schema engine, validation authorization, success/refusal attestation, terminal `ResponseValidationRecord` persistence, `validation_recorded_at`, correction allocation/CAS, transient response-byte handoff, downstream extraction or promotion, provider routing/fallback, live provider invocation, or production activation is implemented by Phase A. Those surfaces remain separately governed and deferred.
 
-Issue #334 / PR #335 remain blocked. They may resume only after the amendment is
-accepted through a separate owner-authorized lifecycle and implementation
-resumption is separately authorized. This amendment drafting contribution adds
-no runtime code, storage, IPC, sandbox, terminal persistence, provider work, or
-production activation.
+Issue #334 / PR #335 remain blocked until PR #339 merges. They may resume only
+after this accepted amendment is on `main` and implementation resumption is
+separately authorized. This acceptance contribution adds no runtime code,
+storage, IPC, sandbox, terminal persistence, provider work, or production
+activation.
