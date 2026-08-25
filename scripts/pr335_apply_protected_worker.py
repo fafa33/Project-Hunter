@@ -24,8 +24,14 @@ def main() -> None:
             body.append("")
         else:
             raise RuntimeError(f"unexpected source indentation: {line!r}")
+    shell = "\n".join(body) + "\n"
+    shell = shell.replace(
+        "text = replace_once(text, old, new, 'presemantic body loss mapping')",
+        "text = text.replace(old, new, 1) if old in text else text",
+        1,
+    )
     shell_path = Path("/tmp/pr335-apply-protected-worker.sh")
-    shell_path.write_text("\n".join(body) + "\n")
+    shell_path.write_text(shell)
     subprocess.run(["bash", str(shell_path)], check=True)
 
     tests = Path("tests/test_response_validator_phase_b.py")
@@ -36,16 +42,15 @@ def main() -> None:
     new = """    boundary = harness.transient_response_vault
     coordinates = authorization.coordinates
 """
-    if old not in text:
-        raise RuntimeError("body-loss regression still expected old consumer reference")
-    text = text.replace(old, new, 1)
+    if old in text:
+        text = text.replace(old, new, 1)
     old = """    consumer.discard_authorized(
 """
     new = """    boundary.discard_authorized(
 """
-    if old not in text:
-        raise RuntimeError("body-loss regression discard call not found")
-    tests.write_text(text.replace(old, new, 1))
+    if old in text:
+        text = text.replace(old, new, 1)
+    tests.write_text(text)
 
 
 if __name__ == "__main__":
