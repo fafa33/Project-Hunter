@@ -488,11 +488,13 @@ No additional architectural ambiguity is identified.
 ## Readiness and next governed step
 
 - Preparation self-assessment: `READY_FOR_ADR`.
-- Independent architecture audit is required on the exact PR #337 head.
-- This ADPR does not amend accepted ADR 0035. If the independent audit returns a
-  readiness verdict permitting ADR drafting, the next governed contribution is
-  a narrow ADR 0035 amendment/transposition that records only the process
-  isolation, reservation, failure, retry/join, and re-validation rules above.
+- Independent exact-head re-audit completed on
+  `c26a1dae9f4635f51fd70c65748c760fcb335808` and returned `READY_FOR_ADR`.
+- PR #337 merged to `main` as
+  `0cea851917afd9579aeaf3bb6261a8177d1e8153`.
+- This ADPR does not itself amend accepted ADR 0035. Issue #338 now governs the
+  narrow amendment/transposition of only the process isolation, reservation,
+  failure, retry/join, and re-validation rules above.
 - Runtime correction of PR #335 remains blocked until that ADR amendment is
   accepted and a separately authorized implementation scope resumes it.
 - Merge remains owner-only.
@@ -510,6 +512,11 @@ No additional architectural ambiguity is identified.
 - PR #337 exact-head review correction: Phase-A-compatible fresh-capture/base-
   event lineage, architecture-index registration, Phase-B in-memory refusal
   contract, and restart-surviving non-content reservation ownership
+- Final independent re-audit: `READY_FOR_ADR` on
+  `c26a1dae9f4635f51fd70c65748c760fcb335808`
+- Preparation merge: PR #337 at
+  `0cea851917afd9579aeaf3bb6261a8177d1e8153`
+- ADR amendment drafting: Issue #338
 - Governing accepted ADRs: 0031, 0033, 0034, and 0035
-- ADR amendment: not yet created
+- ADR amendment: Proposed under Issue #338; not yet accepted
 - Runtime implementation: not authorized by this record

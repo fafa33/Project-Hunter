@@ -4,13 +4,19 @@
 
 Accepted.
 
+The base decision remains Accepted. The transient-isolation and reservation
+amendment drafted under Issue #338 is **Proposed** and non-binding until a
+separate owner-authorized acceptance transition is merged. This drafting
+contribution does not mark that amendment Accepted and changes no runtime
+behavior.
+
 ## Date
 
 2026-08-24.
 
 ## Governing Preparation
 
-[ADPR-0010](../architecture-records/ADPR-0010-evidence-intelligence-response-validator.md) v1.5 is the governing preparation record.
+[ADPR-0010](../architecture-records/ADPR-0010-evidence-intelligence-response-validator.md) v1.5 is the governing preparation record for the accepted base decision.
 
 The preparation lineage has three distinct coordinates that must not be conflated:
 
@@ -22,6 +28,12 @@ The targeted independent re-audit in `docs/ARCHITECTURE_AUDITS/adpr-0010-respons
 
 ADR 0035's acceptance transition is carried by owner-authorized Issue #330 and PR #331. It becomes binding only when the repository owner merges PR #331; before that merge, the `Proposed` state already on `main` remains authoritative. This acceptance contribution changes no architectural decision in the drafted record, introduces no materially new architecture, and does not authorize runtime implementation.
 
+### Proposed transient-isolation and reservation amendment lineage
+
+[ADPR-0011](../architecture-records/ADPR-0011-adr-0035-transient-handoff-isolation-reservation.md), governed by Issue #336 and merged through PR #337 at `0cea851917afd9579aeaf3bb6261a8177d1e8153`, is the governing preparation for this narrow amendment. The final independent exact-head re-audit returned `READY_FOR_ADR` on `c26a1dae9f4635f51fd70c65748c760fcb335808` after verifying the protected-worker topology, non-durable transfer, ADR 0035-owned durable reservation, refusal semantics, Phase-A-compatible re-validation, and authority separation.
+
+Issue #338 governs amendment drafting and transposition only. The amendment reaffirms and does not supersede the accepted base decision. PR #335 / Issue #334 remain blocked until the amendment receives a separate owner-authorized acceptance transition and runtime resumption is separately authorized.
+
 ## Context
 
 Accepted ADR 0034 deliberately ends the Model Adapter boundary after governed provider-response capture. Transport success, response capture, provider identity, and successful network delivery do not establish semantic response validity. Accepted ADR 0016 likewise prohibits implementation existence or successful AI execution from promoting output into canonical analytical authority.
@@ -29,6 +41,13 @@ Accepted ADR 0034 deliberately ends the Model Adapter boundary after governed pr
 Hunter therefore needs a distinct post-response boundary that can decide whether a captured response conforms to the exact requested-output contract and the exact historically applicable validation policy, while preserving the authority boundaries already established by ADR 0009, ADR 0020, ADR 0031, ADR 0032, ADR 0033, and ADR 0034.
 
 The governing preparation established two separate architecture questions: where validation executes and who owns canonical validation-profile publication/history. The independent audit found the original preparation incomplete because the profile-authority ownership topology had not been fairly compared. ADPR-0010 v1.5 corrected that gap and then hardened strict-known replay/chronology so both base and corrected validation results have trusted decision-time and durable-knowability coordinates.
+
+Phase B review later proved that same-process privacy could expose exact
+non-retained response bytes and that a one-shot capture could be authorized to
+multiple canonical events. ADPR-0011 prepared and independently audited the
+narrow correction transposed below. It selects security and reservation
+outcomes without choosing a concrete sandbox, process manager, IPC primitive,
+or storage technology.
 
 This decision must preserve the following invariants:
 
@@ -68,6 +87,16 @@ Base validation is deduplicated before any semantic worker execution through a s
 
 Worker retry/restart resumes the same event and cutoff. Explicit re-validation is a distinct governed operation and receives a new event/cutoff with fresh profile and Source Handling resolution.
 
+Explicit re-validation preserves the predecessor `base_validation_key` and its
+original `response_capture_identity`. Neither coordinate may be replaced inside
+the allocated re-validation event. A fresh ADR 0034 capture instead has a new
+`response_capture_identity`, produces a new `base_validation_key`, and allocates
+a new generation-0 base validation event. Any causal reference from that fresh
+base event to an earlier validation attempt or result is non-identity-bearing
+metadata outside `ValidationEventAllocation`; it must not populate or imply
+`predecessor_validation_event_id` on the generation-0 event and cannot alter
+its event identity, cutoff, base key, or capture identity.
+
 ### 4. Governed correction allocation and chronology
 
 Every semantic mutation of a `ResponseValidationRecord` is a governed correction decision. There is no clerical bypass that can alter validation semantics inside the immutable correction chain.
@@ -98,6 +127,127 @@ After successful event allocation and semantic-processing prerequisites, `Respon
 The input mode is explicitly `DURABLE` or `TRANSIENT_NOT_RETAINED`. Model Adapter may carry exact matching credential-screened transient bytes solely to satisfy an authorized validation handoff, but it cannot select profile, event, cutoff, correction allocation, or Source Handling.
 
 Successful validation does not itself authorize persistence of transient response bytes. Retention remains governed only by Source Handling authority.
+
+#### Protected worker for `TRANSIENT_NOT_RETAINED`
+
+For `TRANSIENT_NOT_RETAINED`, the ADR 0034 response-capture component and the
+ADR 0035 semantic consumer execute inside one protected isolated worker. Exact
+response bytes pass from capture to semantic consumption entirely inside that
+protected boundary. Colocation is a security topology only: ADR 0034 remains
+capture/attempt/handoff authority and ADR 0035 remains authorization and
+semantic-validity authority.
+
+The caller-facing process receives only non-content capture/attempt metadata,
+authorization or refusal metadata, governed validation results, and diagnostics
+permitted by Source Handling. It must not receive or recover:
+
+- exact response-body bytes;
+- a readable response-body descriptor;
+- caller-readable shared memory containing the body;
+- a socket endpoint, object reference, callback, or equivalent capability that
+  can yield the body; or
+- debugger, `ptrace`, process-memory, `/proc`-style memory/descriptor, dump,
+  inspection, logging, exception, or diagnostic access that recovers the body.
+
+A distinct PID alone is insufficient. A same-UID subprocess or any other
+worker that remains reflectively, debugger-, memory-, or descriptor-readable by
+the caller-facing process is insufficient. The worker must operate behind an
+OS-enforced security boundary—such as an appropriate distinct security
+principal, sandbox, namespace boundary, or equivalent combination—whose
+falsifiable outcome prevents all caller-side recovery paths above. No readable
+body descriptor may be inherited by or transferred to the caller, no body
+shared-memory region may be caller-readable, and the worker must be non-dumpable
+or equivalently inspection-restricted where the platform supports that control.
+Administrative or root compromise of the host is outside this threat model.
+This decision requires the security outcomes, not one particular isolation
+primitive.
+
+#### Non-durable body transfer
+
+The non-retained exact body must not be materialized in a named filesystem file,
+an anonymous or temporary filesystem-backed file, caller-readable shared
+memory, or any durable or reconstructable retained copy. Capture-to-consumer
+transfer and consumption use only non-durable OS IPC or equivalent ephemeral
+streaming entirely inside the protected worker boundary.
+
+The worker may hold only the minimum ephemeral body state required for governed
+capture screening and the one authorized semantic execution. ADR 0033 remains
+the exclusive authority for retention, reconstruction, access, deletion, and
+lifecycle. The protected topology and transfer mechanism grant none of those
+permissions, and neither body bytes nor a body-recovery capability may return
+to the caller-facing process.
+
+#### ADR 0035-owned atomic reservation
+
+Before exposing successful `TRANSIENT_NOT_RETAINED` authorization, ADR 0035
+authorization atomically reserves the canonical capture identity through this
+mapping:
+
+`response_capture_identity -> owning validation_event_id`
+
+The mapping uses atomic create-if-absent semantics. The first successful
+canonical owner wins; the same `validation_event_id` retries or joins
+idempotently; every different event conflicts. Reservation commits before
+successful authorization is exposed and is never transferred, released, or
+reassigned after timeout, cancellation, execution failure, successful
+consumption, or cleanup.
+
+ADR 0034 supplies the governed attempt, capture identity, response capture,
+handoff evidence, and capture/attempt lineage. It does not own, publish, or
+enforce a validation-event reservation registry. No companion amendment to ADR
+0034 is required or authorized by this decision.
+
+Committed reservation ownership is durable non-content authority metadata. A
+canonical restart-surviving mapping or ownership tombstone must survive
+authorization-authority restart, worker restart, timeout, cancellation,
+execution failure, successful consumption, and cleanup. Process-local-only
+storage is insufficient. The ownership record remains after bytes are consumed
+or lost, contains no response bytes or reconstructable representation, grants
+no body-reading capability, and does not claim that bytes remain available.
+Persistence stores the already-decided mapping mechanically and may not choose
+or re-decide ownership. This durability and uniqueness requirement does not by
+itself mandate a globally distributed registry or any single storage primitive.
+
+#### One capture, one event; retry and conflict
+
+A `TRANSIENT_NOT_RETAINED` capture may be semantically consumed by at most one
+canonical `validation_event_id`. This applies to every pair of distinct events,
+including a base event versus explicit re-validation and two otherwise
+legitimate base events whose requested-output or profile coordinates yield
+different canonical events.
+
+Same-event retry/join observes the durable owner and the same historically
+bound event/cutoff/profile/Source Handling/output-contract/capture coordinates.
+It does not mint sibling ownership, rerun the ownership race, or reinterpret
+current/latest state. A competing event fails closed before semantic execution.
+
+Explicit re-validation remains a distinct event over the predecessor base key
+and original capture identity. If another event owns or consumed the capture,
+or the exact non-retained bytes are unavailable, re-validation yields the
+existing `INPUT_UNAVAILABLE` state. A fresh capture must not be substituted into
+that allocated event. A separately governed fresh ADR 0034 observation creates
+a new capture identity, new base key, and new generation-0 base event under the
+identity rules in section 3; it is not replay or reconstruction and does not
+claim equality with the earlier response.
+
+#### Reservation refusal boundary
+
+Reservation conflict uses only the existing top-level `INPUT_UNAVAILABLE`
+state. This amendment adds no validation state and does not change section 8
+precedence. In particular, the existing relative ordering
+`SOURCE_HANDLING_BLOCKED > VALIDATOR_ERROR > INPUT_UNAVAILABLE` remains intact;
+the full ordering, including `VALIDATOR_CAPABILITY_UNKNOWN`, remains exactly as
+listed in section 8.
+
+Phase B produces the canonical in-memory refusal outcome and state-compatible
+refusal attestation for the losing canonical event. It does not append a
+terminal durable `ResponseValidationRecord` or create
+`validation_recorded_at`. Those operations remain in the later persistence
+phase governed by sections 7 and 9. Same-losing-event retry/join deterministically
+reproduces or joins the refusal from canonical event coordinates and durable
+ownership. Future terminal persistence may mechanically preserve the already-
+decided event/refusal/attestation/capture/reservation lineage but must not
+re-decide the reservation conflict.
 
 ### 7. Immutable validation records and persistence-owned durable acceptance
 
@@ -160,6 +310,14 @@ Transient content that was not retainable replays only the durable validation re
 
 Ordinary retry is not re-validation. Explicit re-validation receives a new event/cutoff and fresh authority resolution and does not rewrite prior history.
 
+For `TRANSIENT_NOT_RETAINED`, explicit re-validation retains the predecessor
+base key and original capture identity. Unavailable or already-owned/consumed
+bytes produce `INPUT_UNAVAILABLE`; current/latest or fresh response content
+never substitutes. A fresh capture begins a new generation-0 base event and may
+carry only non-identity-bearing causal metadata outside
+`ValidationEventAllocation`, never a `predecessor_validation_event_id` or other
+identity implication on that base event.
+
 ### 11. Correction concurrency and CAS semantics
 
 Corrections are append-only, governed, and non-branching. Each correction names the exact current predecessor and next generation.
@@ -180,6 +338,74 @@ The validator creates no extraction proposal and performs no canonical promotion
 
 A separately governed downstream extraction/knowledge-proposal service may consume only validation states permitted by its own contract, normally `VALID`, while preserving exact validation identity and lineage. Canonical promotion remains owned by the separately accepted authority that already governs that domain.
 
+### 14. Mandatory transient-validation conformance
+
+Any later implementation of this amendment must prove at minimum:
+
+1. the ADR 0034 capture component and ADR 0035 semantic consumer execute inside
+   the same protected worker for `TRANSIENT_NOT_RETAINED`, while the caller-
+   facing process receives only non-content metadata and results;
+2. caller-facing code cannot recover the exact transient body through object
+   inspection, inherited descriptors, shared memory, sockets, callbacks,
+   exceptions, logs, diagnostics, debugger attachment, process-memory reads, or
+   `/proc`-style memory and descriptor surfaces;
+3. validator-only isolation is rejected because ADR 0034 response capture must
+   also occur inside the protected worker;
+4. a distinct-PID or same-UID subprocess that remains reflectively, `ptrace`-,
+   debugger-, memory-, or descriptor-readable by the caller is rejected as
+   non-conforming;
+5. the protected worker is non-dumpable or equivalently inspection-restricted
+   where supported, and no readable body descriptor or body shared-memory
+   region is inherited by or exposed to the caller;
+6. exact transient bytes are never materialized in named, anonymous, or
+   temporary filesystem-backed files, caller-readable shared memory, or a
+   durable/reconstructable copy, and internal handoff uses only non-durable IPC
+   or equivalent ephemeral streaming inside the worker;
+7. ADR 0035, not ADR 0034, atomically reserves the capture identity during
+   authorization and exposes no successful authorization before ownership is
+   confirmed;
+8. the canonical `response_capture_identity -> owning validation_event_id`
+   mapping uses atomic create-if-absent and survives authorization-authority and
+   validator-worker restart without relying on a process-local registry;
+9. two different canonical events racing for one capture produce exactly one
+   owner, and the loser receives `INPUT_UNAVAILABLE` before semantics;
+10. two legitimate distinct base events with different requested-output or
+    profile coordinates cannot both consume the same non-retained capture;
+11. authority restart, worker restart, timeout, cancellation, execution
+    failure, successful consumption, and cleanup never remove or transfer the
+    committed owner;
+12. same-event retry/join after restart observes the same owner and historically
+    bound coordinates, while a competing event after restart still receives
+    `INPUT_UNAVAILABLE` without rerunning the race;
+13. post-consumption ownership remains as a tombstone even though the exact
+    transient body is unavailable;
+14. the durable reservation representation contains only canonical capture and
+    owner identities and provably contains no body bytes or body-reading
+    capability;
+15. a losing event emits the canonical Phase-B in-memory refusal outcome and
+    refusal attestation without appending a terminal `ResponseValidationRecord`
+    or minting `validation_recorded_at`;
+16. same-losing-event retry/join deterministically reproduces or joins the same
+    refusal, and later terminal persistence preserves its lineage without
+    re-deciding ownership;
+17. explicit re-validation preserves the original `base_validation_key` and
+    `response_capture_identity` and yields `INPUT_UNAVAILABLE` when the original
+    non-retained bytes are unavailable or owned/consumed by another event;
+18. a fresh capture identity is rejected as substitution into an allocated
+    re-validation event and cannot mutate its event identity, cutoff, base key,
+    or capture lineage;
+19. a fresh ADR 0034 capture creates a new base key and generation-0 event; any
+    causal reference to an earlier validation is non-identity-bearing metadata
+    outside `ValidationEventAllocation`, does not populate or imply
+    `predecessor_validation_event_id`, and does not reuse the earlier event's
+    identity, cutoff, or base key;
+20. no reservation, refusal, IPC, process-boundary, or causal-lineage artifact
+    stores or logs exact non-retained response bytes or permits downstream
+    extraction/promotion; and
+21. mutation-style or equivalent non-vacuity protection proves that each
+    reusable isolation, reservation, refusal, and identity guard fails when its
+    prohibited path is reintroduced.
+
 ## Consequences
 
 ### Positive consequences
@@ -190,6 +416,12 @@ A separately governed downstream extraction/knowledge-proposal service may consu
 - Historical replay is deterministic and strict-known, including correction chronology and delayed durable acceptance.
 - Caller, worker, transport, and persistence cannot mint canonical profiles, cutoffs, validity, or semantic correction history.
 - Non-retainable but processable response content can be validated without granting retention authority.
+- Non-retained response bytes are structurally isolated from caller-facing
+  processes while capture and semantic authorities remain distinct.
+- Durable one-event ownership makes authorization deterministic across worker
+  and authority restarts without retaining response content.
+- Fresh-capture handling preserves Phase-A event identity instead of mutating
+  an allocated re-validation event.
 - Failed or incomparable correction chronology does not wedge the next correction generation.
 - Downstream extraction and promotion remain separately governed.
 
@@ -199,6 +431,11 @@ A separately governed downstream extraction/knowledge-proposal service may consu
 - Append-only event, correction, attestation, and chronology contracts add persistence and concurrency complexity.
 - Comparable trusted time domains or an accepted monotonic ordering contract are mandatory for base/correction chronology.
 - Historical replay requires preserving enough exact identity and authority lineage to prove eligibility without current-state substitution.
+- Non-retained validation requires an OS-protected worker, non-durable internal
+  transfer, and durable non-content reservation metadata.
+- One-shot reservation intentionally means that another canonical event cannot
+  semantically consume the same transient capture, even when that event is
+  otherwise legitimate.
 
 ### Risks controlled by this decision
 
@@ -208,6 +445,11 @@ A separately governed downstream extraction/knowledge-proposal service may consu
 - correction chain branching or clock-skew wedging;
 - replay exposure before the governing decision or durable acceptance became knowable;
 - use of attempt-time Source Handling as later validation permission;
+- caller recovery of policy-non-retained response bytes through process memory,
+  descriptors, shared memory, files, debugging, or inspection surfaces;
+- restart or cleanup erasing reservation ownership and reopening a consumed
+  capture to another event;
+- fresh response capture mutating an already allocated re-validation identity;
 - accidental canonical promotion from a successful validation result.
 
 ## Alternatives Considered
@@ -228,6 +470,15 @@ A separately governed downstream extraction/knowledge-proposal service may consu
 4. **Persistence-owned profile registry authority — rejected.** Violates repository/persistence separation by turning storage into policy authority.
 5. **Generic/shared profile authority — deferred.** Requires a later governed decision and independent multi-consumer evidence under ADR 0032.
 
+### Transient isolation and reservation
+
+1. **Protected capture-and-consumer worker with ADR 0035 reservation — selected.** Enforces non-retention against the caller-facing process while preserving ADR 0034 capture authority and ADR 0035 semantic/authorization authority.
+2. **Validator-only isolation or a bare subprocess — rejected.** Capture outside the boundary leaves exact bytes caller-reachable, while a distinct PID or inspectable same-UID child does not prevent debugger, memory, or descriptor recovery.
+3. **Filesystem-backed or caller-readable shared-memory handoff — rejected.** It creates a retained, reconstructable, or caller-readable body surface inconsistent with `TRANSIENT_NOT_RETAINED`.
+4. **ADR 0034-owned validation-event reservation — rejected.** ADR 0034 supplies capture identity and handoff lineage but does not own validation events or authorization.
+5. **Process-local or releasable reservation — rejected.** Restart, cleanup, or execution order could erase first-owner truth and allow a second event to consume the one-shot capture.
+6. **Fresh-capture substitution into re-validation — rejected.** Phase A binds re-validation to the predecessor base key and original capture identity; a fresh capture begins a new generation-0 base event.
+
 ## Falsification and Reconsideration
 
 The dedicated `ResponseValidationProfileAuthority` recommendation must be revisited through a new governed architecture decision if evidence proves before activation that the canonical validation profile contains no policy beyond an already-authoritative upstream requested-output contract; or if multiple independent consumers establish genuinely common validation-profile semantics that satisfy ADR 0032 without semantic loss; or if another authority topology can preserve the same rule-maker/executor separation, strict-known history, anti-forgery, and replay guarantees with materially lower governance cost.
@@ -236,7 +487,16 @@ Reconsideration must preserve historical profile identities, existing validation
 
 ## Compatibility and Migration
 
-This decision extends ADR 0034 after response capture and reaffirms ADR 0033 Source Handling exclusivity, ADR 0031 requested-output ownership, ADR 0032 shared-core admission gates, ADR 0020 strict-known replay, ADR 0016 promotion limits, and ADR 0009 repository/service separation. None is superseded by this ADR.
+This decision extends ADR 0034 after response capture and reaffirms ADR 0033 Source Handling exclusivity, ADR 0031 requested-output ownership, ADR 0032 shared-core admission gates, ADR 0020 strict-known replay, ADR 0016 promotion limits, and ADR 0009 repository/service separation. The proposed amendment co-locates ADR 0034 capture and ADR 0035 semantic consumption only as a protected execution topology; it transfers no authority and requires no ADR 0034 amendment. None is superseded by this ADR.
+
+ADR 0031 remains owner of requested-output and `ExtractionSchema` semantics;
+validation establishes conformance only and grants no canonical truth or
+promotion authority. ADR 0033 remains exclusive owner of retention,
+reconstruction, access, deletion, and lifecycle decisions. ADR 0034 remains
+owner of provider invocation, attempts, response capture, capture identity,
+handoff evidence, and capture/attempt lineage. ADR 0035 owns validation event
+identity, authorization, semantic validation, and the capture-to-event
+reservation introduced by this amendment.
 
 The legacy `AIExtractionProvider` / `SecureAIProviderRunner` path predates this architecture and cannot be relabelled as the canonical `ResponseValidator` or treated as satisfying these contracts merely because it performs limited screening or creates extraction proposals.
 
@@ -244,14 +504,29 @@ No synthetic backfill may fabricate validation events, profile resolutions, Sour
 
 Migration to runtime implementation, if later authorized, must be additive and gated by separate implementation scope, tests, persistence/schema changes, replay conformance, and activation controls. Acceptance of this ADR changes no runtime behavior.
 
+The proposed amendment is additive to the Phase-A event allocator. It does not
+change base-key construction, re-validation identity, generation semantics, or
+correction CAS/replay. PR #335 remains blocked pending amendment acceptance and
+separate authorization to resume implementation.
+
 ## Non-Goals
 
 This ADR does not authorize or design:
 
 - runtime `ResponseValidator` implementation;
+- implementation of the isolated worker, sandbox/process primitive, IPC, or
+  reservation store;
+- modification of PR #335 code or resumption of Issue #334;
+- terminal `ResponseValidationRecord` persistence or creation of
+  `validation_recorded_at` by Phase B;
+- amendment of ADR 0034;
+- new validation states or any change to section 8 precedence;
+- correction allocation, correction CAS, or correction replay redesign;
 - Issue #315 work;
 - provider routing, fallback, ranking, hedging, or multi-provider activation;
+- provider-invocation redesign or live provider activation;
 - extraction or knowledge promotion;
+- DefiLlama integration;
 - source/claim/valuation truth;
 - ranking, opportunity, recommendation, timing, portfolio, Dashboard, or scheduler work;
 - governance redesign;
@@ -261,6 +536,16 @@ This ADR does not authorize or design:
 
 **Architecture accepted. Phase A foundation is implemented under the separately authorized Issue #332 contribution and is not activated in production.**
 
+**The Issue #338 transient-isolation and reservation amendment is Proposed,
+documentation-only, and not implemented or accepted by this drafting
+contribution.**
+
 Phase A adds the provider-independent canonical `ResponseValidationProfileAuthority` publication/history/resolution contracts, strict-known profile resolution, atomic base-validation and explicit re-validation event allocation, allocator-owned `validation_event_id` and `validation_cutoff`, retry/join semantics, and the closed ADR 0035 validation-state vocabulary and precedence. The implementation is confined to `hunter.evidence_intelligence.response_validator` and its mechanical persistence boundary, with deterministic/adversarial tests.
 
 No semantic validation worker, parser/schema engine, validation authorization, success/refusal attestation, terminal `ResponseValidationRecord` persistence, `validation_recorded_at`, correction allocation/CAS, transient response-byte handoff, downstream extraction or promotion, provider routing/fallback, live provider invocation, or production activation is implemented by Phase A. Those surfaces remain separately governed and deferred.
+
+Issue #334 / PR #335 remain blocked. They may resume only after the amendment is
+accepted through a separate owner-authorized lifecycle and implementation
+resumption is separately authorized. This amendment drafting contribution adds
+no runtime code, storage, IPC, sandbox, terminal persistence, provider work, or
+production activation.
