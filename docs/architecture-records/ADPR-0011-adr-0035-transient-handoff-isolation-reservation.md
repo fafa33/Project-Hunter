@@ -43,14 +43,24 @@ These are architecture gaps rather than isolated implementation defects. ADR
 handoff, but does not yet specify the isolation topology or which event owns a
 single-use capture when canonical events compete.
 
+Independent audit of the first PR #337 revision then identified five required
+corrections: isolate capture together with consumption, define an OS security
+boundary stronger than a subprocess, keep event reservation under ADR 0035,
+exclude filesystem-backed transient handoff, and state the one-capture/one-event
+consequence for every pair of distinct canonical events. The owner decisions
+below resolve those findings without reopening any other architecture.
+
 ## Owner-selected correction
 
-### 1. Real process isolation
+### 1. Isolated capture-and-validation worker
 
-For `TRANSIENT_NOT_RETAINED` input, the component that exposes the
-caller-facing validation authorization/control surface and the component that
-consumes the exact response body for semantic validation must execute in
-separate operating-system processes with separate address spaces.
+For `TRANSIENT_NOT_RETAINED` input, the ADR 0034 response-capture boundary and
+the ADR 0035 semantic consumer execute together inside an isolated worker
+process. The component that exposes the caller-facing validation
+authorization/control surface executes outside that worker and never receives
+the exact response body. The caller-facing process receives only non-content
+capture/attempt metadata, authorization/refusal metadata, and the governed
+non-content validation result and permitted diagnostics.
 
 The caller-facing process must never receive or hold any of the following:
 
@@ -64,34 +74,78 @@ An opaque response-capture identity is lineage, not a body-reading capability.
 It may cross the caller-facing control surface only when that process cannot
 dereference it into exact response material.
 
-ADR 0034's capture-side boundary may transiently receive the provider response
-because capture remains its accepted responsibility. Exact bytes needed for
-validation must pass from that governed capture boundary to the isolated ADR
-0035 validator consumer without becoming readable in the caller-facing
-process. The isolated consumer may read them only for the one authorized
-semantic execution and must not expose or return them. The returned result is
-limited to the governed non-content validation outcome and diagnostics that
-Source Handling permits.
+ADR 0034's capture-side component inside the worker may transiently receive the
+provider response because capture remains its accepted responsibility. Exact
+bytes needed for validation pass from that capture component to the ADR 0035
+semantic consumer entirely inside the isolated worker. The semantic consumer
+may read them only for the one authorized execution and must not expose or
+return them. This topology explicitly rejects placing ADR 0034 capture in the
+caller-facing process while isolating only the ADR 0035 consumer.
 
 A thread, coroutine, class boundary, private attribute, name-mangled member,
 in-process socket pair, or other same-process convention does not satisfy this
-rule. The exact inter-process transport and deployment mechanism remain
-implementation choices, but conformance requires an operating-system-enforced
-process boundary and the absence of an inherited or otherwise caller-readable
-body capability.
+rule.
+
+A distinct process identifier or subprocess alone is also insufficient. The
+worker must run behind an operating-system-enforced security boundary that
+prevents the caller-facing process from inspecting worker memory or readable
+descriptors. The implementation must provide an enforceable equivalent of a
+distinct OS security principal, sandbox, namespace boundary, or combination
+whose effective properties include:
+
+- the caller-facing process cannot attach with `ptrace`, a debugger, or an
+  equivalent process-inspection facility;
+- the caller-facing process cannot read `/proc`-style worker memory,
+  descriptor, or equivalent inspection surfaces;
+- no readable response-body descriptor is inherited by or transferred to the
+  caller-facing process;
+- no shared-memory region containing the body is readable by the caller-facing
+  process; and
+- the worker is non-dumpable or equivalently inspection-restricted where the
+  platform supports that control.
+
+A same-UID subprocess that remains reflectively or debugger-readable by the
+caller-facing process does not qualify. Exact sandbox, principal, namespace,
+and process-management mechanisms remain implementation choices only when they
+prove all required isolation properties. Administrative or root compromise of
+the host is outside this threat model.
 
 This refinement does not externalize provider invocation into a new provider
 gateway. Provider invocation, response capture, and response-capture lineage
-remain within ADR 0034; only the ADR 0035 semantic consumer is isolated from the
-caller-facing process.
+remain within ADR 0034, while both the ADR 0034 capture component and ADR 0035
+semantic consumer are isolated from the caller-facing process for
+`TRANSIENT_NOT_RETAINED` input.
 
-### 2. Atomic event reservation
+### 2. Non-durable transfer and consumption
+
+For `TRANSIENT_NOT_RETAINED`, the exact response body must not be materialized
+in a named or anonymous filesystem file, persisted in a temporary file, exposed
+through caller-readable shared memory, or copied into any durable or
+reconstructable retained representation. Transfer from capture to semantic
+consumption must use non-durable operating-system IPC or equivalent ephemeral
+streaming entirely inside the isolated worker boundary.
+
+The isolated worker may hold the minimum ephemeral body state necessary for
+capture screening and the one authorized semantic execution, subject to the
+historically applicable ADR 0033 decision. It must not return that state to the
+caller-facing process or convert it into a retained artifact. ADR 0033 remains
+the exclusive authority for every retention, reconstruction, access, deletion,
+and lifecycle permission; neither the worker topology nor the IPC mechanism
+grants or extends those permissions.
+
+### 3. ADR 0035-owned atomic event reservation
 
 Authorization for `TRANSIENT_NOT_RETAINED` input must include one atomic
 reservation operation over the canonical response-capture identity. The only
 reservation owner is the Phase-A-allocated canonical `validation_event_id`.
 No caller-selected alias, worker identity, authorization token, process
 identity, or re-validation request identity may replace that owner.
+
+The reservation mechanism is part of ADR 0035 validation authorization and is
+owned by ADR 0035. ADR 0034 owns the provider attempt, response capture,
+canonical capture identity, and governed handoff; it supplies those exact
+non-content coordinates but does not own, publish, or enforce a
+`validation_event_id` reservation registry.
 
 The authorization sequence is fixed:
 
@@ -100,10 +154,10 @@ The authorization sequence is fixed:
 2. ADR 0035 resolves all historically applicable authorization prerequisites,
    including the profile, requested-output contract, Source Handling decision,
    capture/attempt lineage, and input mode.
-3. As part of authorization, the ADR 0034-owned capture boundary atomically
-   records the canonical `validation_event_id` as owner if the capture is
-   unreserved, returns the existing reservation if its owner is the same event,
-   or refuses if another event already owns it.
+3. As part of authorization, the ADR 0035 authorization authority atomically
+   records the canonical `validation_event_id` as owner if the capture identity
+   is unreserved, returns the existing reservation if its owner is the same
+   event, or refuses if another event already owns it.
 4. ADR 0035 exposes a successful transient validation authorization only after
    same-event ownership has been confirmed.
 
@@ -113,12 +167,20 @@ another event, or replaceable after failure, timeout, cancellation, or
 consumption. This prevents execution order from changing which canonical event
 was authorized to consume the one-shot input.
 
+A non-retained transient capture can therefore be semantically consumed by at
+most one canonical `validation_event_id`. This rule applies to every pair of
+distinct events, including a base event versus re-validation and two otherwise
+legitimate base validation events whose requested-output or profile coordinates
+produce different canonical events. If another event requires the exact bytes,
+it requires a fresh ADR 0034-governed observation and capture. This is an
+intentional consequence of non-retention combined with one-shot reservation.
+
 The operation stores no response body and grants no retention permission. Any
 reservation metadata is non-content lineage only, remains subordinate to the
 ADR 0034 capture and ADR 0035 event authorities, and cannot establish that
 response bytes are still available.
 
-### 3. Retry, join, and interrupted delivery
+### 4. Retry, join, and interrupted delivery
 
 Retry or concurrent join of the same canonical `validation_event_id` observes
 the same reservation owner and preserves the same authorization coordinates.
@@ -132,7 +194,7 @@ isolated consumer. If it is no longer available, the event fails closed under
 the existing ADR 0035 input-unavailable refusal semantics. The capture is not
 reassigned to another event.
 
-### 4. Explicit re-validation
+### 5. Explicit re-validation
 
 Explicit re-validation receives a new canonical event and cutoff under ADR
 0035. Because its `validation_event_id` differs, it cannot reserve, read, or
@@ -148,10 +210,11 @@ fresh governed capture exists, re-validation fails closed as input unavailable.
 
 ## Failure semantics
 
-- A different event that loses the atomic reservation is refused before
-  semantic execution with the existing ADR 0035 `INPUT_UNAVAILABLE` top-level
-  state and state-compatible refusal semantics. No new top-level validation
-  state is created.
+- A different event that loses the atomic reservation, including an otherwise
+  legitimate base event with different requested-output/profile coordinates,
+  is refused before semantic execution with the existing ADR 0035
+  `INPUT_UNAVAILABLE` top-level state and state-compatible refusal semantics.
+  No new top-level validation state is created.
 - If Source Handling itself prohibits or cannot authorize processing, the
   existing ADR 0035 `SOURCE_HANDLING_BLOCKED` semantics continue to apply. A
   reservation conflict does not relabel Source Handling authority.
@@ -194,23 +257,29 @@ handling authority still fails closed without current or permissive fallback.
 ### ADR 0034 — Model Adapter and capture authority
 
 ADR 0034 continues to own provider invocation, attempts, response capture,
-single-use handoff evidence, and capture/attempt lineage. Its capture boundary
-mechanically enforces the one-event reservation requested by ADR 0035
-authorization and supplies exact transient bytes only to the isolated semantic
-consumer. It does not choose validation event, cutoff, profile, output contract,
-Source Handling decision, or semantic outcome. A fresh re-validation
-observation is a new attempt/capture, matching ADR 0034's retry and
-re-invocation semantics. No provider gateway or routing authority is added.
+single-use handoff evidence, canonical capture identity, and capture/attempt
+lineage. For `TRANSIENT_NOT_RETAINED`, its capture component executes inside
+the isolated worker and supplies exact transient bytes only to the colocated
+semantic consumer through non-durable ephemeral transfer. ADR 0034 does not
+own or enforce the mapping from capture identity to `validation_event_id` and
+does not acquire a validation reservation registry. It does not choose
+validation event, cutoff, profile, output contract, Source Handling decision,
+or semantic outcome. A fresh re-validation observation is a new
+attempt/capture, matching ADR 0034's retry and re-invocation semantics. No
+companion ADR 0034 amendment, provider gateway, or routing authority is added.
 
 ### ADR 0035 — validation authority
 
 ADR 0035 continues to own canonical event allocation, trusted validation
 cutoff, validation authorization, semantic execution, closed states,
 precedence, and success/refusal attestations. The process boundary makes its
-non-caller transient authorization mechanically enforceable; the reservation
-binds the one-shot input to the already canonical event. Profile publication,
-Source Handling, requested-output truth, capture lineage, persistence, and
-downstream promotion remain outside validator authority.
+non-caller transient authorization mechanically enforceable. As part of that
+authorization authority, ADR 0035 atomically reserves one exact capture identity
+to the already canonical event before exposing successful authorization. The
+reservation is idempotent only for the same event and refuses every different
+event. Profile publication, Source Handling, requested-output truth, capture
+lineage, persistence, and downstream promotion remain outside validator
+authority.
 
 The correction is therefore an extension of ADR 0035's transient handoff and
 authorization mechanics. It neither supersedes nor transfers authority from
@@ -220,35 +289,69 @@ ADRs 0031, 0033, or 0034.
 
 A later implementation must prove at minimum:
 
-1. caller-facing code cannot recover the exact transient body through object
+1. the ADR 0034 capture component and ADR 0035 semantic consumer execute inside
+   the same protected worker for `TRANSIENT_NOT_RETAINED`, while the
+   caller-facing process receives only non-content metadata and results;
+2. caller-facing code cannot recover the exact transient body through object
    inspection, inherited descriptors, shared memory, sockets, callbacks,
-   exceptions, logs, or diagnostics;
-2. exact transient bytes cross a real process boundary directly into the
-   isolated validator consumer and are not returned with the outcome;
-3. two different canonical events racing for one capture produce exactly one
+   exceptions, logs, diagnostics, debugger attachment, process-memory reads, or
+   `/proc`-style memory and descriptor surfaces;
+3. a distinct-PID or same-UID subprocess that remains reflectively,
+   `ptrace`-, debugger-, memory-, or descriptor-readable by the caller is
+   rejected as non-conforming rather than treated as an isolation boundary;
+4. the protected worker is non-dumpable or equivalently
+   inspection-restricted where supported, and no readable body descriptor or
+   shared-memory body region is inherited by or exposed to the caller;
+5. exact transient bytes are never materialized in named or anonymous
+   filesystem files, temporary files, caller-readable shared memory, or a
+   durable/reconstructable copy, and their internal handoff uses only
+   non-durable IPC or equivalent ephemeral streaming inside the worker;
+6. ADR 0035, not ADR 0034, atomically reserves the capture identity during
+   authorization and exposes no successful authorization before ownership is
+   confirmed;
+7. two different canonical events racing for one capture produce exactly one
    owner, and the loser receives `INPUT_UNAVAILABLE` refusal before semantics;
-4. same-event retry/join observes the same owner and the same historically
+8. two legitimate distinct base events with different requested-output or
+   profile coordinates cannot both consume the same non-retained capture;
+9. same-event retry/join observes the same owner and the same historically
    bound authorization coordinates;
-5. a committed reservation is never transferred to a different event after
-   interruption, execution failure, or consumption;
-6. explicit re-validation cannot reuse the original event's transient capture;
-7. re-validation without a fresh governed capture fails closed and does not
-   substitute current/latest or retained content;
-8. a fresh re-validation capture has new ADR 0034 attempt/capture lineage and
-   makes no historical-reconstruction or response-equality claim; and
-9. no reservation, refusal, or process-boundary artifact stores or logs exact
-   non-retained response bytes or permits downstream extraction/promotion.
+10. a committed reservation is never transferred to a different event after
+    interruption, execution failure, or consumption;
+11. explicit re-validation cannot reuse the original event's transient capture;
+12. any different event that still needs exact bytes requires a fresh ADR
+    0034-governed observation/capture and otherwise fails closed without
+    current/latest or retained-content substitution;
+13. a fresh re-validation capture has new ADR 0034 attempt/capture lineage and
+    makes no historical-reconstruction or response-equality claim; and
+14. no reservation, refusal, IPC, or process-boundary artifact stores or logs
+    exact non-retained response bytes or permits downstream
+    extraction/promotion.
 
 ## Falsification and rejected alternatives
 
 - **Same-process privacy:** rejected by owner selection and PR #335 evidence;
   language-level privacy does not prevent caller-readable exact bytes.
+- **Validator-only isolation:** rejected because ADR 0034 capture outside the
+  protected worker would still place exact non-retained bytes or a readable
+  handoff capability in the caller-facing process.
+- **Bare subprocess separation:** rejected because a same-UID or otherwise
+  inspectable child can remain readable through debugger, process-memory, and
+  descriptor-inspection facilities.
+- **Filesystem or caller-readable shared-memory handoff:** rejected because it
+  creates a retained, reconstructable, or caller-readable exact-body surface
+  inconsistent with `TRANSIENT_NOT_RETAINED`.
+- **ADR 0034-owned event reservation:** rejected because validation-event
+  ownership belongs to ADR 0035 authorization; ADR 0034 supplies capture
+  identity and governed handoff without acquiring an event registry.
 - **Reserve on execution:** rejected because two events can appear successfully
   authorized and execution order becomes authority.
 - **Release to a competing event:** rejected because it makes ownership depend
   on worker failure/order and violates first-successful-reservation ownership.
 - **Reuse for explicit re-validation:** rejected because re-validation is a new
   canonical event and a single-use capture has one owner.
+- **Reuse across distinct base events:** rejected even when both events are
+  otherwise legitimate; different requested-output/profile coordinates create
+  different canonical events, and one non-retained capture has one owner.
 - **Fallback to current, retained, reconstructed, or freshly invoked content:**
   rejected because it changes event-bound authority and historical meaning. A
   separately governed fresh observation may support a new re-validation event,
@@ -257,8 +360,9 @@ A later implementation must prove at minimum:
 ## Explicit non-goals
 
 - runtime implementation or modification of PR #335 code;
-- exact IPC protocol, process manager, deployment topology, or operating-system
-  primitive selection beyond the required real process boundary;
+- exact non-durable IPC protocol, process manager, deployment topology, or
+  operating-system primitive selection beyond the required protected-worker
+  properties;
 - durable raw-response storage or any retention expansion;
 - terminal `ResponseValidationRecord` persistence;
 - `validation_recorded_at`;
@@ -286,14 +390,17 @@ They are not addressed by this preparation PR.
 
 The principal residual risk is accidental descriptor or body leakage while an
 implementation creates the process boundary. The conformance rule is
-outcome-based: no caller-facing process may possess a readable capability,
-regardless of the chosen IPC primitive.
+outcome-based: no caller-facing process may possess a readable capability or OS
+inspection path, regardless of distinct process IDs or the chosen IPC
+primitive.
 
-Exact IPC framing, process supervision, non-content reservation storage, and
+Exact non-durable IPC framing, qualifying sandbox/principal/namespace controls,
+process supervision, ADR 0035-owned non-content reservation storage, and
 crash-recovery mechanics remain implementation choices. They are constrained
-by the canonical rules above and may not weaken isolation, first-owner
-reservation, same-event retry/join, strict-known authority, or non-retention.
-No additional architectural ambiguity is identified.
+by the canonical rules above and may not weaken capture-and-consumer isolation,
+OS inspection resistance, first-owner reservation, same-event retry/join,
+strict-known authority, or non-retention. No additional architectural ambiguity
+is identified.
 
 ## Readiness and next governed step
 
@@ -314,6 +421,9 @@ No additional architectural ambiguity is identified.
 - Blocked implementation issue/PR: #334 / #335
 - Architecture-dependent findings: PR #335
   `discussion_r3848869567` and `discussion_r3848869576`
+- PR #337 independent audit correction: capture-and-consumer topology, OS
+  inspection boundary, ADR 0035 reservation ownership, non-durable IPC, and
+  all-distinct-event single ownership
 - Governing accepted ADRs: 0031, 0033, 0034, and 0035
 - ADR amendment: not yet created
 - Runtime implementation: not authorized by this record
