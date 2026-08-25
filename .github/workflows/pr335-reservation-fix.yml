@@ -1,0 +1,110 @@
+name: PR335 reservation fix
+
+on:
+  push:
+    branches:
+      - codex/issue-334-response-validator-phase-b
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: codex/issue-334-response-validator-phase-b
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Apply targeted reservation fix
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(text: str, old: str, new: str, label: str) -> str:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{label}: expected exactly one match, found {count}')
+              return text.replace(old, new, 1)
+
+          persistence = Path('src/hunter/evidence_intelligence/response_validator_persistence.py')
+          text = persistence.read_text()
+
+          text = replace_once(
+              text,
+              '    ResponseValidationProfileSpec,\n    ResponseValidatorFoundation,\n',
+              '    ResponseValidationProfileSpec,\n    ResponseValidator,\n    ResponseValidatorFoundation,\n',
+              'persistence import ResponseValidator',
+          )
+
+          text = replace_once(
+              text,
+              '        self.__event_allocator_owner: ResponseValidatorFoundation | None = None\n        self.__event_allocator_capability: object | None = None\n        self._initialize()\n',
+              '        self.__event_allocator_owner: ResponseValidatorFoundation | None = None\n        self.__event_allocator_capability: object | None = None\n        self.__validation_authority_capabilities: set[object] = set()\n        self._initialize()\n',
+              'reservation capability store',
+          )
+
+          anchor = '''    def _require_profile_authority_capability(self, capability: object | None) -> None:\n'''
+          insertion = '''    def _bind_validation_authority(\n        self,\n        owner: object,\n        installer: Callable[[object], None],\n    ) -> None:\n        \"\"\"Install an opaque reservation-write capability into an exact ResponseValidator.\"\"\"\n        expected_installer = vars(ResponseValidator)[\n            \"_ResponseValidator__install_reservation_persistence_capability\"\n        ]\n        if (\n            type(owner) is not ResponseValidator\n            or getattr(getattr(owner, \"_foundation\", None), \"_repository\", None) is not self\n            or getattr(installer, \"__self__\", None) is not owner\n            or getattr(installer, \"__func__\", None) is not expected_installer\n        ):\n            raise ResponseValidatorDirectWriteForbidden(\n                \"transient reservation persistence capability owner is not canonical\"\n            )\n        capability = object()\n        self.__validation_authority_capabilities.add(capability)\n        installer(capability)\n\n'''
+          text = replace_once(text, anchor, insertion + anchor, 'validation authority binding')
+
+          anchor = '''    def _publish_profile_authorized(\n'''
+          insertion = '''    def _require_validation_authority_capability(self, capability: object | None) -> None:\n        if capability is None or capability not in self.__validation_authority_capabilities:\n            raise ResponseValidatorDirectWriteForbidden(\n                \"transient capture reservation requires its owning ResponseValidator capability\"\n            )\n\n'''
+          text = replace_once(text, anchor, insertion + anchor, 'reservation capability guard')
+
+          anchor = '''    def _insert_allocation(self, connection: sqlite3.Connection, allocation: ValidationEventAllocation) -> None:\n'''
+          insertion = '''    def _reserve_transient_capture_authorized(\n        self,\n        *,\n        authority_capability: object | None,\n        response_capture_identity: str,\n        validation_event_id: str,\n    ) -> bool:\n        \"\"\"Atomically reserve one transient capture for one canonical validation event.\"\"\"\n        self._require_validation_authority_capability(authority_capability)\n        if not response_capture_identity or not validation_event_id:\n            raise ResponseValidatorPersistenceConflict(\n                \"transient capture reservation requires canonical non-blank identities\"\n            )\n        with self._connect() as connection:\n            connection.execute(\"BEGIN IMMEDIATE\")\n            existing = connection.execute(\n                \"\"\"\n                SELECT validation_event_id\n                FROM response_validation_transient_capture_reservations\n                WHERE response_capture_identity = ?\n                \"\"\",\n                (response_capture_identity,),\n            ).fetchone()\n            if existing is not None:\n                return str(existing[\"validation_event_id\"]) == validation_event_id\n            try:\n                connection.execute(\n                    \"\"\"\n                    INSERT INTO response_validation_transient_capture_reservations (\n                        response_capture_identity, validation_event_id\n                    ) VALUES (?, ?)\n                    \"\"\",\n                    (response_capture_identity, validation_event_id),\n                )\n            except sqlite3.IntegrityError as error:\n                raise ResponseValidatorPersistenceConflict(\n                    \"transient capture reservation identity conflict\"\n                ) from error\n            return True\n\n    def transient_capture_owner(self, response_capture_identity: str) -> str | None:\n        \"\"\"Read durable non-content ownership metadata for one transient capture.\"\"\"\n        with self._connect() as connection:\n            row = connection.execute(\n                \"\"\"\n                SELECT validation_event_id\n                FROM response_validation_transient_capture_reservations\n                WHERE response_capture_identity = ?\n                \"\"\",\n                (response_capture_identity,),\n            ).fetchone()\n        return str(row[\"validation_event_id\"]) if row is not None else None\n\n'''
+          text = replace_once(text, anchor, insertion + anchor, 'reservation methods')
+
+          sql_anchor = '''                CREATE INDEX IF NOT EXISTS response_validation_event_cutoff_idx\n                    ON response_validation_event_allocations(validation_cutoff, validation_event_id);\n'''
+          sql_new = sql_anchor + '''\n                CREATE TABLE IF NOT EXISTS response_validation_transient_capture_reservations (\n                    response_capture_identity TEXT PRIMARY KEY,\n                    validation_event_id TEXT NOT NULL,\n                    FOREIGN KEY (validation_event_id)\n                        REFERENCES response_validation_event_allocations(validation_event_id)\n                );\n                CREATE INDEX IF NOT EXISTS response_validation_transient_capture_owner_idx\n                    ON response_validation_transient_capture_reservations(validation_event_id);\n'''
+          text = replace_once(text, sql_anchor, sql_new, 'reservation table')
+          persistence.write_text(text)
+
+          validator = Path('src/hunter/evidence_intelligence/response_validator.py')
+          text = validator.read_text()
+          text = replace_once(
+              text,
+              '        self._foundation = foundation\n        self._model_adapter_repository = model_adapter_repository\n',
+              '        self._foundation = foundation\n        self.__reservation_persistence_capability: object | None = None\n        foundation._repository._bind_validation_authority(  # noqa: SLF001 - authority capability binding\n            self,\n            self.__install_reservation_persistence_capability,\n        )\n        self._model_adapter_repository = model_adapter_repository\n',
+              'validator reservation binding',
+          )
+
+          anchor = '''    def __install_transient_response_consumer(self, consumer: Any) -> None:\n'''
+          insertion = '''    def __install_reservation_persistence_capability(self, capability: object) -> None:\n        if self.__reservation_persistence_capability is not None:\n            raise ResponseValidationAuthorizationError(\n                \"transient reservation persistence capability is immutable\"\n            )\n        self.__reservation_persistence_capability = capability\n\n'''
+          text = replace_once(text, anchor, insertion + anchor, 'validator reservation installer')
+
+          old = '''        self._require_asserted_coordinates(asserted_coordinates, inputs.coordinates)\n\n        authorization = ResponseValidationAuthorization(_AUTHORIZATION_MINT, coordinates=inputs.coordinates)\n'''
+          new = '''        self._require_asserted_coordinates(asserted_coordinates, inputs.coordinates)\n\n        if inputs.coordinates.input_mode is ValidationInputMode.TRANSIENT_NOT_RETAINED:\n            repository = self._foundation._repository  # noqa: SLF001 - same owning ADR 0035 boundary\n            reserved = repository._reserve_transient_capture_authorized(  # noqa: SLF001\n                authority_capability=self.__reservation_persistence_capability,\n                response_capture_identity=inputs.coordinates.response_capture_identity,\n                validation_event_id=inputs.coordinates.validation_event_id,\n            )\n            if not reserved:\n                return self._refusal_result(\n                    allocation=allocation,\n                    state=ValidationState.INPUT_UNAVAILABLE,\n                    reason_code=\"TRANSIENT_RESPONSE_CAPTURE_RESERVED_BY_OTHER_EVENT\",\n                    available_authority=(\n                        (\"profile_publication_id\", inputs.coordinates.profile_publication_id),\n                        (\"profile_resolution_id\", inputs.coordinates.profile_resolution_id),\n                        (\"response_capture_identity\", inputs.coordinates.response_capture_identity),\n                        (\"validation_event_id\", inputs.coordinates.validation_event_id),\n                    ),\n                )\n\n        authorization = ResponseValidationAuthorization(_AUTHORIZATION_MINT, coordinates=inputs.coordinates)\n'''
+          text = replace_once(text, old, new, 'atomic reservation before authorization')
+          validator.write_text(text)
+
+          tests = Path('tests/test_response_validator_phase_b.py')
+          text = tests.read_text()
+          marker = '''def test_transient_response_is_consumed_once_without_persistence_or_logging(\n'''
+          new_tests = '''def test_transient_capture_first_canonical_event_wins_durable_reservation(tmp_path: Path) -> None:\n    harness = fixture.make_harness(tmp_path, transient=True)\n    harness.foundation._clock = fixture.SequenceClock(\n        fixture.VALIDATION_CUTOFF + timedelta(seconds=1)\n    )  # noqa: SLF001\n    revalidation = harness.foundation.allocate_revalidation(\n        predecessor_validation_event_id=harness.allocation.validation_event_id\n    )\n\n    base = harness.validator.authorize_event(harness.allocation)\n    competing = harness.validator.authorize_event(revalidation)\n\n    assert base.authorization is not None\n    assert competing.refusal is not None\n    assert competing.refusal.refusal.state is ValidationState.INPUT_UNAVAILABLE\n    assert competing.refusal.refusal.reason_code == \"TRANSIENT_RESPONSE_CAPTURE_RESERVED_BY_OTHER_EVENT\"\n    assert (\n        harness.validation_repository.transient_capture_owner(\n            harness.allocation.base_validation_key.response_capture_identity\n        )\n        == harness.allocation.validation_event_id\n    )\n\n\ndef test_transient_capture_reservation_is_first_owner_not_base_priority(tmp_path: Path) -> None:\n    harness = fixture.make_harness(tmp_path, transient=True)\n    harness.foundation._clock = fixture.SequenceClock(\n        fixture.VALIDATION_CUTOFF + timedelta(seconds=1)\n    )  # noqa: SLF001\n    revalidation = harness.foundation.allocate_revalidation(\n        predecessor_validation_event_id=harness.allocation.validation_event_id\n    )\n\n    first = harness.validator.authorize_event(revalidation)\n    losing_base = harness.validator.authorize_event(harness.allocation)\n\n    assert first.authorization is not None\n    assert losing_base.refusal is not None\n    assert losing_base.refusal.refusal.state is ValidationState.INPUT_UNAVAILABLE\n    assert losing_base.refusal.refusal.reason_code == \"TRANSIENT_RESPONSE_CAPTURE_RESERVED_BY_OTHER_EVENT\"\n    assert (\n        harness.validation_repository.transient_capture_owner(\n            harness.allocation.base_validation_key.response_capture_identity\n        )\n        == revalidation.validation_event_id\n    )\n\n\ndef test_transient_reservation_survives_validator_restart_and_body_loss(tmp_path: Path) -> None:\n    harness = fixture.make_harness(tmp_path, transient=True)\n    first = harness.validator.authorize_event(harness.allocation)\n    assert first.authorization is not None\n\n    empty_handoff = model_adapter.TransientResponseHandoffVault()\n    restarted = ResponseValidator(\n        harness.foundation,\n        model_adapter_repository=harness.model_repository,\n        pre_model_repository=harness.pre_model_repository,\n        source_handling_store=harness.source_authority.store,\n        runtime=DeterministicJsonValidationRuntime(),\n        transient_response_vault=empty_handoff,\n    )\n    retry = restarted.authorize_event(harness.allocation)\n\n    assert retry.refusal is not None\n    assert retry.refusal.refusal.state is ValidationState.INPUT_UNAVAILABLE\n    assert retry.refusal.refusal.reason_code == \"TRANSIENT_RESPONSE_ACCESS_UNAVAILABLE\"\n    assert (\n        harness.validation_repository.transient_capture_owner(\n            harness.allocation.base_validation_key.response_capture_identity\n        )\n        == harness.allocation.validation_event_id\n    )\n\n\n'''
+          text = replace_once(text, marker, new_tests + marker, 'reservation regression tests')
+          tests.write_text(text)
+          PY
+      - name: Install project
+        run: python -m pip install -e '.[dev]'
+      - name: Run targeted Phase B tests
+        run: python -m pytest -q tests/test_response_validator_phase_b.py
+      - name: Check diff
+        run: git diff --check
+      - name: Commit clean targeted fix and remove runner
+        shell: bash
+        run: |
+          git rm .github/workflows/pr335-reservation-fix.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/hunter/evidence_intelligence/response_validator.py \
+                  src/hunter/evidence_intelligence/response_validator_persistence.py \
+                  tests/test_response_validator_phase_b.py
+          git commit -m 'Fix PR #335 transient capture reservation'
+          git push origin HEAD:codex/issue-334-response-validator-phase-b
