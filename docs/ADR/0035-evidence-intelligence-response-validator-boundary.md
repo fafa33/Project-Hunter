@@ -32,7 +32,7 @@ ADR 0035's acceptance transition is carried by owner-authorized Issue #330 and P
 
 [ADPR-0011](../architecture-records/ADPR-0011-adr-0035-transient-handoff-isolation-reservation.md), governed by Issue #336 and merged through PR #337 at `0cea851917afd9579aeaf3bb6261a8177d1e8153`, is the governing preparation for this narrow amendment. The final independent exact-head re-audit returned `READY_FOR_ADR` on `c26a1dae9f4635f51fd70c65748c760fcb335808` after verifying the protected-worker topology, non-durable transfer, ADR 0035-owned durable reservation, refusal semantics, Phase-A-compatible re-validation, and authority separation.
 
-Issue #338 governs amendment drafting and transposition only. The amendment reaffirms and does not supersede the accepted base decision. PR #335 / Issue #334 remain blocked until the amendment receives a separate owner-authorized acceptance transition and runtime resumption is separately authorized.
+Issue #338 and Draft PR #339 govern amendment drafting and transposition only. The amendment reaffirms and does not supersede the accepted base decision. PR #335 / Issue #334 remain blocked until the amendment receives a separate owner-authorized acceptance transition and runtime resumption is separately authorized.
 
 ## Context
 

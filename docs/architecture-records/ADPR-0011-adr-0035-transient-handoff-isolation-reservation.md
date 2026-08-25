@@ -492,9 +492,9 @@ No additional architectural ambiguity is identified.
   `c26a1dae9f4635f51fd70c65748c760fcb335808` and returned `READY_FOR_ADR`.
 - PR #337 merged to `main` as
   `0cea851917afd9579aeaf3bb6261a8177d1e8153`.
-- This ADPR does not itself amend accepted ADR 0035. Issue #338 now governs the
-  narrow amendment/transposition of only the process isolation, reservation,
-  failure, retry/join, and re-validation rules above.
+- This ADPR does not itself amend accepted ADR 0035. Issue #338 / Draft PR #339
+  now govern the narrow amendment/transposition of only the process isolation,
+  reservation, failure, retry/join, and re-validation rules above.
 - Runtime correction of PR #335 remains blocked until that ADR amendment is
   accepted and a separately authorized implementation scope resumes it.
 - Merge remains owner-only.
@@ -516,7 +516,7 @@ No additional architectural ambiguity is identified.
   `c26a1dae9f4635f51fd70c65748c760fcb335808`
 - Preparation merge: PR #337 at
   `0cea851917afd9579aeaf3bb6261a8177d1e8153`
-- ADR amendment drafting: Issue #338
+- ADR amendment drafting: Issue #338 / Draft PR #339
 - Governing accepted ADRs: 0031, 0033, 0034, and 0035
-- ADR amendment: Proposed under Issue #338; not yet accepted
+- ADR amendment: Proposed under Issue #338 / Draft PR #339; not yet accepted
 - Runtime implementation: not authorized by this record
