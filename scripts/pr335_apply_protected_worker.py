@@ -95,7 +95,7 @@ def main() -> None:
     text = replace_function(
         text,
         "test_processing_allowed_with_response_content_denied_persists_no_content",
-        '''def test_processing_allowed_with_response_content_denied_requires_protected_worker(
+        """def test_processing_allowed_with_response_content_denied_requires_protected_worker(
     service: ModelAdapterService,
     repository: ModelAdapterPersistenceRepository,
 ) -> None:
@@ -109,12 +109,12 @@ def main() -> None:
 
     assert transport.sends == []
     values = persisted_scalars(Path(repository.path))
-    assert not any(isinstance(value, str) and "protected source content" in value for value in values)''',
+    assert not any(isinstance(value, str) and "protected source content" in value for value in values)""",
     )
     text = replace_function(
         text,
         "test_denied_response_durability_does_not_fabricate_a_substitute_identity",
-        '''def test_denied_response_durability_without_worker_creates_no_response_artifact(
+        """def test_denied_response_durability_without_worker_creates_no_response_artifact(
     service: ModelAdapterService,
     repository: ModelAdapterPersistenceRepository,
 ) -> None:
@@ -126,12 +126,12 @@ def main() -> None:
         dispatch(service, prepared, transport, authority=authority)
 
     assert transport.sends == []
-    assert repository.strict_known_response_artifact(prepared.attempt.attempt_id, fixture.later(30)) is None''',
+    assert repository.strict_known_response_artifact(prepared.attempt.attempt_id, fixture.later(30)) is None""",
     )
     text = replace_function(
         text,
         "test_later_authority_cannot_be_substituted_into_a_historical_response_replay",
-        '''def test_transient_historical_response_cannot_be_created_without_protected_worker(
+        """def test_transient_historical_response_cannot_be_created_without_protected_worker(
     service: ModelAdapterService,
     repository: ModelAdapterPersistenceRepository,
 ) -> None:
@@ -147,12 +147,12 @@ def main() -> None:
     permissive = fixture.attempt_authority(cutoff=fixture.later(60))
     assert permissive is not None
     assert transport.sends == []
-    assert repository.strict_known_response_artifact(prepared.attempt.attempt_id, fixture.later(90)) is None''',
+    assert repository.strict_known_response_artifact(prepared.attempt.attempt_id, fixture.later(90)) is None""",
     )
     text = replace_function(
         text,
         "test_the_dispatch_outcome_never_carries_raw_response_bytes_past_the_boundary",
-        '''def test_direct_transient_dispatch_never_exposes_raw_response_bytes_without_worker(
+        """def test_direct_transient_dispatch_never_exposes_raw_response_bytes_without_worker(
     service: ModelAdapterService,
 ) -> None:
     denying = fixture.attempt_authority(request_content=False)
@@ -163,7 +163,7 @@ def main() -> None:
     with pytest.raises(ModelAdapterAuthorityError, match="accepted OS-protected worker"):
         dispatch(service, prepared, transport, authority=denying)
 
-    assert transport.sends == []''',
+    assert transport.sends == []""",
     )
     adapter_tests.write_text(text)
 
