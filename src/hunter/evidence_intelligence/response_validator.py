@@ -954,7 +954,7 @@ class DeterministicJsonValidationRuntime:
             decoded = json.loads(
                 response_text,
                 parse_float=Decimal,
-                parse_int=Decimal,
+                parse_int=_parse_json_integer,
                 parse_constant=_reject_nonstandard_json_constant,
             )
         except InvalidOperation as error:
@@ -1725,7 +1725,7 @@ def _parse_output_contract(
         parsed = json.loads(
             value,
             parse_float=Decimal,
-            parse_int=Decimal,
+            parse_int=_parse_json_integer,
             parse_constant=_reject_nonstandard_json_constant,
         )
     except (TypeError, InvalidOperation, json.JSONDecodeError, RecursionError, ValueError) as error:
@@ -1756,6 +1756,19 @@ def _parse_output_contract(
 
 def _reject_nonstandard_json_constant(value: str) -> None:
     raise ValueError(f"non-standard JSON constant is forbidden: {value}")
+
+
+def _parse_json_integer(value: str) -> int | Decimal:
+    """Parse JSON integers without depending on Python's bounded int conversion."""
+    digits = value[1:] if value.startswith("-") else value
+    if len(digits) <= 256:
+        return int(value)
+    try:
+        return Decimal(value)
+    except InvalidOperation as error:
+        raise ResponseValidationRuleUnavailable(
+            "JSON integer exceeds the exact installed numeric capability"
+        ) from error
 
 
 def _json_nesting_exceeds(value: str, maximum_depth: int) -> bool:
