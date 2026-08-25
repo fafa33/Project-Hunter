@@ -51,14 +51,14 @@ def main() -> None:
     )
     text = replace_once(
         text,
-        '''                                  "response_capture_identity": capture_identity,\n                                  "validation_ready": ready,\n''',
-        '''                                  "response_capture_identity": capture_identity,\n                                  "capture_cutoff": result.outcome.recorded_at.isoformat(),\n                                  "validation_ready": ready,\n''',
+        '"response_capture_identity": capture_identity,\n',
+        '"response_capture_identity": capture_identity,\n                                  "capture_cutoff": result.outcome.recorded_at.isoformat(),\n',
         "protected dispatch capture cutoff",
     )
     text = replace_once(
         text,
-        '''                  capture = repository.strict_known_response_capture(capture_identity, validator._foundation._clock.now())  # noqa: SLF001\n''',
-        '''                  cutoff_raw = result.get("capture_cutoff")\n                  if not isinstance(cutoff_raw, str) or not cutoff_raw:\n                      raise _access_error("protected dispatch omitted capture cutoff")\n                  try:\n                      cutoff = datetime.fromisoformat(cutoff_raw)\n                  except ValueError as error:\n                      raise _access_error("protected dispatch capture cutoff is malformed") from error\n                  if cutoff.tzinfo is None:\n                      raise _access_error("protected dispatch capture cutoff is naive")\n                  capture = repository.strict_known_response_capture(capture_identity, cutoff)\n''',
+        "validator._foundation._clock.now()",
+        'datetime.fromisoformat(str(result["capture_cutoff"]))',
         "strict-known capture cutoff",
     )
     worker.write_text(text)
