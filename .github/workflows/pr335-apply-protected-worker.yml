@@ -28,8 +28,10 @@ jobs:
         run: python -m pytest -q tests/test_response_validator_phase_b.py
       - name: Adjacent Phase A B boundaries
         run: python -m pytest -q tests/test_response_validator_phase_a.py tests/test_response_validator_phase_b.py tests/test_model_adapter_phase_a.py tests/test_model_adapter_phase_b.py
-      - name: Static checks
+      - name: Normalize and validate touched Python
         run: |
+          python -m ruff check --fix src/hunter/evidence_intelligence/transient_worker.py src/hunter/evidence_intelligence/model_adapter.py src/hunter/evidence_intelligence/response_validator.py src/hunter/evidence_intelligence/response_validator_persistence.py tests/test_response_validator_phase_b.py tests/test_model_adapter_phase_b.py
+          python -m black src/hunter/evidence_intelligence/transient_worker.py src/hunter/evidence_intelligence/model_adapter.py src/hunter/evidence_intelligence/response_validator.py src/hunter/evidence_intelligence/response_validator_persistence.py tests/test_response_validator_phase_b.py tests/test_model_adapter_phase_b.py
           python -m ruff check src/hunter/evidence_intelligence/transient_worker.py src/hunter/evidence_intelligence/model_adapter.py src/hunter/evidence_intelligence/response_validator.py src/hunter/evidence_intelligence/response_validator_persistence.py tests/test_response_validator_phase_b.py tests/test_model_adapter_phase_b.py
           python -m black --check src/hunter/evidence_intelligence/transient_worker.py src/hunter/evidence_intelligence/model_adapter.py src/hunter/evidence_intelligence/response_validator.py src/hunter/evidence_intelligence/response_validator_persistence.py tests/test_response_validator_phase_b.py tests/test_model_adapter_phase_b.py
           git diff --check
