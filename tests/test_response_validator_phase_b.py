@@ -474,6 +474,47 @@ def test_unrepresentable_json_number_maps_to_resource_rule_unavailable(tmp_path:
     assert result.outcome.findings[0].reason_code == "EXECUTABLE_VALIDATION_RULE_UNAVAILABLE"
 
 
+def test_integral_decimal_satisfies_json_schema_integer(tmp_path: Path) -> None:
+    harness = fixture.make_harness(
+        tmp_path,
+        output_contract='{"type":"integer"}',
+        raw_response="1.0",
+        profile_overrides={"required_dimensions": ("SCHEMA",)},
+    )
+
+    assert _execute(harness).outcome.state is ValidationState.VALID
+
+
+@pytest.mark.parametrize("raw_response", ("1.5", "true"))
+def test_non_integral_decimal_and_boolean_do_not_satisfy_json_schema_integer(
+    tmp_path: Path,
+    raw_response: str,
+) -> None:
+    harness = fixture.make_harness(
+        tmp_path,
+        output_contract='{"type":"integer"}',
+        raw_response=raw_response,
+        profile_overrides={"required_dimensions": ("SCHEMA",)},
+    )
+
+    assert _execute(harness).outcome.state is ValidationState.INVALID_SCHEMA
+
+
+def test_huge_valid_json_integer_is_lossless_not_invalid_syntax(tmp_path: Path) -> None:
+    raw_response = "9" * 5000
+    harness = fixture.make_harness(
+        tmp_path,
+        raw_response=raw_response,
+        output_contract='{"type":"integer"}',
+        profile_overrides={"required_dimensions": ("SYNTAX", "SCHEMA")},
+    )
+
+    result = _execute(harness)
+
+    assert result.outcome.state is ValidationState.VALID
+    assert all(finding.state is not ValidationState.INVALID_SYNTAX for finding in result.outcome.findings)
+
+
 @pytest.mark.parametrize(
     ("output_contract", "raw_response"),
     (

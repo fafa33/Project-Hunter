@@ -954,6 +954,7 @@ class DeterministicJsonValidationRuntime:
             decoded = json.loads(
                 response_text,
                 parse_float=Decimal,
+                parse_int=Decimal,
                 parse_constant=_reject_nonstandard_json_constant,
             )
         except InvalidOperation as error:
@@ -1724,6 +1725,7 @@ def _parse_output_contract(
         parsed = json.loads(
             value,
             parse_float=Decimal,
+            parse_int=Decimal,
             parse_constant=_reject_nonstandard_json_constant,
         )
     except (TypeError, InvalidOperation, json.JSONDecodeError, RecursionError, ValueError) as error:
@@ -1945,7 +1947,13 @@ def _matches_json_type(value: Any, declared: str) -> bool:
     if declared == "string":
         return isinstance(value, str)
     if declared == "integer":
-        return isinstance(value, int) and not isinstance(value, bool)
+        return (
+            isinstance(value, int)
+            and not isinstance(value, bool)
+            or isinstance(value, Decimal)
+            and value.is_finite()
+            and value == value.to_integral_value()
+        )
     if declared == "number":
         return isinstance(value, (int, float, Decimal)) and not isinstance(value, bool)
     if declared == "boolean":
