@@ -1225,6 +1225,11 @@ class ResponseValidator:
         try:
             rederived = self._canonical_authorization_inputs(inputs.allocation)
         except _AuthorizationRefusalSignal as signal:
+            if signal.state is ValidationState.INPUT_UNAVAILABLE:
+                return self._presemantic_execution_refusal(
+                    canonical,
+                    reason_code=signal.reason_code,
+                )
             raise ResponseValidationExecutionError(
                 f"authorization authority no longer rederives at its historical cutoff: {signal.reason_code}"
             ) from signal
@@ -1253,10 +1258,11 @@ class ResponseValidator:
                     transport_identity=rederived.response_artifact.transport_identity,
                     transport_version=rederived.response_artifact.transport_version,
                 )
-            except TransientResponseAccessError as error:
-                raise ResponseValidationExecutionError(
-                    "transient response lease was rejected before execution"
-                ) from error
+            except TransientResponseAccessError:
+                return self._presemantic_execution_refusal(
+                    canonical,
+                    reason_code="TRANSIENT_RESPONSE_ACCESS_UNAVAILABLE",
+                )
 
         try:
             findings = self._runtime.evaluate(
@@ -1299,6 +1305,36 @@ class ResponseValidator:
             validation_event_id=canonical.coordinates.validation_event_id,
             state=state,
             authorization_id=canonical.authorization_id,
+        )
+        result = ResponseValidationExecutionResult(outcome=outcome, attestation=attestation)
+        self._execution_results[canonical.authorization_id] = result
+        return result
+
+    def _presemantic_execution_refusal(
+        self,
+        canonical: ResponseValidationAuthorization,
+        *,
+        reason_code: str,
+    ) -> ResponseValidationExecutionResult:
+        finding = ResponseValidationFinding(
+            "INPUT_AVAILABILITY",
+            ValidationState.INPUT_UNAVAILABLE,
+            reason_code,
+        )
+        outcome = ResponseSemanticValidationOutcome(
+            authorization_id=canonical.authorization_id,
+            coordinates=canonical.coordinates,
+            state=ValidationState.INPUT_UNAVAILABLE,
+            findings=(finding,),
+            executed=False,
+        )
+        attestation = ResponseValidationAttestation(
+            _ATTESTATION_MINT,
+            kind=ValidationAttestationKind.REFUSAL,
+            decision_id=outcome.semantic_outcome_id,
+            validation_event_id=canonical.coordinates.validation_event_id,
+            state=ValidationState.INPUT_UNAVAILABLE,
+            authorization_id=None,
         )
         result = ResponseValidationExecutionResult(outcome=outcome, attestation=attestation)
         self._execution_results[canonical.authorization_id] = result

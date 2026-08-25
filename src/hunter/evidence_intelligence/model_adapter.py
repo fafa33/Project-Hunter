@@ -39,7 +39,6 @@ import json
 import os
 import re
 import socket
-import tempfile
 import threading
 from array import array
 from collections.abc import Mapping, Sequence
@@ -454,17 +453,27 @@ class TransientResponseHandoffVault:
         )
         payload = _canonical_json(asdict(envelope))
         with self.__lock:
+            read_descriptor, write_descriptor = os.pipe()
             try:
-                with tempfile.TemporaryFile() as response_file:
-                    response_file.write(entry.content.encode("utf-8"))
-                    response_file.flush()
-                    response_file.seek(0)
-                    sent = producer_endpoint.sendmsg(
-                        [payload],
-                        [(socket.SOL_SOCKET, socket.SCM_RIGHTS, array("i", [response_file.fileno()]))],
-                    )
+                encoded = entry.content.encode("utf-8")
+                offset = 0
+                while offset < len(encoded):
+                    written = os.write(write_descriptor, encoded[offset:])
+                    if written <= 0:
+                        raise OSError("transient response pipe write made no progress")
+                    offset += written
+                os.close(write_descriptor)
+                write_descriptor = -1
+                sent = producer_endpoint.sendmsg(
+                    [payload],
+                    [(socket.SOL_SOCKET, socket.SCM_RIGHTS, array("i", [read_descriptor]))],
+                )
             except (OSError, UnicodeError) as error:
                 raise TransientResponseAccessError("transient response handoff failed") from error
+            finally:
+                if write_descriptor >= 0:
+                    os.close(write_descriptor)
+                os.close(read_descriptor)
             if sent != len(payload):
                 raise TransientResponseAccessError("transient response handoff frame was incomplete")
 

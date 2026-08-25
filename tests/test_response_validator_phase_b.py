@@ -672,6 +672,33 @@ def test_transient_reservation_survives_validator_restart_and_body_loss(tmp_path
     )
 
 
+def test_reserved_transient_body_loss_before_execute_returns_input_unavailable(tmp_path: Path) -> None:
+    harness = fixture.make_harness(tmp_path, transient=True)
+    authorization = _authorize(harness)
+    consumer = harness.validator._ResponseValidator__transient_response_consumer  # noqa: SLF001
+    coordinates = authorization.coordinates
+    response_artifact = harness.dispatch_result.response_artifact
+    assert response_artifact is not None
+    consumer.discard_authorized(
+        response_capture_identity=coordinates.response_capture_identity,
+        attempt_id=coordinates.attempt_id,
+        handoff_id=coordinates.handoff_id,
+        outcome_id=coordinates.outcome_id,
+        execution_profile_identity=coordinates.execution_profile_identity,
+        response_protocol_identity=response_artifact.response_protocol_identity,
+        response_protocol_version=response_artifact.response_protocol_version,
+        transport_identity=response_artifact.transport_identity,
+        transport_version=response_artifact.transport_version,
+    )
+
+    result = harness.validator.execute(authorization)
+
+    assert result.outcome.state is ValidationState.INPUT_UNAVAILABLE
+    assert result.outcome.executed is False
+    assert result.attestation.kind is ValidationAttestationKind.REFUSAL
+    assert result.outcome.findings[0].reason_code == "TRANSIENT_RESPONSE_ACCESS_UNAVAILABLE"
+
+
 def test_transient_response_is_consumed_once_without_persistence_or_logging(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
