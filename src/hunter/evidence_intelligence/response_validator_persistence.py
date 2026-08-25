@@ -114,9 +114,7 @@ class ResponseValidatorPersistenceRepository:
         installer: Callable[[object], None],
     ) -> None:
         """Install an opaque reservation-write capability into an exact ResponseValidator."""
-        expected_installer = vars(ResponseValidator)[
-            "_ResponseValidator__install_reservation_persistence_capability"
-        ]
+        expected_installer = vars(ResponseValidator)["_ResponseValidator__install_reservation_persistence_capability"]
         if (
             type(owner) is not ResponseValidator
             or getattr(getattr(owner, "_foundation", None), "_repository", None) is not self
@@ -365,9 +363,7 @@ class ResponseValidatorPersistenceRepository:
                     (response_capture_identity, validation_event_id),
                 )
             except sqlite3.IntegrityError as error:
-                raise ResponseValidatorPersistenceConflict(
-                    "transient capture reservation identity conflict"
-                ) from error
+                raise ResponseValidatorPersistenceConflict("transient capture reservation identity conflict") from error
             return True
 
     def transient_capture_owner(self, response_capture_identity: str) -> str | None:

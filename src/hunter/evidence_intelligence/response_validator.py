@@ -1102,9 +1102,7 @@ class ResponseValidator:
 
     def __install_reservation_persistence_capability(self, capability: object) -> None:
         if self.__reservation_persistence_capability is not None:
-            raise ResponseValidationAuthorizationError(
-                "transient reservation persistence capability is immutable"
-            )
+            raise ResponseValidationAuthorizationError("transient reservation persistence capability is immutable")
         self.__reservation_persistence_capability = capability
 
     def __install_transient_response_consumer(self, consumer: Any) -> None:

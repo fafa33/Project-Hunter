@@ -603,9 +603,7 @@ def test_concurrent_authorization_retries_join_one_canonical_grant(tmp_path: Pat
 
 def test_transient_capture_first_canonical_event_wins_durable_reservation(tmp_path: Path) -> None:
     harness = fixture.make_harness(tmp_path, transient=True)
-    harness.foundation._clock = fixture.SequenceClock(
-        fixture.VALIDATION_CUTOFF + timedelta(seconds=1)
-    )  # noqa: SLF001
+    harness.foundation._clock = fixture.SequenceClock(fixture.VALIDATION_CUTOFF + timedelta(seconds=1))  # noqa: SLF001
     revalidation = harness.foundation.allocate_revalidation(
         predecessor_validation_event_id=harness.allocation.validation_event_id
     )
@@ -627,9 +625,7 @@ def test_transient_capture_first_canonical_event_wins_durable_reservation(tmp_pa
 
 def test_transient_capture_reservation_is_first_owner_not_base_priority(tmp_path: Path) -> None:
     harness = fixture.make_harness(tmp_path, transient=True)
-    harness.foundation._clock = fixture.SequenceClock(
-        fixture.VALIDATION_CUTOFF + timedelta(seconds=1)
-    )  # noqa: SLF001
+    harness.foundation._clock = fixture.SequenceClock(fixture.VALIDATION_CUTOFF + timedelta(seconds=1))  # noqa: SLF001
     revalidation = harness.foundation.allocate_revalidation(
         predecessor_validation_event_id=harness.allocation.validation_event_id
     )
