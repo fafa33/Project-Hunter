@@ -36,7 +36,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+import socket
+import tempfile
+import threading
+from array import array
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
@@ -251,6 +256,10 @@ class ResponseCaptureBlocked(ModelAdapterError):
     """Raised when captured response content may not become durable evidence."""
 
 
+class TransientResponseAccessError(ModelAdapterError):
+    """Raised when transient response access is forged, mismatched, or reused."""
+
+
 class PreDispatchRefused(ModelAdapterError):
     """Raised when the adapter refuses before any attempt becomes dispatchable.
 
@@ -263,6 +272,201 @@ class PreDispatchRefused(ModelAdapterError):
         super().__init__(f"{refusal}: {reason}")
         self.refusal: PreDispatchRefusal = refusal
         self.reason = reason
+
+
+@dataclass(frozen=True)
+class _TransientResponseEntry:
+    response_capture_identity: str
+    attempt_id: str
+    handoff_id: str
+    outcome_id: str
+    execution_profile_identity: str
+    response_protocol_identity: str
+    response_protocol_version: str
+    transport_identity: str
+    transport_version: str
+    content: str = field(repr=False, compare=False)
+
+
+@dataclass(frozen=True)
+class _TransientResponseEnvelope:
+    response_capture_identity: str
+    attempt_id: str
+    handoff_id: str
+    outcome_id: str
+    execution_profile_identity: str
+    response_protocol_identity: str
+    response_protocol_version: str
+    transport_identity: str
+    transport_version: str
+
+
+class _TransientResponseConsumer:
+    """Validator-only receiver for anonymous, descriptor-backed response bytes."""
+
+    def __init__(self, endpoint: socket.socket) -> None:
+        self.__endpoint = endpoint
+        self.__entries: dict[str, tuple[_TransientResponseEnvelope, int]] = {}
+        self.__lock = threading.Lock()
+
+    def available_for_validation(self, **coordinates: str) -> bool:
+        with self.__lock:
+            self.__receive_until(coordinates["response_capture_identity"], block=False)
+            item = self.__entries.get(coordinates["response_capture_identity"])
+            return item is not None and self.__matches(item[0], coordinates)
+
+    def consume_authorized(self, **coordinates: str) -> str:
+        with self.__lock:
+            capture_identity = coordinates["response_capture_identity"]
+            self.__receive_until(capture_identity)
+            item = self.__entries.get(capture_identity)
+            if item is None or not self.__matches(item[0], coordinates):
+                raise TransientResponseAccessError("transient response lineage does not match authorization")
+            del self.__entries[capture_identity]
+            descriptor = item[1]
+        try:
+            with os.fdopen(descriptor, "rb") as response_file:
+                return response_file.read().decode("utf-8")
+        except (OSError, UnicodeError) as error:
+            raise TransientResponseAccessError("transient response material is unreadable") from error
+
+    def discard_authorized(self, **coordinates: str) -> None:
+        with self.__lock:
+            response_capture_identity = coordinates["response_capture_identity"]
+            self.__receive_until(response_capture_identity, block=False)
+            item = self.__entries.get(response_capture_identity)
+            if item is None or not self.__matches(item[0], coordinates):
+                return
+            del self.__entries[response_capture_identity]
+        if item is not None:
+            os.close(item[1])
+
+    def __receive_until(self, response_capture_identity: str, *, block: bool = True) -> bool:
+        while response_capture_identity not in self.__entries:
+            descriptor_items = array("i")
+            try:
+                payload, ancillary, flags, _address = self.__endpoint.recvmsg(
+                    16_384,
+                    socket.CMSG_SPACE(descriptor_items.itemsize),
+                    0 if block else socket.MSG_DONTWAIT,
+                )
+            except BlockingIOError:
+                return False
+            except OSError as error:
+                raise TransientResponseAccessError("transient response handoff is unavailable") from error
+            descriptors: list[int] = []
+            for level, kind, data in ancillary:
+                if level == socket.SOL_SOCKET and kind == socket.SCM_RIGHTS:
+                    received = array("i")
+                    received.frombytes(data[: len(data) - (len(data) % received.itemsize)])
+                    descriptors.extend(received)
+            if flags & (socket.MSG_TRUNC | socket.MSG_CTRUNC) or len(descriptors) != 1:
+                for descriptor in descriptors:
+                    os.close(descriptor)
+                raise TransientResponseAccessError("transient response handoff frame is malformed")
+            descriptor = descriptors[0]
+            try:
+                decoded = json.loads(payload.decode("utf-8"))
+                envelope = _TransientResponseEnvelope(**decoded)
+            except (TypeError, ValueError, UnicodeError, json.JSONDecodeError) as error:
+                os.close(descriptor)
+                raise TransientResponseAccessError("transient response handoff metadata is malformed") from error
+            if envelope.response_capture_identity in self.__entries:
+                os.close(descriptor)
+                raise TransientResponseAccessError("transient response capture is already pending")
+            self.__entries[envelope.response_capture_identity] = (envelope, descriptor)
+        return True
+
+    @staticmethod
+    def __matches(entry: _TransientResponseEnvelope, coordinates: Mapping[str, str]) -> bool:
+        return all(getattr(entry, name) == value for name, value in coordinates.items())
+
+
+class TransientResponseHandoffVault:
+    """Adapter-only sender half of the single-use ADR 0035 transient handoff."""
+
+    def __init__(self) -> None:
+        self.__producer_endpoint: socket.socket | None = None
+        self.__model_adapter_bound = False
+        self.__model_adapter_capability: object | None = None
+        self.__response_validator_bound = False
+        self.__lock = threading.Lock()
+
+    def _bind_model_adapter(self, owner: object, installer: Any) -> None:
+        expected = vars(ModelAdapterService)["_ModelAdapterService__install_transient_handoff_capability"]
+        if (
+            type(owner) is not ModelAdapterService
+            or getattr(owner, "_transient_response_vault", None) is not self
+            or getattr(installer, "__self__", None) is not owner
+            or getattr(installer, "__func__", None) is not expected
+            or self.__model_adapter_bound
+        ):
+            raise TransientResponseAccessError("transient handoff producer owner is not canonical")
+        capability = object()
+        self.__model_adapter_bound = True
+        self.__model_adapter_capability = capability
+        installer(capability)
+
+    def _bind_response_validator(self, owner: object, installer: Any) -> None:
+        from hunter.evidence_intelligence.response_validator import ResponseValidator
+
+        expected = vars(ResponseValidator)["_ResponseValidator__install_transient_response_consumer"]
+        if (
+            type(owner) is not ResponseValidator
+            or getattr(owner, "_transient_response_vault", None) is not self
+            or getattr(installer, "__self__", None) is not owner
+            or getattr(installer, "__func__", None) is not expected
+            or self.__response_validator_bound
+            or self.__producer_endpoint is not None
+        ):
+            raise TransientResponseAccessError("transient handoff consumer owner is not canonical")
+        producer_endpoint, consumer_endpoint = socket.socketpair(socket.AF_UNIX, socket.SOCK_DGRAM)
+        producer_endpoint.set_inheritable(False)
+        consumer_endpoint.set_inheritable(False)
+        consumer = _TransientResponseConsumer(consumer_endpoint)
+        try:
+            installer(consumer)
+        except Exception:
+            producer_endpoint.close()
+            consumer_endpoint.close()
+            raise
+        self.__producer_endpoint = producer_endpoint
+        self.__response_validator_bound = True
+
+    def _deposit_authorized(self, capability: object | None, *, entry: _TransientResponseEntry) -> None:
+        if capability is None or capability is not self.__model_adapter_capability:
+            raise TransientResponseAccessError("transient response deposit requires Model Adapter authority")
+        if not self.__response_validator_bound:
+            raise TransientResponseAccessError("transient response handoff has no canonical ResponseValidator owner")
+        producer_endpoint = self.__producer_endpoint
+        if producer_endpoint is None:
+            raise TransientResponseAccessError("transient response producer endpoint is unavailable")
+        envelope = _TransientResponseEnvelope(
+            response_capture_identity=entry.response_capture_identity,
+            attempt_id=entry.attempt_id,
+            handoff_id=entry.handoff_id,
+            outcome_id=entry.outcome_id,
+            execution_profile_identity=entry.execution_profile_identity,
+            response_protocol_identity=entry.response_protocol_identity,
+            response_protocol_version=entry.response_protocol_version,
+            transport_identity=entry.transport_identity,
+            transport_version=entry.transport_version,
+        )
+        payload = _canonical_json(asdict(envelope))
+        with self.__lock:
+            try:
+                with tempfile.TemporaryFile() as response_file:
+                    response_file.write(entry.content.encode("utf-8"))
+                    response_file.flush()
+                    response_file.seek(0)
+                    sent = producer_endpoint.sendmsg(
+                        [payload],
+                        [(socket.SOL_SOCKET, socket.SCM_RIGHTS, array("i", [response_file.fileno()]))],
+                    )
+            except (OSError, UnicodeError) as error:
+                raise TransientResponseAccessError("transient response handoff failed") from error
+            if sent != len(payload):
+                raise TransientResponseAccessError("transient response handoff frame was incomplete")
 
 
 def _canonical_json(value: object) -> bytes:
@@ -676,10 +880,10 @@ class ModelAttemptOutcomeRecord:
 class ModelDispatchOutcome:
     """The result of one authorized Phase B dispatch.
 
-    Deliberately carries no raw transport result. Response content leaves the
-    adapter only through the governed `ProviderResponseArtifact`, so a caller
-    cannot receive bytes whose durability Source Handling denied and persist them
-    itself. Governed provider status metadata reaches the caller on the artifact.
+    Deliberately carries no raw transport result or transient byte capability.
+    Governed provider status metadata reaches the caller on the artifact; any
+    policy-non-retained content moves only through the instance-bound handoff
+    shared by the exact Model Adapter and ResponseValidator owners.
     """
 
     outcome: ModelAttemptOutcomeRecord
@@ -941,14 +1145,27 @@ class ModelAdapterService:
         *,
         dispatch_seam: NoNetworkDispatchSeam | None = None,
         transport_endpoints: Mapping[str, str] | None = None,
+        transient_response_vault: TransientResponseHandoffVault | None = None,
     ) -> None:
         self._repository = repository
         self._dispatch_seam = dispatch_seam or NoNetworkDispatchSeam()
+        self._transient_response_vault = transient_response_vault
+        self.__transient_handoff_capability: object | None = None
+        if transient_response_vault is not None:
+            transient_response_vault._bind_model_adapter(  # noqa: SLF001 - capability installation boundary
+                self,
+                self.__install_transient_handoff_capability,
+            )
         # Endpoint URLs are deployment configuration keyed by the profile's own
         # endpoint-class identity, not a selection surface: the profile names
         # exactly one class and the adapter looks up exactly that one. An absent
         # entry fails closed rather than falling back to a default endpoint.
         self._transport_endpoints: Mapping[str, str] = dict(transport_endpoints or {})
+
+    def __install_transient_handoff_capability(self, capability: object) -> None:
+        if self.__transient_handoff_capability is not None:
+            raise TransientResponseAccessError("transient handoff producer capability is immutable")
+        self.__transient_handoff_capability = capability
 
     @property
     def dispatch_seam(self) -> NoNetworkDispatchSeam:
@@ -1642,6 +1859,32 @@ class ModelAdapterService:
                 handoff_id=handoff_id,
                 execution_evidence=result.execution_evidence if result is not None else "UNKNOWN",
                 cause=error,
+            )
+
+        if (
+            outcome == "SUCCEEDED_TRANSPORT"
+            and response_artifact is not None
+            and response_artifact.state == "RESPONSE_EVIDENCE_UNAVAILABLE_BY_POLICY"
+            and result is not None
+            and result.response_text is not None
+            and response_content_credential_risk(result.response_text) is None
+            and handoff_id is not None
+            and self._transient_response_vault is not None
+        ):
+            self._transient_response_vault._deposit_authorized(  # noqa: SLF001 - capability-checked handoff
+                self.__transient_handoff_capability,
+                entry=_TransientResponseEntry(
+                    response_capture_identity=response_artifact.response_artifact_identity,
+                    attempt_id=attempt.attempt_id,
+                    handoff_id=handoff_id,
+                    outcome_id=record.outcome_id,
+                    execution_profile_identity=profile.profile_identity,
+                    response_protocol_identity=result.response_protocol_identity,
+                    response_protocol_version=result.response_protocol_version,
+                    transport_identity=result.transport_identity,
+                    transport_version=result.transport_version,
+                    content=result.response_text,
+                ),
             )
 
         return ModelDispatchOutcome(outcome=record, response_artifact=response_artifact)

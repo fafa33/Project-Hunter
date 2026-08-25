@@ -563,6 +563,26 @@ class ModelAdapterPersistenceRepository:
         evidence_payload = dict(json.loads(payload_json)["request_evidence"])
         return ProviderRequestEvidence(**evidence_payload)
 
+    def strict_known_handoff(self, handoff_id: str, cutoff: datetime) -> ModelHandoffRecord | None:
+        """Read the exact canonical handoff only when known at ``cutoff``."""
+        _aware("cutoff", cutoff)
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT payload_hash, payload_json
+                FROM model_handoff_records
+                WHERE handoff_id = ? AND recorded_at <= ?
+                LIMIT 1
+                """,
+                (handoff_id, cutoff.astimezone(UTC).isoformat()),
+            ).fetchone()
+        if row is None:
+            return None
+        payload_json = str(row["payload_json"])
+        if _sha256(payload_json) != str(row["payload_hash"]):
+            raise ModelAdapterPersistenceCorruption("persisted handoff hash mismatch")
+        return _handoff_from_payload(json.loads(payload_json))
+
     def handoff_consumed_at(self, handoff_id: str) -> datetime | None:
         with self._connect() as connection:
             row = connection.execute(
@@ -715,6 +735,68 @@ class ModelAdapterPersistenceRepository:
             raise ModelAdapterPersistenceCorruption("persisted response artifact hash mismatch")
         return _response_artifact_from_payload(json.loads(payload_json))
 
+    def strict_known_response_capture(
+        self,
+        response_capture_identity: str,
+        cutoff: datetime,
+    ) -> tuple[ProviderResponseArtifact, ModelAttemptOutcomeRecord] | None:
+        """Resolve one exact capture and the exact authoritative outcome that owns it.
+
+        ADR 0035 allocates a validation event against a response-capture identity,
+        not against a caller-selected attempt.  This lookup starts from that exact
+        identity and rejects a capture whose linked outcome is no longer the
+        strict-known authoritative head at the validation cutoff.
+        """
+        _aware("cutoff", cutoff)
+        moment = cutoff.astimezone(UTC).isoformat()
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT response_artifact_id, attempt_id, outcome_id,
+                       payload_hash, payload_json
+                FROM provider_response_artifacts
+                WHERE response_artifact_id = ? AND recorded_at <= ?
+                LIMIT 1
+                """,
+                (response_capture_identity, moment),
+            ).fetchone()
+            if row is None:
+                return None
+            outcome_row = connection.execute(
+                """
+                SELECT payload_hash, payload_json
+                FROM model_attempt_outcome_records
+                WHERE outcome_id = ? AND recorded_at <= ?
+                LIMIT 1
+                """,
+                (str(row["outcome_id"]), moment),
+            ).fetchone()
+        if outcome_row is None:
+            raise ModelAdapterPersistenceCorruption("response capture outcome is unavailable at cutoff")
+
+        response_payload = str(row["payload_json"])
+        if _sha256(response_payload) != str(row["payload_hash"]):
+            raise ModelAdapterPersistenceCorruption("persisted response artifact hash mismatch")
+        response = _response_artifact_from_payload(json.loads(response_payload))
+        if response.response_artifact_identity != str(row["response_artifact_id"]):
+            raise ModelAdapterPersistenceCorruption("persisted response capture identity mismatch")
+
+        outcome_payload = str(outcome_row["payload_json"])
+        if _sha256(outcome_payload) != str(outcome_row["payload_hash"]):
+            raise ModelAdapterPersistenceCorruption("persisted outcome hash mismatch")
+        outcome = _outcome_from_payload(json.loads(outcome_payload))
+        if outcome.outcome_id != str(row["outcome_id"]):
+            raise ModelAdapterPersistenceCorruption("response capture outcome identity mismatch")
+        if response.attempt_id != str(row["attempt_id"]) or outcome.attempt_id != response.attempt_id:
+            raise ModelAdapterPersistenceCorruption("response capture attempt lineage mismatch")
+
+        governing = self.authoritative_outcome(response.attempt_id, cutoff)
+        if governing is None or governing.outcome_id != outcome.outcome_id:
+            raise ModelAdapterPersistenceCorruption(
+                "response capture is not attached to the strict-known authoritative attempt outcome"
+            )
+        return response, outcome
+
     def attempt_exists(self, attempt_id: str) -> bool:
         with self._connect() as connection:
             row = connection.execute(
@@ -822,6 +904,14 @@ def _response_artifact_from_payload(payload: Mapping[str, Any]) -> ProviderRespo
     metadata = item.get("provider_status_metadata") or ()
     item["provider_status_metadata"] = tuple(tuple(entry) for entry in metadata)
     return ProviderResponseArtifact(**item)
+
+
+def _handoff_from_payload(payload: Mapping[str, Any]) -> ModelHandoffRecord:
+    item = dict(payload.get("handoff") or {})
+    item["attempt_cutoff"] = _parse_time(str(item["attempt_cutoff"]))
+    if item.get("expires_at") is not None:
+        item["expires_at"] = _parse_time(str(item["expires_at"]))
+    return ModelHandoffRecord(**item)
 
 
 def _attempt_from_payload(payload: Mapping[str, Any]) -> ModelAttemptRecord:
