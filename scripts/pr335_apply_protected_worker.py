@@ -14,6 +14,15 @@ def replace_once(text: str, old: str, new: str, label: str) -> str:
     return text.replace(old, new, 1)
 
 
+def replace_function(text: str, name: str, replacement: str) -> str:
+    start_marker = f"def {name}("
+    start = text.index(start_marker)
+    next_start = text.find("\ndef ", start + len(start_marker))
+    if next_start == -1:
+        raise RuntimeError(f"{name}: next function not found")
+    return text[:start] + replacement.rstrip() + "\n\n" + text[next_start + 1 :]
+
+
 def main() -> None:
     source = subprocess.check_output(
         ["git", "show", f"{SOURCE_COMMIT}:{SOURCE_PATH}"],
@@ -80,6 +89,83 @@ def main() -> None:
     if old in text:
         text = text.replace(old, new, 1)
     tests.write_text(text)
+
+    adapter_tests = Path("tests/test_model_adapter_phase_b.py")
+    text = adapter_tests.read_text()
+    text = replace_function(
+        text,
+        "test_processing_allowed_with_response_content_denied_persists_no_content",
+        '''def test_processing_allowed_with_response_content_denied_requires_protected_worker(
+    service: ModelAdapterService,
+    repository: ModelAdapterPersistenceRepository,
+) -> None:
+    authority = fixture.attempt_authority(request_content=False)
+    prepared = prepare(service, authority=authority)
+    body = '{"choices": [{"message": {"content": "protected source content echoed back"}}]}'
+    transport = fixture.FakeTransport(fixture.transport_result(response_text=body))
+
+    with pytest.raises(ModelAdapterAuthorityError, match="accepted OS-protected worker"):
+        dispatch(service, prepared, transport, authority=authority)
+
+    assert transport.sends == []
+    values = persisted_scalars(Path(repository.path))
+    assert not any(isinstance(value, str) and "protected source content" in value for value in values)''',
+    )
+    text = replace_function(
+        text,
+        "test_denied_response_durability_does_not_fabricate_a_substitute_identity",
+        '''def test_denied_response_durability_without_worker_creates_no_response_artifact(
+    service: ModelAdapterService,
+    repository: ModelAdapterPersistenceRepository,
+) -> None:
+    authority = fixture.attempt_authority(request_content=False)
+    prepared = prepare(service, authority=authority)
+    transport = fixture.FakeTransport(fixture.transport_result())
+
+    with pytest.raises(ModelAdapterAuthorityError, match="accepted OS-protected worker"):
+        dispatch(service, prepared, transport, authority=authority)
+
+    assert transport.sends == []
+    assert repository.strict_known_response_artifact(prepared.attempt.attempt_id, fixture.later(30)) is None''',
+    )
+    text = replace_function(
+        text,
+        "test_later_authority_cannot_be_substituted_into_a_historical_response_replay",
+        '''def test_transient_historical_response_cannot_be_created_without_protected_worker(
+    service: ModelAdapterService,
+    repository: ModelAdapterPersistenceRepository,
+) -> None:
+    denying = fixture.attempt_authority(request_content=False)
+    prepared = prepare(service, authority=denying)
+    transport = fixture.FakeTransport(
+        fixture.transport_result(response_text='{"choices": [{"text": "historical"}]}')
+    )
+
+    with pytest.raises(ModelAdapterAuthorityError, match="accepted OS-protected worker"):
+        dispatch(service, prepared, transport, authority=denying)
+
+    permissive = fixture.attempt_authority(cutoff=fixture.later(60))
+    assert permissive is not None
+    assert transport.sends == []
+    assert repository.strict_known_response_artifact(prepared.attempt.attempt_id, fixture.later(90)) is None''',
+    )
+    text = replace_function(
+        text,
+        "test_the_dispatch_outcome_never_carries_raw_response_bytes_past_the_boundary",
+        '''def test_direct_transient_dispatch_never_exposes_raw_response_bytes_without_worker(
+    service: ModelAdapterService,
+) -> None:
+    denying = fixture.attempt_authority(request_content=False)
+    prepared = prepare(service, authority=denying)
+    secret_ish = '{"choices": [{"message": {"content": "protected content the caller must not receive"}}]}'
+    transport = fixture.FakeTransport(fixture.transport_result(response_text=secret_ish))
+
+    with pytest.raises(ModelAdapterAuthorityError, match="accepted OS-protected worker"):
+        dispatch(service, prepared, transport, authority=denying)
+
+    assert transport.sends == []''',
+    )
+    adapter_tests.write_text(text)
 
 
 if __name__ == "__main__":
