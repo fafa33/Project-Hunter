@@ -7,6 +7,13 @@ SOURCE_COMMIT = "03fc330da15eb64451950977af849b3a0d184607"
 SOURCE_PATH = ".github/workflows/pr335-isolation-fix.yml"
 
 
+def replace_once(text: str, old: str, new: str, label: str) -> str:
+    count = text.count(old)
+    if count != 1:
+        raise RuntimeError(f"{label}: expected exactly one match, found {count}")
+    return text.replace(old, new, 1)
+
+
 def main() -> None:
     source = subprocess.check_output(
         ["git", "show", f"{SOURCE_COMMIT}:{SOURCE_PATH}"],
@@ -33,6 +40,28 @@ def main() -> None:
     shell_path = Path("/tmp/pr335-apply-protected-worker.sh")
     shell_path.write_text(shell)
     subprocess.run(["bash", str(shell_path)], check=True)
+
+    worker = Path("src/hunter/evidence_intelligence/transient_worker.py")
+    text = worker.read_text()
+    text = replace_once(
+        text,
+        "from dataclasses import dataclass, field\n",
+        "from dataclasses import dataclass, field\nfrom datetime import datetime\n",
+        "datetime import",
+    )
+    text = replace_once(
+        text,
+        '''                                  "response_capture_identity": capture_identity,\n                                  "validation_ready": ready,\n''',
+        '''                                  "response_capture_identity": capture_identity,\n                                  "capture_cutoff": result.outcome.recorded_at.isoformat(),\n                                  "validation_ready": ready,\n''',
+        "protected dispatch capture cutoff",
+    )
+    text = replace_once(
+        text,
+        '''                  capture = repository.strict_known_response_capture(capture_identity, validator._foundation._clock.now())  # noqa: SLF001\n''',
+        '''                  cutoff_raw = result.get("capture_cutoff")\n                  if not isinstance(cutoff_raw, str) or not cutoff_raw:\n                      raise _access_error("protected dispatch omitted capture cutoff")\n                  try:\n                      cutoff = datetime.fromisoformat(cutoff_raw)\n                  except ValueError as error:\n                      raise _access_error("protected dispatch capture cutoff is malformed") from error\n                  if cutoff.tzinfo is None:\n                      raise _access_error("protected dispatch capture cutoff is naive")\n                  capture = repository.strict_known_response_capture(capture_identity, cutoff)\n''',
+        "strict-known capture cutoff",
+    )
+    worker.write_text(text)
 
     tests = Path("tests/test_response_validator_phase_b.py")
     text = tests.read_text()
