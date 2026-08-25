@@ -601,6 +601,81 @@ def test_concurrent_authorization_retries_join_one_canonical_grant(tmp_path: Pat
     assert len({id(authorization) for authorization in authorizations}) == 1
 
 
+def test_transient_capture_first_canonical_event_wins_durable_reservation(tmp_path: Path) -> None:
+    harness = fixture.make_harness(tmp_path, transient=True)
+    harness.foundation._clock = fixture.SequenceClock(
+        fixture.VALIDATION_CUTOFF + timedelta(seconds=1)
+    )  # noqa: SLF001
+    revalidation = harness.foundation.allocate_revalidation(
+        predecessor_validation_event_id=harness.allocation.validation_event_id
+    )
+
+    base = harness.validator.authorize_event(harness.allocation)
+    competing = harness.validator.authorize_event(revalidation)
+
+    assert base.authorization is not None
+    assert competing.refusal is not None
+    assert competing.refusal.refusal.state is ValidationState.INPUT_UNAVAILABLE
+    assert competing.refusal.refusal.reason_code == "TRANSIENT_RESPONSE_CAPTURE_RESERVED_BY_OTHER_EVENT"
+    assert (
+        harness.validation_repository.transient_capture_owner(
+            harness.allocation.base_validation_key.response_capture_identity
+        )
+        == harness.allocation.validation_event_id
+    )
+
+
+def test_transient_capture_reservation_is_first_owner_not_base_priority(tmp_path: Path) -> None:
+    harness = fixture.make_harness(tmp_path, transient=True)
+    harness.foundation._clock = fixture.SequenceClock(
+        fixture.VALIDATION_CUTOFF + timedelta(seconds=1)
+    )  # noqa: SLF001
+    revalidation = harness.foundation.allocate_revalidation(
+        predecessor_validation_event_id=harness.allocation.validation_event_id
+    )
+
+    first = harness.validator.authorize_event(revalidation)
+    losing_base = harness.validator.authorize_event(harness.allocation)
+
+    assert first.authorization is not None
+    assert losing_base.refusal is not None
+    assert losing_base.refusal.refusal.state is ValidationState.INPUT_UNAVAILABLE
+    assert losing_base.refusal.refusal.reason_code == "TRANSIENT_RESPONSE_CAPTURE_RESERVED_BY_OTHER_EVENT"
+    assert (
+        harness.validation_repository.transient_capture_owner(
+            harness.allocation.base_validation_key.response_capture_identity
+        )
+        == revalidation.validation_event_id
+    )
+
+
+def test_transient_reservation_survives_validator_restart_and_body_loss(tmp_path: Path) -> None:
+    harness = fixture.make_harness(tmp_path, transient=True)
+    first = harness.validator.authorize_event(harness.allocation)
+    assert first.authorization is not None
+
+    empty_handoff = model_adapter.TransientResponseHandoffVault()
+    restarted = ResponseValidator(
+        harness.foundation,
+        model_adapter_repository=harness.model_repository,
+        pre_model_repository=harness.pre_model_repository,
+        source_handling_store=harness.source_authority.store,
+        runtime=DeterministicJsonValidationRuntime(),
+        transient_response_vault=empty_handoff,
+    )
+    retry = restarted.authorize_event(harness.allocation)
+
+    assert retry.refusal is not None
+    assert retry.refusal.refusal.state is ValidationState.INPUT_UNAVAILABLE
+    assert retry.refusal.refusal.reason_code == "TRANSIENT_RESPONSE_ACCESS_UNAVAILABLE"
+    assert (
+        harness.validation_repository.transient_capture_owner(
+            harness.allocation.base_validation_key.response_capture_identity
+        )
+        == harness.allocation.validation_event_id
+    )
+
+
 def test_transient_response_is_consumed_once_without_persistence_or_logging(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,

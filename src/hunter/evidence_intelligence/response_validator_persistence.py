@@ -24,6 +24,7 @@ from hunter.evidence_intelligence.response_validator import (
     ResponseValidationProfile,
     ResponseValidationProfileAuthority,
     ResponseValidationProfileSpec,
+    ResponseValidator,
     ResponseValidatorFoundation,
     ResponseValidatorFoundationError,
     ValidationEventAllocation,
@@ -56,6 +57,7 @@ class ResponseValidatorPersistenceRepository:
         self.__profile_authority_capability: object | None = None
         self.__event_allocator_owner: ResponseValidatorFoundation | None = None
         self.__event_allocator_capability: object | None = None
+        self.__validation_authority_capabilities: set[object] = set()
         self._initialize()
 
     def _bind_profile_authority(
@@ -106,6 +108,28 @@ class ResponseValidatorPersistenceRepository:
         self.__event_allocator_capability = capability
         installer(capability)
 
+    def _bind_validation_authority(
+        self,
+        owner: object,
+        installer: Callable[[object], None],
+    ) -> None:
+        """Install an opaque reservation-write capability into an exact ResponseValidator."""
+        expected_installer = vars(ResponseValidator)[
+            "_ResponseValidator__install_reservation_persistence_capability"
+        ]
+        if (
+            type(owner) is not ResponseValidator
+            or getattr(getattr(owner, "_foundation", None), "_repository", None) is not self
+            or getattr(installer, "__self__", None) is not owner
+            or getattr(installer, "__func__", None) is not expected_installer
+        ):
+            raise ResponseValidatorDirectWriteForbidden(
+                "transient reservation persistence capability owner is not canonical"
+            )
+        capability = object()
+        self.__validation_authority_capabilities.add(capability)
+        installer(capability)
+
     def _require_profile_authority_capability(self, capability: object | None) -> None:
         if capability is None or capability is not self.__profile_authority_capability:
             raise ResponseValidatorDirectWriteForbidden("profile persistence requires its owning authority capability")
@@ -113,6 +137,12 @@ class ResponseValidatorPersistenceRepository:
     def _require_event_allocator_capability(self, capability: object | None) -> None:
         if capability is None or capability is not self.__event_allocator_capability:
             raise ResponseValidatorDirectWriteForbidden("event allocation requires its owning service capability")
+
+    def _require_validation_authority_capability(self, capability: object | None) -> None:
+        if capability is None or capability not in self.__validation_authority_capabilities:
+            raise ResponseValidatorDirectWriteForbidden(
+                "transient capture reservation requires its owning ResponseValidator capability"
+            )
 
     def _publish_profile_authorized(
         self,
@@ -300,6 +330,59 @@ class ResponseValidatorPersistenceRepository:
             ).fetchall()
         return tuple(_allocation_from_row(row) for row in rows)
 
+    def _reserve_transient_capture_authorized(
+        self,
+        *,
+        authority_capability: object | None,
+        response_capture_identity: str,
+        validation_event_id: str,
+    ) -> bool:
+        """Atomically reserve one transient capture for one canonical validation event."""
+        self._require_validation_authority_capability(authority_capability)
+        if not response_capture_identity or not validation_event_id:
+            raise ResponseValidatorPersistenceConflict(
+                "transient capture reservation requires canonical non-blank identities"
+            )
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                """
+                SELECT validation_event_id
+                FROM response_validation_transient_capture_reservations
+                WHERE response_capture_identity = ?
+                """,
+                (response_capture_identity,),
+            ).fetchone()
+            if existing is not None:
+                return str(existing["validation_event_id"]) == validation_event_id
+            try:
+                connection.execute(
+                    """
+                    INSERT INTO response_validation_transient_capture_reservations (
+                        response_capture_identity, validation_event_id
+                    ) VALUES (?, ?)
+                    """,
+                    (response_capture_identity, validation_event_id),
+                )
+            except sqlite3.IntegrityError as error:
+                raise ResponseValidatorPersistenceConflict(
+                    "transient capture reservation identity conflict"
+                ) from error
+            return True
+
+    def transient_capture_owner(self, response_capture_identity: str) -> str | None:
+        """Read durable non-content ownership metadata for one transient capture."""
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT validation_event_id
+                FROM response_validation_transient_capture_reservations
+                WHERE response_capture_identity = ?
+                """,
+                (response_capture_identity,),
+            ).fetchone()
+        return str(row["validation_event_id"]) if row is not None else None
+
     def _insert_allocation(self, connection: sqlite3.Connection, allocation: ValidationEventAllocation) -> None:
         payload = _allocation_payload(allocation)
         try:
@@ -367,6 +450,15 @@ class ResponseValidatorPersistenceRepository:
                     WHERE predecessor_validation_event_id IS NOT NULL;
                 CREATE INDEX IF NOT EXISTS response_validation_event_cutoff_idx
                     ON response_validation_event_allocations(validation_cutoff, validation_event_id);
+
+                CREATE TABLE IF NOT EXISTS response_validation_transient_capture_reservations (
+                    response_capture_identity TEXT PRIMARY KEY,
+                    validation_event_id TEXT NOT NULL,
+                    FOREIGN KEY (validation_event_id)
+                        REFERENCES response_validation_event_allocations(validation_event_id)
+                );
+                CREATE INDEX IF NOT EXISTS response_validation_transient_capture_owner_idx
+                    ON response_validation_transient_capture_reservations(validation_event_id);
                 """
             )
 

@@ -1077,6 +1077,11 @@ class ResponseValidator:
         if not isinstance(runtime, DeterministicJsonValidationRuntime):
             raise ResponseValidationAuthorizationError("Phase B requires a deterministic validator runtime")
         self._foundation = foundation
+        self.__reservation_persistence_capability: object | None = None
+        foundation._repository._bind_validation_authority(  # noqa: SLF001 - authority capability binding
+            self,
+            self.__install_reservation_persistence_capability,
+        )
         self._model_adapter_repository = model_adapter_repository
         self._pre_model_repository = pre_model_repository
         self._source_handling_store = source_handling_store
@@ -1094,6 +1099,13 @@ class ResponseValidator:
         self._execution_results: dict[str, ResponseValidationExecutionResult] = {}
         self._event_authorization_ids: dict[str, str] = {}
         self._state_lock = threading.Lock()
+
+    def __install_reservation_persistence_capability(self, capability: object) -> None:
+        if self.__reservation_persistence_capability is not None:
+            raise ResponseValidationAuthorizationError(
+                "transient reservation persistence capability is immutable"
+            )
+        self.__reservation_persistence_capability = capability
 
     def __install_transient_response_consumer(self, consumer: Any) -> None:
         if self.__transient_response_consumer is not None:
@@ -1142,6 +1154,26 @@ class ResponseValidator:
             )
 
         self._require_asserted_coordinates(asserted_coordinates, inputs.coordinates)
+
+        if inputs.coordinates.input_mode is ValidationInputMode.TRANSIENT_NOT_RETAINED:
+            repository = self._foundation._repository  # noqa: SLF001 - same owning ADR 0035 boundary
+            reserved = repository._reserve_transient_capture_authorized(  # noqa: SLF001
+                authority_capability=self.__reservation_persistence_capability,
+                response_capture_identity=inputs.coordinates.response_capture_identity,
+                validation_event_id=inputs.coordinates.validation_event_id,
+            )
+            if not reserved:
+                return self._refusal_result(
+                    allocation=allocation,
+                    state=ValidationState.INPUT_UNAVAILABLE,
+                    reason_code="TRANSIENT_RESPONSE_CAPTURE_RESERVED_BY_OTHER_EVENT",
+                    available_authority=(
+                        ("profile_publication_id", inputs.coordinates.profile_publication_id),
+                        ("profile_resolution_id", inputs.coordinates.profile_resolution_id),
+                        ("response_capture_identity", inputs.coordinates.response_capture_identity),
+                        ("validation_event_id", inputs.coordinates.validation_event_id),
+                    ),
+                )
 
         authorization = ResponseValidationAuthorization(_AUTHORIZATION_MINT, coordinates=inputs.coordinates)
         authorization_id = authorization.authorization_id
