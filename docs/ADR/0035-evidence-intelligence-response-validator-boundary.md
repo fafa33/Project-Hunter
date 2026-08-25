@@ -192,6 +192,10 @@ successful authorization is exposed and is never transferred, released, or
 reassigned after timeout, cancellation, execution failure, successful
 consumption, or cleanup.
 
+No caller-selected alias, worker identity, authorization token, process
+identity, or re-validation request identity may replace the canonical
+`validation_event_id` as reservation owner.
+
 ADR 0034 supplies the governed attempt, capture identity, response capture,
 handoff evidence, and capture/attempt lineage. It does not own, publish, or
 enforce a validation-event reservation registry. No companion amendment to ADR
@@ -219,7 +223,20 @@ different canonical events.
 Same-event retry/join observes the durable owner and the same historically
 bound event/cutoff/profile/Source Handling/output-contract/capture coordinates.
 It does not mint sibling ownership, rerun the ownership race, or reinterpret
-current/latest state. A competing event fails closed before semantic execution.
+current/latest state. Retry may proceed to semantic execution only while the
+exact transient body remains lawfully available. If the canonical event owns
+the capture but the body is lost, exhausted, disappeared, unavailable after
+consumption, or otherwise unavailable through the one-shot transfer at initial
+execution or same-event retry time, that event deterministically fails closed
+with the existing `INPUT_UNAVAILABLE` state.
+
+Body unavailability is not `VALIDATOR_ERROR` merely because authorization
+previously succeeded. `VALIDATOR_ERROR` is reserved for a failure after an
+authorized semantic execution has actually begun. This rule adds no state and
+does not alter section 8 precedence. The event must not search for a retained
+copy, reconstruct the body, switch its authorized input mode from
+`TRANSIENT_NOT_RETAINED` to `DURABLE`, or re-call a provider. A competing event
+fails closed before semantic execution.
 
 Explicit re-validation remains a distinct event over the predecessor base key
 and original capture identity. If another event owns or consumed the capture,
@@ -377,32 +394,37 @@ Any later implementation of this amendment must prove at minimum:
 12. same-event retry/join after restart observes the same owner and historically
     bound coordinates, while a competing event after restart still receives
     `INPUT_UNAVAILABLE` without rerunning the race;
-13. post-consumption ownership remains as a tombstone even though the exact
+13. when an event owns the capture but exact bytes become unavailable before
+    initial execution or same-event retry, the outcome is `INPUT_UNAVAILABLE`,
+    not `VALIDATOR_ERROR`; no provider re-call, retained-copy fallback,
+    reconstruction, ownership race, sibling reservation, or input-mode
+    substitution occurs;
+14. post-consumption ownership remains as a tombstone even though the exact
     transient body is unavailable;
-14. the durable reservation representation contains only canonical capture and
+15. the durable reservation representation contains only canonical capture and
     owner identities and provably contains no body bytes or body-reading
     capability;
-15. a losing event emits the canonical Phase-B in-memory refusal outcome and
+16. a losing event emits the canonical Phase-B in-memory refusal outcome and
     refusal attestation without appending a terminal `ResponseValidationRecord`
     or minting `validation_recorded_at`;
-16. same-losing-event retry/join deterministically reproduces or joins the same
+17. same-losing-event retry/join deterministically reproduces or joins the same
     refusal, and later terminal persistence preserves its lineage without
     re-deciding ownership;
-17. explicit re-validation preserves the original `base_validation_key` and
+18. explicit re-validation preserves the original `base_validation_key` and
     `response_capture_identity` and yields `INPUT_UNAVAILABLE` when the original
     non-retained bytes are unavailable or owned/consumed by another event;
-18. a fresh capture identity is rejected as substitution into an allocated
+19. a fresh capture identity is rejected as substitution into an allocated
     re-validation event and cannot mutate its event identity, cutoff, base key,
     or capture lineage;
-19. a fresh ADR 0034 capture creates a new base key and generation-0 event; any
+20. a fresh ADR 0034 capture creates a new base key and generation-0 event; any
     causal reference to an earlier validation is non-identity-bearing metadata
     outside `ValidationEventAllocation`, does not populate or imply
     `predecessor_validation_event_id`, and does not reuse the earlier event's
     identity, cutoff, or base key;
-20. no reservation, refusal, IPC, process-boundary, or causal-lineage artifact
+21. no reservation, refusal, IPC, process-boundary, or causal-lineage artifact
     stores or logs exact non-retained response bytes or permits downstream
     extraction/promotion; and
-21. mutation-style or equivalent non-vacuity protection proves that each
+22. mutation-style or equivalent non-vacuity protection proves that each
     reusable isolation, reservation, refusal, and identity guard fails when its
     prohibited path is reintroduced.
 
