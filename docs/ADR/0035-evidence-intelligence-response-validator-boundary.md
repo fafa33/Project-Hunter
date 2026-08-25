@@ -442,8 +442,9 @@ Any later implementation of this amendment must prove at minimum:
   processes while capture and semantic authorities remain distinct.
 - Durable one-event ownership makes authorization deterministic across worker
   and authority restarts without retaining response content.
-- Fresh-capture handling preserves Phase-A event identity instead of mutating
-  an allocated re-validation event.
+- Fresh-capture handling rejects substitution into an allocated re-validation
+  event and creates a separate Phase-A generation-0 event with a new base key
+  and capture identity.
 - Failed or incomparable correction chronology does not wedge the next correction generation.
 - Downstream extraction and promotion remain separately governed.
 
