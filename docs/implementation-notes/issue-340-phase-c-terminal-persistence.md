@@ -10,12 +10,14 @@ This checkpoint starts the narrow Phase C implementation after PR #335. It is in
 - `ResponseValidator` remains semantic authority; persistence must not derive, alter, rank, upgrade, downgrade, or reinterpret validation state/reason/findings.
 - Persistence atomically assigns `validation_recorded_at`; callers and workers cannot supply it.
 - One immutable terminal generation-0 record exists per canonical `validation_event_id`; identical retry joins the same record and preserves the original recorded-at coordinate.
-- Persist exact canonical identity/lineage and state-compatible attestation coordinates; reject any mismatch mechanically.
+- For a repeated `validation_event_id`, idempotency requires exact equality of the complete canonical non-content tuple: decision kind/id/state, authorization id, attestation id, profile resolution/publication/version, validator contract identity/version, requested-output contract identity/version/hash, Source Handling resolution/fact/policy/registry/authorization-rule ids, response-capture/evidence-state, provider attempt/handoff/outcome/execution-profile/request-evidence lineage, pre-model build/prompt/intent/ledger/allocation/package ids, evidence-input identity, input mode, revalidation generation/predecessor, and refusal `available_authority` when applicable. Any mismatch is a hard conflict and must not mutate the existing record.
 - Enforce `validation_cutoff <= validation_recorded_at`; incomparable or inverted chronology fails closed before append.
 
 ## Non-retention invariant
 
 `TRANSIENT_NOT_RETAINED` response bytes must never be persisted, hashed, serialized, logged, reconstructed, or included in terminal-record diagnostics. Phase C stores only canonical non-content decision/lineage metadata already produced by Phase B.
+
+The terminal payload hash is versioned as `sha256-canonical-noncontent-json-v1`: SHA-256 over UTF-8 bytes of canonical JSON containing only the immutable non-content record fields plus the persistence-owned timestamp and record identity. Canonical JSON uses sorted keys, no insignificant whitespace (`separators=(",", ":")`), and UTF-8 text without ASCII escaping. Response bytes are never an input to this hash.
 
 ## Read / replay boundary
 
