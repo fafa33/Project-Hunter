@@ -19,7 +19,7 @@ import pytest
 import response_validator_phase_b_fixture as fixture
 from evidence_pre_model_source_handling_fixture import publish_policy_successor
 
-from hunter.evidence_intelligence import model_adapter
+from hunter.evidence_intelligence import model_adapter, transient_worker
 from hunter.evidence_intelligence.response_validator import (
     DeterministicJsonValidationRuntime,
     ResponseValidationAuthorization,
@@ -718,16 +718,16 @@ def test_transient_response_is_consumed_inside_os_protected_worker_without_calle
     assert marker not in repr(vault_state)
     assert marker not in repr(vars(harness.adapter))
     assert marker not in repr(vars(harness.validator))
-    assert "_TransientResponseHandoffVault__worker_entry" in vault_state
-    assert vault_state["_TransientResponseHandoffVault__worker_entry"] is None
+    # Fresh-spawn topology keeps no caller-side worker-entry plaintext/body surface.
+    assert "_TransientResponseHandoffVault__worker_entry" not in vault_state
     sessions = vault_state["_TransientResponseHandoffVault__sessions"]
     assert len(sessions) == 1
     session = next(iter(sessions.values()))
-    assert session.pid != os.getpid()
+    assert session.process.pid != os.getpid()
     assert session.hardening in {"linux-prctl-nondumpable", "darwin-pt-deny-attach"}
     if sys.platform.startswith("linux"):
         with pytest.raises(OSError):
-            open(f"/proc/{session.pid}/mem", "rb", buffering=0)
+            open(f"/proc/{session.process.pid}/mem", "rb", buffering=0)
 
     authorization = _authorize(harness)
     result = harness.validator.execute(authorization)
@@ -756,13 +756,13 @@ def test_caller_control_channel_has_no_body_read_operation(tmp_path: Path) -> No
     assert "_VALIDATION_RESPONSE_CONSUME_MINT" not in vars(model_adapter)
     assert "transient_response_access" not in inspect.signature(harness.validator.authorize_event).parameters
     vault_state = vars(harness.transient_response_vault)
-    assert vault_state["_TransientResponseHandoffVault__worker_entry"] is None
+    # Fresh-spawn topology keeps no caller-side worker-entry plaintext/body surface.
+    assert "_TransientResponseHandoffVault__worker_entry" not in vault_state
     sessions = vault_state["_TransientResponseHandoffVault__sessions"]
     assert len(sessions) == 1
     session = next(iter(sessions.values()))
-    session.endpoint.sendall((len(b'{"op":"BODY"}')).to_bytes(4, "big") + b'{"op":"BODY"}')
-    size = int.from_bytes(session.endpoint.recv(4), "big")
-    reply = json.loads(session.endpoint.recv(size).decode())
+    transient_worker._send_message(session.endpoint, {"op": "BODY"})  # noqa: SLF001
+    reply = transient_worker._recv_message(session.endpoint)  # noqa: SLF001
     assert reply["kind"] == "REFUSAL"
     assert "body" not in json.dumps(reply).lower()
 
