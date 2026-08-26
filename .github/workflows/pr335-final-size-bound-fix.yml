@@ -1,3 +1,4 @@
+# final-trigger-2026-08-26
 name: PR335 final size-bound fix
 
 on:
@@ -35,7 +36,6 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
-
           path = Path("src/hunter/evidence_intelligence/response_validator.py")
           text = path.read_text()
           replacements = {
@@ -49,12 +49,11 @@ jobs:
                   raise SystemExit(f"expected size-bound comparison not found: {old}")
               text = text.replace(old, new, 1)
           path.write_text(text)
-
           tests = Path("tests/test_response_validator_phase_b.py")
           test_text = tests.read_text()
           marker = "def test_pr335_huge_decimal_schema_size_bound_is_compared_without_int_materialization"
           if marker not in test_text:
-              test_text += '''\n\ndef test_pr335_huge_decimal_schema_size_bound_is_compared_without_int_materialization(tmp_path: Path) -> None:\n    harness = fixture.make_harness(\n        tmp_path,\n        output_contract='{\"type\":\"string\",\"minLength\":1e1000000000}',\n        raw_response='\"a\"',\n        profile_overrides={\"required_dimensions\": (\"SYNTAX\", \"SCHEMA\", \"OUTPUT_CONTRACT\")},\n    )\n\n    result = _execute(harness)\n    assert result.outcome.state is ValidationState.INVALID_OUTPUT_CONTRACT\n'''
+              test_text += '''\n\ndef test_pr335_huge_decimal_schema_size_bound_is_compared_without_int_materialization(tmp_path: Path) -> None:\n    harness = fixture.make_harness(\n        tmp_path,\n        output_contract='{\"type\":\"string\",\"minLength\":1e1000000000}',\n        raw_response='\"a\"',\n        profile_overrides={\"required_dimensions\": (\"SYNTAX\", \"SCHEMA\", \"OUTPUT_CONTRACT\")},\n    )\n    result = _execute(harness)\n    assert result.outcome.state is ValidationState.INVALID_OUTPUT_CONTRACT\n'''
               tests.write_text(test_text)
           PY
           python -m pytest -q tests/test_response_validator_phase_b.py -k 'integral_decimal_schema_size_keywords or huge_decimal_schema_size_bound or reservation_owner'
