@@ -38,6 +38,7 @@ def test_success_append_retry_reload_and_strict_known(tmp_path: Path) -> None:
 
     first = service.persist_execution(result)
     retry = service.persist_execution(result)
+    reloaded = service.load(first.validation_event_id)
 
     assert retry == first
     assert first.validation_recorded_at == recorded_at
@@ -46,11 +47,19 @@ def test_success_append_retry_reload_and_strict_known(tmp_path: Path) -> None:
     assert first.state is ValidationState.VALID
     assert first.authorization_id == result.outcome.authorization_id
     assert first.attestation_id == result.attestation.attestation_id
+    assert first.findings == tuple(
+        (finding.dimension, finding.state.value, finding.reason_code) for finding in result.outcome.findings
+    )
+    assert first.executed is result.outcome.executed
+    assert first.refusal_reason_code is None
     assert first.profile_publication_id == harness.profile.publication_id
     assert first.attempt_id == harness.prepared.attempt.attempt_id
     assert first.build_record_id == harness.build_result.build_record.build_record_id
     assert first.hash_version == RESPONSE_VALIDATION_RECORD_HASH_VERSION
-    assert service.load(first.validation_event_id) == first
+    assert reloaded == first
+    assert reloaded is not None
+    assert reloaded.findings == first.findings
+    assert reloaded.executed is result.outcome.executed
     assert service.load(first.validation_event_id, strict_known_at=recorded_at - timedelta(microseconds=1)) is None
     assert service.load(first.validation_event_id, strict_known_at=recorded_at) == first
 
@@ -72,12 +81,19 @@ def test_refusal_is_persisted_without_inventing_missing_authority(tmp_path: Path
     )
 
     record = service.persist_refusal(refusal)
+    reloaded = service.load(record.validation_event_id)
 
     assert record.decision_kind is ResponseValidationDecisionKind.REFUSAL
     assert record.authorization_id is None
     assert record.state is ValidationState.RULE_UNAVAILABLE
     assert record.profile_publication_id is None
     assert record.available_authority == refusal.refusal.available_authority
+    assert record.findings == ()
+    assert record.refusal_reason_code == refusal.refusal.reason_code
+    assert record.executed is None
+    assert reloaded == record
+    assert reloaded is not None
+    assert reloaded.refusal_reason_code == refusal.refusal.reason_code
 
 
 def test_concurrent_identical_retry_joins_one_record(tmp_path: Path) -> None:
@@ -129,6 +145,7 @@ def test_terminal_payload_tamper_is_detected_and_transient_body_is_never_stored(
             (record.validation_event_id,),
         ).fetchone()[0]
         assert "supported answer" not in payload
+        assert "ALL_REQUIRED_DIMENSIONS_VALID" in payload
         connection.execute(
             "UPDATE response_validation_terminal_records SET payload_json = '{}' WHERE validation_event_id = ?",
             (record.validation_event_id,),
