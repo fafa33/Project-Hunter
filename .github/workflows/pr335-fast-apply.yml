@@ -1,0 +1,72 @@
+name: PR335 fast apply
+
+on:
+  push:
+    branches:
+      - codex/issue-334-response-validator-phase-b
+    paths:
+      - .github/workflows/pr335-fast-apply.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: codex/issue-334-response-validator-phase-b
+          fetch-depth: 0
+      - name: Apply exact root-fixer transformations only
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          lines = Path('.github/workflows/pr335-root-spawn-fix.yml').read_text().splitlines()
+          marker = '      - name: Apply spawn-based protected worker architecture'
+          marker_index = lines.index(marker)
+          run_index = next(i for i in range(marker_index + 1, len(lines)) if lines[i] == '        run: |')
+          body = []
+          for line in lines[run_index + 1:]:
+              if line.startswith('          '):
+                  body.append(line[10:])
+              elif not line:
+                  body.append('')
+              else:
+                  break
+          stop = next(i for i, line in enumerate(body) if line.startswith('black src/hunter/evidence_intelligence/transient_worker.py'))
+          Path('/tmp/pr335-transform.sh').write_text('\n'.join(body[:stop]) + '\n')
+          PY
+          bash -euxo pipefail /tmp/pr335-transform.sh
+      - name: Fail closed on architecture invariants
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -n 'os\.fork' src/hunter/evidence_intelligence/transient_worker.py; then
+            exit 1
+          fi
+          grep -n 'get_context("spawn")' src/hunter/evidence_intelligence/transient_worker.py
+          if grep -nE 'len\(value\) [<>] int\(schema\["(minItems|maxItems|minLength|maxLength)"\]\)' src/hunter/evidence_intelligence/response_validator.py; then
+            exit 1
+          fi
+          python -m compileall -q src/hunter/evidence_intelligence tests/test_response_validator_phase_b.py
+          git diff --check
+      - name: Commit source and remove all PR-only fixers
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/pr335-final-size-bound-fix.yml
+          rm -f .github/workflows/pr335-fixer-bootstrap.yml
+          rm -f .github/workflows/pr335-root-spawn-fix.yml
+          rm -f .github/workflows/pr335-finalize-spawn.yml
+          rm -f .github/workflows/pr335-finalize-now.yml
+          rm -f .github/workflows/pr335-fast-apply.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "Replace forked transient worker with fresh spawn boundary"
+          git push origin HEAD:codex/issue-334-response-validator-phase-b
