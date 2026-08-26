@@ -118,19 +118,27 @@ class PromptTaskRouteRegistry:
         *,
         profiles: PromptMachineProfileRegistry,
     ) -> None:
-        """Validate route targets and reject duplicate or ambiguous task keys."""
+        """Validate route targets and reject duplicate or ambiguous route coordinates."""
         if not isinstance(profiles, PromptMachineProfileRegistry):
             raise TypeError("routes require the canonical PromptMachineProfileRegistry")
         entries: dict[str, PromptTaskRoute] = {}
+        route_coordinates: dict[tuple[str, str], PromptTaskRoute] = {}
         for route in routes:
             if not isinstance(route, PromptTaskRoute):
                 raise TypeError("route registry accepts PromptTaskRoute entries only")
+            coordinate = (route.route_id, route.version)
+            if coordinate in route_coordinates:
+                existing = route_coordinates[coordinate]
+                if existing.route_identity != route.route_identity:
+                    raise PromptRouteConflict("conflicting governed route identity/version payload")
+                raise PromptRouteConflict("duplicate governed route identity/version")
             if route.task_key in entries:
                 existing = entries[route.task_key]
                 if existing.route_identity != route.route_identity:
                     raise PromptRouteConflict("conflicting governed route for exact task key")
                 raise PromptRouteConflict("duplicate governed route for exact task key")
             profiles.resolve(route.profile_id, route.profile_version)
+            route_coordinates[coordinate] = route
             entries[route.task_key] = route
         self._routes = dict(sorted(entries.items()))
         self._profile_registry_identity = profiles.registry_identity
