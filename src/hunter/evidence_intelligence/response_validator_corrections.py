@@ -208,7 +208,9 @@ class ResponseValidationCorrectionService:
                     ),
                 )
             except sqlite3.IntegrityError as error:
-                raise ResponseValidationCorrectionConflict("exact next correction generation is already claimed") from error
+                raise ResponseValidationCorrectionConflict(
+                    "exact next correction generation is already claimed"
+                ) from error
             return allocation
 
     def persist(
