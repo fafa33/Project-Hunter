@@ -2,7 +2,8 @@
 
 This module persists only already-decided Phase B validation results. It never
 sees, hashes, serializes, or reconstructs response content. The durable payload
-is canonical non-content decision and lineage metadata only.
+contains canonical non-content decision, finding/refusal, attestation, and
+lineage metadata only.
 """
 
 from __future__ import annotations
@@ -62,6 +63,9 @@ class ResponseValidationRecord:
     state: ValidationState
     authorization_id: str | None
     attestation_id: str
+    findings: tuple[tuple[str, str, str], ...]
+    refusal_reason_code: str | None
+    executed: bool | None
     profile_resolution_id: str | None
     profile_publication_id: str | None
     profile_version: int | None
@@ -104,6 +108,7 @@ class ResponseValidationRecord:
             _aware_utc("validation_recorded_at", self.validation_recorded_at),
         )
         object.__setattr__(self, "state", canonical_validation_state(self.state))
+        object.__setattr__(self, "findings", _normalize_findings(self.findings))
         if self.validation_recorded_at < self.validation_cutoff:
             raise ResponseValidationTerminalConflict("validation_recorded_at precedes validation_cutoff")
         if self.revalidation_generation < 0:
@@ -113,12 +118,27 @@ class ResponseValidationRecord:
         if self.schema_version != RESPONSE_VALIDATION_RECORD_SCHEMA_VERSION:
             raise ResponseValidationTerminalConflict("unknown terminal record schema version")
         for name in ("validation_event_id", "decision_id", "attestation_id"):
-            if not isinstance(getattr(self, name), str) or not getattr(self, name).strip():
+            value = getattr(self, name)
+            if not isinstance(value, str) or not value.strip():
                 raise ResponseValidationTerminalConflict(f"{name} must be non-blank")
         normalized_authority = tuple(sorted((str(key), str(value)) for key, value in self.available_authority))
         if len({key for key, _ in normalized_authority}) != len(normalized_authority):
             raise ResponseValidationTerminalConflict("available_authority keys must be unique")
         object.__setattr__(self, "available_authority", normalized_authority)
+        if self.decision_kind is ResponseValidationDecisionKind.SUCCESS:
+            if not self.findings:
+                raise ResponseValidationTerminalConflict("success terminal record requires canonical findings")
+            if self.refusal_reason_code is not None:
+                raise ResponseValidationTerminalConflict("success terminal record cannot contain refusal reason")
+            if not isinstance(self.executed, bool):
+                raise ResponseValidationTerminalConflict("success terminal record requires execution metadata")
+        elif self.decision_kind is ResponseValidationDecisionKind.REFUSAL:
+            if self.findings:
+                raise ResponseValidationTerminalConflict("refusal terminal record cannot contain success findings")
+            if not isinstance(self.refusal_reason_code, str) or not self.refusal_reason_code.strip():
+                raise ResponseValidationTerminalConflict("refusal terminal record requires canonical reason code")
+            if self.executed is not None:
+                raise ResponseValidationTerminalConflict("refusal terminal record cannot claim semantic execution")
 
     @property
     def record_id(self) -> str:
@@ -166,6 +186,9 @@ class ResponseValidationTerminalPersistenceService:
             "state": outcome.state,
             "authorization_id": outcome.authorization_id,
             "attestation_id": attestation.attestation_id,
+            "findings": tuple((item.dimension, item.state.value, item.reason_code) for item in outcome.findings),
+            "refusal_reason_code": None,
+            "executed": outcome.executed,
             **_success_lineage(coordinates),
             "available_authority": (),
         }
@@ -194,6 +217,9 @@ class ResponseValidationTerminalPersistenceService:
             "state": refusal.state,
             "authorization_id": None,
             "attestation_id": attestation.attestation_id,
+            "findings": (),
+            "refusal_reason_code": refusal.reason_code,
+            "executed": None,
             **_empty_lineage(
                 revalidation_generation=allocation.revalidation_generation,
                 predecessor_validation_event_id=allocation.predecessor_validation_event_id,
@@ -234,11 +260,9 @@ class ResponseValidationTerminalPersistenceService:
             str(desired["validation_event_id"]),
             _aware_utc("validation_cutoff", desired["validation_cutoff"]),
         )
-        expected_generation = int(desired["revalidation_generation"])
-        expected_predecessor = desired["predecessor_validation_event_id"]
-        if allocation.revalidation_generation != expected_generation:
+        if allocation.revalidation_generation != int(desired["revalidation_generation"]):
             raise ResponseValidationTerminalConflict("terminal lineage generation does not match allocation")
-        if allocation.predecessor_validation_event_id != expected_predecessor:
+        if allocation.predecessor_validation_event_id != desired["predecessor_validation_event_id"]:
             raise ResponseValidationTerminalConflict("terminal predecessor does not match allocation")
 
         with self._connect() as connection:
@@ -263,7 +287,6 @@ class ResponseValidationTerminalPersistenceService:
             recorded_at = _aware_utc("validation_recorded_at", self._clock.now())
             record = ResponseValidationRecord(validation_recorded_at=recorded_at, **dict(desired))
             payload = _record_payload(record)
-            payload_hash = _sha256(payload)
             try:
                 connection.execute(
                     """
@@ -276,7 +299,7 @@ class ResponseValidationTerminalPersistenceService:
                         record.validation_event_id,
                         record.validation_recorded_at.isoformat(),
                         record.record_id,
-                        payload_hash,
+                        _sha256(payload),
                         payload,
                         record.hash_version,
                         record.schema_version,
@@ -419,6 +442,7 @@ def _record_from_row(row: sqlite3.Row) -> ResponseValidationRecord:
         item["validation_recorded_at"] = _parse_time(str(item["validation_recorded_at"]))
         item["decision_kind"] = ResponseValidationDecisionKind(item["decision_kind"])
         item["state"] = canonical_validation_state(item["state"])
+        item["findings"] = tuple(tuple(entry) for entry in item.get("findings", ()))
         item["available_authority"] = tuple(tuple(pair) for pair in item.get("available_authority", ()))
         record = ResponseValidationRecord(**item)
     except (KeyError, TypeError, ValueError, ResponseValidationTerminalPersistenceError) as error:
@@ -449,6 +473,19 @@ def _desired_retry_tuple(desired: Mapping[str, Any]) -> tuple[tuple[str, Any], .
     values["hash_version"] = RESPONSE_VALIDATION_RECORD_HASH_VERSION
     values["schema_version"] = RESPONSE_VALIDATION_RECORD_SCHEMA_VERSION
     return tuple(sorted(values.items()))
+
+
+def _normalize_findings(findings: tuple[tuple[str, str, str], ...]) -> tuple[tuple[str, str, str], ...]:
+    normalized: list[tuple[str, str, str]] = []
+    for entry in findings:
+        if len(entry) != 3:
+            raise ResponseValidationTerminalConflict("terminal finding must contain dimension, state, and reason code")
+        dimension, state, reason_code = (str(value) for value in entry)
+        if not dimension.strip() or not reason_code.strip():
+            raise ResponseValidationTerminalConflict("terminal finding coordinates must be non-blank")
+        canonical_state = canonical_validation_state(state)
+        normalized.append((dimension, canonical_state.value, reason_code))
+    return tuple(normalized)
 
 
 def _canonical_json(value: object) -> str:
