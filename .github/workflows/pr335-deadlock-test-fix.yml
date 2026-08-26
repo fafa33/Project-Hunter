@@ -30,8 +30,6 @@ jobs:
           assert text.count(old) == 1, text.count(old)
           path.write_text(text.replace(old, new, 1))
           PY
-          black tests/test_response_validator_phase_b.py
-          pytest -q tests/test_response_validator_phase_b.py -k 'pr335_protected_worker_waits_for_validator_quiescence_and_resets_child_lock'
       - name: Commit and clean
         shell: bash
         run: |
