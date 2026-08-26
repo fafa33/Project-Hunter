@@ -33,6 +33,7 @@ from hunter.evidence_intelligence.response_validator import (
     ValidationState,
 )
 from hunter.evidence_intelligence.response_validator_persistence import _profile_payload
+from hunter.evidence_intelligence.transient_worker import TransientResponseHandoffVault
 
 
 def _authorize(harness: fixture.Harness):
