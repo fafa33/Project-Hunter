@@ -63,6 +63,35 @@ jobs:
           if old not in script:
               raise SystemExit('expected generated spawn-test template not found')
           script = script.replace(old, new, 1)
+
+          lint_marker = 'black src/hunter/evidence_intelligence/transient_worker.py src/hunter/evidence_intelligence/model_adapter.py src/hunter/evidence_intelligence/response_validator.py tests/test_response_validator_phase_b.py'
+          if lint_marker not in script:
+              raise SystemExit('root fixer lint marker not found')
+          align_tests = r'''python - <<'PYTESTPATCH'
+from pathlib import Path
+
+path = Path("tests/test_response_validator_phase_b.py")
+text = path.read_text()
+replacements = {
+    '    assert "_TransientResponseHandoffVault__worker_entry" in vault_state\n    assert vault_state["_TransientResponseHandoffVault__worker_entry"] is None\n':
+        '    assert "_TransientResponseHandoffVault__worker_entry" not in vault_state\n',
+    '    assert session.pid != os.getpid()\n':
+        '    assert session.process.pid is not None\n    assert session.process.pid != os.getpid()\n',
+    '            open(f"/proc/{session.pid}/mem", "rb", buffering=0)\n':
+        '            open(f"/proc/{session.process.pid}/mem", "rb", buffering=0)\n',
+    '    assert vault_state["_TransientResponseHandoffVault__worker_entry"] is None\n    sessions = vault_state["_TransientResponseHandoffVault__sessions"]\n':
+        '    assert "_TransientResponseHandoffVault__worker_entry" not in vault_state\n    sessions = vault_state["_TransientResponseHandoffVault__sessions"]\n',
+    '    session.endpoint.sendall((len(b\'{"op":"BODY"}\')).to_bytes(4, "big") + b\'{"op":"BODY"}\')\n    size = int.from_bytes(session.endpoint.recv(4), "big")\n    reply = json.loads(session.endpoint.recv(size).decode())\n':
+        '    from hunter.evidence_intelligence import transient_worker\n\n    transient_worker._send_message(session.endpoint, {"op": "BODY"})\n    reply = transient_worker._recv_message(session.endpoint)\n',
+}
+for old_text, new_text in replacements.items():
+    if old_text not in text:
+        raise SystemExit(f"expected stale spawn regression fragment not found: {old_text!r}")
+    text = text.replace(old_text, new_text, 1)
+path.write_text(text)
+PYTESTPATCH
+'''
+          script = script.replace(lint_marker, align_tests + lint_marker, 1)
           Path('/tmp/pr335-root-apply.sh').write_text(script)
           PY
           bash -euxo pipefail /tmp/pr335-root-apply.sh
