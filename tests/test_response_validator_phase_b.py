@@ -909,9 +909,11 @@ def test_pr335_integral_decimal_schema_size_keywords_are_valid(tmp_path: Path) -
 
 def test_pr335_protected_worker_uses_fresh_spawn_interpreter_not_fork() -> None:
     source = inspect.getsource(TransientResponseHandoffVault._dispatch_authorized)
-    worker_source = inspect.getsource(__import__(
-        "hunter.evidence_intelligence.transient_worker", fromlist=["_spawn_transport_worker"]
-    )._spawn_transport_worker)
+    worker_source = inspect.getsource(
+        __import__(
+            "hunter.evidence_intelligence.transient_worker", fromlist=["_spawn_transport_worker"]
+        )._spawn_transport_worker
+    )
 
     assert 'get_context("spawn")' in source
     assert "os.fork" not in source
