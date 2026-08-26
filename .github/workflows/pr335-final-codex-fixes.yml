@@ -18,133 +18,13 @@ jobs:
         with:
           ref: codex/issue-334-response-validator-phase-b
           fetch-depth: 0
-      - name: Apply exact targeted fixes
+      - name: Apply targeted patch
+        run: python .github/pr335_final_fix.py
+      - name: Commit and clean temporary fixer
         shell: bash
         run: |
-          python - <<'PY'
-          from pathlib import Path
-
-          rv = Path('src/hunter/evidence_intelligence/response_validator.py')
-          text = rv.read_text()
-
-          old = '            self._discard_transient_response(signal.transient_cleanup_coordinates)\n'
-          new = '''            self._discard_transient_response(\n                signal.transient_cleanup_coordinates,\n                refusing_validation_event_id=allocation.validation_event_id,\n            )\n'''
-          assert text.count(old) == 1, text.count(old)
-          text = text.replace(old, new, 1)
-
-          old = '''    def _discard_transient_response(\n        self,\n        coordinates: tuple[tuple[str, str], ...] | None,\n    ) -> None:\n        boundary = self._transient_response_vault\n        if boundary is not None and coordinates is not None:\n            boundary.discard_authorized(**dict(coordinates))\n'''
-          new = '''    def _discard_transient_response(\n        self,\n        coordinates: tuple[tuple[str, str], ...] | None,\n        *,\n        refusing_validation_event_id: str,\n    ) -> None:\n        boundary = self._transient_response_vault\n        if boundary is None or coordinates is None:\n            return\n        resolved = dict(coordinates)\n        capture_identity = resolved.get("response_capture_identity")\n        if capture_identity:\n            owner = self._foundation._repository.transient_capture_owner(capture_identity)  # noqa: SLF001\n            if owner is not None and owner != refusing_validation_event_id:\n                # A later/refusing event must never destroy the first owner's\n                # single-use body. Reservation ownership is durable and wins.\n                return\n        boundary.discard_authorized(**resolved)\n'''
-          assert text.count(old) == 1, text.count(old)
-          text = text.replace(old, new, 1)
-
-          old = '''    for name in ("minLength", "maxLength", "minItems", "maxItems"):\n        item = schema.get(name)\n        if item is not None and (not isinstance(item, int) or isinstance(item, bool) or item < 0):\n            raise ResponseValidationRuleUnavailable(f"output-contract {name} must be a non-negative integer")\n'''
-          new = '''    for name in ("minLength", "maxLength", "minItems", "maxItems"):\n        item = schema.get(name)\n        if item is not None and not _is_non_negative_json_integer(item):\n            raise ResponseValidationRuleUnavailable(f"output-contract {name} must be a non-negative integer")\n'''
-          assert text.count(old) == 1, text.count(old)
-          text = text.replace(old, new, 1)
-
-          anchor = '\n\ndef _schema_type_invalid(value: Any, schema: Mapping[str, Any]) -> bool:\n'
-          helper = '''\n\ndef _is_non_negative_json_integer(value: Any) -> bool:\n    if isinstance(value, bool):\n        return False\n    if isinstance(value, int):\n        return value >= 0\n    if isinstance(value, Decimal):\n        return value.is_finite() and value >= 0 and value == value.to_integral_value()\n    return False\n'''
-          assert text.count(anchor) == 1
-          text = text.replace(anchor, helper + anchor, 1)
-          rv.write_text(text)
-
-          tw = Path('src/hunter/evidence_intelligence/transient_worker.py')
-          text = tw.read_text()
-          old = '''        parent_endpoint, worker_endpoint = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)\n        parent_endpoint.set_inheritable(False)\n        worker_endpoint.set_inheritable(False)\n        pid = os.fork()\n        if pid == 0:  # pragma: no cover - assertions observe the parent side\n            try:\n                parent_endpoint.close()\n                self.__worker_mode = True\n                self.__sessions = {}\n'''
-          new = '''        validator = self.__response_validator_ref()\n        if validator is None:\n            raise _access_error("canonical ResponseValidator owner disappeared")\n\n        parent_endpoint, worker_endpoint = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)\n        parent_endpoint.set_inheritable(False)\n        worker_endpoint.set_inheritable(False)\n\n        # Fork only from a quiescent validator boundary. A concurrent authorization\n        # or execution may otherwise leave _state_lock locked in the child with no\n        # surviving owning thread. The child installs a fresh lock before any\n        # validator operation; the parent releases the original immediately after\n        # the fork. This makes the copied validator state mechanically usable and\n        # removes the deadlock identified by exact-head review.\n        validator_state_lock = validator._state_lock  # noqa: SLF001 - same protected boundary\n        validator_state_lock.acquire()\n        try:\n            pid = os.fork()\n        except BaseException:\n            validator_state_lock.release()\n            parent_endpoint.close()\n            worker_endpoint.close()\n            raise\n        if pid == 0:  # pragma: no cover - assertions observe the parent side\n            try:\n                validator._state_lock = threading.Lock()  # noqa: SLF001 - post-fork child reset\n                parent_endpoint.close()\n                self.__worker_mode = True\n                self.__sessions = {}\n'''
-          assert text.count(old) == 1, text.count(old)
-          text = text.replace(old, new, 1)
-
-          old = '''        worker_endpoint.close()\n        try:\n            hardened = _recv_message(parent_endpoint)\n'''
-          new = '''        validator_state_lock.release()\n        worker_endpoint.close()\n        try:\n            hardened = _recv_message(parent_endpoint)\n'''
-          assert text.count(old) == 1, text.count(old)
-          text = text.replace(old, new, 1)
-          tw.write_text(text)
-
-          tests = Path('tests/test_response_validator_phase_b.py')
-          text = tests.read_text()
-          marker = '\n\ndef test_pr335_non_owner_refusal_preserves_reserved_transient_body'
-          assert marker not in text
-          text += r'''
-
-
-def test_pr335_non_owner_refusal_preserves_reserved_transient_body(tmp_path: Path) -> None:
-    harness = fixture.make_harness(tmp_path, transient=True)
-    owner_authorization = _authorize(harness)
-
-    policy_time = fixture.VALIDATION_CUTOFF + timedelta(seconds=1)
-    publish_policy_successor(harness.source_authority, cutoff=policy_time, processing="DENY")
-    harness.foundation._clock = fixture.SequenceClock(policy_time + timedelta(seconds=1))  # noqa: SLF001
-    competing = harness.foundation.allocate_revalidation(
-        predecessor_validation_event_id=harness.allocation.validation_event_id
-    )
-
-    refused = harness.validator.authorize_event(competing)
-    assert refused.refusal is not None
-    assert refused.refusal.refusal.state is ValidationState.SOURCE_HANDLING_BLOCKED
-
-    owner_result = harness.validator.execute(owner_authorization)
-    assert owner_result.outcome.state is ValidationState.VALID
-
-
-def test_pr335_integral_decimal_schema_size_keywords_are_valid(tmp_path: Path) -> None:
-    harness = fixture.make_harness(
-        tmp_path,
-        output_contract='{"type":"string","minLength":1.0,"maxLength":3.0}',
-        raw_response='"ab"',
-        profile_overrides={"required_dimensions": ("SYNTAX", "SCHEMA", "OUTPUT_CONTRACT")},
-    )
-
-    result = _execute(harness)
-    assert result.outcome.state is ValidationState.VALID
-
-
-def test_pr335_protected_worker_waits_for_validator_quiescence_and_resets_child_lock(tmp_path: Path) -> None:
-    harness = fixture.make_harness(tmp_path, transient=True)
-    vault = harness.transient_response_vault
-    capability = vars(harness.adapter)["_ModelAdapterService__transient_handoff_capability"]
-    entered = __import__("threading").Event()
-    release = __import__("threading").Event()
-
-    def hold_validator_lock() -> None:
-        with harness.validator._state_lock:  # noqa: SLF001 - adversarial fork regression
-            entered.set()
-            assert release.wait(5)
-
-    def probe_operation() -> Any:
-        # This must acquire the child's validator lock. Without the post-fork reset
-        # the copied lock is permanently locked and this operation deadlocks.
-        joined = harness.validator.authorize_event(harness.allocation)
-        assert joined.authorization is not None
-        from types import SimpleNamespace
-
-        return SimpleNamespace(
-            outcome=SimpleNamespace(outcome_id="protected-worker-lock-probe", recorded_at=fixture.CONCLUDED_AT),
-            response_artifact=None,
-        )
-
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        holder = executor.submit(hold_validator_lock)
-        assert entered.wait(5)
-        dispatch = executor.submit(
-            lambda: vault._dispatch_authorized(capability, operation=probe_operation)  # noqa: SLF001
-        )
-        assert not dispatch.done()
-        release.set()
-        metadata = dispatch.result(timeout=10)
-        holder.result(timeout=5)
-
-    assert metadata["outcome_id"] == "protected-worker-lock-probe"
-    assert metadata["validation_ready"] is False
-'''
-          tests.write_text(text)
-          PY
-      - name: Syntax check
-        run: python -m compileall -q src/hunter/evidence_intelligence tests/test_response_validator_phase_b.py
-      - name: Commit targeted fixes and remove fixer workflow
-        shell: bash
-        run: |
-          git rm .github/workflows/pr335-final-codex-fixes.yml
+          python -m compileall -q src/hunter/evidence_intelligence tests/test_response_validator_phase_b.py
+          git rm .github/workflows/pr335-final-codex-fixes.yml .github/pr335_final_fix.py
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add src/hunter/evidence_intelligence/response_validator.py src/hunter/evidence_intelligence/transient_worker.py tests/test_response_validator_phase_b.py
