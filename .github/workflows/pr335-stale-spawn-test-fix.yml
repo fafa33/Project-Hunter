@@ -22,7 +22,7 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11.13"
-      - name: Update stale fork-era assertions and verify
+      - name: Align tests with fresh-spawn session and packed control protocol
         shell: bash
         run: |
           set -euo pipefail
@@ -30,16 +30,33 @@ jobs:
           from pathlib import Path
           p = Path('tests/test_response_validator_phase_b.py')
           s = p.read_text()
-          old1 = '''    assert "_TransientResponseHandoffVault__worker_entry" in vault_state\n    assert vault_state["_TransientResponseHandoffVault__worker_entry"] is None\n'''
-          new1 = '''    assert "_TransientResponseHandoffVault__worker_entry" not in vault_state\n'''
-          old2 = '''    assert vault_state["_TransientResponseHandoffVault__worker_entry"] is None\n    sessions = vault_state["_TransientResponseHandoffVault__sessions"]\n'''
-          new2 = '''    assert "_TransientResponseHandoffVault__worker_entry" not in vault_state\n    sessions = vault_state["_TransientResponseHandoffVault__sessions"]\n'''
-          if s.count(old1) != 1:
-              raise SystemExit(f'expected exactly one old1 block, found {s.count(old1)}')
-          s = s.replace(old1, new1, 1)
-          if s.count(old2) != 1:
-              raise SystemExit(f'expected exactly one old2 block, found {s.count(old2)}')
-          s = s.replace(old2, new2, 1)
+
+          replacements = [
+              (
+                  '''from hunter.evidence_intelligence import model_adapter\n''',
+                  '''from hunter.evidence_intelligence import model_adapter, transient_worker\n''',
+              ),
+              (
+                  '''    assert "_TransientResponseHandoffVault__worker_entry" in vault_state\n    assert vault_state["_TransientResponseHandoffVault__worker_entry"] is None\n''',
+                  '''    assert "_TransientResponseHandoffVault__worker_entry" not in vault_state\n''',
+              ),
+              (
+                  '''    assert session.pid != os.getpid()\n''',
+                  '''    assert session.process.pid != os.getpid()\n''',
+              ),
+              (
+                  '''    assert vault_state["_TransientResponseHandoffVault__worker_entry"] is None\n    sessions = vault_state["_TransientResponseHandoffVault__sessions"]\n''',
+                  '''    assert "_TransientResponseHandoffVault__worker_entry" not in vault_state\n    sessions = vault_state["_TransientResponseHandoffVault__sessions"]\n''',
+              ),
+              (
+                  '''    session.endpoint.sendall((len(b'{"op":"BODY"}')).to_bytes(4, "big") + b'{"op":"BODY"}')\n    size = int.from_bytes(session.endpoint.recv(4), "big")\n    reply = json.loads(session.endpoint.recv(size).decode())\n''',
+                  '''    transient_worker._send_message(session.endpoint, {"op": "BODY"})  # noqa: SLF001\n    reply = transient_worker._recv_message(session.endpoint)  # noqa: SLF001\n''',
+              ),
+          ]
+          for old, new in replacements:
+              if s.count(old) != 1:
+                  raise SystemExit(f'expected exactly one replacement target, found {s.count(old)}: {old!r}')
+              s = s.replace(old, new, 1)
           p.write_text(s)
           PY
           python -m pip install --disable-pip-version-check -c requirements/ci-constraints.txt -e ".[dev]"
