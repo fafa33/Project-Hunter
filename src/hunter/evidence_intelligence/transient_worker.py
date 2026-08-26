@@ -1,9 +1,12 @@
 """ADR 0035 protected worker for TRANSIENT_NOT_RETAINED validation.
 
-Exact provider-response bytes are created, screened, and semantically
-consumed only in the hardened child process.  The caller-facing process
-owns only non-content metadata and a closed control channel whose protocol
-can request one canonical validation event and can never return body bytes.
+The worker is started with multiprocessing ``spawn`` so it begins in a
+fresh Python interpreter and inherits no live application threads,
+locks, authority-store snapshots, validator objects, or repository
+connections from the caller process. Exact provider-response bytes are
+created, screened, held, and semantically consumed only in that spawned
+and OS-hardened process. The caller receives non-content transport and
+validation metadata only.
 """
 
 from __future__ import annotations
@@ -12,20 +15,30 @@ import ctypes
 import faulthandler
 import json
 import logging
-import os
+import multiprocessing
 import resource
 import socket
 import sys
 import threading
 import weakref
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
+from decimal import Decimal
+from enum import Enum
+from types import SimpleNamespace
 from typing import Any
 
 _MAX_CONTROL_MESSAGE = 1_048_576
 _PR_SET_DUMPABLE = 4
 _PT_DENY_ATTACH = 31
+
+
+class ProtectedTransportRaised(RuntimeError):
+    """A transport raised inside the isolated worker after handoff consumption."""
+
+    def __init__(self, exception_type: str) -> None:
+        super().__init__(exception_type)
+        self.exception_type = exception_type
 
 
 def _access_error(message: str) -> Exception:
@@ -34,12 +47,55 @@ def _access_error(message: str) -> Exception:
     return TransientResponseAccessError(message)
 
 
-def _canonical_json(value: object) -> bytes:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+def _pack(value: Any) -> Any:
+    if value is None:
+        return ["none"]
+    if isinstance(value, bool):
+        return ["bool", value]
+    if isinstance(value, str):
+        return ["str", value]
+    if isinstance(value, int):
+        return ["int", str(value)]
+    if isinstance(value, Decimal):
+        return ["decimal", str(value)]
+    if isinstance(value, float):
+        return ["float", repr(value)]
+    if isinstance(value, datetime):
+        return ["datetime", value.isoformat()]
+    if isinstance(value, Enum):
+        return _pack(value.value)
+    if isinstance(value, dict):
+        return ["dict", [[str(key), _pack(item)] for key, item in value.items()]]
+    if isinstance(value, (list, tuple)):
+        return ["list", [_pack(item) for item in value]]
+    raise TypeError(f"unsupported protected-worker control value: {type(value).__name__}")
+
+
+def _unpack(value: Any) -> Any:
+    if not isinstance(value, list) or not value:
+        raise RuntimeError("protected-worker control value is malformed")
+    tag = value[0]
+    if tag == "none":
+        return None
+    if tag in {"bool", "str"}:
+        return value[1]
+    if tag == "int":
+        return int(value[1])
+    if tag == "decimal":
+        return Decimal(value[1])
+    if tag == "float":
+        return float(value[1])
+    if tag == "datetime":
+        return value[1]
+    if tag == "dict":
+        return {str(key): _unpack(item) for key, item in value[1]}
+    if tag == "list":
+        return [_unpack(item) for item in value[1]]
+    raise RuntimeError("protected-worker control value tag is unknown")
 
 
 def _send_message(endpoint: socket.socket, payload: dict[str, Any]) -> None:
-    encoded = _canonical_json(payload)
+    encoded = json.dumps(_pack(payload), separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     if len(encoded) > _MAX_CONTROL_MESSAGE:
         raise RuntimeError("protected-worker control message exceeds bound")
     endpoint.sendall(len(encoded).to_bytes(4, "big") + encoded)
@@ -61,14 +117,13 @@ def _recv_message(endpoint: socket.socket) -> dict[str, Any]:
     size = int.from_bytes(_recv_exact(endpoint, 4), "big")
     if size <= 0 or size > _MAX_CONTROL_MESSAGE:
         raise RuntimeError("protected-worker control frame is malformed")
-    decoded = json.loads(_recv_exact(endpoint, size).decode("utf-8"))
+    decoded = _unpack(json.loads(_recv_exact(endpoint, size).decode("utf-8")))
     if not isinstance(decoded, dict):
         raise RuntimeError("protected-worker control payload must be an object")
     return decoded
 
 
 def _harden_worker() -> str:
-    """Establish the falsifiable OS inspection boundary before provider I/O."""
     logging.disable(logging.CRITICAL)
     try:
         faulthandler.disable()
@@ -99,19 +154,18 @@ class _TransientResponseEnvelope:
     transport_identity: str
     transport_version: str
 
-    @classmethod
-    def from_entry(cls, entry: Any) -> _TransientResponseEnvelope:
-        return cls(
-            response_capture_identity=entry.response_capture_identity,
-            attempt_id=entry.attempt_id,
-            handoff_id=entry.handoff_id,
-            outcome_id=entry.outcome_id,
-            execution_profile_identity=entry.execution_profile_identity,
-            response_protocol_identity=entry.response_protocol_identity,
-            response_protocol_version=entry.response_protocol_version,
-            transport_identity=entry.transport_identity,
-            transport_version=entry.transport_version,
-        )
+    def as_control(self) -> dict[str, str]:
+        return {
+            "response_capture_identity": self.response_capture_identity,
+            "attempt_id": self.attempt_id,
+            "handoff_id": self.handoff_id,
+            "outcome_id": self.outcome_id,
+            "execution_profile_identity": self.execution_profile_identity,
+            "response_protocol_identity": self.response_protocol_identity,
+            "response_protocol_version": self.response_protocol_version,
+            "transport_identity": self.transport_identity,
+            "transport_version": self.transport_version,
+        }
 
     def matches(self, coordinates: dict[str, str]) -> bool:
         return all(getattr(self, name) == value for name, value in coordinates.items())
@@ -119,7 +173,7 @@ class _TransientResponseEnvelope:
 
 @dataclass
 class _ProtectedWorkerSession:
-    pid: int
+    process: Any = field(repr=False, compare=False)
     endpoint: socket.socket = field(repr=False, compare=False)
     envelope: _TransientResponseEnvelope
     hardening: str
@@ -127,8 +181,167 @@ class _ProtectedWorkerSession:
     closed: bool = False
 
 
+def _evaluate_body(response_text: str, plan: dict[str, Any]) -> dict[str, Any]:
+    from hunter.evidence_intelligence.response_validator import (
+        DeterministicJsonValidationRuntime,
+        ResponseValidationFinding,
+        ResponseValidationRuleUnavailable,
+        ValidationState,
+        highest_precedence_validation_state,
+    )
+
+    runtime_values = plan.get("runtime")
+    coordinates_values = plan.get("coordinates")
+    if not isinstance(runtime_values, dict) or not isinstance(coordinates_values, dict):
+        raise RuntimeError("protected semantic plan is incomplete")
+    runtime = DeterministicJsonValidationRuntime(**runtime_values)
+    coordinates = SimpleNamespace(**coordinates_values)
+    try:
+        findings = tuple(
+            runtime.evaluate(
+                response_text=response_text,
+                coordinates=coordinates,
+                output_contract=plan["output_contract"],
+                evidence_inputs=tuple(tuple(item) for item in plan["evidence_inputs"]),
+                provider_status_metadata=tuple(tuple(item) for item in plan["provider_status_metadata"]),
+                required_dimensions=tuple(plan["required_dimensions"]),
+            )
+        )
+    except ResponseValidationRuleUnavailable:
+        findings = (
+            ResponseValidationFinding(
+                "RULE_AVAILABILITY",
+                ValidationState.RULE_UNAVAILABLE,
+                "EXECUTABLE_VALIDATION_RULE_UNAVAILABLE",
+            ),
+        )
+    except Exception:
+        findings = (
+            ResponseValidationFinding(
+                "VALIDATOR_EXECUTION",
+                ValidationState.VALIDATOR_ERROR,
+                "VALIDATOR_EXECUTION_FAILED",
+            ),
+        )
+    state = highest_precedence_validation_state(item.state for item in findings)
+    return {
+        "kind": "EXECUTION_RESULT",
+        "authorization_id": str(plan["authorization_id"]),
+        "state": state.value,
+        "findings": [
+            {"dimension": item.dimension, "state": item.state.value, "reason_code": item.reason_code}
+            for item in findings
+        ],
+    }
+
+
+def _spawn_transport_worker(
+    endpoint: socket.socket,
+    transport: Any,
+    request: Any,
+    authorization_fields: dict[str, str],
+    credential_secret: str,
+    credential_slot_identity: str,
+) -> None:
+    body: str | None = None
+    envelope: _TransientResponseEnvelope | None = None
+    try:
+        hardening = _harden_worker()
+        _send_message(endpoint, {"kind": "HARDENED", "mechanism": hardening})
+        from hunter.evidence_intelligence.model_adapter import response_content_credential_risk
+        from hunter.evidence_intelligence.model_adapter_transport import (
+            _DISPATCH_MINT,
+            DispatchAuthorization,
+            TransportCredential,
+            TransportResult,
+        )
+
+        authorization = DispatchAuthorization(_DISPATCH_MINT, **authorization_fields)
+        credential = TransportCredential(credential_secret, slot_identity=credential_slot_identity)
+        try:
+            result = transport.send(request, authorization=authorization, credential=credential)
+        except Exception as error:
+            _send_message(endpoint, {"kind": "TRANSPORT_RAISED", "exception_type": type(error).__name__})
+            return
+        if not isinstance(result, TransportResult):
+            _send_message(endpoint, {"kind": "TRANSPORT_NON_CANONICAL"})
+            return
+        body = result.response_text
+        credential_safe = body is None or response_content_credential_risk(body) is None
+        _send_message(
+            endpoint,
+            {
+                "kind": "TRANSPORT_RESULT",
+                "result_class": result.result_class,
+                "delivery_certainty": result.delivery_certainty,
+                "execution_evidence": result.execution_evidence,
+                "transport_identity": result.transport_identity,
+                "transport_version": result.transport_version,
+                "response_protocol_identity": result.response_protocol_identity,
+                "response_protocol_version": result.response_protocol_version,
+                "response_present": body is not None,
+                "credential_safe": credential_safe,
+                "provider_status_metadata": result.provider_status_metadata,
+                "correlation_identity": result.correlation_identity,
+                "idempotency_key": result.idempotency_key,
+                "reason_code": result.reason_code,
+            },
+        )
+        bind = _recv_message(endpoint)
+        if bind.get("op") != "BIND" or not bind.get("keep_body"):
+            body = None
+            _send_message(endpoint, {"kind": "DISCARDED"})
+            return
+        raw_envelope = bind.get("envelope")
+        if body is None or not credential_safe or not isinstance(raw_envelope, dict):
+            body = None
+            _send_message(endpoint, {"kind": "DISCARDED"})
+            return
+        envelope = _TransientResponseEnvelope(**raw_envelope)
+        _send_message(endpoint, {"kind": "BOUND"})
+        command = _recv_message(endpoint)
+        if command.get("op") == "DISCARD":
+            body = None
+            _send_message(endpoint, {"kind": "DISCARDED"})
+            return
+        if command.get("op") != "EXECUTE" or body is None or envelope is None:
+            _send_message(
+                endpoint,
+                {
+                    "kind": "REFUSAL",
+                    "state": "INPUT_UNAVAILABLE",
+                    "reason_code": "PROTECTED_WORKER_COMMAND_REJECTED",
+                },
+            )
+            return
+        plan = command.get("plan")
+        if not isinstance(plan, dict):
+            _send_message(
+                endpoint,
+                {
+                    "kind": "REFUSAL",
+                    "state": "INPUT_UNAVAILABLE",
+                    "reason_code": "VALIDATION_PLAN_UNAVAILABLE",
+                },
+            )
+            return
+        _send_message(endpoint, _evaluate_body(body, plan))
+        body = None
+    except BaseException:
+        try:
+            _send_message(endpoint, {"kind": "WORKER_ERROR", "reason_code": "PROTECTED_WORKER_EXECUTION_FAILED"})
+        except BaseException:
+            pass
+    finally:
+        body = None
+        try:
+            endpoint.close()
+        except OSError:
+            pass
+
+
 class TransientResponseHandoffVault:
-    """Split protected-worker coordinator containing no caller-readable body state."""
+    """Spawn-based coordinator containing no caller-readable response body state."""
 
     def __init__(self) -> None:
         self.__model_adapter_bound = False
@@ -136,13 +349,11 @@ class TransientResponseHandoffVault:
         self.__response_validator_bound = False
         self.__response_validator_ref: weakref.ReferenceType[Any] | None = None
         self.__sessions: dict[str, _ProtectedWorkerSession] = {}
-        self.__worker_mode = False
-        self.__worker_entry: Any | None = None
         self.__lock = threading.Lock()
 
     @staticmethod
     def protected_worker_supported() -> bool:
-        return hasattr(os, "fork") and (sys.platform.startswith("linux") or sys.platform == "darwin")
+        return sys.platform.startswith("linux") or sys.platform == "darwin"
 
     def _bind_model_adapter(self, owner: object, installer: Any) -> None:
         from hunter.evidence_intelligence.model_adapter import ModelAdapterService
@@ -178,20 +389,18 @@ class TransientResponseHandoffVault:
         self.__response_validator_bound = True
 
     def _deposit_authorized(self, capability: object | None, *, entry: Any) -> None:
-        if capability is None or capability is not self.__model_adapter_capability:
-            raise _access_error("transient response deposit requires Model Adapter authority")
-        if not self.__worker_mode:
-            raise _access_error("exact transient bytes may exist only inside the protected worker")
-        if self.__worker_entry is not None:
-            raise _access_error("protected worker already owns a pending transient capture")
-        self.__worker_entry = entry
+        raise _access_error("direct transient-body deposit is forbidden by the spawn worker topology")
 
     def _dispatch_authorized(
         self,
         capability: object | None,
         *,
-        operation: Callable[[], Any],
-    ) -> dict[str, Any]:
+        transport: Any,
+        request: Any,
+        authorization: Any,
+        credential: Any,
+        operation: Any,
+    ) -> Any:
         if capability is None or capability is not self.__model_adapter_capability:
             raise _access_error("protected dispatch requires Model Adapter authority")
         if not self.__response_validator_bound or self.__response_validator_ref is None:
@@ -199,113 +408,122 @@ class TransientResponseHandoffVault:
         if not self.protected_worker_supported():
             raise _access_error("no accepted OS-protected worker is available on this platform")
 
-        validator = self.__response_validator_ref()
-        if validator is None:
-            raise _access_error("canonical ResponseValidator owner disappeared")
-
         parent_endpoint, worker_endpoint = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
-        parent_endpoint.set_inheritable(False)
-        worker_endpoint.set_inheritable(False)
-
-        # Fork only from a quiescent validator boundary. A concurrent authorization
-        # or execution may otherwise leave _state_lock locked in the child with no
-        # surviving owning thread. The child installs a fresh lock before any
-        # validator operation; the parent releases the original immediately after
-        # the fork.
-        validator_state_lock = validator._state_lock  # noqa: SLF001 - same protected boundary
-        validator_state_lock.acquire()
+        authorization_fields = {
+            "handoff_id": authorization.handoff_id,
+            "attempt_id": authorization.attempt_id,
+            "execution_profile_identity": authorization.execution_profile_identity,
+            "consumed_at": authorization.consumed_at,
+        }
+        context = multiprocessing.get_context("spawn")
+        process = context.Process(
+            target=_spawn_transport_worker,
+            args=(
+                worker_endpoint,
+                transport,
+                request,
+                authorization_fields,
+                credential.reveal(),
+                credential.slot_identity,
+            ),
+            daemon=False,
+        )
         try:
-            pid = os.fork()
-        except BaseException:
-            validator_state_lock.release()
+            process.start()
+        except BaseException as error:
             parent_endpoint.close()
             worker_endpoint.close()
-            raise
-        if pid == 0:  # pragma: no cover - assertions observe the parent side
-            try:
-                validator._state_lock = threading.Lock()  # noqa: SLF001 - post-fork child reset
-                parent_endpoint.close()
-                self.__worker_mode = True
-                self.__sessions = {}
-                hardening = _harden_worker()
-                _send_message(worker_endpoint, {"kind": "HARDENED", "mechanism": hardening})
-                result = operation()
-                response_artifact = getattr(result, "response_artifact", None)
-                capture_identity = (
-                    getattr(response_artifact, "response_artifact_identity", None)
-                    if response_artifact is not None
-                    else None
-                )
-                ready = self.__worker_entry is not None
-                _send_message(
-                    worker_endpoint,
-                    {
-                        "kind": "DISPATCH_RESULT",
-                        "outcome_id": result.outcome.outcome_id,
-                        "response_capture_identity": capture_identity,
-                        "capture_cutoff": result.outcome.recorded_at.isoformat(),
-                        "validation_ready": ready,
-                    },
-                )
-                if ready:
-                    self.__serve_one_command(worker_endpoint)
-            except BaseException:  # noqa: BLE001 - never serialize body/exception detail
-                try:
-                    _send_message(
-                        worker_endpoint,
-                        {"kind": "WORKER_ERROR", "reason_code": "PROTECTED_WORKER_EXECUTION_FAILED"},
-                    )
-                except BaseException:
-                    pass
-            finally:
-                self.__worker_entry = None
-                try:
-                    worker_endpoint.close()
-                except OSError:
-                    pass
-                os._exit(0)
-
-        validator_state_lock.release()
+            raise ProtectedTransportRaised(f"SPAWN_{type(error).__name__}") from error
         worker_endpoint.close()
         try:
             hardened = _recv_message(parent_endpoint)
             if hardened.get("kind") != "HARDENED":
                 raise _access_error("protected worker did not establish its isolation boundary")
-            result = _recv_message(parent_endpoint)
-            if result.get("kind") != "DISPATCH_RESULT":
-                raise _access_error("protected worker failed before governed response capture")
-            capture_identity = result.get("response_capture_identity")
-            if result.get("validation_ready"):
-                if not isinstance(capture_identity, str) or not capture_identity:
-                    raise _access_error("protected worker omitted canonical capture identity")
-                entry_envelope = self._envelope_from_persistence_coordinates(capture_identity, result)
-                session = _ProtectedWorkerSession(
-                    pid=pid,
-                    endpoint=parent_endpoint,
-                    envelope=entry_envelope,
-                    hardening=str(hardened.get("mechanism") or ""),
+            transport_message = _recv_message(parent_endpoint)
+            kind = transport_message.get("kind")
+            if kind == "TRANSPORT_RAISED":
+                raise ProtectedTransportRaised(str(transport_message.get("exception_type") or "UNKNOWN"))
+            if kind == "TRANSPORT_NON_CANONICAL":
+                from hunter.evidence_intelligence.model_adapter_transport import TransportResult
+
+                sanitized = object()
+            elif kind == "TRANSPORT_RESULT":
+                from hunter.evidence_intelligence.model_adapter_transport import TransportResult
+
+                sanitized = TransportResult(
+                    result_class=transport_message["result_class"],
+                    delivery_certainty=transport_message["delivery_certainty"],
+                    execution_evidence=transport_message["execution_evidence"],
+                    transport_identity=transport_message["transport_identity"],
+                    transport_version=transport_message["transport_version"],
+                    response_protocol_identity=transport_message["response_protocol_identity"],
+                    response_protocol_version=transport_message["response_protocol_version"],
+                    response_text="" if transport_message.get("response_present") else None,
+                    provider_status_metadata=tuple(
+                        tuple(item) for item in transport_message.get("provider_status_metadata", [])
+                    ),
+                    correlation_identity=transport_message.get("correlation_identity"),
+                    idempotency_key=transport_message.get("idempotency_key"),
+                    reason_code=str(transport_message.get("reason_code") or ""),
                 )
-                with self.__lock:
-                    if capture_identity in self.__sessions:
-                        raise _access_error("protected worker session already exists for capture")
-                    self.__sessions[capture_identity] = session
             else:
+                raise _access_error("protected worker failed before governed transport observation")
+
+            result = operation(sanitized)
+            response_artifact = getattr(result, "response_artifact", None)
+            outcome = getattr(result, "outcome", None)
+            keep_body = bool(
+                kind == "TRANSPORT_RESULT"
+                and transport_message.get("response_present")
+                and transport_message.get("credential_safe")
+                and response_artifact is not None
+                and outcome is not None
+                and getattr(outcome, "outcome", None) == "SUCCEEDED_TRANSPORT"
+            )
+            if not keep_body:
+                _send_message(parent_endpoint, {"op": "BIND", "keep_body": False})
+                try:
+                    _recv_message(parent_endpoint)
+                except BaseException:
+                    pass
                 parent_endpoint.close()
-                os.waitpid(pid, 0)
+                process.join(timeout=5)
+                return result
+
+            capture_identity = response_artifact.response_artifact_identity
+            envelope = self._envelope_from_persistence_coordinates(
+                capture_identity,
+                {
+                    "capture_cutoff": outcome.recorded_at.isoformat(),
+                    "outcome_id": outcome.outcome_id,
+                },
+            )
+            _send_message(
+                parent_endpoint,
+                {"op": "BIND", "keep_body": True, "envelope": envelope.as_control()},
+            )
+            bound = _recv_message(parent_endpoint)
+            if bound.get("kind") != "BOUND":
+                raise _access_error("protected worker refused canonical capture binding")
+            session = _ProtectedWorkerSession(
+                process=process,
+                endpoint=parent_endpoint,
+                envelope=envelope,
+                hardening=str(hardened.get("mechanism") or ""),
+            )
+            with self.__lock:
+                if capture_identity in self.__sessions:
+                    raise _access_error("protected worker session already exists for capture")
+                self.__sessions[capture_identity] = session
             return result
         except BaseException:
             try:
                 parent_endpoint.close()
             except OSError:
                 pass
-            try:
-                os.kill(pid, 9)
-            except OSError:
-                pass
-            try:
-                os.waitpid(pid, 0)
-            except OSError:
-                pass
+            if process.is_alive():
+                process.terminate()
+            process.join(timeout=5)
             raise
 
     def _envelope_from_persistence_coordinates(
@@ -319,7 +537,7 @@ class TransientResponseHandoffVault:
         repository = validator._model_adapter_repository  # noqa: SLF001 - same protected boundary
         capture = repository.strict_known_response_capture(
             capture_identity, datetime.fromisoformat(str(result["capture_cutoff"]))
-        )  # noqa: SLF001
+        )
         if capture is None:
             raise _access_error("protected capture is not durably knowable")
         artifact, outcome = capture
@@ -338,44 +556,37 @@ class TransientResponseHandoffVault:
         )
 
     def available_for_validation(self, **coordinates: str) -> bool:
-        if self.__worker_mode:
-            entry = self.__worker_entry
-            return entry is not None and _TransientResponseEnvelope.from_entry(entry).matches(coordinates)
         capture_identity = coordinates.get("response_capture_identity")
         if not capture_identity:
             return False
         with self.__lock:
             session = self.__sessions.get(capture_identity)
-        if session is None or session.closed or not session.envelope.matches(coordinates):
-            return False
-        try:
-            os.kill(session.pid, 0)
-        except OSError:
-            return False
-        return True
+        return bool(
+            session is not None
+            and not session.closed
+            and session.process.is_alive()
+            and session.envelope.matches(coordinates)
+        )
 
     def consume_authorized(self, **coordinates: str) -> str:
-        if not self.__worker_mode:
-            raise _access_error("caller-facing process has no transient-body consume capability")
-        entry = self.__worker_entry
-        if entry is None or not _TransientResponseEnvelope.from_entry(entry).matches(coordinates):
-            raise _access_error("transient response lineage does not match authorization")
-        self.__worker_entry = None
-        return entry.content
+        raise _access_error("caller-facing process has no transient-body consume capability")
 
-    def execute_canonical_event(self, *, response_capture_identity: str, validation_event_id: str) -> dict[str, Any]:
-        if self.__worker_mode:
-            raise _access_error("worker cannot recursively invoke its caller control channel")
+    def execute_canonical_event(
+        self,
+        *,
+        response_capture_identity: str,
+        validation_event_id: str,
+        execution_plan: dict[str, Any],
+    ) -> dict[str, Any]:
         with self.__lock:
             session = self.__sessions.get(response_capture_identity)
         if session is None or session.closed:
             raise _access_error("protected transient worker is unavailable")
+        if str(execution_plan.get("coordinates", {}).get("validation_event_id")) != validation_event_id:
+            raise _access_error("protected semantic plan event identity mismatch")
         with session.lock:
             try:
-                _send_message(
-                    session.endpoint,
-                    {"op": "EXECUTE", "validation_event_id": validation_event_id},
-                )
+                _send_message(session.endpoint, {"op": "EXECUTE", "plan": execution_plan})
                 reply = _recv_message(session.endpoint)
             except (OSError, EOFError, RuntimeError, ValueError) as error:
                 self._close_session(response_capture_identity, terminate=True)
@@ -386,11 +597,6 @@ class TransientResponseHandoffVault:
         return reply
 
     def discard_authorized(self, **coordinates: str) -> None:
-        if self.__worker_mode:
-            entry = self.__worker_entry
-            if entry is not None and _TransientResponseEnvelope.from_entry(entry).matches(coordinates):
-                self.__worker_entry = None
-            return
         capture_identity = coordinates.get("response_capture_identity")
         if not capture_identity:
             return
@@ -407,7 +613,7 @@ class TransientResponseHandoffVault:
             self._close_session(capture_identity, terminate=False)
 
     def _in_protected_worker(self) -> bool:
-        return self.__worker_mode
+        return False
 
     def _close_session(self, capture_identity: str, *, terminate: bool) -> None:
         with self.__lock:
@@ -419,88 +625,9 @@ class TransientResponseHandoffVault:
             session.endpoint.close()
         except OSError:
             pass
-        if terminate:
-            try:
-                os.kill(session.pid, 9)
-            except OSError:
-                pass
-        try:
-            os.waitpid(session.pid, 0)
-        except OSError:
-            pass
-
-    def __serve_one_command(self, endpoint: socket.socket) -> None:
-        command = _recv_message(endpoint)
-        op = command.get("op")
-        if op == "DISCARD":
-            self.__worker_entry = None
-            _send_message(endpoint, {"kind": "DISCARDED"})
-            return
-        if op != "EXECUTE":
-            _send_message(
-                endpoint,
-                {"kind": "REFUSAL", "state": "INPUT_UNAVAILABLE", "reason_code": "PROTECTED_WORKER_COMMAND_REJECTED"},
-            )
-            return
-        validation_event_id = command.get("validation_event_id")
-        if not isinstance(validation_event_id, str) or not validation_event_id:
-            _send_message(
-                endpoint,
-                {"kind": "REFUSAL", "state": "INPUT_UNAVAILABLE", "reason_code": "VALIDATION_EVENT_UNAVAILABLE"},
-            )
-            return
-        validator = self.__response_validator_ref() if self.__response_validator_ref is not None else None
-        if validator is None:
-            _send_message(
-                endpoint,
-                {"kind": "REFUSAL", "state": "INPUT_UNAVAILABLE", "reason_code": "VALIDATOR_OWNER_UNAVAILABLE"},
-            )
-            return
-        allocation = validator._foundation._repository.validation_event(validation_event_id)  # noqa: SLF001
-        if allocation is None:
-            _send_message(
-                endpoint,
-                {"kind": "REFUSAL", "state": "INPUT_UNAVAILABLE", "reason_code": "VALIDATION_EVENT_UNAVAILABLE"},
-            )
-            return
-        authorization_result = validator.authorize_event(allocation)
-        if authorization_result.refusal is not None:
-            refusal = authorization_result.refusal.refusal
-            _send_message(
-                endpoint, {"kind": "REFUSAL", "state": refusal.state.value, "reason_code": refusal.reason_code}
-            )
-            return
-        authorization = authorization_result.authorization
-        if authorization is None:
-            _send_message(
-                endpoint,
-                {
-                    "kind": "REFUSAL",
-                    "state": "INPUT_UNAVAILABLE",
-                    "reason_code": "VALIDATION_AUTHORIZATION_UNAVAILABLE",
-                },
-            )
-            return
-        execution = validator.execute(authorization)
-        if not hasattr(execution, "outcome"):
-            refusal = execution.refusal
-            _send_message(
-                endpoint, {"kind": "REFUSAL", "state": refusal.state.value, "reason_code": refusal.reason_code}
-            )
-            return
-        outcome = execution.outcome
-        _send_message(
-            endpoint,
-            {
-                "kind": "EXECUTION_RESULT",
-                "authorization_id": outcome.authorization_id,
-                "state": outcome.state.value,
-                "findings": [
-                    {"dimension": item.dimension, "state": item.state.value, "reason_code": item.reason_code}
-                    for item in outcome.findings
-                ],
-            },
-        )
+        if terminate and session.process.is_alive():
+            session.process.terminate()
+        session.process.join(timeout=5)
 
     def close(self) -> None:
         with self.__lock:

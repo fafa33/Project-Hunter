@@ -906,40 +906,44 @@ def test_pr335_integral_decimal_schema_size_keywords_are_valid(tmp_path: Path) -
     assert result.outcome.state is ValidationState.VALID
 
 
-def test_pr335_protected_worker_waits_for_validator_quiescence_and_resets_child_lock(tmp_path: Path) -> None:
+def test_pr335_protected_worker_uses_fresh_spawn_interpreter_not_fork() -> None:
+    source = inspect.getsource(TransientResponseHandoffVault._dispatch_authorized)
+    worker_source = inspect.getsource(__import__(
+        "hunter.evidence_intelligence.transient_worker", fromlist=["_spawn_transport_worker"]
+    )._spawn_transport_worker)
+
+    assert 'get_context("spawn")' in source
+    assert "os.fork" not in source
+    assert "authorize_event" not in worker_source
+    assert "AuthorityStore" not in worker_source
+
+
+def test_pr335_huge_integral_decimal_size_bound_does_not_materialize_python_int(tmp_path: Path) -> None:
+    harness = fixture.make_harness(
+        tmp_path,
+        output_contract='{"type":"string","minLength":1e1000000000}',
+        raw_response='"x"',
+        profile_overrides={"required_dimensions": ("SYNTAX", "SCHEMA", "OUTPUT_CONTRACT")},
+    )
+
+    result = _execute(harness)
+    assert result.outcome.state is ValidationState.INVALID_OUTPUT_CONTRACT
+
+
+def test_pr335_revalidation_uses_parent_fresh_authority_plan_after_dispatch(tmp_path: Path) -> None:
     harness = fixture.make_harness(tmp_path, transient=True)
-    vault = harness.transient_response_vault
-    capability = vars(harness.adapter)["_ModelAdapterService__transient_handoff_capability"]
-    entered = __import__("threading").Event()
-    release = __import__("threading").Event()
+    policy_time = fixture.VALIDATION_CUTOFF + timedelta(seconds=1)
+    publish_policy_successor(
+        harness.source_authority,
+        cutoff=policy_time,
+        processing="ALLOW",
+    )
+    harness.foundation._clock = fixture.SequenceClock(policy_time + timedelta(seconds=1))  # noqa: SLF001
+    revalidation = harness.foundation.allocate_revalidation(
+        predecessor_validation_event_id=harness.allocation.validation_event_id
+    )
 
-    def hold_validator_lock() -> None:
-        with harness.validator._state_lock:  # noqa: SLF001 - adversarial fork regression
-            entered.set()
-            assert release.wait(5)
-
-    def probe_operation() -> Any:
-        # Prove the child-side validator lock is usable after fork without
-        # depending on transient-session availability during dispatch itself.
-        with harness.validator._state_lock:  # noqa: SLF001 - adversarial fork regression
-            pass
-        from types import SimpleNamespace
-
-        return SimpleNamespace(
-            outcome=SimpleNamespace(outcome_id="protected-worker-lock-probe", recorded_at=fixture.CONCLUDED_AT),
-            response_artifact=None,
-        )
-
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        holder = executor.submit(hold_validator_lock)
-        assert entered.wait(5)
-        dispatch = executor.submit(
-            lambda: vault._dispatch_authorized(capability, operation=probe_operation)  # noqa: SLF001
-        )
-        assert not dispatch.done()
-        release.set()
-        metadata = dispatch.result(timeout=10)
-        holder.result(timeout=5)
-
-    assert metadata["outcome_id"] == "protected-worker-lock-probe"
-    assert metadata["validation_ready"] is False
+    authorized = harness.validator.authorize_event(revalidation)
+    assert authorized.authorization is not None
+    result = harness.validator.execute(authorized.authorization)
+    assert result.outcome.state is ValidationState.VALID

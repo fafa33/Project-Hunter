@@ -1286,82 +1286,71 @@ class ResponseValidator:
                 assert refusal_result.refusal is not None
                 self._execution_results[canonical.authorization_id] = refusal_result.refusal
                 return refusal_result.refusal
-            if boundary._in_protected_worker():  # noqa: SLF001 - exact protected-worker execution seam
-                try:
-                    content = boundary.consume_authorized(
-                        response_capture_identity=canonical.coordinates.response_capture_identity,
-                        attempt_id=canonical.coordinates.attempt_id,
-                        handoff_id=canonical.coordinates.handoff_id,
-                        outcome_id=canonical.coordinates.outcome_id,
-                        execution_profile_identity=canonical.coordinates.execution_profile_identity,
-                        response_protocol_identity=rederived.response_artifact.response_protocol_identity,
-                        response_protocol_version=rederived.response_artifact.response_protocol_version,
-                        transport_identity=rederived.response_artifact.transport_identity,
-                        transport_version=rederived.response_artifact.transport_version,
-                    )
-                except TransientResponseAccessError as error:
-                    raise _AuthorizationRefusalSignal(
-                        ValidationState.INPUT_UNAVAILABLE,
-                        "TRANSIENT_RESPONSE_ACCESS_UNAVAILABLE",
-                        (("validation_event_id", inputs.allocation.validation_event_id),),
-                    ) from error
-                findings = evaluate_text(content)
-            else:
-                try:
-                    worker_result = boundary.execute_canonical_event(
-                        response_capture_identity=canonical.coordinates.response_capture_identity,
-                        validation_event_id=canonical.coordinates.validation_event_id,
-                    )
-                except TransientResponseAccessError:
-                    refusal_result = self._refusal_result(
-                        allocation=inputs.allocation,
-                        state=ValidationState.INPUT_UNAVAILABLE,
-                        reason_code="TRANSIENT_RESPONSE_ACCESS_UNAVAILABLE",
-                        available_authority=(("validation_event_id", inputs.allocation.validation_event_id),),
-                    )
-                    assert refusal_result.refusal is not None
-                    self._execution_results[canonical.authorization_id] = refusal_result.refusal
-                    return refusal_result.refusal
-                if worker_result.get("kind") == "REFUSAL":
-                    try:
-                        refusal_state = ValidationState(str(worker_result.get("state")))
-                    except ValueError as error:
-                        raise ResponseValidationExecutionError(
-                            "protected worker returned an unknown refusal state"
-                        ) from error
-                    if refusal_state is not ValidationState.INPUT_UNAVAILABLE:
-                        raise ResponseValidationExecutionError(
-                            "protected worker returned a non-input refusal after authorization"
-                        )
-                    refusal_result = self._refusal_result(
-                        allocation=inputs.allocation,
-                        state=refusal_state,
-                        reason_code=str(worker_result.get("reason_code") or "TRANSIENT_RESPONSE_ACCESS_UNAVAILABLE"),
-                        available_authority=(("validation_event_id", inputs.allocation.validation_event_id),),
-                    )
-                    assert refusal_result.refusal is not None
-                    self._execution_results[canonical.authorization_id] = refusal_result.refusal
-                    return refusal_result.refusal
-                if worker_result.get("authorization_id") != canonical.authorization_id:
-                    raise ResponseValidationExecutionError("protected worker authorization identity mismatch")
-                raw_findings = worker_result.get("findings")
-                if not isinstance(raw_findings, list) or not raw_findings:
-                    raise ResponseValidationExecutionError("protected worker returned no semantic findings")
-                findings = tuple(
-                    ResponseValidationFinding(
-                        dimension=str(item["dimension"]),
-                        state=ValidationState(str(item["state"])),
-                        reason_code=str(item["reason_code"]),
-                    )
-                    for item in raw_findings
-                    if isinstance(item, dict)
+            execution_plan = {
+                "authorization_id": canonical.authorization_id,
+                "coordinates": asdict(canonical.coordinates),
+                "output_contract": rederived.output_contract,
+                "evidence_inputs": rederived.evidence_inputs,
+                "provider_status_metadata": rederived.provider_status_metadata,
+                "required_dimensions": rederived.required_dimensions,
+                "runtime": asdict(self._runtime),
+            }
+            try:
+                worker_result = boundary.execute_canonical_event(
+                    response_capture_identity=canonical.coordinates.response_capture_identity,
+                    validation_event_id=canonical.coordinates.validation_event_id,
+                    execution_plan=execution_plan,
                 )
-                if (
-                    not findings
-                    or str(worker_result.get("state"))
-                    != highest_precedence_validation_state(item.state for item in findings).value
-                ):
-                    raise ResponseValidationExecutionError("protected worker semantic state mismatch")
+            except TransientResponseAccessError:
+                refusal_result = self._refusal_result(
+                    allocation=inputs.allocation,
+                    state=ValidationState.INPUT_UNAVAILABLE,
+                    reason_code="TRANSIENT_RESPONSE_ACCESS_UNAVAILABLE",
+                    available_authority=(("validation_event_id", inputs.allocation.validation_event_id),),
+                )
+                assert refusal_result.refusal is not None
+                self._execution_results[canonical.authorization_id] = refusal_result.refusal
+                return refusal_result.refusal
+            if worker_result.get("kind") == "REFUSAL":
+                try:
+                    refusal_state = ValidationState(str(worker_result.get("state")))
+                except ValueError as error:
+                    raise ResponseValidationExecutionError(
+                        "protected worker returned an unknown refusal state"
+                    ) from error
+                if refusal_state is not ValidationState.INPUT_UNAVAILABLE:
+                    raise ResponseValidationExecutionError(
+                        "protected worker returned a non-input refusal after authorization"
+                    )
+                refusal_result = self._refusal_result(
+                    allocation=inputs.allocation,
+                    state=refusal_state,
+                    reason_code=str(worker_result.get("reason_code") or "TRANSIENT_RESPONSE_ACCESS_UNAVAILABLE"),
+                    available_authority=(("validation_event_id", inputs.allocation.validation_event_id),),
+                )
+                assert refusal_result.refusal is not None
+                self._execution_results[canonical.authorization_id] = refusal_result.refusal
+                return refusal_result.refusal
+            if worker_result.get("authorization_id") != canonical.authorization_id:
+                raise ResponseValidationExecutionError("protected worker authorization identity mismatch")
+            raw_findings = worker_result.get("findings")
+            if not isinstance(raw_findings, list) or not raw_findings:
+                raise ResponseValidationExecutionError("protected worker returned no semantic findings")
+            findings = tuple(
+                ResponseValidationFinding(
+                    dimension=str(item["dimension"]),
+                    state=ValidationState(str(item["state"])),
+                    reason_code=str(item["reason_code"]),
+                )
+                for item in raw_findings
+                if isinstance(item, dict)
+            )
+            if (
+                not findings
+                or str(worker_result.get("state"))
+                != highest_precedence_validation_state(item.state for item in findings).value
+            ):
+                raise ResponseValidationExecutionError("protected worker semantic state mismatch")
 
         state = highest_precedence_validation_state(item.state for item in findings)
         outcome = ResponseSemanticValidationOutcome(
@@ -2009,6 +1998,18 @@ def _is_non_negative_json_integer(value: Any) -> bool:
     return False
 
 
+def _length_less_than_bound(length: int, bound: Any) -> bool:
+    if isinstance(bound, Decimal):
+        return Decimal(length) < bound
+    return length < bound
+
+
+def _length_greater_than_bound(length: int, bound: Any) -> bool:
+    if isinstance(bound, Decimal):
+        return Decimal(length) > bound
+    return length > bound
+
+
 def _schema_type_invalid(value: Any, schema: Mapping[str, Any]) -> bool:
     declared = schema.get("type")
     if declared is not None and not _matches_json_type(value, str(declared)):
@@ -2055,17 +2056,17 @@ def _output_contract_invalid(value: Any, schema: Mapping[str, Any]) -> bool:
         if isinstance(additional, Mapping) and any(_output_contract_invalid(value[key], additional) for key in extra):
             return True
     if isinstance(value, list):
-        if "minItems" in schema and len(value) < int(schema["minItems"]):
+        if "minItems" in schema and _length_less_than_bound(len(value), schema["minItems"]):
             return True
-        if "maxItems" in schema and len(value) > int(schema["maxItems"]):
+        if "maxItems" in schema and _length_greater_than_bound(len(value), schema["maxItems"]):
             return True
         items = schema.get("items")
         if isinstance(items, Mapping) and any(_output_contract_invalid(item, items) for item in value):
             return True
     if isinstance(value, str):
-        if "minLength" in schema and len(value) < int(schema["minLength"]):
+        if "minLength" in schema and _length_less_than_bound(len(value), schema["minLength"]):
             return True
-        if "maxLength" in schema and len(value) > int(schema["maxLength"]):
+        if "maxLength" in schema and _length_greater_than_bound(len(value), schema["maxLength"]):
             return True
     if isinstance(value, (int, float, Decimal)) and not isinstance(value, bool):
         if "minimum" in schema and value < schema["minimum"]:

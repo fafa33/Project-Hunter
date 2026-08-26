@@ -66,7 +66,7 @@ from hunter.evidence_intelligence.source_handling import (
     _string_sequence,
     validate_durable_payload,
 )
-from hunter.evidence_intelligence.transient_worker import TransientResponseHandoffVault
+from hunter.evidence_intelligence.transient_worker import ProtectedTransportRaised, TransientResponseHandoffVault
 
 IdempotencyCapability = Literal["SUPPORTED", "UNAVAILABLE", "UNKNOWN"]
 
@@ -1324,28 +1324,30 @@ class ModelAdapterService:
             consumed_at=dispatched_at.astimezone(UTC).isoformat(),
         )
 
-        def finish_dispatch() -> ModelDispatchOutcome:
-            # 7. Exactly one provider invocation.
-            try:
-                result = transport.send(request, authorization=authorization, credential=credential)
-            except Exception as error:  # noqa: BLE001 - a transport that raises must not lose lineage
-                # The handoff is already consumed, so bytes may well have gone out.
-                # Claiming non-delivery here would be exactly the fabrication ADR 0034
-                # prohibits; the attempt stays attributable and uncertain instead.
-                return self._record_outcome(
-                    prepared=prepared,
-                    profile=profile,
-                    attempt_authority=attempt_authority,
-                    outcome="INTERNAL_ADAPTER_ERROR",
-                    delivery_certainty="UNKNOWN",
-                    execution_evidence="UNKNOWN",
-                    reason_code=f"TRANSPORT_RAISED_{type(error).__name__}",
-                    recorded_at=concluded_at,
-                    dispatched_at=dispatched_at,
-                    transport_identity=profile.transport_identity,
-                    transport_version=profile.transport_version,
-                    handoff_id=handoff.handoff_id,
-                )
+        def finish_dispatch(protected_result: object | None = None) -> ModelDispatchOutcome:
+            # 7. Exactly one provider invocation. For TRANSIENT_NOT_RETAINED the
+            # invocation already occurred in the fresh spawned worker and only a
+            # non-content TransportResult surrogate reaches this callback.
+            if protected_result is None:
+                try:
+                    result: object = transport.send(request, authorization=authorization, credential=credential)
+                except Exception as error:  # noqa: BLE001 - a transport that raises must not lose lineage
+                    return self._record_outcome(
+                        prepared=prepared,
+                        profile=profile,
+                        attempt_authority=attempt_authority,
+                        outcome="INTERNAL_ADAPTER_ERROR",
+                        delivery_certainty="UNKNOWN",
+                        execution_evidence="UNKNOWN",
+                        reason_code=f"TRANSPORT_RAISED_{type(error).__name__}",
+                        recorded_at=concluded_at,
+                        dispatched_at=dispatched_at,
+                        transport_identity=profile.transport_identity,
+                        transport_version=profile.transport_version,
+                        handoff_id=handoff.handoff_id,
+                    )
+            else:
+                result = protected_result
 
             if not isinstance(result, TransportResult):
                 return self._record_outcome(
@@ -1424,29 +1426,42 @@ class ModelAdapterService:
                 transport_version=result.transport_version,
                 handoff_id=handoff.handoff_id,
                 result=result,
+                protected_transient_body=transient_requires_protected_worker,
             )
 
         if transient_requires_protected_worker:
             vault = self._transient_response_vault
             if vault is None:
                 raise ModelAdapterAuthorityError("protected transient worker is unavailable")
-            metadata = vault._dispatch_authorized(  # noqa: SLF001 - capability-checked protected boundary
-                self.__transient_handoff_capability,
-                operation=finish_dispatch,
-            )
+            try:
+                protected_outcome = vault._dispatch_authorized(  # noqa: SLF001 - capability-checked protected boundary
+                    self.__transient_handoff_capability,
+                    transport=transport,
+                    request=request,
+                    authorization=authorization,
+                    credential=credential,
+                    operation=finish_dispatch,
+                )
+            except ProtectedTransportRaised as error:
+                return self._record_outcome(
+                    prepared=prepared,
+                    profile=profile,
+                    attempt_authority=attempt_authority,
+                    outcome="INTERNAL_ADAPTER_ERROR",
+                    delivery_certainty="UNKNOWN",
+                    execution_evidence="UNKNOWN",
+                    reason_code=f"TRANSPORT_RAISED_{error.exception_type}",
+                    recorded_at=concluded_at,
+                    dispatched_at=dispatched_at,
+                    transport_identity=profile.transport_identity,
+                    transport_version=profile.transport_version,
+                    handoff_id=handoff.handoff_id,
+                    protected_transient_body=True,
+                )
             durable_outcome = self._repository.authoritative_outcome(attempt.attempt_id, concluded_at)
-            if durable_outcome is None or durable_outcome.outcome_id != metadata.get("outcome_id"):
+            if durable_outcome is None or durable_outcome.outcome_id != protected_outcome.outcome.outcome_id:
                 raise TransientResponseAccessError("protected dispatch outcome did not rederive from persistence")
-            capture_identity = metadata.get("response_capture_identity")
-            response_artifact = None
-            if capture_identity is not None:
-                if not isinstance(capture_identity, str) or not capture_identity:
-                    raise TransientResponseAccessError("protected dispatch returned an invalid capture identity")
-                capture = self._repository.strict_known_response_capture(capture_identity, concluded_at)
-                if capture is None or capture[1].outcome_id != durable_outcome.outcome_id:
-                    raise TransientResponseAccessError("protected response capture did not rederive from persistence")
-                response_artifact = capture[0]
-            return ModelDispatchOutcome(outcome=durable_outcome, response_artifact=response_artifact)
+            return protected_outcome
 
         return finish_dispatch()
 
@@ -1609,6 +1624,7 @@ class ModelAdapterService:
         transport_version: str,
         handoff_id: str | None,
         result: TransportResult | None = None,
+        protected_transient_body: bool = False,
     ) -> ModelDispatchOutcome:
         attempt = prepared.attempt
         decision = prepared.resolved_authority.decision
@@ -1718,6 +1734,7 @@ class ModelAdapterService:
             and response_content_credential_risk(result.response_text) is None
             and handoff_id is not None
             and self._transient_response_vault is not None
+            and not protected_transient_body
         ):
             self._transient_response_vault._deposit_authorized(  # noqa: SLF001 - capability-checked handoff
                 self.__transient_handoff_capability,
