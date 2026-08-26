@@ -45,6 +45,10 @@ jobs:
                   '''    assert session.process.pid != os.getpid()\n''',
               ),
               (
+                  '''                open(f"/proc/{session.pid}/mem", "rb", buffering=0)\n''',
+                  '''                open(f"/proc/{session.process.pid}/mem", "rb", buffering=0)\n''',
+              ),
+              (
                   '''    assert vault_state["_TransientResponseHandoffVault__worker_entry"] is None\n    sessions = vault_state["_TransientResponseHandoffVault__sessions"]\n''',
                   '''    assert "_TransientResponseHandoffVault__worker_entry" not in vault_state\n    sessions = vault_state["_TransientResponseHandoffVault__sessions"]\n''',
               ),
