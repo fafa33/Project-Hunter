@@ -3,6 +3,7 @@ from __future__ import annotations
 import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import cast
 
 import pytest
 
@@ -12,6 +13,9 @@ from hunter.evidence_intelligence.response_validator_corrections import (
     ResponseValidationCorrectionCorruption,
     ResponseValidationCorrectionRequest,
     ResponseValidationCorrectionService,
+)
+from hunter.evidence_intelligence.response_validator_terminal_persistence import (
+    ResponseValidationRecord,
 )
 
 
@@ -54,7 +58,9 @@ def test_phase_d_generation_one_persists_and_replays_strict_known(tmp_path) -> N
     service = ResponseValidationCorrectionService(
         _owner(),
         db_path=tmp_path / "phase-d.sqlite3",
-        base_record_loader=lambda event_id: base if event_id == "event-1" else None,
+        base_record_loader=lambda event_id: cast(ResponseValidationRecord, base)
+        if event_id == "event-1"
+        else None,
         clock=_Clock(t1, t2),
     )
 
@@ -80,7 +86,7 @@ def test_phase_d_generation_two_uses_predecessor_correction_recorded_at(tmp_path
     service = ResponseValidationCorrectionService(
         _owner(),
         db_path=tmp_path / "phase-d.sqlite3",
-        base_record_loader=lambda _: base,
+        base_record_loader=lambda _: cast(ResponseValidationRecord, base),
         clock=_Clock(t1, t2, t3, t4),
     )
 
@@ -106,7 +112,7 @@ def test_phase_d_inverted_chronology_does_not_consume_generation(tmp_path) -> No
     service = ResponseValidationCorrectionService(
         _owner(),
         db_path=tmp_path / "phase-d.sqlite3",
-        base_record_loader=lambda _: base,
+        base_record_loader=lambda _: cast(ResponseValidationRecord, base),
         clock=_Clock(invalid, valid, recorded),
     )
     request = _request(base.record_id)
@@ -129,7 +135,7 @@ def test_phase_d_identical_retry_joins_and_tamper_fails_closed(tmp_path) -> None
     service = ResponseValidationCorrectionService(
         _owner(),
         db_path=path,
-        base_record_loader=lambda _: base,
+        base_record_loader=lambda _: cast(ResponseValidationRecord, base),
         clock=_Clock(t1, t2),
     )
     request = _request(base.record_id)
