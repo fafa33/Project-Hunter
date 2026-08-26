@@ -58,9 +58,7 @@ def test_phase_d_generation_one_persists_and_replays_strict_known(tmp_path) -> N
     service = ResponseValidationCorrectionService(
         _owner(),
         db_path=tmp_path / "phase-d.sqlite3",
-        base_record_loader=lambda event_id: cast(ResponseValidationRecord, base)
-        if event_id == "event-1"
-        else None,
+        base_record_loader=lambda event_id: cast(ResponseValidationRecord, base) if event_id == "event-1" else None,
         clock=_Clock(t1, t2),
     )
 
