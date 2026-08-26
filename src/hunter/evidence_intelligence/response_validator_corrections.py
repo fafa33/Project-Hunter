@@ -94,9 +94,7 @@ class ResponseValidationCorrectionAllocation:
         lower = _aware_utc("predecessor_accepted_at", self.predecessor_accepted_at)
         cutoff = _aware_utc("correction_cutoff", self.correction_cutoff)
         if lower > cutoff:
-            raise ResponseValidationCorrectionConflict(
-                "correction cutoff precedes predecessor durable acceptance"
-            )
+            raise ResponseValidationCorrectionConflict("correction cutoff precedes predecessor durable acceptance")
         object.__setattr__(self, "predecessor_accepted_at", lower)
         object.__setattr__(self, "correction_cutoff", cutoff)
 
@@ -250,9 +248,7 @@ class ResponseValidationCorrectionService:
 
             head_id, generation, lower_bound = self._current_head(connection, request.validation_event_id)
             if head_id != request.predecessor_record_id:
-                raise ResponseValidationCorrectionConflict(
-                    "correction request does not name exact current predecessor"
-                )
+                raise ResponseValidationCorrectionConflict("correction request does not name exact current predecessor")
             cutoff = _aware_utc("correction_cutoff", self._clock.now())
             if cutoff < lower_bound:
                 raise ResponseValidationCorrectionConflict(
@@ -349,17 +345,13 @@ class ResponseValidationCorrectionService:
             existing = self._record_by_decision(connection, allocation.correction_decision_id)
             if existing is not None:
                 if _record_decision_tuple(existing) != _decision_retry_tuple(decision):
-                    raise ResponseValidationCorrectionConflict(
-                        "retry conflicts with immutable corrected semantics"
-                    )
+                    raise ResponseValidationCorrectionConflict("retry conflicts with immutable corrected semantics")
                 return existing
             head_id, generation, predecessor_accepted_at = self._current_head(
                 connection, allocation.validation_event_id
             )
             if head_id != allocation.predecessor_record_id or generation + 1 != allocation.generation:
-                raise ResponseValidationCorrectionConflict(
-                    "correction allocation no longer extends exact current head"
-                )
+                raise ResponseValidationCorrectionConflict("correction allocation no longer extends exact current head")
             if predecessor_accepted_at != allocation.predecessor_accepted_at:
                 raise ResponseValidationCorrectionConflict(
                     "correction allocation predecessor acceptance was substituted"
@@ -368,9 +360,7 @@ class ResponseValidationCorrectionService:
                 raise ResponseValidationCorrectionConflict("correction predecessor chronology is invalid")
             recorded_at = _aware_utc("correction_recorded_at", self._clock.now())
             if recorded_at < allocation.correction_cutoff:
-                raise ResponseValidationCorrectionConflict(
-                    "correction acceptance precedes trusted correction cutoff"
-                )
+                raise ResponseValidationCorrectionConflict("correction acceptance precedes trusted correction cutoff")
             record = ResponseValidationCorrectionRecord(
                 validation_event_id=allocation.validation_event_id,
                 generation=allocation.generation,
@@ -408,9 +398,7 @@ class ResponseValidationCorrectionService:
                     ),
                 )
             except sqlite3.IntegrityError as error:
-                raise ResponseValidationCorrectionConflict(
-                    "immutable correction record identity conflict"
-                ) from error
+                raise ResponseValidationCorrectionConflict("immutable correction record identity conflict") from error
             return record
 
     def replay(
@@ -450,9 +438,7 @@ class ResponseValidationCorrectionService:
             expected_generation += 1
         return current
 
-    def _current_head(
-        self, connection: sqlite3.Connection, validation_event_id: str
-    ) -> tuple[str, int, datetime]:
+    def _current_head(self, connection: sqlite3.Connection, validation_event_id: str) -> tuple[str, int, datetime]:
         """Read and integrity-check the exact durable head for one event."""
         row = connection.execute(
             """
@@ -592,9 +578,7 @@ def _allocation_from_row(row: sqlite3.Row) -> ResponseValidationCorrectionAlloca
     }
     for name, value in expected.items():
         if name in row.keys() and row[name] != value:
-            raise ResponseValidationCorrectionCorruption(
-                f"correction allocation {name} index does not match payload"
-            )
+            raise ResponseValidationCorrectionCorruption(f"correction allocation {name} index does not match payload")
     return allocation
 
 
@@ -630,9 +614,7 @@ def _correction_record_from_row(row: sqlite3.Row) -> ResponseValidationCorrectio
     }
     for name, value in expected.items():
         if name in row.keys() and row[name] != value:
-            raise ResponseValidationCorrectionCorruption(
-                f"correction record {name} index does not match payload"
-            )
+            raise ResponseValidationCorrectionCorruption(f"correction record {name} index does not match payload")
     return record
 
 
@@ -678,19 +660,13 @@ def _canonical_outcome(
         raise ResponseValidationCorrectionConflict(
             "correction semantic outcome requires canonical findings and execution metadata"
         )
-    precedence = highest_precedence_validation_state(
-        ValidationState(item[1]) for item in normalized
-    )
+    precedence = highest_precedence_validation_state(ValidationState(item[1]) for item in normalized)
     if precedence is not canonical_state:
-        raise ResponseValidationCorrectionConflict(
-            "correction state does not match canonical finding precedence"
-        )
+        raise ResponseValidationCorrectionConflict("correction state does not match canonical finding precedence")
     if canonical_state is ValidationState.VALID and any(
         ValidationState(item[1]) is not ValidationState.VALID for item in normalized
     ):
-        raise ResponseValidationCorrectionConflict(
-            "VALID correction cannot contain a non-VALID finding"
-        )
+        raise ResponseValidationCorrectionConflict("VALID correction cannot contain a non-VALID finding")
     return canonical_state, normalized
 
 
