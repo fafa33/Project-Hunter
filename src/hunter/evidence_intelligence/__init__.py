@@ -66,6 +66,17 @@ from hunter.evidence_intelligence.provider import (
 from hunter.evidence_intelligence.relationships import RelationshipProjectionService, RelationshipView
 from hunter.evidence_intelligence.reporting import EvidenceIntelligenceReporter, ReportContext
 from hunter.evidence_intelligence.repository import EvidenceIntelligenceRepository
+from hunter.evidence_intelligence.smart_prompt_machine import (
+    PromptBuildAuthorityError,
+    PromptBuildManifest,
+    PromptBuildRequest,
+    PromptCompilationResult,
+    PromptContextCompiler,
+    PromptMachineProfile,
+    PromptMachineProfileRegistry,
+    PromptProfileConflict,
+    SmartPromptMachineError,
+)
 from hunter.evidence_intelligence.validation import (
     EvidenceClassification,
     ExtractionValidationResult,
@@ -126,7 +137,15 @@ __all__ = [
     "PredicateRegistry",
     "PersistedClaim",
     "PersistedConflict",
+    "PromptBuildAuthorityError",
+    "PromptBuildManifest",
+    "PromptBuildRequest",
+    "PromptCompilationResult",
+    "PromptContextCompiler",
     "PromptInjectionDetector",
+    "PromptMachineProfile",
+    "PromptMachineProfileRegistry",
+    "PromptProfileConflict",
     "ProviderExtractionResult",
     "ProviderRunResult",
     "RelationshipProjectionService",
@@ -135,6 +154,7 @@ __all__ = [
     "ReportContext",
     "SecurityAuditEvent",
     "SecureAIProviderRunner",
+    "SmartPromptMachineError",
     "SourceAuthorityVerificationEvent",
     "SourceEvidenceLink",
     "ValidatedClaimProposal",
