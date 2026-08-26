@@ -875,7 +875,6 @@ def test_mutation_style_latest_profile_lookup_would_change_historical_authority(
     assert _authorize(harness).coordinates.profile_publication_id == harness.profile.publication_id
 
 
-
 def test_pr335_non_owner_refusal_preserves_reserved_transient_body(tmp_path: Path) -> None:
     harness = fixture.make_harness(tmp_path, transient=True)
     owner_authorization = _authorize(harness)
