@@ -199,12 +199,31 @@ class TransientResponseHandoffVault:
         if not self.protected_worker_supported():
             raise _access_error("no accepted OS-protected worker is available on this platform")
 
+        validator = self.__response_validator_ref()
+        if validator is None:
+            raise _access_error("canonical ResponseValidator owner disappeared")
+
         parent_endpoint, worker_endpoint = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
         parent_endpoint.set_inheritable(False)
         worker_endpoint.set_inheritable(False)
-        pid = os.fork()
+
+        # Fork only from a quiescent validator boundary. A concurrent authorization
+        # or execution may otherwise leave _state_lock locked in the child with no
+        # surviving owning thread. The child installs a fresh lock before any
+        # validator operation; the parent releases the original immediately after
+        # the fork.
+        validator_state_lock = validator._state_lock  # noqa: SLF001 - same protected boundary
+        validator_state_lock.acquire()
+        try:
+            pid = os.fork()
+        except BaseException:
+            validator_state_lock.release()
+            parent_endpoint.close()
+            worker_endpoint.close()
+            raise
         if pid == 0:  # pragma: no cover - assertions observe the parent side
             try:
+                validator._state_lock = threading.Lock()  # noqa: SLF001 - post-fork child reset
                 parent_endpoint.close()
                 self.__worker_mode = True
                 self.__sessions = {}
@@ -246,6 +265,7 @@ class TransientResponseHandoffVault:
                     pass
                 os._exit(0)
 
+        validator_state_lock.release()
         worker_endpoint.close()
         try:
             hardened = _recv_message(parent_endpoint)

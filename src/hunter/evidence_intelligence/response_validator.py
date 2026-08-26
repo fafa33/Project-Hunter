@@ -1140,7 +1140,10 @@ class ResponseValidator:
         try:
             inputs = self._canonical_authorization_inputs(allocation)
         except _AuthorizationRefusalSignal as signal:
-            self._discard_transient_response(signal.transient_cleanup_coordinates)
+            self._discard_transient_response(
+                signal.transient_cleanup_coordinates,
+                refusing_validation_event_id=allocation.validation_event_id,
+            )
             return self._refusal_result(
                 allocation=allocation,
                 state=signal.state,
@@ -1451,10 +1454,21 @@ class ResponseValidator:
     def _discard_transient_response(
         self,
         coordinates: tuple[tuple[str, str], ...] | None,
+        *,
+        refusing_validation_event_id: str,
     ) -> None:
         boundary = self._transient_response_vault
-        if boundary is not None and coordinates is not None:
-            boundary.discard_authorized(**dict(coordinates))
+        if boundary is None or coordinates is None:
+            return
+        resolved = dict(coordinates)
+        capture_identity = resolved.get("response_capture_identity")
+        if capture_identity:
+            owner = self._foundation._repository.transient_capture_owner(capture_identity)  # noqa: SLF001
+            if owner is not None and owner != refusing_validation_event_id:
+                # A later/refusing event must never destroy the first owner's
+                # single-use body. Reservation ownership is durable and wins.
+                return
+        boundary.discard_authorized(**resolved)
 
     def _canonical_authorization_inputs(
         self,
@@ -1981,8 +1995,18 @@ def _validate_output_contract_schema(schema: Mapping[str, Any]) -> None:
             raise ResponseValidationRuleUnavailable(f"output-contract {name} must be numeric")
     for name in ("minLength", "maxLength", "minItems", "maxItems"):
         item = schema.get(name)
-        if item is not None and (not isinstance(item, int) or isinstance(item, bool) or item < 0):
+        if item is not None and not _is_non_negative_json_integer(item):
             raise ResponseValidationRuleUnavailable(f"output-contract {name} must be a non-negative integer")
+
+
+def _is_non_negative_json_integer(value: Any) -> bool:
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, int):
+        return value >= 0
+    if isinstance(value, Decimal):
+        return value.is_finite() and value >= 0 and value == value.to_integral_value()
+    return False
 
 
 def _schema_type_invalid(value: Any, schema: Mapping[str, Any]) -> bool:

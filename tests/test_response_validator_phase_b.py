@@ -873,3 +873,72 @@ def test_mutation_style_latest_profile_lookup_would_change_historical_authority(
     assert mutated_latest.profile == current
     assert mutated_latest.profile.publication_id != historical.coordinates.profile_publication_id
     assert _authorize(harness).coordinates.profile_publication_id == harness.profile.publication_id
+
+
+
+def test_pr335_non_owner_refusal_preserves_reserved_transient_body(tmp_path: Path) -> None:
+    harness = fixture.make_harness(tmp_path, transient=True)
+    owner_authorization = _authorize(harness)
+
+    policy_time = fixture.VALIDATION_CUTOFF + timedelta(seconds=1)
+    publish_policy_successor(harness.source_authority, cutoff=policy_time, processing="DENY")
+    harness.foundation._clock = fixture.SequenceClock(policy_time + timedelta(seconds=1))  # noqa: SLF001
+    competing = harness.foundation.allocate_revalidation(
+        predecessor_validation_event_id=harness.allocation.validation_event_id
+    )
+
+    refused = harness.validator.authorize_event(competing)
+    assert refused.refusal is not None
+    assert refused.refusal.refusal.state is ValidationState.SOURCE_HANDLING_BLOCKED
+
+    owner_result = harness.validator.execute(owner_authorization)
+    assert owner_result.outcome.state is ValidationState.VALID
+
+
+def test_pr335_integral_decimal_schema_size_keywords_are_valid(tmp_path: Path) -> None:
+    harness = fixture.make_harness(
+        tmp_path,
+        output_contract='{"type":"string","minLength":1.0,"maxLength":3.0}',
+        raw_response='"ab"',
+        profile_overrides={"required_dimensions": ("SYNTAX", "SCHEMA", "OUTPUT_CONTRACT")},
+    )
+
+    result = _execute(harness)
+    assert result.outcome.state is ValidationState.VALID
+
+
+def test_pr335_protected_worker_waits_for_validator_quiescence_and_resets_child_lock(tmp_path: Path) -> None:
+    harness = fixture.make_harness(tmp_path, transient=True)
+    vault = harness.transient_response_vault
+    capability = vars(harness.adapter)["_ModelAdapterService__transient_handoff_capability"]
+    entered = __import__("threading").Event()
+    release = __import__("threading").Event()
+
+    def hold_validator_lock() -> None:
+        with harness.validator._state_lock:  # noqa: SLF001 - adversarial fork regression
+            entered.set()
+            assert release.wait(5)
+
+    def probe_operation() -> Any:
+        joined = harness.validator.authorize_event(harness.allocation)
+        assert joined.authorization is not None
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            outcome=SimpleNamespace(outcome_id="protected-worker-lock-probe", recorded_at=fixture.CONCLUDED_AT),
+            response_artifact=None,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        holder = executor.submit(hold_validator_lock)
+        assert entered.wait(5)
+        dispatch = executor.submit(
+            lambda: vault._dispatch_authorized(capability, operation=probe_operation)  # noqa: SLF001
+        )
+        assert not dispatch.done()
+        release.set()
+        metadata = dispatch.result(timeout=10)
+        holder.result(timeout=5)
+
+    assert metadata["outcome_id"] == "protected-worker-lock-probe"
+    assert metadata["validation_ready"] is False
