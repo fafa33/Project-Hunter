@@ -82,7 +82,7 @@ def _identity(kind: str, value: object) -> str:
     return f"{kind}:{hashlib.sha256(payload).hexdigest()}"
 
 
-def _required_text(name: str, value: str) -> str:
+def _required_text(name: str, value: object) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{name} must be non-empty")
     return value
@@ -154,9 +154,16 @@ class PromptMachineProfile:
             "context_policy_id",
             "context_policy_version",
         ):
-            _required_text(name, str(getattr(self, name)))
+            _required_text(name, getattr(self, name))
         if self.schema_version != PROMPT_MACHINE_PROFILE_SCHEMA_VERSION:
             raise PromptProfileConflict("unknown Smart Prompt Machine profile schema version")
+        if not isinstance(self.required_span_ids, tuple):
+            raise PromptProfileConflict("required span ids must be a tuple of non-empty strings")
+        for span_id in self.required_span_ids:
+            try:
+                _required_text("required_span_id", span_id)
+            except ValueError as error:
+                raise PromptProfileConflict("required span ids must be non-empty strings") from error
         required = tuple(sorted(set(self.required_span_ids)))
         if len(required) != len(self.required_span_ids):
             raise PromptProfileConflict("duplicate required span identity in governed profile")
@@ -222,6 +229,10 @@ class PromptBuildManifest:
     prompt_plan_id: str | None
     prompt_artifact_id: str | None
     schema_version: str = PROMPT_BUILD_MANIFEST_SCHEMA_VERSION
+
+    def __post_init__(self) -> None:
+        if self.schema_version != PROMPT_BUILD_MANIFEST_SCHEMA_VERSION:
+            raise PromptBuildAuthorityError("unknown Smart Prompt Machine manifest schema version")
 
     @property
     def manifest_id(self) -> str:
