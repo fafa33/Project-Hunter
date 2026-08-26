@@ -1,0 +1,40 @@
+name: PR335 fixer bootstrap
+
+on:
+  push:
+    branches:
+      - codex/issue-334-response-validator-phase-b
+    paths:
+      - .github/workflows/pr335-fixer-bootstrap.yml
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: codex/issue-334-response-validator-phase-b
+          fetch-depth: 0
+      - name: Repair missing local import in root fixer
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('.github/workflows/pr335-root-spawn-fix.yml')
+          text = path.read_text()
+          old = "new = '''def test_pr335_protected_worker_uses_fresh_spawn_interpreter_not_fork() -> None:\\n    source = inspect.getsource(TransientResponseHandoffVault._dispatch_authorized)\\n"
+          new = "new = '''def test_pr335_protected_worker_uses_fresh_spawn_interpreter_not_fork() -> None:\\n    from hunter.evidence_intelligence.transient_worker import TransientResponseHandoffVault\\n\\n    source = inspect.getsource(TransientResponseHandoffVault._dispatch_authorized)\\n"
+          if old not in text:
+              raise SystemExit('expected fixer test template not found')
+          path.write_text(text.replace(old, new, 1))
+          PY
+          git diff --check
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add .github/workflows/pr335-root-spawn-fix.yml
+          git commit -m "Fix PR335 spawn fixer test import"
+          git push origin HEAD:codex/issue-334-response-validator-phase-b
