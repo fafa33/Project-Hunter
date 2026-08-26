@@ -238,9 +238,7 @@ def test_smart_machine_routes_task_and_keeps_hostile_text_untrusted(
     assert hostile not in orchestration_request.specification.trusted_system_constraints
     assert result.envelope.task_request_id == request.request_id
     assert result.envelope.route_identity == _route().route_identity
-    assert result.envelope.profile_identity == profiles.resolve(
-        "hunter-evidence-extraction", "1"
-    ).profile_identity
+    assert result.envelope.profile_identity == profiles.resolve("hunter-evidence-extraction", "1").profile_identity
     assert result.envelope.build_record_id == "build-1"
     assert result.envelope.build_manifest_id == result.compilation.manifest.manifest_id
 
