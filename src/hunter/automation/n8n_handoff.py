@@ -130,6 +130,8 @@ class PromptAutomationEnvelopeHandoff:
             raise PromptAutomationHandoffError("automation handoff document must contain string fields only")
         try:
             return cls(**decoded)
+        except PromptAutomationHandoffError:
+            raise
         except (SmartPromptMachineError, TypeError, ValueError):
             raise PromptAutomationHandoffError("automation handoff document is not canonical") from None
 
