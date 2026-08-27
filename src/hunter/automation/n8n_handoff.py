@@ -23,8 +23,8 @@ from hunter.evidence_intelligence.smart_prompt_routing import (
     PromptAutomationVerifier,
 )
 from hunter.evidence_intelligence.smart_prompt_transport import (
-    PromptAutomationDispatchRequest,
     PromptAutomationDispatcher,
+    PromptAutomationDispatchRequest,
     PromptAutomationDispatchResult,
     PromptAutomationTransportError,
 )
