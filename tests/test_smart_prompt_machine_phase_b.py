@@ -33,6 +33,14 @@ from hunter.evidence_intelligence.smart_prompt_routing import (
 )
 from hunter.evidence_intelligence.source_handling import AuthorityStore
 
+_AUTOMATION_SIGNING_KEY_HEX = "11" * 32
+
+
+@pytest.fixture(autouse=True)
+def _automation_signing_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Provide the explicit shared signing key used by Phase B test workers."""
+    monkeypatch.setenv("HUNTER_PROMPT_AUTOMATION_SIGNING_KEY", _AUTOMATION_SIGNING_KEY_HEX)
+
 
 class _Clock:
     def __init__(self, value: datetime) -> None:

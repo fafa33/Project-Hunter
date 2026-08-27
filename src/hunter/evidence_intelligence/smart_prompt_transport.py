@@ -211,7 +211,9 @@ class PromptAutomationAcknowledgement:
 class PromptAutomationTransport(Protocol):
     """External delivery seam; endpoint URLs and credentials stay outside Hunter core."""
 
-    def deliver(self, payload: Mapping[str, str]) -> PromptAutomationAcknowledgement: ...
+    def deliver(self, payload: Mapping[str, str]) -> PromptAutomationAcknowledgement:
+        """Deliver one already-validated non-content payload."""
+        raise NotImplementedError
 
 
 @dataclass(frozen=True)
@@ -242,8 +244,16 @@ class PromptAutomationDispatcher:
         """Derive one deterministic payload from a governed envelope and destination."""
         if not isinstance(request, PromptAutomationDispatchRequest):
             raise TypeError("build_payload requires PromptAutomationDispatchRequest")
-        destination = self._destinations.resolve(request.destination_key)
         envelope = request.envelope
+        if type(envelope) is not PromptAutomationEnvelope:
+            raise PromptAutomationTransportError("dispatcher requires an exact PromptAutomationEnvelope")
+        try:
+            PromptAutomationEnvelope.verify_issuer_signature(envelope)
+        except SmartPromptMachineError as error:
+            raise PromptAutomationTransportError(
+                "automation envelope issuer signature could not be verified"
+            ) from error
+        destination = self._destinations.resolve(request.destination_key)
         dispatch_id = _identity(
             "smart-prompt-automation-dispatch",
             {
