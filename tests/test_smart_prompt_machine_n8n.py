@@ -292,7 +292,6 @@ def test_credential_header_injection_is_rejected_before_request() -> None:
     assert opener.requests == []
 
 
-
 def test_non_latin1_credential_is_rejected_before_request() -> None:
     payload = _payload()
     opener = _Opener(_Response(_ack(payload)))
