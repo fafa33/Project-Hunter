@@ -99,12 +99,12 @@ def validate_defect_prevention_lifecycle() -> list[str]:
 def main() -> int:
     try:
         errors = validate_defect_prevention_lifecycle()
-    except (OSError, json.JSONDecodeError, ValueError) as error:
-        print(f"[Defect Prevention Guard] FAIL: {error}")
+    except (OSError, json.JSONDecodeError, ValueError) as exception:
+        print(f"[Defect Prevention Guard] FAIL: {exception}")
         return 2
     if errors:
-        for error in errors:
-            print(f"[Defect Prevention Guard] FAIL: {error}")
+        for message in errors:
+            print(f"[Defect Prevention Guard] FAIL: {message}")
         return 1
     print("[Defect Prevention Guard] PASS: detection/prevention lifecycle is explicit and valid")
     return 0
