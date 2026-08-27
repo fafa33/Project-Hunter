@@ -332,6 +332,34 @@ def test_duplicate_acknowledgement_keys_fail_closed() -> None:
         _transport(_Opener(_Response(duplicate))).deliver(payload.as_mapping())
 
 
+@pytest.mark.parametrize("receipt_id", ("webhook-secret", "receipt with spaces", "r" * 257))
+def test_receipt_identifier_is_bounded_and_secret_safe(receipt_id: str) -> None:
+    payload = _payload()
+    response = _Response(_ack(payload, receipt_id=receipt_id))
+
+    with pytest.raises(PromptAutomationTransportError, match="receipt identity is invalid") as raised:
+        _transport(_Opener(response)).deliver(payload.as_mapping())
+    assert "webhook-secret" not in str(raised.value)
+
+
+def test_json_decoder_limit_is_normalized_as_malformed_acknowledgement() -> None:
+    payload = _payload()
+    raw = (
+        '{"dispatch_id":'
+        + json.dumps(payload.dispatch_id)
+        + ',"payload_id":'
+        + json.dumps(payload.payload_id)
+        + ',"receipt_id":"receipt-1","accepted":true,"schema_version":'
+        + json.dumps("smart-prompt-automation-ack-v1")
+        + ',"overflow":'
+        + "9" * 5000
+        + "}"
+    ).encode("utf-8")
+
+    with pytest.raises(PromptAutomationTransportError, match="malformed JSON"):
+        _transport(_Opener(_Response(raw))).deliver(payload.as_mapping())
+
+
 def test_environment_factory_requires_operational_secret_and_builds_dispatcher() -> None:
     environment = {
         N8N_WEBHOOK_URL_ENV: "https://n8n.example.test/webhook/hunter",

@@ -51,6 +51,8 @@ N8N_DESTINATION = PromptAutomationDestination(
 
 _DEFAULT_TIMEOUT_SECONDS = 10.0
 _MAX_ACKNOWLEDGEMENT_BYTES = 64 * 1024
+_MAX_RECEIPT_ID_LENGTH = 256
+_RECEIPT_ID_CHARACTERS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.:")
 _PAYLOAD_FIELDS = frozenset(field.name for field in fields(PromptAutomationPayload))
 _ACKNOWLEDGEMENT_FIELDS = frozenset(field.name for field in fields(PromptAutomationAcknowledgement))
 
@@ -180,6 +182,15 @@ def _response_content_type(response: Any) -> str:
     return value if isinstance(value, str) else ""
 
 
+def _validate_receipt_id(receipt_id: object, *, bearer_token: str, endpoint_url: str) -> None:
+    if not isinstance(receipt_id, str) or not 1 <= len(receipt_id) <= _MAX_RECEIPT_ID_LENGTH:
+        raise PromptAutomationTransportError("n8n acknowledgement receipt identity is invalid")
+    if any(character not in _RECEIPT_ID_CHARACTERS for character in receipt_id):
+        raise PromptAutomationTransportError("n8n acknowledgement receipt identity is invalid")
+    if bearer_token in receipt_id or endpoint_url in receipt_id:
+        raise PromptAutomationTransportError("n8n acknowledgement receipt identity is invalid")
+
+
 def _validated_bearer_token(credential: TransportCredential) -> str:
     """Reveal and validate one runtime bearer token before HTTP header construction."""
     token = credential.reveal()
@@ -300,10 +311,15 @@ class N8nPromptAutomationTransport:
             decoded = json.loads(raw.decode("utf-8"), object_pairs_hook=_reject_duplicate_json_keys)
         except _DuplicateJSONKeyError:
             raise PromptAutomationTransportError("n8n webhook acknowledgement contains duplicate JSON keys") from None
-        except (UnicodeDecodeError, json.JSONDecodeError):
+        except (UnicodeDecodeError, ValueError):
             raise PromptAutomationTransportError("n8n webhook acknowledgement is malformed JSON") from None
 
         acknowledgement = _canonical_acknowledgement(decoded)
+        _validate_receipt_id(
+            acknowledgement.receipt_id,
+            bearer_token=bearer_token,
+            endpoint_url=self._endpoint_url,
+        )
         if acknowledgement.dispatch_id != canonical.dispatch_id:
             raise PromptAutomationTransportError("n8n acknowledgement dispatch identity mismatch")
         if acknowledgement.payload_id != canonical.payload_id:
