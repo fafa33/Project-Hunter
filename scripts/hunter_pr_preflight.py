@@ -12,6 +12,7 @@ PYTEST_TEST_FAILURE_EXIT = 1
 NORMAL_QUALITY_GATES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Architecture Index Guard", ("python", "scripts/hunter_architecture_index_preflight.py")),
     ("Artifact Guard", ("python", "scripts/hunter_artifact_preflight.py")),
+    ("Defect Prevention Guard", ("python", "scripts/hunter_defect_prevention_preflight.py")),
     ("Ruff", ("ruff", "check", ".")),
     ("Black", ("black", "--check", "--diff", ".")),
     ("Mypy", ("mypy",)),
@@ -73,7 +74,7 @@ def run_preflight(*, mode: str = NORMAL_MODE) -> int:
 
         print(
             "[Hunter Pre-PR] EXPECTED RED: Pytest exited 1; architecture index guard, artifact guard, "
-            "Ruff, Black, and Mypy are clean.",
+            "defect prevention guard, Ruff, Black, and Mypy are clean.",
             flush=True,
         )
         print("[Hunter Pre-PR] PASS: tests-first RED hygiene contract", flush=True)
@@ -102,9 +103,9 @@ def main() -> int:
         choices=PREFLIGHT_MODES,
         default=NORMAL_MODE,
         help=(
-            "normal requires Architecture Index Guard/Artifact Guard/Ruff/Black/Mypy/Pytest green; "
-            "tests-first-red requires Architecture Index Guard/Artifact Guard/Ruff/Black/Mypy green and "
-            "Pytest exit 1 from intentionally failing tests."
+            "normal requires Architecture Index Guard/Artifact Guard/Defect Prevention Guard/"
+            "Ruff/Black/Mypy/Pytest green; tests-first-red requires those deterministic hygiene "
+            "gates except Pytest green and accepts only Pytest exit 1 from intentionally failing tests."
         ),
     )
     parser.add_argument(
