@@ -209,7 +209,6 @@ def test_forged_dispatcher_permit_is_rejected_before_request() -> None:
 def test_transport_does_not_mutate_the_supplied_mapping() -> None:
     payload = _payload()
     supplied = dict(payload.as_mapping())
-    opener = _Opener(_Response(_ack(payload)))
 
     n8n_module._canonical_payload(supplied)
 
