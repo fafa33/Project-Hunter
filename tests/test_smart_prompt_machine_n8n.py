@@ -465,8 +465,6 @@ def test_endpoint_component_reflection_is_rejected(receipt_id: str) -> None:
         _authorized_deliver(transport, payload)
 
 
-
-
 @pytest.mark.parametrize(
     ("endpoint", "receipt_id"),
     (
