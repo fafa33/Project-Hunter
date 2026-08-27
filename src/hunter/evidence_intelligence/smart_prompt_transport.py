@@ -85,9 +85,7 @@ class PromptAutomationDestinationRegistry:
             if coordinate in coordinates:
                 existing = coordinates[coordinate]
                 if existing.destination_identity != destination.destination_identity:
-                    raise PromptAutomationTransportError(
-                        "conflicting automation destination identity/version payload"
-                    )
+                    raise PromptAutomationTransportError("conflicting automation destination identity/version payload")
                 raise PromptAutomationTransportError("duplicate automation destination identity/version")
             if destination.destination_key in entries:
                 existing = entries[destination.destination_key]
