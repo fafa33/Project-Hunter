@@ -34,6 +34,8 @@ _SIGNING_KEY_ENV = "HUNTER_PROMPT_AUTOMATION_SIGNING_KEY"
 _SIGNING_KEY_HEX = "11" * 32
 _VERIFYING_KEY_ENV = "HUNTER_PROMPT_AUTOMATION_VERIFYING_KEY"
 _VERIFYING_KEY_HEX = "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
+_VERIFYING_KEY_ENV = "HUNTER_PROMPT_AUTOMATION_VERIFYING_KEY"
+_VERIFYING_KEY_HEX = "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
 
 
 class _Response:
@@ -127,6 +129,7 @@ def _ack(payload: PromptAutomationPayload, *, accepted: bool = True, **overrides
 @pytest.fixture(autouse=True)
 def _signing_key(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(_SIGNING_KEY_ENV, _SIGNING_KEY_HEX)
+    monkeypatch.setenv(_VERIFYING_KEY_ENV, _VERIFYING_KEY_HEX)
     monkeypatch.setenv(_VERIFYING_KEY_ENV, _VERIFYING_KEY_HEX)
 
 

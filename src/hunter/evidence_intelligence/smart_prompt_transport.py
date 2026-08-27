@@ -225,9 +225,9 @@ class PromptAutomationDispatchResult:
     acknowledgement: PromptAutomationAcknowledgement
 
 
-_ACTIVE_DISPATCH_CONTEXT: ContextVar[
-    tuple[object, Mapping[str, str], PromptAutomationEnvelope] | None
-] = ContextVar("hunter_prompt_automation_dispatch_context", default=None)
+_ACTIVE_DISPATCH_CONTEXT: ContextVar[tuple[object, Mapping[str, str], PromptAutomationEnvelope] | None] = ContextVar(
+    "hunter_prompt_automation_dispatch_context", default=None
+)
 
 
 def _require_active_dispatch(
@@ -304,9 +304,7 @@ class PromptAutomationDispatcher:
         """Deliver an immutable canonical payload and verify its exact acknowledgement."""
         payload = self.build_payload(request)
         delivery_mapping = payload.as_mapping()
-        context_token = _ACTIVE_DISPATCH_CONTEXT.set(
-            (self._transport, delivery_mapping, request.envelope)
-        )
+        context_token = _ACTIVE_DISPATCH_CONTEXT.set((self._transport, delivery_mapping, request.envelope))
         try:
             acknowledgement = self._transport.deliver(delivery_mapping)
         finally:

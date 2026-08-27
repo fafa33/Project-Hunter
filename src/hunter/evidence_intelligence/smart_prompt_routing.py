@@ -131,15 +131,11 @@ def _automation_key_bytes(environment_name: str, purpose: str) -> bytes:
     """Load one exact-size operational key without echoing secret material."""
     key_hex = os.environ.get(environment_name, "").strip()
     if not key_hex:
-        raise PromptTaskAuthorityError(
-            f"{environment_name} must provide the automation {purpose} key"
-        )
+        raise PromptTaskAuthorityError(f"{environment_name} must provide the automation {purpose} key")
     try:
         key = bytes.fromhex(key_hex)
     except ValueError as error:
-        raise PromptTaskAuthorityError(
-            f"{environment_name} must be a hex-encoded byte string"
-        ) from error
+        raise PromptTaskAuthorityError(f"{environment_name} must be a hex-encoded byte string") from error
     if len(key) != _PROMPT_AUTOMATION_KEY_BYTES:
         raise PromptTaskAuthorityError(
             f"{environment_name} must decode to exactly {_PROMPT_AUTOMATION_KEY_BYTES} bytes"
@@ -149,16 +145,12 @@ def _automation_key_bytes(environment_name: str, purpose: str) -> bytes:
 
 def _automation_envelope_signing_key() -> Ed25519PrivateKey:
     """Load the issuer-only Ed25519 private key."""
-    return Ed25519PrivateKey.from_private_bytes(
-        _automation_key_bytes(_PROMPT_AUTOMATION_SIGNING_KEY_ENV, "signing")
-    )
+    return Ed25519PrivateKey.from_private_bytes(_automation_key_bytes(_PROMPT_AUTOMATION_SIGNING_KEY_ENV, "signing"))
 
 
 def _automation_envelope_verifying_key() -> Ed25519PublicKey:
     """Load the verifier-only Ed25519 public key."""
-    return Ed25519PublicKey.from_public_bytes(
-        _automation_key_bytes(_PROMPT_AUTOMATION_VERIFYING_KEY_ENV, "verifying")
-    )
+    return Ed25519PublicKey.from_public_bytes(_automation_key_bytes(_PROMPT_AUTOMATION_VERIFYING_KEY_ENV, "verifying"))
 
 
 @dataclass(frozen=True)
