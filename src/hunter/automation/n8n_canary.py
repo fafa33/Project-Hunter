@@ -5,11 +5,12 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 from hunter.automation.n8n_handoff import N8nPromptAutomationWorker, PromptAutomationHandoffError
 from hunter.evidence_intelligence.smart_prompt_transport import PromptAutomationTransportError
