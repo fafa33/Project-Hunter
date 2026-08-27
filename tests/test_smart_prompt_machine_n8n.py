@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import http.client
 import io
 import json
 import urllib.error
@@ -46,6 +47,14 @@ class _Response:
 
     def read(self, limit: int = -1) -> bytes:
         return self._body if limit < 0 else self._body[:limit]
+
+
+class _TruncatedResponse(_Response):
+    def __init__(self) -> None:
+        super().__init__(b"")
+
+    def read(self, limit: int = -1) -> bytes:
+        raise http.client.IncompleteRead(b'{"dispatch_id":', 100)
 
 
 class _Opener:
@@ -248,6 +257,30 @@ def test_ambiguous_network_failure_is_not_retried_or_reported_as_accepted() -> N
     assert len(opener.requests) == 1
 
 
+def test_truncated_http_response_is_an_ambiguous_outcome() -> None:
+    payload = _payload()
+    opener = _Opener(_TruncatedResponse())
+
+    with pytest.raises(PromptAutomationTransportError, match="outcome is unknown"):
+        _transport(opener).deliver(payload.as_mapping())
+    assert len(opener.requests) == 1
+
+
+def test_credential_header_injection_is_rejected_before_request() -> None:
+    payload = _payload()
+    opener = _Opener(_Response(_ack(payload)))
+    transport = N8nPromptAutomationTransport(
+        "https://n8n.example.test/webhook/hunter",
+        TransportCredential("webhook-secret\r\nX-Leaked: yes", slot_identity="test:n8n"),
+        opener=opener,
+    )
+
+    with pytest.raises(PromptAutomationTransportError, match="credential") as raised:
+        transport.deliver(payload.as_mapping())
+    assert "webhook-secret" not in str(raised.value)
+    assert opener.requests == []
+
+
 def test_http_error_does_not_leak_response_body_or_secret() -> None:
     payload = _payload()
     error = urllib.error.HTTPError(
@@ -263,6 +296,14 @@ def test_http_error_does_not_leak_response_body_or_secret() -> None:
     assert "denied" not in str(raised.value)
     assert raised.value.__cause__ is None
     assert raised.value.__suppress_context__ is True
+
+
+def test_duplicate_acknowledgement_keys_fail_closed() -> None:
+    payload = _payload()
+    duplicate = _ack(payload).replace(b'"accepted": true', b'"accepted": true, "accepted": false')
+
+    with pytest.raises(PromptAutomationTransportError, match="duplicate JSON keys"):
+        _transport(_Opener(_Response(duplicate))).deliver(payload.as_mapping())
 
 
 def test_environment_factory_requires_operational_secret_and_builds_dispatcher() -> None:

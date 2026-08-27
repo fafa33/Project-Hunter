@@ -15,6 +15,7 @@ payload identities are the idempotency coordinates for that replay.
 
 from __future__ import annotations
 
+import http.client
 import json
 import math
 import os
@@ -52,6 +53,19 @@ _DEFAULT_TIMEOUT_SECONDS = 10.0
 _MAX_ACKNOWLEDGEMENT_BYTES = 64 * 1024
 _PAYLOAD_FIELDS = frozenset(field.name for field in fields(PromptAutomationPayload))
 _ACKNOWLEDGEMENT_FIELDS = frozenset(field.name for field in fields(PromptAutomationAcknowledgement))
+
+
+class _DuplicateJSONKeyError(ValueError):
+    """Raised when an untrusted JSON object repeats a key."""
+
+
+def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    values: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in values:
+            raise _DuplicateJSONKeyError(key)
+        values[key] = value
+    return values
 
 
 class _RejectRedirectHandler(urllib.request.HTTPRedirectHandler):
@@ -166,6 +180,17 @@ def _response_content_type(response: Any) -> str:
     return value if isinstance(value, str) else ""
 
 
+def _validated_bearer_token(credential: TransportCredential) -> str:
+    token = credential.reveal()
+    if (
+        not isinstance(token, str)
+        or not token
+        or any(ord(character) < 0x20 or ord(character) == 0x7F for character in token)
+    ):
+        raise PromptAutomationTransportError("n8n webhook credential contains invalid header characters")
+    return token
+
+
 class N8nPromptAutomationTransport:
     """Deliver Phase C non-content payloads to one configured n8n webhook.
 
@@ -226,12 +251,13 @@ class N8nPromptAutomationTransport:
             separators=(",", ":"),
             ensure_ascii=False,
         ).encode("utf-8")
+        bearer_token = _validated_bearer_token(self._credential)
         request = urllib.request.Request(
             self._endpoint_url,
             data=body,
             headers={
                 "Accept": "application/json",
-                "Authorization": f"Bearer {self._credential.reveal()}",
+                "Authorization": f"Bearer {bearer_token}",
                 "Content-Type": "application/json",
                 "User-Agent": "Project-Hunter-Smart-Prompt-Machine/1",
             },
@@ -244,6 +270,10 @@ class N8nPromptAutomationTransport:
                 content_type = _response_content_type(response)
         except urllib.error.HTTPError as error:
             raise PromptAutomationTransportError(f"n8n webhook returned HTTP {error.code}") from None
+        except http.client.IncompleteRead:
+            raise PromptAutomationTransportError(
+                "n8n webhook delivery outcome is unknown; reconcile before replaying the same dispatch"
+            ) from None
         except (urllib.error.URLError, TimeoutError, OSError):
             raise PromptAutomationTransportError(
                 "n8n webhook delivery outcome is unknown; reconcile before replaying the same dispatch"
@@ -260,7 +290,9 @@ class N8nPromptAutomationTransport:
         if content_type.split(";", 1)[0].strip().lower() != "application/json":
             raise PromptAutomationTransportError("n8n webhook acknowledgement must use application/json")
         try:
-            decoded = json.loads(raw.decode("utf-8"))
+            decoded = json.loads(raw.decode("utf-8"), object_pairs_hook=_reject_duplicate_json_keys)
+        except _DuplicateJSONKeyError:
+            raise PromptAutomationTransportError("n8n webhook acknowledgement contains duplicate JSON keys") from None
         except (UnicodeDecodeError, json.JSONDecodeError):
             raise PromptAutomationTransportError("n8n webhook acknowledgement is malformed JSON") from None
 
