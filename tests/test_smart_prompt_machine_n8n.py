@@ -200,7 +200,7 @@ def test_private_delivery_requires_verified_envelope_before_request() -> None:
     with pytest.raises(PromptAutomationTransportError, match="canonical automation envelope"):
         transport._deliver_from_dispatcher(
             payload.as_mapping(),
-            _PromptAutomationDispatchPermit(payload.payload_id, object()),
+            object(),  # type: ignore[arg-type]
         )
     assert opener.requests == []
 
