@@ -9,6 +9,7 @@ from dataclasses import fields
 
 import pytest
 
+from hunter.automation import n8n as n8n_module
 from hunter.automation.n8n import (
     N8N_WEBHOOK_TIMEOUT_ENV,
     N8N_WEBHOOK_TOKEN_ENV,
@@ -157,6 +158,20 @@ def test_endpoint_configuration_fails_closed(endpoint: str) -> None:
         )
 
 
+def test_redirect_handler_rejects_following_a_bearer_request() -> None:
+    request = n8n_module.urllib.request.Request("https://n8n.example.test/webhook/hunter")
+
+    with pytest.raises(PromptAutomationTransportError, match="redirects are not permitted"):
+        n8n_module._RejectRedirectHandler().redirect_request(
+            request,
+            object(),
+            302,
+            "Found",
+            {},
+            "https://attacker.example.test/collect",
+        )
+
+
 @pytest.mark.parametrize(
     "mutator",
     (
@@ -235,6 +250,8 @@ def test_http_error_does_not_leak_response_body_or_secret() -> None:
         _transport(_Opener(error)).deliver(payload.as_mapping())
     assert "webhook-secret" not in str(raised.value)
     assert "denied" not in str(raised.value)
+    assert raised.value.__cause__ is None
+    assert raised.value.__suppress_context__ is True
 
 
 def test_environment_factory_requires_operational_secret_and_builds_dispatcher() -> None:

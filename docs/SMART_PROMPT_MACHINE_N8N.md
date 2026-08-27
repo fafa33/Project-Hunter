@@ -32,9 +32,10 @@ equivalent operational configuration. Never commit their values:
 | `HUNTER_N8N_WEBHOOK_TIMEOUT_SECONDS` | Optional positive finite request timeout; defaults to `10` |
 
 The transport refuses missing configuration, cleartext endpoints, embedded URL
-credentials, query/fragment secrets, and malformed timeout values. It never
-includes the endpoint or token in the canonical payload, acknowledgement,
-exception message, or its representation.
+credentials, query/fragment secrets, malformed timeout values, and redirects.
+It never follows a redirect after attaching the bearer token. It never includes
+the endpoint or token in the canonical payload, acknowledgement, exception
+message, or its representation.
 
 ## Webhook request
 
@@ -94,9 +95,10 @@ For a successfully accepted delivery, n8n must return HTTP 2xx,
 }
 ```
 
-The adapter rejects non-2xx responses, non-JSON or malformed bodies, unknown
-schema versions, extra fields, `accepted: false`, and acknowledgements whose
-dispatch or payload identity does not match the submitted canonical payload.
+The adapter rejects non-2xx responses (including redirects), non-JSON or
+malformed bodies, unknown schema versions, extra fields, `accepted: false`, and
+acknowledgements whose dispatch or payload identity does not match the submitted
+canonical payload.
 
 ## Activation boundary
 

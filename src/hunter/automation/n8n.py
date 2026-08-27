@@ -54,9 +54,27 @@ _PAYLOAD_FIELDS = frozenset(field.name for field in fields(PromptAutomationPaylo
 _ACKNOWLEDGEMENT_FIELDS = frozenset(field.name for field in fields(PromptAutomationAcknowledgement))
 
 
+class _RejectRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Refuse every redirect so the bearer token stays at the configured URL."""
+
+    def redirect_request(
+        self,
+        req: urllib.request.Request,
+        fp: Any,
+        code: int,
+        msg: str,
+        headers: Any,
+        newurl: str,
+    ) -> None:
+        raise PromptAutomationTransportError("n8n webhook redirects are not permitted")
+
+
+_N8N_OPENER = urllib.request.build_opener(_RejectRedirectHandler())
+
+
 def _default_opener(request: urllib.request.Request, timeout: float) -> Any:
     """Perform the real request; tests replace this callable with a fake opener."""
-    return urllib.request.urlopen(request, timeout=timeout)  # noqa: S310 - endpoint is HTTPS-validated
+    return _N8N_OPENER.open(request, timeout=timeout)
 
 
 def _required_environment(environ: Mapping[str, str], name: str) -> str:
@@ -95,8 +113,8 @@ def _validate_timeout(value: object) -> float:
         raise PromptAutomationTransportError("n8n webhook timeout must be a positive finite number")
     try:
         timeout = float(value)
-    except (TypeError, ValueError) as error:
-        raise PromptAutomationTransportError("n8n webhook timeout must be a positive finite number") from error
+    except (TypeError, ValueError):
+        raise PromptAutomationTransportError("n8n webhook timeout must be a positive finite number") from None
     if not math.isfinite(timeout) or timeout <= 0:
         raise PromptAutomationTransportError("n8n webhook timeout must be a positive finite number")
     return timeout
@@ -108,8 +126,8 @@ def _canonical_payload(payload: Mapping[str, str]) -> PromptAutomationPayload:
         raise PromptAutomationTransportError("n8n transport requires a canonical payload mapping")
     try:
         values = dict(payload)
-    except (TypeError, ValueError) as error:
-        raise PromptAutomationTransportError("n8n transport payload cannot be materialized") from error
+    except (TypeError, ValueError):
+        raise PromptAutomationTransportError("n8n transport payload cannot be materialized") from None
     if any(not isinstance(key, str) or not isinstance(value, str) for key, value in values.items()):
         raise PromptAutomationTransportError("n8n transport payload must contain string fields only")
     keys = frozenset(values)
@@ -121,8 +139,8 @@ def _canonical_payload(payload: Mapping[str, str]) -> PromptAutomationPayload:
         )
     try:
         return PromptAutomationPayload(**values)
-    except (TypeError, ValueError) as error:
-        raise PromptAutomationTransportError("n8n transport payload is not canonical") from error
+    except (TypeError, ValueError):
+        raise PromptAutomationTransportError("n8n transport payload is not canonical") from None
 
 
 def _canonical_acknowledgement(value: object) -> PromptAutomationAcknowledgement:
@@ -136,8 +154,8 @@ def _canonical_acknowledgement(value: object) -> PromptAutomationAcknowledgement
         raise PromptAutomationTransportError(f"n8n acknowledgement schema mismatch (missing={missing}, extra={extra})")
     try:
         return PromptAutomationAcknowledgement(**value)
-    except (TypeError, ValueError) as error:
-        raise PromptAutomationTransportError("n8n response acknowledgement is not canonical") from error
+    except (TypeError, ValueError):
+        raise PromptAutomationTransportError("n8n response acknowledgement is not canonical") from None
 
 
 def _response_content_type(response: Any) -> str:
@@ -225,11 +243,11 @@ class N8nPromptAutomationTransport:
                 raw = response.read(_MAX_ACKNOWLEDGEMENT_BYTES + 1)
                 content_type = _response_content_type(response)
         except urllib.error.HTTPError as error:
-            raise PromptAutomationTransportError(f"n8n webhook returned HTTP {error.code}") from error
-        except (urllib.error.URLError, TimeoutError, OSError) as error:
+            raise PromptAutomationTransportError(f"n8n webhook returned HTTP {error.code}") from None
+        except (urllib.error.URLError, TimeoutError, OSError):
             raise PromptAutomationTransportError(
                 "n8n webhook delivery outcome is unknown; reconcile before replaying the same dispatch"
-            ) from error
+            ) from None
 
         if not isinstance(status, int) or isinstance(status, bool):
             raise PromptAutomationTransportError("n8n webhook returned an invalid HTTP status")
@@ -243,8 +261,8 @@ class N8nPromptAutomationTransport:
             raise PromptAutomationTransportError("n8n webhook acknowledgement must use application/json")
         try:
             decoded = json.loads(raw.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as error:
-            raise PromptAutomationTransportError("n8n webhook acknowledgement is malformed JSON") from error
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            raise PromptAutomationTransportError("n8n webhook acknowledgement is malformed JSON") from None
 
         acknowledgement = _canonical_acknowledgement(decoded)
         if acknowledgement.dispatch_id != canonical.dispatch_id:
