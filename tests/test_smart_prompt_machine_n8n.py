@@ -158,8 +158,18 @@ def test_endpoint_configuration_fails_closed(endpoint: str) -> None:
         )
 
 
-def test_redirect_handler_rejects_following_a_bearer_request() -> None:
-    request = n8n_module.urllib.request.Request("https://n8n.example.test/webhook/hunter")
+@pytest.mark.parametrize(
+    "newurl",
+    (
+        "https://attacker.example.test/collect",
+        "http://attacker.example.test/collect",
+    ),
+)
+def test_redirect_handler_rejects_following_a_bearer_request(newurl: str) -> None:
+    request = n8n_module.urllib.request.Request(
+        "https://n8n.example.test/webhook/hunter",
+        headers={"Authorization": "Bearer webhook-secret"},
+    )
 
     with pytest.raises(PromptAutomationTransportError, match="redirects are not permitted"):
         n8n_module._RejectRedirectHandler().redirect_request(
@@ -168,8 +178,9 @@ def test_redirect_handler_rejects_following_a_bearer_request() -> None:
             302,
             "Found",
             {},
-            "https://attacker.example.test/collect",
+            newurl,
         )
+    assert request.get_header("Authorization") == "Bearer webhook-secret"
 
 
 @pytest.mark.parametrize(
