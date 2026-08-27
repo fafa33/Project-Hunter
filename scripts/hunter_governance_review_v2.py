@@ -2,7 +2,9 @@
 
 The active merge authority is intentionally limited to current merge risk. This
 check does not judge PR prose, branch naming, Issue identity, reactions, or
-process history.
+process history. It does enforce one durable admission invariant: a PR head must
+already have passed the repository's branch-level pre-PR preflight on that exact
+SHA before governance can become green.
 """
 
 from __future__ import annotations
@@ -13,10 +15,20 @@ import os
 import sys
 import time
 from typing import Any
+from urllib.parse import quote
 
 import hunter_github_transport as transport
 
 CONTEXT = "Hunter Governance Review"
+PRE_PR_WORKFLOW_NAME = "Hunter / Pre-PR Preflight"
+PRE_PR_WORKFLOW_PATH = ".github/workflows/hunter-pre-pr-preflight.yml"
+REQUIRED_RULESET_CHECKS = {
+    "Quality Gates",
+    "dependency-review",
+    "CodeQL",
+    "Hunter Governance Review",
+    "Hunter Merge Readiness",
+}
 
 
 def request_json(repository: str, token: str, method: str, path: str, payload: dict[str, Any] | None = None) -> Any:
@@ -64,6 +76,80 @@ def read_mergeability(repository: str, token: str, pr_number: int) -> dict[str, 
     return pr
 
 
+def candidate_admission(repository: str, token: str, head_sha: str) -> tuple[str, str]:
+    encoded_sha = quote(head_sha, safe="")
+    payload = request_json(
+        repository,
+        token,
+        "GET",
+        f"actions/runs?head_sha={encoded_sha}&event=push&per_page=100",
+    )
+    if not isinstance(payload, dict):
+        raise RuntimeError("Pre-PR workflow-run payload is unavailable")
+
+    matching = [
+        run
+        for run in payload.get("workflow_runs") or []
+        if isinstance(run, dict)
+        and str(run.get("head_sha") or "") == head_sha
+        and str(run.get("name") or "") == PRE_PR_WORKFLOW_NAME
+        and str(run.get("path") or "") == PRE_PR_WORKFLOW_PATH
+        and str(run.get("event") or "") == "push"
+    ]
+    if not matching:
+        return "failure", "Candidate admission blocked: exact-head branch preflight is missing."
+
+    latest = max(matching, key=lambda run: int(run.get("id") or 0))
+    status = str(latest.get("status") or "")
+    conclusion = str(latest.get("conclusion") or "")
+    if status != "completed":
+        return "pending", "Waiting for exact-head branch preflight to complete."
+    if conclusion != "success":
+        return "failure", f"Candidate admission blocked: exact-head branch preflight={conclusion or 'unknown'}."
+    return "success", "Exact-head branch preflight passed before PR governance progression."
+
+
+def ruleset_conformance(repository: str, token: str) -> tuple[str, str]:
+    summaries = request_json(repository, token, "GET", "rulesets?per_page=100")
+    if not isinstance(summaries, list):
+        raise RuntimeError("Repository ruleset listing is unavailable")
+
+    active_main_rulesets: list[dict[str, Any]] = []
+    for summary in summaries:
+        if not isinstance(summary, dict) or summary.get("enforcement") != "active":
+            continue
+        ruleset_id = summary.get("id")
+        if not ruleset_id:
+            continue
+        detail = request_json(repository, token, "GET", f"rulesets/{ruleset_id}")
+        if not isinstance(detail, dict):
+            continue
+        ref_condition = ((detail.get("conditions") or {}).get("ref_name") or {})
+        includes = set(ref_condition.get("include") or [])
+        if "refs/heads/main" in includes:
+            active_main_rulesets.append(detail)
+
+    if not active_main_rulesets:
+        return "failure", "Repository protection drift: no active ruleset protects refs/heads/main."
+
+    required_contexts: set[str] = set()
+    for ruleset in active_main_rulesets:
+        for rule in ruleset.get("rules") or []:
+            if not isinstance(rule, dict) or rule.get("type") != "required_status_checks":
+                continue
+            parameters = rule.get("parameters") or {}
+            for check in parameters.get("required_status_checks") or []:
+                if isinstance(check, dict):
+                    context = str(check.get("context") or "").strip()
+                    if context:
+                        required_contexts.add(context)
+
+    missing = sorted(REQUIRED_RULESET_CHECKS - required_contexts)
+    if missing:
+        return "failure", "Repository protection drift: required status checks missing: " + ", ".join(missing)
+    return "success", "Main ruleset requires every canonical Hunter merge status."
+
+
 def review(repository: str, token: str, pr_number: int) -> int:
     pr = read_mergeability(repository, token, pr_number)
     if pr.get("state") != "open":
@@ -88,12 +174,22 @@ def review(repository: str, token: str, pr_number: int) -> int:
         publish(repository, token, head_sha, "pending", "Waiting for GitHub to resolve current mergeability.")
         return 0
 
+    admission_state, admission_description = candidate_admission(repository, token, head_sha)
+    if admission_state != "success":
+        publish(repository, token, head_sha, admission_state, admission_description)
+        return 0
+
+    ruleset_state, ruleset_description = ruleset_conformance(repository, token)
+    if ruleset_state != "success":
+        publish(repository, token, head_sha, ruleset_state, ruleset_description)
+        return 0
+
     publish(
         repository,
         token,
         head_sha,
         "success",
-        "No blocking governance defect in current merge state; code and review gates remain authoritative.",
+        "Candidate admitted on exact-head preflight and canonical main protection is enforced.",
     )
     return 0
 
