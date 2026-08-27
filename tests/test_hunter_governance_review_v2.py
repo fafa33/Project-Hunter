@@ -68,6 +68,8 @@ def test_candidate_admission_requires_exact_head_push_preflight(monkeypatch):
     head = "a" * 40
 
     def fake_request(_repo, _token, _method, path, _payload=None):
+        if "contents/.hunter-preflight-mode" in path:
+            return {"message": "Not Found"}
         assert f"head_sha={head}" in path
         assert "event=push" in path
         return {
@@ -93,7 +95,9 @@ def test_candidate_admission_requires_exact_head_push_preflight(monkeypatch):
 def test_candidate_admission_uses_latest_exact_head_run(monkeypatch):
     head = "a" * 40
 
-    def fake_request(_repo, _token, _method, _path, _payload=None):
+    def fake_request(_repo, _token, _method, path, _payload=None):
+        if "contents/.hunter-preflight-mode" in path:
+            return {"message": "Not Found"}
         return {
             "workflow_runs": [
                 {
@@ -263,12 +267,116 @@ def test_reconcile_continues_after_one_pr_failure_and_drops_checkout_credentials
     assert 'exit "${failures}"' in workflow
 
 
-def test_candidate_admission_blocks_candidate_modified_preflight(monkeypatch):
+# --- Targeted tests for BLOCKER 1 ---
+
+
+def test_read_pr_changed_paths_api_error(monkeypatch):
+    def fake_request(*_args, **_kwargs):
+        raise core.transport.GitHubRequestError("404 Not Found", category="permanent", status_code=404)
+
+    monkeypatch.setattr(core, "request_json", fake_request)
+    ok, paths, err = core.read_pr_changed_paths("fafa33/Project-Hunter", "token", 376)
+    assert ok is False
+    assert paths == ()
+    assert "GitHub request error" in err
+
+
+def test_read_pr_changed_paths_malformed_payload(monkeypatch):
+    monkeypatch.setattr(core, "request_json", lambda *_args, **_kwargs: {"message": "not a list"})
+    ok, paths, err = core.read_pr_changed_paths("fafa33/Project-Hunter", "token", 376)
+    assert ok is False
+    assert paths == ()
+    assert "not a list" in err
+
+
+def test_read_pr_changed_paths_valid_empty_list(monkeypatch):
+    monkeypatch.setattr(core, "request_json", lambda *_args, **_kwargs: [])
+    ok, paths, err = core.read_pr_changed_paths("fafa33/Project-Hunter", "token", 376)
+    assert ok is True
+    assert paths == ()
+    assert err is None
+
+
+def test_read_pr_changed_paths_valid_list_with_protected_file(monkeypatch):
+    monkeypatch.setattr(
+        core,
+        "request_json",
+        lambda *_args, **_kwargs: [{"filename": "scripts/hunter_pr_preflight.py"}, {"filename": "README.md"}],
+    )
+    ok, paths, err = core.read_pr_changed_paths("fafa33/Project-Hunter", "token", 376)
+    assert ok is True
+    assert paths == ("scripts/hunter_pr_preflight.py", "README.md")
+    assert err is None
+
+
+# --- Targeted tests for BLOCKER 2 ---
+
+
+def test_read_head_preflight_mode_confirmed_404(monkeypatch):
+    def fake_request(*_args, **_kwargs):
+        raise core.transport.GitHubRequestError("Not Found", category="permanent", status_code=404)
+
+    monkeypatch.setattr(core, "request_json", fake_request)
+    mode, err = core.read_head_preflight_mode("fafa33/Project-Hunter", "token", "a" * 40)
+    assert mode == "normal"
+    assert err is None
+
+
+def test_read_head_preflight_mode_transport_error(monkeypatch):
+    def fake_request(*_args, **_kwargs):
+        raise core.transport.GitHubRequestError("Timeout", category="transport")
+
+    monkeypatch.setattr(core, "request_json", fake_request)
+    mode, err = core.read_head_preflight_mode("fafa33/Project-Hunter", "token", "a" * 40)
+    assert mode == "unavailable"
+    assert "Timeout" in err
+
+
+def test_read_head_preflight_mode_malformed_payload(monkeypatch):
+    monkeypatch.setattr(core, "request_json", lambda *_args, **_kwargs: ["not", "a", "dict"])
+    mode, err = core.read_head_preflight_mode("fafa33/Project-Hunter", "token", "a" * 40)
+    assert mode == "unavailable"
+    assert "non-dict" in err
+
+
+def test_read_head_preflight_mode_invalid_base64_or_content(monkeypatch):
+    import base64
+
+    # Invalid base64
+    monkeypatch.setattr(core, "request_json", lambda *_args, **_kwargs: {"content": "!!!not-base64!!!"})
+    mode, err = core.read_head_preflight_mode("fafa33/Project-Hunter", "token", "a" * 40)
+    assert mode == "invalid"
+    assert "failed to decode" in err
+
+    # Unsupported content
+    bad_b64 = base64.b64encode(b"invalid-mode").decode("utf-8")
+    monkeypatch.setattr(core, "request_json", lambda *_args, **_kwargs: {"content": bad_b64})
+    mode, err = core.read_head_preflight_mode("fafa33/Project-Hunter", "token", "a" * 40)
+    assert mode == "invalid"
+    assert "unsupported preflight mode content" in err
+
+
+def test_read_head_preflight_mode_tests_first_red(monkeypatch):
+    import base64
+
+    red_b64 = base64.b64encode(b"tests-first-red").decode("utf-8")
+    monkeypatch.setattr(core, "request_json", lambda *_args, **_kwargs: {"content": red_b64})
+    mode, err = core.read_head_preflight_mode("fafa33/Project-Hunter", "token", "a" * 40)
+    assert mode == "tests-first-red"
+    assert err is None
+
+
+# --- Targeted tests for BLOCKER 3 ---
+
+
+def test_protected_preflight_ordinary_candidate_cannot_self_authorize(monkeypatch):
     head = "a" * 40
 
     def fake_request(_repo, _token, _method, path, _payload=None):
-        if "pulls/371/files" in path:
+        if "pulls/376/files" in path:
             return [{"filename": "scripts/hunter_pr_preflight.py"}]
+        if "contents/.hunter-preflight-mode" in path:
+            return {"message": "Not Found"}
         if f"head_sha={head}" in path:
             return {
                 "workflow_runs": [
@@ -286,9 +394,134 @@ def test_candidate_admission_blocks_candidate_modified_preflight(monkeypatch):
         return {}
 
     monkeypatch.setattr(core, "request_json", fake_request)
-    state, description = core.candidate_admission("fafa33/Project-Hunter", "token", head, pr_number=371)
+    state, description = core.candidate_admission("fafa33/Project-Hunter", "token", head, pr_number=376)
     assert state == "failure"
-    assert "preflight definition was modified by candidate" in description
+    assert "lacks trusted preflight upgrade verification" in description
+
+
+def test_protected_preflight_legitimate_trusted_upgrade_proceeds(monkeypatch):
+    head = "a" * 40
+
+    def fake_request(_repo, _token, _method, path, _payload=None):
+        if "pulls/376/files" in path:
+            return [{"filename": "scripts/hunter_pr_preflight.py"}]
+        if "contents/.hunter-preflight-mode" in path:
+            return {"message": "Not Found"}
+        if f"head_sha={head}" in path:
+            return {
+                "workflow_runs": [
+                    {
+                        "id": 100,
+                        "name": core.PREFLIGHT_UPGRADE_WORKFLOW_NAME,
+                        "path": core.PREFLIGHT_UPGRADE_WORKFLOW_PATH,
+                        "head_sha": head,
+                        "pr_number": 376,
+                        "status": "completed",
+                        "conclusion": "success",
+                        "mode": "normal",
+                    }
+                ]
+            }
+        return {}
+
+    monkeypatch.setattr(core, "request_json", fake_request)
+    state, description = core.candidate_admission("fafa33/Project-Hunter", "token", head, pr_number=376)
+    assert state == "success"
+    assert "Exact-head trusted preflight upgrade passed" in description
+
+
+def test_protected_preflight_missing_stale_failed_trusted_upgrade_proof_blocked(monkeypatch):
+    head = "a" * 40
+
+    def fake_request(_repo, _token, _method, path, _payload=None):
+        if "pulls/376/files" in path:
+            return [{"filename": "scripts/hunter_pr_preflight.py"}]
+        if "contents/.hunter-preflight-mode" in path:
+            return {"message": "Not Found"}
+        if f"head_sha={head}" in path:
+            return {
+                "workflow_runs": [
+                    {
+                        "id": 100,
+                        "name": core.PREFLIGHT_UPGRADE_WORKFLOW_NAME,
+                        "path": core.PREFLIGHT_UPGRADE_WORKFLOW_PATH,
+                        "head_sha": head,
+                        "pr_number": 376,
+                        "status": "completed",
+                        "conclusion": "failure",
+                    }
+                ]
+            }
+        return {}
+
+    monkeypatch.setattr(core, "request_json", fake_request)
+    state, description = core.candidate_admission("fafa33/Project-Hunter", "token", head, pr_number=376)
+    assert state == "failure"
+    assert "trusted preflight upgrade verification=failure" in description
+
+
+def test_protected_preflight_upgrade_proof_commit_binding(monkeypatch):
+    head = "a" * 40
+    other_head = "b" * 40
+
+    def fake_request(_repo, _token, _method, path, _payload=None):
+        if "pulls/376/files" in path:
+            return [{"filename": "scripts/hunter_pr_preflight.py"}]
+        if "contents/.hunter-preflight-mode" in path:
+            return {"message": "Not Found"}
+        if f"head_sha={head}" in path:
+            return {
+                "workflow_runs": [
+                    {
+                        "id": 100,
+                        "name": core.PREFLIGHT_UPGRADE_WORKFLOW_NAME,
+                        "path": core.PREFLIGHT_UPGRADE_WORKFLOW_PATH,
+                        "head_sha": other_head,
+                        "pr_number": 376,
+                        "status": "completed",
+                        "conclusion": "success",
+                    }
+                ]
+            }
+        return {}
+
+    monkeypatch.setattr(core, "request_json", fake_request)
+    state, description = core.candidate_admission("fafa33/Project-Hunter", "token", head, pr_number=376)
+    assert state == "failure"
+    assert "lacks trusted preflight upgrade verification" in description
+
+
+def test_protected_preflight_upgrade_proof_pr_isolation(monkeypatch):
+    head = "a" * 40
+
+    def fake_request(_repo, _token, _method, path, _payload=None):
+        if "pulls/376/files" in path:
+            return [{"filename": "scripts/hunter_pr_preflight.py"}]
+        if "contents/.hunter-preflight-mode" in path:
+            return {"message": "Not Found"}
+        if f"head_sha={head}" in path:
+            return {
+                "workflow_runs": [
+                    {
+                        "id": 100,
+                        "name": core.PREFLIGHT_UPGRADE_WORKFLOW_NAME,
+                        "path": core.PREFLIGHT_UPGRADE_WORKFLOW_PATH,
+                        "head_sha": head,
+                        "pr_number": 999,  # different PR
+                        "status": "completed",
+                        "conclusion": "success",
+                    }
+                ]
+            }
+        return {}
+
+    monkeypatch.setattr(core, "request_json", fake_request)
+    state, description = core.candidate_admission("fafa33/Project-Hunter", "token", head, pr_number=376)
+    assert state == "failure"
+    assert "lacks trusted preflight upgrade verification" in description
+
+
+# --- General ruleset tests ---
 
 
 def test_ruleset_applies_to_ref_include_and_exclude_main():
@@ -437,6 +670,8 @@ def test_candidate_admission_stale_mode_proof_cannot_authorize_new_head(monkeypa
     stale_head = "b" * 40
 
     def fake_request(_repo, _token, _method, path, _payload=None):
+        if "contents/.hunter-preflight-mode" in path:
+            raise core.transport.GitHubRequestError("not found", category="permanent", status_code=404)
         if f"head_sha={head}" in path:
             return {
                 "workflow_runs": [

@@ -24,6 +24,8 @@ import hunter_github_transport as transport
 CONTEXT = "Hunter Governance Review"
 PRE_PR_WORKFLOW_NAME = "Hunter / Pre-PR Preflight"
 PRE_PR_WORKFLOW_PATH = ".github/workflows/hunter-pre-pr-preflight.yml"
+PREFLIGHT_UPGRADE_WORKFLOW_NAME = "Hunter / Trusted Preflight Upgrade"
+PREFLIGHT_UPGRADE_WORKFLOW_PATH = ".github/workflows/hunter-trusted-preflight-upgrade.yml"
 REQUIRED_RULESET_CHECKS = {
     "Quality Gates",
     "dependency-review",
@@ -88,21 +90,24 @@ def read_mergeability(repository: str, token: str, pr_number: int) -> dict[str, 
     return pr
 
 
-def read_pr_changed_paths(repository: str, token: str, pr_number: int) -> tuple[str, ...]:
+def read_pr_changed_paths(repository: str, token: str, pr_number: int) -> tuple[bool, tuple[str, ...], str | None]:
     try:
         payload = request_json(repository, token, "GET", f"pulls/{pr_number}/files?per_page=100")
         if not isinstance(payload, list):
-            return ()
-        return tuple(
+            return False, (), "pull request file listing payload is not a list"
+        paths = tuple(
             str(item.get("filename") or "").strip()
             for item in payload
             if isinstance(item, dict) and item.get("filename")
         )
-    except Exception:
-        return ()
+        return True, paths, None
+    except transport.GitHubRequestError as exc:
+        return False, (), f"GitHub request error: {exc}"
+    except Exception as exc:
+        return False, (), f"unexpected error: {type(exc).__name__}: {exc}"
 
 
-def read_head_preflight_mode(repository: str, token: str, head_sha: str) -> str:
+def read_head_preflight_mode(repository: str, token: str, head_sha: str) -> tuple[str, str | None]:
     encoded_sha = quote(head_sha, safe="")
     try:
         payload = request_json(
@@ -111,29 +116,43 @@ def read_head_preflight_mode(repository: str, token: str, head_sha: str) -> str:
             "GET",
             f"contents/.hunter-preflight-mode?ref={encoded_sha}",
         )
-    except Exception:
-        return "normal"
+    except transport.GitHubRequestError as exc:
+        if exc.status_code == 404:
+            return "normal", None
+        return "unavailable", f"GitHub request error ({exc.status_code}): {exc}"
+    except Exception as exc:
+        return "unavailable", f"unexpected error: {type(exc).__name__}: {exc}"
 
-    if isinstance(payload, dict) and payload.get("content"):
-        try:
-            raw = base64.b64decode(str(payload["content"])).decode("utf-8").strip()
-            if raw == "tests-first-red":
-                return "tests-first-red"
-            return "invalid"
-        except Exception:
-            return "invalid"
-    return "normal"
+    if isinstance(payload, dict):
+        if payload.get("message") == "Not Found":
+            return "normal", None
+        content = payload.get("content")
+        if isinstance(content, str) and content:
+            try:
+                raw = base64.b64decode(content).decode("utf-8").strip()
+                if raw == "tests-first-red":
+                    return "tests-first-red", None
+                return "invalid", f"unsupported preflight mode content: {raw!r}"
+            except Exception as exc:
+                return "invalid", f"failed to decode base64 mode content: {exc}"
+        return "normal", None
+    return "unavailable", "non-dict payload for .hunter-preflight-mode"
 
 
 def candidate_admission(repository: str, token: str, head_sha: str, pr_number: int | None = None) -> tuple[str, str]:
+    touches_protected_preflight = False
     if pr_number is not None:
-        changed_paths = read_pr_changed_paths(repository, token, pr_number)
+        ok, changed_paths, err = read_pr_changed_paths(repository, token, pr_number)
+        if not ok:
+            return "failure", f"Candidate admission blocked: changed file evidence is unavailable ({err})."
         if any(path in PREFLIGHT_OWNED_PATHS for path in changed_paths):
-            return "failure", "Candidate admission blocked: preflight definition was modified by candidate."
+            touches_protected_preflight = True
 
-    head_mode = read_head_preflight_mode(repository, token, head_sha)
+    head_mode, mode_err = read_head_preflight_mode(repository, token, head_sha)
+    if head_mode == "unavailable":
+        return "failure", f"Candidate admission blocked: preflight mode evidence is unavailable ({mode_err})."
     if head_mode == "invalid":
-        return "failure", "Candidate admission blocked: invalid .hunter-preflight-mode content."
+        return "failure", f"Candidate admission blocked: invalid .hunter-preflight-mode content ({mode_err})."
     if head_mode == "tests-first-red":
         return (
             "failure",
@@ -150,9 +169,56 @@ def candidate_admission(repository: str, token: str, head_sha: str, pr_number: i
     if not isinstance(payload, dict):
         raise RuntimeError("Pre-PR workflow-run payload is unavailable")
 
+    workflow_runs = payload.get("workflow_runs")
+    if not isinstance(workflow_runs, list):
+        return "failure", "Candidate admission blocked: workflow_runs payload is malformed."
+
+    if touches_protected_preflight:
+        upgrade_runs = [
+            run
+            for run in workflow_runs
+            if isinstance(run, dict)
+            and str(run.get("head_sha") or "") == head_sha
+            and str(run.get("name") or "") == PREFLIGHT_UPGRADE_WORKFLOW_NAME
+            and str(run.get("path") or "") == PREFLIGHT_UPGRADE_WORKFLOW_PATH
+            and (
+                int(run.get("pr_number") or (run.get("inputs") or {}).get("pr_number") or 0) == pr_number
+                if pr_number is not None
+                else True
+            )
+        ]
+        if not upgrade_runs:
+            return (
+                "failure",
+                "Candidate admission blocked: preflight definition was modified by candidate and lacks trusted preflight upgrade verification.",
+            )
+
+        latest_upgrade = max(upgrade_runs, key=lambda run: int(run.get("id") or 0))
+        status = str(latest_upgrade.get("status") or "")
+        conclusion = str(latest_upgrade.get("conclusion") or "")
+        run_mode = str(
+            latest_upgrade.get("mode") or (latest_upgrade.get("inputs") or {}).get("mode") or "normal"
+        ).strip()
+
+        if run_mode != head_mode:
+            return "failure", "Candidate admission blocked: preflight mode proof mismatched with exact-head mode."
+        if run_mode != "normal":
+            return (
+                "failure",
+                f"Candidate admission blocked: preflight mode is {run_mode} (only normal mode authorizes Ready).",
+            )
+        if status != "completed":
+            return "pending", "Waiting for trusted preflight upgrade verification to complete."
+        if conclusion != "success":
+            return (
+                "failure",
+                f"Candidate admission blocked: trusted preflight upgrade verification={conclusion or 'unknown'}.",
+            )
+        return "success", "Exact-head trusted preflight upgrade passed before PR governance progression."
+
     matching = [
         run
-        for run in payload.get("workflow_runs") or []
+        for run in workflow_runs
         if isinstance(run, dict)
         and str(run.get("head_sha") or "") == head_sha
         and str(run.get("name") or "") == PRE_PR_WORKFLOW_NAME
