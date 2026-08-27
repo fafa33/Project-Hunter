@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import fields, replace
-from typing import Mapping
 
 import pytest
 
