@@ -259,6 +259,33 @@ def test_dispatcher_rejects_envelope_subclass_override() -> None:
         _dispatcher(_AcceptingTransport()).build_payload(request)
 
 
+def test_dispatcher_binds_the_envelope_before_verification_and_payload_build() -> None:
+    """A changing request cannot swap the envelope after its verified read."""
+
+    class _ChangingDispatchRequest(PromptAutomationDispatchRequest):
+        """Return different envelopes on successive property reads."""
+
+        def __init__(
+            self,
+            first: PromptAutomationEnvelope,
+            second: PromptAutomationEnvelope,
+        ) -> None:
+            """Prepare a request whose envelope property changes after one read."""
+            object.__setattr__(self, "destination_key", "automation.n8n")
+            object.__setattr__(self, "_envelopes", iter((first, second)))
+
+        @property
+        def envelope(self) -> PromptAutomationEnvelope:
+            """Return the next envelope to expose to an unsafe caller."""
+            return next(self._envelopes)
+
+    first = _envelope()
+    second = _envelope(build_record_id="swapped-after-verification")
+    payload = _dispatcher(_AcceptingTransport()).build_payload(_ChangingDispatchRequest(first, second))
+
+    assert payload.build_record_id == first.build_record_id
+
+
 def test_retry_delivers_identical_immutable_payload_and_replay_identity() -> None:
     """Repeated delivery reuses the immutable canonical payload and replay identity."""
     transport = _AcceptingTransport()

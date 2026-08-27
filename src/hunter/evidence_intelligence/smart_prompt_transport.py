@@ -244,16 +244,16 @@ class PromptAutomationDispatcher:
         """Derive one deterministic payload from a governed envelope and destination."""
         if not isinstance(request, PromptAutomationDispatchRequest):
             raise TypeError("build_payload requires PromptAutomationDispatchRequest")
-        if type(request.envelope) is not PromptAutomationEnvelope:
+        envelope = request.envelope
+        if type(envelope) is not PromptAutomationEnvelope:
             raise PromptAutomationTransportError("dispatcher requires an exact PromptAutomationEnvelope")
         try:
-            PromptAutomationEnvelope.verify_issuer_signature(request.envelope)
+            PromptAutomationEnvelope.verify_issuer_signature(envelope)
         except SmartPromptMachineError as error:
             raise PromptAutomationTransportError(
                 "automation envelope issuer signature could not be verified"
             ) from error
         destination = self._destinations.resolve(request.destination_key)
-        envelope = request.envelope
         dispatch_id = _identity(
             "smart-prompt-automation-dispatch",
             {

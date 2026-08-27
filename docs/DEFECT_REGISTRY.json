@@ -328,8 +328,8 @@
       "source": "PR #354 independent Codex P1 and CodeRabbit Major security reviews on 2026-08-27",
       "classification": "systemic",
       "guard_boundary": "Smart Prompt Machine automation-envelope issuance and transport boundary",
-      "guard": "PromptAutomationEnvelope carries an issuer signature over the exact seven non-content lineage claims; SmartPromptMachine is the supported issuer, and PromptAutomationDispatcher first requires the exact canonical envelope type and then calls the class-bound verifier before constructing any external payload, so a subtype cannot override verification. The signature is excluded from the transport mapping, while hostile tests reject prompt text, token values, caller-supplied signatures, and verifier overrides in every forwarded lineage field",
-      "test": "tests/test_smart_prompt_machine_phase_c.py::test_dispatcher_rejects_envelope_subclass_override",
+      "guard": "PromptAutomationEnvelope carries an issuer signature over the exact seven non-content lineage claims; SmartPromptMachine is the supported issuer, and PromptAutomationDispatcher binds the envelope once, requires its exact canonical type, and calls the class-bound verifier before constructing any external payload, so neither a subtype nor a changing request property can override verification. The signature is excluded from the transport mapping, while hostile tests reject prompt text, token values, caller-supplied signatures, verifier overrides, and post-verification envelope swaps in every forwarded lineage field",
+      "test": "tests/test_smart_prompt_machine_phase_c.py::test_dispatcher_binds_the_envelope_before_verification_and_payload_build",
       "status": "guarded"
     }
   ]
