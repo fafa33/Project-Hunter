@@ -212,6 +212,7 @@ def _validate_dispatcher_lineage(
     if payload.dispatch_id != expected_dispatch_id:
         raise PromptAutomationTransportError("n8n transport dispatch identity is not canonical")
 
+
 def _canonical_acknowledgement(value: object) -> PromptAutomationAcknowledgement:
     """Parse one exact acknowledgement without echoing untrusted remote keys."""
     if not isinstance(value, dict):
@@ -375,7 +376,6 @@ class N8nPromptAutomationTransport:
     def deliver(self, payload: Mapping[str, str]) -> PromptAutomationAcknowledgement:
         """Reject direct delivery without dispatcher-minted authority."""
         raise PromptAutomationTransportError("n8n transport delivery requires dispatcher authorization")
-
 
     def _deliver_from_dispatcher(
         self,

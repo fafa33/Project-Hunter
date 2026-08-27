@@ -16,8 +16,6 @@ PROMPT_AUTOMATION_PAYLOAD_SCHEMA_VERSION = "smart-prompt-automation-payload-v1"
 PROMPT_AUTOMATION_ACK_SCHEMA_VERSION = "smart-prompt-automation-ack-v1"
 
 
-
-
 class PromptAutomationTransportError(SmartPromptMachineError):
     """Raised when governed automation transport lineage cannot be proven."""
 
