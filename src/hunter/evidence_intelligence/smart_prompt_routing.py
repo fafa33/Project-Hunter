@@ -110,6 +110,17 @@ def _automation_envelope_signature(claims: Mapping[str, str]) -> str:
     ).hexdigest()
 
 
+def _canonical_issuer_signature(value: object) -> str:
+    """Return one ASCII lowercase SHA-256 digest or fail through the authority path."""
+    if (
+        not isinstance(value, str)
+        or len(value) != hashlib.sha256().digest_size * 2
+        or any(character not in "0123456789abcdef" for character in value)
+    ):
+        raise PromptTaskAuthorityError("issuer_signature must be a 64-character lowercase hexadecimal digest")
+    return value
+
+
 def _automation_envelope_signing_key() -> bytes:
     """Load the shared operational signing key required by every issuer and verifier."""
     key_hex = os.environ.get(_PROMPT_AUTOMATION_SIGNING_KEY_ENV, "").strip()
@@ -267,7 +278,7 @@ class PromptAutomationEnvelope:
         """Validate non-content lineage coordinates and envelope schema."""
         for name in _PROMPT_AUTOMATION_ENVELOPE_LINEAGE_FIELDS:
             _required_text(name, getattr(self, name))
-        _required_text("issuer_signature", self.issuer_signature)
+        _canonical_issuer_signature(self.issuer_signature)
         if self.schema_version != PROMPT_AUTOMATION_ENVELOPE_SCHEMA_VERSION:
             raise PromptTaskAuthorityError("unknown Smart Prompt Machine automation-envelope schema version")
 
@@ -285,7 +296,7 @@ class PromptAutomationEnvelope:
                 schema_version=self.schema_version,
             )
         )
-        if not hmac.compare_digest(self.issuer_signature, expected):
+        if not hmac.compare_digest(_canonical_issuer_signature(self.issuer_signature), expected):
             raise PromptTaskAuthorityError("automation envelope issuer signature mismatch")
 
     @property

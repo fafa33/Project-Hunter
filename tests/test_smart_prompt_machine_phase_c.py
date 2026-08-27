@@ -242,7 +242,7 @@ def test_dispatcher_rejects_a_publicly_constructed_forged_envelope() -> None:
         profile_identity="caller-profile-identity",
         build_manifest_id="caller-manifest",
         build_record_id="caller-source-bytes",
-        issuer_signature="caller-supplied-signature",
+        issuer_signature="0" * 64,
     )
     request = PromptAutomationDispatchRequest(
         destination_key="automation.n8n",
@@ -261,6 +261,13 @@ def test_envelope_issuance_requires_a_shared_operational_signing_key(
 
     with pytest.raises(PromptTaskAuthorityError, match=_AUTOMATION_SIGNING_KEY_ENV):
         _envelope()
+
+
+@pytest.mark.parametrize("signature", ("é" * 64, "A" * 64, "0" * 63))
+def test_envelope_rejects_noncanonical_issuer_signatures(signature: str) -> None:
+    """Malformed signatures fail through the governed authority error path."""
+    with pytest.raises(PromptTaskAuthorityError, match="lowercase hexadecimal"):
+        replace(_envelope(), issuer_signature=signature)
 
 
 def test_envelope_signature_verifies_across_worker_processes() -> None:
