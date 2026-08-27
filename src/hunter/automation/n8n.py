@@ -119,8 +119,8 @@ def _validate_endpoint(value: object) -> str:
         parsed = urlsplit(value)
         hostname = parsed.hostname
         port = parsed.port
-    except ValueError as error:
-        raise PromptAutomationTransportError("n8n webhook endpoint is malformed") from error
+    except ValueError:
+        raise PromptAutomationTransportError("n8n webhook endpoint is malformed") from None
     if parsed.scheme != "https" or not hostname:
         raise PromptAutomationTransportError("n8n webhook endpoint must use https")
     if parsed.username is not None or parsed.password is not None:
@@ -158,11 +158,7 @@ def _canonical_payload(payload: Mapping[str, str]) -> PromptAutomationPayload:
         raise PromptAutomationTransportError("n8n transport payload must contain string fields only")
     keys = frozenset(values)
     if keys != _PAYLOAD_FIELDS:
-        missing = sorted(_PAYLOAD_FIELDS - keys)
-        extra = sorted(keys - _PAYLOAD_FIELDS)
-        raise PromptAutomationTransportError(
-            f"n8n transport payload schema mismatch (missing={missing}, extra={extra})"
-        )
+        raise PromptAutomationTransportError("n8n transport payload schema mismatch")
     try:
         return PromptAutomationPayload(**values)
     except (TypeError, ValueError):
@@ -221,9 +217,7 @@ def _canonical_acknowledgement(value: object) -> PromptAutomationAcknowledgement
         raise PromptAutomationTransportError("n8n response must be a JSON object acknowledgement")
     keys = frozenset(value)
     if keys != _ACKNOWLEDGEMENT_FIELDS:
-        missing = sorted(_ACKNOWLEDGEMENT_FIELDS - keys)
-        extra = sorted(keys - _ACKNOWLEDGEMENT_FIELDS)
-        raise PromptAutomationTransportError(f"n8n acknowledgement schema mismatch (missing={missing}, extra={extra})")
+        raise PromptAutomationTransportError("n8n acknowledgement schema mismatch")
     try:
         return PromptAutomationAcknowledgement(**value)
     except (TypeError, ValueError):
