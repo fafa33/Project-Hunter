@@ -7,6 +7,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 REGISTRY_PATH = ROOT / "docs" / "DEFECT_REGISTRY.json"
 LIFECYCLE_PATH = ROOT / "docs" / "DEFECT_PREVENTION_LIFECYCLE.json"
+WRITE_POLICY_PATH = ROOT / "docs" / "CODE_WRITE_POLICY.json"
 EXPECTED_STAGES = (
     "recorded",
     "regression-tested",
@@ -23,6 +24,48 @@ def _load_object(path: Path) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise ValueError(f"{path.name} must contain a JSON object")
     return data
+
+
+def validate_code_write_policy() -> list[str]:
+    errors: list[str] = []
+    policy = _load_object(WRITE_POLICY_PATH)
+
+    if policy.get("version") != 1:
+        errors.append("CODE_WRITE_POLICY version must be 1")
+
+    paths = policy.get("code_write_paths")
+    if not isinstance(paths, dict):
+        return errors + ["CODE_WRITE_POLICY code_write_paths must be an object"]
+
+    local = paths.get("local_git_push")
+    if not isinstance(local, dict) or local.get("allowed") is not True:
+        errors.append("local_git_push must be an allowed code-write path")
+    elif local.get("required_boundary") != ".githooks/pre-push":
+        errors.append("local_git_push must require the repository pre-push boundary")
+
+    for path_name in ("github_contents_api", "github_git_data_api"):
+        entry = paths.get(path_name)
+        if not isinstance(entry, dict) or entry.get("allowed") is not False:
+            errors.append(f"{path_name} must be forbidden for code-changing candidates")
+
+    api_agents = paths.get("api_only_agents")
+    if not isinstance(api_agents, dict):
+        errors.append("api_only_agents policy must be an object")
+    elif api_agents.get("allowed_role") != "read-review-metadata-only":
+        errors.append("API-only agents must be limited to read/review/metadata work")
+
+    progression = policy.get("review_progression")
+    if not isinstance(progression, dict):
+        return errors + ["CODE_WRITE_POLICY review_progression must be an object"]
+    if progression.get("unadmitted_head_state") != "draft":
+        errors.append("unadmitted PR heads must be returned to Draft")
+    if progression.get("auto_ready") is not False:
+        errors.append("candidate admission must never auto-promote a PR to Ready")
+    ready_requires = str(progression.get("ready_requires") or "")
+    if "exact-head" not in ready_requires or "Pre-PR Preflight" not in ready_requires:
+        errors.append("Ready progression must require successful exact-head Pre-PR Preflight")
+
+    return errors
 
 
 def validate_defect_prevention_lifecycle() -> list[str]:
@@ -93,6 +136,7 @@ def validate_defect_prevention_lifecycle() -> list[str]:
         if state == "prevented" and evidence.get("recurrence") is None:
             errors.append(f"{defect_id}: prevented state requires recurrence escalation")
 
+    errors.extend(validate_code_write_policy())
     return errors
 
 
@@ -106,7 +150,10 @@ def main() -> int:
         for message in errors:
             print(f"[Defect Prevention Guard] FAIL: {message}")
         return 1
-    print("[Defect Prevention Guard] PASS: detection/prevention lifecycle is explicit and valid")
+    print(
+        "[Defect Prevention Guard] PASS: prevention lifecycle and code-write ingress "
+        "policy are explicit and valid"
+    )
     return 0
 
 

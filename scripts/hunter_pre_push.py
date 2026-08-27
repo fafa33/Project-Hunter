@@ -48,9 +48,7 @@ def _require_clean_tree() -> None:
 
 def _require_exact_head(updates: list[tuple[str, str, str]], head_sha: str) -> None:
     branch_updates = [
-        (remote_ref, local_sha)
-        for _local_ref, local_sha, remote_ref in updates
-        if remote_ref.startswith("refs/heads/")
+        (remote_ref, local_sha) for _local_ref, local_sha, remote_ref in updates if remote_ref.startswith("refs/heads/")
     ]
     if not branch_updates:
         return

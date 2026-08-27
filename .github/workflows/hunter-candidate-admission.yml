@@ -1,0 +1,45 @@
+name: Hunter Candidate Admission
+
+on:
+  pull_request_target:
+    branches:
+      - main
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - ready_for_review
+
+permissions:
+  actions: read
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: hunter-candidate-admission-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  candidate-admission:
+    name: Hunter Candidate Admission
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout trusted controller
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          path: engine
+          persist-credentials: false
+
+      - name: Enforce exact-head review admission
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          python "${GITHUB_WORKSPACE}/engine/scripts/hunter_candidate_admission.py" \
+            --pr "${PR_NUMBER}" \
+            --repository "${GH_REPO}"
