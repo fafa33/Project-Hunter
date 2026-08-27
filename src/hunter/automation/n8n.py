@@ -187,7 +187,7 @@ def _validate_receipt_id(receipt_id: object, *, bearer_token: str, endpoint_url:
         raise PromptAutomationTransportError("n8n acknowledgement receipt identity is invalid")
     if any(character not in _RECEIPT_ID_CHARACTERS for character in receipt_id):
         raise PromptAutomationTransportError("n8n acknowledgement receipt identity is invalid")
-    if bearer_token in receipt_id or endpoint_url in receipt_id:
+    if bearer_token in receipt_id or receipt_id in bearer_token or endpoint_url in receipt_id:
         raise PromptAutomationTransportError("n8n acknowledgement receipt identity is invalid")
 
 
@@ -311,7 +311,7 @@ class N8nPromptAutomationTransport:
             decoded = json.loads(raw.decode("utf-8"), object_pairs_hook=_reject_duplicate_json_keys)
         except _DuplicateJSONKeyError:
             raise PromptAutomationTransportError("n8n webhook acknowledgement contains duplicate JSON keys") from None
-        except (UnicodeDecodeError, ValueError):
+        except (RecursionError, UnicodeDecodeError, ValueError):
             raise PromptAutomationTransportError("n8n webhook acknowledgement is malformed JSON") from None
 
         acknowledgement = _canonical_acknowledgement(decoded)

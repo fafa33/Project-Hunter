@@ -360,6 +360,29 @@ def test_json_decoder_limit_is_normalized_as_malformed_acknowledgement() -> None
         _transport(_Opener(_Response(raw))).deliver(payload.as_mapping())
 
 
+def test_recursive_json_decoder_failure_is_normalized_as_malformed_acknowledgement() -> None:
+    payload = _payload()
+    raw = ("[" * 10000 + "]" * 10000).encode("utf-8")
+
+    with pytest.raises(PromptAutomationTransportError, match="malformed JSON"):
+        _transport(_Opener(_Response(raw))).deliver(payload.as_mapping())
+
+
+def test_partial_bearer_reflection_is_rejected_before_return() -> None:
+    payload = _payload()
+    token = "webhook-token-" + "a" * 300
+    response = _Response(_ack(payload, receipt_id=token[:256]))
+    transport = N8nPromptAutomationTransport(
+        "https://n8n.example.test/webhook/hunter",
+        TransportCredential(token, slot_identity="test:n8n"),
+        opener=_Opener(response),
+    )
+
+    with pytest.raises(PromptAutomationTransportError, match="receipt identity is invalid") as raised:
+        transport.deliver(payload.as_mapping())
+    assert token not in str(raised.value)
+
+
 def test_environment_factory_requires_operational_secret_and_builds_dispatcher() -> None:
     environment = {
         N8N_WEBHOOK_URL_ENV: "https://n8n.example.test/webhook/hunter",
