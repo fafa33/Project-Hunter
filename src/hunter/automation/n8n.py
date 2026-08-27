@@ -60,6 +60,7 @@ class _DuplicateJSONKeyError(ValueError):
 
 
 def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """Materialize one JSON object while rejecting ambiguous duplicate keys."""
     values: dict[str, Any] = {}
     for key, value in pairs:
         if key in values:
@@ -80,6 +81,7 @@ class _RejectRedirectHandler(urllib.request.HTTPRedirectHandler):
         headers: Any,
         newurl: str,
     ) -> None:
+        """Reject every redirect before urllib can construct a follow-up request."""
         raise PromptAutomationTransportError("n8n webhook redirects are not permitted")
 
 
@@ -92,6 +94,7 @@ def _default_opener(request: urllib.request.Request, timeout: float) -> Any:
 
 
 def _required_environment(environ: Mapping[str, str], name: str) -> str:
+    """Load one required operational string without accepting control whitespace."""
     value = environ.get(name, "")
     if not isinstance(value, str) or not value.strip():
         raise PromptAutomationTransportError(f"{name} must be configured")
@@ -101,6 +104,7 @@ def _required_environment(environ: Mapping[str, str], name: str) -> str:
 
 
 def _validate_endpoint(value: object) -> str:
+    """Validate one HTTPS endpoint without echoing malformed endpoint material."""
     if not isinstance(value, str) or not value.strip():
         raise PromptAutomationTransportError("n8n webhook endpoint must be a non-empty string")
     if value != value.strip() or any(ord(character) < 0x20 for character in value):
@@ -109,20 +113,21 @@ def _validate_endpoint(value: object) -> str:
         parsed = urlsplit(value)
         hostname = parsed.hostname
         port = parsed.port
-    except ValueError as error:
-        raise PromptAutomationTransportError("n8n webhook endpoint is malformed") from error
+    except ValueError:
+        raise PromptAutomationTransportError("n8n webhook endpoint is malformed") from None
     if parsed.scheme != "https" or not hostname:
         raise PromptAutomationTransportError("n8n webhook endpoint must use https")
     if parsed.username is not None or parsed.password is not None:
         raise PromptAutomationTransportError("n8n webhook endpoint must not embed credentials")
     if parsed.query or parsed.fragment:
-        raise PromptAutomationTransportError("n8n webhook endpoint must not carry query or fragment secrets")
+        raise PromptAutomationTransportError("n8n webhook endpoint must not contain query strings or fragments")
     if port is not None and not 1 <= port <= 65535:
         raise PromptAutomationTransportError("n8n webhook endpoint port is invalid")
     return value
 
 
 def _validate_timeout(value: object) -> float:
+    """Return one positive finite timeout value or fail closed."""
     if isinstance(value, bool):
         raise PromptAutomationTransportError("n8n webhook timeout must be a positive finite number")
     try:
@@ -144,13 +149,8 @@ def _canonical_payload(payload: Mapping[str, str]) -> PromptAutomationPayload:
         raise PromptAutomationTransportError("n8n transport payload cannot be materialized") from None
     if any(not isinstance(key, str) or not isinstance(value, str) for key, value in values.items()):
         raise PromptAutomationTransportError("n8n transport payload must contain string fields only")
-    keys = frozenset(values)
-    if keys != _PAYLOAD_FIELDS:
-        missing = sorted(_PAYLOAD_FIELDS - keys)
-        extra = sorted(keys - _PAYLOAD_FIELDS)
-        raise PromptAutomationTransportError(
-            f"n8n transport payload schema mismatch (missing={missing}, extra={extra})"
-        )
+    if frozenset(values) != _PAYLOAD_FIELDS:
+        raise PromptAutomationTransportError("n8n transport payload schema mismatch")
     try:
         return PromptAutomationPayload(**values)
     except (TypeError, ValueError):
@@ -158,14 +158,11 @@ def _canonical_payload(payload: Mapping[str, str]) -> PromptAutomationPayload:
 
 
 def _canonical_acknowledgement(value: object) -> PromptAutomationAcknowledgement:
-    """Parse one exact acknowledgement and reject extension fields."""
+    """Parse one exact acknowledgement without echoing untrusted remote keys."""
     if not isinstance(value, dict):
         raise PromptAutomationTransportError("n8n response must be a JSON object acknowledgement")
-    keys = frozenset(value)
-    if keys != _ACKNOWLEDGEMENT_FIELDS:
-        missing = sorted(_ACKNOWLEDGEMENT_FIELDS - keys)
-        extra = sorted(keys - _ACKNOWLEDGEMENT_FIELDS)
-        raise PromptAutomationTransportError(f"n8n acknowledgement schema mismatch (missing={missing}, extra={extra})")
+    if frozenset(value) != _ACKNOWLEDGEMENT_FIELDS:
+        raise PromptAutomationTransportError("n8n acknowledgement schema mismatch")
     try:
         return PromptAutomationAcknowledgement(**value)
     except (TypeError, ValueError):
@@ -173,6 +170,7 @@ def _canonical_acknowledgement(value: object) -> PromptAutomationAcknowledgement
 
 
 def _response_content_type(response: Any) -> str:
+    """Return the response Content-Type when a header mapping is available."""
     headers = getattr(response, "headers", None)
     if headers is None or not hasattr(headers, "get"):
         return ""
@@ -181,6 +179,7 @@ def _response_content_type(response: Any) -> str:
 
 
 def _validated_bearer_token(credential: TransportCredential) -> str:
+    """Reveal and validate one runtime bearer token before HTTP header construction."""
     token = credential.reveal()
     if (
         not isinstance(token, str)
@@ -212,6 +211,7 @@ class N8nPromptAutomationTransport:
         timeout_seconds: float = _DEFAULT_TIMEOUT_SECONDS,
         opener: Callable[[urllib.request.Request, float], Any] | None = None,
     ) -> None:
+        """Bind validated operational endpoint, credential, timeout, and opener state."""
         if not isinstance(credential, TransportCredential):
             raise TypeError("n8n transport requires a non-durable TransportCredential")
         self._endpoint_url = _validate_endpoint(endpoint_url)
@@ -240,6 +240,7 @@ class N8nPromptAutomationTransport:
         )
 
     def __repr__(self) -> str:
+        """Return a representation that never renders endpoint or credential material."""
         return "N8nPromptAutomationTransport(<configured>)"
 
     def deliver(self, payload: Mapping[str, str]) -> PromptAutomationAcknowledgement:
