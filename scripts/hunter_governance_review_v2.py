@@ -134,6 +134,14 @@ def ruleset_conformance(repository: str, token: str) -> tuple[str, str]:
 
     required_contexts: set[str] = set()
     for ruleset in active_main_rulesets:
+        if "bypass_actors" not in ruleset:
+            return "failure", "Repository protection drift: main ruleset bypass configuration is unavailable."
+        bypass_actors = ruleset.get("bypass_actors")
+        if not isinstance(bypass_actors, list):
+            return "failure", "Repository protection drift: main ruleset bypass configuration is invalid."
+        if bypass_actors:
+            return "failure", "Repository protection drift: active main ruleset has bypass actors."
+
         for rule in ruleset.get("rules") or []:
             if not isinstance(rule, dict) or rule.get("type") != "required_status_checks":
                 continue
@@ -147,7 +155,7 @@ def ruleset_conformance(repository: str, token: str) -> tuple[str, str]:
     missing = sorted(REQUIRED_RULESET_CHECKS - required_contexts)
     if missing:
         return "failure", "Repository protection drift: required status checks missing: " + ", ".join(missing)
-    return "success", "Main ruleset requires every canonical Hunter merge status."
+    return "success", "Main ruleset requires every canonical Hunter merge status with no bypass actors."
 
 
 def review(repository: str, token: str, pr_number: int) -> int:
