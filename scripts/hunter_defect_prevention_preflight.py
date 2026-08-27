@@ -151,8 +151,7 @@ def main() -> int:
             print(f"[Defect Prevention Guard] FAIL: {message}")
         return 1
     print(
-        "[Defect Prevention Guard] PASS: prevention lifecycle and code-write ingress "
-        "policy are explicit and valid"
+        "[Defect Prevention Guard] PASS: prevention lifecycle and code-write ingress " "policy are explicit and valid"
     )
     return 0
 

@@ -9,9 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_code_write_policy_forbids_direct_api_code_commits() -> None:
-    policy = json.loads(
-        (ROOT / "docs" / "CODE_WRITE_POLICY.json").read_text(encoding="utf-8")
-    )
+    policy = json.loads((ROOT / "docs" / "CODE_WRITE_POLICY.json").read_text(encoding="utf-8"))
     paths = policy["code_write_paths"]
 
     assert paths["local_git_push"]["allowed"] is True
@@ -22,9 +20,7 @@ def test_code_write_policy_forbids_direct_api_code_commits() -> None:
 
 
 def test_code_write_policy_requires_draft_until_exact_head_admission() -> None:
-    policy = json.loads(
-        (ROOT / "docs" / "CODE_WRITE_POLICY.json").read_text(encoding="utf-8")
-    )
+    policy = json.loads((ROOT / "docs" / "CODE_WRITE_POLICY.json").read_text(encoding="utf-8"))
     progression = policy["review_progression"]
 
     assert progression["unadmitted_head_state"] == "draft"

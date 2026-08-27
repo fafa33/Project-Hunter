@@ -70,9 +70,7 @@ def enforce_candidate_admission(repository: str, token: str, pr_number: int) -> 
 
 
 def parser() -> argparse.ArgumentParser:
-    result = argparse.ArgumentParser(
-        description="Keep unadmitted Project Hunter candidates out of review."
-    )
+    result = argparse.ArgumentParser(description="Keep unadmitted Project Hunter candidates out of review.")
     result.add_argument("--pr", type=int, required=True)
     result.add_argument("--repository", required=True)
     return result

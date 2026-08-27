@@ -37,11 +37,14 @@ def test_unadmitted_ready_candidate_is_returned_to_draft(monkeypatch) -> None:
         lambda token, node_id: converted.append((token, node_id)),
     )
 
-    assert admission.enforce_candidate_admission(
-        "fafa33/Project-Hunter",
-        "token",
-        371,
-    ) == 0
+    assert (
+        admission.enforce_candidate_admission(
+            "fafa33/Project-Hunter",
+            "token",
+            371,
+        )
+        == 0
+    )
     assert converted == [("token", "PR_test_node")]
 
 
@@ -62,11 +65,14 @@ def test_admitted_candidate_stays_ready(monkeypatch) -> None:
         lambda *_args: (_ for _ in ()).throw(AssertionError("must not redraft")),
     )
 
-    assert admission.enforce_candidate_admission(
-        "fafa33/Project-Hunter",
-        "token",
-        371,
-    ) == 0
+    assert (
+        admission.enforce_candidate_admission(
+            "fafa33/Project-Hunter",
+            "token",
+            371,
+        )
+        == 0
+    )
 
 
 def test_already_draft_candidate_does_not_requery_admission(monkeypatch) -> None:
@@ -81,11 +87,14 @@ def test_already_draft_candidate_does_not_requery_admission(monkeypatch) -> None
         lambda *_args: (_ for _ in ()).throw(AssertionError("must not query")),
     )
 
-    assert admission.enforce_candidate_admission(
-        "fafa33/Project-Hunter",
-        "token",
-        371,
-    ) == 0
+    assert (
+        admission.enforce_candidate_admission(
+            "fafa33/Project-Hunter",
+            "token",
+            371,
+        )
+        == 0
+    )
 
 
 def test_convert_to_draft_requires_graphql_confirmation(monkeypatch) -> None:
@@ -93,11 +102,7 @@ def test_convert_to_draft_requires_graphql_confirmation(monkeypatch) -> None:
 
     def fake_graphql(**kwargs):
         captured.update(kwargs)
-        return {
-            "convertPullRequestToDraft": {
-                "pullRequest": {"id": "PR_test_node", "isDraft": True}
-            }
-        }
+        return {"convertPullRequestToDraft": {"pullRequest": {"id": "PR_test_node", "isDraft": True}}}
 
     monkeypatch.setattr(admission.transport, "request_graphql_json", fake_graphql)
     admission.convert_to_draft("token", "PR_test_node")
@@ -107,9 +112,7 @@ def test_convert_to_draft_requires_graphql_confirmation(monkeypatch) -> None:
 
 
 def test_candidate_admission_workflow_is_trusted_and_never_checks_out_pr_code() -> None:
-    workflow = (
-        ROOT / ".github" / "workflows" / "hunter-candidate-admission.yml"
-    ).read_text(encoding="utf-8")
+    workflow = (ROOT / ".github" / "workflows" / "hunter-candidate-admission.yml").read_text(encoding="utf-8")
 
     assert "pull_request_target:" in workflow
     assert "ready_for_review" in workflow
