@@ -12,7 +12,9 @@ HEAD_A = "a" * 40
 HEAD_B = "b" * 40
 
 
-def _update(sha: str = HEAD_A, *, local_ref: str = "refs/heads/feature", remote_ref: str = "refs/heads/feature") -> list[str]:
+def _update(
+    sha: str = HEAD_A, *, local_ref: str = "refs/heads/feature", remote_ref: str = "refs/heads/feature"
+) -> list[str]:
     return [f"{local_ref} {sha} {remote_ref} {hunter_pre_push.ZERO_SHA}\n"]
 
 
@@ -69,9 +71,7 @@ def test_non_branch_source_refspec_targeting_remote_branch_cannot_bypass_exact_h
     monkeypatch.setattr(hunter_pre_push.os, "chdir", lambda _path: None)
 
     with pytest.raises(RuntimeError, match="exact HEAD"):
-        hunter_pre_push.enforce_pre_push(
-            _update(HEAD_B, local_ref=HEAD_B, remote_ref="refs/heads/feature")
-        )
+        hunter_pre_push.enforce_pre_push(_update(HEAD_B, local_ref=HEAD_B, remote_ref="refs/heads/feature"))
 
 
 def test_pre_push_rejects_dirty_tree_before_preflight(monkeypatch, tmp_path) -> None:
