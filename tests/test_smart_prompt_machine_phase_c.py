@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
+import json
+import os
+import subprocess
+import sys
 from collections.abc import Mapping
 from dataclasses import fields, replace
+from pathlib import Path
 
 import pytest
 
 from hunter.evidence_intelligence.smart_prompt_routing import (
     PromptAutomationEnvelope,
+    PromptTaskAuthorityError,
     _issue_prompt_automation_envelope,
 )
 from hunter.evidence_intelligence.smart_prompt_transport import (
@@ -21,6 +27,15 @@ from hunter.evidence_intelligence.smart_prompt_transport import (
     PromptAutomationPayload,
     PromptAutomationTransportError,
 )
+
+_AUTOMATION_SIGNING_KEY_ENV = "HUNTER_PROMPT_AUTOMATION_SIGNING_KEY"
+_AUTOMATION_SIGNING_KEY_HEX = "11" * 32
+
+
+@pytest.fixture(autouse=True)
+def _automation_signing_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Provide the explicit shared signing key used by Phase C test workers."""
+    monkeypatch.setenv(_AUTOMATION_SIGNING_KEY_ENV, _AUTOMATION_SIGNING_KEY_HEX)
 
 
 def _envelope(**overrides: str) -> PromptAutomationEnvelope:
@@ -236,6 +251,44 @@ def test_dispatcher_rejects_a_publicly_constructed_forged_envelope() -> None:
 
     with pytest.raises(PromptAutomationTransportError, match="issuer signature"):
         _dispatcher(_AcceptingTransport()).build_payload(request)
+
+
+def test_envelope_issuance_requires_a_shared_operational_signing_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Missing shared key material fails closed instead of creating unverifiable envelopes."""
+    monkeypatch.delenv(_AUTOMATION_SIGNING_KEY_ENV)
+
+    with pytest.raises(PromptTaskAuthorityError, match=_AUTOMATION_SIGNING_KEY_ENV):
+        _envelope()
+
+
+def test_envelope_signature_verifies_across_worker_processes() -> None:
+    """A stable configured key lets a queued envelope verify after process boundaries."""
+    envelope = _envelope(build_record_id="cross-process-build")
+    verifier = """
+import json
+import sys
+
+from hunter.evidence_intelligence.smart_prompt_routing import PromptAutomationEnvelope
+
+PromptAutomationEnvelope(**json.loads(sys.stdin.read())).verify_issuer_signature()
+"""
+    environment = dict(os.environ)
+    source_root = str(Path(__file__).resolve().parents[1] / "src")
+    environment["PYTHONPATH"] = os.pathsep.join(
+        part for part in (source_root, environment.get("PYTHONPATH", "")) if part
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", verifier],
+        input=json.dumps(envelope.__dict__),
+        text=True,
+        capture_output=True,
+        check=False,
+        env=environment,
+    )
+
+    assert completed.returncode == 0, completed.stderr
 
 
 def test_dispatcher_rejects_envelope_subclass_override() -> None:

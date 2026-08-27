@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
-import secrets
+import os
 from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass
 from datetime import datetime
@@ -24,7 +24,8 @@ PROMPT_TASK_REQUEST_SCHEMA_VERSION = "smart-prompt-task-request-v1"
 PROMPT_TASK_ROUTE_SCHEMA_VERSION = "smart-prompt-task-route-v1"
 PROMPT_AUTOMATION_ENVELOPE_SCHEMA_VERSION = "smart-prompt-automation-envelope-v1"
 
-_PROMPT_AUTOMATION_ENVELOPE_SIGNING_KEY = secrets.token_bytes(32)
+_PROMPT_AUTOMATION_SIGNING_KEY_ENV = "HUNTER_PROMPT_AUTOMATION_SIGNING_KEY"
+_PROMPT_AUTOMATION_SIGNING_KEY_MIN_BYTES = 32
 _PROMPT_AUTOMATION_ENVELOPE_LINEAGE_FIELDS = (
     "task_request_id",
     "route_registry_identity",
@@ -103,10 +104,31 @@ def _automation_envelope_signature(claims: Mapping[str, str]) -> str:
         ensure_ascii=False,
     ).encode("utf-8")
     return hmac.new(
-        _PROMPT_AUTOMATION_ENVELOPE_SIGNING_KEY,
+        _automation_envelope_signing_key(),
         canonical_claims,
         hashlib.sha256,
     ).hexdigest()
+
+
+def _automation_envelope_signing_key() -> bytes:
+    """Load the shared operational signing key required by every issuer and verifier."""
+    key_hex = os.environ.get(_PROMPT_AUTOMATION_SIGNING_KEY_ENV, "").strip()
+    if not key_hex:
+        raise PromptTaskAuthorityError(
+            f"{_PROMPT_AUTOMATION_SIGNING_KEY_ENV} must provide the shared automation signing key"
+        )
+    try:
+        key = bytes.fromhex(key_hex)
+    except ValueError as error:
+        raise PromptTaskAuthorityError(
+            f"{_PROMPT_AUTOMATION_SIGNING_KEY_ENV} must be a hex-encoded byte string"
+        ) from error
+    if len(key) < _PROMPT_AUTOMATION_SIGNING_KEY_MIN_BYTES:
+        raise PromptTaskAuthorityError(
+            f"{_PROMPT_AUTOMATION_SIGNING_KEY_ENV} must decode to at least "
+            f"{_PROMPT_AUTOMATION_SIGNING_KEY_MIN_BYTES} bytes"
+        )
+    return key
 
 
 @dataclass(frozen=True)
