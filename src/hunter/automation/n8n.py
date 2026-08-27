@@ -53,6 +53,7 @@ N8N_DESTINATION = PromptAutomationDestination(
 _DEFAULT_TIMEOUT_SECONDS = 10.0
 _MAX_ACKNOWLEDGEMENT_BYTES = 64 * 1024
 _MAX_RECEIPT_ID_LENGTH = 256
+_MAX_ENDPOINT_PERCENT_DECODE_ROUNDS = 8
 _RECEIPT_ID_CHARACTERS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.:")
 _PAYLOAD_FIELDS = frozenset(field.name for field in fields(PromptAutomationPayload))
 _ACKNOWLEDGEMENT_FIELDS = frozenset(field.name for field in fields(PromptAutomationAcknowledgement))
@@ -128,6 +129,8 @@ def _validate_endpoint(value: object) -> str:
         raise PromptAutomationTransportError("n8n webhook endpoint must not contain query strings or fragments")
     if port is not None and not 1 <= port <= 65535:
         raise PromptAutomationTransportError("n8n webhook endpoint port is invalid")
+    _bounded_percent_decode(parsed.path)
+    _bounded_percent_decode(hostname)
     return value
 
 
@@ -201,21 +204,22 @@ def _response_content_length(response: Any) -> int | None:
     return content_length
 
 
+def _bounded_percent_decode(value: str) -> str:
+    """Decode endpoint material to a fixed point within a bounded number of rounds."""
+    current = value
+    for _ in range(_MAX_ENDPOINT_PERCENT_DECODE_ROUNDS + 1):
+        normalized = unquote(current)
+        if normalized == current:
+            return current
+        current = normalized
+    raise PromptAutomationTransportError("n8n webhook endpoint normalization exceeds safe bound")
+
+
 def _normalized_endpoint_components(endpoint_url: str) -> tuple[str, ...]:
     """Return case- and percent-normalized endpoint components for redaction checks."""
     parsed = urlsplit(endpoint_url)
-    decoded_path = parsed.path
-    for _ in range(2):
-        normalized_path = unquote(decoded_path)
-        if normalized_path == decoded_path:
-            break
-        decoded_path = normalized_path
-    decoded_hostname = parsed.hostname or ""
-    for _ in range(2):
-        normalized_hostname = unquote(decoded_hostname)
-        if normalized_hostname == decoded_hostname:
-            break
-        decoded_hostname = normalized_hostname
+    decoded_path = _bounded_percent_decode(parsed.path)
+    decoded_hostname = _bounded_percent_decode(parsed.hostname or "")
     components = {
         endpoint_url.casefold(),
         parsed.netloc.casefold(),
@@ -275,7 +279,13 @@ class N8nPromptAutomationTransport:
     are rejected so payload shape alone cannot authorize a network send.
     """
 
-    __slots__ = ("_endpoint_url", "_credential", "_timeout_seconds", "_opener")
+    __slots__ = (
+        "_endpoint_url",
+        "_credential",
+        "_timeout_seconds",
+        "_opener",
+        "_dispatcher_authority",
+    )
 
     transport_identity = N8N_TRANSPORT_IDENTITY
     transport_version = N8N_TRANSPORT_VERSION
@@ -295,6 +305,7 @@ class N8nPromptAutomationTransport:
         self._credential = credential
         self._timeout_seconds = _validate_timeout(timeout_seconds)
         self._opener = opener or _default_opener
+        self._dispatcher_authority: object | None = None
 
     @classmethod
     def from_environment(
@@ -324,6 +335,12 @@ class N8nPromptAutomationTransport:
         """Reject direct delivery without dispatcher-minted authority."""
         raise PromptAutomationTransportError("n8n transport delivery requires dispatcher authorization")
 
+    def _register_dispatcher_authority(self, authority: object) -> None:
+        """Bind one dispatcher authority; reject rebinding to prevent authority confusion."""
+        if self._dispatcher_authority is not None and self._dispatcher_authority is not authority:
+            raise PromptAutomationTransportError("n8n transport is already bound to another dispatcher")
+        self._dispatcher_authority = authority
+
     def _deliver_from_dispatcher(
         self,
         payload: Mapping[str, str],
@@ -331,7 +348,11 @@ class N8nPromptAutomationTransport:
     ) -> PromptAutomationAcknowledgement:
         """POST one canonical payload after dispatcher provenance is proven."""
         canonical = _canonical_payload(payload)
-        if not isinstance(permit, _PromptAutomationDispatchPermit) or not permit._matches(canonical.payload_id):
+        if (
+            not isinstance(permit, _PromptAutomationDispatchPermit)
+            or self._dispatcher_authority is None
+            or not permit._matches(canonical.payload_id, self._dispatcher_authority)
+        ):
             raise PromptAutomationTransportError("n8n transport delivery authorization is invalid")
         body = json.dumps(
             dict(canonical.as_mapping()),

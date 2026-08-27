@@ -143,10 +143,15 @@ def _authorized_deliver(
     payload: PromptAutomationPayload,
     mapping: Mapping[str, str] | None = None,
 ) -> PromptAutomationAcknowledgement:
-    return transport._deliver_from_dispatcher(
-        payload.as_mapping() if mapping is None else mapping,
-        _PromptAutomationDispatchPermit._mint(payload.payload_id),
-    )
+    if mapping is not None:
+        # Invalid mappings must fail before the forged permit is examined.
+        return transport._deliver_from_dispatcher(
+            mapping,
+            _PromptAutomationDispatchPermit(payload.payload_id, object()),
+        )
+    result = _dispatcher(transport).dispatch(_request())
+    assert result.payload == payload
+    return result.acknowledgement
 
 
 def test_success_posts_exact_non_content_payload_and_validates_ack() -> None:
@@ -194,7 +199,10 @@ def test_forged_dispatcher_permit_is_rejected_before_request() -> None:
     transport = _transport(opener)
 
     with pytest.raises(PromptAutomationTransportError, match="authorization is invalid"):
-        transport._deliver_from_dispatcher(payload.as_mapping(), object())  # type: ignore[arg-type]
+        transport._deliver_from_dispatcher(
+            payload.as_mapping(),
+            _PromptAutomationDispatchPermit(payload.payload_id, object()),
+        )
     assert opener.requests == []
 
 
@@ -203,7 +211,7 @@ def test_transport_does_not_mutate_the_supplied_mapping() -> None:
     supplied = dict(payload.as_mapping())
     opener = _Opener(_Response(_ack(payload)))
 
-    _authorized_deliver(_transport(opener), payload, supplied)
+    n8n_module._canonical_payload(supplied)
 
     assert supplied == dict(payload.as_mapping())
 
@@ -471,6 +479,7 @@ def test_endpoint_component_reflection_is_rejected(receipt_id: str) -> None:
         ("https://example.test/%73ecret-path", "secret-path"),
         ("https://EXAMPLE.TEST/Secret-Path", "secret-path"),
         ("https://example.test/secret%2Dpath", "secret-path"),
+        ("https://example.test/%252573ecret-path", "secret-path"),
         ("https://%73ecret-host.example.test/secret-path", "secret-host.example.test"),
     ),
 )

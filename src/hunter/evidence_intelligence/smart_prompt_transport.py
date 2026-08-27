@@ -17,25 +17,18 @@ PROMPT_AUTOMATION_ACK_SCHEMA_VERSION = "smart-prompt-automation-ack-v1"
 
 
 class _PromptAutomationDispatchPermit:
-    """Unforgeable-in-practice capability minted only after envelope verification."""
+    """Payload-bound capability accepted only by its dispatcher-bound transport."""
 
-    __slots__ = ("_payload_id", "_seal")
+    __slots__ = ("_payload_id", "_authority")
 
-    _SEAL = object()
-
-    def __init__(self, payload_id: str, seal: object) -> None:
-        """Keep the permit constructor private to this module's dispatcher path."""
+    def __init__(self, payload_id: str, authority: object) -> None:
+        """Bind the permit to one dispatcher-owned, transport-registered authority."""
         self._payload_id = payload_id
-        self._seal = seal
+        self._authority = authority
 
-    @classmethod
-    def _mint(cls, payload_id: str) -> _PromptAutomationDispatchPermit:
-        """Mint one payload-bound permit without exposing a public authority API."""
-        return cls(payload_id, cls._SEAL)
-
-    def _matches(self, payload_id: str) -> bool:
-        """Check that this permit was minted here for this exact payload identity."""
-        return self._seal is self._SEAL and self._payload_id == payload_id
+    def _matches(self, payload_id: str, authority: object) -> bool:
+        """Check payload identity and the exact dispatcher authority identity."""
+        return self._authority is authority and self._payload_id == payload_id
 
 
 class PromptAutomationTransportError(SmartPromptMachineError):
@@ -260,6 +253,10 @@ class PromptAutomationDispatcher:
             raise TypeError("dispatcher requires the canonical destination registry")
         self._destinations = destinations
         self._transport = transport
+        self._dispatch_authority = object()
+        register_authority = getattr(transport, "_register_dispatcher_authority", None)
+        if callable(register_authority):
+            register_authority(self._dispatch_authority)
         self._seen_dispatches: dict[str, str] = {}
 
     def build_payload(self, request: PromptAutomationDispatchRequest) -> PromptAutomationPayload:
@@ -312,7 +309,7 @@ class PromptAutomationDispatcher:
         if callable(authorized_deliver):
             acknowledgement = authorized_deliver(
                 payload.as_mapping(),
-                _PromptAutomationDispatchPermit._mint(payload.payload_id),
+                _PromptAutomationDispatchPermit(payload.payload_id, self._dispatch_authority),
             )
         else:
             acknowledgement = self._transport.deliver(payload.as_mapping())
