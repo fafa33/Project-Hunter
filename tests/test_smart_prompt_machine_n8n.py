@@ -6,6 +6,7 @@ import http.client
 import io
 import json
 import urllib.error
+from collections.abc import Mapping
 from dataclasses import fields
 
 import pytest
@@ -21,12 +22,14 @@ from hunter.automation.n8n import (
 from hunter.evidence_intelligence.model_adapter_transport import TransportCredential
 from hunter.evidence_intelligence.smart_prompt_routing import _issue_prompt_automation_envelope
 from hunter.evidence_intelligence.smart_prompt_transport import (
+    PromptAutomationAcknowledgement,
     PromptAutomationDestination,
     PromptAutomationDestinationRegistry,
     PromptAutomationDispatcher,
     PromptAutomationDispatchRequest,
     PromptAutomationPayload,
     PromptAutomationTransportError,
+    _PromptAutomationDispatchPermit,
 )
 
 _SIGNING_KEY_ENV = "HUNTER_PROMPT_AUTOMATION_SIGNING_KEY"
@@ -78,7 +81,7 @@ class _Opener:
         return self.response
 
 
-def _payload() -> PromptAutomationPayload:
+def _request() -> PromptAutomationDispatchRequest:
     claims = {
         "task_request_id": "task-request-1",
         "route_registry_identity": "route-registry-1",
@@ -89,19 +92,24 @@ def _payload() -> PromptAutomationPayload:
         "build_record_id": "build-1",
     }
     envelope = _issue_prompt_automation_envelope(**claims)
+    return PromptAutomationDispatchRequest(destination_key="automation.n8n", envelope=envelope)
+
+
+def _dispatcher(transport: object) -> PromptAutomationDispatcher:
     destination = PromptAutomationDestination(
         destination_id="hunter-n8n",
         version="1",
         destination_key="automation.n8n",
         transport_name="n8n",
     )
-    dispatcher = PromptAutomationDispatcher(
+    return PromptAutomationDispatcher(
         destinations=PromptAutomationDestinationRegistry((destination,)),
-        transport=object(),  # type: ignore[arg-type]
+        transport=transport,  # type: ignore[arg-type]
     )
-    return dispatcher.build_payload(
-        PromptAutomationDispatchRequest(destination_key="automation.n8n", envelope=envelope)
-    )
+
+
+def _payload() -> PromptAutomationPayload:
+    return _dispatcher(object()).build_payload(_request())
 
 
 def _ack(payload: PromptAutomationPayload, *, accepted: bool = True, **overrides: object) -> bytes:
@@ -130,12 +138,23 @@ def _transport(opener: _Opener) -> N8nPromptAutomationTransport:
     )
 
 
+def _authorized_deliver(
+    transport: N8nPromptAutomationTransport,
+    payload: PromptAutomationPayload,
+    mapping: Mapping[str, str] | None = None,
+) -> PromptAutomationAcknowledgement:
+    return transport._deliver_from_dispatcher(
+        payload.as_mapping() if mapping is None else mapping,
+        _PromptAutomationDispatchPermit._mint(payload.payload_id),
+    )
+
+
 def test_success_posts_exact_non_content_payload_and_validates_ack() -> None:
     payload = _payload()
     opener = _Opener(_Response(_ack(payload)))
     transport = _transport(opener)
 
-    acknowledgement = transport.deliver(payload.as_mapping())
+    acknowledgement = _authorized_deliver(transport, payload)
 
     assert acknowledgement.accepted is True
     request, timeout = opener.requests[0]
@@ -149,12 +168,42 @@ def test_success_posts_exact_non_content_payload_and_validates_ack() -> None:
     assert "credential" not in json.dumps(body).lower()
 
 
+def test_direct_transport_delivery_requires_dispatcher_authorization() -> None:
+    payload = _payload()
+    opener = _Opener(_Response(_ack(payload)))
+
+    with pytest.raises(PromptAutomationTransportError, match="dispatcher authorization"):
+        _transport(opener).deliver(payload.as_mapping())
+    assert opener.requests == []
+
+
+def test_dispatcher_mints_authorization_for_n8n_delivery() -> None:
+    payload = _payload()
+    opener = _Opener(_Response(_ack(payload)))
+    dispatcher = _dispatcher(_transport(opener))
+
+    result = dispatcher.dispatch(_request())
+
+    assert result.acknowledgement.accepted is True
+    assert len(opener.requests) == 1
+
+
+def test_forged_dispatcher_permit_is_rejected_before_request() -> None:
+    payload = _payload()
+    opener = _Opener(_Response(_ack(payload)))
+    transport = _transport(opener)
+
+    with pytest.raises(PromptAutomationTransportError, match="authorization is invalid"):
+        transport._deliver_from_dispatcher(payload.as_mapping(), object())  # type: ignore[arg-type]
+    assert opener.requests == []
+
+
 def test_transport_does_not_mutate_the_supplied_mapping() -> None:
     payload = _payload()
     supplied = dict(payload.as_mapping())
     opener = _Opener(_Response(_ack(payload)))
 
-    _transport(opener).deliver(supplied)
+    _authorized_deliver(_transport(opener), payload, supplied)
 
     assert supplied == dict(payload.as_mapping())
 
@@ -219,7 +268,7 @@ def test_payload_schema_rejects_missing_extra_and_non_string_fields(mutator) -> 
     opener = _Opener(_Response(_ack(payload)))
 
     with pytest.raises(PromptAutomationTransportError, match="payload"):
-        _transport(opener).deliver(values)
+        _authorized_deliver(_transport(opener), payload, values)
     assert opener.requests == []
 
 
@@ -227,11 +276,11 @@ def test_malformed_acknowledgement_and_extra_fields_fail_closed() -> None:
     payload = _payload()
     malformed = _Opener(_Response(b"not-json"))
     with pytest.raises(PromptAutomationTransportError, match="malformed JSON"):
-        _transport(malformed).deliver(payload.as_mapping())
+        _authorized_deliver(_transport(malformed), payload)
 
     extra = _Opener(_Response(_ack(payload, unexpected="field")))
     with pytest.raises(PromptAutomationTransportError, match="schema mismatch"):
-        _transport(extra).deliver(payload.as_mapping())
+        _authorized_deliver(_transport(extra), payload)
 
 
 @pytest.mark.parametrize(
@@ -245,18 +294,18 @@ def test_malformed_acknowledgement_and_extra_fields_fail_closed() -> None:
 def test_non_success_or_non_json_response_fails_closed(response: _Response) -> None:
     payload = _payload()
     with pytest.raises(PromptAutomationTransportError):
-        _transport(_Opener(response)).deliver(payload.as_mapping())
+        _authorized_deliver(_transport(_Opener(response)), payload)
 
 
 def test_rejected_and_mismatched_acknowledgements_fail_closed() -> None:
     payload = _payload()
     rejected = _Opener(_Response(_ack(payload, accepted=False)))
     with pytest.raises(PromptAutomationTransportError, match="rejected"):
-        _transport(rejected).deliver(payload.as_mapping())
+        _authorized_deliver(_transport(rejected), payload)
 
     mismatched = _Opener(_Response(_ack(payload, dispatch_id="other-dispatch")))
     with pytest.raises(PromptAutomationTransportError, match="dispatch identity"):
-        _transport(mismatched).deliver(payload.as_mapping())
+        _authorized_deliver(_transport(mismatched), payload)
 
 
 def test_ambiguous_network_failure_is_not_retried_or_reported_as_accepted() -> None:
@@ -264,7 +313,7 @@ def test_ambiguous_network_failure_is_not_retried_or_reported_as_accepted() -> N
     opener = _Opener(TimeoutError("socket timeout"))
 
     with pytest.raises(PromptAutomationTransportError, match="outcome is unknown"):
-        _transport(opener).deliver(payload.as_mapping())
+        _authorized_deliver(_transport(opener), payload)
     assert len(opener.requests) == 1
 
 
@@ -273,7 +322,7 @@ def test_truncated_http_response_is_an_ambiguous_outcome() -> None:
     opener = _Opener(_TruncatedResponse())
 
     with pytest.raises(PromptAutomationTransportError, match="outcome is unknown"):
-        _transport(opener).deliver(payload.as_mapping())
+        _authorized_deliver(_transport(opener), payload)
     assert len(opener.requests) == 1
 
 
@@ -282,7 +331,7 @@ def test_http_protocol_error_is_an_ambiguous_outcome() -> None:
     opener = _Opener(http.client.BadStatusLine("malformed response"))
 
     with pytest.raises(PromptAutomationTransportError, match="outcome is unknown"):
-        _transport(opener).deliver(payload.as_mapping())
+        _authorized_deliver(_transport(opener), payload)
     assert len(opener.requests) == 1
 
 
@@ -296,7 +345,7 @@ def test_credential_header_injection_is_rejected_before_request() -> None:
     )
 
     with pytest.raises(PromptAutomationTransportError, match="credential") as raised:
-        transport.deliver(payload.as_mapping())
+        _authorized_deliver(transport, payload)
     assert "webhook-secret" not in str(raised.value)
     assert opener.requests == []
 
@@ -311,7 +360,7 @@ def test_non_latin1_credential_is_rejected_before_request() -> None:
     )
 
     with pytest.raises(PromptAutomationTransportError, match="credential") as raised:
-        transport.deliver(payload.as_mapping())
+        _authorized_deliver(transport, payload)
     assert "webhook-secret" not in str(raised.value)
     assert opener.requests == []
 
@@ -326,7 +375,7 @@ def test_http_error_does_not_leak_response_body_or_secret() -> None:
         io.BytesIO(b"denied webhook-secret"),
     )
     with pytest.raises(PromptAutomationTransportError) as raised:
-        _transport(_Opener(error)).deliver(payload.as_mapping())
+        _authorized_deliver(_transport(_Opener(error)), payload)
     assert "webhook-secret" not in str(raised.value)
     assert "denied" not in str(raised.value)
     assert raised.value.__cause__ is None
@@ -338,7 +387,7 @@ def test_duplicate_acknowledgement_keys_fail_closed() -> None:
     duplicate = _ack(payload).replace(b'"accepted": true', b'"accepted": true, "accepted": false')
 
     with pytest.raises(PromptAutomationTransportError, match="duplicate JSON keys"):
-        _transport(_Opener(_Response(duplicate))).deliver(payload.as_mapping())
+        _authorized_deliver(_transport(_Opener(_Response(duplicate))), payload)
 
 
 @pytest.mark.parametrize("receipt_id", ("webhook-secret", "receipt with spaces", "r" * 257))
@@ -347,7 +396,7 @@ def test_receipt_identifier_is_bounded_and_secret_safe(receipt_id: str) -> None:
     response = _Response(_ack(payload, receipt_id=receipt_id))
 
     with pytest.raises(PromptAutomationTransportError, match="receipt identity is invalid") as raised:
-        _transport(_Opener(response)).deliver(payload.as_mapping())
+        _authorized_deliver(_transport(_Opener(response)), payload)
     assert "webhook-secret" not in str(raised.value)
 
 
@@ -366,7 +415,7 @@ def test_json_decoder_limit_is_normalized_as_malformed_acknowledgement() -> None
     ).encode("utf-8")
 
     with pytest.raises(PromptAutomationTransportError, match="malformed JSON"):
-        _transport(_Opener(_Response(raw))).deliver(payload.as_mapping())
+        _authorized_deliver(_transport(_Opener(_Response(raw))), payload)
 
 
 def test_recursive_json_decoder_failure_is_normalized_as_malformed_acknowledgement() -> None:
@@ -374,7 +423,7 @@ def test_recursive_json_decoder_failure_is_normalized_as_malformed_acknowledgeme
     raw = ("[" * 10000 + "]" * 10000).encode("utf-8")
 
     with pytest.raises(PromptAutomationTransportError, match="malformed JSON"):
-        _transport(_Opener(_Response(raw))).deliver(payload.as_mapping())
+        _authorized_deliver(_transport(_Opener(_Response(raw))), payload)
 
 
 def test_partial_bearer_reflection_is_rejected_before_return() -> None:
@@ -388,7 +437,7 @@ def test_partial_bearer_reflection_is_rejected_before_return() -> None:
     )
 
     with pytest.raises(PromptAutomationTransportError, match="receipt identity is invalid") as raised:
-        transport.deliver(payload.as_mapping())
+        _authorized_deliver(transport, payload)
     assert token not in str(raised.value)
 
 
@@ -398,7 +447,7 @@ def test_short_content_length_read_is_an_ambiguous_outcome() -> None:
     response = _Response(body, content_length=str(len(body) + 100))
 
     with pytest.raises(PromptAutomationTransportError, match="outcome is unknown"):
-        _transport(_Opener(response)).deliver(payload.as_mapping())
+        _authorized_deliver(_transport(_Opener(response)), payload)
 
 
 @pytest.mark.parametrize("receipt_id", ("secret-host.example.test", "secret-path"))
@@ -413,7 +462,33 @@ def test_endpoint_component_reflection_is_rejected(receipt_id: str) -> None:
     )
 
     with pytest.raises(PromptAutomationTransportError, match="receipt identity is invalid"):
-        transport.deliver(payload.as_mapping())
+        _authorized_deliver(transport, payload)
+
+
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "receipt_id"),
+    (
+        ("https://example.test/%73ecret-path", "secret-path"),
+        ("https://EXAMPLE.TEST/Secret-Path", "secret-path"),
+        ("https://example.test/secret%2Dpath", "secret-path"),
+    ),
+)
+def test_normalized_endpoint_component_reflection_is_rejected(
+    endpoint: str,
+    receipt_id: str,
+) -> None:
+    payload = _payload()
+    response = _Response(_ack(payload, receipt_id=receipt_id))
+    transport = N8nPromptAutomationTransport(
+        endpoint,
+        TransportCredential("webhook-secret", slot_identity="test:n8n"),
+        opener=_Opener(response),
+    )
+
+    with pytest.raises(PromptAutomationTransportError, match="receipt identity is invalid"):
+        _authorized_deliver(transport, payload)
 
 
 def test_environment_factory_requires_operational_secret_and_builds_dispatcher() -> None:

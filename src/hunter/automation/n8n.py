@@ -24,7 +24,7 @@ import urllib.request
 from collections.abc import Callable, Mapping
 from dataclasses import fields
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 from hunter.evidence_intelligence.model_adapter_transport import TransportCredential
 from hunter.evidence_intelligence.smart_prompt_transport import (
@@ -34,6 +34,7 @@ from hunter.evidence_intelligence.smart_prompt_transport import (
     PromptAutomationDispatcher,
     PromptAutomationPayload,
     PromptAutomationTransportError,
+    _PromptAutomationDispatchPermit,
 )
 
 N8N_WEBHOOK_URL_ENV = "HUNTER_N8N_WEBHOOK_URL"
@@ -200,16 +201,42 @@ def _response_content_length(response: Any) -> int | None:
     return content_length
 
 
+def _normalized_endpoint_components(endpoint_url: str) -> tuple[str, ...]:
+    """Return case- and percent-normalized endpoint components for redaction checks."""
+    parsed = urlsplit(endpoint_url)
+    decoded_path = parsed.path
+    for _ in range(2):
+        normalized_path = unquote(decoded_path)
+        if normalized_path == decoded_path:
+            break
+        decoded_path = normalized_path
+    components = {
+        endpoint_url.casefold(),
+        parsed.netloc.casefold(),
+        (parsed.hostname or "").casefold(),
+        parsed.path.casefold(),
+        decoded_path.casefold(),
+    }
+    for path in (parsed.path, decoded_path):
+        components.update(part.casefold() for part in path.split("/") if part)
+    return tuple(sorted(component for component in components if component))
+
+
 def _validate_receipt_id(receipt_id: object, *, bearer_token: str, endpoint_url: str) -> None:
     if not isinstance(receipt_id, str) or not 1 <= len(receipt_id) <= _MAX_RECEIPT_ID_LENGTH:
         raise PromptAutomationTransportError("n8n acknowledgement receipt identity is invalid")
     if any(character not in _RECEIPT_ID_CHARACTERS for character in receipt_id):
         raise PromptAutomationTransportError("n8n acknowledgement receipt identity is invalid")
+    normalized_receipt_id = receipt_id.casefold()
     if (
         bearer_token in receipt_id
         or receipt_id in bearer_token
         or endpoint_url in receipt_id
         or receipt_id in endpoint_url
+        or any(
+            component in normalized_receipt_id or normalized_receipt_id in component
+            for component in _normalized_endpoint_components(endpoint_url)
+        )
     ):
         raise PromptAutomationTransportError("n8n acknowledgement receipt identity is invalid")
 
@@ -234,8 +261,9 @@ class N8nPromptAutomationTransport:
     """Deliver Phase C non-content payloads to one configured n8n webhook.
 
     The transport has no route/profile/source/prompt authority. The dispatcher
-    verifies the signed envelope before calling ``deliver``; this adapter then
-    validates the exact derived payload shape and only performs HTTP mechanics.
+    verifies the signed envelope and mints a payload-bound permit before the
+    private delivery hook can perform HTTP mechanics. Direct calls to ``deliver``
+    are rejected so payload shape alone cannot authorize a network send.
     """
 
     __slots__ = ("_endpoint_url", "_credential", "_timeout_seconds", "_opener")
@@ -284,8 +312,18 @@ class N8nPromptAutomationTransport:
         return "N8nPromptAutomationTransport(<configured>)"
 
     def deliver(self, payload: Mapping[str, str]) -> PromptAutomationAcknowledgement:
-        """POST one canonical payload and return one identity-bound acknowledgement."""
+        """Reject direct delivery without dispatcher-minted authority."""
+        raise PromptAutomationTransportError("n8n transport delivery requires dispatcher authorization")
+
+    def _deliver_from_dispatcher(
+        self,
+        payload: Mapping[str, str],
+        permit: _PromptAutomationDispatchPermit,
+    ) -> PromptAutomationAcknowledgement:
+        """POST one canonical payload after dispatcher provenance is proven."""
         canonical = _canonical_payload(payload)
+        if not isinstance(permit, _PromptAutomationDispatchPermit) or not permit._matches(canonical.payload_id):
+            raise PromptAutomationTransportError("n8n transport delivery authorization is invalid")
         body = json.dumps(
             dict(canonical.as_mapping()),
             sort_keys=True,

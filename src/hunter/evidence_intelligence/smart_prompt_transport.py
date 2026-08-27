@@ -16,6 +16,28 @@ PROMPT_AUTOMATION_PAYLOAD_SCHEMA_VERSION = "smart-prompt-automation-payload-v1"
 PROMPT_AUTOMATION_ACK_SCHEMA_VERSION = "smart-prompt-automation-ack-v1"
 
 
+class _PromptAutomationDispatchPermit:
+    """Unforgeable-in-practice capability minted only after envelope verification."""
+
+    __slots__ = ("_payload_id", "_seal")
+
+    _SEAL = object()
+
+    def __init__(self, payload_id: str, seal: object) -> None:
+        """Keep the permit constructor private to this module's dispatcher path."""
+        self._payload_id = payload_id
+        self._seal = seal
+
+    @classmethod
+    def _mint(cls, payload_id: str) -> _PromptAutomationDispatchPermit:
+        """Mint one payload-bound permit without exposing a public authority API."""
+        return cls(payload_id, cls._SEAL)
+
+    def _matches(self, payload_id: str) -> bool:
+        """Check that this permit was minted here for this exact payload identity."""
+        return self._seal is self._SEAL and self._payload_id == payload_id
+
+
 class PromptAutomationTransportError(SmartPromptMachineError):
     """Raised when governed automation transport lineage cannot be proven."""
 
@@ -286,7 +308,14 @@ class PromptAutomationDispatcher:
     def dispatch(self, request: PromptAutomationDispatchRequest) -> PromptAutomationDispatchResult:
         """Deliver an immutable canonical payload and verify its exact acknowledgement."""
         payload = self.build_payload(request)
-        acknowledgement = self._transport.deliver(payload.as_mapping())
+        authorized_deliver = getattr(self._transport, "_deliver_from_dispatcher", None)
+        if callable(authorized_deliver):
+            acknowledgement = authorized_deliver(
+                payload.as_mapping(),
+                _PromptAutomationDispatchPermit._mint(payload.payload_id),
+            )
+        else:
+            acknowledgement = self._transport.deliver(payload.as_mapping())
         if not isinstance(acknowledgement, PromptAutomationAcknowledgement):
             raise PromptAutomationTransportError("transport returned non-canonical acknowledgement")
         if acknowledgement.dispatch_id != payload.dispatch_id:
