@@ -142,6 +142,7 @@ def test_ruleset_conformance_requires_all_canonical_statuses(monkeypatch):
         assert path == "rulesets/7"
         return {
             "enforcement": "active",
+            "bypass_actors": [],
             "conditions": {"ref_name": {"include": ["refs/heads/main"], "exclude": []}},
             "rules": [
                 {
@@ -162,6 +163,53 @@ def test_ruleset_conformance_requires_all_canonical_statuses(monkeypatch):
     assert "Hunter Merge Readiness" in description
 
 
+def test_ruleset_conformance_rejects_main_ruleset_with_bypass_actor(monkeypatch):
+    required = sorted(core.REQUIRED_RULESET_CHECKS)
+
+    def fake_request(_repo, _token, _method, path, _payload=None):
+        if path.startswith("rulesets?"):
+            return [{"id": 7, "enforcement": "active"}]
+        return {
+            "enforcement": "active",
+            "bypass_actors": [{"actor_id": 1, "actor_type": "RepositoryRole", "bypass_mode": "always"}],
+            "conditions": {"ref_name": {"include": ["refs/heads/main"], "exclude": []}},
+            "rules": [
+                {
+                    "type": "required_status_checks",
+                    "parameters": {"required_status_checks": [{"context": item} for item in required]},
+                }
+            ],
+        }
+
+    monkeypatch.setattr(core, "request_json", fake_request)
+    state, description = core.ruleset_conformance("fafa33/Project-Hunter", "token")
+    assert state == "failure"
+    assert "bypass actors" in description
+
+
+def test_ruleset_conformance_rejects_missing_bypass_configuration(monkeypatch):
+    required = sorted(core.REQUIRED_RULESET_CHECKS)
+
+    def fake_request(_repo, _token, _method, path, _payload=None):
+        if path.startswith("rulesets?"):
+            return [{"id": 7, "enforcement": "active"}]
+        return {
+            "enforcement": "active",
+            "conditions": {"ref_name": {"include": ["refs/heads/main"], "exclude": []}},
+            "rules": [
+                {
+                    "type": "required_status_checks",
+                    "parameters": {"required_status_checks": [{"context": item} for item in required]},
+                }
+            ],
+        }
+
+    monkeypatch.setattr(core, "request_json", fake_request)
+    state, description = core.ruleset_conformance("fafa33/Project-Hunter", "token")
+    assert state == "failure"
+    assert "bypass configuration" in description
+
+
 def test_ruleset_conformance_accepts_complete_main_protection(monkeypatch):
     required = sorted(core.REQUIRED_RULESET_CHECKS)
 
@@ -170,6 +218,7 @@ def test_ruleset_conformance_accepts_complete_main_protection(monkeypatch):
             return [{"id": 7, "enforcement": "active"}]
         return {
             "enforcement": "active",
+            "bypass_actors": [],
             "conditions": {"ref_name": {"include": ["refs/heads/main"], "exclude": []}},
             "rules": [
                 {
