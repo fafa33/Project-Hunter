@@ -14,6 +14,7 @@ import pytest
 
 from hunter.evidence_intelligence.smart_prompt_routing import (
     PromptAutomationEnvelope,
+    PromptAutomationVerifier,
     PromptTaskAuthorityError,
     _issue_prompt_automation_envelope,
 )
@@ -30,12 +31,15 @@ from hunter.evidence_intelligence.smart_prompt_transport import (
 
 _AUTOMATION_SIGNING_KEY_ENV = "HUNTER_PROMPT_AUTOMATION_SIGNING_KEY"
 _AUTOMATION_SIGNING_KEY_HEX = "11" * 32
+_AUTOMATION_VERIFYING_KEY_ENV = "HUNTER_PROMPT_AUTOMATION_VERIFYING_KEY"
+_AUTOMATION_VERIFYING_KEY_HEX = "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
 
 
 @pytest.fixture(autouse=True)
 def _automation_signing_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Provide the explicit shared signing key used by Phase C test workers."""
+    """Provide issuer-only private and verifier-only public test keys."""
     monkeypatch.setenv(_AUTOMATION_SIGNING_KEY_ENV, _AUTOMATION_SIGNING_KEY_HEX)
+    monkeypatch.setenv(_AUTOMATION_VERIFYING_KEY_ENV, _AUTOMATION_VERIFYING_KEY_HEX)
 
 
 def _envelope(**overrides: str) -> PromptAutomationEnvelope:
@@ -242,7 +246,7 @@ def test_dispatcher_rejects_a_publicly_constructed_forged_envelope() -> None:
         profile_identity="caller-profile-identity",
         build_manifest_id="caller-manifest",
         build_record_id="caller-source-bytes",
-        issuer_signature="0" * 64,
+        issuer_signature="0" * 128,
     )
     request = PromptAutomationDispatchRequest(
         destination_key="automation.n8n",
@@ -253,17 +257,39 @@ def test_dispatcher_rejects_a_publicly_constructed_forged_envelope() -> None:
         _dispatcher(_AcceptingTransport()).build_payload(request)
 
 
-def test_envelope_issuance_requires_a_shared_operational_signing_key(
+def test_envelope_issuance_requires_an_issuer_private_signing_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Missing shared key material fails closed instead of creating unverifiable envelopes."""
+    """Missing issuer private key fails closed instead of creating unverifiable envelopes."""
     monkeypatch.delenv(_AUTOMATION_SIGNING_KEY_ENV)
 
     with pytest.raises(PromptTaskAuthorityError, match=_AUTOMATION_SIGNING_KEY_ENV):
         _envelope()
 
 
-@pytest.mark.parametrize("signature", ("é" * 64, "A" * 64, "0" * 63))
+def test_envelope_verification_requires_a_verifier_public_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verifier bootstrap fails closed when the worker lacks its public key."""
+    _envelope()
+    monkeypatch.delenv(_AUTOMATION_VERIFYING_KEY_ENV)
+
+    with pytest.raises(PromptTaskAuthorityError, match=_AUTOMATION_VERIFYING_KEY_ENV):
+        PromptAutomationVerifier.from_environment()
+
+
+def test_verifier_snapshot_ignores_later_environment_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A bound verifier keeps its issuer trust root after environment mutation."""
+    envelope = _envelope()
+    verifier = PromptAutomationVerifier.from_environment()
+    monkeypatch.setenv(_AUTOMATION_VERIFYING_KEY_ENV, "22" * 32)
+
+    envelope.verify_issuer_signature(verifier)
+
+
+@pytest.mark.parametrize("signature", ("é" * 128, "A" * 128, "0" * 127))
 def test_envelope_rejects_noncanonical_issuer_signatures(signature: str) -> None:
     """Malformed signatures fail through the governed authority error path."""
     with pytest.raises(PromptTaskAuthorityError, match="lowercase hexadecimal"):
@@ -277,9 +303,11 @@ def test_envelope_signature_verifies_across_worker_processes() -> None:
 import json
 import sys
 
-from hunter.evidence_intelligence.smart_prompt_routing import PromptAutomationEnvelope
+from hunter.evidence_intelligence.smart_prompt_routing import PromptAutomationEnvelope, PromptAutomationVerifier
 
-PromptAutomationEnvelope(**json.loads(sys.stdin.read())).verify_issuer_signature()
+PromptAutomationEnvelope(**json.loads(sys.stdin.read())).verify_issuer_signature(
+    PromptAutomationVerifier.from_environment()
+)
 """
     environment = dict(os.environ)
     source_root = str(Path(__file__).resolve().parents[1] / "src")
@@ -304,7 +332,7 @@ def test_dispatcher_rejects_envelope_subclass_override() -> None:
     class _BypassingEnvelope(PromptAutomationEnvelope):
         """Attempt to bypass the canonical signature verifier."""
 
-        def verify_issuer_signature(self) -> None:
+        def verify_issuer_signature(self, verifier: PromptAutomationVerifier) -> None:
             """Pretend that forged lineage has been authorized."""
             return None
 
