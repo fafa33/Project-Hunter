@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from dataclasses import fields, replace
 
 import pytest
+
 from hunter.evidence_intelligence.smart_prompt_routing import PromptAutomationEnvelope
 from hunter.evidence_intelligence.smart_prompt_transport import (
     PROMPT_AUTOMATION_ACK_SCHEMA_VERSION,
