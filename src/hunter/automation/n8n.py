@@ -271,7 +271,7 @@ class N8nPromptAutomationTransport:
                 content_type = _response_content_type(response)
         except urllib.error.HTTPError as error:
             raise PromptAutomationTransportError(f"n8n webhook returned HTTP {error.code}") from None
-        except http.client.IncompleteRead:
+        except http.client.HTTPException:
             raise PromptAutomationTransportError(
                 "n8n webhook delivery outcome is unknown; reconcile before replaying the same dispatch"
             ) from None

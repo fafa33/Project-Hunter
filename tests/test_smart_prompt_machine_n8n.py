@@ -266,6 +266,15 @@ def test_truncated_http_response_is_an_ambiguous_outcome() -> None:
     assert len(opener.requests) == 1
 
 
+def test_http_protocol_error_is_an_ambiguous_outcome() -> None:
+    payload = _payload()
+    opener = _Opener(http.client.BadStatusLine("malformed response"))
+
+    with pytest.raises(PromptAutomationTransportError, match="outcome is unknown"):
+        _transport(opener).deliver(payload.as_mapping())
+    assert len(opener.requests) == 1
+
+
 def test_credential_header_injection_is_rejected_before_request() -> None:
     payload = _payload()
     opener = _Opener(_Response(_ack(payload)))
