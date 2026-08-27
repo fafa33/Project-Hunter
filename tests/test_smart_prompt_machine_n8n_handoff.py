@@ -23,6 +23,7 @@ from hunter.evidence_intelligence.repository import EvidenceIntelligenceReposito
 from hunter.evidence_intelligence.smart_prompt_machine import PromptMachineProfile, PromptMachineProfileRegistry
 from hunter.evidence_intelligence.smart_prompt_routing import (
     PROMPT_AUTOMATION_ENVELOPE_SCHEMA_VERSION,
+    PromptTaskAuthorityError,
     PromptTaskRequest,
     PromptTaskRoute,
     PromptTaskRouteRegistry,
@@ -238,6 +239,7 @@ def test_split_domain_e2e_uses_public_verifier_only_on_worker(monkeypatch: pytes
     first = worker.dispatch_document(document)
     second = worker.dispatch_document(document)
 
+    assert first.payload.destination_key == "automation.n8n"
     assert first.payload.dispatch_id == second.payload.dispatch_id
     assert first.payload.payload_id == second.payload.payload_id
     assert first.acknowledgement.accepted is True
@@ -295,9 +297,13 @@ def test_worker_requires_verifier_key_without_requiring_signing_key() -> None:
         "HUNTER_N8N_WEBHOOK_URL": _N8N_URL,
         "HUNTER_N8N_WEBHOOK_TOKEN": _N8N_TOKEN,
     }
-    with pytest.raises(Exception, match="HUNTER_PROMPT_AUTOMATION_VERIFYING_KEY"):
+    with pytest.raises(PromptTaskAuthorityError, match="HUNTER_PROMPT_AUTOMATION_VERIFYING_KEY"):
         N8nPromptAutomationWorker.from_environment(environ=environment, opener=_AcceptingOpener())
 
     environment["HUNTER_PROMPT_AUTOMATION_VERIFYING_KEY"] = "bad-key"
-    with pytest.raises(Exception, match="32 bytes"):
+    with pytest.raises(PromptTaskAuthorityError, match="hex-encoded byte string"):
+        N8nPromptAutomationWorker.from_environment(environ=environment, opener=_AcceptingOpener())
+
+    environment["HUNTER_PROMPT_AUTOMATION_VERIFYING_KEY"] = "00" * 31
+    with pytest.raises(PromptTaskAuthorityError, match="32 bytes"):
         N8nPromptAutomationWorker.from_environment(environ=environment, opener=_AcceptingOpener())
