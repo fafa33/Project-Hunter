@@ -182,12 +182,30 @@ def _response_content_type(response: Any) -> str:
     return value if isinstance(value, str) else ""
 
 
+def _response_content_length(response: Any) -> int | None:
+    headers = getattr(response, "headers", None)
+    if headers is None or not hasattr(headers, "get"):
+        return None
+    value = headers.get("Content-Length")
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise PromptAutomationTransportError("n8n webhook returned an invalid Content-Length")
+    try:
+        content_length = int(value, 10)
+    except ValueError:
+        raise PromptAutomationTransportError("n8n webhook returned an invalid Content-Length") from None
+    if content_length < 0:
+        raise PromptAutomationTransportError("n8n webhook returned an invalid Content-Length")
+    return content_length
+
+
 def _validate_receipt_id(receipt_id: object, *, bearer_token: str, endpoint_url: str) -> None:
     if not isinstance(receipt_id, str) or not 1 <= len(receipt_id) <= _MAX_RECEIPT_ID_LENGTH:
         raise PromptAutomationTransportError("n8n acknowledgement receipt identity is invalid")
     if any(character not in _RECEIPT_ID_CHARACTERS for character in receipt_id):
         raise PromptAutomationTransportError("n8n acknowledgement receipt identity is invalid")
-    if bearer_token in receipt_id or receipt_id in bearer_token or endpoint_url in receipt_id:
+    if bearer_token in receipt_id or receipt_id in bearer_token or endpoint_url in receipt_id or receipt_id in endpoint_url:
         raise PromptAutomationTransportError("n8n acknowledgement receipt identity is invalid")
 
 
@@ -286,6 +304,7 @@ class N8nPromptAutomationTransport:
                 status = getattr(response, "status", None)
                 raw = response.read(_MAX_ACKNOWLEDGEMENT_BYTES + 1)
                 content_type = _response_content_type(response)
+                content_length = _response_content_length(response)
         except urllib.error.HTTPError as error:
             raise PromptAutomationTransportError(f"n8n webhook returned HTTP {error.code}") from None
         except http.client.HTTPException:
@@ -305,6 +324,10 @@ class N8nPromptAutomationTransport:
             raise PromptAutomationTransportError("n8n webhook acknowledgement body must be UTF-8 JSON bytes")
         if len(raw) > _MAX_ACKNOWLEDGEMENT_BYTES:
             raise PromptAutomationTransportError("n8n webhook acknowledgement is too large")
+        if content_length is not None and len(raw) != content_length:
+            raise PromptAutomationTransportError(
+                "n8n webhook delivery outcome is unknown; reconcile before replaying the same dispatch"
+            )
         if content_type.split(";", 1)[0].strip().lower() != "application/json":
             raise PromptAutomationTransportError("n8n webhook acknowledgement must use application/json")
         try:

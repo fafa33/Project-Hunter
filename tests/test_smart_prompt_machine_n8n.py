@@ -34,9 +34,18 @@ _SIGNING_KEY_HEX = "11" * 32
 
 
 class _Response:
-    def __init__(self, body: bytes, *, status: int = 200, content_type: str = "application/json") -> None:
+    def __init__(
+        self,
+        body: bytes,
+        *,
+        status: int = 200,
+        content_type: str = "application/json",
+        content_length: str | None = None,
+    ) -> None:
         self.status = status
         self.headers = {"Content-Type": content_type}
+        if content_length is not None:
+            self.headers["Content-Length"] = content_length
         self._body = body
 
     def __enter__(self) -> _Response:
@@ -381,6 +390,30 @@ def test_partial_bearer_reflection_is_rejected_before_return() -> None:
     with pytest.raises(PromptAutomationTransportError, match="receipt identity is invalid") as raised:
         transport.deliver(payload.as_mapping())
     assert token not in str(raised.value)
+
+
+def test_short_content_length_read_is_an_ambiguous_outcome() -> None:
+    payload = _payload()
+    body = _ack(payload)
+    response = _Response(body, content_length=str(len(body) + 100))
+
+    with pytest.raises(PromptAutomationTransportError, match="outcome is unknown"):
+        _transport(_Opener(response)).deliver(payload.as_mapping())
+
+
+@pytest.mark.parametrize("receipt_id", ("secret-host.example.test", "secret-path"))
+def test_endpoint_component_reflection_is_rejected(receipt_id: str) -> None:
+    payload = _payload()
+    endpoint = "https://secret-host.example.test/secret-path"
+    response = _Response(_ack(payload, receipt_id=receipt_id))
+    transport = N8nPromptAutomationTransport(
+        endpoint,
+        TransportCredential("webhook-secret", slot_identity="test:n8n"),
+        opener=_Opener(response),
+    )
+
+    with pytest.raises(PromptAutomationTransportError, match="receipt identity is invalid"):
+        transport.deliver(payload.as_mapping())
 
 
 def test_environment_factory_requires_operational_secret_and_builds_dispatcher() -> None:
