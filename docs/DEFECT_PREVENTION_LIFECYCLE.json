@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "purpose": "Machine-readable semantics separating defect detection from actual prevention enforcement.",
+  "stages": [
+    "recorded",
+    "regression-tested",
+    "locally-enforced",
+    "hosted-enforced",
+    "merge-enforced",
+    "prevented"
+  ],
+  "legacy_status_semantics": {
+    "guarded": "detected"
+  },
+  "rule": "A legacy guarded defect is detection-only unless explicit enforcement evidence upgrades it. Prevented requires local, hosted, and merge enforcement and recurrence escalation.",
+  "explicit_enforcement": {
+    "PRH-007": {
+      "state": "merge-enforced",
+      "local": ".githooks/pre-push -> python scripts/hunter_pre_push.py -> python scripts/hunter_pr_preflight.py --mode normal",
+      "hosted": "Hunter / Pre-PR Preflight and CI both execute the canonical shared preflight on pushed exact HEAD",
+      "merge": "Required Quality Gates plus Hunter Merge Readiness remain independent merge controls",
+      "recurrence": "Any pushed-head recurrence is a prevention-system failure and requires enforcement-gap correction"
+    }
+  }
+}
