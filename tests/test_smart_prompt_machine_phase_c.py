@@ -238,6 +238,27 @@ def test_dispatcher_rejects_a_publicly_constructed_forged_envelope() -> None:
         _dispatcher(_AcceptingTransport()).build_payload(request)
 
 
+def test_dispatcher_rejects_envelope_subclass_override() -> None:
+    """An envelope subtype cannot override verification at the dispatch boundary."""
+
+    class _BypassingEnvelope(PromptAutomationEnvelope):
+        """Attempt to bypass the canonical signature verifier."""
+
+        def verify_issuer_signature(self) -> None:
+            """Pretend that forged lineage has been authorized."""
+            return None
+
+    issued = _envelope()
+    forged_envelope = _BypassingEnvelope(**issued.__dict__)
+    request = PromptAutomationDispatchRequest(
+        destination_key="automation.n8n",
+        envelope=forged_envelope,
+    )
+
+    with pytest.raises(PromptAutomationTransportError, match="exact PromptAutomationEnvelope"):
+        _dispatcher(_AcceptingTransport()).build_payload(request)
+
+
 def test_retry_delivers_identical_immutable_payload_and_replay_identity() -> None:
     """Repeated delivery reuses the immutable canonical payload and replay identity."""
     transport = _AcceptingTransport()
