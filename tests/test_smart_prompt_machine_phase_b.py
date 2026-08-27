@@ -34,12 +34,14 @@ from hunter.evidence_intelligence.smart_prompt_routing import (
 from hunter.evidence_intelligence.source_handling import AuthorityStore
 
 _AUTOMATION_SIGNING_KEY_HEX = "11" * 32
+_AUTOMATION_VERIFYING_KEY_HEX = "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
 
 
 @pytest.fixture(autouse=True)
 def _automation_signing_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Provide the explicit shared signing key used by Phase B test workers."""
+    """Provide issuer-only private and verifier-only public test keys."""
     monkeypatch.setenv("HUNTER_PROMPT_AUTOMATION_SIGNING_KEY", _AUTOMATION_SIGNING_KEY_HEX)
+    monkeypatch.setenv("HUNTER_PROMPT_AUTOMATION_VERIFYING_KEY", _AUTOMATION_VERIFYING_KEY_HEX)
 
 
 class _Clock:

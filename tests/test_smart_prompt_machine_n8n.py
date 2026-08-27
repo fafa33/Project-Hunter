@@ -32,6 +32,8 @@ from hunter.evidence_intelligence.smart_prompt_transport import (
 
 _SIGNING_KEY_ENV = "HUNTER_PROMPT_AUTOMATION_SIGNING_KEY"
 _SIGNING_KEY_HEX = "11" * 32
+_VERIFYING_KEY_ENV = "HUNTER_PROMPT_AUTOMATION_VERIFYING_KEY"
+_VERIFYING_KEY_HEX = "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
 
 
 class _Response:
@@ -125,6 +127,7 @@ def _ack(payload: PromptAutomationPayload, *, accepted: bool = True, **overrides
 @pytest.fixture(autouse=True)
 def _signing_key(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(_SIGNING_KEY_ENV, _SIGNING_KEY_HEX)
+    monkeypatch.setenv(_VERIFYING_KEY_ENV, _VERIFYING_KEY_HEX)
 
 
 def _transport(opener: _Opener) -> N8nPromptAutomationTransport:
@@ -172,6 +175,21 @@ def test_direct_transport_delivery_cannot_use_valid_signed_lineage() -> None:
     with pytest.raises(PromptAutomationTransportError, match="dispatcher authorization"):
         _transport(opener).deliver(payload.as_mapping())
     assert opener.requests == []
+
+
+def test_n8n_delivery_verifies_with_public_key_without_private_signing_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = _request()
+    payload = _dispatcher(object()).build_payload(request)
+    opener = _Opener(_Response(_ack(payload)))
+    monkeypatch.delenv(_SIGNING_KEY_ENV)
+
+    result = _dispatcher(_transport(opener)).dispatch(request)
+
+    assert result.payload == payload
+    assert result.acknowledgement.accepted is True
+    assert len(opener.requests) == 1
 
 
 def test_dispatcher_mints_authorization_for_n8n_delivery() -> None:

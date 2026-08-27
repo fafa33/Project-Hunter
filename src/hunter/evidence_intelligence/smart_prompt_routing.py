@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import hashlib
-import hmac
 import json
 import os
 from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass
 from datetime import datetime
+
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 
 from hunter.evidence_intelligence.pre_model_persistence import EvidencePreModelReconstruction
 from hunter.evidence_intelligence.repository import EvidenceIntelligenceRepository
@@ -25,7 +27,9 @@ PROMPT_TASK_ROUTE_SCHEMA_VERSION = "smart-prompt-task-route-v1"
 PROMPT_AUTOMATION_ENVELOPE_SCHEMA_VERSION = "smart-prompt-automation-envelope-v1"
 
 _PROMPT_AUTOMATION_SIGNING_KEY_ENV = "HUNTER_PROMPT_AUTOMATION_SIGNING_KEY"
-_PROMPT_AUTOMATION_SIGNING_KEY_MIN_BYTES = 32
+_PROMPT_AUTOMATION_VERIFYING_KEY_ENV = "HUNTER_PROMPT_AUTOMATION_VERIFYING_KEY"
+_PROMPT_AUTOMATION_KEY_BYTES = 32
+_PROMPT_AUTOMATION_SIGNATURE_BYTES = 64
 _PROMPT_AUTOMATION_ENVELOPE_LINEAGE_FIELDS = (
     "task_request_id",
     "route_registry_identity",
@@ -95,51 +99,66 @@ def _automation_envelope_claims(
     }
 
 
-def _automation_envelope_signature(claims: Mapping[str, str]) -> str:
-    """Sign canonical envelope claims without including prompt or source content."""
-    canonical_claims = json.dumps(
+def _automation_envelope_message(claims: Mapping[str, str]) -> bytes:
+    """Encode canonical envelope claims without including prompt or source content."""
+    return json.dumps(
         dict(claims),
         sort_keys=True,
         separators=(",", ":"),
         ensure_ascii=False,
     ).encode("utf-8")
-    return hmac.new(
-        _automation_envelope_signing_key(),
-        canonical_claims,
-        hashlib.sha256,
-    ).hexdigest()
+
+
+def _automation_envelope_signature(claims: Mapping[str, str]) -> str:
+    """Sign canonical envelope claims with the machine-only Ed25519 private key."""
+    return _automation_envelope_signing_key().sign(_automation_envelope_message(claims)).hex()
 
 
 def _canonical_issuer_signature(value: object) -> str:
-    """Return one ASCII lowercase SHA-256 digest or fail through the authority path."""
+    """Return one ASCII lowercase Ed25519 signature or fail through the authority path."""
     if (
         not isinstance(value, str)
-        or len(value) != hashlib.sha256().digest_size * 2
+        or len(value) != _PROMPT_AUTOMATION_SIGNATURE_BYTES * 2
         or any(character not in "0123456789abcdef" for character in value)
     ):
-        raise PromptTaskAuthorityError("issuer_signature must be a 64-character lowercase hexadecimal digest")
+        raise PromptTaskAuthorityError(
+            "issuer_signature must be a 128-character lowercase hexadecimal Ed25519 signature"
+        )
     return value
 
 
-def _automation_envelope_signing_key() -> bytes:
-    """Load the shared operational signing key required by every issuer and verifier."""
-    key_hex = os.environ.get(_PROMPT_AUTOMATION_SIGNING_KEY_ENV, "").strip()
+def _automation_key_bytes(environment_name: str, purpose: str) -> bytes:
+    """Load one exact-size operational key without echoing secret material."""
+    key_hex = os.environ.get(environment_name, "").strip()
     if not key_hex:
         raise PromptTaskAuthorityError(
-            f"{_PROMPT_AUTOMATION_SIGNING_KEY_ENV} must provide the shared automation signing key"
+            f"{environment_name} must provide the automation {purpose} key"
         )
     try:
         key = bytes.fromhex(key_hex)
     except ValueError as error:
         raise PromptTaskAuthorityError(
-            f"{_PROMPT_AUTOMATION_SIGNING_KEY_ENV} must be a hex-encoded byte string"
+            f"{environment_name} must be a hex-encoded byte string"
         ) from error
-    if len(key) < _PROMPT_AUTOMATION_SIGNING_KEY_MIN_BYTES:
+    if len(key) != _PROMPT_AUTOMATION_KEY_BYTES:
         raise PromptTaskAuthorityError(
-            f"{_PROMPT_AUTOMATION_SIGNING_KEY_ENV} must decode to at least "
-            f"{_PROMPT_AUTOMATION_SIGNING_KEY_MIN_BYTES} bytes"
+            f"{environment_name} must decode to exactly {_PROMPT_AUTOMATION_KEY_BYTES} bytes"
         )
     return key
+
+
+def _automation_envelope_signing_key() -> Ed25519PrivateKey:
+    """Load the issuer-only Ed25519 private key."""
+    return Ed25519PrivateKey.from_private_bytes(
+        _automation_key_bytes(_PROMPT_AUTOMATION_SIGNING_KEY_ENV, "signing")
+    )
+
+
+def _automation_envelope_verifying_key() -> Ed25519PublicKey:
+    """Load the verifier-only Ed25519 public key."""
+    return Ed25519PublicKey.from_public_bytes(
+        _automation_key_bytes(_PROMPT_AUTOMATION_VERIFYING_KEY_ENV, "verifying")
+    )
 
 
 @dataclass(frozen=True)
@@ -284,20 +303,23 @@ class PromptAutomationEnvelope:
 
     def verify_issuer_signature(self) -> None:
         """Reject caller-forged lineage before the envelope reaches transport."""
-        expected = _automation_envelope_signature(
-            _automation_envelope_claims(
-                task_request_id=self.task_request_id,
-                route_registry_identity=self.route_registry_identity,
-                profile_registry_identity=self.profile_registry_identity,
-                route_identity=self.route_identity,
-                profile_identity=self.profile_identity,
-                build_manifest_id=self.build_manifest_id,
-                build_record_id=self.build_record_id,
-                schema_version=self.schema_version,
-            )
+        claims = _automation_envelope_claims(
+            task_request_id=self.task_request_id,
+            route_registry_identity=self.route_registry_identity,
+            profile_registry_identity=self.profile_registry_identity,
+            route_identity=self.route_identity,
+            profile_identity=self.profile_identity,
+            build_manifest_id=self.build_manifest_id,
+            build_record_id=self.build_record_id,
+            schema_version=self.schema_version,
         )
-        if not hmac.compare_digest(_canonical_issuer_signature(self.issuer_signature), expected):
-            raise PromptTaskAuthorityError("automation envelope issuer signature mismatch")
+        try:
+            _automation_envelope_verifying_key().verify(
+                bytes.fromhex(_canonical_issuer_signature(self.issuer_signature)),
+                _automation_envelope_message(claims),
+            )
+        except InvalidSignature:
+            raise PromptTaskAuthorityError("automation envelope issuer signature mismatch") from None
 
     @property
     def envelope_id(self) -> str:
