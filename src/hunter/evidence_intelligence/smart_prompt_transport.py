@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Iterable, Mapping
+from contextvars import ContextVar
 from dataclasses import asdict, dataclass
 from types import MappingProxyType
 from typing import Protocol
@@ -224,6 +225,22 @@ class PromptAutomationDispatchResult:
     acknowledgement: PromptAutomationAcknowledgement
 
 
+_ACTIVE_DISPATCH_CONTEXT: ContextVar[
+    tuple[object, Mapping[str, str], PromptAutomationEnvelope] | None
+] = ContextVar("hunter_prompt_automation_dispatch_context", default=None)
+
+
+def _require_active_dispatch(
+    transport: object,
+    payload: Mapping[str, str],
+) -> PromptAutomationEnvelope:
+    """Require the exact mapping created inside an active dispatcher call."""
+    context = _ACTIVE_DISPATCH_CONTEXT.get()
+    if context is None or context[0] is not transport or context[1] is not payload:
+        raise PromptAutomationTransportError("n8n transport delivery requires dispatcher authorization")
+    return context[2]
+
+
 class PromptAutomationDispatcher:
     """Build and deliver canonical non-content automation payloads fail-closed."""
 
@@ -286,14 +303,14 @@ class PromptAutomationDispatcher:
     def dispatch(self, request: PromptAutomationDispatchRequest) -> PromptAutomationDispatchResult:
         """Deliver an immutable canonical payload and verify its exact acknowledgement."""
         payload = self.build_payload(request)
-        authorized_deliver = getattr(self._transport, "_deliver_from_dispatcher", None)
-        if callable(authorized_deliver):
-            acknowledgement = authorized_deliver(
-                payload.as_mapping(),
-                request.envelope,
-            )
-        else:
-            acknowledgement = self._transport.deliver(payload.as_mapping())
+        delivery_mapping = payload.as_mapping()
+        context_token = _ACTIVE_DISPATCH_CONTEXT.set(
+            (self._transport, delivery_mapping, request.envelope)
+        )
+        try:
+            acknowledgement = self._transport.deliver(delivery_mapping)
+        finally:
+            _ACTIVE_DISPATCH_CONTEXT.reset(context_token)
         if not isinstance(acknowledgement, PromptAutomationAcknowledgement):
             raise PromptAutomationTransportError("transport returned non-canonical acknowledgement")
         if acknowledgement.dispatch_id != payload.dispatch_id:

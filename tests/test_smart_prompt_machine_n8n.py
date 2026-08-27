@@ -6,7 +6,6 @@ import http.client
 import io
 import json
 import urllib.error
-from collections.abc import Mapping
 from dataclasses import fields
 
 import pytest
@@ -140,14 +139,7 @@ def _transport(opener: _Opener) -> N8nPromptAutomationTransport:
 def _authorized_deliver(
     transport: N8nPromptAutomationTransport,
     payload: PromptAutomationPayload,
-    mapping: Mapping[str, str] | None = None,
 ) -> PromptAutomationAcknowledgement:
-    if mapping is not None:
-        # Invalid mappings must fail before the untrusted envelope is examined.
-        return transport._deliver_from_dispatcher(
-            mapping,
-            object(),  # type: ignore[arg-type]
-        )
     result = _dispatcher(transport).dispatch(_request())
     assert result.payload == payload
     return result.acknowledgement
@@ -172,8 +164,9 @@ def test_success_posts_exact_non_content_payload_and_validates_ack() -> None:
     assert "credential" not in json.dumps(body).lower()
 
 
-def test_direct_transport_delivery_requires_dispatcher_authorization() -> None:
-    payload = _payload()
+def test_direct_transport_delivery_cannot_use_valid_signed_lineage() -> None:
+    request = _request()
+    payload = _dispatcher(object()).build_payload(request)
     opener = _Opener(_Response(_ack(payload)))
 
     with pytest.raises(PromptAutomationTransportError, match="dispatcher authorization"):
@@ -190,19 +183,6 @@ def test_dispatcher_mints_authorization_for_n8n_delivery() -> None:
 
     assert result.acknowledgement.accepted is True
     assert len(opener.requests) == 1
-
-
-def test_private_delivery_requires_verified_envelope_before_request() -> None:
-    payload = _payload()
-    opener = _Opener(_Response(_ack(payload)))
-    transport = _transport(opener)
-
-    with pytest.raises(PromptAutomationTransportError, match="canonical automation envelope"):
-        transport._deliver_from_dispatcher(
-            payload.as_mapping(),
-            object(),  # type: ignore[arg-type]
-        )
-    assert opener.requests == []
 
 
 def test_transport_does_not_mutate_the_supplied_mapping() -> None:
@@ -271,11 +251,8 @@ def test_payload_schema_rejects_missing_extra_and_non_string_fields(mutator) -> 
     payload = _payload()
     values = dict(payload.as_mapping())
     mutator(values)
-    opener = _Opener(_Response(_ack(payload)))
-
     with pytest.raises(PromptAutomationTransportError, match="payload"):
-        _authorized_deliver(_transport(opener), payload, values)
-    assert opener.requests == []
+        n8n_module._canonical_payload(values)
 
 
 def test_malformed_acknowledgement_and_extra_fields_fail_closed() -> None:

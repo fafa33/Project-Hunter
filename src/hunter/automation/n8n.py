@@ -37,6 +37,7 @@ from hunter.evidence_intelligence.smart_prompt_transport import (
     PromptAutomationPayload,
     PromptAutomationTransportError,
     _identity,
+    _require_active_dispatch,
 )
 
 N8N_WEBHOOK_URL_ENV = "HUNTER_N8N_WEBHOOK_URL"
@@ -322,10 +323,10 @@ class N8nPromptAutomationTransport:
     """Deliver Phase C non-content payloads to one configured n8n webhook.
 
     The transport has no route/profile/source/prompt authority. The dispatcher
-    verifies the signed envelope before the private delivery hook performs HTTP
-    mechanics, and the adapter verifies that same signed lineage again. Direct
-    calls to ``deliver`` are rejected so payload shape alone cannot authorize a
-    network send.
+    verifies the signed envelope before calling ``deliver``, and the adapter
+    verifies that same signed lineage again. Direct calls to ``deliver`` are
+    rejected because only the exact mapping created inside ``dispatch`` can
+    authorize a network send.
     """
 
     __slots__ = ("_endpoint_url", "_credential", "_timeout_seconds", "_opener")
@@ -374,15 +375,8 @@ class N8nPromptAutomationTransport:
         return "N8nPromptAutomationTransport(<configured>)"
 
     def deliver(self, payload: Mapping[str, str]) -> PromptAutomationAcknowledgement:
-        """Reject direct delivery without dispatcher-minted authority."""
-        raise PromptAutomationTransportError("n8n transport delivery requires dispatcher authorization")
-
-    def _deliver_from_dispatcher(
-        self,
-        payload: Mapping[str, str],
-        envelope: object,
-    ) -> PromptAutomationAcknowledgement:
-        """POST one canonical payload after signed dispatcher lineage is proven."""
+        """POST one canonical payload only inside the dispatcher authorization scope."""
+        envelope = _require_active_dispatch(self, payload)
         canonical = _canonical_payload(payload)
         _validate_dispatcher_lineage(canonical, envelope)
         body = json.dumps(
