@@ -27,12 +27,12 @@ equivalent operational configuration. Never commit their values:
 
 | Variable | Meaning |
 |---|---|
-| `HUNTER_N8N_WEBHOOK_URL` | HTTPS n8n webhook endpoint; query/fragment credentials are rejected |
+| `HUNTER_N8N_WEBHOOK_URL` | HTTPS n8n webhook endpoint; query strings and fragments are rejected |
 | `HUNTER_N8N_WEBHOOK_TOKEN` | Bearer token used only in the outbound `Authorization` header |
 | `HUNTER_N8N_WEBHOOK_TIMEOUT_SECONDS` | Optional positive finite request timeout; defaults to `10` |
 
 The transport refuses missing configuration, cleartext endpoints, embedded URL
-credentials, query/fragment secrets, malformed timeout values, and redirects.
+credentials, query strings, fragments, malformed timeout values, and redirects.
 It never follows a redirect after attaching the bearer token. It never includes
 the endpoint or token in the canonical payload, acknowledgement, exception
 message, or its representation.
