@@ -11,6 +11,13 @@ from hunter.automation.n8n import (
     N8nPromptAutomationTransport,
     build_n8n_prompt_automation_dispatcher,
 )
+from hunter.automation.n8n_handoff import (
+    PROMPT_AUTOMATION_HANDOFF_SCHEMA_VERSION,
+    N8nPromptAutomationWorker,
+    PromptAutomationEnvelopeHandoff,
+    PromptAutomationHandoffError,
+    serialize_prompt_automation_handoff,
+)
 from hunter.automation.runner import AutomationJobRunner
 from hunter.automation.scheduler import AutomationScheduler
 
@@ -29,7 +36,12 @@ __all__ = [
     "N8N_WEBHOOK_TOKEN_ENV",
     "N8N_WEBHOOK_URL_ENV",
     "N8nPromptAutomationTransport",
+    "N8nPromptAutomationWorker",
+    "PROMPT_AUTOMATION_HANDOFF_SCHEMA_VERSION",
+    "PromptAutomationEnvelopeHandoff",
+    "PromptAutomationHandoffError",
     "automation_config_from_mapping",
     "build_n8n_prompt_automation_dispatcher",
     "load_automation_config",
+    "serialize_prompt_automation_handoff",
 ]
