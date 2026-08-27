@@ -25,11 +25,11 @@
     {
       "id": "PRH-003",
       "class": "tests-first-marker-not-on-exact-pushed-head",
-      "source": "PR #286 CodeRabbit",
+      "source": "PR #286 CodeRabbit; PR #371 review findings on 2026-08-27",
       "classification": "systemic",
-      "guard_boundary": "exact-head preflight mode selection",
-      "guard": ".hunter-preflight-mode is read from the checked-out branch head",
-      "test": "tests/test_hunter_pr_preflight.py::test_pre_pr_workflow_reads_machine_readable_mode_marker",
+      "guard_boundary": "exact-head preflight mode selection and candidate admission mode proof",
+      "guard": ".hunter-preflight-mode is read from the checked-out branch head; candidate admission binds exact HEAD and canonical mode proof, requiring normal mode success to authorize Ready while keeping tests-first-red runs Draft-only",
+      "test": "tests/test_hunter_governance_review_v2.py::test_candidate_admission_tests_first_red_success_stays_draft",
       "status": "guarded"
     },
     {
@@ -65,11 +65,11 @@
     {
       "id": "PRH-007",
       "class": "candidate-pushed-without-complete-local-preflight",
-      "source": "Issue #291 implementation hosted preflight failures and PR #293 stale-run acceptance on 2026-08-20",
+      "source": "Issue #291 implementation hosted preflight failures and PR #293 stale-run acceptance on 2026-08-20; PR #371 review findings on candidate preflight trust and ruleset exclusions on 2026-08-27",
       "classification": "systemic",
       "guard_boundary": "shared full preflight contract plus commit-scoped hosted evidence before review progression",
-      "guard": "agents run the canonical normal preflight before push and verify hosted evidence belongs to current HEAD",
-      "test": "tests/test_recent_preflight_defect_registry.py::test_agents_reference_canonical_preflight_command",
+      "guard": "agents run the canonical normal preflight before push and verify hosted evidence belongs to current HEAD; candidate admission relies on trusted default-branch preflight semantics and blocks candidate-modified preflight definitions; ruleset conformance applies include/exclude ref matching where matching exclusion for main wins",
+      "test": "tests/test_hunter_governance_review_v2.py::test_candidate_admission_blocks_candidate_modified_preflight",
       "status": "guarded"
     },
     {

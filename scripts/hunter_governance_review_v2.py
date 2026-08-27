@@ -2,21 +2,45 @@
 
 The active merge authority is intentionally limited to current merge risk. This
 check does not judge PR prose, branch naming, Issue identity, reactions, or
-process history.
+process history. It does enforce one durable admission invariant: a PR head must
+already have passed the repository's branch-level pre-PR preflight on that exact
+SHA before governance can become green.
 """
 
 from __future__ import annotations
 
 import argparse
+import base64
+import fnmatch
 import json
 import os
 import sys
 import time
 from typing import Any
+from urllib.parse import quote
 
 import hunter_github_transport as transport
 
 CONTEXT = "Hunter Governance Review"
+PRE_PR_WORKFLOW_NAME = "Hunter / Pre-PR Preflight"
+PRE_PR_WORKFLOW_PATH = ".github/workflows/hunter-pre-pr-preflight.yml"
+REQUIRED_RULESET_CHECKS = {
+    "Quality Gates",
+    "dependency-review",
+    "CodeQL",
+    "Hunter Governance Review",
+    "Hunter Merge Readiness",
+}
+PREFLIGHT_OWNED_PATHS = frozenset(
+    {
+        ".github/workflows/hunter-pre-pr-preflight.yml",
+        "scripts/hunter_pr_preflight.py",
+        "scripts/hunter_architecture_index_preflight.py",
+        "scripts/hunter_artifact_preflight.py",
+        "scripts/hunter_defect_prevention_preflight.py",
+        "scripts/hunter_pre_push.py",
+    }
+)
 
 
 def request_json(repository: str, token: str, method: str, path: str, payload: dict[str, Any] | None = None) -> Any:
@@ -64,6 +88,189 @@ def read_mergeability(repository: str, token: str, pr_number: int) -> dict[str, 
     return pr
 
 
+def read_pr_changed_paths(repository: str, token: str, pr_number: int) -> tuple[str, ...]:
+    try:
+        payload = request_json(repository, token, "GET", f"pulls/{pr_number}/files?per_page=100")
+        if not isinstance(payload, list):
+            return ()
+        return tuple(
+            str(item.get("filename") or "").strip()
+            for item in payload
+            if isinstance(item, dict) and item.get("filename")
+        )
+    except Exception:
+        return ()
+
+
+def read_head_preflight_mode(repository: str, token: str, head_sha: str) -> str:
+    encoded_sha = quote(head_sha, safe="")
+    try:
+        payload = request_json(
+            repository,
+            token,
+            "GET",
+            f"contents/.hunter-preflight-mode?ref={encoded_sha}",
+        )
+    except Exception:
+        return "normal"
+
+    if isinstance(payload, dict) and payload.get("content"):
+        try:
+            raw = base64.b64decode(str(payload["content"])).decode("utf-8").strip()
+            if raw == "tests-first-red":
+                return "tests-first-red"
+            return "invalid"
+        except Exception:
+            return "invalid"
+    return "normal"
+
+
+def candidate_admission(repository: str, token: str, head_sha: str, pr_number: int | None = None) -> tuple[str, str]:
+    if pr_number is not None:
+        changed_paths = read_pr_changed_paths(repository, token, pr_number)
+        if any(path in PREFLIGHT_OWNED_PATHS for path in changed_paths):
+            return "failure", "Candidate admission blocked: preflight definition was modified by candidate."
+
+    head_mode = read_head_preflight_mode(repository, token, head_sha)
+    if head_mode == "invalid":
+        return "failure", "Candidate admission blocked: invalid .hunter-preflight-mode content."
+    if head_mode == "tests-first-red":
+        return (
+            "failure",
+            "Candidate admission blocked: preflight mode is tests-first-red (tests-first-red work must remain in Draft).",
+        )
+
+    encoded_sha = quote(head_sha, safe="")
+    payload = request_json(
+        repository,
+        token,
+        "GET",
+        f"actions/runs?head_sha={encoded_sha}&event=push&per_page=100",
+    )
+    if not isinstance(payload, dict):
+        raise RuntimeError("Pre-PR workflow-run payload is unavailable")
+
+    matching = [
+        run
+        for run in payload.get("workflow_runs") or []
+        if isinstance(run, dict)
+        and str(run.get("head_sha") or "") == head_sha
+        and str(run.get("name") or "") == PRE_PR_WORKFLOW_NAME
+        and str(run.get("path") or "") == PRE_PR_WORKFLOW_PATH
+        and str(run.get("event") or "") == "push"
+    ]
+    if not matching:
+        return "failure", "Candidate admission blocked: exact-head branch preflight is missing."
+
+    latest = max(matching, key=lambda run: int(run.get("id") or 0))
+    status = str(latest.get("status") or "")
+    conclusion = str(latest.get("conclusion") or "")
+
+    run_mode = str(latest.get("mode") or latest.get("preflight_mode") or "normal").strip()
+    if run_mode != head_mode:
+        return "failure", "Candidate admission blocked: preflight mode proof mismatched with exact-head mode."
+    if run_mode != "normal":
+        return (
+            "failure",
+            f"Candidate admission blocked: preflight mode is {run_mode} (only normal mode authorizes Ready).",
+        )
+
+    if status != "completed":
+        return "pending", "Waiting for exact-head branch preflight to complete."
+    if conclusion != "success":
+        return "failure", f"Candidate admission blocked: exact-head branch preflight={conclusion or 'unknown'}."
+    return "success", "Exact-head branch preflight passed before PR governance progression."
+
+
+def matches_ref_pattern(ref: str, pattern: str) -> bool:
+    pattern = pattern.strip()
+    if not pattern:
+        return False
+    if pattern == "~DEFAULT_BRANCH":
+        return ref == "refs/heads/main"
+    return ref == pattern or fnmatch.fnmatch(ref, pattern)
+
+
+def ruleset_applies_to_ref(ruleset_detail: dict[str, Any], ref: str = "refs/heads/main") -> tuple[bool, str | None]:
+    if "conditions" not in ruleset_detail:
+        return False, "Repository protection drift: ruleset condition configuration is missing."
+    conditions = ruleset_detail.get("conditions")
+    if not isinstance(conditions, dict):
+        return False, "Repository protection drift: ruleset condition configuration is malformed."
+
+    ref_condition = conditions.get("ref_name")
+    if not isinstance(ref_condition, dict):
+        return False, "Repository protection drift: ruleset ref_name condition is missing or malformed."
+
+    includes = ref_condition.get("include")
+    if not isinstance(includes, list):
+        return False, "Repository protection drift: ruleset include condition is missing or malformed."
+
+    excludes = ref_condition.get("exclude")
+    if excludes is not None and not isinstance(excludes, list):
+        return False, "Repository protection drift: ruleset exclude condition is malformed."
+
+    excludes_list = excludes or []
+
+    included = any(matches_ref_pattern(ref, str(pat)) for pat in includes)
+    excluded = any(matches_ref_pattern(ref, str(pat)) for pat in excludes_list)
+
+    if included and not excluded:
+        return True, None
+    return False, None
+
+
+def ruleset_conformance(repository: str, token: str) -> tuple[str, str]:
+    summaries = request_json(repository, token, "GET", "rulesets?per_page=100")
+    if not isinstance(summaries, list):
+        raise RuntimeError("Repository ruleset listing is unavailable")
+
+    active_main_rulesets: list[dict[str, Any]] = []
+    for summary in summaries:
+        if not isinstance(summary, dict) or summary.get("enforcement") != "active":
+            continue
+        ruleset_id = summary.get("id")
+        if not ruleset_id:
+            continue
+        detail = request_json(repository, token, "GET", f"rulesets/{ruleset_id}")
+        if not isinstance(detail, dict):
+            continue
+
+        applies, error_msg = ruleset_applies_to_ref(detail, "refs/heads/main")
+        if error_msg:
+            return "failure", error_msg
+        if applies:
+            active_main_rulesets.append(detail)
+
+    if not active_main_rulesets:
+        return "failure", "Repository protection drift: no active ruleset protects refs/heads/main."
+
+    required_contexts: set[str] = set()
+    for ruleset in active_main_rulesets:
+        if "bypass_actors" not in ruleset:
+            return "failure", "Repository protection drift: main ruleset bypass configuration is unavailable."
+        bypass_actors = ruleset.get("bypass_actors")
+        if not isinstance(bypass_actors, list):
+            return "failure", "Repository protection drift: main ruleset bypass configuration is invalid."
+        if bypass_actors:
+            return "failure", "Repository protection drift: active main ruleset has bypass actors."
+
+        for rule in ruleset.get("rules") or []:
+            if not isinstance(rule, dict) or rule.get("type") != "required_status_checks":
+                continue
+            parameters = rule.get("parameters") or {}
+            for check in parameters.get("required_status_checks") or []:
+                if isinstance(check, dict):
+                    context = str(check.get("context") or "").strip()
+                    if context:
+                        required_contexts.add(context)
+
+    missing = sorted(REQUIRED_RULESET_CHECKS - required_contexts)
+    if missing:
+        return "failure", "Repository protection drift: required status checks missing: " + ", ".join(missing)
+    return "success", "Main ruleset requires every canonical Hunter merge status with no bypass actors."
+
+
 def review(repository: str, token: str, pr_number: int) -> int:
     pr = read_mergeability(repository, token, pr_number)
     if pr.get("state") != "open":
@@ -88,12 +295,22 @@ def review(repository: str, token: str, pr_number: int) -> int:
         publish(repository, token, head_sha, "pending", "Waiting for GitHub to resolve current mergeability.")
         return 0
 
+    admission_state, admission_description = candidate_admission(repository, token, head_sha, pr_number)
+    if admission_state != "success":
+        publish(repository, token, head_sha, admission_state, admission_description)
+        return 0
+
+    ruleset_state, ruleset_description = ruleset_conformance(repository, token)
+    if ruleset_state != "success":
+        publish(repository, token, head_sha, ruleset_state, ruleset_description)
+        return 0
+
     publish(
         repository,
         token,
         head_sha,
         "success",
-        "No blocking governance defect in current merge state; code and review gates remain authoritative.",
+        "Candidate admitted on exact-head preflight and canonical main protection is enforced.",
     )
     return 0
 

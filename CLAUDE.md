@@ -16,6 +16,8 @@ For a materially architectural change, verify the applicable architecture before
 
 Use the smallest correct change. Do not weaken tests or evidence requirements to make a check pass.
 
+Before pushing an ordinary code-changing candidate, ensure the repository-owned hooks are enabled with `python scripts/install_hunter_git_hooks.py`. The `.githooks/pre-push` hook is the machine-enforced push boundary: it requires a clean tree, binds the pushed branch SHA to the checked-out exact HEAD, runs `python scripts/hunter_pr_preflight.py --mode normal`, and rechecks HEAD/tree state before authorizing network push. Agent prose or a remembered green run is never a substitute for this hook.
+
 Before pushing an ordinary code-changing candidate, run when available:
 
 ```text
@@ -28,7 +30,7 @@ Before treating a hosted Pre-PR run as proof or opening a PR based on it, verify
 
 CI failures are actionable: diagnose and fix real failures without asking for another prompt when the fix is in scope.
 
-When independent review confirms a blocking systemic defect, update `docs/DEFECT_REGISTRY.json` in the correcting or immediately following governed contribution and add or strengthen a deterministic guard/test appropriate to the failure class. Do not rely on prose memory alone where a machine-checkable boundary exists.
+When independent review confirms a blocking systemic defect, update `docs/DEFECT_REGISTRY.json` in the correcting or immediately following governed contribution and add or strengthen a deterministic guard/test appropriate to the failure class. Do not rely on prose memory alone where a machine-checkable boundary exists. A defect is not "prevented" merely because hosted CI can detect it after push; prevention requires enforcement at the earliest practical boundary. If a class represented as prevented recurs on a pushed head or in independent review, treat that as a prevention-system defect and repair the enforcement gap, not only the feature symptom.
 
 A machine guard must itself be justified by canonical authority or a demonstrated recurring defect. Prefer semantic or structural invariants over brittle wording checks. Do not make TARGETED work satisfy FULL-review ceremony, do not block canonically valid equivalent wording, and do not add a merge-blocking check merely because it is easy to automate. A guard that rejects valid canonical output or creates false-positive merge blockage is itself a defect and must be corrected.
 

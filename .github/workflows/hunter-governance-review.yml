@@ -1,7 +1,9 @@
 name: Hunter Governance Review
 
-# Lightweight current-state sanity review. It does not judge PR prose, branch
+# Trusted current-state sanity review. It does not judge PR prose, branch
 # naming, Issue identity, reactions, review history, or process ceremony.
+# It does require exact-head branch preflight admission and canonical main
+# ruleset protection before publishing success.
 
 on:
   pull_request:
@@ -19,6 +21,7 @@ on:
         type: string
 
 permissions:
+  actions: read
   contents: read
   pull-requests: read
   statuses: write

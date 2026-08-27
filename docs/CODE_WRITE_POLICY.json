@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "purpose": "Canonical code-write ingress policy. Code-changing candidates must cross the repository-owned pre-push boundary before review progression.",
+  "code_write_paths": {
+    "local_git_push": {
+      "allowed": true,
+      "required_boundary": ".githooks/pre-push",
+      "canonical_preflight": "python scripts/hunter_pr_preflight.py --mode normal"
+    },
+    "github_contents_api": {
+      "allowed": false,
+      "reason": "Direct Contents API commits bypass the repository-local pre-push boundary."
+    },
+    "github_git_data_api": {
+      "allowed": false,
+      "reason": "Direct Git Data API ref/commit writes bypass the repository-local pre-push boundary."
+    },
+    "api_only_agents": {
+      "allowed_role": "read-review-metadata-only",
+      "code_change_handoff": "clone-capable-writer"
+    }
+  },
+  "review_progression": {
+    "unadmitted_head_state": "draft",
+    "ready_requires": "successful exact-head Hunter / Pre-PR Preflight",
+    "auto_ready": false
+  }
+}
