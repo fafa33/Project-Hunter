@@ -124,7 +124,7 @@ def ruleset_conformance(repository: str, token: str) -> tuple[str, str]:
         detail = request_json(repository, token, "GET", f"rulesets/{ruleset_id}")
         if not isinstance(detail, dict):
             continue
-        ref_condition = ((detail.get("conditions") or {}).get("ref_name") or {})
+        ref_condition = (detail.get("conditions") or {}).get("ref_name") or {}
         includes = set(ref_condition.get("include") or [])
         if "refs/heads/main" in includes:
             active_main_rulesets.append(detail)
