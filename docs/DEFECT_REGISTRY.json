@@ -321,6 +321,16 @@
       "guard": "every recorded axis carries the observation rather than an assumption in either direction. _record_capture_persistence_failure takes the transport's observed execution_evidence through as a parameter (UNKNOWN where no result exists) instead of asserting a completion, and the OpenAI transport converts a request-body construction failure into CONFIRMED_NOT_DELIVERED with NO_EXECUTION_ESTABLISHED, because a body that was never built means no byte was ever offered. The general rule: an outcome field must record what was established, never the strongest or the safest value that would fit -- overstating certainty and overstating uncertainty are both untruthful",
       "test": "tests/test_model_adapter_phase_b.py::test_a_persistence_failure_after_a_malformed_response_does_not_assert_a_completion",
       "status": "guarded"
+    },
+    {
+      "id": "SPM-001",
+      "class": "unsigned-public-automation-envelope",
+      "source": "PR #354 independent Codex P1 and CodeRabbit Major security reviews on 2026-08-27",
+      "classification": "systemic",
+      "guard_boundary": "Smart Prompt Machine automation-envelope issuance and transport boundary",
+      "guard": "PromptAutomationEnvelope carries an issuer signature over the exact seven non-content lineage claims; SmartPromptMachine is the supported issuer, and PromptAutomationDispatcher verifies that signature before constructing any external payload. The signature is excluded from the transport mapping, while hostile tests reject prompt text, token values, and caller-supplied signatures in every forwarded lineage field",
+      "test": "tests/test_smart_prompt_machine_phase_c.py::test_dispatcher_rejects_content_or_token_in_every_lineage_field",
+      "status": "guarded"
     }
   ]
 }

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
-from collections.abc import Iterable
+import secrets
+from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass
 from datetime import datetime
 
@@ -21,6 +23,17 @@ from hunter.execution import Clock
 PROMPT_TASK_REQUEST_SCHEMA_VERSION = "smart-prompt-task-request-v1"
 PROMPT_TASK_ROUTE_SCHEMA_VERSION = "smart-prompt-task-route-v1"
 PROMPT_AUTOMATION_ENVELOPE_SCHEMA_VERSION = "smart-prompt-automation-envelope-v1"
+
+_PROMPT_AUTOMATION_ENVELOPE_SIGNING_KEY = secrets.token_bytes(32)
+_PROMPT_AUTOMATION_ENVELOPE_LINEAGE_FIELDS = (
+    "task_request_id",
+    "route_registry_identity",
+    "profile_registry_identity",
+    "route_identity",
+    "profile_identity",
+    "build_manifest_id",
+    "build_record_id",
+)
 
 
 class PromptRouteConflict(SmartPromptMachineError):
@@ -55,6 +68,45 @@ def _identity(kind: str, value: object) -> str:
         ensure_ascii=False,
     ).encode("utf-8")
     return f"{kind}:{hashlib.sha256(payload).hexdigest()}"
+
+
+def _automation_envelope_claims(
+    *,
+    task_request_id: str,
+    route_registry_identity: str,
+    profile_registry_identity: str,
+    route_identity: str,
+    profile_identity: str,
+    build_manifest_id: str,
+    build_record_id: str,
+    schema_version: str,
+) -> Mapping[str, str]:
+    """Return the exact non-content claims covered by an envelope signature."""
+    return {
+        "task_request_id": task_request_id,
+        "route_registry_identity": route_registry_identity,
+        "profile_registry_identity": profile_registry_identity,
+        "route_identity": route_identity,
+        "profile_identity": profile_identity,
+        "build_manifest_id": build_manifest_id,
+        "build_record_id": build_record_id,
+        "schema_version": schema_version,
+    }
+
+
+def _automation_envelope_signature(claims: Mapping[str, str]) -> str:
+    """Sign canonical envelope claims without including prompt or source content."""
+    canonical_claims = json.dumps(
+        dict(claims),
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    return hmac.new(
+        _PROMPT_AUTOMATION_ENVELOPE_SIGNING_KEY,
+        canonical_claims,
+        hashlib.sha256,
+    ).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -177,7 +229,7 @@ class PromptTaskRouteRegistry:
 
 @dataclass(frozen=True)
 class PromptAutomationEnvelope:
-    """Non-content identity envelope suitable for later automation transport."""
+    """Non-content identity envelope that carries machine-issued provenance."""
 
     task_request_id: str
     route_registry_identity: str
@@ -186,27 +238,78 @@ class PromptAutomationEnvelope:
     profile_identity: str
     build_manifest_id: str
     build_record_id: str
+    issuer_signature: str
     schema_version: str = PROMPT_AUTOMATION_ENVELOPE_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
         """Validate non-content lineage coordinates and envelope schema."""
-        for name in (
-            "task_request_id",
-            "route_registry_identity",
-            "profile_registry_identity",
-            "route_identity",
-            "profile_identity",
-            "build_manifest_id",
-            "build_record_id",
-        ):
+        for name in _PROMPT_AUTOMATION_ENVELOPE_LINEAGE_FIELDS:
             _required_text(name, getattr(self, name))
+        _required_text("issuer_signature", self.issuer_signature)
         if self.schema_version != PROMPT_AUTOMATION_ENVELOPE_SCHEMA_VERSION:
             raise PromptTaskAuthorityError("unknown Smart Prompt Machine automation-envelope schema version")
+
+    def verify_issuer_signature(self) -> None:
+        """Reject caller-forged lineage before the envelope reaches transport."""
+        expected = _automation_envelope_signature(
+            _automation_envelope_claims(
+                task_request_id=self.task_request_id,
+                route_registry_identity=self.route_registry_identity,
+                profile_registry_identity=self.profile_registry_identity,
+                route_identity=self.route_identity,
+                profile_identity=self.profile_identity,
+                build_manifest_id=self.build_manifest_id,
+                build_record_id=self.build_record_id,
+                schema_version=self.schema_version,
+            )
+        )
+        if not hmac.compare_digest(self.issuer_signature, expected):
+            raise PromptTaskAuthorityError("automation envelope issuer signature mismatch")
 
     @property
     def envelope_id(self) -> str:
         """Return the stable identity of this non-content automation envelope."""
-        return _identity("smart-prompt-automation-envelope", asdict(self))
+        return _identity(
+            "smart-prompt-automation-envelope",
+            _automation_envelope_claims(
+                task_request_id=self.task_request_id,
+                route_registry_identity=self.route_registry_identity,
+                profile_registry_identity=self.profile_registry_identity,
+                route_identity=self.route_identity,
+                profile_identity=self.profile_identity,
+                build_manifest_id=self.build_manifest_id,
+                build_record_id=self.build_record_id,
+                schema_version=self.schema_version,
+            ),
+        )
+
+
+def _issue_prompt_automation_envelope(
+    *,
+    task_request_id: str,
+    route_registry_identity: str,
+    profile_registry_identity: str,
+    route_identity: str,
+    profile_identity: str,
+    build_manifest_id: str,
+    build_record_id: str,
+    schema_version: str = PROMPT_AUTOMATION_ENVELOPE_SCHEMA_VERSION,
+) -> PromptAutomationEnvelope:
+    """Issue a signed envelope from machine-owned, non-content lineage claims."""
+    claims = _automation_envelope_claims(
+        task_request_id=task_request_id,
+        route_registry_identity=route_registry_identity,
+        profile_registry_identity=profile_registry_identity,
+        route_identity=route_identity,
+        profile_identity=profile_identity,
+        build_manifest_id=build_manifest_id,
+        build_record_id=build_record_id,
+        schema_version=schema_version,
+    )
+    return PromptAutomationEnvelope(
+        **claims,
+        issuer_signature=_automation_envelope_signature(claims),
+    )
 
 
 @dataclass(frozen=True)
@@ -264,7 +367,7 @@ class SmartPromptMachine:
             raise PromptTaskAuthorityError("compiled manifest profile-registry identity mismatch")
         if manifest.profile_identity != profile.profile_identity:
             raise PromptTaskAuthorityError("compiled manifest profile identity mismatch")
-        envelope = PromptAutomationEnvelope(
+        envelope = _issue_prompt_automation_envelope(
             task_request_id=request.request_id,
             route_registry_identity=self._routes.registry_identity,
             profile_registry_identity=self._profiles.registry_identity,
