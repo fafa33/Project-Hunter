@@ -29,7 +29,6 @@ from hunter.evidence_intelligence.smart_prompt_transport import (
     PromptAutomationDispatchRequest,
     PromptAutomationPayload,
     PromptAutomationTransportError,
-    _PromptAutomationDispatchPermit,
 )
 
 _SIGNING_KEY_ENV = "HUNTER_PROMPT_AUTOMATION_SIGNING_KEY"
@@ -144,10 +143,10 @@ def _authorized_deliver(
     mapping: Mapping[str, str] | None = None,
 ) -> PromptAutomationAcknowledgement:
     if mapping is not None:
-        # Invalid mappings must fail before the forged permit is examined.
+        # Invalid mappings must fail before the untrusted envelope is examined.
         return transport._deliver_from_dispatcher(
             mapping,
-            _PromptAutomationDispatchPermit(payload.payload_id, object()),
+            object(),  # type: ignore[arg-type]
         )
     result = _dispatcher(transport).dispatch(_request())
     assert result.payload == payload
@@ -193,12 +192,12 @@ def test_dispatcher_mints_authorization_for_n8n_delivery() -> None:
     assert len(opener.requests) == 1
 
 
-def test_forged_dispatcher_permit_is_rejected_before_request() -> None:
+def test_private_delivery_requires_verified_envelope_before_request() -> None:
     payload = _payload()
     opener = _Opener(_Response(_ack(payload)))
     transport = _transport(opener)
 
-    with pytest.raises(PromptAutomationTransportError, match="authorization is invalid"):
+    with pytest.raises(PromptAutomationTransportError, match="canonical automation envelope"):
         transport._deliver_from_dispatcher(
             payload.as_mapping(),
             _PromptAutomationDispatchPermit(payload.payload_id, object()),

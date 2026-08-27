@@ -27,6 +27,8 @@ from typing import Any
 from urllib.parse import unquote, urlsplit
 
 from hunter.evidence_intelligence.model_adapter_transport import TransportCredential
+from hunter.evidence_intelligence.smart_prompt_machine import SmartPromptMachineError
+from hunter.evidence_intelligence.smart_prompt_routing import PromptAutomationEnvelope
 from hunter.evidence_intelligence.smart_prompt_transport import (
     PromptAutomationAcknowledgement,
     PromptAutomationDestination,
@@ -34,7 +36,7 @@ from hunter.evidence_intelligence.smart_prompt_transport import (
     PromptAutomationDispatcher,
     PromptAutomationPayload,
     PromptAutomationTransportError,
-    _PromptAutomationDispatchPermit,
+    _identity,
 )
 
 N8N_WEBHOOK_URL_ENV = "HUNTER_N8N_WEBHOOK_URL"
@@ -49,6 +51,7 @@ N8N_DESTINATION = PromptAutomationDestination(
     destination_key="automation.n8n",
     transport_name="n8n",
 )
+_N8N_DESTINATION_REGISTRY = PromptAutomationDestinationRegistry((N8N_DESTINATION,))
 
 _DEFAULT_TIMEOUT_SECONDS = 10.0
 _MAX_ACKNOWLEDGEMENT_BYTES = 64 * 1024
@@ -165,6 +168,50 @@ def _canonical_payload(payload: Mapping[str, str]) -> PromptAutomationPayload:
         raise PromptAutomationTransportError("n8n transport payload is not canonical") from None
 
 
+def _validate_dispatcher_lineage(
+    payload: PromptAutomationPayload,
+    envelope: object,
+) -> None:
+    """Require a verified signed envelope bound to this exact n8n dispatch."""
+    if type(envelope) is not PromptAutomationEnvelope:
+        raise PromptAutomationTransportError("n8n transport requires the canonical automation envelope")
+    try:
+        envelope.verify_issuer_signature()
+    except SmartPromptMachineError:
+        raise PromptAutomationTransportError(
+            "n8n transport automation envelope issuer signature could not be verified"
+        ) from None
+    if payload.destination_registry_identity != _N8N_DESTINATION_REGISTRY.registry_identity:
+        raise PromptAutomationTransportError("n8n transport destination registry identity mismatch")
+    if payload.destination_identity != N8N_DESTINATION.destination_identity:
+        raise PromptAutomationTransportError("n8n transport destination identity mismatch")
+    if payload.destination_key != N8N_DESTINATION.destination_key:
+        raise PromptAutomationTransportError("n8n transport destination key mismatch")
+    if payload.transport_name != N8N_DESTINATION.transport_name:
+        raise PromptAutomationTransportError("n8n transport name mismatch")
+    lineage = (
+        ("envelope_id", envelope.envelope_id),
+        ("task_request_id", envelope.task_request_id),
+        ("route_registry_identity", envelope.route_registry_identity),
+        ("profile_registry_identity", envelope.profile_registry_identity),
+        ("route_identity", envelope.route_identity),
+        ("profile_identity", envelope.profile_identity),
+        ("build_manifest_id", envelope.build_manifest_id),
+        ("build_record_id", envelope.build_record_id),
+    )
+    if any(getattr(payload, name) != value for name, value in lineage):
+        raise PromptAutomationTransportError("n8n transport payload and envelope lineage mismatch")
+    expected_dispatch_id = _identity(
+        "smart-prompt-automation-dispatch",
+        {
+            "destination_registry_identity": payload.destination_registry_identity,
+            "destination_identity": payload.destination_identity,
+            "envelope_id": envelope.envelope_id,
+        },
+    )
+    if payload.dispatch_id != expected_dispatch_id:
+        raise PromptAutomationTransportError("n8n transport dispatch identity is not canonical")
+
 def _canonical_acknowledgement(value: object) -> PromptAutomationAcknowledgement:
     """Parse one exact acknowledgement without echoing untrusted remote keys."""
     if not isinstance(value, dict):
@@ -274,18 +321,13 @@ class N8nPromptAutomationTransport:
     """Deliver Phase C non-content payloads to one configured n8n webhook.
 
     The transport has no route/profile/source/prompt authority. The dispatcher
-    verifies the signed envelope and mints a payload-bound permit before the
-    private delivery hook can perform HTTP mechanics. Direct calls to ``deliver``
-    are rejected so payload shape alone cannot authorize a network send.
+    verifies the signed envelope before the private delivery hook performs HTTP
+    mechanics, and the adapter verifies that same signed lineage again. Direct
+    calls to ``deliver`` are rejected so payload shape alone cannot authorize a
+    network send.
     """
 
-    __slots__ = (
-        "_endpoint_url",
-        "_credential",
-        "_timeout_seconds",
-        "_opener",
-        "_dispatcher_authority",
-    )
+    __slots__ = ("_endpoint_url", "_credential", "_timeout_seconds", "_opener")
 
     transport_identity = N8N_TRANSPORT_IDENTITY
     transport_version = N8N_TRANSPORT_VERSION
@@ -305,7 +347,6 @@ class N8nPromptAutomationTransport:
         self._credential = credential
         self._timeout_seconds = _validate_timeout(timeout_seconds)
         self._opener = opener or _default_opener
-        self._dispatcher_authority: object | None = None
 
     @classmethod
     def from_environment(
@@ -335,25 +376,15 @@ class N8nPromptAutomationTransport:
         """Reject direct delivery without dispatcher-minted authority."""
         raise PromptAutomationTransportError("n8n transport delivery requires dispatcher authorization")
 
-    def _register_dispatcher_authority(self, authority: object) -> None:
-        """Bind one dispatcher authority; reject rebinding to prevent authority confusion."""
-        if self._dispatcher_authority is not None and self._dispatcher_authority is not authority:
-            raise PromptAutomationTransportError("n8n transport is already bound to another dispatcher")
-        self._dispatcher_authority = authority
 
     def _deliver_from_dispatcher(
         self,
         payload: Mapping[str, str],
-        permit: _PromptAutomationDispatchPermit,
+        envelope: object,
     ) -> PromptAutomationAcknowledgement:
-        """POST one canonical payload after dispatcher provenance is proven."""
+        """POST one canonical payload after signed dispatcher lineage is proven."""
         canonical = _canonical_payload(payload)
-        if (
-            not isinstance(permit, _PromptAutomationDispatchPermit)
-            or self._dispatcher_authority is None
-            or not permit._matches(canonical.payload_id, self._dispatcher_authority)
-        ):
-            raise PromptAutomationTransportError("n8n transport delivery authorization is invalid")
+        _validate_dispatcher_lineage(canonical, envelope)
         body = json.dumps(
             dict(canonical.as_mapping()),
             sort_keys=True,
@@ -432,7 +463,7 @@ def build_n8n_prompt_automation_dispatcher(
 ) -> PromptAutomationDispatcher:
     """Construct the Phase C dispatcher with the operational n8n transport."""
     return PromptAutomationDispatcher(
-        destinations=PromptAutomationDestinationRegistry((N8N_DESTINATION,)),
+        destinations=_N8N_DESTINATION_REGISTRY,
         transport=N8nPromptAutomationTransport.from_environment(environ=environ, opener=opener),
     )
 
