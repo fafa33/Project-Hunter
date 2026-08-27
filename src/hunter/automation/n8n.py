@@ -28,7 +28,7 @@ from urllib.parse import unquote, urlsplit
 
 from hunter.evidence_intelligence.model_adapter_transport import TransportCredential
 from hunter.evidence_intelligence.smart_prompt_machine import SmartPromptMachineError
-from hunter.evidence_intelligence.smart_prompt_routing import PromptAutomationEnvelope
+from hunter.evidence_intelligence.smart_prompt_routing import PromptAutomationEnvelope, PromptAutomationVerifier
 from hunter.evidence_intelligence.smart_prompt_transport import (
     PromptAutomationAcknowledgement,
     PromptAutomationDestination,
@@ -68,7 +68,6 @@ class _DuplicateJSONKeyError(ValueError):
 
 
 def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    """Materialize one JSON object while rejecting ambiguous duplicate keys."""
     values: dict[str, Any] = {}
     for key, value in pairs:
         if key in values:
@@ -89,7 +88,6 @@ class _RejectRedirectHandler(urllib.request.HTTPRedirectHandler):
         headers: Any,
         newurl: str,
     ) -> None:
-        """Reject every redirect before urllib can construct a follow-up request."""
         raise PromptAutomationTransportError("n8n webhook redirects are not permitted")
 
 
@@ -102,7 +100,6 @@ def _default_opener(request: urllib.request.Request, timeout: float) -> Any:
 
 
 def _required_environment(environ: Mapping[str, str], name: str) -> str:
-    """Load one required operational string without accepting control whitespace."""
     value = environ.get(name, "")
     if not isinstance(value, str) or not value.strip():
         raise PromptAutomationTransportError(f"{name} must be configured")
@@ -112,7 +109,6 @@ def _required_environment(environ: Mapping[str, str], name: str) -> str:
 
 
 def _validate_endpoint(value: object) -> str:
-    """Validate one HTTPS endpoint without echoing malformed endpoint material."""
     if not isinstance(value, str) or not value.strip():
         raise PromptAutomationTransportError("n8n webhook endpoint must be a non-empty string")
     if any(ord(character) <= 0x20 or ord(character) == 0x7F for character in value):
@@ -123,14 +119,14 @@ def _validate_endpoint(value: object) -> str:
         parsed = urlsplit(value)
         hostname = parsed.hostname
         port = parsed.port
-    except ValueError:
-        raise PromptAutomationTransportError("n8n webhook endpoint is malformed") from None
+    except ValueError as error:
+        raise PromptAutomationTransportError("n8n webhook endpoint is malformed") from error
     if parsed.scheme != "https" or not hostname:
         raise PromptAutomationTransportError("n8n webhook endpoint must use https")
     if parsed.username is not None or parsed.password is not None:
         raise PromptAutomationTransportError("n8n webhook endpoint must not embed credentials")
     if parsed.query or parsed.fragment:
-        raise PromptAutomationTransportError("n8n webhook endpoint must not contain query strings or fragments")
+        raise PromptAutomationTransportError("n8n webhook endpoint must not carry query or fragment secrets")
     if port is not None and not 1 <= port <= 65535:
         raise PromptAutomationTransportError("n8n webhook endpoint port is invalid")
     _bounded_percent_decode(parsed.path)
@@ -139,7 +135,6 @@ def _validate_endpoint(value: object) -> str:
 
 
 def _validate_timeout(value: object) -> float:
-    """Return one positive finite timeout value or fail closed."""
     if isinstance(value, bool):
         raise PromptAutomationTransportError("n8n webhook timeout must be a positive finite number")
     try:
@@ -161,8 +156,13 @@ def _canonical_payload(payload: Mapping[str, str]) -> PromptAutomationPayload:
         raise PromptAutomationTransportError("n8n transport payload cannot be materialized") from None
     if any(not isinstance(key, str) or not isinstance(value, str) for key, value in values.items()):
         raise PromptAutomationTransportError("n8n transport payload must contain string fields only")
-    if frozenset(values) != _PAYLOAD_FIELDS:
-        raise PromptAutomationTransportError("n8n transport payload schema mismatch")
+    keys = frozenset(values)
+    if keys != _PAYLOAD_FIELDS:
+        missing = sorted(_PAYLOAD_FIELDS - keys)
+        extra = sorted(keys - _PAYLOAD_FIELDS)
+        raise PromptAutomationTransportError(
+            f"n8n transport payload schema mismatch (missing={missing}, extra={extra})"
+        )
     try:
         return PromptAutomationPayload(**values)
     except (TypeError, ValueError):
@@ -172,12 +172,13 @@ def _canonical_payload(payload: Mapping[str, str]) -> PromptAutomationPayload:
 def _validate_dispatcher_lineage(
     payload: PromptAutomationPayload,
     envelope: object,
+    verifier: PromptAutomationVerifier,
 ) -> None:
     """Require a verified signed envelope bound to this exact n8n dispatch."""
     if type(envelope) is not PromptAutomationEnvelope:
         raise PromptAutomationTransportError("n8n transport requires the canonical automation envelope")
     try:
-        envelope.verify_issuer_signature()
+        PromptAutomationEnvelope.verify_issuer_signature(envelope, verifier)
     except SmartPromptMachineError:
         raise PromptAutomationTransportError(
             "n8n transport automation envelope issuer signature could not be verified"
@@ -215,11 +216,14 @@ def _validate_dispatcher_lineage(
 
 
 def _canonical_acknowledgement(value: object) -> PromptAutomationAcknowledgement:
-    """Parse one exact acknowledgement without echoing untrusted remote keys."""
+    """Parse one exact acknowledgement and reject extension fields."""
     if not isinstance(value, dict):
         raise PromptAutomationTransportError("n8n response must be a JSON object acknowledgement")
-    if frozenset(value) != _ACKNOWLEDGEMENT_FIELDS:
-        raise PromptAutomationTransportError("n8n acknowledgement schema mismatch")
+    keys = frozenset(value)
+    if keys != _ACKNOWLEDGEMENT_FIELDS:
+        missing = sorted(_ACKNOWLEDGEMENT_FIELDS - keys)
+        extra = sorted(keys - _ACKNOWLEDGEMENT_FIELDS)
+        raise PromptAutomationTransportError(f"n8n acknowledgement schema mismatch (missing={missing}, extra={extra})")
     try:
         return PromptAutomationAcknowledgement(**value)
     except (TypeError, ValueError):
@@ -227,7 +231,6 @@ def _canonical_acknowledgement(value: object) -> PromptAutomationAcknowledgement
 
 
 def _response_content_type(response: Any) -> str:
-    """Return the response Content-Type when a header mapping is available."""
     headers = getattr(response, "headers", None)
     if headers is None or not hasattr(headers, "get"):
         return ""
@@ -304,7 +307,6 @@ def _validate_receipt_id(receipt_id: object, *, bearer_token: str, endpoint_url:
 
 
 def _validated_bearer_token(credential: TransportCredential) -> str:
-    """Reveal and validate one runtime bearer token before HTTP header construction."""
     token = credential.reveal()
     if (
         not isinstance(token, str)
@@ -329,7 +331,7 @@ class N8nPromptAutomationTransport:
     authorize a network send.
     """
 
-    __slots__ = ("_endpoint_url", "_credential", "_timeout_seconds", "_opener")
+    __slots__ = ("_endpoint_url", "_credential", "_timeout_seconds", "_opener", "_verifier")
 
     transport_identity = N8N_TRANSPORT_IDENTITY
     transport_version = N8N_TRANSPORT_VERSION
@@ -341,14 +343,17 @@ class N8nPromptAutomationTransport:
         *,
         timeout_seconds: float = _DEFAULT_TIMEOUT_SECONDS,
         opener: Callable[[urllib.request.Request, float], Any] | None = None,
+        verifier: PromptAutomationVerifier | None = None,
     ) -> None:
-        """Bind validated operational endpoint, credential, timeout, and opener state."""
         if not isinstance(credential, TransportCredential):
             raise TypeError("n8n transport requires a non-durable TransportCredential")
+        if verifier is not None and type(verifier) is not PromptAutomationVerifier:
+            raise TypeError("n8n transport requires the canonical process-bound issuer verifier")
         self._endpoint_url = _validate_endpoint(endpoint_url)
         self._credential = credential
         self._timeout_seconds = _validate_timeout(timeout_seconds)
         self._opener = opener or _default_opener
+        self._verifier = verifier if verifier is not None else PromptAutomationVerifier.from_environment()
 
     @classmethod
     def from_environment(
@@ -356,6 +361,7 @@ class N8nPromptAutomationTransport:
         *,
         environ: Mapping[str, str] | None = None,
         opener: Callable[[urllib.request.Request, float], Any] | None = None,
+        verifier: PromptAutomationVerifier | None = None,
     ) -> N8nPromptAutomationTransport:
         """Build the adapter from operational endpoint/secret configuration."""
         source = os.environ if environ is None else environ
@@ -363,22 +369,23 @@ class N8nPromptAutomationTransport:
         token = _required_environment(source, N8N_WEBHOOK_TOKEN_ENV)
         timeout_text = source.get(N8N_WEBHOOK_TIMEOUT_ENV, str(_DEFAULT_TIMEOUT_SECONDS))
         credential = TransportCredential(token, slot_identity=f"env:{N8N_WEBHOOK_TOKEN_ENV}")
+        bound_verifier = verifier if verifier is not None else PromptAutomationVerifier.from_environment(environ=source)
         return cls(
             endpoint_url,
             credential,
             timeout_seconds=timeout_text,
             opener=opener,
+            verifier=bound_verifier,
         )
 
     def __repr__(self) -> str:
-        """Return a representation that never renders endpoint or credential material."""
         return "N8nPromptAutomationTransport(<configured>)"
 
     def deliver(self, payload: Mapping[str, str]) -> PromptAutomationAcknowledgement:
         """POST one canonical payload only inside the dispatcher authorization scope."""
-        envelope = _require_active_dispatch(self, payload)
+        envelope = _require_active_dispatch(self, payload, self._verifier)
         canonical = _canonical_payload(payload)
-        _validate_dispatcher_lineage(canonical, envelope)
+        _validate_dispatcher_lineage(canonical, envelope, self._verifier)
         body = json.dumps(
             dict(canonical.as_mapping()),
             sort_keys=True,
@@ -456,9 +463,16 @@ def build_n8n_prompt_automation_dispatcher(
     opener: Callable[[urllib.request.Request, float], Any] | None = None,
 ) -> PromptAutomationDispatcher:
     """Construct the Phase C dispatcher with the operational n8n transport."""
+    source = os.environ if environ is None else environ
+    verifier = PromptAutomationVerifier.from_environment(environ=source)
     return PromptAutomationDispatcher(
         destinations=_N8N_DESTINATION_REGISTRY,
-        transport=N8nPromptAutomationTransport.from_environment(environ=environ, opener=opener),
+        transport=N8nPromptAutomationTransport.from_environment(
+            environ=source,
+            opener=opener,
+            verifier=verifier,
+        ),
+        verifier=verifier,
     )
 
 

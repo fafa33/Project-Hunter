@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from contextvars import ContextVar
 from dataclasses import asdict, dataclass
 from types import MappingProxyType
-from typing import Protocol
+from typing import Any, Protocol
 
 from hunter.evidence_intelligence.smart_prompt_machine import SmartPromptMachineError
-from hunter.evidence_intelligence.smart_prompt_routing import PromptAutomationEnvelope
+from hunter.evidence_intelligence.smart_prompt_routing import PromptAutomationEnvelope, PromptAutomationVerifier
 
 PROMPT_AUTOMATION_DESTINATION_SCHEMA_VERSION = "smart-prompt-automation-destination-v1"
 PROMPT_AUTOMATION_DISPATCH_SCHEMA_VERSION = "smart-prompt-automation-dispatch-v1"
@@ -225,36 +225,75 @@ class PromptAutomationDispatchResult:
     acknowledgement: PromptAutomationAcknowledgement
 
 
-_ACTIVE_DISPATCH_CONTEXT: ContextVar[tuple[object, Mapping[str, str], PromptAutomationEnvelope] | None] = ContextVar(
-    "hunter_prompt_automation_dispatch_context", default=None
-)
+def _make_dispatch_scope() -> tuple[
+    Callable[[Any, PromptAutomationDispatchRequest], PromptAutomationDispatchResult],
+    Callable[[object, Mapping[str, str], PromptAutomationVerifier], PromptAutomationEnvelope],
+]:
+    """Create a private dispatch scope whose mutable context is never module-visible."""
+    active_context: ContextVar[
+        tuple[object, Mapping[str, str], PromptAutomationEnvelope, PromptAutomationVerifier] | None
+    ] = ContextVar("hunter_prompt_automation_dispatch_context", default=None)
+
+    def require_active_dispatch(
+        transport: object,
+        payload: Mapping[str, str],
+        verifier: PromptAutomationVerifier,
+    ) -> PromptAutomationEnvelope:
+        """Require the exact mapping and verifier bound by the active dispatcher call."""
+        context = active_context.get()
+        if context is None or context[0] is not transport or context[1] is not payload or context[3] != verifier:
+            raise PromptAutomationTransportError("n8n transport delivery requires dispatcher authorization")
+        return context[2]
+
+    def dispatch(dispatcher: Any, request: PromptAutomationDispatchRequest) -> PromptAutomationDispatchResult:
+        """Deliver only through the private context scope and validate its acknowledgement."""
+        if type(dispatcher) is not PromptAutomationDispatcher:
+            raise PromptAutomationTransportError("dispatcher authorization scope is not canonical")
+        payload = dispatcher.build_payload(request)
+        delivery_mapping = payload.as_mapping()
+        context_token = active_context.set(
+            (dispatcher._transport, delivery_mapping, request.envelope, dispatcher._verifier)
+        )
+        try:
+            acknowledgement = dispatcher._transport.deliver(delivery_mapping)
+        finally:
+            active_context.reset(context_token)
+        if not isinstance(acknowledgement, PromptAutomationAcknowledgement):
+            raise PromptAutomationTransportError("transport returned non-canonical acknowledgement")
+        if acknowledgement.dispatch_id != payload.dispatch_id:
+            raise PromptAutomationTransportError("transport acknowledgement dispatch identity mismatch")
+        if acknowledgement.payload_id != payload.payload_id:
+            raise PromptAutomationTransportError("transport acknowledgement payload identity mismatch")
+        if not acknowledgement.accepted:
+            raise PromptAutomationTransportError("automation transport rejected the canonical payload")
+        return PromptAutomationDispatchResult(payload=payload, acknowledgement=acknowledgement)
+
+    return dispatch, require_active_dispatch
 
 
-def _require_active_dispatch(
-    transport: object,
-    payload: Mapping[str, str],
-) -> PromptAutomationEnvelope:
-    """Require the exact mapping created inside an active dispatcher call."""
-    context = _ACTIVE_DISPATCH_CONTEXT.get()
-    if context is None or context[0] is not transport or context[1] is not payload:
-        raise PromptAutomationTransportError("n8n transport delivery requires dispatcher authorization")
-    return context[2]
+_dispatch_with_scope, _require_active_dispatch = _make_dispatch_scope()
 
 
 class PromptAutomationDispatcher:
     """Build and deliver canonical non-content automation payloads fail-closed."""
+
+    __slots__ = ("_destinations", "_transport", "_verifier", "_seen_dispatches")
 
     def __init__(
         self,
         *,
         destinations: PromptAutomationDestinationRegistry,
         transport: PromptAutomationTransport,
+        verifier: PromptAutomationVerifier | None = None,
     ) -> None:
-        """Bind one governed destination registry to one externally configured transport."""
+        """Bind governed destinations, transport, and one process-bound verifier snapshot."""
         if not isinstance(destinations, PromptAutomationDestinationRegistry):
             raise TypeError("dispatcher requires the canonical destination registry")
+        if verifier is not None and type(verifier) is not PromptAutomationVerifier:
+            raise TypeError("dispatcher requires the canonical process-bound issuer verifier")
         self._destinations = destinations
         self._transport = transport
+        self._verifier = verifier if verifier is not None else PromptAutomationVerifier.from_environment()
         self._seen_dispatches: dict[str, str] = {}
 
     def build_payload(self, request: PromptAutomationDispatchRequest) -> PromptAutomationPayload:
@@ -265,7 +304,7 @@ class PromptAutomationDispatcher:
         if type(envelope) is not PromptAutomationEnvelope:
             raise PromptAutomationTransportError("dispatcher requires an exact PromptAutomationEnvelope")
         try:
-            PromptAutomationEnvelope.verify_issuer_signature(envelope)
+            PromptAutomationEnvelope.verify_issuer_signature(envelope, self._verifier)
         except SmartPromptMachineError as error:
             raise PromptAutomationTransportError(
                 "automation envelope issuer signature could not be verified"
@@ -301,20 +340,5 @@ class PromptAutomationDispatcher:
         return payload
 
     def dispatch(self, request: PromptAutomationDispatchRequest) -> PromptAutomationDispatchResult:
-        """Deliver an immutable canonical payload and verify its exact acknowledgement."""
-        payload = self.build_payload(request)
-        delivery_mapping = payload.as_mapping()
-        context_token = _ACTIVE_DISPATCH_CONTEXT.set((self._transport, delivery_mapping, request.envelope))
-        try:
-            acknowledgement = self._transport.deliver(delivery_mapping)
-        finally:
-            _ACTIVE_DISPATCH_CONTEXT.reset(context_token)
-        if not isinstance(acknowledgement, PromptAutomationAcknowledgement):
-            raise PromptAutomationTransportError("transport returned non-canonical acknowledgement")
-        if acknowledgement.dispatch_id != payload.dispatch_id:
-            raise PromptAutomationTransportError("transport acknowledgement dispatch identity mismatch")
-        if acknowledgement.payload_id != payload.payload_id:
-            raise PromptAutomationTransportError("transport acknowledgement payload identity mismatch")
-        if not acknowledgement.accepted:
-            raise PromptAutomationTransportError("automation transport rejected the canonical payload")
-        return PromptAutomationDispatchResult(payload=payload, acknowledgement=acknowledgement)
+        """Enter the private dispatch scope and validate its exact acknowledgement."""
+        return _dispatch_with_scope(self, request)

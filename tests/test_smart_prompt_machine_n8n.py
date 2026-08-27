@@ -18,6 +18,7 @@ from hunter.automation.n8n import (
     N8nPromptAutomationTransport,
     build_n8n_prompt_automation_dispatcher,
 )
+from hunter.evidence_intelligence import smart_prompt_transport as transport_module
 from hunter.evidence_intelligence.model_adapter_transport import TransportCredential
 from hunter.evidence_intelligence.smart_prompt_routing import _issue_prompt_automation_envelope
 from hunter.evidence_intelligence.smart_prompt_transport import (
@@ -32,8 +33,6 @@ from hunter.evidence_intelligence.smart_prompt_transport import (
 
 _SIGNING_KEY_ENV = "HUNTER_PROMPT_AUTOMATION_SIGNING_KEY"
 _SIGNING_KEY_HEX = "11" * 32
-_VERIFYING_KEY_ENV = "HUNTER_PROMPT_AUTOMATION_VERIFYING_KEY"
-_VERIFYING_KEY_HEX = "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
 _VERIFYING_KEY_ENV = "HUNTER_PROMPT_AUTOMATION_VERIFYING_KEY"
 _VERIFYING_KEY_HEX = "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
 
@@ -130,7 +129,6 @@ def _ack(payload: PromptAutomationPayload, *, accepted: bool = True, **overrides
 def _signing_key(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(_SIGNING_KEY_ENV, _SIGNING_KEY_HEX)
     monkeypatch.setenv(_VERIFYING_KEY_ENV, _VERIFYING_KEY_HEX)
-    monkeypatch.setenv(_VERIFYING_KEY_ENV, _VERIFYING_KEY_HEX)
 
 
 def _transport(opener: _Opener) -> N8nPromptAutomationTransport:
@@ -180,6 +178,11 @@ def test_direct_transport_delivery_cannot_use_valid_signed_lineage() -> None:
     assert opener.requests == []
 
 
+def test_dispatch_scope_is_not_caller_writable_module_state() -> None:
+    """The dispatcher context is closure-owned instead of an importable ContextVar."""
+    assert not hasattr(transport_module, "_ACTIVE_DISPATCH_CONTEXT")
+
+
 def test_n8n_delivery_verifies_with_public_key_without_private_signing_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -189,6 +192,21 @@ def test_n8n_delivery_verifies_with_public_key_without_private_signing_key(
     monkeypatch.delenv(_SIGNING_KEY_ENV)
 
     result = _dispatcher(_transport(opener)).dispatch(request)
+
+    assert result.payload == payload
+    assert result.acknowledgement.accepted is True
+    assert len(opener.requests) == 1
+
+
+def test_bound_verifier_ignores_later_environment_mutation(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A dispatcher and transport keep the bootstrap verifier after environment mutation."""
+    request = _request()
+    payload = _dispatcher(object()).build_payload(request)
+    opener = _Opener(_Response(_ack(payload)))
+    dispatcher = _dispatcher(_transport(opener))
+    monkeypatch.setenv(_VERIFYING_KEY_ENV, "22" * 32)
+
+    result = dispatcher.dispatch(request)
 
     assert result.payload == payload
     assert result.acknowledgement.accepted is True
@@ -272,6 +290,7 @@ def test_payload_schema_rejects_missing_extra_and_non_string_fields(mutator) -> 
     payload = _payload()
     values = dict(payload.as_mapping())
     mutator(values)
+
     with pytest.raises(PromptAutomationTransportError, match="payload"):
         n8n_module._canonical_payload(values)
 
@@ -500,6 +519,7 @@ def test_environment_factory_requires_operational_secret_and_builds_dispatcher()
         N8N_WEBHOOK_URL_ENV: "https://n8n.example.test/webhook/hunter",
         N8N_WEBHOOK_TOKEN_ENV: "webhook-secret",
         N8N_WEBHOOK_TIMEOUT_ENV: "3.5",
+        _VERIFYING_KEY_ENV: _VERIFYING_KEY_HEX,
     }
     opener = _Opener(_Response(b"{}"))
 

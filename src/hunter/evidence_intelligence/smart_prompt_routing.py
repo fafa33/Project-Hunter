@@ -127,9 +127,18 @@ def _canonical_issuer_signature(value: object) -> str:
     return value
 
 
-def _automation_key_bytes(environment_name: str, purpose: str) -> bytes:
+def _automation_key_bytes(
+    environment_name: str,
+    purpose: str,
+    *,
+    environ: Mapping[str, str] | None = None,
+) -> bytes:
     """Load one exact-size operational key without echoing secret material."""
-    key_hex = os.environ.get(environment_name, "").strip()
+    source = os.environ if environ is None else environ
+    key_value = source.get(environment_name, "")
+    if not isinstance(key_value, str):
+        raise PromptTaskAuthorityError(f"{environment_name} must provide a hex-encoded byte string")
+    key_hex = key_value.strip()
     if not key_hex:
         raise PromptTaskAuthorityError(f"{environment_name} must provide the automation {purpose} key")
     try:
@@ -148,9 +157,34 @@ def _automation_envelope_signing_key() -> Ed25519PrivateKey:
     return Ed25519PrivateKey.from_private_bytes(_automation_key_bytes(_PROMPT_AUTOMATION_SIGNING_KEY_ENV, "signing"))
 
 
-def _automation_envelope_verifying_key() -> Ed25519PublicKey:
-    """Load the verifier-only Ed25519 public key."""
-    return Ed25519PublicKey.from_public_bytes(_automation_key_bytes(_PROMPT_AUTOMATION_VERIFYING_KEY_ENV, "verifying"))
+@dataclass(frozen=True, slots=True)
+class PromptAutomationVerifier:
+    """Process-bound issuer verifier captured once from trusted bootstrap configuration."""
+
+    _public_key_bytes: bytes
+
+    def __post_init__(self) -> None:
+        """Reject malformed verifier material before it can become a trust root."""
+        if type(self._public_key_bytes) is not bytes or len(self._public_key_bytes) != _PROMPT_AUTOMATION_KEY_BYTES:
+            raise PromptTaskAuthorityError(f"verifier public key must be exactly {_PROMPT_AUTOMATION_KEY_BYTES} bytes")
+
+    @classmethod
+    def from_environment(
+        cls,
+        *,
+        environ: Mapping[str, str] | None = None,
+    ) -> PromptAutomationVerifier:
+        """Capture the verifier key once so later environment mutation cannot change trust."""
+        public_key_bytes = _automation_key_bytes(
+            _PROMPT_AUTOMATION_VERIFYING_KEY_ENV,
+            "verifying",
+            environ=environ,
+        )
+        return cls(_public_key_bytes=public_key_bytes)
+
+    def verify(self, signature: bytes, message: bytes) -> None:
+        """Verify one canonical message with the captured issuer public key."""
+        Ed25519PublicKey.from_public_bytes(self._public_key_bytes).verify(signature, message)
 
 
 @dataclass(frozen=True)
@@ -293,8 +327,10 @@ class PromptAutomationEnvelope:
         if self.schema_version != PROMPT_AUTOMATION_ENVELOPE_SCHEMA_VERSION:
             raise PromptTaskAuthorityError("unknown Smart Prompt Machine automation-envelope schema version")
 
-    def verify_issuer_signature(self) -> None:
+    def verify_issuer_signature(self, verifier: PromptAutomationVerifier) -> None:
         """Reject caller-forged lineage before the envelope reaches transport."""
+        if type(verifier) is not PromptAutomationVerifier:
+            raise PromptTaskAuthorityError("automation envelope requires the process-bound issuer verifier")
         claims = _automation_envelope_claims(
             task_request_id=self.task_request_id,
             route_registry_identity=self.route_registry_identity,
@@ -306,7 +342,7 @@ class PromptAutomationEnvelope:
             schema_version=self.schema_version,
         )
         try:
-            _automation_envelope_verifying_key().verify(
+            verifier.verify(
                 bytes.fromhex(_canonical_issuer_signature(self.issuer_signature)),
                 _automation_envelope_message(claims),
             )
