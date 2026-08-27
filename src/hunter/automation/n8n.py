@@ -107,8 +107,10 @@ def _validate_endpoint(value: object) -> str:
     """Validate one HTTPS endpoint without echoing malformed endpoint material."""
     if not isinstance(value, str) or not value.strip():
         raise PromptAutomationTransportError("n8n webhook endpoint must be a non-empty string")
-    if value != value.strip() or any(ord(character) < 0x20 for character in value):
+    if any(ord(character) <= 0x20 or ord(character) == 0x7F for character in value):
         raise PromptAutomationTransportError("n8n webhook endpoint contains invalid whitespace")
+    if not value.isascii():
+        raise PromptAutomationTransportError("n8n webhook endpoint contains invalid characters")
     try:
         parsed = urlsplit(value)
         hostname = parsed.hostname
@@ -187,6 +189,10 @@ def _validated_bearer_token(credential: TransportCredential) -> str:
         or any(ord(character) < 0x20 or ord(character) == 0x7F for character in token)
     ):
         raise PromptAutomationTransportError("n8n webhook credential contains invalid header characters")
+    try:
+        token.encode("latin-1")
+    except UnicodeEncodeError:
+        raise PromptAutomationTransportError("n8n webhook credential contains invalid header characters") from None
     return token
 
 

@@ -157,6 +157,8 @@ def test_transport_does_not_mutate_the_supplied_mapping() -> None:
         "https://user:password@n8n.example.test/webhook/hunter",
         "https://n8n.example.test/webhook/hunter?token=secret",
         "https://n8n.example.test/webhook/hunter#secret",
+        "https://n8n.☃/webhook/hunter",
+        "https://n8n.example.test/webhook/hunter☃",
     ),
 )
 def test_endpoint_configuration_fails_closed(endpoint: str) -> None:
@@ -281,6 +283,22 @@ def test_credential_header_injection_is_rejected_before_request() -> None:
     transport = N8nPromptAutomationTransport(
         "https://n8n.example.test/webhook/hunter",
         TransportCredential("webhook-secret\r\nX-Leaked: yes", slot_identity="test:n8n"),
+        opener=opener,
+    )
+
+    with pytest.raises(PromptAutomationTransportError, match="credential") as raised:
+        transport.deliver(payload.as_mapping())
+    assert "webhook-secret" not in str(raised.value)
+    assert opener.requests == []
+
+
+
+def test_non_latin1_credential_is_rejected_before_request() -> None:
+    payload = _payload()
+    opener = _Opener(_Response(_ack(payload)))
+    transport = N8nPromptAutomationTransport(
+        "https://n8n.example.test/webhook/hunter",
+        TransportCredential("webhook-secret☃", slot_identity="test:n8n"),
         opener=opener,
     )
 
