@@ -471,6 +471,7 @@ def test_endpoint_component_reflection_is_rejected(receipt_id: str) -> None:
         ("https://example.test/%73ecret-path", "secret-path"),
         ("https://EXAMPLE.TEST/Secret-Path", "secret-path"),
         ("https://example.test/secret%2Dpath", "secret-path"),
+        ("https://%73ecret-host.example.test/secret-path", "secret-host.example.test"),
     ),
 )
 def test_normalized_endpoint_component_reflection_is_rejected(

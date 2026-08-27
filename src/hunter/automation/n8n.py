@@ -210,13 +210,22 @@ def _normalized_endpoint_components(endpoint_url: str) -> tuple[str, ...]:
         if normalized_path == decoded_path:
             break
         decoded_path = normalized_path
+    decoded_hostname = parsed.hostname or ""
+    for _ in range(2):
+        normalized_hostname = unquote(decoded_hostname)
+        if normalized_hostname == decoded_hostname:
+            break
+        decoded_hostname = normalized_hostname
     components = {
         endpoint_url.casefold(),
         parsed.netloc.casefold(),
         (parsed.hostname or "").casefold(),
+        decoded_hostname.casefold(),
         parsed.path.casefold(),
         decoded_path.casefold(),
     }
+    for hostname in (parsed.hostname or "", decoded_hostname):
+        components.update(part.casefold() for part in hostname.split(".") if part)
     for path in (parsed.path, decoded_path):
         components.update(part.casefold() for part in path.split("/") if part)
     return tuple(sorted(component for component in components if component))
