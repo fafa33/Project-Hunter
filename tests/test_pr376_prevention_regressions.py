@@ -102,9 +102,7 @@ def test_protected_preflight_requires_exact_head_pr_bound_status(monkeypatch) ->
         raise AssertionError(path)
 
     monkeypatch.setattr(governance, "request_json", fake_request)
-    state, _description = governance.candidate_admission(
-        "fafa33/Project-Hunter", "token", HEAD_A, pr_number=376
-    )
+    state, _description = governance.candidate_admission("fafa33/Project-Hunter", "token", HEAD_A, pr_number=376)
 
     assert state == "success"
     assert not any("actions/runs" in path and "pull_request_target" in path for path in requests)
