@@ -178,6 +178,51 @@ def validate_defect_prevention_lifecycle() -> list[str]:
     return errors
 
 
+def _module_assignment(tree: ast.Module, name: str) -> ast.expr | None:
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            if any(isinstance(target, ast.Name) and target.id == name for target in node.targets):
+                return node.value
+        elif isinstance(node, ast.AnnAssign):
+            if isinstance(node.target, ast.Name) and node.target.id == name:
+                return node.value
+    return None
+
+
+def _run_preflight_uses_normal_gate_sequence(tree: ast.Module) -> bool:
+    for node in tree.body:
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) or node.name != "run_preflight":
+            continue
+        for child in ast.walk(node):
+            if not isinstance(child, ast.Call):
+                continue
+            if not isinstance(child.func, ast.Name) or child.func.id != "run_quality_gates":
+                continue
+            if any(isinstance(argument, ast.Name) and argument.id == "NORMAL_QUALITY_GATES" for argument in child.args):
+                return True
+    return False
+
+
+def _workflow_has_unconditional_exit_before_preflight(content: str) -> bool:
+    lines = content.splitlines()
+    command_index = next(
+        (index for index, line in enumerate(lines) if "python scripts/hunter_pr_preflight.py" in line),
+        None,
+    )
+    if command_index is None:
+        return False
+
+    command_indent = len(lines[command_index]) - len(lines[command_index].lstrip())
+    for line in lines[:command_index]:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or stripped != "exit 0":
+            continue
+        indent = len(line) - len(line.lstrip())
+        if indent <= command_indent:
+            return True
+    return False
+
+
 def validate_candidate_preflight_definition(candidate_root: Path) -> list[str]:
     errors: list[str] = []
     workflow_path = candidate_root / ".github" / "workflows" / "hunter-pre-pr-preflight.yml"
@@ -189,31 +234,33 @@ def validate_candidate_preflight_definition(candidate_root: Path) -> list[str]:
         content = workflow_path.read_text(encoding="utf-8")
         if "python scripts/hunter_pr_preflight.py" not in content:
             errors.append("candidate preflight workflow does not invoke scripts/hunter_pr_preflight.py")
-        if "exit 0" in content:
-            errors.append("candidate preflight workflow contains unconditional exit 0 bypass")
+        elif _workflow_has_unconditional_exit_before_preflight(content):
+            errors.append("candidate preflight workflow contains unconditional exit 0 before preflight execution")
 
     if not script_path.is_file():
         errors.append(f"candidate preflight script missing: {script_path}")
     else:
         code = script_path.read_text(encoding="utf-8")
-        if "exit 0" in code and "def run_quality_gates" not in code:
-            errors.append("candidate preflight script contains unconditional exit 0")
         try:
             tree = ast.parse(code, filename=str(script_path))
-            found_gates: set[str] = set()
-            for node in ast.walk(tree):
-                if isinstance(node, (ast.Tuple, ast.List)) and len(node.elts) >= 2:
-                    first = node.elts[0]
-                    if isinstance(first, ast.Constant) and isinstance(first.value, str):
-                        if first.value in REQUIRED_PREFLIGHT_GATES:
-                            found_gates.add(first.value)
-            missing = sorted(set(REQUIRED_PREFLIGHT_GATES) - found_gates)
-            if missing:
-                errors.append(
-                    "candidate preflight script NORMAL_QUALITY_GATES missing required gates: " + ", ".join(missing)
-                )
-        except SyntaxError as exc:
-            errors.append(f"candidate preflight script syntax error: {exc}")
+            gates_node = _module_assignment(tree, "NORMAL_QUALITY_GATES")
+            if gates_node is None:
+                errors.append("candidate preflight script defines no module-level NORMAL_QUALITY_GATES")
+            else:
+                try:
+                    candidate_gates = ast.literal_eval(gates_node)
+                except (TypeError, ValueError):
+                    errors.append("candidate preflight script NORMAL_QUALITY_GATES is not a literal gate sequence")
+                else:
+                    normalized = tuple((str(name), tuple(command)) for name, command in candidate_gates)
+                    if normalized != TRUSTED_CANDIDATE_QUALITY_GATES:
+                        errors.append(
+                            "candidate preflight script NORMAL_QUALITY_GATES must match the trusted required labels and commands"
+                        )
+            if not _run_preflight_uses_normal_gate_sequence(tree):
+                errors.append("candidate preflight run_preflight does not execute NORMAL_QUALITY_GATES")
+        except (SyntaxError, TypeError, ValueError) as exc:
+            errors.append(f"candidate preflight script structure error: {exc}")
 
     return errors
 
