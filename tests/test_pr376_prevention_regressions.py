@@ -208,7 +208,7 @@ def test_candidate_definition_rejects_dead_gate_tuple(tmp_path) -> None:
     )
     (scripts / "hunter_pr_preflight.py").write_text(
         "NORMAL_QUALITY_GATES = ()\n"
-        "DEAD = ((\"Architecture Index Guard\", (\"python\", \"ignored.py\")),)\n"
+        'DEAD = (("Architecture Index Guard", ("python", "ignored.py")),)\n'
         "def run_preflight():\n"
         "    return 0\n",
         encoding="utf-8",
