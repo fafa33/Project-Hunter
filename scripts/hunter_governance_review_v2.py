@@ -1,8 +1,8 @@
-"""Low-friction governance sanity review plus exact-head candidate admission helpers.
+"""Trusted governance sanity review plus exact-head candidate admission helpers.
 
-The governance status itself remains limited to current mergeability, matching the
-trusted main-branch controller. Candidate admission is enforced independently by
-Hunter Candidate Admission and consumes exact-head preflight evidence.
+Hunter Governance Review is a required merge prerequisite. A successful status
+therefore requires both a clean merge state and successful exact-head candidate
+admission; the separate Draft controller remains defense in depth only.
 """
 
 from __future__ import annotations
@@ -252,12 +252,18 @@ def review(repository: str, token: str, pr_number: int) -> int:
         publish(repository, token, head_sha, "pending", "Waiting for GitHub to resolve current mergeability.")
         return 0
 
+    admission_state, admission_description = candidate_admission(repository, token, head_sha, pr_number)
+    if admission_state != "success":
+        status_state = "pending" if admission_state == "pending" else "failure"
+        publish(repository, token, head_sha, status_state, admission_description)
+        return 0
+
     publish(
         repository,
         token,
         head_sha,
         "success",
-        "No blocking governance defect in current merge state; code and review gates remain authoritative.",
+        "Exact-head candidate admission and current merge-state governance checks passed.",
     )
     return 0
 
