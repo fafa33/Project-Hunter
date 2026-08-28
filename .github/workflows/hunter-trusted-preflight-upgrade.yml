@@ -1,10 +1,7 @@
 name: Hunter / Trusted Preflight Upgrade
 
 # Trusted verification path for pull requests that update preflight definition files.
-# The validation job may execute candidate code, but only with a read-only token,
-# no persisted checkout credentials, no inherited secrets, and a bounded timeout.
-# The separate publisher job is the only job with status-write authority and never
-# executes candidate code.
+# Executes only trusted default-branch controller code.
 
 on:
   pull_request_target:
@@ -15,17 +12,18 @@ on:
       - reopened
       - synchronize
 
+permissions:
+  contents: read
+
 concurrency:
   group: hunter-preflight-upgrade-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:
-  validate-candidate:
-    name: Trusted Candidate Preflight Validation
+  upgrade-preflight:
+    name: Trusted Preflight Upgrade
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    permissions:
-      contents: read
 
     steps:
       - name: Checkout trusted controller
@@ -35,7 +33,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Checkout exact candidate as untrusted input
+      - name: Checkout candidate definitions (read-only)
         uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.sha }}
@@ -52,75 +50,17 @@ jobs:
             pyproject.toml
             requirements/ci-constraints.txt
 
-      - name: Install trusted project dependencies
+      - name: Install project
         env:
           PIP_CONSTRAINT: requirements/ci-constraints.txt
         run: |
           set -euo pipefail
           python -m pip install --disable-pip-version-check -c requirements/ci-constraints.txt -e ".[dev]"
 
-      - name: Validate candidate gate structure with trusted code
+      - name: Validate proposed candidate preflight definitions
         run: |
           set -euo pipefail
           python scripts/hunter_defect_prevention_preflight.py --validate-candidate candidate
 
-      - name: Execute exact candidate preflight without write credentials
-        env:
-          GITHUB_TOKEN: ""
-          GH_TOKEN: ""
-        run: |
-          set -euo pipefail
-          cd candidate
-          python scripts/hunter_pr_preflight.py --mode normal
-
-  publish-proof:
-    name: Publish Exact-Head Trusted Upgrade Proof
-    needs: validate-candidate
-    if: ${{ always() && !cancelled() }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      contents: read
-      statuses: write
-
-    steps:
-      - name: Publish exact-head PR-bound status
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          VALIDATION_RESULT: ${{ needs.validate-candidate.result }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          set -euo pipefail
-          python - <<'PY'
-          import json
-          import os
-          import urllib.request
-
-          result = os.environ["VALIDATION_RESULT"]
-          state = "success" if result == "success" else "failure"
-          payload = json.dumps(
-              {
-                  "state": state,
-                  "context": f"Hunter Trusted Preflight Upgrade / PR #{os.environ['PR_NUMBER']}",
-                  "description": f"Exact candidate preflight validation {state} ({result})",
-                  "target_url": os.environ["RUN_URL"],
-              }
-          ).encode("utf-8")
-          request = urllib.request.Request(
-              f"https://api.github.com/repos/{os.environ['GH_REPO']}/statuses/{os.environ['HEAD_SHA']}",
-              data=payload,
-              method="POST",
-              headers={
-                  "Authorization": f"Bearer {os.environ['GITHUB_TOKEN']}",
-                  "Accept": "application/vnd.github+json",
-                  "X-GitHub-Api-Version": "2022-11-28",
-                  "Content-Type": "application/json",
-              },
-          )
-          with urllib.request.urlopen(request, timeout=30) as response:
-              if response.status != 201:
-                  raise RuntimeError(f"status publication returned HTTP {response.status}")
-          PY
+      - name: Run shared deterministic preflight from trusted base
+        run: python scripts/hunter_pr_preflight.py --mode normal

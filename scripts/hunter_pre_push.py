@@ -61,26 +61,13 @@ def _require_exact_head(updates: list[tuple[str, str, str]], head_sha: str) -> N
         )
 
 
-def _committed_marker(head_sha: str) -> str | None:
-    marker_spec = f"{head_sha}:{MODE_MARKER.as_posix()}"
-    exists = subprocess.run(
-        ("git", "cat-file", "-e", marker_spec),
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if exists.returncode != 0:
-        return None
-    return _run_git("show", marker_spec)
-
-
-def _select_preflight_mode(head_sha: str) -> str:
-    raw = _committed_marker(head_sha)
-    if raw is None:
+def _select_preflight_mode() -> str:
+    if not MODE_MARKER.exists():
         return NORMAL_MODE
+    raw = MODE_MARKER.read_text(encoding="utf-8")
     mode = raw.rstrip("\n")
     if mode != TESTS_FIRST_RED_MODE:
-        raise RuntimeError("committed .hunter-preflight-mode must contain exactly tests-first-red")
+        raise RuntimeError(".hunter-preflight-mode must contain exactly tests-first-red")
     return mode
 
 
@@ -98,7 +85,7 @@ def enforce_pre_push(lines: Iterable[str]) -> int:
     before_head = _run_git("rev-parse", "HEAD")
     _require_clean_tree()
     _require_exact_head(updates, before_head)
-    mode = _select_preflight_mode(before_head)
+    mode = _select_preflight_mode()
 
     completed = subprocess.run(_preflight_command(mode), check=False)
     if completed.returncode != 0:
