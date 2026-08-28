@@ -1,9 +1,7 @@
 name: Hunter Governance Review
 
-# Trusted current-state sanity review. It does not judge PR prose, branch
-# naming, Issue identity, reactions, review history, or process ceremony.
-# It does require exact-head branch preflight admission and canonical main
-# ruleset protection before publishing success.
+# Current-state governance status. Success is published only when mergeability
+# and exact-head candidate admission are both proven by the trusted controller.
 
 on:
   pull_request:
@@ -13,6 +11,11 @@ on:
       - opened
       - reopened
       - synchronize
+  workflow_run:
+    workflows:
+      - Hunter / Trusted Preflight Upgrade
+    types:
+      - completed
   workflow_dispatch:
     inputs:
       pr_number:
@@ -27,7 +30,13 @@ permissions:
   statuses: write
 
 concurrency:
-  group: hunter-governance-review-${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+  group: >-
+    hunter-governance-review-${{
+      github.event.pull_request.number
+      || github.event.workflow_run.pull_requests[0].number
+      || github.event.inputs.pr_number
+      || github.run_id
+    }}
   cancel-in-progress: false
 
 jobs:
@@ -35,6 +44,11 @@ jobs:
     name: Hunter Governance Review
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    if: >-
+      ${{
+        github.event_name != 'workflow_run'
+        || github.event.workflow_run.pull_requests[0].number
+      }}
 
     steps:
       - name: Checkout trusted controller
@@ -44,11 +58,16 @@ jobs:
           path: engine
           persist-credentials: false
 
-      - name: Publish current merge-state sanity status
+      - name: Publish current governance and admission status
         env:
           GITHUB_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+          PR_NUMBER: >-
+            ${{
+              github.event.pull_request.number
+              || github.event.workflow_run.pull_requests[0].number
+              || github.event.inputs.pr_number
+            }}
           GITHUB_RUN_ID: ${{ github.run_id }}
           GITHUB_SERVER_URL: ${{ github.server_url }}
         run: |
