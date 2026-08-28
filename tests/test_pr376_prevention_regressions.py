@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 import json
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 candidate_controller = importlib.import_module("hunter_candidate_admission")
 prevention = importlib.import_module("hunter_defect_prevention_preflight")
@@ -13,14 +14,19 @@ HEAD_A = "a" * 40
 HEAD_B = "b" * 40
 
 
+def _query_page(path: str) -> str:
+    return parse_qs(urlparse(f"https://example.invalid/{path}").query).get("page", [""])[0]
+
+
 def test_changed_path_detection_reads_later_pages(monkeypatch) -> None:
     seen: list[str] = []
 
     def fake_request(_repo, _token, _method, path, _payload=None):
         seen.append(path)
-        if "page=1" in path:
+        page = _query_page(path)
+        if page == "1":
             return [{"filename": f"docs/file-{index}.md"} for index in range(100)]
-        if "page=2" in path:
+        if page == "2":
             return [{"filename": "scripts/hunter_pr_preflight.py"}]
         raise AssertionError(path)
 
@@ -30,14 +36,15 @@ def test_changed_path_detection_reads_later_pages(monkeypatch) -> None:
     assert ok is True
     assert error is None
     assert "scripts/hunter_pr_preflight.py" in paths
-    assert any("page=2" in path for path in seen)
+    assert any(_query_page(path) == "2" for path in seen)
 
 
 def test_changed_path_detection_fails_closed_on_unreadable_later_page(monkeypatch) -> None:
     def fake_request(_repo, _token, _method, path, _payload=None):
-        if "page=1" in path:
+        page = _query_page(path)
+        if page == "1":
             return [{"filename": f"docs/file-{index}.md"} for index in range(100)]
-        if "page=2" in path:
+        if page == "2":
             return {"message": "malformed"}
         raise AssertionError(path)
 
