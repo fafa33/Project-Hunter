@@ -234,7 +234,9 @@ def test_governance_required_status_succeeds_only_after_admission(monkeypatch) -
     )
 
     assert governance.review("fafa33/Project-Hunter", "token", 377) == 0
-    assert published == [("success", "Exact-head candidate admission and current merge-state governance checks passed.")]
+    assert published == [
+        ("success", "Exact-head candidate admission and current merge-state governance checks passed.")
+    ]
 
 
 def test_trusted_upgrade_separates_untrusted_execution_from_status_write() -> None:
