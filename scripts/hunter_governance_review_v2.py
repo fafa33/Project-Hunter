@@ -160,20 +160,21 @@ def candidate_admission(repository: str, token: str, head_sha: str, pr_number: i
         )
 
     encoded_sha = quote(head_sha, safe="")
-    payload = request_json(
-        repository,
-        token,
-        "GET",
-        f"actions/runs?head_sha={encoded_sha}&event=push&per_page=100",
-    )
-    if not isinstance(payload, dict):
-        raise RuntimeError("Pre-PR workflow-run payload is unavailable")
-
-    workflow_runs = payload.get("workflow_runs")
-    if not isinstance(workflow_runs, list):
-        return "failure", "Candidate admission blocked: workflow_runs payload is malformed."
 
     if touches_protected_preflight:
+        payload = request_json(
+            repository,
+            token,
+            "GET",
+            f"actions/runs?head_sha={encoded_sha}&per_page=100",
+        )
+        if not isinstance(payload, dict):
+            raise RuntimeError("Pre-PR workflow-run payload is unavailable")
+
+        workflow_runs = payload.get("workflow_runs")
+        if not isinstance(workflow_runs, list):
+            return "failure", "Candidate admission blocked: workflow_runs payload is malformed."
+
         upgrade_runs = [
             run
             for run in workflow_runs
@@ -181,6 +182,7 @@ def candidate_admission(repository: str, token: str, head_sha: str, pr_number: i
             and str(run.get("head_sha") or "") == head_sha
             and str(run.get("name") or "") == PREFLIGHT_UPGRADE_WORKFLOW_NAME
             and str(run.get("path") or "") == PREFLIGHT_UPGRADE_WORKFLOW_PATH
+            and str(run.get("event") or "") == "pull_request_target"
             and (
                 int(run.get("pr_number") or (run.get("inputs") or {}).get("pr_number") or 0) == pr_number
                 if pr_number is not None
@@ -215,6 +217,19 @@ def candidate_admission(repository: str, token: str, head_sha: str, pr_number: i
                 f"Candidate admission blocked: trusted preflight upgrade verification={conclusion or 'unknown'}.",
             )
         return "success", "Exact-head trusted preflight upgrade passed before PR governance progression."
+
+    payload = request_json(
+        repository,
+        token,
+        "GET",
+        f"actions/runs?head_sha={encoded_sha}&event=push&per_page=100",
+    )
+    if not isinstance(payload, dict):
+        raise RuntimeError("Pre-PR workflow-run payload is unavailable")
+
+    workflow_runs = payload.get("workflow_runs")
+    if not isinstance(workflow_runs, list):
+        return "failure", "Candidate admission blocked: workflow_runs payload is malformed."
 
     matching = [
         run

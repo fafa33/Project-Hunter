@@ -1,10 +1,21 @@
 from __future__ import annotations
 
+import argparse
+import ast
 import json
 from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
+REQUIRED_PREFLIGHT_GATES = (
+    "Architecture Index Guard",
+    "Artifact Guard",
+    "Defect Prevention Guard",
+    "Ruff",
+    "Black",
+    "Mypy",
+    "Pytest",
+)
 REGISTRY_PATH = ROOT / "docs" / "DEFECT_REGISTRY.json"
 LIFECYCLE_PATH = ROOT / "docs" / "DEFECT_PREVENTION_LIFECYCLE.json"
 WRITE_POLICY_PATH = ROOT / "docs" / "CODE_WRITE_POLICY.json"
@@ -140,7 +151,66 @@ def validate_defect_prevention_lifecycle() -> list[str]:
     return errors
 
 
+def validate_candidate_preflight_definition(candidate_root: Path) -> list[str]:
+    errors: list[str] = []
+    workflow_path = candidate_root / ".github" / "workflows" / "hunter-pre-pr-preflight.yml"
+    script_path = candidate_root / "scripts" / "hunter_pr_preflight.py"
+
+    if not workflow_path.is_file():
+        errors.append(f"candidate preflight workflow missing: {workflow_path}")
+    else:
+        content = workflow_path.read_text(encoding="utf-8")
+        if "python scripts/hunter_pr_preflight.py" not in content:
+            errors.append("candidate preflight workflow does not invoke scripts/hunter_pr_preflight.py")
+        if "exit 0" in content:
+            errors.append("candidate preflight workflow contains unconditional exit 0 bypass")
+
+    if not script_path.is_file():
+        errors.append(f"candidate preflight script missing: {script_path}")
+    else:
+        code = script_path.read_text(encoding="utf-8")
+        if "exit 0" in code and "def run_quality_gates" not in code:
+            errors.append("candidate preflight script contains unconditional exit 0")
+        try:
+            tree = ast.parse(code, filename=str(script_path))
+            found_gates: set[str] = set()
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Tuple) or isinstance(node, ast.List):
+                    if len(node.elts) >= 2:
+                        first = node.elts[0]
+                        if isinstance(first, ast.Constant) and isinstance(first.value, str):
+                            if first.value in REQUIRED_PREFLIGHT_GATES:
+                                found_gates.add(first.value)
+            missing = sorted(set(REQUIRED_PREFLIGHT_GATES) - found_gates)
+            if missing:
+                errors.append(
+                    "candidate preflight script NORMAL_QUALITY_GATES missing required gates: " + ", ".join(missing)
+                )
+        except SyntaxError as exc:
+            errors.append(f"candidate preflight script syntax error: {exc}")
+
+    return errors
+
+
 def main() -> int:
+    parser = argparse.ArgumentParser(description="Hunter defect prevention lifecycle and candidate preflight validator")
+    parser.add_argument(
+        "--validate-candidate",
+        type=Path,
+        metavar="PATH",
+        help="Validate proposed candidate preflight definition files at PATH without executing them.",
+    )
+    args = parser.parse_args()
+
+    if args.validate_candidate:
+        candidate_errors = validate_candidate_preflight_definition(args.validate_candidate)
+        if candidate_errors:
+            for message in candidate_errors:
+                print(f"[Candidate Preflight Guard] FAIL: {message}")
+            return 1
+        print("[Candidate Preflight Guard] PASS: proposed candidate preflight definitions are complete and valid")
+        return 0
+
     try:
         errors = validate_defect_prevention_lifecycle()
     except (OSError, json.JSONDecodeError, ValueError) as exception:
@@ -150,9 +220,7 @@ def main() -> int:
         for message in errors:
             print(f"[Defect Prevention Guard] FAIL: {message}")
         return 1
-    print(
-        "[Defect Prevention Guard] PASS: prevention lifecycle and code-write ingress " "policy are explicit and valid"
-    )
+    print("[Defect Prevention Guard] PASS: prevention lifecycle and code-write ingress policy are explicit and valid")
     return 0
 
 

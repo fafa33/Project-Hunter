@@ -33,6 +33,14 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Checkout candidate definitions (read-only)
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
@@ -48,6 +56,11 @@ jobs:
         run: |
           set -euo pipefail
           python -m pip install --disable-pip-version-check -c requirements/ci-constraints.txt -e ".[dev]"
+
+      - name: Validate proposed candidate preflight definitions
+        run: |
+          set -euo pipefail
+          python scripts/hunter_defect_prevention_preflight.py --validate-candidate candidate
 
       - name: Run shared deterministic preflight from trusted base
         run: python scripts/hunter_pr_preflight.py --mode normal
