@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import importlib
 from pathlib import Path
 
-import hunter_governance_review_v2 as core
+core = importlib.import_module("hunter_governance_review_v2")
 
 
 HEAD = "b" * 40
