@@ -28,6 +28,14 @@ EXPECTED_STAGES = (
     "prevented",
 )
 REQUIRED_ENFORCEMENT_FIELDS = ("local", "hosted", "merge", "recurrence")
+ALLOWED_CODE_WRITE_PATHS = frozenset(
+    {
+        "local_git_push",
+        "github_contents_api",
+        "github_git_data_api",
+        "api_only_agents",
+    }
+)
 
 
 def _load_object(path: Path) -> dict[str, Any]:
@@ -47,6 +55,14 @@ def validate_code_write_policy() -> list[str]:
     paths = policy.get("code_write_paths")
     if not isinstance(paths, dict):
         return errors + ["CODE_WRITE_POLICY code_write_paths must be an object"]
+
+    unknown_paths = sorted(set(paths) - ALLOWED_CODE_WRITE_PATHS)
+    if unknown_paths:
+        errors.append("CODE_WRITE_POLICY contains unrecognized code-write paths: " + ", ".join(unknown_paths))
+
+    missing_paths = sorted(ALLOWED_CODE_WRITE_PATHS - set(paths))
+    if missing_paths:
+        errors.append("CODE_WRITE_POLICY is missing required code-write paths: " + ", ".join(missing_paths))
 
     local = paths.get("local_git_push")
     if not isinstance(local, dict) or local.get("allowed") is not True:
