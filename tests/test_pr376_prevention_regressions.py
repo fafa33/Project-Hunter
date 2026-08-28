@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import importlib
 import json
 from pathlib import Path
 
-import hunter_candidate_admission as candidate_controller
-import hunter_defect_prevention_preflight as prevention
-import hunter_governance_review_v2 as governance
+candidate_controller = importlib.import_module("hunter_candidate_admission")
+prevention = importlib.import_module("hunter_defect_prevention_preflight")
+governance = importlib.import_module("hunter_governance_review_v2")
 
 
 HEAD_A = "a" * 40
