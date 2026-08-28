@@ -154,9 +154,7 @@ def read_trusted_upgrade_status(
 
     context = _upgrade_status_context(pr_number)
     matching = [
-        status
-        for status in payload
-        if isinstance(status, dict) and str(status.get("context") or "") == context
+        status for status in payload if isinstance(status, dict) and str(status.get("context") or "") == context
     ]
     if not matching:
         return "missing", "Candidate admission blocked: exact-head trusted preflight upgrade status is missing."
@@ -246,7 +244,9 @@ def review(repository: str, token: str, pr_number: int) -> int:
         raise RuntimeError(f"PR #{pr_number} head SHA is unavailable")
 
     if pr.get("mergeable") is False:
-        publish(repository, token, head_sha, "failure", "Blocking governance finding: pull request has merge conflicts.")
+        publish(
+            repository, token, head_sha, "failure", "Blocking governance finding: pull request has merge conflicts."
+        )
         return 0
     if pr.get("mergeable") is None:
         publish(repository, token, head_sha, "pending", "Waiting for GitHub to resolve current mergeability.")
