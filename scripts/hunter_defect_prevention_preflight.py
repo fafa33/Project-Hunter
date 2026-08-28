@@ -193,6 +193,90 @@ def _is_non_empty_str(val: Any) -> bool:
     return bool(val.strip())
 
 
+def _find_symbol_in_scope(body: list[ast.stmt], name: str, is_final: bool) -> ast.AST | None:
+    for node in body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            if node.name == name:
+                return node
+        elif is_final and isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id == name:
+                    return node
+        elif is_final and isinstance(node, ast.AnnAssign):
+            if isinstance(node.target, ast.Name) and node.target.id == name:
+                return node
+    return None
+
+
+def _validate_python_reference(ref: Any, kind: str) -> str | None:
+    if type(ref) is not str or not ref.strip():
+        return f"{kind} must be a non-empty string"
+
+    ref_str = ref.strip()
+    if "::" not in ref_str:
+        return f"{kind} '{ref_str}' is malformed (missing '::')"
+
+    parts = ref_str.split("::")
+    rel_path_str = parts[0].strip()
+    target_spec = parts[1:]
+
+    if not rel_path_str:
+        return f"{kind} '{ref_str}' has empty file path"
+
+    if any(not p.strip() for p in target_spec):
+        return f"{kind} '{ref_str}' contains empty symbol segment"
+
+    if (
+        rel_path_str.startswith("/")
+        or rel_path_str.startswith("\\")
+        or (len(rel_path_str) > 1 and rel_path_str[1] == ":")
+    ):
+        return f"{kind} '{ref_str}' uses an absolute path"
+
+    path_parts = Path(rel_path_str).parts
+    if ".." in path_parts:
+        return f"{kind} '{ref_str}' contains path traversal ('..')"
+
+    file_path = ROOT / rel_path_str
+    if not file_path.is_file():
+        return f"{kind} '{ref_str}' references non-existent file '{rel_path_str}'"
+
+    if not file_path.name.endswith(".py"):
+        return f"{kind} '{ref_str}' references non-Python file '{rel_path_str}'"
+
+    try:
+        source = file_path.read_text(encoding="utf-8")
+        tree = ast.parse(source, filename=str(file_path))
+    except Exception as exc:
+        return f"{kind} '{ref_str}' file '{rel_path_str}' cannot be parsed as Python AST: {exc}"
+
+    if len(target_spec) == 1:
+        name = target_spec[0].strip()
+        found = _find_symbol_in_scope(tree.body, name, is_final=True)
+        if found is None:
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and node.name == name:
+                    found = node
+                    break
+        if found is None:
+            return f"{kind} '{ref_str}' symbol '{name}' not found in '{rel_path_str}'"
+    else:
+        current_body = tree.body
+        for idx, seg_raw in enumerate(target_spec):
+            seg = seg_raw.strip()
+            is_last = idx == len(target_spec) - 1
+            found_node = _find_symbol_in_scope(current_body, seg, is_last)
+            if found_node is None:
+                return f"{kind} '{ref_str}' symbol segment '{seg}' not found in '{rel_path_str}'"
+            if not is_last:
+                if hasattr(found_node, "body") and isinstance(found_node.body, list):
+                    current_body = found_node.body
+                else:
+                    return f"{kind} '{ref_str}' segment '{seg}' has no child scope in '{rel_path_str}'"
+
+    return None
+
+
 def validate_reviewer_finding_dispositions() -> list[str]:
     errors: list[str] = []
     if not REVIEWER_DISPOSITIONS_PATH.is_file():
@@ -289,15 +373,16 @@ def validate_reviewer_finding_dispositions() -> list[str]:
                     evidence = finding.get("permanent_disposition_evidence")
                     guard_ref = finding.get("guard_reference")
                     test_ref = finding.get("test_reference")
-                    if (
-                        res_state != "resolved"
-                        or not _is_non_empty_str(evidence)
-                        or not _is_non_empty_str(guard_ref)
-                        or not _is_non_empty_str(test_ref)
-                    ):
+                    if res_state != "resolved" or not _is_non_empty_str(evidence):
                         errors.append(
                             f"{finding_id}: recurrence of {stage} defect {mapped_id} requires a resolved permanent disposition with non-empty string evidence, guard_reference, and test_reference"
                         )
+                    guard_err = _validate_python_reference(guard_ref, "guard_reference")
+                    if guard_err:
+                        errors.append(f"{finding_id}: {guard_err}")
+                    test_err = _validate_python_reference(test_ref, "test_reference")
+                    if test_err:
+                        errors.append(f"{finding_id}: {test_err}")
         elif mapped_id is not None:
             if not _is_non_empty_str(mapped_id) or mapped_id not in registry_defects:
                 errors.append(f"{finding_id}: mapped_defect_id {mapped_id!r} not found in DEFECT_REGISTRY.json")
@@ -307,14 +392,16 @@ def validate_reviewer_finding_dispositions() -> list[str]:
                 evidence = finding.get("permanent_disposition_evidence")
                 guard_ref = finding.get("guard_reference")
                 test_ref = finding.get("test_reference")
-                if (
-                    not _is_non_empty_str(evidence)
-                    or not _is_non_empty_str(guard_ref)
-                    or not _is_non_empty_str(test_ref)
-                ):
+                if not _is_non_empty_str(evidence):
                     errors.append(
                         f"{finding_id}: resolved new_systemic_defect finding requires non-empty string permanent_disposition_evidence, guard_reference, and test_reference"
                     )
+                guard_err = _validate_python_reference(guard_ref, "guard_reference")
+                if guard_err:
+                    errors.append(f"{finding_id}: {guard_err}")
+                test_err = _validate_python_reference(test_ref, "test_reference")
+                if test_err:
+                    errors.append(f"{finding_id}: {test_err}")
             elif classification in {"duplicate", "recurrence"}:
                 evidence = finding.get("permanent_disposition_evidence")
                 if not _is_non_empty_str(evidence):
