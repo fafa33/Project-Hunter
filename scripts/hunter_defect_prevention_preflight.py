@@ -3,6 +3,8 @@ from __future__ import annotations
 import argparse
 import ast
 import json
+import os
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +17,15 @@ REQUIRED_PREFLIGHT_GATES = (
     "Black",
     "Mypy",
     "Pytest",
+)
+TRUSTED_CANDIDATE_QUALITY_GATES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("Architecture Index Guard", ("python", "scripts/hunter_architecture_index_preflight.py")),
+    ("Artifact Guard", ("python", "scripts/hunter_artifact_preflight.py")),
+    ("Defect Prevention Guard", ("python", "scripts/hunter_defect_prevention_preflight.py")),
+    ("Ruff", ("ruff", "check", ".")),
+    ("Black", ("black", "--check", "--diff", ".")),
+    ("Mypy", ("mypy",)),
+    ("Pytest", ("pytest",)),
 )
 REGISTRY_PATH = ROOT / "docs" / "DEFECT_REGISTRY.json"
 LIFECYCLE_PATH = ROOT / "docs" / "DEFECT_PREVENTION_LIFECYCLE.json"
@@ -191,12 +202,11 @@ def validate_candidate_preflight_definition(candidate_root: Path) -> list[str]:
             tree = ast.parse(code, filename=str(script_path))
             found_gates: set[str] = set()
             for node in ast.walk(tree):
-                if isinstance(node, ast.Tuple) or isinstance(node, ast.List):
-                    if len(node.elts) >= 2:
-                        first = node.elts[0]
-                        if isinstance(first, ast.Constant) and isinstance(first.value, str):
-                            if first.value in REQUIRED_PREFLIGHT_GATES:
-                                found_gates.add(first.value)
+                if isinstance(node, (ast.Tuple, ast.List)) and len(node.elts) >= 2:
+                    first = node.elts[0]
+                    if isinstance(first, ast.Constant) and isinstance(first.value, str):
+                        if first.value in REQUIRED_PREFLIGHT_GATES:
+                            found_gates.add(first.value)
             missing = sorted(set(REQUIRED_PREFLIGHT_GATES) - found_gates)
             if missing:
                 errors.append(
@@ -208,6 +218,37 @@ def validate_candidate_preflight_definition(candidate_root: Path) -> list[str]:
     return errors
 
 
+def run_candidate_quality_gates(candidate_root: Path) -> int:
+    """Execute the candidate through an immutable trusted gate list.
+
+    The candidate dispatcher is deliberately not used as proof authority. A PR may
+    edit hunter_pr_preflight.py, but it cannot remove or bypass a gate from this
+    trusted controller because every required command is launched here directly.
+    """
+    if not candidate_root.is_dir():
+        print(f"[Trusted Candidate Gates] FAIL: candidate root missing: {candidate_root}")
+        return 2
+
+    env = os.environ.copy()
+    env["GITHUB_TOKEN"] = ""
+    env["GH_TOKEN"] = ""
+
+    for name, command in TRUSTED_CANDIDATE_QUALITY_GATES:
+        printable = " ".join(command)
+        print(f"[Trusted Candidate Gates] {name}: {printable}", flush=True)
+        completed = subprocess.run(command, cwd=candidate_root, env=env, check=False)
+        if completed.returncode != 0:
+            print(
+                f"[Trusted Candidate Gates] FAIL: {name} exited {completed.returncode}",
+                flush=True,
+            )
+            return completed.returncode
+        print(f"[Trusted Candidate Gates] PASS: {name}", flush=True)
+
+    print("[Trusted Candidate Gates] PASS: immutable trusted gate chain executed", flush=True)
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Hunter defect prevention lifecycle and candidate preflight validator")
     parser.add_argument(
@@ -215,6 +256,12 @@ def main() -> int:
         type=Path,
         metavar="PATH",
         help="Validate proposed candidate preflight definition files at PATH without executing them.",
+    )
+    parser.add_argument(
+        "--run-candidate-gates",
+        type=Path,
+        metavar="PATH",
+        help="Execute every required candidate quality gate from the trusted controller.",
     )
     args = parser.parse_args()
 
@@ -226,6 +273,9 @@ def main() -> int:
             return 1
         print("[Candidate Preflight Guard] PASS: proposed candidate preflight definitions are complete and valid")
         return 0
+
+    if args.run_candidate_gates:
+        return run_candidate_quality_gates(args.run_candidate_gates)
 
     try:
         errors = validate_defect_prevention_lifecycle()
