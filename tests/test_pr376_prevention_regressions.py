@@ -63,7 +63,7 @@ def test_trusted_upgrade_status_is_bound_to_exact_pr_context(monkeypatch) -> Non
     state, description = governance.read_trusted_upgrade_status("fafa33/Project-Hunter", "token", HEAD_A, 376)
 
     assert state == "success"
-    assert "Exact-head trusted preflight upgrade passed" in description
+    assert "Exact-head trusted candidate preflight validation passed" in description
 
 
 def test_wrong_pr_trusted_upgrade_status_cannot_authorize(monkeypatch) -> None:
@@ -82,8 +82,32 @@ def test_wrong_pr_trusted_upgrade_status_cannot_authorize(monkeypatch) -> None:
     assert state == "missing"
 
 
-def test_ruleset_all_token_matches_main() -> None:
-    assert governance.matches_ref_pattern("refs/heads/main", "~ALL") is True
+def test_protected_preflight_requires_exact_head_pr_bound_status(monkeypatch) -> None:
+    requests: list[str] = []
+
+    def fake_request(_repo, _token, _method, path, _payload=None):
+        requests.append(path)
+        if "pulls/376/files" in path:
+            return [{"filename": "scripts/hunter_pr_preflight.py"}]
+        if "contents/.hunter-preflight-mode" in path:
+            return {"message": "Not Found"}
+        if f"commits/{HEAD_A}/statuses" in path:
+            return [
+                {
+                    "id": 12,
+                    "context": governance._upgrade_status_context(376),
+                    "state": "success",
+                }
+            ]
+        raise AssertionError(path)
+
+    monkeypatch.setattr(governance, "request_json", fake_request)
+    state, _description = governance.candidate_admission(
+        "fafa33/Project-Hunter", "token", HEAD_A, pr_number=376
+    )
+
+    assert state == "success"
+    assert not any("actions/runs" in path and "pull_request_target" in path for path in requests)
 
 
 def test_unknown_code_write_path_is_rejected(monkeypatch, tmp_path) -> None:
@@ -149,14 +173,17 @@ def test_stale_candidate_admission_event_cannot_draft_newer_head(monkeypatch) ->
     assert converted == []
 
 
-def test_trusted_upgrade_workflow_reads_candidate_as_data_only() -> None:
+def test_trusted_upgrade_separates_untrusted_execution_from_status_write() -> None:
     workflow = (
         Path(__file__).resolve().parents[1] / ".github" / "workflows" / "hunter-trusted-preflight-upgrade.yml"
     ).read_text(encoding="utf-8")
 
     assert "ref: ${{ github.event.pull_request.head.sha }}" in workflow
     assert "path: candidate" in workflow
+    assert "validate-candidate candidate" in workflow
+    assert "cd candidate" in workflow
+    assert "python scripts/hunter_pr_preflight.py --mode normal" in workflow
+    assert 'GITHUB_TOKEN: ""' in workflow
+    assert "needs: validate-candidate" in workflow
     assert "statuses: write" in workflow
-    assert "--validate-candidate candidate" in workflow
-    assert "python candidate/" not in workflow
     assert "Hunter Trusted Preflight Upgrade / PR #" in workflow
