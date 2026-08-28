@@ -83,10 +83,7 @@ def enforce_candidate_admission(
         )
         return 0
     if expected_head_sha and latest_head_sha != expected_head_sha:
-        print(
-            f"PR #{pr_number} candidate-admission event became stale before Draft transition; "
-            "skipping mutation"
-        )
+        print(f"PR #{pr_number} candidate-admission event became stale before Draft transition; " "skipping mutation")
         return 0
     if latest.get("draft") is True:
         return 0
