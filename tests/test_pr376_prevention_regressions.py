@@ -113,7 +113,7 @@ def test_protected_preflight_requires_exact_head_pr_bound_status(monkeypatch) ->
     state, _description = governance.candidate_admission("fafa33/Project-Hunter", "token", HEAD_A, pr_number=376)
 
     assert state == "success"
-    assert not any("actions/runs" in path and "pull_request_target" in path for path in requests)
+    assert not any("actions/runs" in path for path in requests)
 
 
 def test_unknown_code_write_path_is_rejected(monkeypatch, tmp_path) -> None:
@@ -195,6 +195,57 @@ def test_trusted_candidate_runner_executes_immutable_gate_chain(monkeypatch, tmp
     assert prevention.run_candidate_quality_gates(tmp_path) == 0
     assert calls == [command for _name, command in prevention.TRUSTED_CANDIDATE_QUALITY_GATES]
     assert len(calls) == len(prevention.REQUIRED_PREFLIGHT_GATES)
+
+
+def test_candidate_definition_rejects_dead_gate_tuple(tmp_path) -> None:
+    workflow = tmp_path / ".github" / "workflows"
+    scripts = tmp_path / "scripts"
+    workflow.mkdir(parents=True)
+    scripts.mkdir()
+    (workflow / "hunter-pre-pr-preflight.yml").write_text(
+        "run: python scripts/hunter_pr_preflight.py --mode normal\n",
+        encoding="utf-8",
+    )
+    (scripts / "hunter_pr_preflight.py").write_text(
+        "NORMAL_QUALITY_GATES = ()\n"
+        "DEAD = ((\"Architecture Index Guard\", (\"python\", \"ignored.py\")),)\n"
+        "def run_preflight():\n"
+        "    return 0\n",
+        encoding="utf-8",
+    )
+
+    errors = prevention.validate_candidate_preflight_definition(tmp_path)
+
+    assert any("NORMAL_QUALITY_GATES must match" in error for error in errors)
+    assert any("does not execute NORMAL_QUALITY_GATES" in error for error in errors)
+
+
+def test_candidate_workflow_ignores_conditional_or_documented_exit_zero(tmp_path) -> None:
+    workflow = tmp_path / ".github" / "workflows"
+    scripts = tmp_path / "scripts"
+    workflow.mkdir(parents=True)
+    scripts.mkdir()
+    (workflow / "hunter-pre-pr-preflight.yml").write_text(
+        "run: |\n"
+        "  # example: exit 0\n"
+        "  if false; then\n"
+        "    exit 0\n"
+        "  fi\n"
+        "  python scripts/hunter_pr_preflight.py --mode normal\n",
+        encoding="utf-8",
+    )
+    (scripts / "hunter_pr_preflight.py").write_text(
+        "NORMAL_QUALITY_GATES = " + repr(prevention.TRUSTED_CANDIDATE_QUALITY_GATES) + "\n"
+        "def run_quality_gates(gates):\n"
+        "    return 0\n"
+        "def run_preflight():\n"
+        "    return run_quality_gates(NORMAL_QUALITY_GATES)\n",
+        encoding="utf-8",
+    )
+
+    errors = prevention.validate_candidate_preflight_definition(tmp_path)
+
+    assert not any("exit 0" in error for error in errors)
 
 
 def test_governance_required_status_fails_when_candidate_is_unadmitted(monkeypatch) -> None:
