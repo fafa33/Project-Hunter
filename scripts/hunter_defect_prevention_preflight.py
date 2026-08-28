@@ -30,6 +30,14 @@ TRUSTED_CANDIDATE_QUALITY_GATES: tuple[tuple[str, tuple[str, ...]], ...] = (
 REGISTRY_PATH = ROOT / "docs" / "DEFECT_REGISTRY.json"
 LIFECYCLE_PATH = ROOT / "docs" / "DEFECT_PREVENTION_LIFECYCLE.json"
 WRITE_POLICY_PATH = ROOT / "docs" / "CODE_WRITE_POLICY.json"
+REVIEWER_DISPOSITIONS_PATH = ROOT / "docs" / "REVIEWER_FINDING_DISPOSITIONS.json"
+VALIDATED_CLASSIFICATIONS = {
+    "new_systemic_defect",
+    "recurrence",
+    "duplicate",
+    "isolated_non_automatable",
+}
+VALIDATED_RESOLUTION_STATES = {"resolved", "unresolved"}
 EXPECTED_STAGES = (
     "recorded",
     "regression-tested",
@@ -175,6 +183,161 @@ def validate_defect_prevention_lifecycle() -> list[str]:
             errors.append(f"{defect_id}: prevented state requires recurrence escalation")
 
     errors.extend(validate_code_write_policy())
+    errors.extend(validate_reviewer_finding_dispositions())
+    return errors
+
+
+def _is_non_empty_str(val: Any) -> bool:
+    if type(val) is not str:
+        return False
+    return bool(val.strip())
+
+
+def validate_reviewer_finding_dispositions() -> list[str]:
+    errors: list[str] = []
+    if not REVIEWER_DISPOSITIONS_PATH.is_file():
+        return ["REVIEWER_FINDING_DISPOSITIONS.json is missing"]
+
+    try:
+        dispositions = _load_object(REVIEWER_DISPOSITIONS_PATH)
+    except Exception as exc:
+        return [f"REVIEWER_FINDING_DISPOSITIONS.json load error: {exc}"]
+
+    if dispositions.get("version") != 1:
+        errors.append("REVIEWER_FINDING_DISPOSITIONS version must be 1")
+
+    findings = dispositions.get("findings")
+    if not isinstance(findings, list):
+        return errors + ["REVIEWER_FINDING_DISPOSITIONS findings must be a list"]
+
+    try:
+        registry = _load_object(REGISTRY_PATH)
+        registry_defects = {
+            defect["id"]: defect
+            for defect in registry.get("defects", [])
+            if isinstance(defect, dict) and isinstance(defect.get("id"), str)
+        }
+    except Exception:
+        registry_defects = {}
+
+    try:
+        lifecycle = _load_object(LIFECYCLE_PATH)
+        explicit_enforcement = lifecycle.get("explicit_enforcement", {})
+        if not isinstance(explicit_enforcement, dict):
+            explicit_enforcement = {}
+    except Exception:
+        explicit_enforcement = {}
+
+    finding_ids: set[str] = set()
+
+    for index, finding in enumerate(findings):
+        if not isinstance(finding, dict):
+            errors.append(f"finding #{index} must be an object")
+            continue
+
+        finding_id = finding.get("id")
+        if not _is_non_empty_str(finding_id):
+            errors.append(f"finding #{index} has invalid id")
+            continue
+        if finding_id in finding_ids:
+            errors.append(f"duplicate finding id: {finding_id}")
+        finding_ids.add(finding_id)
+
+        source = finding.get("source_provenance")
+        if not isinstance(source, dict) or not _is_non_empty_str(source.get("reviewer")):
+            errors.append(f"{finding_id}: source_provenance must be an object with a reviewer")
+
+        val_state = finding.get("validation_state")
+        if val_state not in {"validated", "unvalidated", "rejected"}:
+            errors.append(f"{finding_id}: unknown validation_state {val_state!r}")
+            continue
+
+        if val_state != "validated":
+            continue
+
+        classification = finding.get("classification")
+        if classification not in VALIDATED_CLASSIFICATIONS:
+            errors.append(
+                f"{finding_id}: validated finding requires classification in {sorted(VALIDATED_CLASSIFICATIONS)}"
+            )
+
+        res_state = finding.get("resolution_state")
+        if res_state not in VALIDATED_RESOLUTION_STATES:
+            errors.append(f"{finding_id}: resolution_state must be one of {sorted(VALIDATED_RESOLUTION_STATES)}")
+            continue
+
+        if res_state == "unresolved":
+            errors.append(f"{finding_id}: validated substantive reviewer finding is unresolved")
+
+        mapped_id = finding.get("mapped_defect_id")
+
+        if classification == "duplicate":
+            if not _is_non_empty_str(mapped_id):
+                errors.append(f"{finding_id}: duplicate classification requires non-empty mapped_defect_id")
+            elif mapped_id not in registry_defects:
+                errors.append(f"{finding_id}: mapped_defect_id {mapped_id!r} not found in DEFECT_REGISTRY.json")
+
+        elif classification == "recurrence":
+            if not _is_non_empty_str(mapped_id):
+                errors.append(f"{finding_id}: recurrence classification requires non-empty mapped_defect_id")
+            elif mapped_id not in registry_defects:
+                errors.append(f"{finding_id}: mapped_defect_id {mapped_id!r} not found in DEFECT_REGISTRY.json")
+            else:
+                enforcement_entry = explicit_enforcement.get(mapped_id, {})
+                stage = enforcement_entry.get("state") if isinstance(enforcement_entry, dict) else None
+                if stage in {"prevented", "merge-enforced"}:
+                    evidence = finding.get("permanent_disposition_evidence")
+                    guard_ref = finding.get("guard_reference")
+                    test_ref = finding.get("test_reference")
+                    if (
+                        res_state != "resolved"
+                        or not _is_non_empty_str(evidence)
+                        or not _is_non_empty_str(guard_ref)
+                        or not _is_non_empty_str(test_ref)
+                    ):
+                        errors.append(
+                            f"{finding_id}: recurrence of {stage} defect {mapped_id} requires a resolved permanent disposition with non-empty string evidence, guard_reference, and test_reference"
+                        )
+        elif mapped_id is not None:
+            if not _is_non_empty_str(mapped_id) or mapped_id not in registry_defects:
+                errors.append(f"{finding_id}: mapped_defect_id {mapped_id!r} not found in DEFECT_REGISTRY.json")
+
+        if res_state == "resolved":
+            if classification == "new_systemic_defect":
+                evidence = finding.get("permanent_disposition_evidence")
+                guard_ref = finding.get("guard_reference")
+                test_ref = finding.get("test_reference")
+                if (
+                    not _is_non_empty_str(evidence)
+                    or not _is_non_empty_str(guard_ref)
+                    or not _is_non_empty_str(test_ref)
+                ):
+                    errors.append(
+                        f"{finding_id}: resolved new_systemic_defect finding requires non-empty string permanent_disposition_evidence, guard_reference, and test_reference"
+                    )
+            elif classification in {"duplicate", "recurrence"}:
+                evidence = finding.get("permanent_disposition_evidence")
+                if not _is_non_empty_str(evidence):
+                    errors.append(
+                        f"{finding_id}: resolved {classification} finding requires non-empty string permanent_disposition_evidence"
+                    )
+
+        if classification == "isolated_non_automatable":
+            justification = finding.get("justification") or finding.get("permanent_disposition_evidence")
+            bounded_control = finding.get("bounded_manual_control") or finding.get("permanent_disposition_evidence")
+            if not _is_non_empty_str(justification):
+                errors.append(f"{finding_id}: isolated_non_automatable finding requires explicit justification")
+            if not _is_non_empty_str(bounded_control):
+                errors.append(
+                    f"{finding_id}: isolated_non_automatable finding requires bounded manual control statement"
+                )
+            if mapped_id and mapped_id in explicit_enforcement:
+                stage = explicit_enforcement[mapped_id].get("state")
+                if stage == "prevented":
+                    errors.append(
+                        f"{finding_id}: isolated_non_automatable finding cannot be falsely labeled prevented for defect {mapped_id}"
+                    )
+
     return errors
 
 

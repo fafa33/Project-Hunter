@@ -63,6 +63,49 @@ def test_governance_review_skips_non_main_target(monkeypatch):
     assert published == []
 
 
+def test_governance_review_closed_pr_skips_disposition_failure(monkeypatch):
+    published = []
+    pr = _pr(True)
+    pr["state"] = "closed"
+    monkeypatch.setattr(core, "read_mergeability", lambda _repo, _token, _number: pr)
+    monkeypatch.setattr(
+        core, "check_reviewer_dispositions", lambda: (False, "Reviewer finding disposition failure: unresolved")
+    )
+    monkeypatch.setattr(core, "publish", lambda *args: published.append(args))
+
+    assert core.review("fafa33/Project-Hunter", "token", 501) == 0
+    assert published == []
+
+
+def test_governance_review_non_main_pr_skips_disposition_failure(monkeypatch):
+    published = []
+    pr = _pr(True)
+    pr["base"]["ref"] = "release/v1"
+    monkeypatch.setattr(core, "read_mergeability", lambda _repo, _token, _number: pr)
+    monkeypatch.setattr(
+        core, "check_reviewer_dispositions", lambda: (False, "Reviewer finding disposition failure: unresolved")
+    )
+    monkeypatch.setattr(core, "publish", lambda *args: published.append(args))
+
+    assert core.review("fafa33/Project-Hunter", "token", 501) == 0
+    assert published == []
+
+
+def test_governance_review_open_main_pr_fails_closed_on_unresolved_disposition(monkeypatch):
+    published = []
+    pr = _pr(True)
+    monkeypatch.setattr(core, "read_mergeability", lambda _repo, _token, _number: pr)
+    monkeypatch.setattr(
+        core, "check_reviewer_dispositions", lambda: (False, "Reviewer finding disposition failure: unresolved")
+    )
+    monkeypatch.setattr(core, "publish", lambda *args: published.append(args))
+
+    assert core.review("fafa33/Project-Hunter", "token", 501) == 0
+    assert len(published) == 1
+    assert published[0][3] == "failure"
+    assert "Blocking governance finding" in published[0][4]
+
+
 def test_candidate_admission_tests_first_red_success_stays_draft(monkeypatch):
     monkeypatch.setattr(core, "read_pr_changed_paths", lambda *_args: (True, (), None))
     monkeypatch.setattr(core, "read_head_preflight_mode", lambda *_args: ("tests-first-red", None))

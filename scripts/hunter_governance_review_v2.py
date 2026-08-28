@@ -169,6 +169,15 @@ def read_trusted_upgrade_status(
     return "failure", f"Candidate admission blocked: trusted candidate preflight validation={state or 'unknown'}."
 
 
+def check_reviewer_dispositions() -> tuple[bool, str]:
+    import hunter_defect_prevention_preflight as prevention
+
+    errors = prevention.validate_reviewer_finding_dispositions()
+    if errors:
+        return False, f"Reviewer finding disposition failure: {'; '.join(errors)}"
+    return True, "Reviewer finding dispositions are valid."
+
+
 def candidate_admission(repository: str, token: str, head_sha: str, pr_number: int | None = None) -> tuple[str, str]:
     touches_protected_preflight = False
     if pr_number is not None:
@@ -243,6 +252,11 @@ def review(repository: str, token: str, pr_number: int) -> int:
     head_sha = str((pr.get("head") or {}).get("sha") or "").strip()
     if not head_sha:
         raise RuntimeError(f"PR #{pr_number} head SHA is unavailable")
+
+    disp_ok, disp_msg = check_reviewer_dispositions()
+    if not disp_ok:
+        publish(repository, token, head_sha, "failure", f"Blocking governance finding: {disp_msg}")
+        return 0
 
     if pr.get("mergeable") is False:
         publish(
