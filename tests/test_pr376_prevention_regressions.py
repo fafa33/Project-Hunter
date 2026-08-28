@@ -60,9 +60,7 @@ def test_trusted_upgrade_status_is_bound_to_exact_pr_context(monkeypatch) -> Non
         ]
 
     monkeypatch.setattr(governance, "request_json", fake_request)
-    state, description = governance.read_trusted_upgrade_status(
-        "fafa33/Project-Hunter", "token", HEAD_A, 376
-    )
+    state, description = governance.read_trusted_upgrade_status("fafa33/Project-Hunter", "token", HEAD_A, 376)
 
     assert state == "success"
     assert "Exact-head trusted preflight upgrade passed" in description
@@ -79,9 +77,7 @@ def test_wrong_pr_trusted_upgrade_status_cannot_authorize(monkeypatch) -> None:
         ]
 
     monkeypatch.setattr(governance, "request_json", fake_request)
-    state, _description = governance.read_trusted_upgrade_status(
-        "fafa33/Project-Hunter", "token", HEAD_A, 376
-    )
+    state, _description = governance.read_trusted_upgrade_status("fafa33/Project-Hunter", "token", HEAD_A, 376)
 
     assert state == "missing"
 
@@ -155,10 +151,7 @@ def test_stale_candidate_admission_event_cannot_draft_newer_head(monkeypatch) ->
 
 def test_trusted_upgrade_workflow_reads_candidate_as_data_only() -> None:
     workflow = (
-        Path(__file__).resolve().parents[1]
-        / ".github"
-        / "workflows"
-        / "hunter-trusted-preflight-upgrade.yml"
+        Path(__file__).resolve().parents[1] / ".github" / "workflows" / "hunter-trusted-preflight-upgrade.yml"
     ).read_text(encoding="utf-8")
 
     assert "ref: ${{ github.event.pull_request.head.sha }}" in workflow
