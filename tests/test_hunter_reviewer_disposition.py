@@ -166,6 +166,116 @@ def test_existing_valid_normal_pr_behavior_is_not_falsely_blocked(tmp_path, monk
     assert errors == []
 
 
+def test_duplicate_without_mapped_defect_id_fails(tmp_path, monkeypatch) -> None:
+    dispositions = {
+        "version": 1,
+        "purpose": "test",
+        "findings": [
+            {
+                "id": "RFD-TEST-ERR1",
+                "source_provenance": {"reviewer": "Reviewer A"},
+                "validation_state": "validated",
+                "classification": "duplicate",
+                "resolution_state": "resolved",
+                "permanent_disposition_evidence": "Fixed elsewhere",
+            }
+        ],
+    }
+    path = tmp_path / "REVIEWER_FINDING_DISPOSITIONS.json"
+    path.write_text(json.dumps(dispositions), encoding="utf-8")
+    monkeypatch.setattr(prevention, "REVIEWER_DISPOSITIONS_PATH", path)
+
+    errors = prevention.validate_reviewer_finding_dispositions()
+    assert any("duplicate classification requires non-empty mapped_defect_id" in error for error in errors)
+
+
+def test_duplicate_with_unknown_mapped_defect_id_fails(tmp_path, monkeypatch) -> None:
+    dispositions = {
+        "version": 1,
+        "purpose": "test",
+        "findings": [
+            {
+                "id": "RFD-TEST-ERR2",
+                "source_provenance": {"reviewer": "Reviewer A"},
+                "validation_state": "validated",
+                "classification": "duplicate",
+                "mapped_defect_id": "PRH-UNKNOWN-999",
+                "resolution_state": "resolved",
+                "permanent_disposition_evidence": "Fixed elsewhere",
+            }
+        ],
+    }
+    path = tmp_path / "REVIEWER_FINDING_DISPOSITIONS.json"
+    path.write_text(json.dumps(dispositions), encoding="utf-8")
+    monkeypatch.setattr(prevention, "REVIEWER_DISPOSITIONS_PATH", path)
+
+    errors = prevention.validate_reviewer_finding_dispositions()
+    assert any("mapped_defect_id 'PRH-UNKNOWN-999' not found" in error for error in errors)
+
+
+def test_escalated_recurrence_with_missing_or_invalid_evidence_or_refs_fails(tmp_path, monkeypatch) -> None:
+    invalid_cases: list[dict[str, object]] = [
+        # missing permanent_disposition_evidence
+        {
+            "id": "RFD-ERR-A",
+            "source_provenance": {"reviewer": "Rev"},
+            "validation_state": "validated",
+            "classification": "recurrence",
+            "mapped_defect_id": "PRH-007",
+            "resolution_state": "resolved",
+            "guard_reference": "scripts/guard.py",
+            "test_reference": "tests/test_guard.py",
+        },
+        # whitespace-only permanent_disposition_evidence
+        {
+            "id": "RFD-ERR-B",
+            "source_provenance": {"reviewer": "Rev"},
+            "validation_state": "validated",
+            "classification": "recurrence",
+            "mapped_defect_id": "PRH-007",
+            "resolution_state": "resolved",
+            "permanent_disposition_evidence": "   ",
+            "guard_reference": "scripts/guard.py",
+            "test_reference": "tests/test_guard.py",
+        },
+        # boolean placeholder for guard_reference
+        {
+            "id": "RFD-ERR-C",
+            "source_provenance": {"reviewer": "Rev"},
+            "validation_state": "validated",
+            "classification": "recurrence",
+            "mapped_defect_id": "PRH-007",
+            "resolution_state": "resolved",
+            "permanent_disposition_evidence": "Valid evidence",
+            "guard_reference": True,
+            "test_reference": "tests/test_guard.py",
+        },
+        # missing test_reference
+        {
+            "id": "RFD-ERR-D",
+            "source_provenance": {"reviewer": "Rev"},
+            "validation_state": "validated",
+            "classification": "recurrence",
+            "mapped_defect_id": "PRH-007",
+            "resolution_state": "resolved",
+            "permanent_disposition_evidence": "Valid evidence",
+            "guard_reference": "scripts/guard.py",
+        },
+    ]
+
+    for case in invalid_cases:
+        case_id = str(case["id"])
+        dispositions = {"version": 1, "purpose": "test", "findings": [case]}
+        path = tmp_path / "REVIEWER_FINDING_DISPOSITIONS.json"
+        path.write_text(json.dumps(dispositions), encoding="utf-8")
+        monkeypatch.setattr(prevention, "REVIEWER_DISPOSITIONS_PATH", path)
+
+        errors = prevention.validate_reviewer_finding_dispositions()
+        assert any(
+            "recurrence of" in error and "requires a resolved permanent disposition" in error for error in errors
+        ), f"Failed for case {case_id}: {errors}"
+
+
 def test_deterministic_preflight_failure_cannot_cross_normal_push_boundary(tmp_path, monkeypatch) -> None:
     def fake_git(*args: str) -> str:
         if args == ("rev-parse", "--show-toplevel"):

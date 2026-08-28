@@ -63,6 +63,43 @@ def test_governance_review_skips_non_main_target(monkeypatch):
     assert published == []
 
 
+def test_governance_review_skips_disposition_check_for_closed_pr(monkeypatch):
+    published = []
+    pr = _pr(True)
+    pr["state"] = "closed"
+    monkeypatch.setattr(core, "read_mergeability", lambda _repo, _token, _number: pr)
+    monkeypatch.setattr(core, "check_reviewer_dispositions", lambda: (False, "Unresolved finding RFD-ERR"))
+    monkeypatch.setattr(core, "publish", lambda *args: published.append(args))
+
+    assert core.review("fafa33/Project-Hunter", "token", 501) == 0
+    assert published == []
+
+
+def test_governance_review_skips_disposition_check_for_non_main_pr(monkeypatch):
+    published = []
+    pr = _pr(True)
+    pr["base"]["ref"] = "release"
+    monkeypatch.setattr(core, "read_mergeability", lambda _repo, _token, _number: pr)
+    monkeypatch.setattr(core, "check_reviewer_dispositions", lambda: (False, "Unresolved finding RFD-ERR"))
+    monkeypatch.setattr(core, "publish", lambda *args: published.append(args))
+
+    assert core.review("fafa33/Project-Hunter", "token", 501) == 0
+    assert published == []
+
+
+def test_governance_review_fails_closed_for_open_main_pr_with_unresolved_disposition(monkeypatch):
+    published = []
+    pr = _pr(True)
+    monkeypatch.setattr(core, "read_mergeability", lambda _repo, _token, _number: pr)
+    monkeypatch.setattr(core, "check_reviewer_dispositions", lambda: (False, "Unresolved finding RFD-ERR"))
+    monkeypatch.setattr(core, "publish", lambda *args: published.append(args))
+
+    assert core.review("fafa33/Project-Hunter", "token", 501) == 0
+    assert len(published) == 1
+    assert published[0][3] == "failure"
+    assert "Unresolved finding RFD-ERR" in published[0][4]
+
+
 def test_candidate_admission_tests_first_red_success_stays_draft(monkeypatch):
     monkeypatch.setattr(core, "read_pr_changed_paths", lambda *_args: (True, (), None))
     monkeypatch.setattr(core, "read_head_preflight_mode", lambda *_args: ("tests-first-red", None))

@@ -252,13 +252,6 @@ def candidate_admission(repository: str, token: str, head_sha: str, pr_number: i
 
 
 def review(repository: str, token: str, pr_number: int) -> int:
-    disp_ok, disp_msg = check_reviewer_dispositions()
-    if not disp_ok:
-        head_sha = str((read_mergeability(repository, token, pr_number).get("head") or {}).get("sha") or "").strip()
-        if head_sha:
-            publish(repository, token, head_sha, "failure", f"Blocking governance finding: {disp_msg}")
-        return 0
-
     pr = read_mergeability(repository, token, pr_number)
     if pr.get("state") != "open":
         print(f"PR #{pr_number} is not open; no governance status published.")
@@ -272,6 +265,11 @@ def review(repository: str, token: str, pr_number: int) -> int:
     head_sha = str((pr.get("head") or {}).get("sha") or "").strip()
     if not head_sha:
         raise RuntimeError(f"PR #{pr_number} head SHA is unavailable")
+
+    disp_ok, disp_msg = check_reviewer_dispositions()
+    if not disp_ok:
+        publish(repository, token, head_sha, "failure", f"Blocking governance finding: {disp_msg}")
+        return 0
 
     if pr.get("mergeable") is False:
         publish(
