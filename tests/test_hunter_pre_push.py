@@ -30,7 +30,7 @@ def test_pre_push_blocks_known_deterministic_failure_before_network_push(monkeyp
 
     monkeypatch.setattr(hunter_pre_push, "_run_git", fake_git)
     monkeypatch.setattr(hunter_pre_push.os, "chdir", lambda _path: None)
-    monkeypatch.setattr(hunter_pre_push, "_select_preflight_mode", lambda _head: hunter_pre_push.NORMAL_MODE)
+    monkeypatch.setattr(hunter_pre_push, "_select_preflight_mode", lambda: hunter_pre_push.NORMAL_MODE)
     monkeypatch.setattr(
         hunter_pre_push.subprocess,
         "run",
@@ -105,7 +105,7 @@ def test_pre_push_rechecks_head_after_successful_preflight(monkeypatch, tmp_path
 
     monkeypatch.setattr(hunter_pre_push, "_run_git", fake_git)
     monkeypatch.setattr(hunter_pre_push.os, "chdir", lambda _path: None)
-    monkeypatch.setattr(hunter_pre_push, "_select_preflight_mode", lambda _head: hunter_pre_push.NORMAL_MODE)
+    monkeypatch.setattr(hunter_pre_push, "_select_preflight_mode", lambda: hunter_pre_push.NORMAL_MODE)
     monkeypatch.setattr(
         hunter_pre_push.subprocess,
         "run",
@@ -115,10 +115,12 @@ def test_pre_push_rechecks_head_after_successful_preflight(monkeypatch, tmp_path
     assert hunter_pre_push.enforce_pre_push(_update()) == 2
 
 
-def test_tests_first_marker_selects_same_supported_mode_as_hosted_preflight(monkeypatch) -> None:
-    monkeypatch.setattr(hunter_pre_push, "_committed_marker", lambda _head: "tests-first-red\n")
+def test_tests_first_marker_selects_same_supported_mode_as_hosted_preflight(monkeypatch, tmp_path) -> None:
+    marker = tmp_path / ".hunter-preflight-mode"
+    marker.write_text("tests-first-red\n", encoding="utf-8")
+    monkeypatch.setattr(hunter_pre_push, "MODE_MARKER", marker)
 
-    assert hunter_pre_push._select_preflight_mode(HEAD_A) == hunter_pre_push.TESTS_FIRST_RED_MODE
+    assert hunter_pre_push._select_preflight_mode() == hunter_pre_push.TESTS_FIRST_RED_MODE
     assert hunter_pre_push._preflight_command(hunter_pre_push.TESTS_FIRST_RED_MODE) == (
         "python",
         "scripts/hunter_pr_preflight.py",
@@ -127,20 +129,13 @@ def test_tests_first_marker_selects_same_supported_mode_as_hosted_preflight(monk
     )
 
 
-def test_invalid_tests_first_marker_fails_closed(monkeypatch) -> None:
-    monkeypatch.setattr(hunter_pre_push, "_committed_marker", lambda _head: "normal\n")
+def test_invalid_tests_first_marker_fails_closed(monkeypatch, tmp_path) -> None:
+    marker = tmp_path / ".hunter-preflight-mode"
+    marker.write_text("normal\n", encoding="utf-8")
+    monkeypatch.setattr(hunter_pre_push, "MODE_MARKER", marker)
 
     with pytest.raises(RuntimeError, match="exactly tests-first-red"):
-        hunter_pre_push._select_preflight_mode(HEAD_A)
-
-
-def test_local_only_ignored_mode_marker_cannot_authorize_tests_first_red(monkeypatch, tmp_path) -> None:
-    marker = tmp_path / ".hunter-preflight-mode"
-    marker.write_text("tests-first-red\n", encoding="utf-8")
-    monkeypatch.setattr(hunter_pre_push, "MODE_MARKER", marker)
-    monkeypatch.setattr(hunter_pre_push, "_committed_marker", lambda _head: None)
-
-    assert hunter_pre_push._select_preflight_mode(HEAD_A) == hunter_pre_push.NORMAL_MODE
+        hunter_pre_push._select_preflight_mode()
 
 
 def test_repository_hook_is_executable_and_calls_canonical_enforcer() -> None:
