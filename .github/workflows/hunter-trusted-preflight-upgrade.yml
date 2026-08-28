@@ -1,8 +1,9 @@
 name: Hunter / Trusted Preflight Upgrade
 
 # Trusted verification path for pull requests that update preflight definition files.
-# The validation job may execute candidate code, but only with a read-only token,
-# no persisted checkout credentials, no inherited secrets, and a bounded timeout.
+# Candidate code may execute only inside the read-only validation job. The gate
+# sequence itself is launched by the trusted default-branch controller, so a
+# candidate cannot self-authorize by weakening hunter_pr_preflight.py.
 # The separate publisher job is the only job with status-write authority and never
 # executes candidate code.
 
@@ -64,14 +65,13 @@ jobs:
           set -euo pipefail
           python scripts/hunter_defect_prevention_preflight.py --validate-candidate candidate
 
-      - name: Execute exact candidate preflight without write credentials
+      - name: Execute immutable trusted gate chain against exact candidate
         env:
           GITHUB_TOKEN: ""
           GH_TOKEN: ""
         run: |
           set -euo pipefail
-          cd candidate
-          python scripts/hunter_pr_preflight.py --mode normal
+          python scripts/hunter_defect_prevention_preflight.py --run-candidate-gates candidate
 
   publish-proof:
     name: Publish Exact-Head Trusted Upgrade Proof
