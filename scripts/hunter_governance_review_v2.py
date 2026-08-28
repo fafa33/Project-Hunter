@@ -165,11 +165,7 @@ def read_trusted_upgrade_status(
         return "missing", "Candidate admission blocked: exact-head trusted preflight upgrade status is unavailable."
 
     context = _upgrade_status_context(pr_number)
-    matching = [
-        status
-        for status in payload
-        if isinstance(status, dict) and str(status.get("context") or "") == context
-    ]
+    matching = [status for status in payload if isinstance(status, dict) and str(status.get("context") or "") == context]
     if not matching:
         return "missing", "Candidate admission blocked: exact-head trusted preflight upgrade status is missing."
 
