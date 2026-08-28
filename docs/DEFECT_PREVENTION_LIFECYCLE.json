@@ -15,11 +15,11 @@
   "rule": "A legacy guarded defect is detection-only unless explicit enforcement evidence upgrades it. Prevented requires local, hosted, and merge enforcement and recurrence escalation. A repository ruleset must mechanically require the canonical merge statuses before merge-enforced or prevented may be claimed.",
   "explicit_enforcement": {
     "PRH-007": {
-      "state": "merge-enforced",
+      "state": "prevented",
       "local": ".githooks/pre-push -> python scripts/hunter_pre_push.py -> python scripts/hunter_pr_preflight.py --mode normal",
       "hosted": "Exact-head Hunter / Pre-PR Preflight runs on pushed branch heads; the trusted Hunter Governance Review independently rejects a PR head without a successful exact-head branch preflight and verifies main ruleset conformance",
       "merge": "Active GitHub ruleset Protect main mechanically requires Quality Gates, dependency-review, CodeQL, Hunter Governance Review, and Hunter Merge Readiness, with no bypass actors",
-      "recurrence": "Any pushed-head recurrence is a prevention-system failure and requires enforcement-gap correction"
+      "recurrence": "Any pushed-head recurrence is a prevention-system failure and requires enforcement-gap correction in docs/REVIEWER_FINDING_DISPOSITIONS.json"
     }
   }
 }

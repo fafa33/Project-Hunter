@@ -18,7 +18,7 @@ def test_legacy_guarded_is_not_treated_as_prevented() -> None:
 def test_prh_007_has_local_hosted_merge_and_recurrence_evidence() -> None:
     lifecycle = json.loads(prevention.LIFECYCLE_PATH.read_text(encoding="utf-8"))
     evidence = lifecycle["explicit_enforcement"]["PRH-007"]
-    assert evidence["state"] == "merge-enforced"
+    assert evidence["state"] == "prevented"
     for field in prevention.REQUIRED_ENFORCEMENT_FIELDS:
         assert isinstance(evidence[field], str)
         assert evidence[field].strip()

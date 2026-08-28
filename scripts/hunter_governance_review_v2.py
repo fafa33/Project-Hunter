@@ -13,6 +13,7 @@ import json
 import os
 import sys
 import time
+from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
@@ -22,6 +23,8 @@ CONTEXT = "Hunter Governance Review"
 PRE_PR_WORKFLOW_NAME = "Hunter / Pre-PR Preflight"
 PRE_PR_WORKFLOW_PATH = ".github/workflows/hunter-pre-pr-preflight.yml"
 PREFLIGHT_UPGRADE_STATUS_PREFIX = "Hunter Trusted Preflight Upgrade / PR #"
+ROOT = Path(__file__).resolve().parents[1] if "__file__" in globals() else Path(".")
+REVIEWER_DISPOSITIONS_PATH = ROOT / "docs" / "REVIEWER_FINDING_DISPOSITIONS.json"
 PREFLIGHT_OWNED_PATHS = frozenset(
     {
         ".githooks/pre-push",
@@ -33,6 +36,25 @@ PREFLIGHT_OWNED_PATHS = frozenset(
         "scripts/hunter_pre_push.py",
     }
 )
+
+
+def check_reviewer_dispositions() -> tuple[bool, str]:
+    if not REVIEWER_DISPOSITIONS_PATH.is_file():
+        return True, ""
+    try:
+        data = json.loads(REVIEWER_DISPOSITIONS_PATH.read_text(encoding="utf-8"))
+        findings = data.get("findings", [])
+        for f in findings:
+            if (
+                isinstance(f, dict)
+                and f.get("validation_state") == "validated"
+                and f.get("resolution_state") == "unresolved"
+            ):
+                fid = f.get("id", "unknown")
+                return False, f"Unresolved validated reviewer finding: {fid}"
+    except Exception as exc:
+        return False, f"Failed to check reviewer dispositions: {exc}"
+    return True, ""
 
 
 def request_json(repository: str, token: str, method: str, path: str, payload: dict[str, Any] | None = None) -> Any:
@@ -230,6 +252,13 @@ def candidate_admission(repository: str, token: str, head_sha: str, pr_number: i
 
 
 def review(repository: str, token: str, pr_number: int) -> int:
+    disp_ok, disp_msg = check_reviewer_dispositions()
+    if not disp_ok:
+        head_sha = str((read_mergeability(repository, token, pr_number).get("head") or {}).get("sha") or "").strip()
+        if head_sha:
+            publish(repository, token, head_sha, "failure", f"Blocking governance finding: {disp_msg}")
+        return 0
+
     pr = read_mergeability(repository, token, pr_number)
     if pr.get("state") != "open":
         print(f"PR #{pr_number} is not open; no governance status published.")
