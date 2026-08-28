@@ -24,6 +24,7 @@ PRE_PR_WORKFLOW_PATH = ".github/workflows/hunter-pre-pr-preflight.yml"
 PREFLIGHT_UPGRADE_STATUS_PREFIX = "Hunter Trusted Preflight Upgrade / PR #"
 PREFLIGHT_OWNED_PATHS = frozenset(
     {
+        ".githooks/pre-push",
         ".github/workflows/hunter-pre-pr-preflight.yml",
         "scripts/hunter_pr_preflight.py",
         "scripts/hunter_architecture_index_preflight.py",
