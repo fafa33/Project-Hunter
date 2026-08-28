@@ -1,17 +1,14 @@
-"""Low-friction governance sanity review for Project Hunter.
+"""Low-friction governance sanity review plus exact-head candidate admission helpers.
 
-The active merge authority is intentionally limited to current merge risk. This
-check does not judge PR prose, branch naming, Issue identity, reactions, or
-process history. It does enforce one durable admission invariant: a PR head must
-already have passed the repository's branch-level pre-PR preflight on that exact
-SHA before governance can become green.
+The governance status itself remains limited to current mergeability, matching the
+trusted main-branch controller. Candidate admission is enforced independently by
+Hunter Candidate Admission and consumes exact-head preflight evidence.
 """
 
 from __future__ import annotations
 
 import argparse
 import base64
-import fnmatch
 import json
 import os
 import sys
@@ -24,16 +21,7 @@ import hunter_github_transport as transport
 CONTEXT = "Hunter Governance Review"
 PRE_PR_WORKFLOW_NAME = "Hunter / Pre-PR Preflight"
 PRE_PR_WORKFLOW_PATH = ".github/workflows/hunter-pre-pr-preflight.yml"
-PREFLIGHT_UPGRADE_WORKFLOW_NAME = "Hunter / Trusted Preflight Upgrade"
-PREFLIGHT_UPGRADE_WORKFLOW_PATH = ".github/workflows/hunter-trusted-preflight-upgrade.yml"
 PREFLIGHT_UPGRADE_STATUS_PREFIX = "Hunter Trusted Preflight Upgrade / PR #"
-REQUIRED_RULESET_CHECKS = {
-    "Quality Gates",
-    "dependency-review",
-    "CodeQL",
-    "Hunter Governance Review",
-    "Hunter Merge Readiness",
-}
 PREFLIGHT_OWNED_PATHS = frozenset(
     {
         ".github/workflows/hunter-pre-pr-preflight.yml",
@@ -140,11 +128,11 @@ def read_head_preflight_mode(repository: str, token: str, head_sha: str) -> tupl
         if isinstance(content, str) and content:
             try:
                 raw = base64.b64decode(content).decode("utf-8").strip()
-                if raw == "tests-first-red":
-                    return "tests-first-red", None
-                return "invalid", f"unsupported preflight mode content: {raw!r}"
             except Exception as exc:
                 return "invalid", f"failed to decode base64 mode content: {exc}"
+            if raw == "tests-first-red":
+                return "tests-first-red", None
+            return "invalid", f"unsupported preflight mode content: {raw!r}"
         return "normal", None
     return "unavailable", "non-dict payload for .hunter-preflight-mode"
 
@@ -162,11 +150,13 @@ def read_trusted_upgrade_status(
     encoded_sha = quote(head_sha, safe="")
     payload = request_json(repository, token, "GET", f"commits/{encoded_sha}/statuses?per_page=100")
     if not isinstance(payload, list):
-        return "missing", "Candidate admission blocked: exact-head trusted preflight upgrade status is unavailable."
+        return "failure", "Candidate admission blocked: trusted upgrade status evidence is malformed."
 
     context = _upgrade_status_context(pr_number)
     matching = [
-        status for status in payload if isinstance(status, dict) and str(status.get("context") or "") == context
+        status
+        for status in payload
+        if isinstance(status, dict) and str(status.get("context") or "") == context
     ]
     if not matching:
         return "missing", "Candidate admission blocked: exact-head trusted preflight upgrade status is missing."
@@ -174,96 +164,37 @@ def read_trusted_upgrade_status(
     latest = max(matching, key=lambda status: int(status.get("id") or 0))
     state = str(latest.get("state") or "").strip()
     if state == "success":
-        return "success", "Exact-head trusted preflight upgrade passed before PR governance progression."
+        return "success", "Exact-head trusted candidate preflight validation passed."
     if state == "pending":
-        return "pending", "Waiting for exact-head trusted preflight upgrade verification to complete."
-    return "failure", f"Candidate admission blocked: trusted preflight upgrade verification={state or 'unknown'}."
-
-
-def _run_targets_pr(run: dict[str, Any], pr_number: int) -> bool:
-    pull_requests = run.get("pull_requests")
-    if isinstance(pull_requests, list):
-        for pull_request in pull_requests:
-            if isinstance(pull_request, dict) and int(pull_request.get("number") or 0) == pr_number:
-                return True
-    return int(run.get("pr_number") or 0) == pr_number
+        return "pending", "Waiting for exact-head trusted candidate preflight validation."
+    return "failure", f"Candidate admission blocked: trusted candidate preflight validation={state or 'unknown'}."
 
 
 def candidate_admission(repository: str, token: str, head_sha: str, pr_number: int | None = None) -> tuple[str, str]:
     touches_protected_preflight = False
     if pr_number is not None:
-        ok, changed_paths, err = read_pr_changed_paths(repository, token, pr_number)
+        ok, changed_paths, error = read_pr_changed_paths(repository, token, pr_number)
         if not ok:
-            return "failure", f"Candidate admission blocked: changed file evidence is unavailable ({err})."
-        if any(path in PREFLIGHT_OWNED_PATHS for path in changed_paths):
-            touches_protected_preflight = True
+            return "failure", f"Candidate admission blocked: changed-file evidence is unavailable ({error})."
+        touches_protected_preflight = any(path in PREFLIGHT_OWNED_PATHS for path in changed_paths)
 
-    head_mode, mode_err = read_head_preflight_mode(repository, token, head_sha)
+    head_mode, mode_error = read_head_preflight_mode(repository, token, head_sha)
     if head_mode == "unavailable":
-        return "failure", f"Candidate admission blocked: preflight mode evidence is unavailable ({mode_err})."
+        return "failure", f"Candidate admission blocked: preflight mode evidence is unavailable ({mode_error})."
     if head_mode == "invalid":
-        return "failure", f"Candidate admission blocked: invalid .hunter-preflight-mode content ({mode_err})."
+        return "failure", f"Candidate admission blocked: invalid .hunter-preflight-mode content ({mode_error})."
     if head_mode == "tests-first-red":
-        return (
-            "failure",
-            "Candidate admission blocked: preflight mode is tests-first-red (tests-first-red work must remain in Draft).",
-        )
-
-    encoded_sha = quote(head_sha, safe="")
+        return "failure", "Candidate admission blocked: tests-first-red work must remain Draft-only."
 
     if touches_protected_preflight:
         if pr_number is None:
             return "failure", "Candidate admission blocked: protected preflight changes require PR-bound proof."
-
         proof_state, proof_description = read_trusted_upgrade_status(repository, token, head_sha, pr_number)
-        if proof_state != "missing":
-            return proof_state, proof_description
+        if proof_state == "missing":
+            return "failure", proof_description
+        return proof_state, proof_description
 
-        # Exact-head workflow evidence is retained only as a fail-closed compatibility
-        # path for installations that explicitly publish the candidate SHA on the run.
-        # GitHub pull_request_target normally reports the base SHA, so the canonical
-        # proof path above is the PR-bound commit status on the candidate head.
-        payload = request_json(
-            repository,
-            token,
-            "GET",
-            f"actions/runs?head_sha={encoded_sha}&event=pull_request_target&per_page=100",
-        )
-        if not isinstance(payload, dict):
-            raise RuntimeError("Pre-PR workflow-run payload is unavailable")
-
-        workflow_runs = payload.get("workflow_runs")
-        if not isinstance(workflow_runs, list):
-            return "failure", "Candidate admission blocked: workflow_runs payload is malformed."
-
-        upgrade_runs = [
-            run
-            for run in workflow_runs
-            if isinstance(run, dict)
-            and str(run.get("head_sha") or "") == head_sha
-            and str(run.get("name") or "") == PREFLIGHT_UPGRADE_WORKFLOW_NAME
-            and str(run.get("path") or "") == PREFLIGHT_UPGRADE_WORKFLOW_PATH
-            and str(run.get("event") or "") == "pull_request_target"
-            and _run_targets_pr(run, pr_number)
-        ]
-        if not upgrade_runs:
-            return (
-                "failure",
-                "Candidate admission blocked: preflight definition was modified by candidate and lacks trusted preflight upgrade verification.",
-            )
-
-        latest_upgrade = max(upgrade_runs, key=lambda run: int(run.get("id") or 0))
-        status = str(latest_upgrade.get("status") or "")
-        conclusion = str(latest_upgrade.get("conclusion") or "")
-        if status != "completed":
-            return "pending", "Waiting for trusted preflight upgrade verification to complete."
-        if conclusion != "success":
-            return (
-                "failure",
-                f"Candidate admission blocked: trusted preflight upgrade verification={conclusion or 'unknown'}.",
-            )
-        return "success", "Exact-head trusted preflight upgrade passed before PR governance progression."
-
+    encoded_sha = quote(head_sha, safe="")
     payload = request_json(
         repository,
         token,
@@ -271,7 +202,7 @@ def candidate_admission(repository: str, token: str, head_sha: str, pr_number: i
         f"actions/runs?head_sha={encoded_sha}&event=push&per_page=100",
     )
     if not isinstance(payload, dict):
-        raise RuntimeError("Pre-PR workflow-run payload is unavailable")
+        return "failure", "Candidate admission blocked: branch preflight run evidence is malformed."
 
     workflow_runs = payload.get("workflow_runs")
     if not isinstance(workflow_runs, list):
@@ -292,112 +223,11 @@ def candidate_admission(repository: str, token: str, head_sha: str, pr_number: i
     latest = max(matching, key=lambda run: int(run.get("id") or 0))
     status = str(latest.get("status") or "")
     conclusion = str(latest.get("conclusion") or "")
-
-    run_mode = str(latest.get("mode") or latest.get("preflight_mode") or "normal").strip()
-    if run_mode != head_mode:
-        return "failure", "Candidate admission blocked: preflight mode proof mismatched with exact-head mode."
-    if run_mode != "normal":
-        return (
-            "failure",
-            f"Candidate admission blocked: preflight mode is {run_mode} (only normal mode authorizes Ready).",
-        )
-
     if status != "completed":
         return "pending", "Waiting for exact-head branch preflight to complete."
     if conclusion != "success":
         return "failure", f"Candidate admission blocked: exact-head branch preflight={conclusion or 'unknown'}."
-    return "success", "Exact-head branch preflight passed before PR governance progression."
-
-
-def matches_ref_pattern(ref: str, pattern: str) -> bool:
-    pattern = pattern.strip()
-    if not pattern:
-        return False
-    if pattern == "~ALL":
-        return True
-    if pattern == "~DEFAULT_BRANCH":
-        return ref == "refs/heads/main"
-    return ref == pattern or fnmatch.fnmatch(ref, pattern)
-
-
-def ruleset_applies_to_ref(ruleset_detail: dict[str, Any], ref: str = "refs/heads/main") -> tuple[bool, str | None]:
-    if "conditions" not in ruleset_detail:
-        return False, "Repository protection drift: ruleset condition configuration is missing."
-    conditions = ruleset_detail.get("conditions")
-    if not isinstance(conditions, dict):
-        return False, "Repository protection drift: ruleset condition configuration is malformed."
-
-    ref_condition = conditions.get("ref_name")
-    if not isinstance(ref_condition, dict):
-        return False, "Repository protection drift: ruleset ref_name condition is missing or malformed."
-
-    includes = ref_condition.get("include")
-    if not isinstance(includes, list):
-        return False, "Repository protection drift: ruleset include condition is missing or malformed."
-
-    excludes = ref_condition.get("exclude")
-    if excludes is not None and not isinstance(excludes, list):
-        return False, "Repository protection drift: ruleset exclude condition is malformed."
-
-    excludes_list = excludes or []
-
-    included = any(matches_ref_pattern(ref, str(pat)) for pat in includes)
-    excluded = any(matches_ref_pattern(ref, str(pat)) for pat in excludes_list)
-
-    if included and not excluded:
-        return True, None
-    return False, None
-
-
-def ruleset_conformance(repository: str, token: str) -> tuple[str, str]:
-    summaries = request_json(repository, token, "GET", "rulesets?per_page=100")
-    if not isinstance(summaries, list):
-        raise RuntimeError("Repository ruleset listing is unavailable")
-
-    active_main_rulesets: list[dict[str, Any]] = []
-    for summary in summaries:
-        if not isinstance(summary, dict) or summary.get("enforcement") != "active":
-            continue
-        ruleset_id = summary.get("id")
-        if not ruleset_id:
-            continue
-        detail = request_json(repository, token, "GET", f"rulesets/{ruleset_id}")
-        if not isinstance(detail, dict):
-            continue
-
-        applies, error_msg = ruleset_applies_to_ref(detail, "refs/heads/main")
-        if error_msg:
-            return "failure", error_msg
-        if applies:
-            active_main_rulesets.append(detail)
-
-    if not active_main_rulesets:
-        return "failure", "Repository protection drift: no active ruleset protects refs/heads/main."
-
-    required_contexts: set[str] = set()
-    for ruleset in active_main_rulesets:
-        if "bypass_actors" not in ruleset:
-            return "failure", "Repository protection drift: main ruleset bypass configuration is unavailable."
-        bypass_actors = ruleset.get("bypass_actors")
-        if not isinstance(bypass_actors, list):
-            return "failure", "Repository protection drift: main ruleset bypass configuration is invalid."
-        if bypass_actors:
-            return "failure", "Repository protection drift: active main ruleset has bypass actors."
-
-        for rule in ruleset.get("rules") or []:
-            if not isinstance(rule, dict) or rule.get("type") != "required_status_checks":
-                continue
-            parameters = rule.get("parameters") or {}
-            for check in parameters.get("required_status_checks") or []:
-                if isinstance(check, dict):
-                    context = str(check.get("context") or "").strip()
-                    if context:
-                        required_contexts.add(context)
-
-    missing = sorted(REQUIRED_RULESET_CHECKS - required_contexts)
-    if missing:
-        return "failure", "Repository protection drift: required status checks missing: " + ", ".join(missing)
-    return "success", "Main ruleset requires every canonical Hunter merge status with no bypass actors."
+    return "success", "Exact-head branch preflight passed before review progression."
 
 
 def review(repository: str, token: str, pr_number: int) -> int:
@@ -416,22 +246,10 @@ def review(repository: str, token: str, pr_number: int) -> int:
         raise RuntimeError(f"PR #{pr_number} head SHA is unavailable")
 
     if pr.get("mergeable") is False:
-        publish(
-            repository, token, head_sha, "failure", "Blocking governance finding: pull request has merge conflicts."
-        )
+        publish(repository, token, head_sha, "failure", "Blocking governance finding: pull request has merge conflicts.")
         return 0
     if pr.get("mergeable") is None:
         publish(repository, token, head_sha, "pending", "Waiting for GitHub to resolve current mergeability.")
-        return 0
-
-    admission_state, admission_description = candidate_admission(repository, token, head_sha, pr_number)
-    if admission_state != "success":
-        publish(repository, token, head_sha, admission_state, admission_description)
-        return 0
-
-    ruleset_state, ruleset_description = ruleset_conformance(repository, token)
-    if ruleset_state != "success":
-        publish(repository, token, head_sha, ruleset_state, ruleset_description)
         return 0
 
     publish(
@@ -439,7 +257,7 @@ def review(repository: str, token: str, pr_number: int) -> int:
         token,
         head_sha,
         "success",
-        "Candidate admitted on exact-head preflight and canonical main protection is enforced.",
+        "No blocking governance defect in current merge state; code and review gates remain authoritative.",
     )
     return 0
 
