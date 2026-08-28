@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
 
 candidate_controller = importlib.import_module("hunter_candidate_admission")
@@ -178,6 +179,64 @@ def test_stale_candidate_admission_event_cannot_draft_newer_head(monkeypatch) ->
     assert converted == []
 
 
+def test_trusted_candidate_runner_executes_immutable_gate_chain(monkeypatch, tmp_path) -> None:
+    calls: list[tuple[str, ...]] = []
+
+    def fake_run(command, *, cwd, env, check):
+        assert cwd == tmp_path
+        assert env["GITHUB_TOKEN"] == ""
+        assert env["GH_TOKEN"] == ""
+        assert check is False
+        calls.append(tuple(command))
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(prevention.subprocess, "run", fake_run)
+
+    assert prevention.run_candidate_quality_gates(tmp_path) == 0
+    assert calls == [command for _name, command in prevention.TRUSTED_CANDIDATE_QUALITY_GATES]
+    assert len(calls) == len(prevention.REQUIRED_PREFLIGHT_GATES)
+
+
+def test_governance_required_status_fails_when_candidate_is_unadmitted(monkeypatch) -> None:
+    pr = {
+        "state": "open",
+        "base": {"ref": "main"},
+        "head": {"sha": HEAD_A},
+        "mergeable": True,
+    }
+    published: list[tuple[str, str]] = []
+    monkeypatch.setattr(governance, "read_mergeability", lambda *_args: pr)
+    monkeypatch.setattr(governance, "candidate_admission", lambda *_args: ("failure", "exact-head proof missing"))
+    monkeypatch.setattr(
+        governance,
+        "publish",
+        lambda _repo, _token, _sha, state, description: published.append((state, description)),
+    )
+
+    assert governance.review("fafa33/Project-Hunter", "token", 377) == 0
+    assert published == [("failure", "exact-head proof missing")]
+
+
+def test_governance_required_status_succeeds_only_after_admission(monkeypatch) -> None:
+    pr = {
+        "state": "open",
+        "base": {"ref": "main"},
+        "head": {"sha": HEAD_A},
+        "mergeable": True,
+    }
+    published: list[tuple[str, str]] = []
+    monkeypatch.setattr(governance, "read_mergeability", lambda *_args: pr)
+    monkeypatch.setattr(governance, "candidate_admission", lambda *_args: ("success", "admitted"))
+    monkeypatch.setattr(
+        governance,
+        "publish",
+        lambda _repo, _token, _sha, state, description: published.append((state, description)),
+    )
+
+    assert governance.review("fafa33/Project-Hunter", "token", 377) == 0
+    assert published == [("success", "Exact-head candidate admission and current merge-state governance checks passed.")]
+
+
 def test_trusted_upgrade_separates_untrusted_execution_from_status_write() -> None:
     workflow = (
         Path(__file__).resolve().parents[1] / ".github" / "workflows" / "hunter-trusted-preflight-upgrade.yml"
@@ -186,8 +245,9 @@ def test_trusted_upgrade_separates_untrusted_execution_from_status_write() -> No
     assert "ref: ${{ github.event.pull_request.head.sha }}" in workflow
     assert "path: candidate" in workflow
     assert "validate-candidate candidate" in workflow
-    assert "cd candidate" in workflow
-    assert "python scripts/hunter_pr_preflight.py --mode normal" in workflow
+    assert "--run-candidate-gates candidate" in workflow
+    assert "python scripts/hunter_pr_preflight.py --mode normal" not in workflow
+    assert "cd candidate" not in workflow
     assert 'GITHUB_TOKEN: ""' in workflow
     assert "needs: validate-candidate" in workflow
     assert "statuses: write" in workflow
