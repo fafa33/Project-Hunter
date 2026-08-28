@@ -1,7 +1,10 @@
 name: Hunter / Trusted Preflight Upgrade
 
 # Trusted verification path for pull requests that update preflight definition files.
-# Candidate files are read as data only; controller code executes from the trusted default branch.
+# The validation job may execute candidate code, but only with a read-only token,
+# no persisted checkout credentials, no inherited secrets, and a bounded timeout.
+# The separate publisher job is the only job with status-write authority and never
+# executes candidate code.
 
 on:
   pull_request_target:
@@ -12,19 +15,17 @@ on:
       - reopened
       - synchronize
 
-permissions:
-  contents: read
-  statuses: write
-
 concurrency:
   group: hunter-preflight-upgrade-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:
-  upgrade-preflight:
-    name: Trusted Preflight Upgrade
+  validate-candidate:
+    name: Trusted Candidate Preflight Validation
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout trusted controller
@@ -34,7 +35,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Checkout candidate definitions as data
+      - name: Checkout exact candidate as untrusted input
         uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.sha }}
@@ -51,29 +52,45 @@ jobs:
             pyproject.toml
             requirements/ci-constraints.txt
 
-      - name: Install trusted project
+      - name: Install trusted project dependencies
         env:
           PIP_CONSTRAINT: requirements/ci-constraints.txt
         run: |
           set -euo pipefail
           python -m pip install --disable-pip-version-check -c requirements/ci-constraints.txt -e ".[dev]"
 
-      - name: Validate exact candidate preflight definitions as data
+      - name: Validate candidate gate structure with trusted code
         run: |
           set -euo pipefail
           python scripts/hunter_defect_prevention_preflight.py --validate-candidate candidate
 
-      - name: Run shared deterministic preflight from trusted base
-        run: python scripts/hunter_pr_preflight.py --mode normal
+      - name: Execute exact candidate preflight without write credentials
+        env:
+          GITHUB_TOKEN: ""
+          GH_TOKEN: ""
+        run: |
+          set -euo pipefail
+          cd candidate
+          python scripts/hunter_pr_preflight.py --mode normal
 
-      - name: Publish exact-head trusted upgrade proof
-        if: ${{ always() && !cancelled() }}
+  publish-proof:
+    name: Publish Exact-Head Trusted Upgrade Proof
+    needs: validate-candidate
+    if: ${{ always() && !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      statuses: write
+
+    steps:
+      - name: Publish exact-head PR-bound status
         env:
           GITHUB_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          JOB_STATUS: ${{ job.status }}
+          VALIDATION_RESULT: ${{ needs.validate-candidate.result }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
@@ -82,12 +99,13 @@ jobs:
           import os
           import urllib.request
 
-          state = "success" if os.environ["JOB_STATUS"] == "success" else "failure"
+          result = os.environ["VALIDATION_RESULT"]
+          state = "success" if result == "success" else "failure"
           payload = json.dumps(
               {
                   "state": state,
                   "context": f"Hunter Trusted Preflight Upgrade / PR #{os.environ['PR_NUMBER']}",
-                  "description": "Trusted candidate preflight definition validation " + state,
+                  "description": f"Exact candidate preflight validation {state} ({result})",
                   "target_url": os.environ["RUN_URL"],
               }
           ).encode("utf-8")
