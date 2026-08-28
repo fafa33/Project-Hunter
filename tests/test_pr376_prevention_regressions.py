@@ -4,8 +4,8 @@ import json
 from pathlib import Path
 
 import hunter_candidate_admission as candidate_controller
-import hunter_defect_prevention_preflight as prevention
 import hunter_governance_review_v2 as governance
+import hunter_defect_prevention_preflight as prevention
 
 
 HEAD_A = "a" * 40
