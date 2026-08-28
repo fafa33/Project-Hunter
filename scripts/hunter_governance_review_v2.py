@@ -162,7 +162,7 @@ def read_trusted_upgrade_status(
     encoded_sha = quote(head_sha, safe="")
     payload = request_json(repository, token, "GET", f"commits/{encoded_sha}/statuses?per_page=100")
     if not isinstance(payload, list):
-        return "failure", "Candidate admission blocked: trusted upgrade status evidence is malformed."
+        return "missing", "Candidate admission blocked: exact-head trusted preflight upgrade status is unavailable."
 
     context = _upgrade_status_context(pr_number)
     matching = [
@@ -229,7 +229,7 @@ def candidate_admission(repository: str, token: str, head_sha: str, pr_number: i
             repository,
             token,
             "GET",
-            f"actions/runs?event=pull_request_target&per_page=100",
+            f"actions/runs?head_sha={encoded_sha}&event=pull_request_target&per_page=100",
         )
         if not isinstance(payload, dict):
             raise RuntimeError("Pre-PR workflow-run payload is unavailable")
