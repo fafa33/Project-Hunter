@@ -1,0 +1,70 @@
+{
+  "version": 1,
+  "purpose": "Canonical machine-readable registry of validated reviewer findings and their permanent dispositions.",
+  "findings": [
+    {
+      "id": "RFD-372-001",
+      "source_provenance": {
+        "reviewer": "CodeRabbit / Codex",
+        "pr_number": 371,
+        "reference": "PR #371 review on exact-HEAD candidate admission"
+      },
+      "validation_state": "validated",
+      "classification": "recurrence",
+      "mapped_defect_id": "PRH-007",
+      "mapped_defect_class": "candidate-pushed-without-complete-local-preflight",
+      "resolution_state": "resolved",
+      "permanent_disposition_evidence": "Candidate admission requires exact-head branch preflight proof or trusted upgrade status before review progression.",
+      "guard_reference": "scripts/hunter_governance_review_v2.py::candidate_admission",
+      "test_reference": "tests/test_pr376_prevention_regressions.py::test_protected_preflight_requires_exact_head_pr_bound_status"
+    },
+    {
+      "id": "RFD-372-002",
+      "source_provenance": {
+        "reviewer": "CodeRabbit / Codex",
+        "pr_number": 371,
+        "reference": "PR #371 review on tests-first-red admission parity"
+      },
+      "validation_state": "validated",
+      "classification": "recurrence",
+      "mapped_defect_id": "PRH-003",
+      "mapped_defect_class": "tests-first-marker-not-on-exact-pushed-head",
+      "resolution_state": "resolved",
+      "permanent_disposition_evidence": "Candidate admission checks .hunter-preflight-mode on exact HEAD and keeps tests-first-red work Draft-only.",
+      "guard_reference": "scripts/hunter_governance_review_v2.py::candidate_admission",
+      "test_reference": "tests/test_hunter_governance_review_v2.py::test_candidate_admission_tests_first_red_success_stays_draft"
+    },
+    {
+      "id": "RFD-372-003",
+      "source_provenance": {
+        "reviewer": "CodeRabbit / Codex",
+        "pr_number": 376,
+        "reference": "PR #376 review on candidate-controlled trusted-preflight weakening"
+      },
+      "validation_state": "validated",
+      "classification": "recurrence",
+      "mapped_defect_id": "PRH-007",
+      "mapped_defect_class": "candidate-pushed-without-complete-local-preflight",
+      "resolution_state": "resolved",
+      "permanent_disposition_evidence": "Trusted candidate upgrade workflow validates candidate preflight definitions without executing untrusted code under privileged credentials.",
+      "guard_reference": "scripts/hunter_defect_prevention_preflight.py::validate_candidate_preflight_definition",
+      "test_reference": "tests/test_pr376_prevention_regressions.py::test_candidate_definition_rejects_dead_gate_tuple"
+    },
+    {
+      "id": "RFD-372-004",
+      "source_provenance": {
+        "reviewer": "CodeRabbit / Codex",
+        "pr_number": 376,
+        "reference": "PR #376 review on stale candidate admission"
+      },
+      "validation_state": "validated",
+      "classification": "duplicate",
+      "mapped_defect_id": "PRH-007",
+      "mapped_defect_class": "candidate-pushed-without-complete-local-preflight",
+      "resolution_state": "resolved",
+      "permanent_disposition_evidence": "Candidate admission verifies exact head SHA and fails closed when head moves.",
+      "guard_reference": "scripts/hunter_candidate_admission.py::enforce_candidate_admission",
+      "test_reference": "tests/test_pr376_prevention_regressions.py::test_stale_candidate_admission_event_cannot_draft_newer_head"
+    }
+  ]
+}
