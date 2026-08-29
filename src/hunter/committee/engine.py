@@ -122,7 +122,7 @@ class InvestmentCommitteeEngine:
 
 
 def rank_committee_assessments(
-    assessments: tuple[InvestmentCommitteeAssessment, ...]
+    assessments: tuple[InvestmentCommitteeAssessment, ...],
 ) -> tuple[InvestmentCommitteeAssessment, ...]:
     ordered = sorted(
         assessments,

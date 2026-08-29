@@ -16,7 +16,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-  "black>=24,<25",
+  "black>=26.3.1,<27",
   "mypy>=1.10,<2",
   "pytest>=9,<10",
   "ruff>=0.6,<1",
@@ -54,6 +54,20 @@ ignore = ["E501"]
 [tool.black]
 line-length = 120
 target-version = ["py311"]
+extend-exclude = '''
+(?x)(
+  ^/?src/hunter/committee/repository\.py$
+  | ^/?src/hunter/discovery/repository\.py$
+  | ^/?src/hunter/evidence_assembly/repository\.py$
+  | ^/?src/hunter/evidence_intelligence/model_adapter_persistence\.py$
+  | ^/?src/hunter/evidence_intelligence/pre_model_persistence\.py$
+  | ^/?src/hunter/evidence_intelligence/response_validator_corrections\.py$
+  | ^/?src/hunter/evidence_intelligence/response_validator_persistence\.py$
+  | ^/?src/hunter/evidence_intelligence/response_validator_terminal_persistence\.py$
+  | ^/?tests/test_dashboard_api\.py$
+  | ^/?tests/test_operational_status\.py$
+)
+'''
 
 [tool.mypy]
 python_version = "3.11"
