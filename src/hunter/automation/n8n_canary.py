@@ -88,8 +88,12 @@ def _network_forbidden(*_args: object, **_kwargs: object) -> object:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="hunter n8n-canary")
-    parser.add_argument("handoff", nargs="?", help="path to an already-issued Smart Prompt Machine handoff JSON document")
-    parser.add_argument("--validate-config", action="store_true", help="validate worker configuration without network activity")
+    parser.add_argument(
+        "handoff", nargs="?", help="path to an already-issued Smart Prompt Machine handoff JSON document"
+    )
+    parser.add_argument(
+        "--validate-config", action="store_true", help="validate worker configuration without network activity"
+    )
     parser.add_argument("--receipt-out", help="write the accepted non-secret canary receipt to this path")
     return parser
 

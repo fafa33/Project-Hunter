@@ -81,9 +81,7 @@ def test_review_fix_route_compiles_long_raw_finding_to_exact_bounded_prompt(
     assert "\n\nTarget file/symbol:\nUse only the target file and symbol identified in the finding." in prompt
     assert "\n\nRequired behavior:\nImplement only the behavior required by the finding." in prompt
     assert "\n\nTargeted validation:\nRun only the focused validation required by the finding." in prompt
-    assert prompt.endswith(
-        "Constraints:\n- No refactor.\n- No unrelated files.\n- No new branch or PR.\n- No merge."
-    )
+    assert prompt.endswith("Constraints:\n- No refactor.\n- No unrelated files.\n- No new branch or PR.\n- No merge.")
     assert build_request.profile_id == ENGINEERING_REVIEW_FIX_PROFILE.profile_id
     assert build_request.profile_version == ENGINEERING_REVIEW_FIX_PROFILE.version
     assert result.envelope.route_identity == ENGINEERING_REVIEW_FIX_ROUTE.route_identity
