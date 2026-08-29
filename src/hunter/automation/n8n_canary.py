@@ -14,6 +14,7 @@ from typing import Any
 
 from hunter.automation.n8n_handoff import N8nPromptAutomationWorker, PromptAutomationHandoffError
 from hunter.evidence_intelligence.smart_prompt_transport import PromptAutomationTransportError
+from hunter.evidence_intelligence.smart_prompt_routing import PromptTaskAuthorityError
 
 N8N_CANARY_RECEIPT_SCHEMA_VERSION = "smart-prompt-n8n-canary-receipt-v1"
 
@@ -116,7 +117,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             write_n8n_canary_receipt(receipt, arguments.receipt_out)
         print(receipt.to_json())
         return 0
-    except (OSError, PromptAutomationHandoffError, PromptAutomationTransportError, ValueError) as error:
+    except (
+        OSError,
+        PromptAutomationHandoffError,
+        PromptAutomationTransportError,
+        PromptTaskAuthorityError,
+        ValueError,
+    ) as error:
         print(f"n8n canary failed: {error}")
         return 2
 
