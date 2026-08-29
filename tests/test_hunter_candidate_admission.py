@@ -105,10 +105,20 @@ def test_convert_to_draft_requires_graphql_confirmation(monkeypatch) -> None:
         return {"convertPullRequestToDraft": {"pullRequest": {"id": "PR_test_node", "isDraft": True}}}
 
     monkeypatch.setattr(admission.transport, "request_graphql_json", fake_graphql)
-    admission.convert_to_draft("token", "PR_test_node")
+    assert admission.convert_to_draft("token", "PR_test_node") is True
 
     assert captured["variables"] == {"pullRequestId": "PR_test_node"}
     assert "convertPullRequestToDraft" in captured["query"]
+
+
+def test_convert_to_draft_handles_forbidden_error_gracefully(monkeypatch) -> None:
+    def fake_graphql(**kwargs):
+        raise RuntimeError(
+            "GraphQL query failed: [{'type': 'FORBIDDEN', 'message': 'Resource not accessible by integration'}]"
+        )
+
+    monkeypatch.setattr(admission.transport, "request_graphql_json", fake_graphql)
+    assert admission.convert_to_draft("token", "PR_test_node") is False
 
 
 def test_candidate_admission_workflow_is_trusted_and_never_checks_out_pr_code() -> None:
