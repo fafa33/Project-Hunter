@@ -63,22 +63,13 @@ jobs:
       - name: Select allowlisted formatter for candidate dependency upgrades
         run: |
           set -euo pipefail
-          mapfile -t trusted_black_pins < <(grep -E '^black==[0-9]+\.[0-9]+\.[0-9]+$' requirements/ci-constraints.txt || true)
-          mapfile -t candidate_black_pins < <(grep -E '^black==[0-9]+\.[0-9]+\.[0-9]+$' candidate/requirements/ci-constraints.txt || true)
-          if [[ ${#trusted_black_pins[@]} -ne 1 || ${#candidate_black_pins[@]} -ne 1 ]]; then
-            echo "Trusted formatter selection requires exactly one exact Black pin in both trusted and candidate constraints." >&2
-            exit 1
-          fi
-          trusted_black="${trusted_black_pins[0]#black==}"
-          candidate_black="${candidate_black_pins[0]#black==}"
-          if [[ "${candidate_black}" == "${trusted_black}" ]]; then
-            echo "Candidate keeps trusted Black ${trusted_black}; no formatter bootstrap needed."
-          elif [[ "${candidate_black}" == "26.3.1" ]]; then
-            echo "Using explicitly allowlisted Black ${candidate_black} for trusted candidate formatting checks."
-            python -m pip install --disable-pip-version-check "black==${candidate_black}"
-          else
-            echo "Candidate Black ${candidate_black} is not an approved trusted-upgrade bootstrap version." >&2
-            exit 1
+          mapfile -t formatter_bootstrap < <(
+            python scripts/hunter_trusted_formatter_bootstrap.py \
+              --trusted-constraints requirements/ci-constraints.txt \
+              --candidate-constraints candidate/requirements/ci-constraints.txt
+          )
+          if [[ ${#formatter_bootstrap[@]} -gt 0 ]]; then
+            python -m pip install --disable-pip-version-check --no-deps "${formatter_bootstrap[@]}"
           fi
           python -m black --version
 
