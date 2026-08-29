@@ -1,17 +1,25 @@
 name: Hunter Governance Review Reconcile
 
-# Periodic current-state sanity refresh for open PRs. No metadata history is
-# reconstructed and no PR prose is evaluated.
+# Current-state sanity refresh for open PRs. No metadata history is
+# reconstructed and no PR prose is evaluated. Exact-head branch preflight
+# completion triggers an immediate refresh so API-written heads cannot remain
+# admitted on stale governance state.
 
 on:
   push:
     branches:
       - main
+  workflow_run:
+    workflows:
+      - Hunter / Pre-PR Preflight
+    types:
+      - completed
   schedule:
     - cron: "*/30 * * * *"
   workflow_dispatch:
 
 permissions:
+  actions: read
   contents: read
   pull-requests: read
   statuses: write

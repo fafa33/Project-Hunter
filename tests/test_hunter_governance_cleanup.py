@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -57,10 +56,10 @@ def test_active_workflows_do_not_invoke_retired_preflight() -> None:
 def test_governance_review_has_no_bootstrap_fallback() -> None:
     path = ROOT / ".github/workflows/hunter-governance-review.yml"
     text = path.read_text(encoding="utf-8")
-    assignment = re.search(r"(?m)^\s*PR_NUMBER:\s*(.+?)\s*$", text)
-    assert assignment is not None
-    assert assignment.group(1) == "${{ github.event.pull_request.number || github.event.inputs.pr_number }}"
-    assert "283" not in assignment.group(1)
+    assert "github.event.pull_request.number" in text
+    assert "github.event.workflow_run.pull_requests[0].number" in text
+    assert "github.event.inputs.pr_number" in text
+    assert "283" not in text
     assert "bootstrap" not in text.lower()
     assert 'python "${GITHUB_WORKSPACE}/engine/scripts/hunter_governance_review_v2.py"' in text
 

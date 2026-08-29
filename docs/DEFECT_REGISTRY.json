@@ -25,11 +25,11 @@
     {
       "id": "PRH-003",
       "class": "tests-first-marker-not-on-exact-pushed-head",
-      "source": "PR #286 CodeRabbit",
+      "source": "PR #286 CodeRabbit; PR #371 review findings on 2026-08-27",
       "classification": "systemic",
-      "guard_boundary": "exact-head preflight mode selection",
-      "guard": ".hunter-preflight-mode is read from the checked-out branch head",
-      "test": "tests/test_hunter_pr_preflight.py::test_pre_pr_workflow_reads_machine_readable_mode_marker",
+      "guard_boundary": "exact-head preflight mode selection and candidate admission mode proof",
+      "guard": ".hunter-preflight-mode is read from the checked-out branch head; candidate admission binds exact HEAD and canonical mode proof, requiring normal mode success to authorize Ready while keeping tests-first-red runs Draft-only",
+      "test": "tests/test_hunter_governance_review_v2.py::test_candidate_admission_tests_first_red_success_stays_draft",
       "status": "guarded"
     },
     {
@@ -65,11 +65,11 @@
     {
       "id": "PRH-007",
       "class": "candidate-pushed-without-complete-local-preflight",
-      "source": "Issue #291 implementation hosted preflight failures and PR #293 stale-run acceptance on 2026-08-20",
+      "source": "Issue #291 implementation hosted preflight failures and PR #293 stale-run acceptance on 2026-08-20; PR #371 review findings on candidate preflight trust and ruleset exclusions on 2026-08-27; PR #376 review recurrence on candidate preflight upgrade definition validation on 2026-08-27",
       "classification": "systemic",
       "guard_boundary": "shared full preflight contract plus commit-scoped hosted evidence before review progression",
-      "guard": "agents run the canonical normal preflight before push and verify hosted evidence belongs to current HEAD",
-      "test": "tests/test_recent_preflight_defect_registry.py::test_agents_reference_canonical_preflight_command",
+      "guard": "agents run the canonical normal preflight before push and verify hosted evidence belongs to current HEAD; candidate admission relies on trusted default-branch preflight semantics, paginates PR files, fails closed on unproven evidence or non-404 mode errors, and validates candidate preflight definitions via trusted preflight upgrade workflow without running untrusted code under privileged pull_request_target credentials; ruleset conformance applies include/exclude ref matching where matching exclusion for main wins",
+      "test": "tests/test_hunter_governance_review_v2.py::test_protected_preflight_ordinary_candidate_cannot_self_authorize",
       "status": "guarded"
     },
     {
@@ -320,6 +320,16 @@
       "guard_boundary": "Model Adapter outcome construction and transport-level result normalization",
       "guard": "every recorded axis carries the observation rather than an assumption in either direction. _record_capture_persistence_failure takes the transport's observed execution_evidence through as a parameter (UNKNOWN where no result exists) instead of asserting a completion, and the OpenAI transport converts a request-body construction failure into CONFIRMED_NOT_DELIVERED with NO_EXECUTION_ESTABLISHED, because a body that was never built means no byte was ever offered. The general rule: an outcome field must record what was established, never the strongest or the safest value that would fit -- overstating certainty and overstating uncertainty are both untruthful",
       "test": "tests/test_model_adapter_phase_b.py::test_a_persistence_failure_after_a_malformed_response_does_not_assert_a_completion",
+      "status": "guarded"
+    },
+    {
+      "id": "SPM-001",
+      "class": "unsigned-public-automation-envelope",
+      "source": "PR #354 independent Codex P1 and CodeRabbit Major security reviews on 2026-08-27",
+      "classification": "systemic",
+      "guard_boundary": "Smart Prompt Machine automation-envelope issuance and transport boundary",
+      "guard": "PromptAutomationEnvelope carries an Ed25519 signature over the exact seven non-content lineage claims. HUNTER_PROMPT_AUTOMATION_SIGNING_KEY is issuer-only private key material; network-capable verifier workers capture HUNTER_PROMPT_AUTOMATION_VERIFYING_KEY once in an immutable PromptAutomationVerifier during trusted bootstrap, so later os.environ mutation cannot change the issuer trust root, and missing or malformed key material fails closed. SmartPromptMachine is the supported issuer, and PromptAutomationDispatcher binds the envelope once, requires its exact canonical type, and calls the bound verifier before constructing any external payload, so neither a subtype nor a changing request property can override verification. Its dispatch authorization context is closure-owned and no importable ContextVar can mint it. The signature is excluded from the transport mapping, while hostile tests reject prompt text, token values, caller-supplied signatures, verifier overrides, post-verification envelope swaps, mutable-verifier bypasses, caller-writable dispatch context, private-key-free n8n verification, and cross-process verification failures",
+      "test": "tests/test_smart_prompt_machine_phase_c.py::test_envelope_signature_verifies_across_worker_processes",
       "status": "guarded"
     }
   ]
