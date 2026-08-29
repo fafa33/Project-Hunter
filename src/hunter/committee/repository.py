@@ -25,8 +25,7 @@ class InvestmentCommitteeRepository:
     def _initialize(self) -> None:
         with sqlite3.connect(self.path) as conn:
             conn.execute("PRAGMA foreign_keys = ON")
-            conn.executescript(
-                """
+            conn.executescript("""
                 CREATE TABLE IF NOT EXISTS committee_cycles (
                     cycle_id TEXT PRIMARY KEY,
                     created_at TEXT NOT NULL,
@@ -52,8 +51,7 @@ class InvestmentCommitteeRepository:
                     ON committee_assessments(cycle_id, rank);
                 CREATE INDEX IF NOT EXISTS ix_committee_project_created
                     ON committee_assessments(project_id, created_at DESC);
-                """
-            )
+                """)
 
     def latest_cycle(self) -> dict[str, Any] | None:
         with sqlite3.connect(self.path) as conn:
