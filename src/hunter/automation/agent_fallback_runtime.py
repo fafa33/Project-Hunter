@@ -87,7 +87,13 @@ def _timeout(environ: Mapping[str, str]) -> float:
 
 
 def _branch(value: str) -> str:
-    if not isinstance(value, str) or not value or value.startswith("/") or ".." in value or _BRANCH.fullmatch(value) is None:
+    if (
+        not isinstance(value, str)
+        or not value
+        or value.startswith("/")
+        or ".." in value
+        or _BRANCH.fullmatch(value) is None
+    ):
         raise AgentFallbackRuntimeError("branch name is invalid")
     return value
 
