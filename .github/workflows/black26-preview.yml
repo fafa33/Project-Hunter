@@ -16,14 +16,17 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
-      - name: Generate Black 26 patch
+      - name: Generate Black 26 formatted files
         run: |
           set -euo pipefail
           python -m pip install --disable-pip-version-check black==26.3.1
           black .
           git diff --binary > black26.patch
+          git diff --name-only -z | tar --null -T - -czf black26-formatted-files.tar.gz
       - uses: actions/upload-artifact@v4
         with:
-          name: black26-formatting-patch
-          path: black26.patch
+          name: black26-formatting-output
+          path: |
+            black26.patch
+            black26-formatted-files.tar.gz
           if-no-files-found: error
