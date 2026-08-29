@@ -124,9 +124,7 @@ class GovernedAgentFallbackDispatcher:
                 baseline_head = visible_head
                 continue
 
-            attempts.append(
-                AgentAttempt(provider, "available", baseline_head, visible_head, True, report.detail)
-            )
+            attempts.append(AgentAttempt(provider, "available", baseline_head, visible_head, True, report.detail))
             return AgentFallbackResult(
                 provider=provider,
                 head_before=baseline_head,
