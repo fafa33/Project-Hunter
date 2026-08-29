@@ -46,7 +46,9 @@ def _handoff(monkeypatch: pytest.MonkeyPatch) -> str:
     return serialize_prompt_automation_handoff(envelope)
 
 
-def _completed(argv: tuple[str, ...] | list[str], returncode: int, *, stdout: str = "", stderr: str = "") -> subprocess.CompletedProcess[str]:
+def _completed(
+    argv: tuple[str, ...] | list[str], returncode: int, *, stdout: str = "", stderr: str = ""
+) -> subprocess.CompletedProcess[str]:
     return subprocess.CompletedProcess(argv, returncode, stdout=stdout, stderr=stderr)
 
 
