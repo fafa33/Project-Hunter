@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import importlib
 from pathlib import Path
 
-import hunter_governance_review_v2 as core
+core = importlib.import_module("hunter_governance_review_v2")
+
+
+HEAD = "b" * 40
 
 
 def _pr(mergeable: bool | None) -> dict:
@@ -11,7 +15,7 @@ def _pr(mergeable: bool | None) -> dict:
         "mergeable": mergeable,
         "title": "no canonical title or issue identity",
         "body": "no matrix, no readiness declaration, no reaction ceremony",
-        "head": {"sha": "b" * 40, "ref": "feature/no-governance-metadata"},
+        "head": {"sha": HEAD, "ref": "feature/no-governance-metadata"},
         "base": {"sha": "c" * 40, "ref": "main"},
     }
 
@@ -19,6 +23,7 @@ def _pr(mergeable: bool | None) -> dict:
 def test_governance_review_ignores_process_metadata(monkeypatch):
     published = []
     monkeypatch.setattr(core, "read_mergeability", lambda _repo, _token, _number: _pr(True))
+    monkeypatch.setattr(core, "candidate_admission", lambda *_args: ("success", "admitted"))
     monkeypatch.setattr(core, "publish", lambda *args: published.append(args))
 
     assert core.review("fafa33/Project-Hunter", "token", 501) == 0
@@ -56,6 +61,72 @@ def test_governance_review_skips_non_main_target(monkeypatch):
 
     assert core.review("fafa33/Project-Hunter", "token", 501) == 0
     assert published == []
+
+
+def test_governance_review_skips_disposition_check_for_closed_pr(monkeypatch):
+    published = []
+    pr = _pr(True)
+    pr["state"] = "closed"
+    monkeypatch.setattr(core, "read_mergeability", lambda _repo, _token, _number: pr)
+    monkeypatch.setattr(core, "check_reviewer_dispositions", lambda: (False, "Unresolved finding RFD-ERR"))
+    monkeypatch.setattr(core, "publish", lambda *args: published.append(args))
+
+    assert core.review("fafa33/Project-Hunter", "token", 501) == 0
+    assert published == []
+
+
+def test_governance_review_skips_disposition_check_for_non_main_pr(monkeypatch):
+    published = []
+    pr = _pr(True)
+    pr["base"]["ref"] = "release"
+    monkeypatch.setattr(core, "read_mergeability", lambda _repo, _token, _number: pr)
+    monkeypatch.setattr(core, "check_reviewer_dispositions", lambda: (False, "Unresolved finding RFD-ERR"))
+    monkeypatch.setattr(core, "publish", lambda *args: published.append(args))
+
+    assert core.review("fafa33/Project-Hunter", "token", 501) == 0
+    assert published == []
+
+
+def test_governance_review_fails_closed_for_open_main_pr_with_unresolved_disposition(monkeypatch):
+    published = []
+    pr = _pr(True)
+    monkeypatch.setattr(core, "read_mergeability", lambda _repo, _token, _number: pr)
+    monkeypatch.setattr(core, "check_reviewer_dispositions", lambda: (False, "Unresolved finding RFD-ERR"))
+    monkeypatch.setattr(core, "publish", lambda *args: published.append(args))
+
+    assert core.review("fafa33/Project-Hunter", "token", 501) == 0
+    assert len(published) == 1
+    assert published[0][3] == "failure"
+    assert "Unresolved finding RFD-ERR" in published[0][4]
+
+
+def test_candidate_admission_tests_first_red_success_stays_draft(monkeypatch):
+    monkeypatch.setattr(core, "read_pr_changed_paths", lambda *_args: (True, (), None))
+    monkeypatch.setattr(core, "read_head_preflight_mode", lambda *_args: ("tests-first-red", None))
+
+    state, description = core.candidate_admission("fafa33/Project-Hunter", "token", HEAD, 501)
+
+    assert state == "failure"
+    assert "Draft-only" in description
+
+
+def test_protected_preflight_ordinary_candidate_cannot_self_authorize(monkeypatch):
+    monkeypatch.setattr(
+        core,
+        "read_pr_changed_paths",
+        lambda *_args: (True, ("scripts/hunter_pr_preflight.py",), None),
+    )
+    monkeypatch.setattr(core, "read_head_preflight_mode", lambda *_args: ("normal", None))
+    monkeypatch.setattr(
+        core,
+        "read_trusted_upgrade_status",
+        lambda *_args: ("missing", "trusted proof missing"),
+    )
+
+    state, description = core.candidate_admission("fafa33/Project-Hunter", "token", HEAD, 501)
+
+    assert state == "failure"
+    assert description == "trusted proof missing"
 
 
 def test_workflow_uses_only_trusted_v2_controller_without_bootstrap():
