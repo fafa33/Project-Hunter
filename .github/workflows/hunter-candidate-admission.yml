@@ -21,16 +21,14 @@ permissions:
   pull-requests: write
 
 concurrency:
-  group: hunter-candidate-admission-${{ github.event.pull_request.number || github.event.workflow_run.pull_requests[0].number || github.run_id }}
+  group: hunter-candidate-admission-${{ github.event.pull_request.number || github.event.workflow_run.head_sha || github.run_id }}
   cancel-in-progress: true
 
 jobs:
   candidate-admission:
     if: >-
       github.event_name == 'pull_request_target' ||
-      (github.event_name == 'workflow_run' &&
-       github.event.workflow_run.event == 'push' &&
-       github.event.workflow_run.pull_requests[0].number)
+      (github.event_name == 'workflow_run' && github.event.workflow_run.event == 'push')
     name: Hunter Candidate Admission
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -52,11 +50,33 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          PR_NUMBER: ${{ github.event.pull_request.number || github.event.workflow_run.pull_requests[0].number }}
           EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.workflow_run.head_sha }}
+          DIRECT_PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
-          python "${GITHUB_WORKSPACE}/engine/scripts/hunter_candidate_admission.py" \
-            --pr "${PR_NUMBER}" \
-            --repository "${GH_REPO}" \
-            --head-sha "${EVENT_HEAD_SHA}"
+          if [[ -n "${DIRECT_PR_NUMBER}" ]]; then
+            PR_NUMBERS="${DIRECT_PR_NUMBER}"
+          else
+            PR_NUMBERS="$({
+              cd "${GITHUB_WORKSPACE}/engine/scripts"
+              python - <<'PY'
+import hunter_merge_readiness_v2 as readiness
+
+for number in readiness.candidate_prs():
+    print(number)
+PY
+            })"
+          fi
+
+          if [[ -z "${PR_NUMBERS}" ]]; then
+            echo "No open PR is associated with completed head ${EVENT_HEAD_SHA}; nothing to reconcile."
+            exit 0
+          fi
+
+          while IFS= read -r PR_NUMBER; do
+            [[ -n "${PR_NUMBER}" ]] || continue
+            python "${GITHUB_WORKSPACE}/engine/scripts/hunter_candidate_admission.py" \
+              --pr "${PR_NUMBER}" \
+              --repository "${GH_REPO}" \
+              --head-sha "${EVENT_HEAD_SHA}"
+          done <<< "${PR_NUMBERS}"
