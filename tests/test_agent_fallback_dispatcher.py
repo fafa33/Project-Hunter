@@ -10,7 +10,7 @@ from hunter.automation.agent_fallback import (
     AgentFallbackExhaustedError,
     GovernedAgentFallbackDispatcher,
 )
-from hunter.automation.n8n_handoff import PromptAutomationEnvelopeHandoff
+from hunter.automation.n8n_handoff import PromptAutomationEnvelopeHandoff, PromptAutomationHandoffError
 
 
 def _handoff() -> str:
@@ -123,5 +123,5 @@ def test_provider_order_is_fixed_and_caller_cannot_extend_handoff_schema() -> No
         validate=lambda head: False,
     )
 
-    with pytest.raises(Exception, match="schema mismatch"):
+    with pytest.raises(PromptAutomationHandoffError, match="schema mismatch"):
         dispatcher.dispatch_document(json.dumps(decoded))
