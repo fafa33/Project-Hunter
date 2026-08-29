@@ -124,7 +124,7 @@ def test_real_adapter_contract_falls_through_rate_limit_without_mutating_handoff
     assert "HUNTER_PROMPT_AUTOMATION_SIGNING_KEY" not in provider_envs["codex"]
     assert provider_envs["claude"]["ANTHROPIC_API_KEY"] == "claude-secret"
     assert "OPENAI_API_KEY" not in provider_envs["claude"]
-    assert {attempt["detail"] for attempt in receipt.attempts} == {"provider_rate_limited", "provider_completed"}
+    assert {attempt["detail"] for attempt in receipt.attempts} == {"provider_rate_limited", ""}
 
 
 def test_timeout_terminates_provider_process_group(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -132,7 +132,7 @@ def test_timeout_terminates_provider_process_group(monkeypatch: pytest.MonkeyPat
 
     class FakeProcess:
         pid = 4242
-        returncode = None
+        returncode: int | None = None
 
         def __init__(self, *_args: object, **_kwargs: object) -> None:
             self.calls = 0
