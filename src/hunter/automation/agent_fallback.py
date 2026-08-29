@@ -103,9 +103,7 @@ class GovernedAgentFallbackDispatcher:
 
             if report.status == "rate_limited":
                 self._provider_states[provider] = "rate_limited"
-                attempts.append(
-                    AgentAttempt(provider, "rate_limited", head_before, visible_head, False, report.detail)
-                )
+                attempts.append(AgentAttempt(provider, "rate_limited", head_before, visible_head, False, report.detail))
                 baseline_head = visible_head
                 continue
             if report.status == "failed":
