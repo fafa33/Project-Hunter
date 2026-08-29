@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime, timedelta
+from urllib.parse import urlsplit
 
 from hunter.cli import main
 from hunter.macro import MacroIntelligenceEvidenceEngine, MacroProviderRegistry, MacroRepository, load_macro_config
@@ -33,7 +34,9 @@ def test_csv_provider_parses_latest_real_observation_shape() -> None:
 
     assert metric.name == "federal_funds_rate"
     assert metric.value == 4.25
-    assert metric.source_url.startswith("https://fred.stlouisfed.org")
+    source = urlsplit(metric.source_url)
+    assert source.scheme == "https"
+    assert source.hostname == "fred.stlouisfed.org"
 
 
 def test_ecb_policy_rate_csv_schema_parses_public_mapping() -> None:

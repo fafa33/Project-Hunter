@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime, timedelta
+from urllib.parse import urlsplit
 
 from hunter.cli import main
 from hunter.market_validation import MarketValidationRunner
@@ -48,7 +49,10 @@ def test_binance_provider_parses_open_interest_and_funding_rate() -> None:
 
     assert {metric.name for metric in metrics} == {"open_interest", "funding_rate"}
     assert {metric.asset for metric in metrics} == {"BTC"}
-    assert all(metric.source_url.startswith("https://fapi.binance.com") for metric in metrics)
+    for metric in metrics:
+        source = urlsplit(metric.source_url)
+        assert source.scheme == "https"
+        assert source.hostname == "fapi.binance.com"
 
 
 def test_provider_schema_failure_is_classified_without_fabricating_values() -> None:
