@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 
+from hunter.automation.agent_fallback_runtime import main as agent_fallback_run_main
 from hunter.automation.n8n_canary import main as n8n_canary_main
 from hunter.cli import main as cli_main
 from hunter.committee.command import main as committee_authority_main
@@ -32,6 +33,8 @@ def main(argv: list[str] | None = None) -> int:
         return valuation_authority_main(arguments[1:])
     if arguments and arguments[0] == "n8n-canary":
         return n8n_canary_main(arguments[1:])
+    if arguments and arguments[0] == "agent-fallback-run":
+        return agent_fallback_run_main(arguments[1:])
     return cli_main(arguments)
 
 
