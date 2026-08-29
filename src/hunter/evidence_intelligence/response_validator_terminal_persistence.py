@@ -319,8 +319,7 @@ class ResponseValidationTerminalPersistenceService:
 
     def _initialize(self) -> None:
         with self._connect() as connection:
-            connection.executescript(
-                """
+            connection.executescript("""
                 CREATE TABLE IF NOT EXISTS response_validation_terminal_records (
                     validation_event_id TEXT PRIMARY KEY,
                     validation_recorded_at TEXT NOT NULL,
@@ -334,8 +333,7 @@ class ResponseValidationTerminalPersistenceService:
                 );
                 CREATE INDEX IF NOT EXISTS response_validation_terminal_strict_known_idx
                     ON response_validation_terminal_records(validation_recorded_at, validation_event_id);
-                """
-            )
+                """)
 
     @contextlib.contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:

@@ -509,8 +509,7 @@ class ResponseValidationCorrectionService:
     def _initialize(self) -> None:
         """Install append-only allocation/record tables and strict-known index."""
         with self._connect() as connection:
-            connection.executescript(
-                """
+            connection.executescript("""
                 CREATE TABLE IF NOT EXISTS response_validation_correction_allocations (
                     validation_event_id TEXT NOT NULL,
                     generation INTEGER NOT NULL,
@@ -538,8 +537,7 @@ class ResponseValidationCorrectionService:
                     ON response_validation_correction_records(
                         validation_event_id, correction_recorded_at, generation
                     );
-                """
-            )
+                """)
 
     @contextlib.contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:

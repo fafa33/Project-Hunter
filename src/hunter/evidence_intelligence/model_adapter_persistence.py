@@ -809,8 +809,7 @@ class ModelAdapterPersistenceRepository:
 
     def _initialize(self) -> None:
         with self._connect() as connection:
-            connection.executescript(
-                """
+            connection.executescript("""
                 CREATE TABLE IF NOT EXISTS model_attempt_records (
                     attempt_id TEXT PRIMARY KEY,
                     recorded_at TEXT NOT NULL,
@@ -868,8 +867,7 @@ class ModelAdapterPersistenceRepository:
                 );
                 CREATE INDEX IF NOT EXISTS provider_response_attempt_idx
                     ON provider_response_artifacts(attempt_id, recorded_at);
-                """
-            )
+                """)
 
     @contextlib.contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:

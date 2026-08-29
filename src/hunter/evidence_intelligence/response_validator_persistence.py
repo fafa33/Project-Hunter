@@ -405,8 +405,7 @@ class ResponseValidatorPersistenceRepository:
 
     def _initialize(self) -> None:
         with self._connect() as connection:
-            connection.executescript(
-                """
+            connection.executescript("""
                 CREATE TABLE IF NOT EXISTS response_validation_profiles (
                     publication_id TEXT PRIMARY KEY,
                     applicability_key TEXT NOT NULL,
@@ -455,8 +454,7 @@ class ResponseValidatorPersistenceRepository:
                 );
                 CREATE INDEX IF NOT EXISTS response_validation_transient_capture_owner_idx
                     ON response_validation_transient_capture_reservations(validation_event_id);
-                """
-            )
+                """)
 
     @contextlib.contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:

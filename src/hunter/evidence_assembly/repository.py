@@ -141,12 +141,10 @@ class AssembledEvidenceRepository:
     def assemblies_for_constituent(self, record_id: str) -> tuple[AssembledFundamentalEvidenceRecord, ...]:
         """Return provenance-complete assemblies containing an exact constituent ID."""
         with self._connect() as connection:
-            rows = connection.execute(
-                """
+            rows = connection.execute("""
                 SELECT payload_json FROM assembled_fundamental_evidence_records
                 ORDER BY effective_at, recorded_at, known_at, record_id
-                """
-            ).fetchall()
+                """).fetchall()
         records = (_from_payload(str(row[0])) for row in rows)
         return tuple(record for record in records if record_id in record.constituent_record_ids)
 
