@@ -12,7 +12,9 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Literal
 
-from hunter.automation.n8n_handoff import PromptAutomationEnvelopeHandoff
+from hunter.automation.n8n_handoff import PromptAutomationEnvelopeHandoff, PromptAutomationHandoffError
+from hunter.evidence_intelligence.smart_prompt_machine import SmartPromptMachineError
+from hunter.evidence_intelligence.smart_prompt_routing import PromptAutomationEnvelope, PromptAutomationVerifier
 
 PROVIDER_ORDER = ("codex", "claude", "freebuff", "opencode", "jules")
 ProviderState = Literal["available", "rate_limited", "failed"]
@@ -58,9 +60,9 @@ class AgentFallbackResult:
 
 
 class GovernedAgentFallbackDispatcher:
-    """Run one canonical handoff through the fixed provider pool."""
+    """Run one verified canonical handoff through the fixed provider pool."""
 
-    __slots__ = ("_execute", "_read_head", "_validate")
+    __slots__ = ("_execute", "_read_head", "_validate", "_verifier", "_provider_states")
 
     def __init__(
         self,
@@ -68,40 +70,57 @@ class GovernedAgentFallbackDispatcher:
         execute: Callable[[str, str], AgentExecutionReport],
         read_head: Callable[[], str],
         validate: Callable[[str], bool],
+        verifier: PromptAutomationVerifier,
     ) -> None:
+        if type(verifier) is not PromptAutomationVerifier:
+            raise TypeError("agent fallback requires the process-bound issuer verifier")
         self._execute = execute
         self._read_head = read_head
         self._validate = validate
+        self._verifier = verifier
+        self._provider_states: dict[str, ProviderState] = {provider: "available" for provider in PROVIDER_ORDER}
 
     @property
     def provider_states(self) -> MappingProxyType[str, ProviderState]:
-        return MappingProxyType({provider: "available" for provider in PROVIDER_ORDER})
+        return MappingProxyType(dict(self._provider_states))
 
     def dispatch_document(self, document: str | bytes) -> AgentFallbackResult:
-        """Dispatch the exact canonical handoff; never regenerate it during fallback."""
+        """Verify and dispatch one exact handoff; never regenerate it during fallback."""
         handoff = PromptAutomationEnvelopeHandoff.from_json(document)
+        envelope = handoff.to_envelope()
+        try:
+            PromptAutomationEnvelope.verify_issuer_signature(envelope, self._verifier)
+        except SmartPromptMachineError:
+            raise PromptAutomationHandoffError("automation handoff issuer signature could not be verified") from None
         canonical_document = handoff.to_json()
         baseline_head = self._read_head()
         attempts: list[AgentAttempt] = []
 
         for provider in PROVIDER_ORDER:
+            head_before = baseline_head
             report = self._execute(provider, canonical_document)
+            visible_head = self._read_head()
+
             if report.status == "rate_limited":
+                self._provider_states[provider] = "rate_limited"
                 attempts.append(
-                    AgentAttempt(provider, "rate_limited", baseline_head, baseline_head, False, report.detail)
+                    AgentAttempt(provider, "rate_limited", head_before, visible_head, False, report.detail)
                 )
+                baseline_head = visible_head
                 continue
             if report.status == "failed":
-                attempts.append(AgentAttempt(provider, "failed", baseline_head, baseline_head, False, report.detail))
+                self._provider_states[provider] = "failed"
+                attempts.append(AgentAttempt(provider, "failed", head_before, visible_head, False, report.detail))
+                baseline_head = visible_head
                 continue
 
-            visible_head = self._read_head()
-            if visible_head == baseline_head:
+            if visible_head == head_before:
+                self._provider_states[provider] = "failed"
                 attempts.append(
                     AgentAttempt(
                         provider,
                         "failed",
-                        baseline_head,
+                        head_before,
                         visible_head,
                         False,
                         report.detail or "provider completed without GitHub-visible HEAD advancement",
@@ -111,11 +130,12 @@ class GovernedAgentFallbackDispatcher:
 
             validation_passed = bool(self._validate(visible_head))
             if not validation_passed:
+                self._provider_states[provider] = "failed"
                 attempts.append(
                     AgentAttempt(
                         provider,
                         "failed",
-                        baseline_head,
+                        head_before,
                         visible_head,
                         False,
                         report.detail or "targeted validation failed",
@@ -124,10 +144,11 @@ class GovernedAgentFallbackDispatcher:
                 baseline_head = visible_head
                 continue
 
-            attempts.append(AgentAttempt(provider, "available", baseline_head, visible_head, True, report.detail))
+            self._provider_states[provider] = "available"
+            attempts.append(AgentAttempt(provider, "available", head_before, visible_head, True, report.detail))
             return AgentFallbackResult(
                 provider=provider,
-                head_before=baseline_head,
+                head_before=head_before,
                 head_after=visible_head,
                 attempts=tuple(attempts),
             )
