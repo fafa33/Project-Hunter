@@ -287,7 +287,7 @@ class OperationalAgentFallbackRuntime:
         if outcome.returncode is None:
             return AgentExecutionReport("failed", "provider_unavailable")
         if outcome.returncode == 0:
-            return AgentExecutionReport("completed", "provider_completed")
+            return AgentExecutionReport("completed")
         if outcome.returncode == RATE_LIMIT_EXIT_CODE:
             return AgentExecutionReport("rate_limited", "provider_rate_limited")
         return AgentExecutionReport("failed", "provider_failed")
