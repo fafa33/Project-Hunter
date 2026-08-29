@@ -19,21 +19,27 @@ mutation ConvertPullRequestToDraft($pullRequestId: ID!) {
 """
 
 
-def convert_to_draft(token: str, pull_request_node_id: str) -> None:
+def convert_to_draft(token: str, pull_request_node_id: str) -> bool:
     if not pull_request_node_id:
-        raise RuntimeError("Pull request node id is unavailable")
-    payload: dict[str, Any] = transport.request_graphql_json(
-        url="https://api.github.com/graphql",
-        headers={},
-        query=CONVERT_TO_DRAFT_MUTATION,
-        variables={"pullRequestId": pull_request_node_id},
-        token=token,
-        what="convert unadmitted pull request to draft",
-    )
-    converted = payload.get("convertPullRequestToDraft") or {}
-    pull_request = converted.get("pullRequest") or {}
-    if pull_request.get("isDraft") is not True:
-        raise RuntimeError("GitHub did not confirm pull request draft state")
+        print("Warning: Pull request node id is unavailable; skipping best-effort Draft transition.")
+        return False
+    try:
+        payload: dict[str, Any] = transport.request_graphql_json(
+            url="https://api.github.com/graphql",
+            headers={},
+            query=CONVERT_TO_DRAFT_MUTATION,
+            variables={"pullRequestId": pull_request_node_id},
+            token=token,
+            what="convert unadmitted pull request to draft",
+        )
+        converted = payload.get("convertPullRequestToDraft") or {}
+        pull_request = converted.get("pullRequest") or {}
+        if pull_request.get("isDraft") is not True:
+            raise RuntimeError("GitHub did not confirm pull request draft state")
+    except Exception as exc:
+        print(f"Warning: GraphQL convertPullRequestToDraft failed ({exc}); continuing with admission failure.")
+        return False
+    return True
 
 
 def enforce_candidate_admission(
@@ -86,15 +92,24 @@ def enforce_candidate_admission(
         print(f"PR #{pr_number} candidate-admission event became stale before Draft transition; " "skipping mutation")
         return 0
     if latest.get("draft") is True:
-        return 0
+        print(
+            f"PR #{pr_number} candidate admission is {admission_state}: {description} (Pull request is already Draft)."
+        )
+        return 1
 
     pull_request_node_id = str(latest.get("node_id") or "").strip()
-    convert_to_draft(token, pull_request_node_id)
-    print(
-        f"PR #{pr_number} returned to Draft because exact-head candidate "
-        f"admission is {admission_state}: {description}"
-    )
-    return 0
+    drafted = convert_to_draft(token, pull_request_node_id)
+    if drafted:
+        print(
+            f"PR #{pr_number} returned to Draft because exact-head candidate "
+            f"admission is {admission_state}: {description}"
+        )
+    else:
+        print(
+            f"PR #{pr_number} candidate admission is {admission_state}: {description} "
+            "(Best-effort Draft transition was not completed)."
+        )
+    return 1
 
 
 def parser() -> argparse.ArgumentParser:

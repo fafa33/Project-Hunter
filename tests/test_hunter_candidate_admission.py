@@ -21,6 +21,11 @@ def _pr(*, draft: bool = False) -> dict:
 
 def test_unadmitted_ready_candidate_is_returned_to_draft(monkeypatch) -> None:
     converted: list[tuple[str, str]] = []
+
+    def convert(token: str, node_id: str) -> bool:
+        converted.append((token, node_id))
+        return True
+
     monkeypatch.setattr(
         admission.governance,
         "read_mergeability",
@@ -34,7 +39,7 @@ def test_unadmitted_ready_candidate_is_returned_to_draft(monkeypatch) -> None:
     monkeypatch.setattr(
         admission,
         "convert_to_draft",
-        lambda token, node_id: converted.append((token, node_id)),
+        convert,
     )
 
     assert (
@@ -43,7 +48,7 @@ def test_unadmitted_ready_candidate_is_returned_to_draft(monkeypatch) -> None:
             "token",
             371,
         )
-        == 0
+        == 1
     )
     assert converted == [("token", "PR_test_node")]
 
@@ -105,10 +110,43 @@ def test_convert_to_draft_requires_graphql_confirmation(monkeypatch) -> None:
         return {"convertPullRequestToDraft": {"pullRequest": {"id": "PR_test_node", "isDraft": True}}}
 
     monkeypatch.setattr(admission.transport, "request_graphql_json", fake_graphql)
-    admission.convert_to_draft("token", "PR_test_node")
+    assert admission.convert_to_draft("token", "PR_test_node") is True
 
     assert captured["variables"] == {"pullRequestId": "PR_test_node"}
     assert "convertPullRequestToDraft" in captured["query"]
+
+
+def test_convert_to_draft_handles_forbidden_error_gracefully(monkeypatch) -> None:
+    def fake_graphql(**kwargs):
+        raise RuntimeError(
+            "GraphQL query failed: [{'type': 'FORBIDDEN', 'message': 'Resource not accessible by integration'}]"
+        )
+
+    monkeypatch.setattr(admission.transport, "request_graphql_json", fake_graphql)
+    assert admission.convert_to_draft("token", "PR_test_node") is False
+
+
+def test_rejected_candidate_preserves_failure_when_draft_conversion_is_forbidden(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(
+        admission.governance,
+        "read_mergeability",
+        lambda _repo, _token, _number: _pr(),
+    )
+    monkeypatch.setattr(
+        admission.governance,
+        "candidate_admission",
+        lambda _repo, _token, _head, *_args: ("failure", "exact-head preflight failed"),
+    )
+
+    def fake_graphql(**kwargs):
+        raise RuntimeError("Resource not accessible by integration")
+
+    monkeypatch.setattr(admission.transport, "request_graphql_json", fake_graphql)
+
+    assert admission.enforce_candidate_admission("fafa33/Project-Hunter", "token", 378) == 1
+    output = capsys.readouterr().out
+    assert "Resource not accessible by integration" in output
+    assert "candidate admission is failure: exact-head preflight failed" in output
 
 
 def test_candidate_admission_workflow_is_trusted_and_never_checks_out_pr_code() -> None:

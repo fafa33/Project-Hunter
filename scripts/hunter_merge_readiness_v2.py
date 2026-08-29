@@ -12,9 +12,13 @@ import os
 import sys
 from dataclasses import dataclass
 from functools import cached_property
+from pathlib import Path
 from typing import Any, Protocol
 
 import hunter_github_transport as transport
+
+ROOT = Path(__file__).resolve().parents[1] if "__file__" in globals() else Path(".")
+REVIEWER_DISPOSITIONS_PATH = ROOT / "docs" / "REVIEWER_FINDING_DISPOSITIONS.json"
 
 CONTEXT = "Hunter Merge Readiness"
 GOVERNANCE_CONTEXT = "Hunter Governance Review"
@@ -265,6 +269,23 @@ def evaluate(observation: ReadinessObservation) -> Decision:
         return Decision("failure", "Merge conflict detected; update or resolve the branch.")
     if mergeable is None:
         return Decision("pending", "Waiting for GitHub to resolve current mergeability.")
+
+    # Check canonical reviewer dispositions
+    if REVIEWER_DISPOSITIONS_PATH.is_file():
+        try:
+            data = json.loads(REVIEWER_DISPOSITIONS_PATH.read_text(encoding="utf-8"))
+            findings = data.get("findings", [])
+            unresolved = [
+                f.get("id")
+                for f in findings
+                if isinstance(f, dict)
+                and f.get("validation_state") == "validated"
+                and f.get("resolution_state") == "unresolved"
+            ]
+            if unresolved:
+                return Decision("failure", f"Unresolved validated reviewer findings: {', '.join(unresolved)}.")
+        except Exception as exc:
+            return Decision("failure", f"Failed to check reviewer dispositions: {exc}")
 
     if observation.unresolved_review_threads:
         return Decision("failure", f"Unresolved review threads remain: {len(observation.unresolved_review_threads)}.")

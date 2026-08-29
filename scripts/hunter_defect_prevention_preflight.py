@@ -6,7 +6,7 @@ import json
 import os
 import subprocess
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 ROOT = Path(__file__).resolve().parents[1]
 REQUIRED_PREFLIGHT_GATES = (
@@ -30,6 +30,7 @@ TRUSTED_CANDIDATE_QUALITY_GATES: tuple[tuple[str, tuple[str, ...]], ...] = (
 REGISTRY_PATH = ROOT / "docs" / "DEFECT_REGISTRY.json"
 LIFECYCLE_PATH = ROOT / "docs" / "DEFECT_PREVENTION_LIFECYCLE.json"
 WRITE_POLICY_PATH = ROOT / "docs" / "CODE_WRITE_POLICY.json"
+REVIEWER_DISPOSITIONS_PATH = ROOT / "docs" / "REVIEWER_FINDING_DISPOSITIONS.json"
 EXPECTED_STAGES = (
     "recorded",
     "regression-tested",
@@ -48,12 +49,277 @@ ALLOWED_CODE_WRITE_PATHS = frozenset(
     }
 )
 
+VALIDATED_CLASSIFICATIONS = frozenset(
+    {
+        "new_systemic_defect",
+        "recurrence",
+        "duplicate",
+        "isolated_non_automatable",
+    }
+)
+VALIDATED_RESOLUTION_STATES = frozenset({"unresolved", "resolved"})
+REQUIRED_ENFORCEMENT_FIELDS = ("local", "hosted", "merge", "recurrence")
+ALLOWED_CODE_WRITE_PATHS = frozenset(
+    {
+        "local_git_push",
+        "github_contents_api",
+        "github_git_data_api",
+        "api_only_agents",
+    }
+)
+
 
 def _load_object(path: Path) -> dict[str, Any]:
     data = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
         raise ValueError(f"{path.name} must contain a JSON object")
     return data
+
+
+def _is_non_empty_str(val: Any) -> bool:
+    return isinstance(val, str) and bool(val.strip())
+
+
+ReferenceRole = Literal["guard", "test"]
+ReferenceSymbol = ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef
+
+
+def _find_reference_symbol(tree: ast.Module, selector_parts: tuple[str, ...]) -> ReferenceSymbol | None:
+    body = tree.body
+    selected: ReferenceSymbol | None = None
+    for index, name in enumerate(selector_parts):
+        selected = next(
+            (
+                node
+                for node in body
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and node.name == name
+            ),
+            None,
+        )
+        if selected is None:
+            return None
+        if index < len(selector_parts) - 1:
+            if not isinstance(selected, ast.ClassDef):
+                return None
+            body = selected.body
+    return selected
+
+
+def _validate_reference_target(ref_str: str, *, role: ReferenceRole) -> str | None:
+    """Statically validate one repository-local guard or pytest target reference."""
+    if "::" not in ref_str:
+        return "reference must use '<repo-relative-python-path>::<explicit-selector>'"
+
+    file_part, selector = ref_str.split("::", 1)
+    file_part = file_part.strip()
+    selector = selector.strip()
+    if not file_part:
+        return "reference path must be non-empty"
+    if not selector:
+        return "reference selector must be non-empty"
+
+    selector_parts = tuple(part.strip() for part in selector.split("::"))
+    if any(not part or not part.isidentifier() for part in selector_parts):
+        return f"selector {selector!r} must contain non-empty Python identifiers separated by '::'"
+
+    relative_path = Path(file_part)
+    if relative_path.is_absolute():
+        return f"path {file_part!r} must be repository-relative"
+    if ".." in relative_path.parts:
+        return f"path {file_part!r} must not contain '..' traversal"
+    if relative_path.suffix != ".py":
+        return f"file {file_part!r} must be a Python file"
+
+    resolved_root = ROOT.resolve()
+    try:
+        target_path = (resolved_root / relative_path).resolve(strict=True)
+    except FileNotFoundError:
+        return f"file {file_part!r} does not exist"
+    except (OSError, RuntimeError) as exc:
+        return f"failed to resolve file {file_part!r}: {exc}"
+
+    try:
+        resolved_relative_path = target_path.relative_to(resolved_root)
+    except ValueError:
+        return f"file {file_part!r} resolves outside the repository root"
+
+    if not target_path.is_file():
+        return f"file {file_part!r} is not a regular file"
+
+    lexical_is_test = bool(relative_path.parts) and relative_path.parts[0] == "tests"
+    resolved_is_test = bool(resolved_relative_path.parts) and resolved_relative_path.parts[0] == "tests"
+    if role == "guard" and (lexical_is_test or resolved_is_test):
+        return f"guard reference {file_part!r} must not target the tests tree"
+    if role == "test":
+        if not lexical_is_test or not resolved_is_test:
+            return f"test reference {file_part!r} must target the tests tree"
+        if not (relative_path.name.startswith("test_") or relative_path.name.endswith("_test.py")):
+            return f"test reference {file_part!r} must use a pytest-discoverable filename"
+
+    try:
+        tree = ast.parse(target_path.read_text(encoding="utf-8"), filename=file_part)
+    except (OSError, UnicodeError, SyntaxError, ValueError) as exc:
+        return f"failed to parse AST for {file_part!r}: {exc}"
+
+    selected = _find_reference_symbol(tree, selector_parts)
+    if selected is None:
+        return f"symbol {selector!r} not found in {file_part!r}"
+
+    if role == "test":
+        if len(selector_parts) == 1:
+            if not isinstance(selected, (ast.FunctionDef, ast.AsyncFunctionDef)) or not selected.name.startswith(
+                "test_"
+            ):
+                return f"selector {selector!r} is not a pytest test function"
+        elif len(selector_parts) == 2:
+            class_name, method_name = selector_parts
+            test_class = _find_reference_symbol(tree, (class_name,))
+            if (
+                not isinstance(test_class, ast.ClassDef)
+                or not class_name.startswith("Test")
+                or any(
+                    isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "__init__"
+                    for node in test_class.body
+                )
+                or not isinstance(selected, (ast.FunctionDef, ast.AsyncFunctionDef))
+                or not method_name.startswith("test_")
+            ):
+                return f"selector {selector!r} is not a pytest Test*::test_* target"
+        else:
+            return f"selector {selector!r} is not a supported pytest test target"
+
+    return None
+
+
+def validate_reviewer_finding_dispositions() -> list[str]:
+    errors: list[str] = []
+    if not REVIEWER_DISPOSITIONS_PATH.is_file():
+        return ["REVIEWER_FINDING_DISPOSITIONS.json is missing"]
+
+    dispositions = _load_object(REVIEWER_DISPOSITIONS_PATH)
+    if dispositions.get("version") != 1:
+        errors.append("REVIEWER_FINDING_DISPOSITIONS version must be 1")
+
+    findings = dispositions.get("findings")
+    if not isinstance(findings, list):
+        return errors + ["REVIEWER_FINDING_DISPOSITIONS findings must be a list"]
+
+    registry = _load_object(REGISTRY_PATH)
+    registry_defects = {
+        defect["id"]: defect
+        for defect in registry.get("defects", [])
+        if isinstance(defect, dict) and isinstance(defect.get("id"), str)
+    }
+
+    lifecycle = _load_object(LIFECYCLE_PATH)
+    explicit_enforcement = lifecycle.get("explicit_enforcement", {})
+
+    finding_ids: set[str] = set()
+
+    for index, finding in enumerate(findings):
+        if not isinstance(finding, dict):
+            errors.append(f"finding #{index} must be an object")
+            continue
+
+        finding_id = finding.get("id")
+        if not _is_non_empty_str(finding_id):
+            errors.append(f"finding #{index} has invalid id")
+            continue
+        if finding_id in finding_ids:
+            errors.append(f"duplicate finding id: {finding_id}")
+        finding_ids.add(finding_id)
+
+        source = finding.get("source_provenance")
+        if not isinstance(source, dict) or not _is_non_empty_str(source.get("reviewer")):
+            errors.append(f"{finding_id}: source_provenance must be an object with a reviewer")
+
+        val_state = finding.get("validation_state")
+        if val_state not in {"validated", "unvalidated", "rejected"}:
+            errors.append(f"{finding_id}: unknown validation_state {val_state!r}")
+            continue
+
+        if val_state != "validated":
+            continue
+
+        classification = finding.get("classification")
+        if classification not in VALIDATED_CLASSIFICATIONS:
+            errors.append(
+                f"{finding_id}: validated finding requires classification in {sorted(VALIDATED_CLASSIFICATIONS)}"
+            )
+
+        res_state = finding.get("resolution_state")
+        if res_state not in VALIDATED_RESOLUTION_STATES:
+            errors.append(f"{finding_id}: resolution_state must be one of {sorted(VALIDATED_RESOLUTION_STATES)}")
+            continue
+
+        if res_state == "unresolved":
+            errors.append(f"{finding_id}: validated substantive reviewer finding is unresolved")
+
+        mapped_id = finding.get("mapped_defect_id")
+
+        if classification == "duplicate":
+            if not _is_non_empty_str(mapped_id):
+                errors.append(f"{finding_id}: duplicate classification requires non-empty mapped_defect_id")
+            elif mapped_id not in registry_defects:
+                errors.append(f"{finding_id}: mapped_defect_id {mapped_id!r} not found in DEFECT_REGISTRY.json")
+
+        elif classification == "recurrence":
+            if not _is_non_empty_str(mapped_id):
+                errors.append(f"{finding_id}: recurrence classification requires non-empty mapped_defect_id")
+            elif mapped_id not in registry_defects:
+                errors.append(f"{finding_id}: mapped_defect_id {mapped_id!r} not found in DEFECT_REGISTRY.json")
+            else:
+                enforcement_entry = explicit_enforcement.get(mapped_id, {})
+                stage = enforcement_entry.get("state") if isinstance(enforcement_entry, dict) else None
+                if stage in {"prevented", "merge-enforced"}:
+                    evidence = finding.get("permanent_disposition_evidence")
+                    guard_ref = finding.get("guard_reference")
+                    test_ref = finding.get("test_reference")
+                    if (
+                        res_state != "resolved"
+                        or not _is_non_empty_str(evidence)
+                        or not _is_non_empty_str(guard_ref)
+                        or not _is_non_empty_str(test_ref)
+                    ):
+                        errors.append(
+                            f"{finding_id}: recurrence of {stage} defect {mapped_id} requires a resolved permanent disposition with non-empty string evidence, guard_reference, and test_reference"
+                        )
+                    else:
+                        guard_err = _validate_reference_target(str(guard_ref), role="guard")
+                        if guard_err:
+                            errors.append(f"{finding_id}: invalid guard_reference {guard_ref!r}: {guard_err}")
+                        test_err = _validate_reference_target(str(test_ref), role="test")
+                        if test_err:
+                            errors.append(f"{finding_id}: invalid test_reference {test_ref!r}: {test_err}")
+        elif mapped_id is not None:
+            if not _is_non_empty_str(mapped_id) or mapped_id not in registry_defects:
+                errors.append(f"{finding_id}: mapped_defect_id {mapped_id!r} not found in DEFECT_REGISTRY.json")
+
+        if res_state == "resolved":
+            if classification in {"new_systemic_defect", "duplicate", "recurrence"}:
+                evidence = finding.get("permanent_disposition_evidence")
+                if not _is_non_empty_str(evidence):
+                    errors.append(
+                        f"{finding_id}: resolved {classification} finding requires non-empty string permanent_disposition_evidence"
+                    )
+
+        if classification == "isolated_non_automatable":
+            justification = finding.get("justification") or finding.get("permanent_disposition_evidence")
+            bounded_control = finding.get("bounded_manual_control") or finding.get("permanent_disposition_evidence")
+            if not _is_non_empty_str(justification):
+                errors.append(f"{finding_id}: isolated_non_automatable finding requires explicit justification")
+            if not _is_non_empty_str(bounded_control):
+                errors.append(
+                    f"{finding_id}: isolated_non_automatable finding requires bounded manual control statement"
+                )
+            if mapped_id and mapped_id in explicit_enforcement:
+                stage = explicit_enforcement[mapped_id].get("state")
+                if stage == "prevented":
+                    errors.append(
+                        f"{finding_id}: isolated_non_automatable finding cannot be falsely labeled prevented for defect {mapped_id}"
+                    )
+
+    return errors
 
 
 def validate_code_write_policy() -> list[str]:
@@ -175,6 +441,7 @@ def validate_defect_prevention_lifecycle() -> list[str]:
             errors.append(f"{defect_id}: prevented state requires recurrence escalation")
 
     errors.extend(validate_code_write_policy())
+    errors.extend(validate_reviewer_finding_dispositions())
     return errors
 
 
