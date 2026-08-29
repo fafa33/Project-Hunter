@@ -21,7 +21,8 @@ mutation ConvertPullRequestToDraft($pullRequestId: ID!) {
 
 def convert_to_draft(token: str, pull_request_node_id: str) -> bool:
     if not pull_request_node_id:
-        raise RuntimeError("Pull request node id is unavailable")
+        print("Warning: Pull request node id is unavailable; skipping best-effort Draft transition.")
+        return False
     try:
         payload: dict[str, Any] = transport.request_graphql_json(
             url="https://api.github.com/graphql",
@@ -31,21 +32,13 @@ def convert_to_draft(token: str, pull_request_node_id: str) -> bool:
             token=token,
             what="convert unadmitted pull request to draft",
         )
-    except transport.GitHubRequestError as exc:
-        print(f"Warning: GraphQL convertPullRequestToDraft failed ({exc}); falling back to governance failure status.")
+        converted = payload.get("convertPullRequestToDraft") or {}
+        pull_request = converted.get("pullRequest") or {}
+        if pull_request.get("isDraft") is not True:
+            raise RuntimeError("GitHub did not confirm pull request draft state")
+    except Exception as exc:
+        print(f"Warning: GraphQL convertPullRequestToDraft failed ({exc}); continuing with admission failure.")
         return False
-    except RuntimeError as exc:
-        if "Resource not accessible by integration" in str(exc) or "FORBIDDEN" in str(exc):
-            print(
-                f"Warning: GraphQL convertPullRequestToDraft forbidden ({exc}); falling back to governance failure status."
-            )
-            return False
-        raise
-
-    converted = payload.get("convertPullRequestToDraft") or {}
-    pull_request = converted.get("pullRequest") or {}
-    if pull_request.get("isDraft") is not True:
-        raise RuntimeError("GitHub did not confirm pull request draft state")
     return True
 
 
@@ -99,7 +92,10 @@ def enforce_candidate_admission(
         print(f"PR #{pr_number} candidate-admission event became stale before Draft transition; " "skipping mutation")
         return 0
     if latest.get("draft") is True:
-        return 0
+        print(
+            f"PR #{pr_number} candidate admission is {admission_state}: {description} (Pull request is already Draft)."
+        )
+        return 1
 
     pull_request_node_id = str(latest.get("node_id") or "").strip()
     drafted = convert_to_draft(token, pull_request_node_id)
@@ -111,9 +107,9 @@ def enforce_candidate_admission(
     else:
         print(
             f"PR #{pr_number} candidate admission is {admission_state}: {description} "
-            "(Draft transition skipped due to token permission limits)."
+            "(Best-effort Draft transition was not completed)."
         )
-    return 0
+    return 1
 
 
 def parser() -> argparse.ArgumentParser:
