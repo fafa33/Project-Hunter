@@ -6,7 +6,7 @@ import json
 import os
 import subprocess
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 ROOT = Path(__file__).resolve().parents[1]
 REQUIRED_PREFLIGHT_GATES = (
@@ -80,37 +80,113 @@ def _is_non_empty_str(val: Any) -> bool:
     return isinstance(val, str) and bool(val.strip())
 
 
-def _validate_reference_target(ref_str: str) -> str | None:
-    """Statically validate that ref_str points to an existing file and optional AST symbol.
+ReferenceRole = Literal["guard", "test"]
+ReferenceSymbol = ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef
 
-    Format: "relative/file/path.py" or "relative/file/path.py::symbol_name".
-    Uses AST parsing without importing or executing target code.
-    """
-    if "::" in ref_str:
-        file_part, symbol = ref_str.split("::", 1)
-        file_part = file_part.strip()
-        symbol = symbol.strip()
-    else:
-        file_part = ref_str.strip()
-        symbol = None
 
-    target_path = ROOT / file_part
-    if not target_path.is_file():
+def _find_reference_symbol(tree: ast.Module, selector_parts: tuple[str, ...]) -> ReferenceSymbol | None:
+    body = tree.body
+    selected: ReferenceSymbol | None = None
+    for index, name in enumerate(selector_parts):
+        selected = next(
+            (
+                node
+                for node in body
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and node.name == name
+            ),
+            None,
+        )
+        if selected is None:
+            return None
+        if index < len(selector_parts) - 1:
+            if not isinstance(selected, ast.ClassDef):
+                return None
+            body = selected.body
+    return selected
+
+
+def _validate_reference_target(ref_str: str, *, role: ReferenceRole) -> str | None:
+    """Statically validate one repository-local guard or pytest target reference."""
+    if "::" not in ref_str:
+        return "reference must use '<repo-relative-python-path>::<explicit-selector>'"
+
+    file_part, selector = ref_str.split("::", 1)
+    file_part = file_part.strip()
+    selector = selector.strip()
+    if not file_part:
+        return "reference path must be non-empty"
+    if not selector:
+        return "reference selector must be non-empty"
+
+    selector_parts = tuple(part.strip() for part in selector.split("::"))
+    if any(not part or not part.isidentifier() for part in selector_parts):
+        return f"selector {selector!r} must contain non-empty Python identifiers separated by '::'"
+
+    relative_path = Path(file_part)
+    if relative_path.is_absolute():
+        return f"path {file_part!r} must be repository-relative"
+    if ".." in relative_path.parts:
+        return f"path {file_part!r} must not contain '..' traversal"
+    if relative_path.suffix != ".py":
+        return f"file {file_part!r} must be a Python file"
+
+    resolved_root = ROOT.resolve()
+    try:
+        target_path = (resolved_root / relative_path).resolve(strict=True)
+    except FileNotFoundError:
         return f"file {file_part!r} does not exist"
+    except (OSError, RuntimeError) as exc:
+        return f"failed to resolve file {file_part!r}: {exc}"
 
-    if symbol:
-        try:
-            tree = ast.parse(target_path.read_text(encoding="utf-8"), filename=file_part)
-        except Exception as exc:
-            return f"failed to parse AST for {file_part!r}: {exc}"
+    try:
+        resolved_relative_path = target_path.relative_to(resolved_root)
+    except ValueError:
+        return f"file {file_part!r} resolves outside the repository root"
 
-        top_symbols: set[str] = set()
-        for node in tree.body:
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-                top_symbols.add(node.name)
+    if not target_path.is_file():
+        return f"file {file_part!r} is not a regular file"
 
-        if symbol not in top_symbols:
-            return f"symbol {symbol!r} not found in {file_part!r}"
+    lexical_is_test = bool(relative_path.parts) and relative_path.parts[0] == "tests"
+    resolved_is_test = bool(resolved_relative_path.parts) and resolved_relative_path.parts[0] == "tests"
+    if role == "guard" and (lexical_is_test or resolved_is_test):
+        return f"guard reference {file_part!r} must not target the tests tree"
+    if role == "test":
+        if not lexical_is_test or not resolved_is_test:
+            return f"test reference {file_part!r} must target the tests tree"
+        if not (relative_path.name.startswith("test_") or relative_path.name.endswith("_test.py")):
+            return f"test reference {file_part!r} must use a pytest-discoverable filename"
+
+    try:
+        tree = ast.parse(target_path.read_text(encoding="utf-8"), filename=file_part)
+    except (OSError, UnicodeError, SyntaxError, ValueError) as exc:
+        return f"failed to parse AST for {file_part!r}: {exc}"
+
+    selected = _find_reference_symbol(tree, selector_parts)
+    if selected is None:
+        return f"symbol {selector!r} not found in {file_part!r}"
+
+    if role == "test":
+        if len(selector_parts) == 1:
+            if not isinstance(selected, (ast.FunctionDef, ast.AsyncFunctionDef)) or not selected.name.startswith(
+                "test_"
+            ):
+                return f"selector {selector!r} is not a pytest test function"
+        elif len(selector_parts) == 2:
+            class_name, method_name = selector_parts
+            test_class = _find_reference_symbol(tree, (class_name,))
+            if (
+                not isinstance(test_class, ast.ClassDef)
+                or not class_name.startswith("Test")
+                or any(
+                    isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "__init__"
+                    for node in test_class.body
+                )
+                or not isinstance(selected, (ast.FunctionDef, ast.AsyncFunctionDef))
+                or not method_name.startswith("test_")
+            ):
+                return f"selector {selector!r} is not a pytest Test*::test_* target"
+        else:
+            return f"selector {selector!r} is not a supported pytest test target"
 
     return None
 
@@ -209,10 +285,10 @@ def validate_reviewer_finding_dispositions() -> list[str]:
                             f"{finding_id}: recurrence of {stage} defect {mapped_id} requires a resolved permanent disposition with non-empty string evidence, guard_reference, and test_reference"
                         )
                     else:
-                        guard_err = _validate_reference_target(str(guard_ref))
+                        guard_err = _validate_reference_target(str(guard_ref), role="guard")
                         if guard_err:
                             errors.append(f"{finding_id}: invalid guard_reference {guard_ref!r}: {guard_err}")
-                        test_err = _validate_reference_target(str(test_ref))
+                        test_err = _validate_reference_target(str(test_ref), role="test")
                         if test_err:
                             errors.append(f"{finding_id}: invalid test_reference {test_ref!r}: {test_err}")
         elif mapped_id is not None:
