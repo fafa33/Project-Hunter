@@ -1,0 +1,29 @@
+name: Black 26 formatting preview
+
+on:
+  push:
+    branches:
+      - issue-342-dependency-patch
+
+permissions:
+  contents: read
+
+jobs:
+  preview:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Generate Black 26 patch
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check black==26.3.1
+          black .
+          git diff --binary > black26.patch
+      - uses: actions/upload-artifact@v4
+        with:
+          name: black26-formatting-patch
+          path: black26.patch
+          if-no-files-found: error
