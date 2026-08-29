@@ -53,6 +53,27 @@ def test_unadmitted_ready_candidate_is_returned_to_draft(monkeypatch) -> None:
     assert converted == [("token", "PR_test_node")]
 
 
+def test_pending_candidate_waits_without_redrafting(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(
+        admission.governance,
+        "read_mergeability",
+        lambda _repo, _token, _number: _pr(),
+    )
+    monkeypatch.setattr(
+        admission.governance,
+        "candidate_admission",
+        lambda _repo, _token, _head, *_args: ("pending", "Waiting for exact-head branch preflight to complete."),
+    )
+    monkeypatch.setattr(
+        admission,
+        "convert_to_draft",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("pending must not redraft")),
+    )
+
+    assert admission.enforce_candidate_admission("fafa33/Project-Hunter", "token", 369) == 0
+    assert "candidate admission is pending" in capsys.readouterr().out
+
+
 def test_admitted_candidate_stays_ready(monkeypatch) -> None:
     monkeypatch.setattr(
         admission.governance,
@@ -149,15 +170,20 @@ def test_rejected_candidate_preserves_failure_when_draft_conversion_is_forbidden
     assert "candidate admission is failure: exact-head preflight failed" in output
 
 
-def test_candidate_admission_workflow_is_trusted_and_never_checks_out_pr_code() -> None:
+def test_candidate_admission_workflow_is_trusted_and_reconciles_after_preflight() -> None:
     workflow = (ROOT / ".github" / "workflows" / "hunter-candidate-admission.yml").read_text(encoding="utf-8")
 
     assert "pull_request_target:" in workflow
+    assert "workflow_run:" in workflow
+    assert "Hunter / Pre-PR Preflight" in workflow
+    assert "completed" in workflow
     assert "ready_for_review" in workflow
     assert "pull-requests: write" in workflow
     assert "ref: ${{ github.event.repository.default_branch }}" in workflow
     assert "persist-credentials: false" in workflow
     assert "ref: ${{ github.event.pull_request.head.sha }}" not in workflow
-    assert "EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}" in workflow
+    assert "github.event.workflow_run.pull_requests[0].number" not in workflow
+    assert "readiness.candidate_prs()" in workflow
+    assert "github.event.workflow_run.head_sha" in workflow
     assert '--head-sha "${EVENT_HEAD_SHA}"' in workflow
     assert "hunter_candidate_admission.py" in workflow
