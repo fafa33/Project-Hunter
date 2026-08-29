@@ -182,7 +182,8 @@ def test_candidate_admission_workflow_is_trusted_and_reconciles_after_preflight(
     assert "ref: ${{ github.event.repository.default_branch }}" in workflow
     assert "persist-credentials: false" in workflow
     assert "ref: ${{ github.event.pull_request.head.sha }}" not in workflow
-    assert "github.event.workflow_run.pull_requests[0].number" in workflow
+    assert "github.event.workflow_run.pull_requests[0].number" not in workflow
+    assert "readiness.candidate_prs()" in workflow
     assert "github.event.workflow_run.head_sha" in workflow
     assert '--head-sha "${EVENT_HEAD_SHA}"' in workflow
     assert "hunter_candidate_admission.py" in workflow
