@@ -12,6 +12,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any
 
+from hunter.automation.n8n import N8N_WEBHOOK_TOKEN_ENV
 from hunter.automation.n8n_handoff import N8nPromptAutomationWorker, PromptAutomationHandoffError
 from hunter.evidence_intelligence.smart_prompt_routing import PromptTaskAuthorityError
 from hunter.evidence_intelligence.smart_prompt_transport import PromptAutomationTransportError
@@ -47,10 +48,24 @@ class N8nCanaryReceipt:
         return json.dumps(asdict(self), sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
+def _validate_bearer_token_configuration(environ: Mapping[str, str]) -> None:
+    """Reject token material that cannot be emitted as a safe HTTP header value."""
+    token = environ.get(N8N_WEBHOOK_TOKEN_ENV, "")
+    if not isinstance(token, str):
+        raise PromptAutomationTransportError("n8n webhook credential contains invalid header characters")
+    if any(ord(character) == 0x7F for character in token):
+        raise PromptAutomationTransportError("n8n webhook credential contains invalid header characters")
+    try:
+        token.encode("latin-1")
+    except UnicodeEncodeError:
+        raise PromptAutomationTransportError("n8n webhook credential contains invalid header characters") from None
+
+
 def validate_n8n_canary_configuration(*, environ: Mapping[str, str] | None = None) -> None:
     """Validate worker-only operational configuration without performing network activity."""
     source = os.environ if environ is None else environ
     N8nPromptAutomationWorker.from_environment(environ=source, opener=_network_forbidden)
+    _validate_bearer_token_configuration(source)
 
 
 def run_n8n_canary(
@@ -113,9 +128,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             parser.error("handoff is required unless --validate-config is used")
         document = Path(arguments.handoff).read_bytes()
         receipt = run_n8n_canary(document)
+        print(receipt.to_json())
         if arguments.receipt_out:
             write_n8n_canary_receipt(receipt, arguments.receipt_out)
-        print(receipt.to_json())
         return 0
     except (
         OSError,
