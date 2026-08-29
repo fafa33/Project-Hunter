@@ -13,8 +13,8 @@ from types import MappingProxyType
 from typing import Any
 
 from hunter.automation.n8n_handoff import N8nPromptAutomationWorker, PromptAutomationHandoffError
-from hunter.evidence_intelligence.smart_prompt_transport import PromptAutomationTransportError
 from hunter.evidence_intelligence.smart_prompt_routing import PromptTaskAuthorityError
+from hunter.evidence_intelligence.smart_prompt_transport import PromptAutomationTransportError
 
 N8N_CANARY_RECEIPT_SCHEMA_VERSION = "smart-prompt-n8n-canary-receipt-v1"
 
