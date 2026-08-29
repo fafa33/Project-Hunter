@@ -285,7 +285,7 @@ def test_reference_target_to_nonexistent_file_or_symbol_fails(tmp_path, monkeypa
         "mapped_defect_id": "PRH-007",
         "resolution_state": "resolved",
         "permanent_disposition_evidence": "Valid evidence",
-        "guard_reference": "scripts/nonexistent_guard.py",
+        "guard_reference": "scripts/nonexistent_guard.py::guard",
         "test_reference": "tests/test_hunter_candidate_admission.py::test_admitted_candidate_stays_ready",
     }
     path = tmp_path / "REVIEWER_FINDING_DISPOSITIONS.json"
@@ -313,6 +313,104 @@ def test_reference_target_to_nonexistent_file_or_symbol_fails(tmp_path, monkeypa
         "symbol 'nonexistent_symbol_func' not found in 'scripts/hunter_governance_review_v2.py'" in error
         for error in errors
     )
+
+
+def test_references_require_explicit_selectors_and_python_files() -> None:
+    invalid_cases = (
+        ("scripts/hunter_governance_review_v2.py", "guard", "must use"),
+        ("tests/test_hunter_governance_review_v2.py", "test", "must use"),
+        ("scripts/hunter_governance_review_v2.py::", "guard", "selector must be non-empty"),
+        ("tests/test_hunter_governance_review_v2.py::   ", "test", "selector must be non-empty"),
+        ("README.md::candidate_admission", "guard", "must be a Python file"),
+    )
+
+    for reference, role, expected in invalid_cases:
+        error = prevention._validate_reference_target(reference, role=role)
+        assert error is not None and expected in error
+
+
+def test_guard_and_test_reference_roles_are_not_interchangeable() -> None:
+    production_function_as_test = prevention._validate_reference_target(
+        "scripts/hunter_governance_review_v2.py::candidate_admission",
+        role="test",
+    )
+    test_helper_as_guard = prevention._validate_reference_target(
+        "tests/test_macro_intelligence_engine.py::point",
+        role="guard",
+    )
+
+    assert production_function_as_test is not None and "must target the tests tree" in production_function_as_test
+    assert test_helper_as_guard is not None and "must not target the tests tree" in test_helper_as_guard
+
+
+def test_valid_guard_and_pytest_function_references_pass() -> None:
+    assert (
+        prevention._validate_reference_target(
+            "scripts/hunter_governance_review_v2.py::candidate_admission",
+            role="guard",
+        )
+        is None
+    )
+    assert (
+        prevention._validate_reference_target(
+            "tests/test_hunter_governance_review_v2.py::test_candidate_admission_tests_first_red_success_stays_draft",
+            role="test",
+        )
+        is None
+    )
+
+
+def test_class_qualified_pytest_reference_passes_static_discovery_rules(tmp_path, monkeypatch) -> None:
+    repository_root = tmp_path / "repo"
+    test_file = repository_root / "tests" / "test_class_reference.py"
+    test_file.parent.mkdir(parents=True)
+    test_file.write_text(
+        "class TestReference:\n" "    def test_static_target(self):\n" "        pass\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(prevention, "ROOT", repository_root)
+
+    assert (
+        prevention._validate_reference_target(
+            "tests/test_class_reference.py::TestReference::test_static_target",
+            role="test",
+        )
+        is None
+    )
+
+
+def test_reference_paths_are_confined_after_symlink_resolution(tmp_path, monkeypatch) -> None:
+    repository_root = tmp_path / "repo"
+    scripts = repository_root / "scripts"
+    scripts.mkdir(parents=True)
+    internal_file = scripts / "internal_guard.py"
+    internal_file.write_text("def guard():\n    pass\n", encoding="utf-8")
+    external_file = tmp_path / "external_guard.py"
+    external_file.write_text("def guard():\n    pass\n", encoding="utf-8")
+    (scripts / "external_link.py").symlink_to(external_file)
+    (scripts / "internal_link.py").symlink_to(internal_file)
+    monkeypatch.setattr(prevention, "ROOT", repository_root)
+
+    absolute_error = prevention._validate_reference_target(f"{external_file}::guard", role="guard")
+    traversal_error = prevention._validate_reference_target("../external_guard.py::guard", role="guard")
+    escape_error = prevention._validate_reference_target("scripts/external_link.py::guard", role="guard")
+
+    assert absolute_error is not None and "repository-relative" in absolute_error
+    assert traversal_error is not None and "must not contain '..' traversal" in traversal_error
+    assert escape_error is not None and "resolves outside" in escape_error
+    assert prevention._validate_reference_target("scripts/internal_link.py::guard", role="guard") is None
+
+
+def test_all_seeded_registry_references_pass_role_validation() -> None:
+    dispositions = json.loads(prevention.REVIEWER_DISPOSITIONS_PATH.read_text(encoding="utf-8"))
+
+    for finding in dispositions["findings"]:
+        guard_reference = finding.get("guard_reference")
+        test_reference = finding.get("test_reference")
+        if guard_reference is not None:
+            assert prevention._validate_reference_target(guard_reference, role="guard") is None
+        if test_reference is not None:
+            assert prevention._validate_reference_target(test_reference, role="test") is None
 
 
 def test_deterministic_preflight_failure_cannot_cross_normal_push_boundary(tmp_path, monkeypatch) -> None:
