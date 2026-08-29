@@ -77,6 +77,9 @@ def enforce_candidate_admission(
     if admission_state == "success":
         print(f"PR #{pr_number} admitted for review: {description}")
         return 0
+    if admission_state == "pending":
+        print(f"PR #{pr_number} candidate admission is pending: {description}")
+        return 0
 
     latest = governance.read_mergeability(repository, token, pr_number)
     latest_head_sha = str((latest.get("head") or {}).get("sha") or "").strip()
@@ -116,7 +119,7 @@ def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description="Keep unadmitted Project Hunter candidates out of review.")
     result.add_argument("--pr", type=int, required=True)
     result.add_argument("--repository", required=True)
-    result.add_argument("--head-sha", help="Exact pull_request_target event head SHA; stale events are ignored.")
+    result.add_argument("--head-sha", help="Exact pull_request_target/workflow_run head SHA; stale events are ignored.")
     return result
 
 
