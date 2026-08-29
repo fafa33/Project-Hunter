@@ -25,9 +25,24 @@ HUNTER_AGENT_JULES_COMMAND=["/path/to/jules-wrapper"]
 HUNTER_AGENT_VALIDATION_COMMAND=["/path/to/hunter-targeted-validation"]
 ```
 
-Every provider wrapper reads the exact canonical handoff from stdin. It receives `HUNTER_AGENT_PROVIDER`, `HUNTER_AGENT_BRANCH`, and `HUNTER_AGENT_REPO_DIR` in its environment. Exit `0` means the provider reports completion, exit `75` means rate-limited, and any other exit code means failure. These reports are not trusted as success: the runtime independently reads `origin/refs/heads/<branch>` and requires a new GitHub-visible HEAD plus the validation command to return zero.
+Every provider wrapper reads the exact canonical handoff from stdin. It receives `HUNTER_AGENT_PROVIDER`, `HUNTER_AGENT_BRANCH`, and `HUNTER_AGENT_REPO_DIR`. Exit `0` means the provider reports completion, exit `75` means rate-limited, and any other exit code means failure. Provider stdout/stderr is discarded and never enters the non-secret receipt.
 
-The validation command receives `HUNTER_AGENT_EXPECTED_HEAD` and `HUNTER_AGENT_BRANCH`. It must validate that exact remote candidate.
+Provider processes do not inherit the full n8n environment. Only a small safe OS environment is present by default. If a wrapper needs credentials, explicitly allow only that provider's required environment names with a JSON array, for example:
+
+```text
+HUNTER_AGENT_CODEX_ENV_ALLOWLIST=["OPENAI_API_KEY"]
+HUNTER_AGENT_CLAUDE_ENV_ALLOWLIST=["ANTHROPIC_API_KEY"]
+HUNTER_AGENT_FREEBUFF_ENV_ALLOWLIST=[]
+HUNTER_AGENT_OPENCODE_ENV_ALLOWLIST=[]
+HUNTER_AGENT_JULES_ENV_ALLOWLIST=[]
+HUNTER_AGENT_VALIDATION_ENV_ALLOWLIST=[]
+```
+
+Prompt-authority variables such as `HUNTER_PROMPT_AUTOMATION_SIGNING_KEY` are rejected from every provider and validation allowlist. Each attempt runs in its own process group; timeout cleanup terminates the whole group before fallback continues.
+
+Before any provider runs, the runtime pins and validates the credential-free `github.com` URL currently configured as `origin`. Every later `git ls-remote` HEAD check uses that pinned URL rather than the mutable local remote name. Provider reports are not trusted as success: the runtime requires a new GitHub-visible HEAD plus successful targeted validation.
+
+The validation command receives only its sanitized environment plus `HUNTER_AGENT_EXPECTED_HEAD` and `HUNTER_AGENT_BRANCH`. The successful receipt includes `validation_succeeded: true` and fixed non-secret attempt status codes.
 
 ## Canary completion
 
