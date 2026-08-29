@@ -57,15 +57,10 @@ jobs:
           if [[ -n "${DIRECT_PR_NUMBER}" ]]; then
             PR_NUMBERS="${DIRECT_PR_NUMBER}"
           else
-            PR_NUMBERS="$({
+            PR_NUMBERS="$(
               cd "${GITHUB_WORKSPACE}/engine/scripts"
-              python - <<'PY'
-import hunter_merge_readiness_v2 as readiness
-
-for number in readiness.candidate_prs():
-    print(number)
-PY
-            })"
+              python -c 'import hunter_merge_readiness_v2 as readiness; print("\n".join(str(number) for number in readiness.candidate_prs()))'
+            )"
           fi
 
           if [[ -z "${PR_NUMBERS}" ]]; then
