@@ -209,7 +209,8 @@ jobs:
 def _database(path: Path, *, failed_job: bool) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(path) as connection:
-        connection.execute("""
+        connection.execute(
+            """
             create table persistence_records (
                 id text primary key,
                 record_type text,
@@ -220,7 +221,8 @@ def _database(path: Path, *, failed_job: bool) -> None:
                 payload text,
                 deleted_at text
             )
-            """)
+            """
+        )
         if failed_job:
             connection.execute(
                 "insert into persistence_records values (?, ?, ?, ?, ?, ?, ?, ?)",

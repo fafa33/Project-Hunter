@@ -294,7 +294,8 @@ class EvidencePreModelPersistenceRepository:
 
     def _initialize(self) -> None:
         with self._connect() as connection:
-            connection.executescript("""
+            connection.executescript(
+                """
                 CREATE TABLE IF NOT EXISTS evidence_pre_model_build_bundles (
                     build_record_id TEXT PRIMARY KEY,
                     recorded_at TEXT NOT NULL,
@@ -303,7 +304,8 @@ class EvidencePreModelPersistenceRepository:
                 );
                 CREATE INDEX IF NOT EXISTS evidence_pre_model_build_recorded_at_idx
                     ON evidence_pre_model_build_bundles(recorded_at, build_record_id);
-                """)
+                """
+            )
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.path)

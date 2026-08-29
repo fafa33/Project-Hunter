@@ -135,16 +135,24 @@ class CandidateRegistryRepository:
                     "SELECT discovery_source, COUNT(*) AS count FROM candidates GROUP BY discovery_source"
                 ).fetchall()
             }
-            screenable = int(conn.execute("""
+            screenable = int(
+                conn.execute(
+                    """
                     SELECT COUNT(*) FROM candidates
                     WHERE lifecycle_status IN ('screenable', 'analyzable', 'ranked', 'deep_research')
-                    """).fetchone()[0])
-            identity_ready = int(conn.execute("""
+                    """
+                ).fetchone()[0]
+            )
+            identity_ready = int(
+                conn.execute(
+                    """
                     SELECT COUNT(*) FROM (
                         SELECT candidate_id FROM identifiers
                         GROUP BY candidate_id HAVING COUNT(*) >= 1
                     )
-                    """).fetchone()[0])
+                    """
+                ).fetchone()[0]
+            )
             last_run = conn.execute("SELECT MAX(finished_at) FROM runs").fetchone()[0]
             return CandidateRegistryStats(
                 total_candidates=total,
@@ -408,7 +416,8 @@ class CandidateRegistryRepository:
 
     def latest_screening_results(self) -> tuple[CandidateScreeningResult, ...]:
         with self._connect() as conn:
-            rows = conn.execute("""
+            rows = conn.execute(
+                """
                 SELECT sr.* FROM screening_results sr
                 JOIN (
                     SELECT candidate_id, MAX(screened_at) AS screened_at
@@ -416,7 +425,8 @@ class CandidateRegistryRepository:
                 ) latest
                 ON sr.candidate_id = latest.candidate_id AND sr.screened_at = latest.screened_at
                 ORDER BY sr.score DESC, sr.candidate_id
-                """).fetchall()
+                """
+            ).fetchall()
             return tuple(_screening_from_row(row) for row in rows)
 
     def save_queue_entries(self, entries: tuple[CandidateQueueEntry, ...]) -> None:
@@ -466,7 +476,8 @@ class CandidateRegistryRepository:
 
     def _initialize(self) -> None:
         with self._connect() as conn:
-            conn.executescript("""
+            conn.executescript(
+                """
                 CREATE TABLE IF NOT EXISTS candidates (
                     candidate_id TEXT PRIMARY KEY,
                     slug TEXT NOT NULL UNIQUE,
@@ -613,7 +624,8 @@ class CandidateRegistryRepository:
                 CREATE INDEX IF NOT EXISTS queue_priority_idx ON queue_entries(priority_score);
                 CREATE INDEX IF NOT EXISTS conflicts_candidate_idx ON conflicts(candidate_id);
                 CREATE INDEX IF NOT EXISTS identity_outcome_idx ON identity_results(outcome);
-                """)
+                """
+            )
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.path)
