@@ -223,8 +223,8 @@ def test_escalated_recurrence_with_missing_or_invalid_evidence_or_refs_fails(tmp
             "classification": "recurrence",
             "mapped_defect_id": "PRH-007",
             "resolution_state": "resolved",
-            "guard_reference": "scripts/guard.py",
-            "test_reference": "tests/test_guard.py",
+            "guard_reference": "scripts/hunter_governance_review_v2.py::candidate_admission",
+            "test_reference": "tests/test_hunter_candidate_admission.py::test_admitted_candidate_stays_ready",
         },
         # whitespace-only permanent_disposition_evidence
         {
@@ -235,8 +235,8 @@ def test_escalated_recurrence_with_missing_or_invalid_evidence_or_refs_fails(tmp
             "mapped_defect_id": "PRH-007",
             "resolution_state": "resolved",
             "permanent_disposition_evidence": "   ",
-            "guard_reference": "scripts/guard.py",
-            "test_reference": "tests/test_guard.py",
+            "guard_reference": "scripts/hunter_governance_review_v2.py::candidate_admission",
+            "test_reference": "tests/test_hunter_candidate_admission.py::test_admitted_candidate_stays_ready",
         },
         # boolean placeholder for guard_reference
         {
@@ -248,7 +248,7 @@ def test_escalated_recurrence_with_missing_or_invalid_evidence_or_refs_fails(tmp
             "resolution_state": "resolved",
             "permanent_disposition_evidence": "Valid evidence",
             "guard_reference": True,
-            "test_reference": "tests/test_guard.py",
+            "test_reference": "tests/test_hunter_candidate_admission.py::test_admitted_candidate_stays_ready",
         },
         # missing test_reference
         {
@@ -259,7 +259,7 @@ def test_escalated_recurrence_with_missing_or_invalid_evidence_or_refs_fails(tmp
             "mapped_defect_id": "PRH-007",
             "resolution_state": "resolved",
             "permanent_disposition_evidence": "Valid evidence",
-            "guard_reference": "scripts/guard.py",
+            "guard_reference": "scripts/hunter_governance_review_v2.py::candidate_admission",
         },
     ]
 
@@ -274,6 +274,45 @@ def test_escalated_recurrence_with_missing_or_invalid_evidence_or_refs_fails(tmp
         assert any(
             "recurrence of" in error and "requires a resolved permanent disposition" in error for error in errors
         ), f"Failed for case {case_id}: {errors}"
+
+
+def test_reference_target_to_nonexistent_file_or_symbol_fails(tmp_path, monkeypatch) -> None:
+    nonexistent_file = {
+        "id": "RFD-TEST-NOFILE",
+        "source_provenance": {"reviewer": "Rev"},
+        "validation_state": "validated",
+        "classification": "recurrence",
+        "mapped_defect_id": "PRH-007",
+        "resolution_state": "resolved",
+        "permanent_disposition_evidence": "Valid evidence",
+        "guard_reference": "scripts/nonexistent_guard.py",
+        "test_reference": "tests/test_hunter_candidate_admission.py::test_admitted_candidate_stays_ready",
+    }
+    path = tmp_path / "REVIEWER_FINDING_DISPOSITIONS.json"
+    path.write_text(json.dumps({"version": 1, "purpose": "test", "findings": [nonexistent_file]}), encoding="utf-8")
+    monkeypatch.setattr(prevention, "REVIEWER_DISPOSITIONS_PATH", path)
+
+    errors = prevention.validate_reviewer_finding_dispositions()
+    assert any("file 'scripts/nonexistent_guard.py' does not exist" in error for error in errors)
+
+    nonexistent_symbol = {
+        "id": "RFD-TEST-NOSYM",
+        "source_provenance": {"reviewer": "Rev"},
+        "validation_state": "validated",
+        "classification": "recurrence",
+        "mapped_defect_id": "PRH-007",
+        "resolution_state": "resolved",
+        "permanent_disposition_evidence": "Valid evidence",
+        "guard_reference": "scripts/hunter_governance_review_v2.py::nonexistent_symbol_func",
+        "test_reference": "tests/test_hunter_candidate_admission.py::test_admitted_candidate_stays_ready",
+    }
+    path.write_text(json.dumps({"version": 1, "purpose": "test", "findings": [nonexistent_symbol]}), encoding="utf-8")
+
+    errors = prevention.validate_reviewer_finding_dispositions()
+    assert any(
+        "symbol 'nonexistent_symbol_func' not found in 'scripts/hunter_governance_review_v2.py'" in error
+        for error in errors
+    )
 
 
 def test_deterministic_preflight_failure_cannot_cross_normal_push_boundary(tmp_path, monkeypatch) -> None:

@@ -80,6 +80,41 @@ def _is_non_empty_str(val: Any) -> bool:
     return isinstance(val, str) and bool(val.strip())
 
 
+def _validate_reference_target(ref_str: str) -> str | None:
+    """Statically validate that ref_str points to an existing file and optional AST symbol.
+
+    Format: "relative/file/path.py" or "relative/file/path.py::symbol_name".
+    Uses AST parsing without importing or executing target code.
+    """
+    if "::" in ref_str:
+        file_part, symbol = ref_str.split("::", 1)
+        file_part = file_part.strip()
+        symbol = symbol.strip()
+    else:
+        file_part = ref_str.strip()
+        symbol = None
+
+    target_path = ROOT / file_part
+    if not target_path.is_file():
+        return f"file {file_part!r} does not exist"
+
+    if symbol:
+        try:
+            tree = ast.parse(target_path.read_text(encoding="utf-8"), filename=file_part)
+        except Exception as exc:
+            return f"failed to parse AST for {file_part!r}: {exc}"
+
+        top_symbols: set[str] = set()
+        for node in tree.body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                top_symbols.add(node.name)
+
+        if symbol not in top_symbols:
+            return f"symbol {symbol!r} not found in {file_part!r}"
+
+    return None
+
+
 def validate_reviewer_finding_dispositions() -> list[str]:
     errors: list[str] = []
     if not REVIEWER_DISPOSITIONS_PATH.is_file():
@@ -173,6 +208,13 @@ def validate_reviewer_finding_dispositions() -> list[str]:
                         errors.append(
                             f"{finding_id}: recurrence of {stage} defect {mapped_id} requires a resolved permanent disposition with non-empty string evidence, guard_reference, and test_reference"
                         )
+                    else:
+                        guard_err = _validate_reference_target(str(guard_ref))
+                        if guard_err:
+                            errors.append(f"{finding_id}: invalid guard_reference {guard_ref!r}: {guard_err}")
+                        test_err = _validate_reference_target(str(test_ref))
+                        if test_err:
+                            errors.append(f"{finding_id}: invalid test_reference {test_ref!r}: {test_err}")
         elif mapped_id is not None:
             if not _is_non_empty_str(mapped_id) or mapped_id not in registry_defects:
                 errors.append(f"{finding_id}: mapped_defect_id {mapped_id!r} not found in DEFECT_REGISTRY.json")
