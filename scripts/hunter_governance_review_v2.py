@@ -128,6 +128,41 @@ def read_pr_changed_paths(repository: str, token: str, pr_number: int) -> tuple[
         return False, (), f"unexpected error: {type(exc).__name__}: {exc}"
 
 
+PROHIBITED_API_COMMITTERS = frozenset({"web-flow", "github-actions[bot]"})
+PROHIBITED_API_EMAILS = frozenset({"noreply@github.com", "web-flow@github.com"})
+
+
+def read_commit_lineage_ingress(repository: str, token: str, head_sha: str) -> tuple[bool, str]:
+    encoded_sha = quote(head_sha, safe="")
+    try:
+        payload = request_json(repository, token, "GET", f"commits/{encoded_sha}")
+    except transport.GitHubRequestError as exc:
+        return False, f"Candidate admission blocked: commit ingress evidence is unavailable ({exc})."
+    except Exception as exc:
+        return False, f"Candidate admission blocked: commit ingress evidence error ({exc})."
+
+    if not isinstance(payload, dict):
+        return False, "Candidate admission blocked: commit ingress evidence payload is malformed."
+
+    committer_login = str((payload.get("committer") or {}).get("login") or "").strip().lower()
+    commit_obj = payload.get("commit") or {}
+    git_committer = commit_obj.get("committer") or {}
+    git_committer_email = str(git_committer.get("email") or "").strip().lower()
+    git_committer_name = str(git_committer.get("name") or "").strip().lower()
+
+    if (
+        committer_login in PROHIBITED_API_COMMITTERS
+        or git_committer_email in PROHIBITED_API_EMAILS
+        or git_committer_name == "github"
+    ):
+        return (
+            False,
+            f"Candidate admission blocked: commit lineage ({head_sha[:10]}) was written via prohibited API-only path bypassing pre-push boundary.",
+        )
+
+    return True, "Commit lineage ingress validated."
+
+
 def read_head_preflight_mode(repository: str, token: str, head_sha: str) -> tuple[str, str | None]:
     encoded_sha = quote(head_sha, safe="")
     try:
@@ -206,6 +241,10 @@ def candidate_admission(repository: str, token: str, head_sha: str, pr_number: i
         return "failure", f"Candidate admission blocked: invalid .hunter-preflight-mode content ({mode_error})."
     if head_mode == "tests-first-red":
         return "failure", "Candidate admission blocked: tests-first-red work must remain Draft-only."
+
+    ok_ingress, ingress_error = read_commit_lineage_ingress(repository, token, head_sha)
+    if not ok_ingress:
+        return "failure", ingress_error
 
     if touches_protected_preflight:
         if pr_number is None:

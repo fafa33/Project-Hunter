@@ -119,6 +119,11 @@ def test_protected_preflight_ordinary_candidate_cannot_self_authorize(monkeypatc
     monkeypatch.setattr(core, "read_head_preflight_mode", lambda *_args: ("normal", None))
     monkeypatch.setattr(
         core,
+        "read_commit_lineage_ingress",
+        lambda *_args: (True, "Commit lineage ingress validated."),
+    )
+    monkeypatch.setattr(
+        core,
         "read_trusted_upgrade_status",
         lambda *_args: ("missing", "trusted proof missing"),
     )
@@ -154,3 +159,166 @@ def test_reconcile_continues_after_one_pr_failure_and_drops_checkout_credentials
     assert "if ! python scripts/hunter_governance_review_v2.py" in workflow
     assert "failures=1" in workflow
     assert 'exit "${failures}"' in workflow
+
+
+def test_api_only_code_write_candidate_fails_admission(monkeypatch) -> None:
+    monkeypatch.setattr(core, "read_pr_changed_paths", lambda *_args: (True, ("src/hunter/cli.py",), None))
+    monkeypatch.setattr(core, "read_head_preflight_mode", lambda *_args: ("normal", None))
+
+    def fake_request(_repo, _token, _method, path, _payload=None):
+        if f"commits/{HEAD}" in path:
+            return {
+                "committer": {"login": "web-flow"},
+                "commit": {"committer": {"name": "GitHub", "email": "noreply@github.com"}},
+            }
+        raise AssertionError(path)
+
+    monkeypatch.setattr(core, "request_json", fake_request)
+
+    state, description = core.candidate_admission("fafa33/Project-Hunter", "token", HEAD, 501)
+
+    assert state == "failure"
+    assert "prohibited API-only path" in description
+
+
+def test_api_only_candidate_remains_unadmitted_even_if_hosted_ci_succeeds(monkeypatch) -> None:
+    monkeypatch.setattr(core, "read_pr_changed_paths", lambda *_args: (True, ("src/hunter/cli.py",), None))
+    monkeypatch.setattr(core, "read_head_preflight_mode", lambda *_args: ("normal", None))
+
+    def fake_request(_repo, _token, _method, path, _payload=None):
+        if f"commits/{HEAD}" in path:
+            return {
+                "committer": {"login": "web-flow"},
+                "commit": {"committer": {"name": "GitHub", "email": "noreply@github.com"}},
+            }
+        if "actions/runs" in path:
+            return {
+                "workflow_runs": [
+                    {
+                        "head_sha": HEAD,
+                        "name": core.PRE_PR_WORKFLOW_NAME,
+                        "path": core.PRE_PR_WORKFLOW_PATH,
+                        "event": "push",
+                        "status": "completed",
+                        "conclusion": "success",
+                        "id": 100,
+                    }
+                ]
+            }
+        raise AssertionError(path)
+
+    monkeypatch.setattr(core, "request_json", fake_request)
+
+    state, description = core.candidate_admission("fafa33/Project-Hunter", "token", HEAD, 501)
+
+    assert state == "failure"
+    assert "prohibited API-only path" in description
+
+
+def test_clone_capable_candidate_with_valid_pre_push_and_exact_head_evidence_progresses(monkeypatch) -> None:
+    monkeypatch.setattr(core, "read_pr_changed_paths", lambda *_args: (True, ("src/hunter/cli.py",), None))
+    monkeypatch.setattr(core, "read_head_preflight_mode", lambda *_args: ("normal", None))
+
+    def fake_request(_repo, _token, _method, path, _payload=None):
+        if f"commits/{HEAD}" in path:
+            return {
+                "committer": {"login": "fafa33"},
+                "commit": {"committer": {"name": "Farhad5778", "email": "fafa33@example.com"}},
+            }
+        if "actions/runs" in path:
+            return {
+                "workflow_runs": [
+                    {
+                        "head_sha": HEAD,
+                        "name": core.PRE_PR_WORKFLOW_NAME,
+                        "path": core.PRE_PR_WORKFLOW_PATH,
+                        "event": "push",
+                        "status": "completed",
+                        "conclusion": "success",
+                        "id": 100,
+                    }
+                ]
+            }
+        raise AssertionError(path)
+
+    monkeypatch.setattr(core, "request_json", fake_request)
+
+    state, description = core.candidate_admission("fafa33/Project-Hunter", "token", HEAD, 501)
+
+    assert state == "success"
+    assert "Exact-head branch preflight passed" in description
+
+
+def test_stale_preflight_proof_cannot_authorize_newer_head(monkeypatch) -> None:
+    head_newer = "c" * 40
+    monkeypatch.setattr(core, "read_pr_changed_paths", lambda *_args: (True, ("src/hunter/cli.py",), None))
+    monkeypatch.setattr(core, "read_head_preflight_mode", lambda *_args: ("normal", None))
+
+    def fake_request(_repo, _token, _method, path, _payload=None):
+        if f"commits/{head_newer}" in path:
+            return {
+                "committer": {"login": "fafa33"},
+                "commit": {"committer": {"name": "Farhad5778", "email": "fafa33@example.com"}},
+            }
+        if "actions/runs" in path:
+            return {
+                "workflow_runs": [
+                    {
+                        "head_sha": HEAD,
+                        "name": core.PRE_PR_WORKFLOW_NAME,
+                        "path": core.PRE_PR_WORKFLOW_PATH,
+                        "event": "push",
+                        "status": "completed",
+                        "conclusion": "success",
+                        "id": 99,
+                    }
+                ]
+            }
+        raise AssertionError(path)
+
+    monkeypatch.setattr(core, "request_json", fake_request)
+
+    state, description = core.candidate_admission("fafa33/Project-Hunter", "token", head_newer, 501)
+
+    assert state == "failure"
+    assert "exact-head branch preflight is missing" in description
+
+
+def test_import_ordering_recurrence_prh001_cannot_reach_admitted_candidate_without_canonical_gate(monkeypatch) -> None:
+    monkeypatch.setattr(
+        core, "read_pr_changed_paths", lambda *_args: (True, ("tests/test_issue_agent_trigger.py",), None)
+    )
+    monkeypatch.setattr(core, "read_head_preflight_mode", lambda *_args: ("normal", None))
+
+    def fake_request(_repo, _token, _method, path, _payload=None):
+        if f"commits/{HEAD}" in path:
+            return {
+                "committer": {"login": "web-flow"},
+                "commit": {"committer": {"name": "GitHub", "email": "noreply@github.com"}},
+            }
+        raise AssertionError(path)
+
+    monkeypatch.setattr(core, "request_json", fake_request)
+
+    state, description = core.candidate_admission("fafa33/Project-Hunter", "token", HEAD, 501)
+
+    assert state == "failure"
+    assert "prohibited API-only path" in description
+
+
+def test_legitimate_api_only_read_review_metadata_operations_allowed(monkeypatch) -> None:
+    published = []
+
+    def fake_read_mergeability(_repo, _token, pr_number):
+        return _pr(True)
+
+    monkeypatch.setattr(core, "read_mergeability", fake_read_mergeability)
+    monkeypatch.setattr(core, "check_reviewer_dispositions", lambda: (True, ""))
+    monkeypatch.setattr(core, "candidate_admission", lambda *_args: ("success", "admitted"))
+    monkeypatch.setattr(core, "publish", lambda *args: published.append(args))
+
+    result = core.review("fafa33/Project-Hunter", "token", 501)
+
+    assert result == 0
+    assert len(published) == 1
+    assert published[0][3] == "success"
