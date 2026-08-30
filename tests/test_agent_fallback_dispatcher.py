@@ -4,12 +4,15 @@ import json
 
 import pytest
 
+import hunter.automation.environment_capabilities as capability_module
 from hunter.automation.agent_fallback import (
     PROVIDER_ORDER,
+    AgentEnvironmentUnsuitableError,
     AgentExecutionReport,
     AgentFallbackExhaustedError,
     GovernedAgentFallbackDispatcher,
 )
+from hunter.automation.environment_capabilities import AVAILABLE_CAPABILITIES_ENV, REQUIRED_CAPABILITIES_ENV
 from hunter.automation.n8n_handoff import PromptAutomationEnvelopeHandoff, PromptAutomationHandoffError
 from hunter.evidence_intelligence.smart_prompt_routing import (
     PromptAutomationVerifier,
@@ -65,6 +68,69 @@ def test_rate_limit_falls_through_with_identical_governed_handoff(monkeypatch: p
     assert documents == [document, document]
     assert dispatcher.provider_states["codex"] == "rate_limited"
     assert dispatcher.provider_states["claude"] == "available"
+
+
+def test_environment_preflight_rejects_missing_egress_before_provider_execution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(REQUIRED_CAPABILITIES_ENV, '["egress"]')
+    monkeypatch.setenv(AVAILABLE_CAPABILITIES_ENV, "[]")
+    dispatcher = GovernedAgentFallbackDispatcher(
+        execute=lambda provider, document: pytest.fail("provider must not run in unsuitable environment"),
+        read_head=lambda: pytest.fail("remote HEAD must not be read after environment rejection"),
+        validate=lambda head: False,
+        verifier=_verifier(),
+    )
+
+    with pytest.raises(AgentEnvironmentUnsuitableError, match="missing_capability:egress") as captured:
+        dispatcher.dispatch_document(_handoff(monkeypatch))
+
+    assert captured.value.attempts == ()
+
+
+def test_environment_preflight_rejects_root_ptrace_as_nonrepresentative(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(REQUIRED_CAPABILITIES_ENV, '["representative_preflight"]')
+    monkeypatch.setenv(AVAILABLE_CAPABILITIES_ENV, '["representative_preflight"]')
+    monkeypatch.setattr(capability_module.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(capability_module, "_has_effective_cap_sys_ptrace", lambda: True)
+    dispatcher = GovernedAgentFallbackDispatcher(
+        execute=lambda provider, document: pytest.fail("provider must not run in nonrepresentative root environment"),
+        read_head=lambda: pytest.fail("remote HEAD must not be read after environment rejection"),
+        validate=lambda head: False,
+        verifier=_verifier(),
+    )
+
+    with pytest.raises(AgentEnvironmentUnsuitableError, match="root_with_cap_sys_ptrace"):
+        dispatcher.dispatch_document(_handoff(monkeypatch))
+
+
+def test_environment_preflight_allows_declared_suitable_capabilities(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(REQUIRED_CAPABILITIES_ENV, '["egress","github_push","representative_preflight"]')
+    monkeypatch.setenv(AVAILABLE_CAPABILITIES_ENV, '["egress","github_push","representative_preflight"]')
+    monkeypatch.setattr(capability_module.os, "geteuid", lambda: 501)
+    heads = iter(("head-a", "head-b"))
+    calls: list[str] = []
+
+    def execute(provider: str, document: str) -> AgentExecutionReport:
+        del document
+        calls.append(provider)
+        return AgentExecutionReport("completed")
+
+    dispatcher = GovernedAgentFallbackDispatcher(
+        execute=execute,
+        read_head=lambda: next(heads),
+        validate=lambda head: head == "head-b",
+        verifier=_verifier(),
+    )
+
+    result = dispatcher.dispatch_document(_handoff(monkeypatch))
+
+    assert result.provider == "codex"
+    assert calls == ["codex"]
 
 
 def test_local_only_completion_is_rejected_and_falls_through(monkeypatch: pytest.MonkeyPatch) -> None:

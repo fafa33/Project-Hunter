@@ -7,11 +7,12 @@ advance plus targeted validation after one provider reports completion.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Literal
 
+from hunter.automation.environment_capabilities import assess_environment_capabilities
 from hunter.automation.n8n_handoff import PromptAutomationEnvelopeHandoff, PromptAutomationHandoffError
 from hunter.evidence_intelligence.smart_prompt_machine import SmartPromptMachineError
 from hunter.evidence_intelligence.smart_prompt_routing import PromptAutomationEnvelope, PromptAutomationVerifier
@@ -27,6 +28,15 @@ class AgentFallbackExhaustedError(RuntimeError):
     def __init__(self, attempts: tuple[AgentAttempt, ...]) -> None:
         self.attempts = attempts
         super().__init__("agent provider pool exhausted without verified GitHub success")
+
+
+class AgentEnvironmentUnsuitableError(AgentFallbackExhaustedError):
+    """Raised before provider execution when the shared runtime cannot satisfy the task."""
+
+    def __init__(self, reasons: tuple[str, ...]) -> None:
+        self.reasons = reasons
+        self.attempts = ()
+        RuntimeError.__init__(self, f"ENVIRONMENT_UNSUITABLE: {','.join(reasons)}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,7 +72,7 @@ class AgentFallbackResult:
 class GovernedAgentFallbackDispatcher:
     """Run one verified canonical handoff through the fixed provider pool."""
 
-    __slots__ = ("_execute", "_read_head", "_validate", "_verifier", "_provider_states")
+    __slots__ = ("_execute", "_read_head", "_validate", "_verifier", "_provider_states", "_environ")
 
     def __init__(
         self,
@@ -71,6 +81,7 @@ class GovernedAgentFallbackDispatcher:
         read_head: Callable[[], str],
         validate: Callable[[str], bool],
         verifier: PromptAutomationVerifier,
+        environ: Mapping[str, str] | None = None,
     ) -> None:
         if type(verifier) is not PromptAutomationVerifier:
             raise TypeError("agent fallback requires the process-bound issuer verifier")
@@ -78,6 +89,7 @@ class GovernedAgentFallbackDispatcher:
         self._read_head = read_head
         self._validate = validate
         self._verifier = verifier
+        self._environ = environ
         self._provider_states: dict[str, ProviderState] = {provider: "available" for provider in PROVIDER_ORDER}
 
     @property
@@ -85,13 +97,18 @@ class GovernedAgentFallbackDispatcher:
         return MappingProxyType(dict(self._provider_states))
 
     def dispatch_document(self, document: str | bytes) -> AgentFallbackResult:
-        """Verify and dispatch one exact handoff; never regenerate it during fallback."""
+        """Verify, preflight, and dispatch one exact handoff; never regenerate it during fallback."""
         handoff = PromptAutomationEnvelopeHandoff.from_json(document)
         envelope = handoff.to_envelope()
         try:
             PromptAutomationEnvelope.verify_issuer_signature(envelope, self._verifier)
         except SmartPromptMachineError:
             raise PromptAutomationHandoffError("automation handoff issuer signature could not be verified") from None
+
+        environment = assess_environment_capabilities(self._environ)
+        if not environment.suitable:
+            raise AgentEnvironmentUnsuitableError(environment.reasons)
+
         canonical_document = handoff.to_json()
         baseline_head = self._read_head()
         attempts: list[AgentAttempt] = []
@@ -156,6 +173,7 @@ class GovernedAgentFallbackDispatcher:
 
 __all__ = [
     "AgentAttempt",
+    "AgentEnvironmentUnsuitableError",
     "AgentExecutionReport",
     "AgentFallbackExhaustedError",
     "AgentFallbackResult",
