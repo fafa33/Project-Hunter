@@ -7,7 +7,7 @@ advance plus targeted validation after one provider reports completion.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Literal
@@ -72,7 +72,7 @@ class AgentFallbackResult:
 class GovernedAgentFallbackDispatcher:
     """Run one verified canonical handoff through the fixed provider pool."""
 
-    __slots__ = ("_execute", "_read_head", "_validate", "_verifier", "_provider_states")
+    __slots__ = ("_execute", "_read_head", "_validate", "_verifier", "_provider_states", "_environ")
 
     def __init__(
         self,
@@ -81,6 +81,7 @@ class GovernedAgentFallbackDispatcher:
         read_head: Callable[[], str],
         validate: Callable[[str], bool],
         verifier: PromptAutomationVerifier,
+        environ: Mapping[str, str] | None = None,
     ) -> None:
         if type(verifier) is not PromptAutomationVerifier:
             raise TypeError("agent fallback requires the process-bound issuer verifier")
@@ -88,6 +89,7 @@ class GovernedAgentFallbackDispatcher:
         self._read_head = read_head
         self._validate = validate
         self._verifier = verifier
+        self._environ = environ
         self._provider_states: dict[str, ProviderState] = {provider: "available" for provider in PROVIDER_ORDER}
 
     @property
@@ -103,7 +105,7 @@ class GovernedAgentFallbackDispatcher:
         except SmartPromptMachineError:
             raise PromptAutomationHandoffError("automation handoff issuer signature could not be verified") from None
 
-        environment = assess_environment_capabilities()
+        environment = assess_environment_capabilities(self._environ)
         if not environment.suitable:
             raise AgentEnvironmentUnsuitableError(environment.reasons)
 
