@@ -39,9 +39,7 @@ def _handoff(monkeypatch: pytest.MonkeyPatch) -> str:
 
 def _verifier() -> PromptAutomationVerifier:
     """Return the process-bound verifier matching the regression signing key."""
-    return PromptAutomationVerifier.from_environment(
-        environ={"HUNTER_PROMPT_AUTOMATION_VERIFYING_KEY": _VERIFYING_KEY}
-    )
+    return PromptAutomationVerifier.from_environment(environ={"HUNTER_PROMPT_AUTOMATION_VERIFYING_KEY": _VERIFYING_KEY})
 
 
 def _runtime_environment() -> dict[str, str]:
