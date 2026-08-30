@@ -1,16 +1,17 @@
 from __future__ import annotations
 
 import copy
+from typing import Any
 
+import pytest
 from hunter_issue_agent_trigger import (
     DEFAULT_LABEL,
     IssueAgentTriggerError,
     authorize_event,
 )
-import pytest
 
 
-def _event() -> dict[str, object]:
+def _event() -> dict[str, Any]:
     return {
         "action": "labeled",
         "repository": {"full_name": "fafa33/Project-Hunter"},
@@ -27,7 +28,7 @@ def _event() -> dict[str, object]:
     }
 
 
-def _authorize(event: dict[str, object]):
+def _authorize(event: dict[str, Any]):
     return authorize_event(
         event,
         expected_repository="fafa33/Project-Hunter",
