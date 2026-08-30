@@ -6,6 +6,7 @@ import json
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 
 REQUIRED_CAPABILITIES_ENV = "HUNTER_AGENT_REQUIRED_CAPABILITIES"
 AVAILABLE_CAPABILITIES_ENV = "HUNTER_AGENT_AVAILABLE_CAPABILITIES"
@@ -45,7 +46,7 @@ def _capabilities(value: object, *, name: str) -> tuple[str, ...]:
 def _has_effective_cap_sys_ptrace() -> bool:
     """Return true only when Linux explicitly reports CAP_SYS_PTRACE effective."""
     try:
-        status = open("/proc/self/status", encoding="utf-8").read()
+        status = Path("/proc/self/status").read_text(encoding="utf-8")
     except OSError:
         return False
     for line in status.splitlines():
