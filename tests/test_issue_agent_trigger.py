@@ -4,7 +4,7 @@ import copy
 
 import pytest
 
-from scripts.hunter_issue_agent_trigger import (
+from hunter_issue_agent_trigger import (
     DEFAULT_LABEL,
     IssueAgentTriggerError,
     authorize_event,
