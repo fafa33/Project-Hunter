@@ -2,13 +2,12 @@ from __future__ import annotations
 
 import copy
 
-import pytest
-
 from hunter_issue_agent_trigger import (
     DEFAULT_LABEL,
     IssueAgentTriggerError,
     authorize_event,
 )
+import pytest
 
 
 def _event() -> dict[str, object]:
