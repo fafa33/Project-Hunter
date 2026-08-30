@@ -115,8 +115,13 @@ def test_environment_preflight_allows_declared_suitable_capabilities(
     heads = iter(("head-a", "head-b"))
     calls: list[str] = []
 
+    def execute(provider: str, document: str) -> AgentExecutionReport:
+        del document
+        calls.append(provider)
+        return AgentExecutionReport("completed")
+
     dispatcher = GovernedAgentFallbackDispatcher(
-        execute=lambda provider, document: calls.append(provider) or AgentExecutionReport("completed"),
+        execute=execute,
         read_head=lambda: next(heads),
         validate=lambda head: head == "head-b",
         verifier=_verifier(),
