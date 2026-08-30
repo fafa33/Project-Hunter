@@ -113,6 +113,16 @@
       "status": "guarded"
     },
     {
+      "id": "PRH-012",
+      "class": "code-write-ingress-proven-by-forgeable-commit-metadata",
+      "source": "PR #391 independent review (Codex P1, CodeRabbit Major) on 2026-08-30. The first correction for the API-only code-write ingress gap asserted prevention using a denylist of committer logins, emails and names. The Contents API and Git Data API let a caller supply any author and committer identity, so an API-only write evaded the denylist and could still reach hosted preflight success; the check also read only the tip, so a clone-authored tip concealed an API-written ancestor. A class represented as prevented recurred in review, so the prevention system itself was the defect.",
+      "classification": "systemic",
+      "guard_boundary": "candidate admission requires positive, exact-SHA-bound ingress proof for every commit in the pull request range, never absence of a denied identity and never the tip alone",
+      "guard": "verify_code_write_ingress_provenance() requires each commit in the PR commit range to carry a GitHub-verified signature (verified is True and reason == 'valid') from a signer allowlisted in docs/CODE_WRITE_POLICY.json. The signature is computed over the commit object, so the SHA is the signed identity: a proof cannot be detached, replayed onto a newer SHA, or supplied as Contents API or Git Data API commit metadata, and hosted CI success cannot substitute for it. The policy is read by the governance controller from the trusted default branch, so a candidate cannot widen its own allowlist or move its own attestation floor. Only the committer login is trusted for signer identity because a verified signature binds the committer email to the key owner; the author field carries no such binding. Commits reachable from the declared attested_from_commit floor predate the authority and are exempt, and three-dot comparison excludes only ancestors of that floor, so the exemption cannot be steered onto a later commit. Missing policy, an empty allowlist, unavailable or malformed range evidence, an unsigned commit, an unverified signature and an unauthorized signer all fail closed",
+      "test": "tests/test_hunter_governance_review_v2.py::test_api_written_ancestor_is_not_concealed_by_clone_authored_tip",
+      "status": "guarded"
+    },
+    {
       "id": "ARCH-AUD-001",
       "class": "accepted-adr-coverage-incomplete",
       "source": "PR #288, PR #290, and PR #293 CodeRabbit",

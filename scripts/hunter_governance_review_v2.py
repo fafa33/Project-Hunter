@@ -128,39 +128,191 @@ def read_pr_changed_paths(repository: str, token: str, pr_number: int) -> tuple[
         return False, (), f"unexpected error: {type(exc).__name__}: {exc}"
 
 
-PROHIBITED_API_COMMITTERS = frozenset({"web-flow", "github-actions[bot]"})
-PROHIBITED_API_EMAILS = frozenset({"noreply@github.com", "web-flow@github.com"})
+CODE_WRITE_POLICY_PATH = ROOT / "docs" / "CODE_WRITE_POLICY.json"
+COMMIT_PAGE_CAP = 30
 
 
-def read_commit_lineage_ingress(repository: str, token: str, head_sha: str) -> tuple[bool, str]:
-    encoded_sha = quote(head_sha, safe="")
+def _is_commit_sha(value: str) -> bool:
+    return len(value) == 40 and all(character in "0123456789abcdef" for character in value)
+
+
+def load_ingress_provenance_policy() -> tuple[frozenset[str], str, str | None]:
+    """Read the trusted code-write ingress provenance authority.
+
+    The governance controller checks out the default branch, so this reads the
+    trusted policy rather than the candidate's own copy: a candidate cannot widen
+    its own signer allowlist or move its own attestation floor.
+    """
     try:
-        payload = request_json(repository, token, "GET", f"commits/{encoded_sha}")
-    except transport.GitHubRequestError as exc:
-        return False, f"Candidate admission blocked: commit ingress evidence is unavailable ({exc})."
+        policy = json.loads(CODE_WRITE_POLICY_PATH.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return frozenset(), "", "canonical code-write policy is missing"
     except Exception as exc:
-        return False, f"Candidate admission blocked: commit ingress evidence error ({exc})."
+        return frozenset(), "", f"canonical code-write policy is unreadable ({type(exc).__name__}: {exc})"
 
-    if not isinstance(payload, dict):
-        return False, "Candidate admission blocked: commit ingress evidence payload is malformed."
+    provenance = policy.get("ingress_provenance") if isinstance(policy, dict) else None
+    if not isinstance(provenance, dict):
+        return frozenset(), "", "canonical code-write policy declares no ingress provenance authority"
 
-    committer_login = str((payload.get("committer") or {}).get("login") or "").strip().lower()
-    commit_obj = payload.get("commit") or {}
-    git_committer = commit_obj.get("committer") or {}
-    git_committer_email = str(git_committer.get("email") or "").strip().lower()
-    git_committer_name = str(git_committer.get("name") or "").strip().lower()
+    raw_signers = provenance.get("authorized_signers")
+    if not isinstance(raw_signers, list) or not raw_signers:
+        return frozenset(), "", "code-write policy declares no authorized ingress signers"
+    signers = {str(signer).strip().lower() for signer in raw_signers if isinstance(signer, str) and str(signer).strip()}
+    if len(signers) != len(raw_signers):
+        return frozenset(), "", "code-write policy authorized_signers contains a malformed entry"
 
-    if (
-        committer_login in PROHIBITED_API_COMMITTERS
-        or git_committer_email in PROHIBITED_API_EMAILS
-        or git_committer_name == "github"
-    ):
-        return (
-            False,
-            f"Candidate admission blocked: commit lineage ({head_sha[:10]}) was written via prohibited API-only path bypassing pre-push boundary.",
+    floor = provenance.get("attested_from_commit", "")
+    if not isinstance(floor, str):
+        return frozenset(), "", "code-write policy attested_from_commit is malformed"
+    floor = floor.strip().lower()
+    if floor and not _is_commit_sha(floor):
+        return frozenset(), "", "code-write policy attested_from_commit is not a full commit SHA"
+    return frozenset(signers), floor, None
+
+
+def read_pr_commits(repository: str, token: str, pr_number: int) -> tuple[bool, tuple[dict[str, Any], ...], str | None]:
+    collected: list[dict[str, Any]] = []
+    try:
+        for page in range(1, COMMIT_PAGE_CAP + 1):
+            payload = request_json(
+                repository,
+                token,
+                "GET",
+                f"pulls/{pr_number}/commits?per_page=100&page={page}",
+            )
+            if not isinstance(payload, list):
+                return False, (), "pull request commit listing payload is not a list"
+            collected.extend(item for item in payload if isinstance(item, dict))
+            if len(payload) < 100:
+                return True, tuple(collected), None
+        return False, (), "pull request commit range exceeds the supported proof boundary"
+    except transport.GitHubRequestError as exc:
+        return False, (), f"GitHub request error: {exc}"
+    except Exception as exc:
+        return False, (), f"unexpected error: {type(exc).__name__}: {exc}"
+
+
+def read_commits_beyond_attestation_floor(
+    repository: str,
+    token: str,
+    floor_sha: str,
+    head_sha: str,
+) -> tuple[bool, frozenset[str], str | None]:
+    """SHAs reachable from head_sha but not from the declared attestation floor.
+
+    Three-dot comparison excludes only commits reachable from the merge base of
+    the floor and the head. Any excluded commit is therefore an ancestor of the
+    floor, so a candidate cannot steer the comparison into exempting a commit
+    written after the authority activated.
+    """
+    collected: set[str] = set()
+    encoded_floor = quote(floor_sha, safe="")
+    encoded_head = quote(head_sha, safe="")
+    try:
+        for page in range(1, COMMIT_PAGE_CAP + 1):
+            payload = request_json(
+                repository,
+                token,
+                "GET",
+                f"compare/{encoded_floor}...{encoded_head}?per_page=100&page={page}",
+            )
+            if not isinstance(payload, dict):
+                return False, frozenset(), "commit range comparison payload is malformed"
+            commits = payload.get("commits")
+            if not isinstance(commits, list):
+                return False, frozenset(), "commit range comparison payload is malformed"
+            collected.update(
+                str(commit.get("sha") or "").strip().lower()
+                for commit in commits
+                if isinstance(commit, dict) and commit.get("sha")
+            )
+            if len(commits) < 100:
+                return True, frozenset(collected), None
+        return False, frozenset(), "commit range comparison exceeds the supported proof boundary"
+    except transport.GitHubRequestError as exc:
+        return False, frozenset(), f"GitHub request error: {exc}"
+    except Exception as exc:
+        return False, frozenset(), f"unexpected error: {type(exc).__name__}: {exc}"
+
+
+def _ingress_signer(entry: dict[str, Any]) -> str:
+    """GitHub account that wrote the commit.
+
+    Bound to the committer only. A verified signature requires the committer
+    email to be a verified email of the signing key's owner, so this login is
+    cryptographically bound; the author field carries no such binding.
+    """
+    committer = entry.get("committer")
+    if not isinstance(committer, dict):
+        return ""
+    return str(committer.get("login") or "").strip().lower()
+
+
+def verify_code_write_ingress_provenance(
+    repository: str,
+    token: str,
+    head_sha: str,
+    pr_number: int | None,
+) -> tuple[bool, str]:
+    """Require positive pre-push ingress proof for the whole code-changing range.
+
+    Commit identity fields are caller-supplied through the Contents API and Git
+    Data API, so they prove nothing about how a ref was written. A verified
+    signature from an authorized clone-capable writer is the positive proof: it
+    is computed over the commit object, so it binds the exact SHA and cannot be
+    replayed onto another commit, forged as commit metadata, or satisfied by
+    hosted CI success. Every commit in the range is checked, so a clone-authored
+    tip cannot conceal an API-written ancestor.
+    """
+    if pr_number is None:
+        return False, "Candidate admission blocked: ingress provenance requires PR-bound commit-range evidence."
+
+    signers, floor_sha, policy_error = load_ingress_provenance_policy()
+    if policy_error is not None:
+        return False, f"Candidate admission blocked: {policy_error}."
+
+    ok, commits, error = read_pr_commits(repository, token, pr_number)
+    if not ok:
+        return False, f"Candidate admission blocked: commit-range ingress evidence is unavailable ({error})."
+    if not commits:
+        return False, "Candidate admission blocked: commit-range ingress evidence is empty."
+
+    range_shas = {str(entry.get("sha") or "").strip().lower() for entry in commits}
+    if not all(_is_commit_sha(sha) for sha in range_shas):
+        return False, "Candidate admission blocked: commit-range ingress evidence carries a malformed commit SHA."
+    if head_sha.strip().lower() not in range_shas:
+        return False, "Candidate admission blocked: exact head is absent from the PR commit range evidence."
+
+    attestation_required = range_shas
+    if floor_sha and floor_sha in range_shas:
+        ok_floor, beyond_floor, floor_error = read_commits_beyond_attestation_floor(
+            repository, token, floor_sha, head_sha
         )
+        if not ok_floor:
+            return False, f"Candidate admission blocked: pre-authority range evidence is unavailable ({floor_error})."
+        attestation_required = range_shas & beyond_floor
 
-    return True, "Commit lineage ingress validated."
+    for entry in commits:
+        sha = str(entry.get("sha") or "").strip().lower()
+        if sha not in attestation_required:
+            continue
+        verification = (entry.get("commit") or {}).get("verification")
+        if not isinstance(verification, dict):
+            return False, f"Candidate admission blocked: commit {sha[:10]} carries no ingress signature evidence."
+        reason = str(verification.get("reason") or "unknown")
+        if verification.get("verified") is not True or reason != "valid":
+            return False, (
+                f"Candidate admission blocked: commit {sha[:10]} has no verified pre-push ingress "
+                f"signature (reason={reason})."
+            )
+        signer = _ingress_signer(entry)
+        if signer not in signers:
+            return False, (
+                f"Candidate admission blocked: commit {sha[:10]} was written by unauthorized ingress "
+                f"signer {signer or 'unknown'}."
+            )
+
+    return True, "Verified pre-push ingress signatures cover the code-changing commit range."
 
 
 def read_head_preflight_mode(repository: str, token: str, head_sha: str) -> tuple[str, str | None]:
@@ -242,9 +394,9 @@ def candidate_admission(repository: str, token: str, head_sha: str, pr_number: i
     if head_mode == "tests-first-red":
         return "failure", "Candidate admission blocked: tests-first-red work must remain Draft-only."
 
-    ok_ingress, ingress_error = read_commit_lineage_ingress(repository, token, head_sha)
+    ok_ingress, ingress_message = verify_code_write_ingress_provenance(repository, token, head_sha, pr_number)
     if not ok_ingress:
-        return "failure", ingress_error
+        return "failure", ingress_message
 
     if touches_protected_preflight:
         if pr_number is None:

@@ -107,11 +107,14 @@ def test_protected_preflight_requires_exact_head_pr_bound_status(monkeypatch) ->
                     "state": "success",
                 }
             ]
-        if f"commits/{HEAD_A}" in path:
-            return {
-                "committer": {"login": "fafa33"},
-                "commit": {"committer": {"name": "Farhad5778", "email": "fafa33@example.com"}},
-            }
+        if "pulls/376/commits" in path:
+            return [
+                {
+                    "sha": HEAD_A,
+                    "committer": {"login": "fafa33"},
+                    "commit": {"verification": {"verified": True, "reason": "valid"}},
+                }
+            ]
         raise AssertionError(path)
 
     monkeypatch.setattr(governance, "request_json", fake_request)

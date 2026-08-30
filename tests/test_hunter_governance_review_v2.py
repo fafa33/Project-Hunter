@@ -119,8 +119,8 @@ def test_protected_preflight_ordinary_candidate_cannot_self_authorize(monkeypatc
     monkeypatch.setattr(core, "read_head_preflight_mode", lambda *_args: ("normal", None))
     monkeypatch.setattr(
         core,
-        "read_commit_lineage_ingress",
-        lambda *_args: (True, "Commit lineage ingress validated."),
+        "verify_code_write_ingress_provenance",
+        lambda *_args: (True, "ingress provenance verified"),
     )
     monkeypatch.setattr(
         core,
@@ -161,141 +161,226 @@ def test_reconcile_continues_after_one_pr_failure_and_drops_checkout_credentials
     assert 'exit "${failures}"' in workflow
 
 
-def test_api_only_code_write_candidate_fails_admission(monkeypatch) -> None:
+ANCESTOR = "d" * 40
+FLOOR = "e" * 40
+SUCCESSFUL_RUN = {
+    "head_sha": HEAD,
+    "name": core.PRE_PR_WORKFLOW_NAME,
+    "path": core.PRE_PR_WORKFLOW_PATH,
+    "event": "push",
+    "status": "completed",
+    "conclusion": "success",
+    "id": 100,
+}
+
+
+def _signed(sha: str, signer: str = "claude") -> dict:
+    return {
+        "sha": sha,
+        "committer": {"login": signer},
+        "commit": {"verification": {"verified": True, "reason": "valid"}},
+    }
+
+
+def _unsigned(sha: str, signer: str = "fafa33") -> dict:
+    return {
+        "sha": sha,
+        "committer": {"login": signer},
+        "commit": {"verification": {"verified": False, "reason": "unsigned"}},
+    }
+
+
+def _admission(monkeypatch, commits: list[dict], *, hosted_ci: bool = False, policy=None, extra=None):
+    """Drive candidate_admission over a stubbed PR commit range."""
     monkeypatch.setattr(core, "read_pr_changed_paths", lambda *_args: (True, ("src/hunter/cli.py",), None))
     monkeypatch.setattr(core, "read_head_preflight_mode", lambda *_args: ("normal", None))
+    monkeypatch.setattr(
+        core,
+        "load_ingress_provenance_policy",
+        lambda: policy if policy is not None else (frozenset({"claude", "fafa33"}), "", None),
+    )
 
     def fake_request(_repo, _token, _method, path, _payload=None):
-        if f"commits/{HEAD}" in path:
-            return {
-                "committer": {"login": "web-flow"},
-                "commit": {"committer": {"name": "GitHub", "email": "noreply@github.com"}},
-            }
+        if "pulls/501/commits" in path:
+            return commits
+        if extra is not None:
+            handled, value = extra(path)
+            if handled:
+                return value
+        if hosted_ci and "actions/runs" in path:
+            return {"workflow_runs": [SUCCESSFUL_RUN]}
         raise AssertionError(path)
 
     monkeypatch.setattr(core, "request_json", fake_request)
+    return core.candidate_admission("fafa33/Project-Hunter", "token", HEAD, 501)
 
-    state, description = core.candidate_admission("fafa33/Project-Hunter", "token", HEAD, 501)
+
+def test_custom_identity_api_only_write_is_rejected(monkeypatch) -> None:
+    """An ordinary committer identity is caller-supplied and proves no ingress."""
+    state, description = _admission(monkeypatch, [_unsigned(HEAD, signer="fafa33")])
 
     assert state == "failure"
-    assert "prohibited API-only path" in description
+    assert "no verified pre-push ingress signature" in description
 
 
-def test_api_only_candidate_remains_unadmitted_even_if_hosted_ci_succeeds(monkeypatch) -> None:
-    monkeypatch.setattr(core, "read_pr_changed_paths", lambda *_args: (True, ("src/hunter/cli.py",), None))
-    monkeypatch.setattr(core, "read_head_preflight_mode", lambda *_args: ("normal", None))
-
-    def fake_request(_repo, _token, _method, path, _payload=None):
-        if f"commits/{HEAD}" in path:
-            return {
-                "committer": {"login": "web-flow"},
-                "commit": {"committer": {"name": "GitHub", "email": "noreply@github.com"}},
-            }
-        if "actions/runs" in path:
-            return {
-                "workflow_runs": [
-                    {
-                        "head_sha": HEAD,
-                        "name": core.PRE_PR_WORKFLOW_NAME,
-                        "path": core.PRE_PR_WORKFLOW_PATH,
-                        "event": "push",
-                        "status": "completed",
-                        "conclusion": "success",
-                        "id": 100,
-                    }
-                ]
-            }
-        raise AssertionError(path)
-
-    monkeypatch.setattr(core, "request_json", fake_request)
-
-    state, description = core.candidate_admission("fafa33/Project-Hunter", "token", HEAD, 501)
+def test_api_written_ancestor_is_not_concealed_by_clone_authored_tip(monkeypatch) -> None:
+    state, description = _admission(monkeypatch, [_unsigned(ANCESTOR), _signed(HEAD)])
 
     assert state == "failure"
-    assert "prohibited API-only path" in description
+    assert ANCESTOR[:10] in description
+    assert "no verified pre-push ingress signature" in description
 
 
-def test_clone_capable_candidate_with_valid_pre_push_and_exact_head_evidence_progresses(monkeypatch) -> None:
-    monkeypatch.setattr(core, "read_pr_changed_paths", lambda *_args: (True, ("src/hunter/cli.py",), None))
-    monkeypatch.setattr(core, "read_head_preflight_mode", lambda *_args: ("normal", None))
+def test_missing_trusted_provenance_fails_closed(monkeypatch) -> None:
+    state, description = _admission(
+        monkeypatch,
+        [_signed(HEAD)],
+        policy=(frozenset(), "", "code-write policy declares no authorized ingress signers"),
+    )
 
-    def fake_request(_repo, _token, _method, path, _payload=None):
-        if f"commits/{HEAD}" in path:
-            return {
-                "committer": {"login": "fafa33"},
-                "commit": {"committer": {"name": "Farhad5778", "email": "fafa33@example.com"}},
-            }
-        if "actions/runs" in path:
-            return {
-                "workflow_runs": [
-                    {
-                        "head_sha": HEAD,
-                        "name": core.PRE_PR_WORKFLOW_NAME,
-                        "path": core.PRE_PR_WORKFLOW_PATH,
-                        "event": "push",
-                        "status": "completed",
-                        "conclusion": "success",
-                        "id": 100,
-                    }
-                ]
-            }
-        raise AssertionError(path)
+    assert state == "failure"
+    assert "no authorized ingress signers" in description
 
-    monkeypatch.setattr(core, "request_json", fake_request)
 
-    state, description = core.candidate_admission("fafa33/Project-Hunter", "token", HEAD, 501)
+def test_signature_from_unauthorized_signer_is_rejected(monkeypatch) -> None:
+    state, description = _admission(monkeypatch, [_signed(HEAD, signer="attacker")])
+
+    assert state == "failure"
+    assert "unauthorized ingress signer attacker" in description
+
+
+def test_stale_proof_for_older_sha_cannot_authorize_newer_head(monkeypatch) -> None:
+    """A proof is the signature over its own commit object, so it cannot move."""
+    state, description = _admission(monkeypatch, [_signed(ANCESTOR), _unsigned(HEAD)])
+
+    assert state == "failure"
+    assert HEAD[:10] in description
+
+
+def test_head_absent_from_commit_range_evidence_fails_closed(monkeypatch) -> None:
+    state, description = _admission(monkeypatch, [_signed(ANCESTOR)])
+
+    assert state == "failure"
+    assert "exact head is absent from the PR commit range" in description
+
+
+def test_hosted_ci_success_cannot_override_missing_local_provenance(monkeypatch) -> None:
+    state, description = _admission(monkeypatch, [_unsigned(HEAD)], hosted_ci=True)
+
+    assert state == "failure"
+    assert "no verified pre-push ingress signature" in description
+
+
+def test_clone_capable_provenance_for_every_commit_progresses(monkeypatch) -> None:
+    state, description = _admission(monkeypatch, [_signed(ANCESTOR), _signed(HEAD)], hosted_ci=True)
 
     assert state == "success"
     assert "Exact-head branch preflight passed" in description
 
 
-def test_stale_preflight_proof_cannot_authorize_newer_head(monkeypatch) -> None:
-    head_newer = "c" * 40
-    monkeypatch.setattr(core, "read_pr_changed_paths", lambda *_args: (True, ("src/hunter/cli.py",), None))
-    monkeypatch.setattr(core, "read_head_preflight_mode", lambda *_args: ("normal", None))
+def test_commits_reachable_from_declared_floor_predate_the_regime(monkeypatch) -> None:
+    """Pre-authority history is exempt; everything after the floor is not."""
 
-    def fake_request(_repo, _token, _method, path, _payload=None):
-        if f"commits/{head_newer}" in path:
-            return {
-                "committer": {"login": "fafa33"},
-                "commit": {"committer": {"name": "Farhad5778", "email": "fafa33@example.com"}},
-            }
-        if "actions/runs" in path:
-            return {
-                "workflow_runs": [
-                    {
-                        "head_sha": HEAD,
-                        "name": core.PRE_PR_WORKFLOW_NAME,
-                        "path": core.PRE_PR_WORKFLOW_PATH,
-                        "event": "push",
-                        "status": "completed",
-                        "conclusion": "success",
-                        "id": 99,
-                    }
-                ]
-            }
-        raise AssertionError(path)
+    def extra(path):
+        if f"compare/{FLOOR}...{HEAD}" in path:
+            return True, {"commits": [{"sha": HEAD}]}
+        return False, None
 
-    monkeypatch.setattr(core, "request_json", fake_request)
+    state, description = _admission(
+        monkeypatch,
+        [_unsigned(FLOOR), _signed(HEAD)],
+        hosted_ci=True,
+        policy=(frozenset({"claude"}), FLOOR, None),
+        extra=extra,
+    )
 
-    state, description = core.candidate_admission("fafa33/Project-Hunter", "token", head_newer, 501)
+    assert state == "success"
+    assert "Exact-head branch preflight passed" in description
+
+
+def test_declared_floor_does_not_exempt_commits_beyond_it(monkeypatch) -> None:
+    def extra(path):
+        if f"compare/{FLOOR}...{HEAD}" in path:
+            return True, {"commits": [{"sha": ANCESTOR}, {"sha": HEAD}]}
+        return False, None
+
+    state, description = _admission(
+        monkeypatch,
+        [_unsigned(FLOOR), _unsigned(ANCESTOR), _signed(HEAD)],
+        policy=(frozenset({"claude"}), FLOOR, None),
+        extra=extra,
+    )
 
     assert state == "failure"
-    assert "exact-head branch preflight is missing" in description
+    assert ANCESTOR[:10] in description
 
 
-def test_import_ordering_recurrence_prh001_cannot_reach_admitted_candidate_without_canonical_gate(monkeypatch) -> None:
+def test_unavailable_pre_authority_range_evidence_fails_closed(monkeypatch) -> None:
+    monkeypatch.setattr(
+        core,
+        "read_commits_beyond_attestation_floor",
+        lambda *_args: (False, frozenset(), "commit range comparison payload is malformed"),
+    )
+    state, description = _admission(
+        monkeypatch,
+        [_unsigned(FLOOR), _signed(HEAD)],
+        policy=(frozenset({"claude"}), FLOOR, None),
+    )
+
+    assert state == "failure"
+    assert "pre-authority range evidence is unavailable" in description
+
+
+def test_unavailable_commit_range_evidence_fails_closed(monkeypatch) -> None:
+    monkeypatch.setattr(core, "read_pr_changed_paths", lambda *_args: (True, ("src/hunter/cli.py",), None))
+    monkeypatch.setattr(core, "read_head_preflight_mode", lambda *_args: ("normal", None))
+    monkeypatch.setattr(core, "read_pr_commits", lambda *_args: (False, (), "GitHub request error: 500"))
+
+    state, description = core.candidate_admission("fafa33/Project-Hunter", "token", HEAD, 501)
+
+    assert state == "failure"
+    assert "commit-range ingress evidence is unavailable" in description
+
+
+def test_ingress_provenance_requires_pr_bound_range_evidence() -> None:
+    ok, description = core.verify_code_write_ingress_provenance("fafa33/Project-Hunter", "token", HEAD, None)
+
+    assert ok is False
+    assert "requires PR-bound commit-range evidence" in description
+
+
+def test_author_identity_cannot_stand_in_for_the_signing_committer() -> None:
+    """Only the committer login is cryptographically bound by a verified signature."""
+    entry = {
+        "sha": HEAD,
+        "author": {"login": "claude"},
+        "committer": {"login": "attacker"},
+        "commit": {"verification": {"verified": True, "reason": "valid"}},
+    }
+
+    assert core._ingress_signer(entry) == "attacker"
+
+
+def test_canonical_policy_declares_authorized_signers_and_floor() -> None:
+    signers, floor, error = core.load_ingress_provenance_policy()
+
+    assert error is None
+    assert "claude" in signers
+    assert core._is_commit_sha(floor)
+
+
+def test_import_ordering_recurrence_prh001_cannot_reach_admitted_candidate_without_canonical_gate(
+    monkeypatch,
+) -> None:
     monkeypatch.setattr(
         core, "read_pr_changed_paths", lambda *_args: (True, ("tests/test_issue_agent_trigger.py",), None)
     )
     monkeypatch.setattr(core, "read_head_preflight_mode", lambda *_args: ("normal", None))
+    monkeypatch.setattr(core, "load_ingress_provenance_policy", lambda: (frozenset({"claude"}), "", None))
 
     def fake_request(_repo, _token, _method, path, _payload=None):
-        if f"commits/{HEAD}" in path:
-            return {
-                "committer": {"login": "web-flow"},
-                "commit": {"committer": {"name": "GitHub", "email": "noreply@github.com"}},
-            }
+        if "pulls/501/commits" in path:
+            return [_unsigned(HEAD)]
         raise AssertionError(path)
 
     monkeypatch.setattr(core, "request_json", fake_request)
@@ -303,16 +388,13 @@ def test_import_ordering_recurrence_prh001_cannot_reach_admitted_candidate_witho
     state, description = core.candidate_admission("fafa33/Project-Hunter", "token", HEAD, 501)
 
     assert state == "failure"
-    assert "prohibited API-only path" in description
+    assert "no verified pre-push ingress signature" in description
 
 
 def test_legitimate_api_only_read_review_metadata_operations_allowed(monkeypatch) -> None:
     published = []
 
-    def fake_read_mergeability(_repo, _token, pr_number):
-        return _pr(True)
-
-    monkeypatch.setattr(core, "read_mergeability", fake_read_mergeability)
+    monkeypatch.setattr(core, "read_mergeability", lambda _repo, _token, _number: _pr(True))
     monkeypatch.setattr(core, "check_reviewer_dispositions", lambda: (True, ""))
     monkeypatch.setattr(core, "candidate_admission", lambda *_args: ("success", "admitted"))
     monkeypatch.setattr(core, "publish", lambda *args: published.append(args))
@@ -322,3 +404,57 @@ def test_legitimate_api_only_read_review_metadata_operations_allowed(monkeypatch
     assert result == 0
     assert len(published) == 1
     assert published[0][3] == "success"
+
+
+def test_malformed_commit_range_sha_fails_closed(monkeypatch) -> None:
+    state, description = _admission(monkeypatch, [{"sha": "not-a-sha"}, _signed(HEAD)])
+
+    assert state == "failure"
+    assert "malformed commit SHA" in description
+
+
+def test_non_boolean_verified_flag_cannot_satisfy_the_gate(monkeypatch) -> None:
+    """Only a real verified=True survives; a truthy stand-in must not."""
+    entry = {
+        "sha": HEAD,
+        "committer": {"login": "claude"},
+        "commit": {"verification": {"verified": "true", "reason": "valid"}},
+    }
+
+    state, description = _admission(monkeypatch, [entry])
+
+    assert state == "failure"
+    assert "no verified pre-push ingress signature" in description
+
+
+def test_missing_verification_block_fails_closed(monkeypatch) -> None:
+    state, description = _admission(monkeypatch, [{"sha": HEAD, "committer": {"login": "claude"}, "commit": {}}])
+
+    assert state == "failure"
+    assert "carries no ingress signature evidence" in description
+
+
+def test_authorized_signer_matching_ignores_case_and_padding(monkeypatch) -> None:
+    entry = {
+        "sha": HEAD,
+        "committer": {"login": "  Claude  "},
+        "commit": {"verification": {"verified": True, "reason": "valid"}},
+    }
+
+    state, _description = _admission(monkeypatch, [entry], hosted_ci=True)
+
+    assert state == "success"
+
+
+def test_web_flow_merge_commit_is_not_an_authorized_ingress_signer(monkeypatch) -> None:
+    """GitHub-side merges are signed and verified, but they are still API writes."""
+    entry = {
+        "sha": HEAD,
+        "committer": {"login": "web-flow"},
+        "commit": {"verification": {"verified": True, "reason": "valid"}},
+    }
+
+    state, description = _admission(monkeypatch, [entry])
+
+    assert state == "failure"
+    assert "unauthorized ingress signer web-flow" in description

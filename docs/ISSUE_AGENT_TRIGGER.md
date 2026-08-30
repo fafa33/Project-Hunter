@@ -15,7 +15,7 @@ The trigger serializes a deterministic `hunter-issue-agent-authorization-v1` doc
 
 ## Dispatch boundary
 
-The workflow requires the repository secret `HUNTER_ISSUE_AGENT_WEBHOOK_URL`. The URL must be a credential-free HTTPS endpoint. Missing or malformed configuration fails closed.
+The workflow requires the repository secret `HUNTER_ISSUE_AGENT_WEBHOOK_URL`. The URL must be a credential-free HTTPS endpoint. Missing or malformed configuration fails closed. Redirects are refused rather than followed: a 3xx response fails the dispatch closed, so a redirected POST can never be downgraded to a GET and reported as a delivered authorization.
 
 This endpoint is a **trusted issuer edge**, not the existing fallback-runtime webhook that expects an already-signed `PromptAutomationEnvelopeHandoff`. The receiver must:
 

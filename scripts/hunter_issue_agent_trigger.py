@@ -114,6 +114,21 @@ def authorize_event(
     return IssueAgentAuthorization(**canonical_claims, authorization_id=authorization_id)
 
 
+class _RejectRedirects(urllib.request.HTTPRedirectHandler):
+    """Fail closed on any redirect rather than following it.
+
+    urllib's default handler follows 301/302 and rewrites the POST to a GET, so a
+    redirected dispatch could report success from a final 2xx while the
+    authorization document was never delivered to the authorized endpoint.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[no-untyped-def]
+        raise IssueAgentTriggerError(f"issue-agent webhook redirect ({code}) is not an authorized dispatch path")
+
+
+_OPENER = urllib.request.build_opener(_RejectRedirects)
+
+
 def _post_authorization(url: str, document: str, *, timeout: float = 30.0) -> None:
     parsed = urllib.parse.urlsplit(url)
     if parsed.scheme != "https" or not parsed.netloc or parsed.username or parsed.password or parsed.fragment:
@@ -125,7 +140,7 @@ def _post_authorization(url: str, document: str, *, timeout: float = 30.0) -> No
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with _OPENER.open(request, timeout=timeout) as response:
             if response.status < 200 or response.status >= 300:
                 raise IssueAgentTriggerError("issue-agent webhook rejected the authorization")
     except (urllib.error.URLError, TimeoutError):

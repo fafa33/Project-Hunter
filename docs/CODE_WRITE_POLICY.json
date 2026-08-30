@@ -24,5 +24,18 @@
     "unadmitted_head_state": "draft",
     "ready_requires": "successful exact-head Hunter / Pre-PR Preflight",
     "auto_ready": false
+  },
+  "ingress_provenance": {
+    "proof": "verified-commit-signature",
+    "binding": "The signature is computed over the commit object itself, so the commit SHA is the signed identity. A proof cannot be detached, replayed onto another SHA, or supplied as Contents API or Git Data API commit metadata.",
+    "authority_source": "Read from the trusted default branch by the governance controller, never from the candidate head, so a candidate cannot widen its own allowlist or move its own attestation floor.",
+    "authorized_signers": [
+      "claude",
+      "fafa33"
+    ],
+    "attested_from_commit": "adc3030d277eac824ad0cb077fc34f7babd14296",
+    "attested_from_reason": "Last commit created before this ingress authority existed. Commits reachable from this floor predate the regime; every later code-changing commit in a pull request range requires a verified signature from an authorized signer.",
+    "scope": "every code-changing commit in the pull request range, not only the tip",
+    "fail_closed": "Missing policy, empty allowlist, unavailable commit-range evidence, unsigned commit, unverified signature, or unauthorized signer all block candidate admission."
   }
 }
