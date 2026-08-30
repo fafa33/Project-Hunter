@@ -329,6 +329,7 @@ class OperationalAgentFallbackRuntime:
             read_head=self._read_remote_head,
             validate=self._validate,
             verifier=self._verifier,
+            environ=self._environ,
         )
         result = dispatcher.dispatch_document(document)
         attempts = tuple(asdict(attempt) for attempt in result.attempts)
