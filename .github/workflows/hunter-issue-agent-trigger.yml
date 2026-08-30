@@ -1,0 +1,45 @@
+name: Hunter / Governed Issue Agent Trigger
+
+on:
+  issues:
+    types:
+      - labeled
+
+permissions:
+  contents: read
+  issues: read
+
+concurrency:
+  group: hunter-issue-agent-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  authorize-and-dispatch:
+    name: Authorize and dispatch Issue execution
+    if: >-
+      ${{
+        github.event.label.name == 'hunter-agent-execute'
+        && github.actor == github.repository_owner
+        && !github.event.issue.pull_request
+        && github.event.issue.state == 'open'
+      }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+
+    steps:
+      - name: Checkout trusted trigger implementation
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - name: Authorize exact Issue event and dispatch to trusted issuer edge
+        env:
+          HUNTER_ISSUE_AGENT_WEBHOOK_URL: ${{ secrets.HUNTER_ISSUE_AGENT_WEBHOOK_URL }}
+        run: |
+          set -euo pipefail
+          python scripts/hunter_issue_agent_trigger.py \
+            --event "${GITHUB_EVENT_PATH}" \
+            --repository "${GITHUB_REPOSITORY}" \
+            --owner-login "${GITHUB_REPOSITORY_OWNER}" \
+            --label hunter-agent-execute
