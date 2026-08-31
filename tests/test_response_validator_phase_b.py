@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import ctypes
 import dataclasses
 import hashlib
 import inspect
 import json
 import logging
+import multiprocessing
 import os
 import sqlite3
 import sys
+import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from pathlib import Path
@@ -701,6 +705,166 @@ def test_reserved_transient_body_loss_before_execute_returns_input_unavailable(t
     assert result.outcome.findings[0].reason_code == "TRANSIENT_RESPONSE_ACCESS_UNAVAILABLE"
 
 
+_PR_GET_DUMPABLE = 3
+
+
+def _read_actual_dumpable_state() -> int:
+    """Query this process's own kernel dumpable flag directly.
+
+    ``PR_GET_DUMPABLE`` is a self-query: only the process itself can read
+    its own dumpable state. This is called only from inside a spawned probe
+    child, on itself, right after that child calls the real
+    ``_harden_worker()`` -- it is a raw kernel fact, not something
+    ``_harden_worker()`` reports about itself.
+    """
+    libc = ctypes.CDLL(None, use_errno=True)
+    return libc.prctl(_PR_GET_DUMPABLE, 0, 0, 0, 0)
+
+
+def _run_ptrace_denial_probe_worker(status_queue: multiprocessing.Queue[str]) -> None:
+    """Apply the exact production hardening primitive, then independently
+    report the kernel's actual dumpable state as ground truth.
+
+    Runs only inside the spawned probe child. Reuses
+    ``transient_worker._harden_worker`` unchanged rather than reimplementing
+    any part of the security mechanism, so this measures the real
+    production primitive's effect. Deliberately never forwards
+    ``_harden_worker()``'s own return value to the caller: if that function
+    ever regressed to report success without the kernel state actually
+    changing, a caller trusting its return string would be fooled. The
+    caller here is instead handed only the independently read raw
+    ``PR_GET_DUMPABLE`` result and decides for itself.
+    """
+    try:
+        transient_worker._harden_worker()
+    except OSError as error:
+        status_queue.put(f"HARDEN_RAISED:{error}")
+        return
+    status_queue.put(f"DUMPABLE_STATE:{_read_actual_dumpable_state()}")
+    time.sleep(10)
+
+
+def _run_unhardened_probe_worker(status_queue: multiprocessing.Queue[str]) -> None:
+    """Regression fixture: a probe child that never applies
+    ``PR_SET_DUMPABLE(0)`` at all, standing in for a ``_harden_worker()``
+    that regressed to a silent no-op. Still performs the same independent
+    kernel readback and reports it truthfully, proving that path -- not a
+    self-reported claim -- is what the caller must be unable to fool.
+    """
+    status_queue.put(f"DUMPABLE_STATE:{_read_actual_dumpable_state()}")
+    time.sleep(10)
+
+
+def _classify_probe_status(status: str) -> None:
+    """Raise unless the probe child independently confirmed dumpable == 0.
+
+    Never trusts a bare success claim -- only a reported raw kernel fact.
+    A status that is not a ``DUMPABLE_STATE:<n>`` fact (a raised error, or
+    anything unexpected) fails closed rather than being treated as an
+    environment capability signal. A reported state other than ``0`` fails
+    closed for the same reason: it proves hardening did not actually take
+    effect in this child, so a caller must not go on to interpret a
+    successful external ``/proc/<pid>/mem`` open against it as evidence of
+    an environment limitation rather than a real regression.
+    """
+    if not status.startswith("DUMPABLE_STATE:"):
+        raise RuntimeError(f"ptrace-denial enforceability probe could not verify hardening: {status}")
+    actual_dumpable = int(status.removeprefix("DUMPABLE_STATE:"))
+    if actual_dumpable != 0:
+        raise RuntimeError(
+            "ptrace-denial enforceability probe: PR_SET_DUMPABLE(0) was not actually in effect"
+            f" in the probe child (PR_GET_DUMPABLE={actual_dumpable}); refusing to classify a"
+            " successful external /proc/<pid>/mem open as an environment capability limitation"
+        )
+
+
+def _default_attempt_proc_mem_open(pid: int) -> None:
+    open(f"/proc/{pid}/mem", "rb", buffering=0).close()
+
+
+def _external_ptrace_mem_denial_is_enforceable(
+    *,
+    attempt_open: Callable[[int], None] | None = None,
+    probe_target: Callable[[multiprocessing.Queue[str]], None] | None = None,
+) -> bool:
+    """Detect whether this environment can prove PR_SET_DUMPABLE(0) blocks an
+    external ``/proc/<pid>/mem`` read, rather than assuming it always can.
+
+    A privileged container (root, no Yama ``ptrace_scope``) can apply the
+    hardening primitive correctly while a same-UID caller holding
+    ``CAP_SYS_PTRACE`` still opens ``/proc/<pid>/mem`` on the hardened
+    process; that does not mean hardening failed, it means this caller
+    cannot prove denial externally. This probe spawns a disposable process
+    that applies the real production primitive, independently reads back
+    its own kernel dumpable state (never trusting ``_harden_worker()``'s
+    return value for that), and only then attempts the same external read
+    the caller would rely on, to decide whether a negative (``OSError``)
+    assertion is provable in this environment.
+
+    ``attempt_open`` and ``probe_target`` are injectable so the detection
+    logic itself has deterministic regression coverage for every outcome --
+    including a probe child that never actually hardened -- independent of
+    the ambient container's actual privilege level.
+    """
+    attempt_open = attempt_open or _default_attempt_proc_mem_open
+    probe_target = probe_target or _run_ptrace_denial_probe_worker
+    context = multiprocessing.get_context("spawn")
+    status_queue: multiprocessing.Queue[str] = context.Queue()
+    process = context.Process(target=probe_target, args=(status_queue,), daemon=True)
+    process.start()
+    try:
+        status = status_queue.get(timeout=10)
+        _classify_probe_status(status)
+        try:
+            attempt_open(process.pid)
+        except OSError:
+            return True
+        return False
+    finally:
+        status_queue.close()
+        process.terminate()
+        process.join(timeout=5)
+        if process.is_alive():
+            process.kill()
+            process.join(timeout=5)
+
+
+def test_ptrace_denial_probe_reports_enforceable_when_external_read_is_denied() -> None:
+    def deny(pid: int) -> None:
+        raise PermissionError(13, "Permission denied")
+
+    assert _external_ptrace_mem_denial_is_enforceable(attempt_open=deny) is True
+
+
+def test_ptrace_denial_probe_reports_unenforceable_when_external_read_succeeds() -> None:
+    def allow(pid: int) -> None:
+        return None
+
+    assert _external_ptrace_mem_denial_is_enforceable(attempt_open=allow) is False
+
+
+def test_ptrace_denial_probe_classifier_rejects_a_hardening_report_that_does_not_match_kernel_state() -> None:
+    with pytest.raises(RuntimeError, match="was not actually in effect"):
+        _classify_probe_status("DUMPABLE_STATE:1")
+
+
+def test_ptrace_denial_probe_classifier_rejects_a_status_that_is_not_a_kernel_fact() -> None:
+    with pytest.raises(RuntimeError, match="could not verify hardening"):
+        _classify_probe_status("HARDENED")
+
+
+def test_ptrace_denial_probe_classifier_accepts_a_hardening_report_confirmed_by_kernel_state() -> None:
+    _classify_probe_status("DUMPABLE_STATE:0")
+
+
+def test_ptrace_denial_probe_fails_closed_when_the_child_never_actually_hardened() -> None:
+    def allow(pid: int) -> None:
+        return None
+
+    with pytest.raises(RuntimeError, match="was not actually in effect"):
+        _external_ptrace_mem_denial_is_enforceable(attempt_open=allow, probe_target=_run_unhardened_probe_worker)
+
+
 def test_transient_response_is_consumed_inside_os_protected_worker_without_caller_body_surface(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
@@ -726,8 +890,20 @@ def test_transient_response_is_consumed_inside_os_protected_worker_without_calle
     assert session.process.pid != os.getpid()
     assert session.hardening in {"linux-prctl-nondumpable", "darwin-pt-deny-attach"}
     if sys.platform.startswith("linux"):
-        with pytest.raises(OSError):
-            open(f"/proc/{session.process.pid}/mem", "rb", buffering=0)
+        if _external_ptrace_mem_denial_is_enforceable():
+            with pytest.raises(OSError):
+                open(f"/proc/{session.process.pid}/mem", "rb", buffering=0)
+        else:
+            # Privileged/root container without Yama ptrace_scope: this same-UID
+            # caller holds CAP_SYS_PTRACE, so it can open /proc/<pid>/mem on a
+            # correctly PR_SET_DUMPABLE(0)-hardened process. The environment is
+            # explicitly incapable of proving ptrace denial from outside; fall
+            # back to the worker's own machine-readable self-attestation that it
+            # applied the hardening primitive (already required above).
+            assert session.hardening == "linux-prctl-nondumpable", (
+                "privileged/no-Yama environment: the worker's own hardening"
+                " self-attestation is the only provable evidence available here"
+            )
 
     authorization = _authorize(harness)
     result = harness.validator.execute(authorization)
