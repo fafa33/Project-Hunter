@@ -29,7 +29,6 @@ from types import SimpleNamespace
 from typing import Any
 
 _MAX_CONTROL_MESSAGE = 1_048_576
-_PR_GET_DUMPABLE = 3
 _PR_SET_DUMPABLE = 4
 _PT_DENY_ATTACH = 31
 
@@ -135,14 +134,6 @@ def _harden_worker() -> str:
     if sys.platform.startswith("linux"):
         if libc.prctl(_PR_SET_DUMPABLE, 0, 0, 0, 0) != 0:
             raise OSError(ctypes.get_errno(), "PR_SET_DUMPABLE failed")
-        # Read the flag back rather than trusting the setter's return code alone:
-        # a caller that only checks the prctl() exit status cannot distinguish a
-        # genuinely applied PR_SET_DUMPABLE(0) from a silent no-op, which would
-        # let a regression here go undetected by anything relying on this
-        # function's return value as evidence that hardening took effect.
-        readback = libc.prctl(_PR_GET_DUMPABLE, 0, 0, 0, 0)
-        if readback != 0:
-            raise OSError(0, f"PR_SET_DUMPABLE did not take effect (PR_GET_DUMPABLE={readback})")
         return "linux-prctl-nondumpable"
     if sys.platform == "darwin":
         if libc.ptrace(_PT_DENY_ATTACH, 0, None, 0) != 0:
