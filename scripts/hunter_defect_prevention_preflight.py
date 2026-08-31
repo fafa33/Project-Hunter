@@ -8,6 +8,8 @@ import subprocess
 from pathlib import Path
 from typing import Any, Literal
 
+from hunter_workflow_state import path_matches_scope_entry
+
 ROOT = Path(__file__).resolve().parents[1]
 REQUIRED_PREFLIGHT_GATES = (
     "Architecture Index Guard",
@@ -31,6 +33,18 @@ REGISTRY_PATH = ROOT / "docs" / "DEFECT_REGISTRY.json"
 LIFECYCLE_PATH = ROOT / "docs" / "DEFECT_PREVENTION_LIFECYCLE.json"
 WRITE_POLICY_PATH = ROOT / "docs" / "CODE_WRITE_POLICY.json"
 REVIEWER_DISPOSITIONS_PATH = ROOT / "docs" / "REVIEWER_FINDING_DISPOSITIONS.json"
+# Files that define or bind the connector write ingress itself. If the grant let a
+# connector rewrite these, the ingress could widen its own boundary, so the grant
+# is invalid unless its prohibited scope covers every one of them.
+MUST_BE_PROHIBITED_FROM_CONNECTOR_WRITES = (
+    ".githooks/pre-push",
+    ".github/workflows/ci.yml",
+    ".github/workflows/hunter-trusted-preflight-upgrade.yml",
+    "scripts/hunter_pr_preflight.py",
+    "scripts/hunter_connector_write_ingress.py",
+    "scripts/hunter_governance_review_v2.py",
+    "docs/CODE_WRITE_POLICY.json",
+)
 EXPECTED_STAGES = (
     "recorded",
     "regression-tested",
@@ -368,6 +382,107 @@ def validate_code_write_policy() -> list[str]:
     ready_requires = str(progression.get("ready_requires") or "")
     if "exact-head" not in ready_requires or "Pre-PR Preflight" not in ready_requires:
         errors.append("Ready progression must require successful exact-head Pre-PR Preflight")
+
+    errors.extend(validate_connector_write_ingress(policy))
+    return errors
+
+
+def validate_connector_write_ingress(policy: dict[str, Any]) -> list[str]:
+    """Validate the Issue #403 connector code-write ingress grant.
+
+    The grant is an additional narrow ingress, so this guard exists to stop it
+    from silently becoming a way around the boundaries it sits beside: it may not
+    claim local pre-push equivalence, may not auto-promote or auto-merge, may not
+    drop the exact base tip requirement, and may not name a writer that is also a
+    clone-capable pre-push signer.
+    """
+    errors: list[str] = []
+    grant = policy.get("connector_write_ingress")
+    if not isinstance(grant, dict):
+        return ["CODE_WRITE_POLICY connector_write_ingress must be an object"]
+
+    enabled = grant.get("enabled")
+    if not isinstance(enabled, bool):
+        errors.append("connector write ingress must declare an explicit boolean enabled state")
+    if grant.get("local_pre_push_equivalent") is not False:
+        errors.append("connector write ingress must never claim local pre-push equivalence")
+    if grant.get("require_exact_base_tip") is not True:
+        errors.append("connector write ingress must require an exact base tip")
+
+    if not _is_non_empty_str(grant.get("required_capability")):
+        errors.append("connector write ingress must declare a required writer capability")
+    if grant.get("base_ref") != "main":
+        errors.append("connector write ingress must be based on main")
+
+    forbidden = grant.get("forbidden_target_refs")
+    if not isinstance(forbidden, list) or "main" not in forbidden:
+        errors.append("connector write ingress must forbid main as a write target")
+
+    template = grant.get("branch_pattern_template")
+    if not isinstance(template, str) or "{issue}" not in template:
+        errors.append("connector write ingress branch pattern must bind the governing Issue")
+
+    allowed = grant.get("allowed_paths")
+    if not isinstance(allowed, list) or not [item for item in allowed if _is_non_empty_str(item)]:
+        errors.append("connector write ingress must declare a non-empty allowed path scope")
+    prohibited = grant.get("prohibited_paths")
+    if not isinstance(prohibited, list):
+        errors.append("connector write ingress prohibited_paths must be a list")
+    else:
+        # Checked semantically rather than by literal entry text: ".githooks/",
+        # ".githooks/*" and ".githooks/**" are the same scope statement, and a
+        # guard that accepts only one spelling would reject valid policy.
+        entries = [entry for entry in prohibited if _is_non_empty_str(entry)]
+        for guarded in MUST_BE_PROHIBITED_FROM_CONNECTOR_WRITES:
+            if not any(path_matches_scope_entry(guarded, entry) for entry in entries):
+                errors.append(f"connector write ingress must prohibit writes to {guarded}")
+
+    admission = grant.get("hosted_admission")
+    if not isinstance(admission, dict):
+        errors.append("connector write ingress must declare a hosted admission path")
+    else:
+        if admission.get("unadmitted_head_state") != "draft":
+            errors.append("connector-written candidates must stay Draft until admitted")
+        if admission.get("auto_ready") is not False:
+            errors.append("connector write ingress must never auto-promote a PR to Ready")
+        if admission.get("auto_merge") is not False:
+            errors.append("connector write ingress must never enable automatic merge")
+        if not _is_non_empty_str(admission.get("status_context_prefix")):
+            errors.append("connector write ingress must name the trusted hosted exact-head proof status")
+
+    writers = grant.get("authorized_writers")
+    if not isinstance(writers, list) or not writers:
+        return errors + ["connector write ingress must declare at least one writer grant"]
+
+    provenance = policy.get("ingress_provenance")
+    clone_signers = set()
+    if isinstance(provenance, dict) and isinstance(provenance.get("authorized_signers"), list):
+        clone_signers = {
+            str(signer).strip().lower() for signer in provenance["authorized_signers"] if isinstance(signer, str)
+        }
+
+    bound = 0
+    for index, entry in enumerate(writers):
+        if not isinstance(entry, dict):
+            errors.append(f"connector writer grant #{index} must be an object")
+            continue
+        if not _is_non_empty_str(entry.get("identity")):
+            errors.append(f"connector writer grant #{index} must declare an identity")
+        if entry.get("capability") != grant.get("required_capability"):
+            errors.append(f"connector writer grant #{index} must carry the granted capability")
+        login = entry.get("login")
+        if not isinstance(login, str):
+            errors.append(f"connector writer grant #{index} login must be a string")
+            continue
+        login = login.strip().lower()
+        if not login:
+            continue
+        bound += 1
+        if login in clone_signers:
+            errors.append(f"connector writer {login!r} must not also be a clone-capable pre-push signer")
+
+    if enabled is True and bound == 0:
+        errors.append("connector write ingress is enabled but binds no writer identity")
 
     return errors
 

@@ -9,15 +9,18 @@
     },
     "github_contents_api": {
       "allowed": false,
-      "reason": "Direct Contents API commits bypass the repository-local pre-push boundary."
+      "reason": "Direct Contents API commits bypass the repository-local pre-push boundary.",
+      "conditional_exception": "connector_write_ingress"
     },
     "github_git_data_api": {
       "allowed": false,
-      "reason": "Direct Git Data API ref/commit writes bypass the repository-local pre-push boundary."
+      "reason": "Direct Git Data API ref/commit writes bypass the repository-local pre-push boundary.",
+      "conditional_exception": "connector_write_ingress"
     },
     "api_only_agents": {
       "allowed_role": "read-review-metadata-only",
-      "code_change_handoff": "clone-capable-writer"
+      "code_change_handoff": "clone-capable-writer",
+      "conditional_exception": "connector_write_ingress"
     }
   },
   "review_progression": {
@@ -37,5 +40,65 @@
     "attested_from_reason": "Last commit created before this ingress authority existed. Commits reachable from this floor predate the regime; every later code-changing commit in a pull request range requires a verified signature from an authorized signer.",
     "scope": "every code-changing commit in the pull request range, not only the tip",
     "fail_closed": "Missing policy, empty allowlist, unavailable commit-range evidence, unsigned commit, unverified signature, or unauthorized signer all block candidate admission."
+  },
+  "connector_write_ingress": {
+    "governing_issue": "403",
+    "purpose": "Narrow governed ingress that lets one explicitly authorized connector writer create code changes on a non-main feature branch. It is an additional fail-closed ingress, never a replacement for or weakening of the repository-local pre-push boundary.",
+    "enabled": false,
+    "activation": "Bind login to the verified GitHub account or app login the connector actually writes as, then set enabled to true. An unbound or structurally invalid login keeps the ingress closed.",
+    "required_capability": "feature-branch-write",
+    "authorized_writers": [
+      {
+        "identity": "connected-chatgpt-assistant",
+        "login": "",
+        "capability": "feature-branch-write",
+        "ingress": "github-connector-api",
+        "binding_requirement": "login must be the verified GitHub account or app login that authenticates the connector write, owner-bound before enabled becomes true."
+      }
+    ],
+    "base_ref": "main",
+    "forbidden_target_refs": [
+      "main",
+      "HEAD"
+    ],
+    "branch_pattern_template": "*/issue-{issue}-*",
+    "allowed_paths": [
+      "src/",
+      "tests/",
+      "docs/"
+    ],
+    "prohibited_paths": [
+      ".githooks/",
+      ".github/",
+      "scripts/",
+      "build_backend/",
+      "requirements/",
+      "pyproject.toml",
+      "docs/ADR/",
+      "docs/CODE_WRITE_POLICY.json",
+      "docs/DEFECT_REGISTRY.json",
+      "docs/DEFECT_PREVENTION_LIFECYCLE.json",
+      "docs/REVIEWER_FINDING_DISPOSITIONS.json"
+    ],
+    "require_exact_base_tip": true,
+    "local_pre_push_equivalent": false,
+    "writer_disjointness": "authorized_writers logins must be disjoint from ingress_provenance.authorized_signers, so a connector identity can never be counted as clone-capable pre-push proof.",
+    "hosted_admission": {
+      "status_context_prefix": "Hunter Trusted Preflight Upgrade / PR #",
+      "canonical_preflight": "python scripts/hunter_pr_preflight.py --mode normal",
+      "unadmitted_head_state": "draft",
+      "auto_ready": false,
+      "auto_merge": false
+    },
+    "preserved_controls": [
+      "Quality Gates",
+      "dependency-review",
+      "CodeQL",
+      "Hunter Governance Review",
+      "Hunter Merge Readiness",
+      "independent review",
+      "owner merge approval"
+    ],
+    "fail_closed": "Missing or malformed policy, disabled ingress, unbound or unauthorized writer, wrong capability, main or non-branch target ref, base ref mismatch, stale base commit, missing or mismatched governing Issue scope, unauthorized or prohibited path, and missing trusted hosted exact-head canonical preflight proof all reject the write and keep the candidate unadmitted."
   }
 }

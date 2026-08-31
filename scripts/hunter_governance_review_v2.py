@@ -170,6 +170,53 @@ def load_ingress_provenance_policy() -> tuple[frozenset[str], str, str | None]:
     return frozenset(signers), floor, None
 
 
+def load_connector_write_ingress_policy() -> tuple[bool, frozenset[str], str | None]:
+    """Read the trusted connector code-write ingress grant (Issue #403).
+
+    Like the pre-push signer authority this is read from the trusted default
+    branch, never from the candidate head, so a candidate cannot grant itself
+    connector ingress. A policy with no grant simply grants nothing; a malformed
+    grant blocks admission rather than being ignored.
+    """
+    try:
+        policy = json.loads(CODE_WRITE_POLICY_PATH.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return False, frozenset(), "canonical code-write policy is missing"
+    except Exception as exc:
+        return False, frozenset(), f"canonical code-write policy is unreadable ({type(exc).__name__}: {exc})"
+
+    grant = policy.get("connector_write_ingress") if isinstance(policy, dict) else None
+    if grant is None:
+        return False, frozenset(), None
+    if not isinstance(grant, dict):
+        return False, frozenset(), "connector write ingress grant is malformed"
+    if grant.get("local_pre_push_equivalent") is not False:
+        return False, frozenset(), "connector write ingress must not declare local pre-push equivalence"
+
+    enabled = grant.get("enabled")
+    if not isinstance(enabled, bool):
+        return False, frozenset(), "connector write ingress grant declares no explicit enabled state"
+
+    raw_writers = grant.get("authorized_writers")
+    if not isinstance(raw_writers, list):
+        return False, frozenset(), "connector write ingress authorized_writers must be a list"
+
+    logins: set[str] = set()
+    for entry in raw_writers:
+        if not isinstance(entry, dict):
+            return False, frozenset(), "connector write ingress authorized_writers contains a malformed entry"
+        login = entry.get("login")
+        if not isinstance(login, str):
+            return False, frozenset(), "connector write ingress writer login must be a string"
+        login = login.strip().lower()
+        if login:
+            logins.add(login)
+
+    if enabled and not logins:
+        return False, frozenset(), "connector write ingress is enabled but binds no writer identity"
+    return enabled, frozenset(logins), None
+
+
 def read_pr_commits(repository: str, token: str, pr_number: int) -> tuple[bool, tuple[dict[str, Any], ...], str | None]:
     collected: list[dict[str, Any]] = []
     try:
@@ -292,6 +339,16 @@ def verify_code_write_ingress_provenance(
             return False, f"Candidate admission blocked: pre-authority range evidence is unavailable ({floor_error})."
         attestation_required = range_shas & beyond_floor
 
+    connector_enabled, connector_logins, connector_error = load_connector_write_ingress_policy()
+    if connector_error is not None:
+        return False, f"Candidate admission blocked: {connector_error}."
+    if connector_enabled and (connector_logins & signers):
+        # A connector identity that is also a clone-capable pre-push signer would
+        # let a connector write be counted as local pre-push proof, which is
+        # exactly the equivalence Issue #403 requirement 7 forbids.
+        return False, ("Candidate admission blocked: connector ingress writer is also a clone-capable pre-push signer.")
+
+    connector_written: set[str] = set()
     for entry in commits:
         sha = str(entry.get("sha") or "").strip().lower()
         if sha not in attestation_required:
@@ -306,11 +363,27 @@ def verify_code_write_ingress_provenance(
                 f"signature (reason={reason})."
             )
         signer = _ingress_signer(entry)
-        if signer not in signers:
+        if signer in signers:
+            continue
+        if connector_enabled and signer in connector_logins:
+            connector_written.add(sha)
+            continue
+        return False, (
+            f"Candidate admission blocked: commit {sha[:10]} was written by unauthorized ingress "
+            f"signer {signer or 'unknown'}."
+        )
+
+    if connector_written:
+        # A connector write is never local pre-push proof. The equivalent trusted
+        # admission path is the hosted exact-head canonical preflight, and until
+        # it succeeds for this exact head the candidate stays unadmitted.
+        proof_state, proof_description = read_trusted_upgrade_status(repository, token, head_sha, pr_number)
+        if proof_state != "success":
             return False, (
-                f"Candidate admission blocked: commit {sha[:10]} was written by unauthorized ingress "
-                f"signer {signer or 'unknown'}."
+                f"Candidate admission blocked: {len(connector_written)} connector-written commit(s) require "
+                f"trusted hosted exact-head canonical preflight proof ({proof_description})"
             )
+        return True, "Connector ingress commits are covered by trusted hosted exact-head canonical preflight proof."
 
     return True, "Verified pre-push ingress signatures cover the code-changing commit range."
 

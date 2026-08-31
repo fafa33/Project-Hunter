@@ -254,8 +254,14 @@ class TaskScopeContract:
         )
 
 
-def _path_matches(path: str, entry: str) -> bool:
-    """A changed path is covered by a scope entry by directory prefix or glob."""
+def path_matches_scope_entry(path: str, entry: str) -> bool:
+    """A changed path is covered by a scope entry by directory prefix or glob.
+
+    Public because the governed connector write ingress
+    (`hunter_connector_write_ingress`) compares changed paths against the same
+    kind of owner-authored scope entry, and two implementations of "is this
+    path in scope" would be two different answers.
+    """
 
     entry = entry.strip()
     if not entry:
@@ -334,7 +340,7 @@ def evaluate_task_scope(
     prohibited = tuple(
         path
         for path in observation.changed_paths
-        if any(_path_matches(path, entry) for entry in contract.prohibited_paths)
+        if any(path_matches_scope_entry(path, entry) for entry in contract.prohibited_paths)
     )
     if prohibited:
         return mismatch("prohibited path(s) changed: " + ", ".join(sorted(prohibited)))
@@ -342,7 +348,7 @@ def evaluate_task_scope(
     outside = tuple(
         path
         for path in observation.changed_paths
-        if not any(_path_matches(path, entry) for entry in contract.allowed_paths)
+        if not any(path_matches_scope_entry(path, entry) for entry in contract.allowed_paths)
     )
     if outside:
         return mismatch("path(s) outside the assigned scope changed: " + ", ".join(sorted(outside)))
