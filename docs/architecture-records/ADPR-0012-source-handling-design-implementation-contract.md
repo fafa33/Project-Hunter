@@ -5,9 +5,9 @@
 - ADPR ID: `ADPR-0012`
 - Preparation state: `READY_FOR_REVIEW`
 - Self-assessment: `READY_FOR_ADR`
-- Version: 1
+- Version: 2
 - Author: repository owner-directed architecture work
-- Reviewers: independent architecture audit not yet performed
+- Reviewers: independent architecture audit complete and merged to main — `docs/ARCHITECTURE_AUDITS/adpr-0012-source-handling-independent-audit.md`, verdict `READY_FOR_ADR_WITH_MINOR_FINDINGS` (Issue #395 / PR #396)
 - Created: 2026-08-30
 - Approved: not yet
 - Governing issue: #393
@@ -602,15 +602,45 @@ authority.
 
 ## Quality Assessment
 
-| Dimension | Rating | Basis |
-|---|---|---|
-| Problem definition | Strong | Blocker reproduced against exact baseline with file-level evidence |
-| Evidence quality | Strong | Twelve items, all repository-verifiable at `d237ae7` |
-| Option coverage | Strong | Five materially distinct options, including both ADR-forbidden ones, evaluated on one criteria set |
-| Falsification | Strong | Fourteen mandatory hostile cases applied to the recommendation and to rejected options |
-| Authority clarity | Strong | Single publisher, capability-enforced |
-| Governance alignment | Strong | No unresolved ADR or Constitution conflict |
-| Traceability | Adequate | PR and merge links complete on merge |
+Assessed under `docs/ARCHITECTURE_DECISION_QUALITY_STANDARD.md` across all
+seventeen mandatory quality dimensions, using only that standard's rating
+vocabulary. This restatement corrects audit finding F-002 recorded in
+`docs/ARCHITECTURE_AUDITS/adpr-0012-source-handling-independent-audit.md`; it
+records what this preparation actually contains and adds no substantive content
+to improve a rating.
+
+| # | Dimension | Rating | Rationale | Evidence in this record |
+|---|---|---|---|---|
+| 1 | Problem correctness | `EXCELLENT` | The blocker is a reproduced repository fact, not an implementation preference: no production `SmartPromptMachine` construction exists and every publication call site is test-only | § Problem Statement — Current condition; § Problem Validation — Gap map |
+| 2 | Scope completeness | `GOOD` | In-scope, out-of-scope, decision boundary, and the dependency on ADR 0033's fixed ownership are explicit; ownership is stated as not reopened | § In scope; § Out of scope; § Decision required |
+| 3 | Canonical consistency | `GOOD` | Constitution, canonical map, governance, and every referenced accepted ADR are addressed with no contradiction; the record's own constitutional analysis is accurate but terse relative to the reconstruction the independent audit performed | § Constitution Review; § Governance Review; § Constraints — Governance and accepted ADRs |
+| 4 | Evidence integrity | `EXCELLENT` | Twelve evidence items carry authority, finding, and explicit quality limitations, and each is repository-verifiable at the stated baseline | § Evidence Inventory (E-001 … E-012) |
+| 5 | Assumption discipline | `EXCELLENT` | Four assumptions are separated from evidence and each records rationale, confidence, a falsification condition, and the consequence if false | § Assumptions (A-001 … A-004) |
+| 6 | Option completeness | `GOOD` | Five materially distinct options including both ADR-forbidden ones; depth is normalized for the three viable options, while the two forbidden options are analyzed more briefly because their rejection rests on quoted authority rather than trade-off | § Candidate Options A–E |
+| 7 | Comparative fairness | `GOOD` | One criteria set of thirteen criteria applied to all five options, with costs and failure modes stated for the recommendation as well as the alternatives | § Comparative Analysis |
+| 8 | Falsifiability | `GOOD` | Fourteen hostile cases with defeating mechanism and survival result, applied to the recommendation and to the rejected options; the independent audit's H-15 and H-16 are covered substantively by § 4 and § 9 but were not enumerated as scenario identifiers in this record | § Falsification Results; Selected Contract § 4, § 9 |
+| 9 | Authority and ownership clarity | `EXCELLENT` | One publisher holding the only publication capability, consumers enumerated by name, prohibited overlap stated, and the capability made unreachable from every consumer seam | Selected Contract § 1, § 6 |
+| 10 | Persistence and replay quality | `EXCELLENT` | Identity, versioning, correction, the effective/recorded/known triple, strict-known replay, deterministic non-branching ordering by head compare-and-set, and migration are each explicitly resolved | Selected Contract § 3, § 4, § 8; § Constraints — Persistence and migration, Replay and historical reconstruction |
+| 11 | Evidence and provenance quality | `GOOD` | Authorization lineage, evidence identifiers, and supersession predecessors are carried on every record, and unknown or missing authority is explicitly non-permissive; calibration is not applicable to a control-fact authority | Selected Contract § 2, § 3; § Constraints — Evidence and provenance |
+| 12 | Operational quality | `GOOD` | Failure behavior, observability, deployment ordering, rollback, and the fail-closed consequence of absent key material are addressed; operational cost is not quantified | Selected Contract § 9; § Constraints — Operational; § Risks |
+| 13 | Implementation and migration impact | `GOOD` | Additive migration, required subsystem changes, transition states, compatibility, and per-option reversibility are analyzed proportionally to risk | Selected Contract § 9; § Candidate Options (Reversibility, Migration implications); § ADR Readiness |
+| 14 | Testability and validation | `ACCEPTABLE` | The design is deterministically verifiable and acceptance criteria are derivable from the fail-closed states and hostile cases, and the in-memory store is retained as a test double; however this record does not state acceptance criteria or required validation explicitly, because ADR 0033 defers conformance and counterfactual tests. Documented limitation carried into the ADR 0036 scope | Selected Contract § 9; § ADR Readiness — matters the ADR must leave open |
+| 15 | Maintainability and extensibility | `GOOD` | Authority service, mechanical repository, and resolver seam are separated without speculative abstraction, and Option E remains additively adoptable rather than foreclosed | § Candidate Options — Option E; § Rejected Options; Selected Contract § 1, § 4, § 6 |
+| 16 | Risk quality | `GOOD` | Five material risks span operational, security, performance, process, and rollout, each with likelihood, impact, mitigation, and residual uncertainty | § Risks |
+| 17 | Traceability | `ACCEPTABLE` | Issue, ADPR, planned ADR, and checklist relationships are accurate; PR and merge-commit values remain unpopulated until this record merges, which is the Class A finding F-001 recorded by the independent audit | § Traceability; § Metadata |
+
+### Mandatory Decision Gate
+
+Checked against `docs/ARCHITECTURE_DECISION_QUALITY_STANDARD.md` § Mandatory Decision Gate:
+
+- every dimension has a recorded rating and rationale — satisfied;
+- no mandatory dimension is below `ACCEPTABLE` — satisfied; the lowest ratings are `ACCEPTABLE` for testability and validation and for traceability;
+- Constitution and Governance dimensions are at least `GOOD` — satisfied; canonical consistency is `GOOD`;
+- evidence integrity, option completeness, comparative fairness, and falsifiability are at least `ACCEPTABLE` — satisfied at `EXCELLENT`, `GOOD`, `GOOD`, and `GOOD`;
+- all self-identified blocking questions are resolved — satisfied; the four recorded open questions are later decisions, none blocking;
+- residual limitations are explicitly carried into the proposed ADR scope — satisfied; the testability limitation and the four open questions appear under § ADR Readiness.
+
+The `READY_FOR_ADR` self-assessment below is therefore supported by the gate that authorizes it. It remains a self-assessment: the independent audit verdict is recorded separately in `docs/ARCHITECTURE_AUDITS/adpr-0012-source-handling-independent-audit.md`.
 
 ## Architecture Readiness
 
@@ -651,6 +681,7 @@ normal lifecycle.
 | Date | State | Change | Author or reviewer |
 |---|---|---|---|
 | 2026-08-30 | `READY_FOR_REVIEW` | Record created on baseline `d237ae7cea05a6e906e6c38d092d7f56c3b8a0e5` under Issue #393 | repository owner-directed architecture work |
+| 2026-08-30 | `READY_FOR_REVIEW` | Revision 2. Quality Assessment restated across all seventeen mandatory dimensions of `docs/ARCHITECTURE_DECISION_QUALITY_STANDARD.md` using the canonical rating vocabulary, correcting independent-audit finding F-002. No change to the selected architecture, authority ownership, persistence or replay semantics, or Issue #390 scope | repository owner-directed architecture work |
 
 ## Traceability
 
