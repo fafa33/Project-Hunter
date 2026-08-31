@@ -5,7 +5,7 @@
 - ADPR ID: `ADPR-0012`
 - Preparation state: `READY_FOR_REVIEW`
 - Self-assessment: `READY_FOR_ADR`
-- Version: 2
+- Version: 3
 - Author: repository owner-directed architecture work
 - Reviewers: independent architecture audit complete and merged to main — `docs/ARCHITECTURE_AUDITS/adpr-0012-source-handling-independent-audit.md`, verdict `READY_FOR_ADR_WITH_MINOR_FINDINGS` (Issue #395 / PR #396)
 - Created: 2026-08-30
@@ -501,16 +501,24 @@ it.
 
 ### 6. Production resolver seam
 
-The exact consumer API is:
+The exact consumer API is the existing `SourceHandlingAuthorityResolver`
+protocol, which is **callable**, not a named method:
 
 ```text
-SourceHandlingResolver.resolve(document_id: str, cutoff: datetime)
+SourceHandlingAuthorityResolver.__call__(document_id: str, cutoff: datetime)
     -> EvidencePreModelSourceHandlingAuthority
 ```
 
-matching the `SourceHandlingAuthorityResolver` protocol `SmartPromptMachine`
-already requires. The returned authority is constructed over a read-only store
-view; no publication capability, issuer, or mutating method is reachable through
+The resolver is therefore invoked as `resolver(document_id, cutoff)`. This
+matches `SourceHandlingAuthorityResolver` in
+`src/hunter/evidence_intelligence/smart_prompt_machine.py`, which declares
+`__call__`, and the sole consumer call site in `PromptContextCompiler.compile()`,
+which invokes `self._source_handling_resolver(request.document_id, cutoff)`. An
+implementation exposing only a `.resolve(...)` method would raise `TypeError` at
+every Smart Prompt Machine build, so the callable shape is binding and neither
+the protocol nor the consumer is changed by this contract.
+
+The returned authority is constructed over a read-only store view; no publication capability, issuer, or mutating method is reachable through
 it. Deterministic failure states, each mapping to `BLOCKED`: `AUTHORITY_ABSENT`,
 `AUTHORITY_NOT_KNOWN_AT_CUTOFF`, `POLICY_SCOPE_UNBOUND`, `RULE_AMBIGUOUS`,
 `REGISTRY_UNAVAILABLE`, `TAMPER_DETECTED`. Substituting current or latest state
@@ -682,6 +690,7 @@ normal lifecycle.
 |---|---|---|---|
 | 2026-08-30 | `READY_FOR_REVIEW` | Record created on baseline `d237ae7cea05a6e906e6c38d092d7f56c3b8a0e5` under Issue #393 | repository owner-directed architecture work |
 | 2026-08-30 | `READY_FOR_REVIEW` | Revision 2. Quality Assessment restated across all seventeen mandatory dimensions of `docs/ARCHITECTURE_DECISION_QUALITY_STANDARD.md` using the canonical rating vocabulary, correcting independent-audit finding F-002. No change to the selected architecture, authority ownership, persistence or replay semantics, or Issue #390 scope | repository owner-directed architecture work |
+| 2026-08-31 | `READY_FOR_REVIEW` | Revision 3. Corrected the resolver seam to the existing callable `SourceHandlingAuthorityResolver.__call__` protocol, which the sole consumer already invokes; no protocol or consumer change. Merged main to carry the merged independent audit into this branch and reconciled the stale architecture-index audit rows. Four further contract-completeness findings from PR #394 independent review remain open pending owner authorization, because correcting them would amend an already-audited record | repository owner-directed architecture work |
 
 ## Traceability
 
