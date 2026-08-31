@@ -5,7 +5,7 @@
 - ADPR ID: `ADPR-0012`
 - Preparation state: `READY_FOR_REVIEW`
 - Self-assessment: `READY_FOR_ADR`
-- Version: 3
+- Version: 4
 - Author: repository owner-directed architecture work
 - Reviewers: independent architecture audit complete and merged to main — `docs/ARCHITECTURE_AUDITS/adpr-0012-source-handling-independent-audit.md`, verdict `READY_FOR_ADR_WITH_MINOR_FINDINGS` (Issue #395 / PR #396)
 - Created: 2026-08-30
@@ -429,26 +429,55 @@ This section is the substance ADR 0036 must bind.
 
 `SourceHandlingAuthorityService`, a dedicated component inside the Evidence
 Intelligence ownership domain ADR 0033 named, is the sole participant permitted
-to determine and publish `FACT` and `POLICY`. It is the only holder of a
+to determine and publish every family the resolver seam requires:
+`FACT`, `POLICY`, `FIELD_CATEGORY_REGISTRY`, and `AUTHORIZATION_RULE` successor
+records. `resolve_pre_model_source_handling` already requires a strict-known
+head for all four families before any build may proceed
+(`src/hunter/evidence_intelligence/pre_model.py:284-330`); a contract naming
+only two of them would leave `FIELD_CATEGORY_REGISTRY` and `AUTHORIZATION_RULE`
+without any owner or trusted admission path, and every resolve would then block
+forever on a fresh deployment. It is the only holder of a
 `SourceHandlingPublicationCapability`, which is constructible only during service
 bootstrap from operator-provisioned material and is never reachable from any
 resolver, repository, transport, or handoff type. Smart Prompt Machine, n8n,
 providers, the fallback runtime, callers, orchestrators, and generic
 repositories hold no publication authority of any kind.
 
+**Genesis bootstrap.** `AUTHORIZATION_RULE` is the root of trust every other
+family's `PublicationAuthorization` is validated against, so it cannot itself be
+admitted through the ordinary authorization path — nothing can authorize the
+first rule before a rule exists. It is admitted exactly once, through the
+existing operator-authorized golden-digest bootstrap already implemented as
+`publish_genesis_rule` (`source_handling.py:383-406`): the exact bytes of the
+genesis rule are fixed by an operator-provisioned digest, admission is refused
+unless family history is empty, and normal `PublicationAuthorization` governs
+every later `FIELD_CATEGORY_REGISTRY`, `FACT`, `POLICY`, and successor
+`AUTHORIZATION_RULE` publication (`publish_successor_rule`,
+`source_handling.py:409-435`) from that point on. The genesis bootstrap is an
+operator deployment action, not a runtime code path the service or any consumer
+can trigger; it is out of the capability's reach the same as every other
+publication surface named above.
+
 ### 2. `PublicationAuthorization` authority
 
 Issued only by the service's authorization issuer. Each authorization binds
-exactly: `publication_kind`, `governed_subject_scope`, `authorized_payload_sha256`,
-`authorization_rule_id`, and the temporal triple `effective_from` / `recorded_at`
-/ `known_at`. Anti-forgery is an Ed25519 signature over those canonical claims,
-following the SPM-001 issuer-private / verifier-public split, with missing or
-malformed key material failing closed. `authorization_id` is single-use and
-consumed in the same transaction as the publication it authorizes; replay is
-refused. An authorization is stale, and refused, when it is not strict-known
-eligible at publication time or falls outside its bounded issuance window.
-Corrections reuse the same issuance path and must supersede the exact current
-head.
+exactly: `authorization_id`, `publication_kind`, `governed_subject_scope`,
+`authorized_payload_sha256`, `authorization_rule_id`, and the temporal triple
+`effective_from` / `recorded_at` / `known_at`. Anti-forgery is an Ed25519
+signature over those canonical claims, following the SPM-001 issuer-private /
+verifier-public split, with missing or malformed key material failing closed.
+`authorization_id` is included in the signed claims deliberately: it is the
+single-use replay key, and a key that sits outside its own signature can be
+relabeled onto a differently-scoped presentation without invalidating that
+signature, defeating single-use enforcement rather than merely weakening it.
+Binding it into the signature makes any change to `authorization_id` a
+signature-verification failure, not a separate check that consumption could
+skip. Consumption verifies the signature over the full claim set including
+`authorization_id` and then consumes the id in the same transaction as the
+publication it authorizes; replay is refused. An authorization is stale, and
+refused, when it is not strict-known eligible at publication time or falls
+outside its bounded issuance window. Corrections reuse the same issuance path
+and must supersede the exact current head.
 
 ### 3. Durable Source Handling records
 
@@ -456,7 +485,7 @@ Four families, unchanged in meaning from the existing runtime:
 
 | Family | Scope | Carries |
 |---|---|---|
-| `FACT` | `<document_id>` | sensitivity, operation restrictions (+known flag), persistence restriction, secret presence (+known flag), withdrawn, deleted-at-source, historically-unavailable, availability-known |
+| `FACT` | `<document_id>` | sensitivity (+known flag), operation restrictions (+known flag), persistence restriction (+known flag), secret presence (+known flag), withdrawn, deleted-at-source, historically-unavailable, availability-known |
 | `POLICY` | `policy:<document_id>:v1` | governed policy body, bound `field_category_registry_id` |
 | `FIELD_CATEGORY_REGISTRY` | `registry:<document_id>:v1` | field map, safe-control proofs |
 | `AUTHORIZATION_RULE` | `SOURCE_HANDLING` | rule body and its supersession chain |
@@ -488,10 +517,22 @@ equivalent to `direct_write`.
 
 Classification operates on transient input and records only non-reversible
 observations — detector verdicts, categories, and counts — never the classified
-bytes. `secret_presence` and `secret_presence_known` are separate;
-`operation_restrictions` and `operation_restrictions_known` likewise. Unknown,
-absent, or `UNKNOWN` values for any known-flag yield `BLOCKED`, with no permissive
-default. `persistence_restriction` governs durable retention and reconstruction
+bytes. Every FACT dimension that can be omitted is paired with its own known
+flag, symmetrically: `secret_presence`/`secret_presence_known`,
+`operation_restrictions`/`operation_restrictions_known`,
+`sensitivity`/`sensitivity_known`, and `persistence_restriction`/
+`persistence_restriction_known`. `sensitivity` and `persistence_restriction`
+are required dimensions under ADR 0033's binding invariants exactly as the
+other two are; a contract that gave only two of the four dimensions a known
+flag would leave the other two able to be silently omitted, and ADR 0033 states
+plainly that "any unknown, missing, unavailable, conflicting, or ambiguous
+required source-handling fact or policy authority yields `BLOCKED`" — a rule
+that does not exempt these two. Unknown, absent, or `UNKNOWN` values for any of
+the four known-flags yield `BLOCKED`, with no permissive default, enforced at
+persistence exactly as `secret_presence_known` and `operation_restrictions_known`
+already are: the repository independently rederives the flag from the payload
+and refuses the publication rather than trusting a caller-asserted flag value.
+`persistence_restriction` governs durable retention and reconstruction
 eligibility independently, so material may be processable without being
 retainable and retainable without being reconstructable. Access, retention, and
 deletion restrictions derive from the resolved policy, never from a caller.
@@ -528,15 +569,35 @@ for an unresolved historical cutoff is forbidden; absence is returned as absence
 
 Owner authorization (`hunter-issue-agent-authorization-v1`) establishes who
 requested execution. It never establishes that the content is safe, and it grants
-no processing, retention, or reconstruction permission. Issue content becomes
-eligible for classification only by entering as evidence through the existing
+no processing, retention, or reconstruction permission.
+
+**Ordering is binding, not incidental.** `EvidenceIntelligenceIntakeService.ingest()`
+durably persists `EvidenceSpan.excerpt` into `evidence_spans` unconditionally
+today (`src/hunter/evidence_intelligence/intake.py`); it carries no Source
+Handling gate of its own, because that gate is this contract's responsibility,
+not intake's. Issue-sourced content must not reach that durable `ingest()` call
+until the Source Handling Authority has published `FACT` and `POLICY` for the
+target document scope and those records resolve `persistence_restriction` to a
+value that permits retention. Until that resolution exists, Issue content
+supplied for classification is held only as transient input — the same
+transient-input posture §5 already requires of classification generally — and
+is never written through the durable intake path. This reverses the sequence a
+literal reading of this section previously implied (publish only after intake),
+because that order let content the resolved policy might forbid retaining
+become durable before the policy existed to forbid it. Once `FACT`/`POLICY`
+confirm eligibility, ingestion proceeds through the unchanged existing
 `EvidenceIntelligenceIntake` path, producing an `EvidenceDocument` and its span
-inventory. The Source Handling Authority must then publish `FACT` and `POLICY`
-for that document scope before any Smart Prompt Machine build may proceed; absent
+inventory exactly as it does today. The Source Handling Authority publication
+this sequencing requires is itself gated by the genesis and per-scope
+authorization mechanics of §1 and §2; it grants no exception to them. Absent
 published authority, the build is `BLOCKED`. Raw Issue text has no path to the
 Smart Prompt Machine, to a build, to a handoff, or to the fallback runtime that
 does not pass through this boundary. No direct Issue-to-fallback authority
 exists or may be created.
+
+This section binds only the ordering and eligibility gate; it does not compose
+the Issue trigger, the intake call site, or any other part of a production
+Issue #390 execution path, which remains separately scoped and unimplemented.
 
 ### 8. Correction and replay
 
@@ -691,6 +752,7 @@ normal lifecycle.
 | 2026-08-30 | `READY_FOR_REVIEW` | Record created on baseline `d237ae7cea05a6e906e6c38d092d7f56c3b8a0e5` under Issue #393 | repository owner-directed architecture work |
 | 2026-08-30 | `READY_FOR_REVIEW` | Revision 2. Quality Assessment restated across all seventeen mandatory dimensions of `docs/ARCHITECTURE_DECISION_QUALITY_STANDARD.md` using the canonical rating vocabulary, correcting independent-audit finding F-002. No change to the selected architecture, authority ownership, persistence or replay semantics, or Issue #390 scope | repository owner-directed architecture work |
 | 2026-08-31 | `READY_FOR_REVIEW` | Revision 3. Corrected the resolver seam to the existing callable `SourceHandlingAuthorityResolver.__call__` protocol, which the sole consumer already invokes; no protocol or consumer change. Merged main to carry the merged independent audit into this branch and reconciled the stale architecture-index audit rows. Four further contract-completeness findings from PR #394 independent review remain open pending owner authorization, because correcting them would amend an already-audited record | repository owner-directed architecture work |
+| 2026-08-31 | `READY_FOR_REVIEW` | Revision 4. Owner-authorized correction of the four remaining PR #394 independent-review findings. §1 now assigns publication ownership for all four families the resolver requires (`FIELD_CATEGORY_REGISTRY`, `AUTHORIZATION_RULE` successors) and specifies the existing `publish_genesis_rule` operator bootstrap as the trusted admission path for the first `AUTHORIZATION_RULE`. §2 binds `authorization_id` into the Ed25519 signed claims so it cannot be relabeled without invalidating the signature. §3/§5 add `sensitivity_known` and `persistence_restriction_known` alongside the existing two known-flags, fail-closed under the same rule. §7 reverses the previously implied ordering so Issue content cannot reach the durable intake path until `FACT`/`POLICY` resolve `persistence_restriction` eligibility. No change to the selected architecture (Option A), authority ownership, or the previously audited persistence/replay semantics; these are mechanics completions within the same decision. Under `docs/ARCHITECTURE_AUDIT_PROTOCOL.md` § Re-Audit Protocol this is a revision made solely to address prior findings and calls for a Targeted Re-Audit against this head, not a Full Re-Audit; that re-audit is not self-performed here and remains a required independent step before ADR 0036 drafting resumes | repository owner-directed architecture work |
 
 ## Traceability
 
