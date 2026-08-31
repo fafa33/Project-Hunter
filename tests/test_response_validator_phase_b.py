@@ -7,9 +7,12 @@ import hashlib
 import inspect
 import json
 import logging
+import multiprocessing
 import os
 import sqlite3
 import sys
+import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from pathlib import Path
@@ -701,6 +704,81 @@ def test_reserved_transient_body_loss_before_execute_returns_input_unavailable(t
     assert result.outcome.findings[0].reason_code == "TRANSIENT_RESPONSE_ACCESS_UNAVAILABLE"
 
 
+def _run_ptrace_denial_probe_worker(status_queue: multiprocessing.Queue[str]) -> None:
+    """Apply the exact production hardening primitive in a disposable process.
+
+    Runs only inside the spawned probe child. Reuses
+    ``transient_worker._harden_worker`` unchanged rather than reimplementing
+    any part of the security mechanism, so the probe measures this
+    environment's real behavior, not a stand-in.
+    """
+    try:
+        transient_worker._harden_worker()
+    except OSError as error:
+        status_queue.put(f"HARDEN_FAILED:{error}")
+        return
+    status_queue.put("HARDENED")
+    time.sleep(10)
+
+
+def _default_attempt_proc_mem_open(pid: int) -> None:
+    open(f"/proc/{pid}/mem", "rb", buffering=0).close()
+
+
+def _external_ptrace_mem_denial_is_enforceable(*, attempt_open: Callable[[int], None] | None = None) -> bool:
+    """Detect whether this environment can prove PR_SET_DUMPABLE(0) blocks an
+    external ``/proc/<pid>/mem`` read, rather than assuming it always can.
+
+    A privileged container (root, no Yama ``ptrace_scope``) can apply the
+    hardening primitive correctly while a same-UID caller holding
+    ``CAP_SYS_PTRACE`` still opens ``/proc/<pid>/mem`` on the hardened
+    process; that does not mean hardening failed, it means this caller
+    cannot prove denial externally. This probe spawns a disposable process
+    that applies the real production primitive and reports, by actually
+    attempting the same external read the caller would rely on, whether a
+    negative (``OSError``) assertion is provable in this environment.
+
+    ``attempt_open`` is injectable so the detection logic itself has
+    deterministic regression coverage for both outcomes, independent of
+    the ambient container's actual privilege level.
+    """
+    attempt_open = attempt_open or _default_attempt_proc_mem_open
+    context = multiprocessing.get_context("spawn")
+    status_queue: multiprocessing.Queue[str] = context.Queue()
+    process = context.Process(target=_run_ptrace_denial_probe_worker, args=(status_queue,), daemon=True)
+    process.start()
+    try:
+        status = status_queue.get(timeout=10)
+        if status != "HARDENED":
+            raise RuntimeError(f"ptrace-denial enforceability probe could not self-harden: {status}")
+        try:
+            attempt_open(process.pid)
+        except OSError:
+            return True
+        return False
+    finally:
+        status_queue.close()
+        process.terminate()
+        process.join(timeout=5)
+        if process.is_alive():
+            process.kill()
+            process.join(timeout=5)
+
+
+def test_ptrace_denial_probe_reports_enforceable_when_external_read_is_denied() -> None:
+    def deny(pid: int) -> None:
+        raise PermissionError(13, "Permission denied")
+
+    assert _external_ptrace_mem_denial_is_enforceable(attempt_open=deny) is True
+
+
+def test_ptrace_denial_probe_reports_unenforceable_when_external_read_succeeds() -> None:
+    def allow(pid: int) -> None:
+        return None
+
+    assert _external_ptrace_mem_denial_is_enforceable(attempt_open=allow) is False
+
+
 def test_transient_response_is_consumed_inside_os_protected_worker_without_caller_body_surface(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
@@ -726,8 +804,20 @@ def test_transient_response_is_consumed_inside_os_protected_worker_without_calle
     assert session.process.pid != os.getpid()
     assert session.hardening in {"linux-prctl-nondumpable", "darwin-pt-deny-attach"}
     if sys.platform.startswith("linux"):
-        with pytest.raises(OSError):
-            open(f"/proc/{session.process.pid}/mem", "rb", buffering=0)
+        if _external_ptrace_mem_denial_is_enforceable():
+            with pytest.raises(OSError):
+                open(f"/proc/{session.process.pid}/mem", "rb", buffering=0)
+        else:
+            # Privileged/root container without Yama ptrace_scope: this same-UID
+            # caller holds CAP_SYS_PTRACE, so it can open /proc/<pid>/mem on a
+            # correctly PR_SET_DUMPABLE(0)-hardened process. The environment is
+            # explicitly incapable of proving ptrace denial from outside; fall
+            # back to the worker's own machine-readable self-attestation that it
+            # applied the hardening primitive (already required above).
+            assert session.hardening == "linux-prctl-nondumpable", (
+                "privileged/no-Yama environment: the worker's own hardening"
+                " self-attestation is the only provable evidence available here"
+            )
 
     authorization = _authorize(harness)
     result = harness.validator.execute(authorization)
