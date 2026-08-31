@@ -108,10 +108,15 @@ non-replayable.
 
 Issued only by the service's authorization issuer. Each authorization binds
 exactly: `authorization_id`, `publication_kind`, `governed_subject_scope`,
-`authorized_payload_sha256`, `authorization_rule_id`, and the temporal triple
-`effective_from` / `recorded_at` / `known_at`. Anti-forgery is an Ed25519
-signature over those canonical claims, with missing or malformed key material
-failing closed. `authorization_id` is included in the signed claims: it is
+`authorized_payload_sha256`, `authorization_rule_id`, the temporal triple
+`effective_from` / `recorded_at` / `known_at`, and every other
+permission-bearing provenance field the authorization carries —
+`evidence_ids`, `evidence_strength`, `evidence_method`, `verifier_ids`,
+`verifier_type`, and `released_restrictions`. Anti-forgery is an Ed25519
+signature over that full canonical claim set, with missing or malformed key
+material failing closed; no field that admissibility checking consumes may
+sit outside the signature, so none can be substituted post-issuance without
+invalidating it. `authorization_id` is included in the signed claims: it is
 the single-use replay key, and binding it into the signature makes any change
 to it a signature-verification failure rather than a separate check
 consumption could skip. Consumption verifies the signature over the full
@@ -135,7 +140,15 @@ Four families, unchanged in meaning from the existing runtime:
 Record identity is the SHA-256 of the canonical JSON of the payload excluding
 the authorization envelope. Every record carries `effective_from`,
 `recorded_at`, and `known_at`; all three are required and all three bound
-strict-known eligibility. History is append-only. Correction is linear
+strict-known eligibility, but all three are issuer claims. The repository
+additionally stamps every record with an immutable, repository-assigned
+`admission_time` at the moment of append, which no issuer or caller can set,
+backdate, or supersede. A record is eligible at a cutoff only when it is
+strict-known by the issuer-claimed triple **and** `admission_time` is at or
+before that cutoff, so a successor appended after a cutoff can never become
+eligible for that already-observable cutoff regardless of what `known_at` or
+`recorded_at` it claims — closing clock-skew, retry, and issuer-backdating
+backfill. History is append-only. Correction is linear
 supersession through `supersedes_*_id`; branching is refused by head
 compare-and-set, so exactly one head exists per `(family, scope)` at any
 cutoff. Simultaneous restrictions are represented as a set and are never
@@ -211,19 +224,27 @@ grants no processing, retention, or reconstruction permission.
 
 Ordering is binding, not incidental. Issue-sourced content must not reach the
 durable `EvidenceIntelligenceIntakeService.ingest()` call until the Source
-Handling Authority has published `FACT` and `POLICY` for the target document
-scope and those records resolve `persistence_restriction` to a value that
-permits retention. Until that resolution exists, Issue content supplied for
+Handling Authority has published `FACT`, `POLICY`, and
+`FIELD_CATEGORY_REGISTRY` for the target document scope and
+`derive_source_handling_decision()` resolves the complete decision from all
+four record families to a state that permits retention: `retention_decision`
+is `ALLOW`, and every entry the target payload requires in
+`durable_dispositions` is a `PERSIST`-permitting disposition, with no
+`deletion_lifecycle_decision` restriction blocking the write. A permissive
+`persistence_restriction` flag on `FACT` alone is necessary but never
+sufficient; it never substitutes for the complete resolved decision. Until
+that full resolution permits retention, Issue content supplied for
 classification is held only as transient input and is never written through
-the durable intake path. Once `FACT`/`POLICY` confirm eligibility, ingestion
-proceeds through the unchanged existing `EvidenceIntelligenceIntake` path,
-producing an `EvidenceDocument` and its span inventory exactly as it does
-today. This publication is itself gated by the genesis and per-scope
-authorization mechanics of §1 and §2; it grants no exception to them. Absent
-published authority, the build is `BLOCKED`. Raw Issue text has no path to
-the Smart Prompt Machine, to a build, to a handoff, or to the fallback
-runtime that does not pass through this boundary. No direct Issue-to-fallback
-authority exists or may be created.
+the durable intake path. Once the complete resolved decision confirms
+eligibility, ingestion proceeds through the unchanged existing
+`EvidenceIntelligenceIntake` path, producing an `EvidenceDocument` and its
+span inventory exactly as it does today. This publication is itself gated by
+the genesis and per-scope authorization mechanics of §1 and §2; it grants no
+exception to them. Absent published authority or a complete permissive
+decision, the build is `BLOCKED`. Raw Issue text has no path to the Smart
+Prompt Machine, to a build, to a handoff, or to the fallback runtime that
+does not pass through this boundary. No direct Issue-to-fallback authority
+exists or may be created.
 
 This section binds only the ordering and eligibility gate; it does not
 compose the Issue trigger, the intake call site, or any other part of a
@@ -234,11 +255,14 @@ unimplemented.
 
 Corrections never erase historical state; they append a successor that
 supersedes the exact current head. Resolution at any cutoff returns the head
-that was strict-known at that cutoff, so a correction recorded later is
-invisible to earlier replay. Current or latest authority never substitutes
-for an earlier cutoff. Replay is deterministic in `(document_id, cutoff)`:
-the same pair yields the same decision or the same explicit absence, for the
-lifetime of the record history.
+that was strict-known at that cutoff **and** repository-admitted at or before
+that cutoff per §3's `admission_time`, so a correction recorded later is
+invisible to earlier replay even if its issuer-claimed timestamps are not.
+Current or latest authority never substitutes for an earlier cutoff. Replay
+is deterministic in `(document_id, cutoff)`: the same pair yields the same
+decision or the same explicit absence, for the lifetime of the record
+history — a guarantee `admission_time` makes lifetime-stable rather than
+contingent on issuer-claimed time remaining honest.
 
 ### 9. Migration, rollout, and rollback
 
