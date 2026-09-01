@@ -36,6 +36,7 @@ REVIEWER_DISPOSITIONS_PATH = ROOT / "docs" / "REVIEWER_FINDING_DISPOSITIONS.json
 # Files that define or bind the connector write ingress itself. If the grant let a
 # connector rewrite these, the ingress could widen its own boundary, so the grant
 # is invalid unless its prohibited scope covers every one of them.
+CONNECTOR_AUTHORIZATION_RECEIPT_PATH = ".hunter/connector-write-authorization.json"
 MUST_BE_PROHIBITED_FROM_CONNECTOR_WRITES = (
     ".githooks/pre-push",
     ".github/workflows/ci.yml",
@@ -393,8 +394,11 @@ def validate_connector_write_ingress(policy: dict[str, Any]) -> list[str]:
     The grant is an additional narrow ingress, so this guard exists to stop it
     from silently becoming a way around the boundaries it sits beside: it may not
     claim local pre-push equivalence, may not auto-promote or auto-merge, may not
-    drop the exact base tip requirement, and may not name a writer that is also a
-    clone-capable pre-push signer.
+    drop the exact base tip requirement, and -- because the connector writes as an
+    account that is also a clone-capable signer -- an active grant may not leave
+    admission resting on signature identity alone. Overlapping identities are
+    therefore allowed and the separation is enforced as evidence: an active grant
+    must require trusted hosted exact-head proof for every candidate.
     """
     errors: list[str] = []
     grant = policy.get("connector_write_ingress")
@@ -418,9 +422,26 @@ def validate_connector_write_ingress(policy: dict[str, Any]) -> list[str]:
     if not isinstance(forbidden, list) or "main" not in forbidden:
         errors.append("connector write ingress must forbid main as a write target")
 
+    namespace = grant.get("branch_namespace")
+    if not isinstance(namespace, str) or not namespace.strip() or not namespace.endswith("/"):
+        errors.append("connector write ingress must declare a connector branch namespace ending in '/'")
+        namespace = ""
+
     template = grant.get("branch_pattern_template")
     if not isinstance(template, str) or "{issue}" not in template:
         errors.append("connector write ingress branch pattern must bind the governing Issue")
+    elif namespace and not template.startswith(namespace):
+        # The namespace is what tells the trusted controller that a candidate is
+        # required to carry an authorization receipt at all, so a pattern outside
+        # it would leave connector branches unrecognised.
+        errors.append("connector write ingress branch pattern must live inside the connector namespace")
+
+    if grant.get("authorization_receipt_path") != CONNECTOR_AUTHORIZATION_RECEIPT_PATH:
+        errors.append(f"connector write ingress must bind authorizations to {CONNECTOR_AUTHORIZATION_RECEIPT_PATH}")
+    if enabled is True and not _is_non_empty_str(grant.get("authorization_binding")):
+        errors.append("an active connector write ingress must state how authorizations bind to the exact candidate")
+    if enabled is True and not _is_non_empty_str(grant.get("base_tip_authority")):
+        errors.append("an active connector write ingress must state that the base tip comes from trusted state")
 
     allowed = grant.get("allowed_paths")
     if not isinstance(allowed, list) or not [item for item in allowed if _is_non_empty_str(item)]:
@@ -449,17 +470,21 @@ def validate_connector_write_ingress(policy: dict[str, Any]) -> list[str]:
             errors.append("connector write ingress must never enable automatic merge")
         if not _is_non_empty_str(admission.get("status_context_prefix")):
             errors.append("connector write ingress must name the trusted hosted exact-head proof status")
+        if enabled is True and admission.get("require_for_all_candidates") is not True:
+            # Signature identity cannot separate the channels while the grant is
+            # active, so this declaration is the safety property that replaces
+            # identity disjointness. An active grant without it would silently
+            # reduce admission to signature-only.
+            errors.append(
+                "an active connector write ingress must require trusted hosted exact-head proof for all candidates"
+            )
+
+    if enabled is True and not _is_non_empty_str(grant.get("provenance_separation")):
+        errors.append("an active connector write ingress must state how connector proof is separated from pre-push")
 
     writers = grant.get("authorized_writers")
     if not isinstance(writers, list) or not writers:
         return errors + ["connector write ingress must declare at least one writer grant"]
-
-    provenance = policy.get("ingress_provenance")
-    clone_signers = set()
-    if isinstance(provenance, dict) and isinstance(provenance.get("authorized_signers"), list):
-        clone_signers = {
-            str(signer).strip().lower() for signer in provenance["authorized_signers"] if isinstance(signer, str)
-        }
 
     bound = 0
     for index, entry in enumerate(writers):
@@ -478,8 +503,6 @@ def validate_connector_write_ingress(policy: dict[str, Any]) -> list[str]:
         if not login:
             continue
         bound += 1
-        if login in clone_signers:
-            errors.append(f"connector writer {login!r} must not also be a clone-capable pre-push signer")
 
     if enabled is True and bound == 0:
         errors.append("connector write ingress is enabled but binds no writer identity")

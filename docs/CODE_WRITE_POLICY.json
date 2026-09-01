@@ -44,16 +44,16 @@
   "connector_write_ingress": {
     "governing_issue": "403",
     "purpose": "Narrow governed ingress that lets one explicitly authorized connector writer create code changes on a non-main feature branch. It is an additional fail-closed ingress, never a replacement for or weakening of the repository-local pre-push boundary.",
-    "enabled": false,
-    "activation": "Bind login to the verified GitHub account or app login the connector actually writes as, then set enabled to true. An unbound or structurally invalid login keeps the ingress closed.",
+    "enabled": true,
     "required_capability": "feature-branch-write",
     "authorized_writers": [
       {
         "identity": "connected-chatgpt-assistant",
-        "login": "",
+        "login": "fafa33",
         "capability": "feature-branch-write",
         "ingress": "github-connector-api",
-        "binding_requirement": "login must be the verified GitHub account or app login that authenticates the connector write, owner-bound before enabled becomes true."
+        "identity_note": "The connected assistant authenticates its GitHub session as the repository owner account, so this login is deliberately not disjoint from ingress_provenance.authorized_signers. Requiring disjointness would make the grant unbindable rather than safer, so channel separation is carried by evidence instead: see provenance_separation and authorization_binding.",
+        "identity_evidence": "GitHub collaborator listing for this repository shows exactly one account with write access: fafa33 (admin). chatgpt-codex-connector[bot] is observed on this repository as a pull-request review identity only and is deliberately NOT granted write here; if it is ever observed producing commits, bind it explicitly rather than inferring the grant."
       }
     ],
     "base_ref": "main",
@@ -61,7 +61,11 @@
       "main",
       "HEAD"
     ],
-    "branch_pattern_template": "*/issue-{issue}-*",
+    "branch_namespace": "connector/",
+    "branch_pattern_template": "connector/issue-{issue}-*",
+    "authorization_receipt_path": ".hunter/connector-write-authorization.json",
+    "authorization_binding": "An authorized write mints a canonical claim set (writer, capability, governing Issue, base ref, base commit, target branch, changed paths) whose authorization_id is a SHA-256 over exactly those claims. The writer commits it to the candidate head as authorization_receipt_path, and the trusted governance controller re-derives every claim from trusted repository and pull-request evidence before admission. A candidate on a connector-namespace branch without a matching receipt, or a receipt whose claims disagree with trusted evidence, fails admission however green the hosted statuses are.",
+    "base_tip_authority": "The current base tip is resolved from trusted repository state at authorization time and re-checked immediately before the write is applied. It is never supplied by the connector request, so a stale caller cannot certify its own staleness, and an authorization minted against an older tip cannot be applied after the base advances.",
     "allowed_paths": [
       "src/",
       "tests/",
@@ -82,13 +86,15 @@
     ],
     "require_exact_base_tip": true,
     "local_pre_push_equivalent": false,
-    "writer_disjointness": "authorized_writers logins must be disjoint from ingress_provenance.authorized_signers, so a connector identity can never be counted as clone-capable pre-push proof.",
+    "provenance_separation": "A connector write must never be credited as local pre-push proof. The connector authenticates as an account that also appears in ingress_provenance.authorized_signers, so committer login cannot separate the two channels. The separation is therefore carried by evidence rather than identity: while this grant is active, a verified signature from an authorized signer is no longer sufficient on its own for any candidate, and every code-changing range additionally requires the trusted hosted exact-head canonical preflight proof. That proof is produced by the trusted default-branch controller against the exact candidate SHA, so no writer on any channel can mint it.",
     "hosted_admission": {
       "status_context_prefix": "Hunter Trusted Preflight Upgrade / PR #",
       "canonical_preflight": "python scripts/hunter_pr_preflight.py --mode normal",
       "unadmitted_head_state": "draft",
       "auto_ready": false,
-      "auto_merge": false
+      "auto_merge": false,
+      "require_for_all_candidates": true,
+      "require_for_all_candidates_reason": "Signer identity cannot distinguish a connector write from a clone push while the grant is active, so the trusted hosted exact-head proof is required for every candidate rather than only for connector-attributed commits. This is strictly stronger than signature-only admission and costs no extra hosted work: the trusted upgrade workflow already runs on every pull request to main."
     },
     "preserved_controls": [
       "Quality Gates",
@@ -99,6 +105,6 @@
       "independent review",
       "owner merge approval"
     ],
-    "fail_closed": "Missing or malformed policy, disabled ingress, unbound or unauthorized writer, wrong capability, main or non-branch target ref, base ref mismatch, stale base commit, missing or mismatched governing Issue scope, unauthorized or prohibited path, and missing trusted hosted exact-head canonical preflight proof all reject the write and keep the candidate unadmitted."
+    "fail_closed": "Missing or malformed policy, disabled ingress, unbound or unauthorized writer, wrong capability, main or non-branch target ref, base ref mismatch, stale base commit, missing or mismatched governing Issue scope, unauthorized or prohibited path, an active grant that does not require hosted proof for all candidates, and missing trusted hosted exact-head canonical preflight proof all reject the write and keep the candidate unadmitted."
   }
 }

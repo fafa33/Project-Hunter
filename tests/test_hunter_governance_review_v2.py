@@ -4,6 +4,7 @@ import importlib
 from pathlib import Path
 
 core = importlib.import_module("hunter_governance_review_v2")
+transport = importlib.import_module("hunter_github_transport")
 
 
 HEAD = "b" * 40
@@ -207,6 +208,19 @@ def _admission(monkeypatch, commits: list[dict], *, hosted_ci: bool = False, pol
             handled, value = extra(path)
             if handled:
                 return value
+        # Trusted evidence the connector-ingress re-derivation reads. These
+        # fixtures describe an ordinary clone-capable candidate: a branch outside
+        # the connector namespace carrying no authorization receipt, so the
+        # connector check is a no-op and these cases keep testing exactly the
+        # signature/branch-preflight contract they were written for.
+        if path.startswith("pulls/501"):
+            return {"head": {"ref": "claude/clone-written", "sha": HEAD}, "base": {"ref": "main"}}
+        if path.startswith("contents/.hunter/"):
+            raise transport.GitHubRequestError("Not Found", category="permanent", status_code=404)
+        if "statuses" in path:
+            # The active connector grant makes the trusted hosted exact-head
+            # proof mandatory for every candidate, clone-written included.
+            return [{"id": 7, "context": core._upgrade_status_context(501), "state": "success"}]
         if hosted_ci and "actions/runs" in path:
             return {"workflow_runs": [SUCCESSFUL_RUN]}
         raise AssertionError(path)

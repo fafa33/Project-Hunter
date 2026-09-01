@@ -12,28 +12,41 @@ when every one of the following holds:
   writer identity;
 * the writer login is on the owner-bound allowlist and presents the exact granted
   capability;
-* the target is a branch that is neither the base branch nor a forbidden ref, so a
-  direct `main` write is unrepresentable;
+* the target is a branch inside the connector namespace, and is neither the base
+  branch nor a forbidden ref, so a direct `main` write is unrepresentable;
 * the target branch name encodes the one governing Issue the request declares, so
   branch/commit scope is traceable to a single task;
-* the base ref matches the policy base and the declared base commit is exactly the
-  observed base tip, so a stale base is rejected rather than silently merged later;
+* the base ref matches the policy base, and the base commit equals the current tip
+  resolved from **trusted repository state** -- never a value supplied by the
+  caller, so a stale checkout cannot certify its own staleness;
 * every changed path is inside the granted scope and outside the prohibited scope.
+
+An authorized decision produces a `ConnectorWriteAuthorization`: a canonical,
+deterministic claim set whose `authorization_id` is a SHA-256 over the exact
+claims. The writer commits it to the candidate head as
+`.hunter/connector-write-authorization.json`, and the trusted governance
+controller re-derives every claim from trusted repository/PR evidence before the
+candidate may be admitted. The receipt is therefore a *declaration that is
+checked*, never a caller assertion that is believed: it can only narrow what the
+trusted evidence already shows.
 
 Authorization here is *write* authorization only. It is never pre-push proof and
 never admission: a connector-written candidate stays Draft/unadmitted until the
 trusted hosted exact-head canonical preflight proves it (enforced separately in
-`hunter_governance_review_v2.verify_code_write_ingress_provenance`). Hosted CI,
-Hunter Governance Review, independent review, Hunter Merge Readiness, and owner
-merge approval all remain mandatory and unchanged.
+`hunter_governance_review_v2`). Hosted CI, Hunter Governance Review, independent
+review, Hunter Merge Readiness, and owner merge approval all remain mandatory and
+unchanged.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
+import subprocess
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass, fields
 from fnmatch import fnmatch
 from pathlib import Path
@@ -47,9 +60,100 @@ POLICY_PATH = ROOT / "docs" / "CODE_WRITE_POLICY.json"
 HEADS_PREFIX = "refs/heads/"
 ISSUE_PLACEHOLDER = "{issue}"
 
+#: Repository-relative path the writer commits the authorization receipt to. The
+#: trusted controller reads it at the exact candidate head, so the receipt is
+#: bound to that tree and cannot be replayed onto a different one unchanged.
+AUTHORIZATION_RECEIPT_PATH = ".hunter/connector-write-authorization.json"
+AUTHORIZATION_SCHEMA = "hunter-connector-write-authorization-v1"
+
 _SHA = re.compile(r"\A[0-9a-f]{40}\Z")
 _LOGIN = re.compile(r"\A[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?(?:\[bot\])?\Z")
 _ISSUE = re.compile(r"\A[1-9][0-9]{0,9}\Z")
+
+BaseTipResolver = Callable[[str], str]
+
+
+class BaseTipUnavailable(RuntimeError):
+    """Trusted repository state could not supply the current base tip."""
+
+
+@dataclass(frozen=True)
+class ConnectorWriteAuthorization:
+    """The canonical claim set an authorized connector write is bound to.
+
+    `authorization_id` is a SHA-256 over exactly these claims, so a hand-edited
+    receipt cannot keep a stale identifier and a replayed receipt cannot claim
+    different scope than the one it was minted for.
+    """
+
+    writer: str
+    capability: str
+    issue: str
+    base_ref: str
+    base_sha: str
+    target_ref: str
+    paths: tuple[str, ...]
+
+    def claims(self) -> dict[str, Any]:
+        return {
+            "base_ref": self.base_ref,
+            "base_sha": self.base_sha,
+            "capability": self.capability,
+            "issue": self.issue,
+            "paths": sorted(self.paths),
+            "target_ref": self.target_ref,
+            "writer": self.writer,
+        }
+
+    @property
+    def authorization_id(self) -> str:
+        canonical = json.dumps(self.claims(), sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+    def document(self) -> dict[str, Any]:
+        return {
+            "schema": AUTHORIZATION_SCHEMA,
+            "claims": self.claims(),
+            "authorization_id": self.authorization_id,
+        }
+
+    @classmethod
+    def from_document(cls, payload: Any) -> tuple[ConnectorWriteAuthorization | None, str]:
+        """Parse a receipt, or explain why it is unusable. Never raises."""
+
+        if not isinstance(payload, dict):
+            return None, "authorization receipt must be a JSON object"
+        if payload.get("schema") != AUTHORIZATION_SCHEMA:
+            return None, f"authorization receipt schema must be {AUTHORIZATION_SCHEMA}"
+
+        claims = payload.get("claims")
+        if not isinstance(claims, dict):
+            return None, "authorization receipt claims must be an object"
+
+        expected_keys = {"base_ref", "base_sha", "capability", "issue", "paths", "target_ref", "writer"}
+        if set(claims) != expected_keys:
+            return None, "authorization receipt claims must carry exactly the canonical claim set"
+
+        raw_paths = claims.get("paths")
+        if not isinstance(raw_paths, list) or not all(isinstance(item, str) for item in raw_paths):
+            return None, "authorization receipt paths must be an array of path strings"
+        for name in ("base_ref", "base_sha", "capability", "issue", "target_ref", "writer"):
+            if not isinstance(claims.get(name), str):
+                return None, f"authorization receipt claim {name!r} must be a string"
+
+        authorization = cls(
+            writer=str(claims["writer"]),
+            capability=str(claims["capability"]),
+            issue=str(claims["issue"]),
+            base_ref=str(claims["base_ref"]),
+            base_sha=str(claims["base_sha"]),
+            target_ref=str(claims["target_ref"]),
+            paths=tuple(raw_paths),
+        )
+        declared_id = payload.get("authorization_id")
+        if not isinstance(declared_id, str) or declared_id != authorization.authorization_id:
+            return None, "authorization receipt identifier does not match its own claims"
+        return authorization, ""
 
 
 @dataclass(frozen=True)
@@ -58,6 +162,7 @@ class IngressDecision:
 
     authorized: bool
     reason: str
+    authorization: ConnectorWriteAuthorization | None = None
 
 
 def _reject(reason: str) -> IngressDecision:
@@ -68,10 +173,12 @@ def _reject(reason: str) -> IngressDecision:
 class ConnectorWriteRequest:
     """One proposed connector write, as machine-readable fields.
 
-    Every field is compared against the trusted policy and against repository
-    evidence supplied by the caller. Nothing the connector writes in prose --
-    commit message, PR body, comment -- can widen, waive, or substitute for any
-    of them.
+    Every field is compared against the trusted policy and against trusted
+    repository state. Nothing the connector writes in prose -- commit message, PR
+    body, comment -- can widen, waive, or substitute for any of them, and the
+    request deliberately carries no field describing the current base tip: that
+    is resolved from the repository itself so a stale caller cannot certify its
+    own staleness.
     """
 
     writer: str
@@ -80,7 +187,6 @@ class ConnectorWriteRequest:
     target_ref: str
     base_ref: str
     base_sha: str
-    observed_base_tip_sha: str
     paths: tuple[str, ...] = ()
 
     @classmethod
@@ -92,6 +198,9 @@ class ConnectorWriteRequest:
         if unknown:
             # An unreadable field is a request claim the gate would silently
             # ignore, so refuse the request rather than evaluate part of it.
+            # `observed_base_tip_sha` lands here on purpose: a caller-supplied
+            # base tip is no longer evidence, and silently dropping it would let
+            # an old caller believe its stale-base check still ran.
             raise ValueError("write request has unknown field(s): " + ", ".join(unknown))
 
         def text(name: str) -> str:
@@ -122,7 +231,6 @@ class ConnectorWriteRequest:
             target_ref=text("target_ref"),
             base_ref=text("base_ref"),
             base_sha=text("base_sha"),
-            observed_base_tip_sha=text("observed_base_tip_sha"),
             paths=path_tuple,
         )
 
@@ -136,6 +244,7 @@ class ConnectorIngressPolicy:
     required_capability: str
     base_ref: str
     forbidden_target_refs: frozenset[str]
+    branch_namespace: str
     branch_pattern_template: str
     allowed_paths: tuple[str, ...]
     prohibited_paths: tuple[str, ...]
@@ -147,6 +256,26 @@ class ConnectorIngressPolicy:
             if granted_login == login:
                 return capability
         return None
+
+    def in_connector_namespace(self, branch: str) -> bool:
+        return branch.startswith(self.branch_namespace)
+
+    def issue_for_branch(self, branch: str) -> str | None:
+        """The single governing Issue a branch name binds, derived from the branch.
+
+        Derived rather than declared: the branch name is trusted pull-request
+        evidence, so a receipt cannot claim a different Issue than the branch it
+        was written on.
+        """
+
+        match = re.fullmatch(
+            re.escape(self.branch_pattern_template).replace(re.escape(ISSUE_PLACEHOLDER), r"([1-9][0-9]{0,9})")
+            # `re.escape` escapes the glob wildcard too; restore it as a
+            # non-greedy any-run so the pattern keeps its fnmatch meaning.
+            .replace(r"\*", r".*"),
+            branch,
+        )
+        return match.group(1) if match else None
 
 
 def _normalize_branch(ref: str) -> str | None:
@@ -162,6 +291,38 @@ def _normalize_branch(ref: str) -> str | None:
     if not ref or ref.startswith("/") or ref.endswith("/") or ".." in ref:
         return None
     return ref
+
+
+def git_base_tip(base_ref: str, *, remote: str = "origin", cwd: Path | None = None) -> str:
+    """Resolve the current base tip from trusted repository state.
+
+    Reads the remote ref rather than anything in the caller's request or working
+    copy: a stale checkout must not be able to present its own stale commit as
+    the current tip. Any failure raises rather than returning a guess.
+    """
+
+    try:
+        completed = subprocess.run(
+            ("git", "ls-remote", "--exit-code", "--heads", remote, base_ref),
+            cwd=str(cwd or ROOT),
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise BaseTipUnavailable(f"git ls-remote failed: {type(exc).__name__}: {exc}") from exc
+    if completed.returncode != 0:
+        detail = completed.stderr.strip() or completed.stdout.strip() or f"exit {completed.returncode}"
+        raise BaseTipUnavailable(f"git ls-remote could not resolve {base_ref!r} on {remote!r}: {detail}")
+
+    lines = [line for line in completed.stdout.splitlines() if line.strip()]
+    if len(lines) != 1:
+        raise BaseTipUnavailable(f"git ls-remote returned {len(lines)} refs for {base_ref!r}; expected exactly one")
+    candidate = lines[0].split()[0].strip().lower()
+    if not _SHA.fullmatch(candidate):
+        raise BaseTipUnavailable(f"git ls-remote returned a malformed tip for {base_ref!r}")
+    return candidate
 
 
 def load_policy(path: Path | None = None) -> tuple[ConnectorIngressPolicy | None, str]:
@@ -228,9 +389,15 @@ def load_policy(path: Path | None = None) -> tuple[ConnectorIngressPolicy | None
     if not isinstance(base_ref, str) or not base_ref.strip():
         return None, "connector write ingress declares no base ref"
 
+    namespace = grant.get("branch_namespace")
+    if not isinstance(namespace, str) or not namespace.strip() or not namespace.endswith("/"):
+        return None, "connector write ingress must declare a connector branch namespace ending in '/'"
+
     template = grant.get("branch_pattern_template")
     if not isinstance(template, str) or ISSUE_PLACEHOLDER not in template:
         return None, "connector write ingress branch pattern must bind the governing Issue"
+    if not template.startswith(namespace.strip()):
+        return None, "connector write ingress branch pattern must live inside the connector namespace"
 
     forbidden_raw = grant.get("forbidden_target_refs")
     if not isinstance(forbidden_raw, list) or not all(isinstance(item, str) for item in forbidden_raw):
@@ -260,6 +427,7 @@ def load_policy(path: Path | None = None) -> tuple[ConnectorIngressPolicy | None
             required_capability=required_capability.strip(),
             base_ref=base_ref.strip(),
             forbidden_target_refs=frozenset(item.strip() for item in forbidden_raw if item.strip()),
+            branch_namespace=namespace.strip(),
             branch_pattern_template=template,
             allowed_paths=allowed_paths,
             prohibited_paths=prohibited_paths,
@@ -270,13 +438,44 @@ def load_policy(path: Path | None = None) -> tuple[ConnectorIngressPolicy | None
     )
 
 
+def check_scope(
+    paths: tuple[str, ...],
+    policy: ConnectorIngressPolicy,
+) -> str:
+    """Why these changed paths are out of scope, or "" when every one is in scope.
+
+    Shared by write-time authorization and admission-time re-evaluation so the
+    two cannot drift into two different answers.
+    """
+
+    if not paths or any(not path.strip() for path in paths):
+        return "no changed paths to check against the granted scope"
+    for path in paths:
+        if path.startswith("/") or ".." in Path(path).parts:
+            return f"path {path!r} is not a repository-relative path"
+
+    prohibited = sorted({p for p in paths if any(path_matches_scope_entry(p, e) for e in policy.prohibited_paths)})
+    if prohibited:
+        return "prohibited path(s): " + ", ".join(prohibited)
+
+    outside = sorted({p for p in paths if not any(path_matches_scope_entry(p, e) for e in policy.allowed_paths)})
+    if outside:
+        return "path(s) outside the granted connector scope: " + ", ".join(outside)
+    return ""
+
+
 def evaluate_write_request(
     request: ConnectorWriteRequest,
     policy: ConnectorIngressPolicy | None,
     *,
+    resolve_base_tip: BaseTipResolver | None = None,
     policy_error: str = "",
 ) -> IngressDecision:
-    """Authorize or reject one proposed connector write. Fail-closed throughout."""
+    """Authorize or reject one proposed connector write. Fail-closed throughout.
+
+    `resolve_base_tip` reads trusted repository state; it is injected so tests can
+    drive it, never so a caller can answer the question for itself.
+    """
 
     if policy is None:
         return _reject(f"connector write ingress is unavailable: {policy_error or 'no usable policy'}")
@@ -310,6 +509,8 @@ def evaluate_write_request(
         return _reject(f"write target {request.target_ref.strip() or '(none)'!r} is not a branch ref")
     if target_ref == base_ref or target_ref in policy.forbidden_target_refs:
         return _reject(f"direct write to protected branch {target_ref!r} is forbidden")
+    if not policy.in_connector_namespace(target_ref):
+        return _reject(f"branch {target_ref!r} is outside the connector namespace {policy.branch_namespace!r}")
 
     issue = request.issue.strip().lstrip("#")
     if not _ISSUE.fullmatch(issue):
@@ -321,46 +522,94 @@ def evaluate_write_request(
         return _reject(f"branch {target_ref!r} is out of scope for Issue #{issue} (expected {expected_pattern!r})")
 
     base_sha = request.base_sha.strip().lower()
-    observed_tip = request.observed_base_tip_sha.strip().lower()
     if not _SHA.fullmatch(base_sha):
         return _reject("write request declares no full base commit SHA")
+
+    if resolve_base_tip is None:
+        return _reject("connector write ingress cannot resolve the trusted base tip")
+    try:
+        observed_tip = resolve_base_tip(base_ref).strip().lower()
+    except BaseTipUnavailable as exc:
+        return _reject(f"trusted base tip is unavailable: {exc}")
+    except Exception as exc:  # noqa: BLE001 - any resolver failure must fail closed
+        return _reject(f"trusted base tip is unavailable: {type(exc).__name__}: {exc}")
     if not _SHA.fullmatch(observed_tip):
-        return _reject("write request carries no observed base tip commit SHA")
+        return _reject("trusted repository state returned no usable base tip")
     if policy.require_exact_base_tip and base_sha != observed_tip:
         return _reject(f"stale base: {base_sha[:10]} is not the current {base_ref} tip {observed_tip[:10]}")
 
     paths = tuple(path.strip() for path in request.paths)
-    if not paths or any(not path for path in paths):
-        return _reject("write request declares no changed paths to check against the granted scope")
-    for path in paths:
-        if path.startswith("/") or ".." in Path(path).parts:
-            return _reject(f"path {path!r} is not a repository-relative path")
+    if AUTHORIZATION_RECEIPT_PATH in paths:
+        # The receipt is emitted by this authorizer, not declared as content.
+        return _reject("write request must not declare the authorization receipt as changed content")
+    if any(path.startswith(".hunter/") for path in paths):
+        return _reject("write request must not declare governed .hunter/ ingress state as content")
+    scope_error = check_scope(paths, policy)
+    if scope_error:
+        return _reject(f"write request {scope_error}")
 
-    prohibited = sorted(
-        {path for path in paths if any(path_matches_scope_entry(path, e) for e in policy.prohibited_paths)}
+    authorization = ConnectorWriteAuthorization(
+        writer=writer,
+        capability=policy.required_capability,
+        issue=issue,
+        base_ref=base_ref,
+        base_sha=base_sha,
+        target_ref=target_ref,
+        paths=paths,
     )
-    if prohibited:
-        return _reject("prohibited path(s) in write request: " + ", ".join(prohibited))
-
-    outside = sorted(
-        {path for path in paths if not any(path_matches_scope_entry(path, e) for e in policy.allowed_paths)}
-    )
-    if outside:
-        return _reject("path(s) outside the granted connector scope: " + ", ".join(outside))
-
     return IngressDecision(
         True,
         f"authorized connector write by {writer!r} for Issue #{issue}: branch {target_ref}, "
-        f"base {base_ref}@{base_sha[:10]}, {len(paths)} path(s) in scope. "
-        "The candidate remains Draft/unadmitted until trusted hosted exact-head canonical preflight proves it.",
+        f"base {base_ref}@{base_sha[:10]}, {len(paths)} path(s) in scope, "
+        f"authorization {authorization.authorization_id[:12]}. Commit the receipt to "
+        f"{AUTHORIZATION_RECEIPT_PATH}; the candidate remains Draft/unadmitted until the trusted "
+        "hosted exact-head canonical preflight and trusted re-evaluation prove it.",
+        authorization,
     )
 
 
-def authorize(request: ConnectorWriteRequest, *, path: Path | None = None) -> IngressDecision:
+def confirm_base_unchanged(
+    authorization: ConnectorWriteAuthorization,
+    resolve_base_tip: BaseTipResolver,
+) -> str:
+    """Re-check the trusted base tip just before the write is applied.
+
+    Closes the window between authorization and application: an authorization
+    minted against an older tip must not be applied after the base advanced.
+    Returns "" when the write may proceed, or the reason it may not.
+    """
+
+    try:
+        current = resolve_base_tip(authorization.base_ref).strip().lower()
+    except BaseTipUnavailable as exc:
+        return f"trusted base tip is unavailable: {exc}"
+    except Exception as exc:  # noqa: BLE001 - any resolver failure must fail closed
+        return f"trusted base tip is unavailable: {type(exc).__name__}: {exc}"
+    if not _SHA.fullmatch(current):
+        return "trusted repository state returned no usable base tip"
+    if current != authorization.base_sha:
+        return (
+            f"base {authorization.base_ref} advanced from {authorization.base_sha[:10]} to {current[:10]} "
+            "after authorization; re-authorize against the current tip"
+        )
+    return ""
+
+
+def authorize(
+    request: ConnectorWriteRequest,
+    *,
+    path: Path | None = None,
+    resolve_base_tip: BaseTipResolver | None = None,
+) -> IngressDecision:
     """Evaluate one request against the trusted on-disk policy."""
 
     policy, error = load_policy(path)
-    return evaluate_write_request(request, policy, policy_error=error)
+    return evaluate_write_request(
+        request,
+        policy,
+        resolve_base_tip=resolve_base_tip if resolve_base_tip is not None else git_base_tip,
+        policy_error=error,
+    )
 
 
 def parser() -> argparse.ArgumentParser:
@@ -372,6 +621,15 @@ def parser() -> argparse.ArgumentParser:
         type=Path,
         metavar="PATH",
         help="JSON write-request document; omit to read the document from stdin.",
+    )
+    result.add_argument(
+        "--emit-receipt",
+        type=Path,
+        metavar="PATH",
+        help=(
+            "On authorization, write the commit-bound authorization receipt here. "
+            f"It must be committed to the candidate head as {AUTHORIZATION_RECEIPT_PATH}."
+        ),
     )
     return result
 
@@ -388,7 +646,17 @@ def main() -> int:
     decision = authorize(request)
     verdict = "AUTHORIZE" if decision.authorized else "REJECT"
     print(f"[Connector Write Ingress] {verdict}: {decision.reason}")
-    return 0 if decision.authorized else 1
+    if not decision.authorized or decision.authorization is None:
+        return 1
+
+    if args.emit_receipt:
+        args.emit_receipt.parent.mkdir(parents=True, exist_ok=True)
+        args.emit_receipt.write_text(
+            json.dumps(decision.authorization.document(), indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        print(f"[Connector Write Ingress] receipt written to {args.emit_receipt}")
+    return 0
 
 
 if __name__ == "__main__":

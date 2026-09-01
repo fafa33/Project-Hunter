@@ -83,15 +83,19 @@ def test_guard_rejects_a_grant_that_stops_covering_its_own_boundary_files() -> N
     assert any("docs/CODE_WRITE_POLICY.json" in error for error in errors)
 
 
-def test_connector_writers_are_disjoint_from_clone_capable_pre_push_signers() -> None:
-    policy = json.loads((ROOT / "docs" / "CODE_WRITE_POLICY.json").read_text(encoding="utf-8"))
-    signers = {signer.strip().lower() for signer in policy["ingress_provenance"]["authorized_signers"]}
-    writers = {
-        str(entry.get("login") or "").strip().lower()
-        for entry in policy["connector_write_ingress"]["authorized_writers"]
-    }
+def test_active_grant_separates_connector_proof_from_pre_push_proof_by_evidence() -> None:
+    """The connector shares the owner's account, so identity cannot separate the channels.
 
-    assert not (writers - {""}) & signers
+    The grant must therefore say so and carry the evidence requirement that
+    replaces identity disjointness, rather than resting on signature identity.
+    """
+    policy = json.loads((ROOT / "docs" / "CODE_WRITE_POLICY.json").read_text(encoding="utf-8"))
+    grant = policy["connector_write_ingress"]
+
+    assert grant["enabled"] is True
+    assert grant["local_pre_push_equivalent"] is False
+    assert grant["provenance_separation"].strip()
+    assert grant["hosted_admission"]["require_for_all_candidates"] is True
 
 
 def test_defect_prevention_guard_validates_the_connector_write_ingress_grant() -> None:
@@ -114,17 +118,33 @@ def test_guard_rejects_a_grant_that_permits_writing_main() -> None:
     assert any("forbid main" in error for error in prevention.validate_connector_write_ingress(policy))
 
 
-def test_guard_rejects_a_connector_writer_that_is_also_a_clone_capable_signer() -> None:
+def test_guard_rejects_an_active_grant_that_drops_the_hosted_proof_requirement() -> None:
+    policy = json.loads((ROOT / "docs" / "CODE_WRITE_POLICY.json").read_text(encoding="utf-8"))
+    policy["connector_write_ingress"]["hosted_admission"]["require_for_all_candidates"] = False
+
+    assert any(
+        "hosted exact-head proof for all candidates" in error
+        for error in prevention.validate_connector_write_ingress(policy)
+    )
+
+
+def test_guard_rejects_an_active_grant_that_states_no_provenance_separation() -> None:
+    policy = json.loads((ROOT / "docs" / "CODE_WRITE_POLICY.json").read_text(encoding="utf-8"))
+    policy["connector_write_ingress"]["provenance_separation"] = ""
+
+    assert any("separated from pre-push" in error for error in prevention.validate_connector_write_ingress(policy))
+
+
+def test_guard_accepts_a_writer_login_that_overlaps_the_clone_capable_signers() -> None:
+    """Disjointness would make the grant unbindable; overlap is handled by evidence."""
     policy = json.loads((ROOT / "docs" / "CODE_WRITE_POLICY.json").read_text(encoding="utf-8"))
     policy["connector_write_ingress"]["authorized_writers"][0]["login"] = "claude"
 
-    assert any(
-        "clone-capable pre-push signer" in error for error in prevention.validate_connector_write_ingress(policy)
-    )
+    assert prevention.validate_connector_write_ingress(policy) == []
 
 
 def test_guard_rejects_an_enabled_grant_with_no_bound_writer_identity() -> None:
     policy = json.loads((ROOT / "docs" / "CODE_WRITE_POLICY.json").read_text(encoding="utf-8"))
-    policy["connector_write_ingress"]["enabled"] = True
+    policy["connector_write_ingress"]["authorized_writers"][0]["login"] = ""
 
     assert any("binds no writer identity" in error for error in prevention.validate_connector_write_ingress(policy))

@@ -9,6 +9,7 @@ from urllib.parse import parse_qs, urlparse
 candidate_controller = importlib.import_module("hunter_candidate_admission")
 prevention = importlib.import_module("hunter_defect_prevention_preflight")
 governance = importlib.import_module("hunter_governance_review_v2")
+transport = importlib.import_module("hunter_github_transport")
 
 
 HEAD_A = "a" * 40
@@ -115,6 +116,14 @@ def test_protected_preflight_requires_exact_head_pr_bound_status(monkeypatch) ->
                     "commit": {"verification": {"verified": True, "reason": "valid"}},
                 }
             ]
+        # Trusted evidence the connector-ingress re-derivation reads: an ordinary
+        # clone-capable candidate outside the connector namespace, carrying no
+        # authorization receipt, so this case keeps testing exactly the
+        # protected-preflight contract it was written for.
+        if path.startswith("pulls/376"):
+            return {"head": {"ref": "claude/clone-written", "sha": HEAD_A}, "base": {"ref": "main"}}
+        if path.startswith("contents/.hunter/"):
+            raise transport.GitHubRequestError("Not Found", category="permanent", status_code=404)
         raise AssertionError(path)
 
     monkeypatch.setattr(governance, "request_json", fake_request)
