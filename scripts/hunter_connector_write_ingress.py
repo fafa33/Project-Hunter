@@ -80,13 +80,93 @@ ISSUE_PLACEHOLDER = "{issue}"
 #: trusted controller reads it at the exact candidate head, so the receipt is
 #: bound to that tree and cannot be replayed onto a different one unchanged.
 AUTHORIZATION_RECEIPT_PATH = ".hunter/connector-write-authorization.json"
-AUTHORIZATION_SCHEMA = "hunter-connector-write-authorization-v2"
+AUTHORIZATION_SCHEMA = "hunter-connector-write-authorization-v4"
 
 _SHA = re.compile(r"\A[0-9a-f]{40}\Z")
 _LOGIN = re.compile(r"\A[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?(?:\[bot\])?\Z")
 _ISSUE = re.compile(r"\A[1-9][0-9]{0,9}\Z")
 
 BaseTipResolver = Callable[[str], str]
+
+
+_BLOB_SHA = re.compile(r"\A[0-9a-f]{40}\Z")
+
+
+def blob_digest(content: bytes) -> str:
+    """The git blob SHA of `content`, as GitHub reports it per changed file.
+
+    Computed the way git computes it -- ``sha1("blob <len>\\0" + content)`` -- so a
+    writer can bind the exact bytes it is authorizing without a round trip, and
+    the trusted controller can compare against the `sha` GitHub returns for each
+    file in the pull request without trusting anything the candidate says.
+    """
+
+    return hashlib.sha1(b"blob %d\x00" % len(content) + content).hexdigest()  # noqa: S324
+
+
+@dataclass(frozen=True, order=True)
+class ConnectorFileChange:
+    """One exact file transition authorized through the connector channel."""
+
+    status: str
+    path: str
+    previous_path: str = ""
+    blob_sha: str = ""
+
+    def affected_paths(self) -> tuple[str, ...]:
+        if self.status == "renamed":
+            return (self.previous_path, self.path)
+        return (self.path,)
+
+    def document(self) -> dict[str, str]:
+        return {
+            "blob_sha": self.blob_sha,
+            "path": self.path,
+            "previous_path": self.previous_path,
+            "status": self.status,
+        }
+
+
+def normalize_changes(value: Any) -> tuple[ConnectorFileChange, ...] | None:
+    """Canonicalise exact file transitions, or return ``None`` if ambiguous."""
+
+    if not isinstance(value, (list, tuple)):
+        return None
+    normalized: list[ConnectorFileChange] = []
+    affected: set[str] = set()
+    for raw in value:
+        if isinstance(raw, ConnectorFileChange):
+            status, path, previous_path, blob_sha = raw.status, raw.path, raw.previous_path, raw.blob_sha
+        elif isinstance(raw, dict) and set(raw) == {"status", "path", "previous_path", "blob_sha"}:
+            status = raw.get("status")
+            path = raw.get("path")
+            previous_path = raw.get("previous_path")
+            blob_sha = raw.get("blob_sha")
+        else:
+            return None
+        if not all(isinstance(item, str) for item in (status, path, previous_path, blob_sha)):
+            return None
+        status = status.strip().lower()
+        path = path.strip()
+        previous_path = previous_path.strip()
+        blob_sha = blob_sha.strip().lower()
+        if status not in {"added", "modified", "removed", "renamed"} or not path:
+            return None
+        if status == "removed":
+            if previous_path or blob_sha:
+                return None
+        elif status == "renamed":
+            if not previous_path or previous_path == path or not _BLOB_SHA.fullmatch(blob_sha):
+                return None
+        elif previous_path or not _BLOB_SHA.fullmatch(blob_sha):
+            return None
+        change = ConnectorFileChange(status, path, previous_path, blob_sha)
+        paths = change.affected_paths()
+        if any(item in affected for item in paths):
+            return None
+        affected.update(paths)
+        normalized.append(change)
+    return tuple(sorted(normalized))
 
 
 class BaseTipUnavailable(RuntimeError):
@@ -109,6 +189,10 @@ class ConnectorWriteAuthorization:
     scopes the governing Issue was authorized for; it is derived from the trusted
     manifest rather than declared by the caller, and is empty for an ordinary
     feature-branch write.
+
+    `changes` binds the operation and exact resulting content. Additions and
+    modifications bind the destination blob; removals bind absence; renames bind
+    both source and destination plus the resulting destination blob.
     """
 
     writer: str
@@ -120,12 +204,14 @@ class ConnectorWriteAuthorization:
     paths: tuple[str, ...]
     governance_scopes: tuple[str, ...] = ()
     grant_fingerprint: str = ""
+    changes: tuple[ConnectorFileChange, ...] = ()
 
     def claims(self) -> dict[str, Any]:
         return {
             "base_ref": self.base_ref,
             "base_sha": self.base_sha,
             "capability": self.capability,
+            "changes": [change.document() for change in sorted(self.changes)],
             "governance_scopes": sorted(self.governance_scopes),
             "grant_fingerprint": self.grant_fingerprint,
             "issue": self.issue,
@@ -163,6 +249,7 @@ class ConnectorWriteAuthorization:
             "base_ref",
             "base_sha",
             "capability",
+            "changes",
             "governance_scopes",
             "grant_fingerprint",
             "issue",
@@ -176,9 +263,20 @@ class ConnectorWriteAuthorization:
         raw_paths = claims.get("paths")
         if not isinstance(raw_paths, list) or not all(isinstance(item, str) for item in raw_paths):
             return None, "authorization receipt paths must be an array of path strings"
+        changes = normalize_changes(claims.get("changes"))
+        if changes is None:
+            return None, "authorization receipt changes must be canonical exact file transitions"
+        canonical_paths = sorted({item.strip() for item in raw_paths if item.strip()})
+        if raw_paths != canonical_paths:
+            return None, "authorization receipt paths must be sorted, unique, non-empty canonical paths"
+        if claims.get("changes") != [change.document() for change in changes]:
+            return None, "authorization receipt changes are not in canonical order and form"
         raw_scopes = claims.get("governance_scopes")
         if not isinstance(raw_scopes, list) or not all(isinstance(item, str) for item in raw_scopes):
             return None, "authorization receipt governance_scopes must be an array of scope names"
+        canonical_scopes = sorted({item.strip() for item in raw_scopes if item.strip()})
+        if raw_scopes != canonical_scopes:
+            return None, "authorization receipt governance_scopes must be sorted, unique canonical names"
         for name in ("base_ref", "base_sha", "capability", "grant_fingerprint", "issue", "target_ref", "writer"):
             if not isinstance(claims.get(name), str):
                 return None, f"authorization receipt claim {name!r} must be a string"
@@ -190,9 +288,10 @@ class ConnectorWriteAuthorization:
             base_ref=str(claims["base_ref"]),
             base_sha=str(claims["base_sha"]),
             target_ref=str(claims["target_ref"]),
-            paths=tuple(raw_paths),
-            governance_scopes=tuple(raw_scopes),
+            paths=tuple(canonical_paths),
+            governance_scopes=tuple(canonical_scopes),
             grant_fingerprint=str(claims["grant_fingerprint"]),
+            changes=changes,
         )
         declared_id = payload.get("authorization_id")
         if not isinstance(declared_id, str) or declared_id != authorization.authorization_id:
@@ -232,6 +331,7 @@ class ConnectorWriteRequest:
     base_ref: str
     base_sha: str
     paths: tuple[str, ...] = ()
+    changes: tuple[ConnectorFileChange, ...] = ()
 
     @classmethod
     def from_dict(cls, payload: Any) -> ConnectorWriteRequest:
@@ -268,6 +368,15 @@ class ConnectorWriteRequest:
                     raise ValueError("write request field 'paths' must contain only path strings")
             path_tuple = tuple(raw_paths)
 
+        raw_changes = payload.get("changes")
+        if raw_changes is None:
+            changes: tuple[ConnectorFileChange, ...] = ()
+        else:
+            normalized = normalize_changes(raw_changes)
+            if normalized is None:
+                raise ValueError("write request field 'changes' must be canonical exact file transitions")
+            changes = normalized
+
         return cls(
             writer=text("writer"),
             capability=text("capability"),
@@ -276,6 +385,7 @@ class ConnectorWriteRequest:
             base_ref=text("base_ref"),
             base_sha=text("base_sha"),
             paths=path_tuple,
+            changes=changes,
         )
 
 
@@ -908,7 +1018,10 @@ def evaluate_write_request(
     if policy.require_exact_base_tip and base_sha != observed_tip:
         return _reject(f"stale base: {base_sha[:10]} is not the current {base_ref} tip {observed_tip[:10]}")
 
-    paths = tuple(path.strip() for path in request.paths)
+    stripped_paths = tuple(path.strip() for path in request.paths)
+    if any(not path for path in stripped_paths) or len(set(stripped_paths)) != len(stripped_paths):
+        return _reject("write request paths must be unique, non-empty repository paths")
+    paths = tuple(sorted(stripped_paths))
     if AUTHORIZATION_RECEIPT_PATH in paths:
         # The receipt is emitted by this authorizer, not declared as content.
         return _reject("write request must not declare the authorization receipt as changed content")
@@ -917,6 +1030,17 @@ def evaluate_write_request(
     scope_error = check_scope(paths, policy, capability=capability, issue=issue)
     if scope_error:
         return _reject(f"write request {scope_error}")
+
+    # Bind the operation as well as the bytes. In particular, GitHub reports the
+    # base blob SHA for a removed file; representing removal as an explicit
+    # absence prevents that SHA from masquerading as authorized retained content.
+    changes = normalize_changes(request.changes)
+    changed_paths = {path for change in changes or () for path in change.affected_paths()}
+    if changes is None or changed_paths != set(paths):
+        return _reject(
+            "write request must declare exact, unambiguous change semantics for every changed path "
+            f"({len(paths)} path(s), {len(changed_paths)} change-bound path(s))"
+        )
 
     # Derived from the trusted manifest, never declared by the caller: the Issue
     # comes from the branch the write targets, and the scopes come from the
@@ -937,6 +1061,7 @@ def evaluate_write_request(
         paths=paths,
         governance_scopes=governance_scopes,
         grant_fingerprint=policy.fingerprint,
+        changes=changes,
     )
     return IngressDecision(
         True,

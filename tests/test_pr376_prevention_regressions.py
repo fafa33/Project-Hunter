@@ -14,6 +14,30 @@ transport = importlib.import_module("hunter_github_transport")
 
 HEAD_A = "a" * 40
 HEAD_B = "b" * 40
+TRUSTED_RUN_ID = 3760
+
+
+def _trusted_status(pr_number: int) -> dict:
+    return {
+        "id": 11,
+        "context": governance._upgrade_status_context(pr_number),
+        "state": "success",
+        "creator": {"login": governance.TRUSTED_STATUS_CREATOR, "type": "Bot"},
+        "target_url": f"https://github.com/fafa33/Project-Hunter/actions/runs/{TRUSTED_RUN_ID}",
+    }
+
+
+def _trusted_run(pr_number: int) -> dict:
+    return {
+        "id": TRUSTED_RUN_ID,
+        "name": governance.TRUSTED_UPGRADE_WORKFLOW_NAME,
+        "path": governance.TRUSTED_UPGRADE_WORKFLOW_PATH,
+        "event": "pull_request_target",
+        "head_sha": HEAD_A,
+        "status": "completed",
+        "conclusion": "success",
+        "pull_requests": [{"number": pr_number, "head": {"sha": HEAD_A}}],
+    }
 
 
 def _query_page(path: str) -> str:
@@ -62,11 +86,14 @@ def test_trusted_upgrade_status_is_bound_to_exact_pr_context(monkeypatch) -> Non
     context = governance._upgrade_status_context(376)
 
     def fake_request(_repo, _token, _method, path, _payload=None):
-        assert f"commits/{HEAD_A}/statuses" in path
-        return [
-            {"id": 10, "context": governance._upgrade_status_context(999), "state": "success"},
-            {"id": 11, "context": context, "state": "success"},
-        ]
+        if f"commits/{HEAD_A}/statuses" in path:
+            return [
+                {"id": 10, "context": governance._upgrade_status_context(999), "state": "success"},
+                {**_trusted_status(376), "context": context},
+            ]
+        if path == f"actions/runs/{TRUSTED_RUN_ID}":
+            return _trusted_run(376)
+        raise AssertionError(path)
 
     monkeypatch.setattr(governance, "request_json", fake_request)
     state, description = governance.read_trusted_upgrade_status("fafa33/Project-Hunter", "token", HEAD_A, 376)
@@ -101,13 +128,9 @@ def test_protected_preflight_requires_exact_head_pr_bound_status(monkeypatch) ->
         if "contents/.hunter-preflight-mode" in path:
             return {"message": "Not Found"}
         if f"commits/{HEAD_A}/statuses" in path:
-            return [
-                {
-                    "id": 12,
-                    "context": governance._upgrade_status_context(376),
-                    "state": "success",
-                }
-            ]
+            return [{**_trusted_status(376), "id": 12}]
+        if path == f"actions/runs/{TRUSTED_RUN_ID}":
+            return _trusted_run(376)
         if "pulls/376/commits" in path:
             return [
                 {
@@ -130,7 +153,7 @@ def test_protected_preflight_requires_exact_head_pr_bound_status(monkeypatch) ->
     state, _description = governance.candidate_admission("fafa33/Project-Hunter", "token", HEAD_A, pr_number=376)
 
     assert state == "success"
-    assert not any("actions/runs" in path for path in requests)
+    assert f"actions/runs/{TRUSTED_RUN_ID}" in requests
 
 
 def test_unknown_code_write_path_is_rejected(monkeypatch, tmp_path) -> None:
