@@ -129,7 +129,8 @@ def read_pr_changed_paths(repository: str, token: str, pr_number: int) -> tuple[
         return False, (), f"unexpected error: {type(exc).__name__}: {exc}"
 
 
-CODE_WRITE_POLICY_PATH = ROOT / "docs" / "CODE_WRITE_POLICY.json"
+CODE_WRITE_POLICY_RELATIVE_PATH = "docs/CODE_WRITE_POLICY.json"
+CODE_WRITE_POLICY_PATH = ROOT / CODE_WRITE_POLICY_RELATIVE_PATH
 COMMIT_PAGE_CAP = 30
 
 
@@ -487,6 +488,78 @@ def read_head_authorization_receipt(repository: str, token: str, head_sha: str) 
         return "unavailable", None, f"authorization receipt is undecodable: {type(exc).__name__}: {exc}"
 
 
+def read_head_code_write_policy(repository: str, token: str, head_sha: str) -> tuple[str, Any, str | None]:
+    """Read the candidate head's own copy of the canonical code-write policy.
+
+    Returns ``("absent"|"present"|"unavailable", document, error)``. This is never
+    read as authority -- the grant that authorizes a candidate is always the
+    default-branch one the controller has checked out. It is read only so the
+    controller can see whether a candidate proposes a *wider* grant than the one
+    it is being evaluated under, which is the same-pull-request self-escalation
+    Issue #405 forbids.
+    """
+    encoded_sha = quote(head_sha, safe="")
+    encoded_path = quote(CODE_WRITE_POLICY_RELATIVE_PATH, safe="/")
+    try:
+        payload = request_json(repository, token, "GET", f"contents/{encoded_path}?ref={encoded_sha}")
+    except transport.GitHubRequestError as exc:
+        if exc.status_code == 404:
+            return "absent", None, None
+        return "unavailable", None, f"GitHub request error ({exc.status_code}): {exc}"
+    except Exception as exc:
+        return "unavailable", None, f"unexpected error: {type(exc).__name__}: {exc}"
+
+    if not isinstance(payload, dict):
+        return "unavailable", None, "non-dict payload for the canonical code-write policy"
+    if payload.get("message") == "Not Found":
+        return "absent", None, None
+    content = payload.get("content")
+    if not isinstance(content, str) or not content:
+        return "unavailable", None, "canonical code-write policy carries no content"
+    try:
+        return "present", json.loads(base64.b64decode(content).decode("utf-8")), None
+    except Exception as exc:
+        return "unavailable", None, f"canonical code-write policy is undecodable: {type(exc).__name__}: {exc}"
+
+
+def verify_no_same_candidate_self_escalation(
+    repository: str,
+    token: str,
+    head_sha: str,
+    trusted: ingress.ConnectorIngressPolicy,
+) -> tuple[bool, str]:
+    """Refuse a connector candidate that widens the grant it is authorized under.
+
+    A governed pull request is exactly where a wider grant *should* be proposed,
+    so this does not forbid the proposal. It forbids the proposal being in force
+    for its own candidate: the head's policy is parsed with the same rules as the
+    trusted one, and any additional authority it declares blocks admission of a
+    candidate that is itself writing through the ingress. The widened grant takes
+    effect only once it is independently reviewed, owner-merged, and therefore
+    part of the trusted default branch that evaluates the *next* candidate.
+    """
+    state, document, error = read_head_code_write_policy(repository, token, head_sha)
+    if state == "unavailable":
+        return False, f"Candidate admission blocked: head code-write policy evidence is unavailable ({error})."
+    if state == "absent":
+        return False, "Candidate admission blocked: the candidate head carries no canonical code-write policy."
+
+    candidate, parse_error = ingress.parse_policy(document)
+    if candidate is None:
+        return (
+            False,
+            f"Candidate admission blocked: the candidate head's code-write policy is unusable ({parse_error}).",
+        )
+
+    widening = ingress.grant_widening(trusted, candidate)
+    if widening:
+        return False, (
+            "Candidate admission blocked: a connector candidate may not widen the grant it is authorized "
+            "under and rely on it in the same pull request; this head " + "; ".join(widening) + "."
+        )
+    return True, ""
+
+
 def read_pr_refs(repository: str, token: str, pr_number: int) -> tuple[bool, str, str, str | None]:
     """Trusted head/base branch names for the pull request."""
     try:
@@ -594,14 +667,29 @@ def verify_connector_ingress_authorization(
         )
 
     writer = authorization.writer.strip().lower()
-    granted = policy.capability_for(writer)
-    if granted is None or granted != policy.required_capability:
+    granted = policy.capabilities_for(writer)
+    if not granted:
         return False, f"Candidate admission blocked: authorization writer {writer or 'unknown'!r} is not granted."
-    if authorization.capability != policy.required_capability:
+    if authorization.capability not in granted or policy.capability_scope(authorization.capability) is None:
         return False, (
-            f"Candidate admission blocked: authorization capability {authorization.capability!r} is not the "
-            f"granted {policy.required_capability!r}."
+            f"Candidate admission blocked: authorization capability {authorization.capability!r} is not "
+            f"granted to {writer!r}, which holds {', '.join(sorted(granted))}."
         )
+
+    ok_no_escalation, escalation_message = verify_no_same_candidate_self_escalation(repository, token, head_sha, policy)
+    if not ok_no_escalation:
+        return False, escalation_message
+
+    # The grant version is pinned, not merely named: a receipt minted under any
+    # other version of the grant -- an older default-branch one, or one the
+    # candidate wrote at its own head -- is stale and admits nothing.
+    if authorization.grant_fingerprint != policy.fingerprint:
+        return False, (
+            "Candidate admission blocked: authorization was minted under grant "
+            f"{authorization.grant_fingerprint[:12] or '(none)'}, but the trusted default-branch grant is "
+            f"{policy.fingerprint[:12]}; re-authorize against the current grant."
+        )
+
     foreign = sorted(signer for signer in commit_signers if signer != writer)
     if foreign:
         return False, (
@@ -618,19 +706,40 @@ def verify_connector_ingress_authorization(
             f"candidate's fork point {merge_base[:10]} from {base_ref}."
         )
 
+    # The governance scopes a candidate may use are re-derived from the trusted
+    # manifest for the Issue the *branch* binds, never taken from the receipt. A
+    # receipt claiming scopes the owner did not authorize for that Issue therefore
+    # disagrees with trusted evidence and fails.
+    scope = policy.capability_scope(authorization.capability)
+    expected_scopes: tuple[str, ...] = ()
+    if scope is not None and scope.requires_issue_authorization:
+        authorized_scopes = policy.scopes_authorized_for_issue(branch_issue)
+        if authorized_scopes is None:
+            return False, (
+                f"Candidate admission blocked: Issue #{branch_issue} carries no owner-authored "
+                f"{authorization.capability} authorization on the trusted default branch."
+            )
+        expected_scopes = tuple(sorted(authorized_scopes))
+    if tuple(sorted(authorization.governance_scopes)) != expected_scopes:
+        return False, (
+            "Candidate admission blocked: authorization claims governance scope(s) "
+            f"{', '.join(sorted(authorization.governance_scopes)) or '(none)'}, but Issue #{branch_issue} is "
+            f"authorized for {', '.join(expected_scopes) or '(none)'}."
+        )
+
     trusted_paths = tuple(sorted({p for p in changed_paths if p != ingress.AUTHORIZATION_RECEIPT_PATH}))
     if set(trusted_paths) != {p.strip() for p in authorization.paths}:
         return False, (
             "Candidate admission blocked: the changed files do not match the authorized path set "
             f"({len(trusted_paths)} changed, {len(authorization.paths)} authorized)."
         )
-    scope_error = ingress.check_scope(trusted_paths, policy)
+    scope_error = ingress.check_scope(trusted_paths, policy, capability=authorization.capability, issue=branch_issue)
     if scope_error:
         return False, f"Candidate admission blocked: connector candidate {scope_error}."
 
     return True, (
-        f"Connector authorization {authorization.authorization_id[:12]} re-derived from trusted evidence "
-        f"for Issue #{branch_issue}."
+        f"Connector authorization {authorization.authorization_id[:12]} ({authorization.capability}) "
+        f"re-derived from trusted evidence for Issue #{branch_issue} under grant {policy.fingerprint[:12]}."
     )
 
 

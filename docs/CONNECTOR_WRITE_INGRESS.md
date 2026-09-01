@@ -4,6 +4,8 @@ Issue #403 authorizes one narrow repository-owned path that lets an explicitly a
 
 This is an **additional** ingress. `.githooks/pre-push` remains the authoritative boundary for clone-capable writers and is unchanged by this capability.
 
+Issue #405 later added a **second capability on this same ingress**, `governance-maintenance`, for owner-authorized ADR lifecycle and explicitly scoped governance work. Everything on this page continues to describe the ordinary `feature-branch-write` capability unchanged; see `docs/GOVERNANCE_MAINTENANCE.md` for the added capability, the root-of-trust floor beneath both, and the anti-self-escalation rules.
+
 ## Authority
 
 | Concern | Authority |
@@ -14,6 +16,7 @@ This is an **additional** ingress. `.githooks/pre-push` remains the authoritativ
 | Grant validation | `scripts/hunter_defect_prevention_preflight.py` → `validate_connector_write_ingress` |
 | Regression tests | `tests/test_connector_write_ingress.py` |
 | Defect class | `docs/DEFECT_REGISTRY.json` → `CWI-001` |
+| Added capability (#405) | `docs/GOVERNANCE_MAINTENANCE.md` |
 
 The governance controller checks out the default branch, so the grant is always read from trusted state. A candidate cannot grant itself ingress, widen its own writer allowlist, or move its own scope.
 

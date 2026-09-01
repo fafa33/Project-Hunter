@@ -473,9 +473,9 @@ def test_shipped_grant_is_active_and_bound_so_no_second_bootstrap_is_needed() ->
     assert error == ""
     assert policy is not None
     assert policy.enabled is True
-    assert len(policy.writers) == 1
-    login, capability = policy.writers[0]
-    assert login and capability == policy.required_capability
+    assert policy.writers
+    assert all(login and capability in policy.granted_capabilities() for login, capability in policy.writers)
+    assert policy.required_capability in {capability for _login, capability in policy.writers}
 
 
 def test_shipped_grant_authorizes_a_compliant_connector_write_as_shipped() -> None:
@@ -595,7 +595,16 @@ def _commit(sha: str = HEAD, signer: str = CONNECTOR) -> dict:
     }
 
 
-def _authorization(**overrides: object) -> ingress.ConnectorWriteAuthorization:
+def _authorization(
+    *, grant: ingress.ConnectorIngressPolicy | None = None, **overrides: object
+) -> ingress.ConnectorWriteAuthorization:
+    """A receipt minted under `grant`, defaulting to the harness grant.
+
+    The receipt pins the exact grant version it was authorized under (Issue #405),
+    so a receipt must be minted under the same grant the admission harness is
+    driving; a receipt from any other version is stale by construction.
+    """
+
     authorization = ingress.ConnectorWriteAuthorization(
         writer=CONNECTOR,
         capability="feature-branch-write",
@@ -604,6 +613,8 @@ def _authorization(**overrides: object) -> ingress.ConnectorWriteAuthorization:
         base_sha=BASE_TIP,
         target_ref=CONNECTOR_BRANCH,
         paths=CONTENT_PATHS,
+        governance_scopes=(),
+        grant_fingerprint=(grant if grant is not None else _policy()).fingerprint,
     )
     return replace(authorization, **overrides)  # type: ignore[arg-type]
 
@@ -621,11 +632,25 @@ def _admission(
     connector_policy: tuple[bool, frozenset[str], str | None] = (True, frozenset({CONNECTOR}), None),
     signers: frozenset[str] = frozenset({"claude", "fafa33"}),
     policy: ingress.ConnectorIngressPolicy | None = None,
+    head_policy: ingress.ConnectorIngressPolicy | None = None,
+    head_policy_error: str = "",
 ) -> tuple[str, str]:
-    """Drive candidate_admission over stubbed trusted evidence."""
+    """Drive candidate_admission over stubbed trusted evidence.
+
+    `policy` is the trusted default-branch grant the controller evaluates under;
+    `head_policy` is the grant the candidate carries at its own head, which
+    defaults to the same one. They differ only when a test is driving the Issue
+    #405 same-candidate self-escalation boundary.
+    """
 
     grant = policy if policy is not None else _policy()
+    head_grant = head_policy if head_policy is not None else grant
     monkeypatch.setattr(ingress, "load_policy", lambda *_a, **_k: (grant, ""))
+    monkeypatch.setattr(
+        ingress,
+        "parse_policy",
+        lambda *_a, **_k: ((None, head_policy_error) if head_policy_error else (head_grant, "")),
+    )
     monkeypatch.setattr(core, "read_pr_changed_paths", lambda *_args: (True, changed_paths, None))
     monkeypatch.setattr(core, "read_head_preflight_mode", lambda *_args: ("normal", None))
     monkeypatch.setattr(core, "load_ingress_provenance_policy", lambda: (signers, "", None))
@@ -642,6 +667,10 @@ def _admission(
             return commits if commits is not None else [_commit()]
         if path.startswith("pulls/501"):
             return {"head": {"ref": head_ref, "sha": HEAD}, "base": {"ref": "main"}}
+        if path.startswith(f"contents/{core.CODE_WRITE_POLICY_RELATIVE_PATH}"):
+            # Served so the controller can read the candidate head's own grant;
+            # `parse_policy` is stubbed above, so the bytes only have to decode.
+            return {"content": base64.b64encode(b"{}").decode("ascii")}
         if path.startswith("contents/.hunter/"):
             if document is None:
                 raise transport.GitHubRequestError("Not Found", category="permanent", status_code=404)
@@ -889,7 +918,7 @@ def test_shared_identity_still_cannot_pass_as_local_pre_push_proof(monkeypatch) 
     }
 
     unproven, description = _admission(
-        monkeypatch, receipt=_authorization(writer=shared).document(), statuses=[], **bound
+        monkeypatch, receipt=_authorization(grant=shared_grant, writer=shared).document(), statuses=[], **bound
     )
     assert unproven == "failure"
     assert "a verified signature alone is not pre-push proof" in description
@@ -898,7 +927,7 @@ def test_shared_identity_still_cannot_pass_as_local_pre_push_proof(monkeypatch) 
     assert unauthorized == "failure"
     assert "carries no exact-head authorization receipt" in description
 
-    proven, _ = _admission(monkeypatch, receipt=_authorization(writer=shared).document(), **bound)
+    proven, _ = _admission(monkeypatch, receipt=_authorization(grant=shared_grant, writer=shared).document(), **bound)
     assert proven == "success"
 
 
