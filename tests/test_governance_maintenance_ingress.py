@@ -344,13 +344,88 @@ def test_shipped_grant_still_authorizes_the_ordinary_403_write_path() -> None:
     assert decision.authorized is True, decision.reason
 
 
-def test_shipped_root_of_trust_covers_the_canonical_gate_chain() -> None:
-    """Derived, not restated: every script the gate chain runs is on the floor."""
+def test_shipped_root_of_trust_covers_every_derived_authority() -> None:
+    """Derived, not restated: the floor covers the real authority and its dependencies."""
     policy, _ = ingress.load_policy()
     assert policy is not None
 
-    for guarded in prevention._gate_owned_scripts() + prevention.STATIC_ROOT_OF_TRUST:
+    required, errors = prevention._authority_closure()
+    assert errors == []
+    for guarded in required:
         assert policy.is_root_of_trust(guarded), guarded
+
+
+def test_the_derived_floor_reaches_the_push_boundary_and_its_dependencies() -> None:
+    """The hook shells out; the scripts it reaches are authority just the same.
+
+    `.githooks/pre-push` runs `hunter_pre_push`, which runs the canonical
+    preflight, which runs the guards, which import the shared scope matcher. A
+    floor derived only from the gate chain's own commands would stop at the
+    guards and leave the push boundary's implementation writable.
+    """
+    required, errors = prevention._authority_closure()
+
+    assert errors == []
+    for reached in (
+        "scripts/hunter_pre_push.py",
+        "scripts/hunter_pr_preflight.py",
+        "scripts/hunter_workflow_state.py",
+        "scripts/hunter_github_transport.py",
+        "scripts/hunter_connector_write_ingress.py",
+        "scripts/hunter_governance_review_v2.py",
+        "scripts/hunter_merge_readiness_v2.py",
+        "scripts/hunter_candidate_admission.py",
+    ):
+        assert reached in required, reached
+
+
+def test_the_derived_floor_does_not_over_block_ordinary_scripts() -> None:
+    """A guard that swept in ordinary code would be a false-positive merge blocker.
+
+    `acquire_sky_supply_basis` and `hunter_issue_agent_trigger` run from
+    workflows that mint no merge-gating signal, so they are ordinary code that a
+    future owner-authored scope may open -- not authority.
+    """
+    required, _ = prevention._authority_closure()
+
+    assert "scripts/acquire_sky_supply_basis.py" not in required
+    assert "scripts/hunter_issue_agent_trigger.py" not in required
+
+
+def test_a_floor_that_drops_the_push_boundary_implementation_is_refused() -> None:
+    """Regression for the review finding on PR #406.
+
+    Dropping `hunter_pre_push` from the floor and unblocking it through an
+    Issue-authorized scope previously passed both the guard and the loader, and
+    `check_scope` then authorized writing the push boundary's implementation.
+    """
+    document = _document()
+    grant = document["connector_write_ingress"]
+    grant["root_of_trust_paths"] = [
+        entry for entry in grant["root_of_trust_paths"] if entry != "scripts/hunter_pre_push.py"
+    ]
+    grant["governance_maintenance_scopes"]["push-boundary"] = {
+        "purpose": "hostile",
+        "unblocked_paths": ["scripts/hunter_pre_push.py"],
+    }
+    grant["governance_maintenance_authorizations"][0]["scopes"] = ["adr-lifecycle", "push-boundary"]
+
+    errors = prevention.validate_connector_write_ingress(document)
+
+    assert any("must cover scripts/hunter_pre_push.py" in error for error in errors)
+
+
+def test_a_floor_derivation_that_cannot_read_its_sources_fails_closed(monkeypatch) -> None:
+    """A floor derived from an unreadable source would be silently short."""
+    monkeypatch.setattr(prevention, "PUSH_BOUNDARY_HOOK", ".githooks/does-not-exist")
+
+    required, errors = prevention._authority_closure()
+
+    assert any("is unreadable" in error for error in errors)
+    assert any(
+        "root-of-trust derivation failed" in error for error in prevention.validate_connector_write_ingress(_document())
+    )
+    assert required
 
 
 def test_shipped_scopes_unblock_nothing_on_the_root_of_trust() -> None:
@@ -476,7 +551,7 @@ def test_a_directory_spelled_floor_still_covers_the_gate_chain() -> None:
     assert prevention.validate_connector_write_ingress(document) == []
 
 
-def test_the_guard_rejects_a_floor_that_falls_behind_the_gate_chain() -> None:
+def test_the_guard_rejects_a_floor_that_falls_behind_the_authority_it_protects() -> None:
     document = _document()
     grant = document["connector_write_ingress"]
     grant["root_of_trust_paths"] = [

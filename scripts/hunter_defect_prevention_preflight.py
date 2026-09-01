@@ -4,11 +4,13 @@ import argparse
 import ast
 import json
 import os
+import re
 import subprocess
 from pathlib import Path
 from typing import Any, Literal
 
 import hunter_connector_write_ingress as ingress
+import yaml
 from hunter_workflow_state import path_matches_scope_entry
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -519,36 +521,154 @@ def validate_connector_write_ingress(policy: dict[str, Any]) -> list[str]:
     return errors
 
 
-def _gate_owned_scripts() -> tuple[str, ...]:
-    """Repository scripts the canonical gate chain itself executes.
+#: A repository-relative reference to a script, as it appears in a workflow `run:`
+#: step, a git hook, or another script that shells out to it.
+_SCRIPT_REFERENCE = re.compile(r"scripts/[A-Za-z0-9_][A-Za-z0-9_./-]*\.py")
+PUSH_BOUNDARY_HOOK = ".githooks/pre-push"
+WORKFLOWS_DIRECTORY = ".github/workflows"
+#: A workflow holding any of these write permissions can mint or clear a signal
+#: that gates merge, so whatever it runs is authority. Read from the workflow's
+#: own permissions rather than from a list of workflow names, so a new gating
+#: workflow is covered the moment it is granted the permission.
+GATING_WRITE_PERMISSIONS = frozenset({"statuses", "checks", "pull-requests"})
+#: The authority files that are not Python and so cannot be reached by following
+#: entrypoints: the push boundary itself, the tooling/gate configuration, and the
+#: grant. Everything else on the required floor is derived.
+STATIC_ROOT_OF_TRUST = (
+    PUSH_BOUNDARY_HOOK,
+    "pyproject.toml",
+    "docs/CODE_WRITE_POLICY.json",
+)
 
-    Derived from the gate chain rather than restated as a literal list: a gate
-    that gains, loses, or renames a script moves this set with it, so the
-    root-of-trust floor cannot silently fall behind the authority it protects.
-    """
+
+def _gate_owned_scripts() -> tuple[str, ...]:
+    """Repository scripts the canonical gate chain itself executes."""
     scripts: set[str] = set()
     for _name, command in TRUSTED_CANDIDATE_QUALITY_GATES:
         scripts.update(argument for argument in command if argument.startswith("scripts/") and argument.endswith(".py"))
     return tuple(sorted(scripts))
 
 
-#: Authority files that decide whether a candidate may be written and admitted at
-#: all, beyond the gate scripts derived above. A capability that could write these
-#: could rewrite the authority evaluating it, so no capability on this ingress may
-#: reach them and no governance scope may unblock them.
-STATIC_ROOT_OF_TRUST = (
-    ".githooks/pre-push",
-    "scripts/hunter_pr_preflight.py",
-    ".github/workflows/hunter-trusted-preflight-upgrade.yml",
-    ".github/workflows/hunter-governance-review.yml",
-    ".github/workflows/hunter-merge-readiness.yml",
-    "scripts/hunter_connector_write_ingress.py",
-    "scripts/hunter_governance_review_v2.py",
-    "scripts/hunter_merge_readiness_v2.py",
-    "scripts/hunter_workflow_state.py",
-    "scripts/install_hunter_git_hooks.py",
-    "docs/CODE_WRITE_POLICY.json",
-)
+def _gating_workflows() -> tuple[tuple[str, ...], list[str]]:
+    """Workflow files able to mint or clear a merge-gating signal.
+
+    Selected by the write permissions a workflow actually grants -- to statuses,
+    checks, or pull requests -- rather than by name, so the set moves with the
+    repository instead of with a list someone has to remember to update. An
+    unreadable or unparseable workflow is an error rather than an omission: a
+    floor derived from a directory that failed to read would be silently short.
+    """
+    directory = ROOT / WORKFLOWS_DIRECTORY
+    if not directory.is_dir():
+        return (), [f"{WORKFLOWS_DIRECTORY} is missing, so gating authority cannot be derived"]
+
+    errors: list[str] = []
+    gating: set[str] = set()
+    for path in sorted(directory.glob("*.yml")) + sorted(directory.glob("*.yaml")):
+        relative = path.relative_to(ROOT).as_posix()
+        try:
+            document = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            errors.append(f"{relative} is unreadable, so its gating authority cannot be derived ({exc})")
+            continue
+        if not isinstance(document, dict):
+            errors.append(f"{relative} is not a workflow mapping, so its gating authority cannot be derived")
+            continue
+
+        blocks = [document.get("permissions")]
+        jobs = document.get("jobs")
+        if isinstance(jobs, dict):
+            blocks.extend(job.get("permissions") for job in jobs.values() if isinstance(job, dict))
+        for block in blocks:
+            if isinstance(block, dict) and any(
+                str(block.get(name, "")).strip() == "write" for name in GATING_WRITE_PERMISSIONS
+            ):
+                gating.add(relative)
+                break
+    return tuple(sorted(gating)), errors
+
+
+def _authority_entrypoints() -> tuple[tuple[str, ...], list[str]]:
+    """Every script the gate chain, the push boundary, or a gating workflow runs."""
+    errors: list[str] = []
+    entrypoints: set[str] = set(_gate_owned_scripts())
+
+    gating, gating_errors = _gating_workflows()
+    errors.extend(gating_errors)
+
+    for relative in (PUSH_BOUNDARY_HOOK, *gating):
+        path = ROOT / relative
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            errors.append(f"{relative} is unreadable, so the authority it runs cannot be derived ({exc})")
+            continue
+        entrypoints.update(_SCRIPT_REFERENCE.findall(text))
+
+    return tuple(sorted(entry for entry in entrypoints if (ROOT / entry).is_file())), errors
+
+
+def _local_script_module(name: str) -> str | None:
+    """The `scripts/` file a module name resolves to, or None when it is external."""
+    module = name.split(".")[0]
+    for candidate in (f"scripts/{module}.py", f"scripts/{module}/__init__.py"):
+        if (ROOT / candidate).is_file():
+            return candidate
+    return None
+
+
+def _authority_closure() -> tuple[tuple[str, ...], list[str]]:
+    """The authority entrypoints plus everything they depend on, as floor entries.
+
+    Follows both imports and literal `scripts/...py` references, because an
+    authority reaches its dependencies either way -- `.githooks/pre-push` shells
+    out to a script that in turn shells out to the gate chain. A dependency of a
+    thing that decides whether a candidate may be written or admitted is itself
+    part of that decision, so the floor has to cover it: a capability able to
+    rewrite the shared path-scope matcher would rewrite every scope check that
+    uses it.
+    """
+    entrypoints, errors = _authority_entrypoints()
+
+    seen: set[str] = set()
+    queue = list(entrypoints)
+    while queue:
+        relative = queue.pop()
+        if relative in seen:
+            continue
+        seen.add(relative)
+        path = ROOT / relative
+        try:
+            source = path.read_text(encoding="utf-8")
+            tree = ast.parse(source, filename=relative)
+        except (OSError, SyntaxError, ValueError) as exc:
+            errors.append(f"{relative} could not be analysed, so its authority dependencies are unknown ({exc})")
+            continue
+
+        if relative.endswith("/__init__.py"):
+            queue.extend(sibling.relative_to(ROOT).as_posix() for sibling in path.parent.rglob("*.py"))
+        queue.extend(reference for reference in _SCRIPT_REFERENCE.findall(source) if (ROOT / reference).is_file())
+
+        for node in ast.walk(tree):
+            names: list[str] = []
+            if isinstance(node, ast.Import):
+                names = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
+                names = [node.module]
+            for name in names:
+                target = _local_script_module(name)
+                if target is not None:
+                    queue.append(target)
+
+    # A package is protected as a directory: covering only its __init__ would
+    # leave every submodule writable.
+    floor = {
+        relative.rsplit("/", 1)[0] + "/" if "/" in relative.removeprefix("scripts/") else relative for relative in seen
+    }
+    gating, _ = _gating_workflows()
+    return tuple(sorted(floor | set(gating) | set(STATIC_ROOT_OF_TRUST))), errors
+
+
 GOVERNANCE_MAINTENANCE_CAPABILITY = "governance-maintenance"
 
 
@@ -578,7 +698,9 @@ def validate_governance_maintenance_capability(grant: dict[str, Any]) -> list[st
         return ["connector write ingress must declare a non-empty root_of_trust_paths floor"]
     floor = [item for item in root_of_trust if _is_non_empty_str(item)]
 
-    for required in _gate_owned_scripts() + STATIC_ROOT_OF_TRUST:
+    required_floor, derivation_errors = _authority_closure()
+    errors.extend(f"root-of-trust derivation failed: {reason}" for reason in derivation_errors)
+    for required in required_floor:
         if not any(path_matches_scope_entry(required, entry) for entry in floor):
             errors.append(f"connector write ingress root of trust must cover {required}")
 
