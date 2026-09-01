@@ -54,6 +54,14 @@
         "ingress": "github-connector-api",
         "identity_note": "The connected assistant authenticates its GitHub session as the repository owner account, so this login is deliberately not disjoint from ingress_provenance.authorized_signers. Requiring disjointness would make the grant unbindable rather than safer, so channel separation is carried by evidence instead: see provenance_separation and authorization_binding.",
         "identity_evidence": "GitHub collaborator listing for this repository shows exactly one account with write access: fafa33 (admin). chatgpt-codex-connector[bot] is observed on this repository as a pull-request review identity only and is deliberately NOT granted write here; if it is ever observed producing commits, bind it explicitly rather than inferring the grant."
+      },
+      {
+        "identity": "connected-chatgpt-assistant",
+        "login": "fafa33",
+        "capability": "governance-maintenance",
+        "ingress": "github-connector-api",
+        "identity_note": "The same connected assistant identity, bound a second time for the separate governance-maintenance capability. One grant entry carries one capability, so holding a second capability is an explicit owner-authored entry rather than a widened first entry, and revoking governance maintenance is deleting this entry alone.",
+        "capability_note": "This entry grants nothing on its own: governance-maintenance requires the governing Issue to be authorized in governance_maintenance_authorizations for a named scope, and the root_of_trust_paths floor stays closed to it."
       }
     ],
     "base_ref": "main",
@@ -83,6 +91,88 @@
       "docs/DEFECT_REGISTRY.json",
       "docs/DEFECT_PREVENTION_LIFECYCLE.json",
       "docs/REVIEWER_FINDING_DISPOSITIONS.json"
+    ],
+    "root_of_trust_paths": [
+      ".githooks/",
+      ".github/workflows/",
+      "scripts/hunter_pr_preflight.py",
+      "scripts/hunter_architecture_index_preflight.py",
+      "scripts/hunter_artifact_preflight.py",
+      "scripts/hunter_defect_prevention_preflight.py",
+      "scripts/hunter_connector_write_ingress.py",
+      "scripts/hunter_governance_review_v2.py",
+      "scripts/hunter_governance_review/",
+      "scripts/hunter_governance_preflight.py",
+      "scripts/hunter_candidate_admission.py",
+      "scripts/hunter_controller_admission.py",
+      "scripts/hunter_merge_readiness.py",
+      "scripts/hunter_merge_readiness_v2.py",
+      "scripts/hunter_workflow_state.py",
+      "scripts/hunter_github_transport.py",
+      "scripts/hunter_pre_push.py",
+      "scripts/install_hunter_git_hooks.py",
+      "pyproject.toml",
+      "requirements/",
+      "build_backend/",
+      "docs/CODE_WRITE_POLICY.json"
+    ],
+    "root_of_trust_semantics": "The files that decide whether a candidate may be written and admitted at all: the push boundary, the hosted workflows, the canonical gate chain, the connector authorizer, the governance/admission controllers, the merge-readiness controller, the shared scope and transport primitives they depend on, the packaging/tooling pins that define the gates, and this policy. No capability on this ingress may write them and no scope may unblock them, so a candidate can never rewrite the authority under which it is itself evaluated. Mutating them stays a clone-capable, pre-push-bound, independently reviewed, owner-merged change; the trusted controller always evaluates a candidate against the default-branch version of this policy, so such a change takes effect only after merge and never for its own pull request.",
+    "self_escalation_boundary": "A candidate may not widen the grant it is authorized under and then rely on the widened grant inside the same pull request. The authorization receipt pins grant_fingerprint, a SHA-256 over the authorization-relevant grant, and the trusted controller re-derives that fingerprint from the default branch: a receipt minted under any other version of the grant is stale and fails admission. The controller additionally compares the candidate head's policy against the trusted one and refuses any connector candidate whose head widens the grant -- a new capability, writer, allowed path, unblocked scope path, authorized Issue, removed prohibition, or removed root-of-trust entry.",
+    "additional_capabilities": {
+      "governance-maintenance": {
+        "purpose": "Owner-directed governance maintenance: ADR lifecycle/status transitions, the architecture index/status references those transitions require, and other governance work a governing Issue explicitly scopes. It is an additional capability on the same ingress, never a replacement for feature-branch-write and never a wider default.",
+        "allowed_paths": [
+          "src/",
+          "tests/",
+          "docs/",
+          "scripts/"
+        ],
+        "prohibited_paths": [
+          ".githooks/",
+          ".github/",
+          "scripts/",
+          "build_backend/",
+          "requirements/",
+          "pyproject.toml",
+          "docs/ADR/",
+          "docs/CODE_WRITE_POLICY.json",
+          "docs/DEFECT_REGISTRY.json",
+          "docs/DEFECT_PREVENTION_LIFECYCLE.json",
+          "docs/REVIEWER_FINDING_DISPOSITIONS.json"
+        ],
+        "requires_issue_authorization": true,
+        "issue_authorization_manifest": "governance_maintenance_authorizations",
+        "scope_manifest": "governance_maintenance_scopes",
+        "scope_semantics": "allowed_paths is the outer bound and prohibited_paths is the closed default, so the capability grants nothing beyond feature-branch-write on its own. A path that is prohibited becomes writable only when a named scope in governance_maintenance_scopes unblocks it AND the governing Issue is authorized for that scope in governance_maintenance_authorizations. No scope may unblock a root_of_trust_paths entry, and no scope may unblock a path outside allowed_paths."
+      }
+    },
+    "governance_maintenance_scopes": {
+      "adr-lifecycle": {
+        "purpose": "ADR lifecycle/status transitions and the architecture index/status references the repository's governance requires to stay consistent with them.",
+        "unblocked_paths": [
+          "docs/ADR/",
+          "docs/architecture-index.md",
+          "docs/architecture-records/"
+        ]
+      },
+      "defect-registry": {
+        "purpose": "The canonical defect registry and prevention lifecycle, which a governing Issue that records or strengthens a defect class has to update. It unblocks no authorizer, gate, or workflow: the guards that validate these registries stay closed under root_of_trust_paths, so the registry can be maintained but the check that validates it cannot be rewritten.",
+        "unblocked_paths": [
+          "docs/DEFECT_REGISTRY.json",
+          "docs/DEFECT_PREVENTION_LIFECYCLE.json"
+        ]
+      }
+    },
+    "governance_maintenance_authorizations": [
+      {
+        "issue": "402",
+        "scopes": [
+          "adr-lifecycle"
+        ],
+        "authorized_by": "repository owner",
+        "authorization": "Issue #405, which directs that Issue #402 be executable by the connected assistant",
+        "note": "Issue #402 is the owner-authorized ADR 0036 Proposed -> Accepted lifecycle transition plus the architecture index/status references it requires. Recorded here on the trusted default branch, so it becomes effective only once this contribution is independently reviewed and owner-merged; it cannot authorize the contribution that introduces it."
+      }
     ],
     "require_exact_base_tip": true,
     "local_pre_push_equivalent": false,

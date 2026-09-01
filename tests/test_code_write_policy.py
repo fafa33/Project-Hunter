@@ -145,6 +145,9 @@ def test_guard_accepts_a_writer_login_that_overlaps_the_clone_capable_signers() 
 
 def test_guard_rejects_an_enabled_grant_with_no_bound_writer_identity() -> None:
     policy = json.loads((ROOT / "docs" / "CODE_WRITE_POLICY.json").read_text(encoding="utf-8"))
-    policy["connector_write_ingress"]["authorized_writers"][0]["login"] = ""
+    # The grant binds one entry per capability, so "no bound writer" means every
+    # entry is unbound, not merely the first.
+    for entry in policy["connector_write_ingress"]["authorized_writers"]:
+        entry["login"] = ""
 
     assert any("binds no writer identity" in error for error in prevention.validate_connector_write_ingress(policy))

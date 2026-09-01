@@ -4,10 +4,13 @@ import argparse
 import ast
 import json
 import os
+import re
 import subprocess
 from pathlib import Path
 from typing import Any, Literal
 
+import hunter_connector_write_ingress as ingress
+import yaml
 from hunter_workflow_state import path_matches_scope_entry
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -493,8 +496,15 @@ def validate_connector_write_ingress(policy: dict[str, Any]) -> list[str]:
             continue
         if not _is_non_empty_str(entry.get("identity")):
             errors.append(f"connector writer grant #{index} must declare an identity")
-        if entry.get("capability") != grant.get("required_capability"):
-            errors.append(f"connector writer grant #{index} must carry the granted capability")
+        # One entry carries one capability. Since Issue #405 the grant may define
+        # more than the required one, so the entry must name a capability the
+        # grant actually defines rather than only the ordinary one.
+        additional = grant.get("additional_capabilities")
+        defined_capabilities = {grant.get("required_capability")}
+        if isinstance(additional, dict):
+            defined_capabilities |= set(additional)
+        if entry.get("capability") not in defined_capabilities:
+            errors.append(f"connector writer grant #{index} must carry a granted capability")
         login = entry.get("login")
         if not isinstance(login, str):
             errors.append(f"connector writer grant #{index} login must be a string")
@@ -506,6 +516,284 @@ def validate_connector_write_ingress(policy: dict[str, Any]) -> list[str]:
 
     if enabled is True and bound == 0:
         errors.append("connector write ingress is enabled but binds no writer identity")
+
+    errors.extend(validate_governance_maintenance_capability(grant))
+    return errors
+
+
+#: A repository-relative reference to a script, as it appears in a workflow `run:`
+#: step, a git hook, or another script that shells out to it.
+_SCRIPT_REFERENCE = re.compile(r"scripts/[A-Za-z0-9_][A-Za-z0-9_./-]*\.py")
+PUSH_BOUNDARY_HOOK = ".githooks/pre-push"
+WORKFLOWS_DIRECTORY = ".github/workflows"
+#: A workflow holding any of these write permissions can mint or clear a signal
+#: that gates merge, so whatever it runs is authority. Read from the workflow's
+#: own permissions rather than from a list of workflow names, so a new gating
+#: workflow is covered the moment it is granted the permission.
+GATING_WRITE_PERMISSIONS = frozenset({"statuses", "checks", "pull-requests"})
+#: The authority files that are not Python and so cannot be reached by following
+#: entrypoints: the push boundary itself, the tooling/gate configuration, and the
+#: grant. Everything else on the required floor is derived.
+STATIC_ROOT_OF_TRUST = (
+    PUSH_BOUNDARY_HOOK,
+    "pyproject.toml",
+    "docs/CODE_WRITE_POLICY.json",
+)
+
+
+def _gate_owned_scripts() -> tuple[str, ...]:
+    """Repository scripts the canonical gate chain itself executes."""
+    scripts: set[str] = set()
+    for _name, command in TRUSTED_CANDIDATE_QUALITY_GATES:
+        scripts.update(argument for argument in command if argument.startswith("scripts/") and argument.endswith(".py"))
+    return tuple(sorted(scripts))
+
+
+def _gating_workflows() -> tuple[tuple[str, ...], list[str]]:
+    """Workflow files able to mint or clear a merge-gating signal.
+
+    Selected by the write permissions a workflow actually grants -- to statuses,
+    checks, or pull requests -- rather than by name, so the set moves with the
+    repository instead of with a list someone has to remember to update. An
+    unreadable or unparseable workflow is an error rather than an omission: a
+    floor derived from a directory that failed to read would be silently short.
+    """
+    directory = ROOT / WORKFLOWS_DIRECTORY
+    if not directory.is_dir():
+        return (), [f"{WORKFLOWS_DIRECTORY} is missing, so gating authority cannot be derived"]
+
+    errors: list[str] = []
+    gating: set[str] = set()
+    for path in sorted(directory.glob("*.yml")) + sorted(directory.glob("*.yaml")):
+        relative = path.relative_to(ROOT).as_posix()
+        try:
+            document = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            errors.append(f"{relative} is unreadable, so its gating authority cannot be derived ({exc})")
+            continue
+        if not isinstance(document, dict):
+            errors.append(f"{relative} is not a workflow mapping, so its gating authority cannot be derived")
+            continue
+
+        blocks = [document.get("permissions")]
+        jobs = document.get("jobs")
+        if isinstance(jobs, dict):
+            blocks.extend(job.get("permissions") for job in jobs.values() if isinstance(job, dict))
+        for block in blocks:
+            if isinstance(block, dict) and any(
+                str(block.get(name, "")).strip() == "write" for name in GATING_WRITE_PERMISSIONS
+            ):
+                gating.add(relative)
+                break
+    return tuple(sorted(gating)), errors
+
+
+def _authority_entrypoints() -> tuple[tuple[str, ...], list[str]]:
+    """Every script the gate chain, the push boundary, or a gating workflow runs."""
+    errors: list[str] = []
+    entrypoints: set[str] = set(_gate_owned_scripts())
+
+    gating, gating_errors = _gating_workflows()
+    errors.extend(gating_errors)
+
+    for relative in (PUSH_BOUNDARY_HOOK, *gating):
+        path = ROOT / relative
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            errors.append(f"{relative} is unreadable, so the authority it runs cannot be derived ({exc})")
+            continue
+        entrypoints.update(_SCRIPT_REFERENCE.findall(text))
+
+    return tuple(sorted(entry for entry in entrypoints if (ROOT / entry).is_file())), errors
+
+
+def _local_script_module(name: str) -> str | None:
+    """The `scripts/` file a module name resolves to, or None when it is external."""
+    module = name.split(".")[0]
+    for candidate in (f"scripts/{module}.py", f"scripts/{module}/__init__.py"):
+        if (ROOT / candidate).is_file():
+            return candidate
+    return None
+
+
+def _authority_closure() -> tuple[tuple[str, ...], list[str]]:
+    """The authority entrypoints plus everything they depend on, as floor entries.
+
+    Follows both imports and literal `scripts/...py` references, because an
+    authority reaches its dependencies either way -- `.githooks/pre-push` shells
+    out to a script that in turn shells out to the gate chain. A dependency of a
+    thing that decides whether a candidate may be written or admitted is itself
+    part of that decision, so the floor has to cover it: a capability able to
+    rewrite the shared path-scope matcher would rewrite every scope check that
+    uses it.
+    """
+    entrypoints, errors = _authority_entrypoints()
+
+    seen: set[str] = set()
+    queue = list(entrypoints)
+    while queue:
+        relative = queue.pop()
+        if relative in seen:
+            continue
+        seen.add(relative)
+        path = ROOT / relative
+        try:
+            source = path.read_text(encoding="utf-8")
+            tree = ast.parse(source, filename=relative)
+        except (OSError, SyntaxError, ValueError) as exc:
+            errors.append(f"{relative} could not be analysed, so its authority dependencies are unknown ({exc})")
+            continue
+
+        if relative.endswith("/__init__.py"):
+            queue.extend(sibling.relative_to(ROOT).as_posix() for sibling in path.parent.rglob("*.py"))
+        queue.extend(reference for reference in _SCRIPT_REFERENCE.findall(source) if (ROOT / reference).is_file())
+
+        for node in ast.walk(tree):
+            names: list[str] = []
+            if isinstance(node, ast.Import):
+                names = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
+                names = [node.module]
+            for name in names:
+                target = _local_script_module(name)
+                if target is not None:
+                    queue.append(target)
+
+    # A package is protected as a directory: covering only its __init__ would
+    # leave every submodule writable.
+    floor = {
+        relative.rsplit("/", 1)[0] + "/" if "/" in relative.removeprefix("scripts/") else relative for relative in seen
+    }
+    gating, _ = _gating_workflows()
+    return tuple(sorted(floor | set(gating) | set(STATIC_ROOT_OF_TRUST))), errors
+
+
+GOVERNANCE_MAINTENANCE_CAPABILITY = "governance-maintenance"
+
+
+def validate_governance_maintenance_capability(grant: dict[str, Any]) -> list[str]:
+    """Validate the Issue #405 root-of-trust floor and governance-maintenance capability.
+
+    Three properties carry the anti-self-escalation design, and each is checked
+    structurally rather than by wording:
+
+    1. the root-of-trust floor actually covers the authority that evaluates a
+       candidate -- the gate chain's own scripts, the push boundary, the trusted
+       hosted workflows, the authorizer/controllers, and this policy;
+    2. every capability, ordinary and additional alike, prohibits that floor, so
+       the floor is not a property of whichever capability remembered to declare
+       it; and
+    3. no named governance scope unblocks a floor path or reaches outside its
+       capability's own allowed paths, and every authorized Issue names only
+       scopes the grant defines.
+
+    A grant that declares no additional capabilities is valid and unaffected: this
+    is an added capability model, not a new requirement on the #403 grant.
+    """
+    errors: list[str] = []
+
+    root_of_trust = grant.get("root_of_trust_paths")
+    if not isinstance(root_of_trust, list) or not [item for item in root_of_trust if _is_non_empty_str(item)]:
+        return ["connector write ingress must declare a non-empty root_of_trust_paths floor"]
+    floor = [item for item in root_of_trust if _is_non_empty_str(item)]
+
+    required_floor, derivation_errors = _authority_closure()
+    errors.extend(f"root-of-trust derivation failed: {reason}" for reason in derivation_errors)
+    for required in required_floor:
+        if not any(path_matches_scope_entry(required, entry) for entry in floor):
+            errors.append(f"connector write ingress root of trust must cover {required}")
+
+    def prohibits_floor(prohibited: object, label: str) -> None:
+        if not isinstance(prohibited, list):
+            errors.append(f"{label} prohibited_paths must be a list")
+            return
+        entries = [item for item in prohibited if _is_non_empty_str(item)]
+        for guarded in floor:
+            if not any(path_matches_scope_entry(guarded, entry) for entry in entries):
+                errors.append(f"{label} must prohibit root-of-trust path {guarded}")
+
+    prohibits_floor(grant.get("prohibited_paths"), "connector write ingress")
+
+    capabilities = grant.get("additional_capabilities", {})
+    if not isinstance(capabilities, dict):
+        return errors + ["connector write ingress additional_capabilities must be an object"]
+
+    outer_bound: list[str] = []
+    for name, entry in sorted(capabilities.items()):
+        label = f"connector capability {name!r}"
+        if not isinstance(entry, dict):
+            errors.append(f"{label} must be an object")
+            continue
+        if name == grant.get("required_capability"):
+            errors.append(f"{label} must not redefine the required capability")
+        allowed = entry.get("allowed_paths")
+        if not isinstance(allowed, list) or not [item for item in allowed if _is_non_empty_str(item)]:
+            errors.append(f"{label} must declare a non-empty allowed path scope")
+        else:
+            outer_bound.extend(item for item in allowed if _is_non_empty_str(item))
+        prohibits_floor(entry.get("prohibited_paths"), label)
+        if not isinstance(entry.get("requires_issue_authorization"), bool):
+            errors.append(f"{label} must declare an explicit Issue-authorization requirement")
+        if name == GOVERNANCE_MAINTENANCE_CAPABILITY and entry.get("requires_issue_authorization") is not True:
+            # Without it the capability would be a second, wider default rather
+            # than work a governing Issue has to authorize.
+            errors.append(f"{label} must require explicit per-Issue authorization")
+
+    scopes = grant.get("governance_maintenance_scopes", {})
+    if not isinstance(scopes, dict):
+        return errors + ["connector write ingress governance_maintenance_scopes must be an object"]
+
+    known_scopes: set[str] = set()
+    for name, entry in sorted(scopes.items()):
+        label = f"governance scope {name!r}"
+        if not isinstance(entry, dict):
+            errors.append(f"{label} must be an object")
+            continue
+        known_scopes.add(name)
+        unblocked = entry.get("unblocked_paths")
+        if not isinstance(unblocked, list) or not [item for item in unblocked if _is_non_empty_str(item)]:
+            errors.append(f"{label} must declare the paths it unblocks")
+            continue
+        for path in (item for item in unblocked if _is_non_empty_str(item)):
+            if any(ingress.scope_entries_overlap(path, guarded) for guarded in floor):
+                errors.append(f"{label} must not unblock root-of-trust path {path}")
+            if outer_bound and not any(path_matches_scope_entry(path, bound) for bound in outer_bound):
+                errors.append(f"{label} unblocks {path}, which is outside every capability's allowed paths")
+
+    authorizations = grant.get("governance_maintenance_authorizations", [])
+    if not isinstance(authorizations, list):
+        return errors + ["connector write ingress governance_maintenance_authorizations must be a list"]
+
+    seen_issues: set[str] = set()
+    for index, entry in enumerate(authorizations):
+        label = f"governance authorization #{index}"
+        if not isinstance(entry, dict):
+            errors.append(f"{label} must be an object")
+            continue
+        issue = str(entry.get("issue", "")).strip().lstrip("#")
+        if not issue.isdigit():
+            errors.append(f"{label} must name one governing Issue number")
+        elif issue in seen_issues:
+            errors.append(f"{label} authorizes Issue #{issue} a second time")
+        else:
+            seen_issues.add(issue)
+        if not _is_non_empty_str(entry.get("authorized_by")):
+            errors.append(f"{label} must record who authorized it")
+        entry_scopes = entry.get("scopes")
+        if not isinstance(entry_scopes, list) or not [item for item in entry_scopes if _is_non_empty_str(item)]:
+            errors.append(f"{label} must authorize at least one named scope")
+            continue
+        for scope_name in (item for item in entry_scopes if _is_non_empty_str(item)):
+            if scope_name not in known_scopes:
+                errors.append(f"{label} names unknown governance scope {scope_name!r}")
+
+    defined = {grant.get("required_capability")} | set(capabilities)
+    writers = grant.get("authorized_writers")
+    if isinstance(writers, list):
+        for index, entry in enumerate(writers):
+            if isinstance(entry, dict) and entry.get("capability") not in defined:
+                errors.append(f"connector writer grant #{index} carries a capability the grant does not define")
 
     return errors
 
