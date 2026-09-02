@@ -606,13 +606,11 @@ def test_failed_transaction_does_not_consume_and_same_authorization_retries(tmp_
         expires_at=clock.now() + timedelta(minutes=5),
     )
     with sqlite3.connect(service.path) as connection:
-        connection.execute(
-            """
+        connection.execute("""
             CREATE TRIGGER fail_source_handling_insert
             BEFORE INSERT ON source_handling_authority_records
             BEGIN SELECT RAISE(ABORT, 'simulated crash'); END
-            """
-        )
+            """)
     with pytest.raises(SourceHandlingBlockedError):
         service.publish(
             family="FACT",

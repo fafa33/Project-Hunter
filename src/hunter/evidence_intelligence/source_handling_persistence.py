@@ -469,8 +469,7 @@ class SourceHandlingAuthorityRepository:
 
     def _initialize(self) -> None:
         with self._connect(verify_operator_root=False) as connection:
-            connection.executescript(
-                """
+            connection.executescript("""
                 CREATE TABLE IF NOT EXISTS source_handling_operator_root (
                     singleton_id TEXT PRIMARY KEY CHECK (singleton_id = 'SOURCE_HANDLING'),
                     genesis_rule_sha256 TEXT NOT NULL,
@@ -517,8 +516,7 @@ class SourceHandlingAuthorityRepository:
                     FOREIGN KEY (current_record_id)
                         REFERENCES source_handling_authority_records(record_id)
                 );
-                """
-            )
+                """)
             columns = {
                 str(row["name"])
                 for row in connection.execute("PRAGMA table_info(source_handling_authority_records)").fetchall()
