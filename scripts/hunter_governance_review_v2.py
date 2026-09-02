@@ -13,17 +13,50 @@ import json
 import os
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 import hunter_connector_write_ingress as ingress
 import hunter_github_transport as transport
+
+
+@dataclass(frozen=True)
+class ConnectorAdmission:
+    """Whether a candidate is connector-origin, and whether its evidence holds.
+
+    Three outcomes, deliberately distinct (Issue #409):
+
+    * ``ok and not origin`` -- an ordinary candidate. It never touched the
+      connector channel, so the pre-existing verified-signature / pre-push
+      evidence applies to it unchanged.
+    * ``ok and origin`` -- a candidate proven connector-origin under the trusted
+      default-branch grant: connector namespace, exact-head receipt, and every
+      receipt claim re-derived from trusted repository and pull-request evidence.
+      Such a candidate is admitted on connector evidence instead of a local
+      commit signature, which the GitHub connector API cannot produce.
+    * ``not ok`` -- the connector evidence was required and failed. `message`
+      carries the blocking reason.
+
+    `origin` is never a claim a candidate makes about itself. It is the
+    *conclusion* of the trusted re-derivation, so a signature can neither
+    establish it nor substitute for any part of it.
+    """
+
+    ok: bool
+    origin: bool
+    message: str
+    writer: str = ""
+
 
 CONTEXT = "Hunter Governance Review"
 PRE_PR_WORKFLOW_NAME = "Hunter / Pre-PR Preflight"
 PRE_PR_WORKFLOW_PATH = ".github/workflows/hunter-pre-pr-preflight.yml"
 PREFLIGHT_UPGRADE_STATUS_PREFIX = "Hunter Trusted Preflight Upgrade / PR #"
+TRUSTED_UPGRADE_WORKFLOW_NAME = "Hunter / Trusted Preflight Upgrade"
+TRUSTED_UPGRADE_WORKFLOW_PATH = ".github/workflows/hunter-trusted-preflight-upgrade.yml"
+TRUSTED_STATUS_CREATOR = "github-actions[bot]"
 ROOT = Path(__file__).resolve().parents[1] if "__file__" in globals() else Path(".")
 REVIEWER_DISPOSITIONS_PATH = ROOT / "docs" / "REVIEWER_FINDING_DISPOSITIONS.json"
 PREFLIGHT_OWNED_PATHS = frozenset(
@@ -103,8 +136,33 @@ def read_mergeability(repository: str, token: str, pr_number: int) -> dict[str, 
     return pr
 
 
-def read_pr_changed_paths(repository: str, token: str, pr_number: int) -> tuple[bool, tuple[str, ...], str | None]:
-    collected: list[str] = []
+@dataclass(frozen=True, order=True)
+class PullRequestFile:
+    status: str
+    path: str
+    previous_path: str = ""
+    blob_sha: str = ""
+
+    def affected_paths(self) -> tuple[str, ...]:
+        if self.status == "renamed":
+            return (self.previous_path, self.path)
+        return (self.path,)
+
+
+def read_pr_changed_files(
+    repository: str, token: str, pr_number: int
+) -> tuple[bool, tuple[PullRequestFile, ...], str | None]:
+    """Trusted operation and exact-head content for every changed file.
+
+    The blob SHA is GitHub's own hash of the file content at the exact head, so it
+    is what lets the trusted controller bind an authorization to the *content* it
+    authorized rather than only to the path set (Issue #409 review).
+
+    GitHub reports a base blob SHA for a removed file, so removal is represented
+    as an empty destination blob. Renames preserve both names. Malformed evidence
+    remains present and therefore fails the connector re-derivation closed.
+    """
+    collected: list[PullRequestFile] = []
     try:
         for page in range(1, 31):
             payload = request_json(
@@ -115,11 +173,21 @@ def read_pr_changed_paths(repository: str, token: str, pr_number: int) -> tuple[
             )
             if not isinstance(payload, list):
                 return False, (), "pull request file listing payload is not a list"
-            collected.extend(
-                str(item.get("filename") or "").strip()
-                for item in payload
-                if isinstance(item, dict) and item.get("filename")
-            )
+            for item in payload:
+                if not isinstance(item, dict) or not item.get("filename"):
+                    continue
+                filename = str(item.get("filename") or "").strip()
+                status = str(item.get("status") or "").strip().lower()
+                previous = str(item.get("previous_filename") or "").strip()
+                digest = str(item.get("sha") or "").strip().lower()
+                collected.append(
+                    PullRequestFile(
+                        status=status,
+                        path=filename,
+                        previous_path=previous,
+                        blob_sha="" if status == "removed" else (digest if _is_commit_sha(digest) else ""),
+                    )
+                )
             if len(payload) < 100:
                 return True, tuple(collected), None
         return False, (), "pull request file listing exceeds the supported 3000-file proof boundary"
@@ -127,6 +195,11 @@ def read_pr_changed_paths(repository: str, token: str, pr_number: int) -> tuple[
         return False, (), f"GitHub request error: {exc}"
     except Exception as exc:
         return False, (), f"unexpected error: {type(exc).__name__}: {exc}"
+
+
+def read_pr_changed_paths(repository: str, token: str, pr_number: int) -> tuple[bool, tuple[str, ...], str | None]:
+    ok, files, error = read_pr_changed_files(repository, token, pr_number)
+    return ok, tuple(sorted({path for item in files for path in item.affected_paths() if path})), error
 
 
 CODE_WRITE_POLICY_RELATIVE_PATH = "docs/CODE_WRITE_POLICY.json"
@@ -322,15 +395,35 @@ def verify_code_write_ingress_provenance(
     head_sha: str,
     pr_number: int | None,
 ) -> tuple[bool, str]:
-    """Require positive pre-push ingress proof for the whole code-changing range.
+    """Require positive ingress proof for the whole code-changing range.
 
+    Two channels write this repository, and each has its own positive proof. The
+    channel is decided first, by trusted evidence, and only then is the matching
+    proof required.
+
+    **Clone-capable writers** prove ingress with a verified commit signature.
     Commit identity fields are caller-supplied through the Contents API and Git
-    Data API, so they prove nothing about how a ref was written. A verified
-    signature from an authorized clone-capable writer is the positive proof: it
-    is computed over the commit object, so it binds the exact SHA and cannot be
+    Data API, so they prove nothing about how a ref was written; a signature is
+    computed over the commit object, so it binds the exact SHA and cannot be
     replayed onto another commit, forged as commit metadata, or satisfied by
     hosted CI success. Every commit in the range is checked, so a clone-authored
-    tip cannot conceal an API-written ancestor.
+    tip cannot conceal an API-written ancestor. This path is unchanged.
+
+    **Connector writers** cannot produce that signature at all -- the GitHub
+    connector API creates commits server-side, so there is no local key and no
+    pre-push boundary to sign at. Requiring one made the authorized connector
+    path unusable (Issue #409: PR #408 was blocked as `unsigned` despite being a
+    correctly authorized `connector/issue-402-*` candidate). So a candidate proven
+    connector-origin is admitted on the connector channel's own evidence instead:
+    the exact-head authorization receipt with every claim re-derived from trusted
+    repository and pull-request evidence, one authorized writer committing the
+    whole range, and the trusted hosted exact-head canonical preflight proof.
+
+    Connector evidence is **never** credited as local pre-push proof. It is a
+    different proof of a different channel, and the substitution is one-way:
+    connector origin is established only by the trusted re-derivation, so a
+    clone-capable writer cannot reach the connector regime by asserting it, and
+    an ordinary candidate still needs its signatures.
     """
     if pr_number is None:
         return False, "Candidate admission blocked: ingress provenance requires PR-bound commit-range evidence."
@@ -363,6 +456,53 @@ def verify_code_write_ingress_provenance(
     connector_enabled, connector_logins, connector_error = load_connector_write_ingress_policy()
     if connector_error is not None:
         return False, f"Candidate admission blocked: {connector_error}."
+
+    # Which channel wrote this candidate is decided FIRST, from trusted evidence,
+    # because the two channels have different -- and mutually impossible --
+    # proofs. Deriving the committer of every commit from the trusted listing
+    # rather than from signature results is what makes that possible: a connector
+    # write carries no signature, so identity taken from signature results would
+    # make connector origin unprovable by construction (Issue #409).
+    ok_paths, changed_files, paths_error = read_pr_changed_files(repository, token, pr_number)
+    if not ok_paths:
+        return False, f"Candidate admission blocked: changed-file evidence is unavailable ({paths_error})."
+    range_commits = tuple(entry for entry in commits if str(entry.get("sha") or "").strip().lower() in range_shas)
+    connector = verify_connector_ingress_authorization(
+        repository, token, head_sha, pr_number, changed_files, range_commits
+    )
+    if not connector.ok:
+        return False, connector.message
+
+    if connector.origin:
+        # Connector-origin: the trusted re-derivation above already proved the
+        # writer, capability, namespace, Issue binding, exact base tip, exact
+        # changed-path scope, root-of-trust exclusion, receipt validity, grant
+        # fingerprint, and absence of same-candidate self-escalation. What
+        # remains is the proof no writer on any channel can mint.
+        if not connector_enabled:
+            return False, (
+                "Candidate admission blocked: this candidate is connector-origin but the connector write "
+                "ingress is not active in trusted default-branch state."
+            )
+        if connector.writer not in connector_logins:
+            return False, (
+                f"Candidate admission blocked: connector writer {connector.writer!r} is not bound by the "
+                "trusted connector grant."
+            )
+        proof_state, proof_description = read_trusted_upgrade_status(repository, token, head_sha, pr_number)
+        if proof_state != "success":
+            return False, (
+                "Candidate admission blocked: a connector-origin range is admitted on connector evidence "
+                "rather than a local commit signature, so it requires trusted hosted exact-head canonical "
+                f"preflight proof ({proof_description})"
+            )
+        return True, (
+            f"{connector.message} Connector-origin range admitted on connector evidence plus trusted hosted "
+            "exact-head canonical preflight proof; this is not local pre-push proof."
+        )
+
+    # Ordinary candidate: the pre-existing verified-signature requirement, unchanged.
+    #
     # The connector authenticates as an account that is also a clone-capable
     # signer, so committer login cannot say which channel wrote a commit and
     # demanding disjoint identities would only make the grant unbindable. The
@@ -373,7 +513,6 @@ def verify_code_write_ingress_provenance(
     # candidate SHA, so no writer on either channel can produce it.
     authorized_ingress = (signers | connector_logins) if connector_enabled else signers
 
-    attested_signers: set[str] = set()
     for entry in commits:
         sha = str(entry.get("sha") or "").strip().lower()
         if sha not in attestation_required:
@@ -393,20 +532,6 @@ def verify_code_write_ingress_provenance(
                 f"Candidate admission blocked: commit {sha[:10]} was written by unauthorized ingress "
                 f"signer {signer or 'unknown'}."
             )
-        attested_signers.add(signer)
-
-    # A verified signature from an allowlisted account proves who wrote the
-    # commit, never that the write crossed the governed connector authorizer. So
-    # a connector-namespace candidate must additionally carry an exact-head
-    # authorization whose every claim is re-derived from trusted evidence.
-    ok_paths, changed_paths, paths_error = read_pr_changed_paths(repository, token, pr_number)
-    if not ok_paths:
-        return False, f"Candidate admission blocked: changed-file evidence is unavailable ({paths_error})."
-    ok_authorized, authorization_message = verify_connector_ingress_authorization(
-        repository, token, head_sha, pr_number, changed_paths, frozenset(attested_signers)
-    )
-    if not ok_authorized:
-        return False, authorization_message
 
     if connector_enabled and attestation_required:
         proof_state, proof_description = read_trusted_upgrade_status(repository, token, head_sha, pr_number)
@@ -561,7 +686,7 @@ def verify_no_same_candidate_self_escalation(
 
 
 def read_pr_refs(repository: str, token: str, pr_number: int) -> tuple[bool, str, str, str | None]:
-    """Trusted head/base branch names for the pull request."""
+    """Read trusted head/base branch names; PR authorship is not writer proof."""
     try:
         payload = request_json(repository, token, "GET", f"pulls/{pr_number}")
     except Exception as exc:
@@ -573,6 +698,43 @@ def read_pr_refs(repository: str, token: str, pr_number: int) -> tuple[bool, str
     if not head_ref or not base_ref:
         return False, "", "", "pull request payload carries no head/base ref"
     return True, head_ref, base_ref, None
+
+
+def read_exact_head_push_actor(
+    repository: str, token: str, head_sha: str, head_ref: str
+) -> tuple[bool, str, str | None]:
+    """Authenticate the actor whose push produced the exact candidate head."""
+
+    encoded_sha = quote(head_sha, safe="")
+    try:
+        payload = request_json(
+            repository,
+            token,
+            "GET",
+            f"actions/runs?head_sha={encoded_sha}&event=push&per_page=100",
+        )
+    except Exception as exc:
+        return False, "", f"{type(exc).__name__}: {exc}"
+    runs = payload.get("workflow_runs") if isinstance(payload, dict) else None
+    if not isinstance(runs, list):
+        return False, "", "exact-head push workflow-run evidence is malformed"
+    matching = [
+        run
+        for run in runs
+        if isinstance(run, dict)
+        and str(run.get("head_sha") or "").strip().lower() == head_sha
+        and str(run.get("head_branch") or "").strip() == head_ref
+        and str(run.get("name") or "") == PRE_PR_WORKFLOW_NAME
+        and str(run.get("path") or "") == PRE_PR_WORKFLOW_PATH
+        and str(run.get("event") or "") == "push"
+    ]
+    if not matching:
+        return False, "", "trusted workflow carries no run for the exact-head push"
+    latest = max(matching, key=lambda run: int(run.get("id") or 0))
+    actor = str((latest.get("actor") or {}).get("login") or "").strip().lower()
+    if not actor:
+        return False, "", "exact-head push workflow run carries no authenticated actor"
+    return True, actor, None
 
 
 def read_merge_base(repository: str, token: str, base_ref: str, head_sha: str) -> tuple[bool, str, str | None]:
@@ -596,9 +758,9 @@ def verify_connector_ingress_authorization(
     token: str,
     head_sha: str,
     pr_number: int,
-    changed_paths: tuple[str, ...],
-    commit_signers: frozenset[str],
-) -> tuple[bool, str]:
+    changed_files: tuple[PullRequestFile, ...],
+    range_commits: tuple[dict[str, Any], ...],
+) -> ConnectorAdmission:
     """Re-derive every connector ingress constraint from trusted evidence.
 
     A signed commit from an allowlisted login proves only that an authorized
@@ -606,62 +768,73 @@ def verify_connector_ingress_authorization(
     So the receipt committed at the exact head is parsed for its claims, and then
     every claim is re-checked against trusted repository and pull-request
     evidence: the branch, the base, the fork point, the changed files, and the
-    committer of every attested commit. Nothing is accepted because the receipt
-    says so; the receipt only has to agree with what the trusted evidence already
-    shows, and the granted scope is re-evaluated against the trusted file list
-    rather than the declared one.
+    committer of every commit in the range. Nothing is accepted because the
+    receipt says so; the receipt only has to agree with what the trusted evidence
+    already shows, and the granted scope is re-evaluated against the trusted file
+    list rather than the declared one.
+
+    Since Issue #409 this is also what *establishes* connector origin, and it runs
+    before any local-signature requirement. Every commit in the connector range
+    must have trusted push-workflow actor evidence for this PR branch, so unsigned
+    committer metadata is never the authentication for an ancestor either.
     """
+
+    def blocked(reason: str) -> ConnectorAdmission:
+        return ConnectorAdmission(ok=False, origin=False, message=reason)
+
     policy, policy_error = ingress.load_policy()
     if policy is None:
-        return False, f"Candidate admission blocked: {policy_error}."
+        return blocked(f"Candidate admission blocked: {policy_error}.")
 
     ok_refs, head_ref, base_ref, refs_error = read_pr_refs(repository, token, pr_number)
     if not ok_refs:
-        return False, f"Candidate admission blocked: pull-request ref evidence is unavailable ({refs_error})."
+        return blocked(f"Candidate admission blocked: pull-request ref evidence is unavailable ({refs_error}).")
 
     in_namespace = policy.in_connector_namespace(head_ref)
     state, payload, receipt_error = read_head_authorization_receipt(repository, token, head_sha)
     if state == "unavailable":
-        return False, f"Candidate admission blocked: authorization receipt evidence is unavailable ({receipt_error})."
+        return blocked(f"Candidate admission blocked: authorization receipt evidence is unavailable ({receipt_error}).")
 
     if state == "absent":
         if in_namespace:
-            return False, (
+            return blocked(
                 f"Candidate admission blocked: branch {head_ref} is in the connector namespace "
                 f"{policy.branch_namespace} but carries no exact-head authorization receipt."
             )
-        return True, ""
+        # Not a connector candidate at all: the ordinary signed/pre-push regime
+        # applies to it unchanged.
+        return ConnectorAdmission(ok=True, origin=False, message="")
     if not in_namespace:
-        return False, (
+        return blocked(
             f"Candidate admission blocked: branch {head_ref} carries a connector authorization receipt "
             f"but is outside the connector namespace {policy.branch_namespace}."
         )
     if not policy.enabled:
-        return False, "Candidate admission blocked: connector write ingress is not enabled."
+        return blocked("Candidate admission blocked: connector write ingress is not enabled.")
 
     authorization, parse_error = ingress.ConnectorWriteAuthorization.from_document(payload)
     if authorization is None:
-        return False, f"Candidate admission blocked: {parse_error}."
+        return blocked(f"Candidate admission blocked: {parse_error}.")
 
     if authorization.target_ref != head_ref:
-        return False, (
+        return blocked(
             f"Candidate admission blocked: authorization is bound to branch {authorization.target_ref!r}, "
             f"not this candidate's {head_ref!r}."
         )
     if authorization.base_ref != base_ref or base_ref != policy.base_ref:
-        return False, (
+        return blocked(
             f"Candidate admission blocked: authorization base {authorization.base_ref!r} does not match the "
             f"pull-request base {base_ref!r} authorized as {policy.base_ref!r}."
         )
 
     branch_issue = policy.issue_for_branch(head_ref)
     if branch_issue is None:
-        return False, (
+        return blocked(
             f"Candidate admission blocked: branch {head_ref} binds no governing Issue under "
             f"{policy.branch_pattern_template}."
         )
     if authorization.issue != branch_issue:
-        return False, (
+        return blocked(
             f"Candidate admission blocked: authorization claims Issue #{authorization.issue} but the branch "
             f"binds Issue #{branch_issue}."
         )
@@ -669,39 +842,67 @@ def verify_connector_ingress_authorization(
     writer = authorization.writer.strip().lower()
     granted = policy.capabilities_for(writer)
     if not granted:
-        return False, f"Candidate admission blocked: authorization writer {writer or 'unknown'!r} is not granted."
+        return blocked(f"Candidate admission blocked: authorization writer {writer or 'unknown'!r} is not granted.")
     if authorization.capability not in granted or policy.capability_scope(authorization.capability) is None:
-        return False, (
+        return blocked(
             f"Candidate admission blocked: authorization capability {authorization.capability!r} is not "
             f"granted to {writer!r}, which holds {', '.join(sorted(granted))}."
         )
 
+    # PR authorship is static and unsigned committer metadata is caller-chosen.
+    # Authenticate every commit at a push boundary on this exact PR branch. This
+    # deliberately fails closed for an ancestor that was never itself a pushed
+    # head: without an authenticated run there is no evidence of its writer.
+    for entry in range_commits:
+        sha = str(entry.get("sha") or "").strip().lower()
+        if not _is_commit_sha(sha):
+            return blocked("Candidate admission blocked: connector range carries a malformed commit SHA.")
+        ok_actor, push_actor, actor_error = read_exact_head_push_actor(repository, token, sha, head_ref)
+        if not ok_actor:
+            return blocked(
+                f"Candidate admission blocked: authenticated push actor evidence for commit {sha[:10]} "
+                f"is unavailable ({actor_error})."
+            )
+        if push_actor != writer:
+            return blocked(
+                f"Candidate admission blocked: connector authorization names writer {writer!r}, but commit "
+                f"{sha[:10]} was pushed by authenticated actor {push_actor!r}."
+            )
+
     ok_no_escalation, escalation_message = verify_no_same_candidate_self_escalation(repository, token, head_sha, policy)
     if not ok_no_escalation:
-        return False, escalation_message
+        return blocked(escalation_message)
 
     # The grant version is pinned, not merely named: a receipt minted under any
     # other version of the grant -- an older default-branch one, or one the
     # candidate wrote at its own head -- is stale and admits nothing.
     if authorization.grant_fingerprint != policy.fingerprint:
-        return False, (
+        return blocked(
             "Candidate admission blocked: authorization was minted under grant "
             f"{authorization.grant_fingerprint[:12] or '(none)'}, but the trusted default-branch grant is "
             f"{policy.fingerprint[:12]}; re-authorize against the current grant."
         )
 
-    foreign = sorted(signer for signer in commit_signers if signer != writer)
+    # Every commit in the range must be committed by the one authorized writer.
+    # Derived from the trusted commit listing rather than from signature results,
+    # because a connector write carries no signature: this is what stops another
+    # account -- including a clone-capable signer -- from riding along inside a
+    # connector-origin range.
+    # A commit with no committer login is not "no foreign committer": it is an
+    # unidentifiable one, so it names itself unknown and still blocks.
+    range_committers = frozenset(_ingress_signer(entry) for entry in range_commits)
+    foreign = sorted((committer or "unknown") for committer in range_committers if committer != writer)
     if foreign:
-        return False, (
+        return blocked(
             "Candidate admission blocked: authorization is bound to writer "
             f"{writer!r} but the range carries commits from {', '.join(foreign)}."
         )
 
     ok_base, merge_base, base_error = read_merge_base(repository, token, base_ref, head_sha)
     if not ok_base:
-        return False, f"Candidate admission blocked: base provenance evidence is unavailable ({base_error})."
+        return blocked(f"Candidate admission blocked: base provenance evidence is unavailable ({base_error}).")
     if authorization.base_sha.strip().lower() != merge_base:
-        return False, (
+        return blocked(
             f"Candidate admission blocked: authorization base {authorization.base_sha[:10]} is not this "
             f"candidate's fork point {merge_base[:10]} from {base_ref}."
         )
@@ -715,31 +916,59 @@ def verify_connector_ingress_authorization(
     if scope is not None and scope.requires_issue_authorization:
         authorized_scopes = policy.scopes_authorized_for_issue(branch_issue)
         if authorized_scopes is None:
-            return False, (
+            return blocked(
                 f"Candidate admission blocked: Issue #{branch_issue} carries no owner-authored "
                 f"{authorization.capability} authorization on the trusted default branch."
             )
         expected_scopes = tuple(sorted(authorized_scopes))
     if tuple(sorted(authorization.governance_scopes)) != expected_scopes:
-        return False, (
+        return blocked(
             "Candidate admission blocked: authorization claims governance scope(s) "
             f"{', '.join(sorted(authorization.governance_scopes)) or '(none)'}, but Issue #{branch_issue} is "
             f"authorized for {', '.join(expected_scopes) or '(none)'}."
         )
 
-    trusted_paths = tuple(sorted({p for p in changed_paths if p != ingress.AUTHORIZATION_RECEIPT_PATH}))
+    receipt_transitions = tuple(item for item in changed_files if item.path == ingress.AUTHORIZATION_RECEIPT_PATH)
+    if any(item.status not in {"added", "modified"} or item.previous_path for item in receipt_transitions):
+        return blocked(
+            "Candidate admission blocked: the authorization receipt path may not be deleted, renamed, or used "
+            "as a rename destination."
+        )
+    trusted_files = tuple(item for item in changed_files if item.path != ingress.AUTHORIZATION_RECEIPT_PATH)
+    trusted_changes = ingress.normalize_changes(
+        tuple(
+            ingress.ConnectorFileChange(item.status, item.path, item.previous_path, item.blob_sha)
+            for item in trusted_files
+        )
+    )
+    if trusted_changes is None:
+        return blocked(
+            "Candidate admission blocked: changed-file operation/content evidence is malformed or ambiguous."
+        )
+    trusted_paths = tuple(sorted({path for change in trusted_changes for path in change.affected_paths()}))
     if set(trusted_paths) != {p.strip() for p in authorization.paths}:
-        return False, (
+        return blocked(
             "Candidate admission blocked: the changed files do not match the authorized path set "
             f"({len(trusted_paths)} changed, {len(authorization.paths)} authorized)."
         )
+
+    if trusted_changes != ingress.normalize_changes(authorization.changes):
+        return blocked(
+            "Candidate admission blocked: the exact file operations or resulting content do not match this "
+            "authorization; re-authorize the exact head."
+        )
     scope_error = ingress.check_scope(trusted_paths, policy, capability=authorization.capability, issue=branch_issue)
     if scope_error:
-        return False, f"Candidate admission blocked: connector candidate {scope_error}."
+        return blocked(f"Candidate admission blocked: connector candidate {scope_error}.")
 
-    return True, (
-        f"Connector authorization {authorization.authorization_id[:12]} ({authorization.capability}) "
-        f"re-derived from trusted evidence for Issue #{branch_issue} under grant {policy.fingerprint[:12]}."
+    return ConnectorAdmission(
+        ok=True,
+        origin=True,
+        writer=writer,
+        message=(
+            f"Connector authorization {authorization.authorization_id[:12]} ({authorization.capability}) "
+            f"re-derived from trusted evidence for Issue #{branch_issue} under grant {policy.fingerprint[:12]}."
+        ),
     )
 
 
@@ -767,11 +996,58 @@ def read_trusted_upgrade_status(
 
     latest = max(matching, key=lambda status: int(status.get("id") or 0))
     state = str(latest.get("state") or "").strip()
-    if state == "success":
-        return "success", "Exact-head trusted candidate preflight validation passed."
     if state == "pending":
         return "pending", "Waiting for exact-head trusted candidate preflight validation."
-    return "failure", f"Candidate admission blocked: trusted candidate preflight validation={state or 'unknown'}."
+    if state != "success":
+        return "failure", f"Candidate admission blocked: trusted candidate preflight validation={state or 'unknown'}."
+
+    creator = latest.get("creator")
+    creator_login = str((creator or {}).get("login") or "").strip().lower()
+    creator_type = str((creator or {}).get("type") or "").strip()
+    if creator_login != TRUSTED_STATUS_CREATOR or creator_type != "Bot":
+        return "failure", "Candidate admission blocked: trusted preflight status has an untrusted publisher."
+
+    target_url = str(latest.get("target_url") or "").strip()
+    parsed = urlparse(target_url)
+    expected_prefix = f"/{repository}/actions/runs/"
+    if parsed.scheme != "https" or parsed.netloc != "github.com" or not parsed.path.startswith(expected_prefix):
+        return "failure", "Candidate admission blocked: trusted preflight status has no canonical workflow run."
+    run_text = parsed.path.removeprefix(expected_prefix)
+    if parsed.params or parsed.query or parsed.fragment or not run_text.isdigit() or "/" in run_text:
+        return "failure", "Candidate admission blocked: trusted preflight status workflow target is malformed."
+    run_id = int(run_text)
+    try:
+        run = request_json(repository, token, "GET", f"actions/runs/{run_id}")
+    except Exception as exc:
+        return (
+            "failure",
+            f"Candidate admission blocked: trusted workflow run is unavailable ({type(exc).__name__}: {exc}).",
+        )
+    if not isinstance(run, dict):
+        return "failure", "Candidate admission blocked: trusted workflow run evidence is malformed."
+    if (
+        int(run.get("id") or 0) != run_id
+        or str(run.get("name") or "") != TRUSTED_UPGRADE_WORKFLOW_NAME
+        or str(run.get("path") or "") != TRUSTED_UPGRADE_WORKFLOW_PATH
+        or str(run.get("event") or "") != "pull_request_target"
+        or str(run.get("head_sha") or "").strip().lower() != head_sha
+    ):
+        return "failure", "Candidate admission blocked: status does not identify the trusted exact-head workflow."
+    run_status = str(run.get("status") or "")
+    run_conclusion = str(run.get("conclusion") or "")
+    if run_status != "completed":
+        return "pending", "Waiting for exact-head trusted candidate preflight workflow to complete."
+    if run_conclusion != "success":
+        return "failure", f"Candidate admission blocked: trusted workflow conclusion={run_conclusion or 'unknown'}."
+    pull_requests = run.get("pull_requests")
+    if not isinstance(pull_requests, list) or not any(
+        isinstance(pr, dict)
+        and int(pr.get("number") or 0) == pr_number
+        and str((pr.get("head") or {}).get("sha") or "").strip().lower() == head_sha
+        for pr in pull_requests
+    ):
+        return "failure", "Candidate admission blocked: trusted workflow run is not bound to this exact PR and head."
+    return "success", "Exact-head trusted candidate preflight validation passed."
 
 
 def candidate_admission(repository: str, token: str, head_sha: str, pr_number: int | None = None) -> tuple[str, str]:

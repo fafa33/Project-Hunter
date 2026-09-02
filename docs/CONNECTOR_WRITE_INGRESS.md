@@ -15,7 +15,7 @@ Issue #405 later added a **second capability on this same ingress**, `governance
 | Admission consequence | `scripts/hunter_governance_review_v2.py` → `verify_code_write_ingress_provenance` |
 | Grant validation | `scripts/hunter_defect_prevention_preflight.py` → `validate_connector_write_ingress` |
 | Regression tests | `tests/test_connector_write_ingress.py` |
-| Defect class | `docs/DEFECT_REGISTRY.json` → `CWI-001` |
+| Defect class | `docs/DEFECT_REGISTRY.json` → `CWI-001`, `CAC-001` |
 | Added capability (#405) | `docs/GOVERNANCE_MAINTENANCE.md` |
 
 The governance controller checks out the default branch, so the grant is always read from trusted state. A candidate cannot grant itself ingress, widen its own writer allowlist, or move its own scope.
@@ -86,14 +86,38 @@ So the safety property is kept, and moved onto evidence that no writer can mint:
 
 > While the grant is active, a verified signature from an authorized signer is **not sufficient on its own for any candidate**. Every code-changing range additionally requires the trusted hosted exact-head canonical preflight proof.
 
-That proof (`Hunter Trusted Preflight Upgrade / PR #<n>`) is published by `.github/workflows/hunter-trusted-preflight-upgrade.yml`, whose trusted default-branch controller runs the canonical gate chain against the exact candidate SHA. No writer on either channel can produce it, so a connector write is never credited as local pre-push proof. The requirement applies to clone-written ranges too, precisely because identity cannot be trusted to sort them.
+That proof (`Hunter Trusted Preflight Upgrade / PR #<n>`) is published by `.github/workflows/hunter-trusted-preflight-upgrade.yml`, whose trusted default-branch controller runs the canonical gate chain against the exact candidate SHA. Admission accepts it only when GitHub records `github-actions[bot]` as publisher and its canonical target run is that exact trusted workflow, PR, head, and successful conclusion; a push-capable user's same-context status is not proof. The requirement applies to clone-written ranges too, precisely because identity cannot be trusted to sort them.
 
 This is strictly stronger than signature-only admission and costs no extra hosted work: that workflow already runs on every pull request to `main`. Overlapping logins are consequently allowed; an **active** grant that fails to declare `hosted_admission.require_for_all_candidates: true` is refused by both the loader and the deterministic guard, so the requirement cannot be quietly dropped.
+
+### The channel decides which proof is required (Issue #409)
+
+The connector API creates commits **server-side**: there is no local key and no pre-push boundary to sign at, so a connector-written commit can never carry a verified local signature. Requiring one made the authorized path unusable — Issue #402 / PR #408 was blocked as `unsigned` despite being a correctly authorized `connector/issue-402-*` candidate carrying its receipt.
+
+So admission decides *which channel wrote the candidate* first, from trusted evidence, and only then requires that channel's proof:
+
+| Channel | How it is established | Ingress proof required |
+| --- | --- | --- |
+| ordinary (clone-capable) | no receipt, outside the connector namespace | verified commit signature from an authorized signer, over the whole range — unchanged |
+| connector-origin | the full trusted re-derivation below concludes it | the exact-head receipt re-derived from trusted evidence, one authorized writer across the whole range, and the trusted hosted exact-head canonical preflight proof |
+
+The connector channel's evidence is bound two ways that the first form of this split lacked (both found by independent review of PR #410):
+
+* **Writer identity is authenticated at every connector commit's push boundary.** On an unsigned API-created commit, `committer.login` is GitHub's resolution of caller-supplied committer metadata, so it cannot authenticate the credential that wrote the commit. PR authorship is also insufficient because another credential can later push the branch. The channel reads the trusted push-event `Hunter / Pre-PR Preflight` workflow run for every commit SHA in the connector range on the exact PR head branch and requires each GitHub-authenticated actor to equal the receipt writer. A commit without that evidence fails closed. The committer check remains only a narrowing consistency check; it is never identity proof.
+* **The receipt binds the exact file transition, not just the path set.** It carries canonical `changes` records. Additions and modifications bind the resulting git blob SHA; deletions bind absence instead of reusing GitHub's base-blob SHA; renames bind both `previous_path` and destination plus the exact destination blob. Admission preserves GitHub's `status` and `previous_filename` evidence and compares the complete transition set at the exact head. Same-path mutation, deletion, rename, or rename-plus-modification therefore requires fresh authorization, and a protected source cannot be renamed into an allowed destination.
+
+Three further properties keep this a split rather than a relaxation:
+
+* **Connector origin is a conclusion, never a claim.** It is set only by `verify_connector_ingress_authorization` succeeding on every re-derived constraint. A signature cannot establish it and cannot substitute for any part of it, so a clone-capable writer cannot reach the connector regime by asserting it — and reaching it legitimately means accepting *more* constraints, not fewer.
+* **Unsigned committer metadata can only narrow admission.** Every connector commit is authenticated by its trusted push-workflow actor first. GitHub's commit listing is then checked for consistency with that actor, so missing or foreign metadata still blocks but forged authorized metadata cannot conceal a foreign ancestor writer.
+* **Connector evidence is never credited as local pre-push proof.** The verdict says so explicitly, the grant still declares `local_pre_push_equivalent: false`, and the trusted hosted exact-head proof — which no writer on either channel can mint — is required unconditionally for a connector-origin range.
+
+An inactive grant, a writer not bound by the trusted grant, or a missing/failed/wrong-PR hosted proof all block a connector-origin candidate.
 
 ### The rest of the admission contract
 
 * The grant may not declare `local_pre_push_equivalent: true`; the loader and the deterministic guard both refuse such a policy.
-* Every commit in the range still needs a verified signature from an authorized ingress writer.
+* Every ordinary clone-path commit in the range still needs a verified signature from an authorized ingress writer.
 * A connector-namespace candidate additionally needs its exact-head authorization re-derived from trusted evidence, as above.
 * The trusted hosted proof is required **in addition to** the existing exact-head branch preflight, not instead of it.
 * Until that proof exists, the candidate stays Draft/unadmitted. Proof published against a superseded head, or against a different PR, is not this head's proof.

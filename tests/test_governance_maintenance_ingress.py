@@ -33,6 +33,7 @@ connector writes changed".
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 from dataclasses import replace
 from pathlib import Path
@@ -44,6 +45,17 @@ import hunter_governance_review_v2 as core
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def _digest_for(path: str) -> str:
+    """A deterministic stand-in for the blob SHA GitHub reports for `path`."""
+
+    return hashlib.sha1(path.encode("utf-8")).hexdigest()  # noqa: S324
+
+
+def _changes_for(paths: tuple[str, ...]) -> tuple[ingress.ConnectorFileChange, ...]:
+    return tuple(ingress.ConnectorFileChange("modified", path, blob_sha=_digest_for(path)) for path in paths)
+
 
 BASE_TIP = "a" * 40
 STALE_BASE = "b" * 40
@@ -139,7 +151,10 @@ def _request(**overrides: object) -> ingress.ConnectorWriteRequest:
         base_sha=BASE_TIP,
         paths=ADR_PATHS,
     )
-    return replace(request, **overrides)  # type: ignore[arg-type]
+    request = replace(request, **overrides)  # type: ignore[arg-type]
+    if "changes" not in overrides:
+        request = replace(request, changes=_changes_for(request.paths))
+    return request
 
 
 def _evaluate(
@@ -651,14 +666,41 @@ def test_an_equivalently_spelled_head_policy_is_not_treated_as_escalation(monkey
 
 SUCCESSFUL_BRANCH_RUN = {
     "head_sha": HEAD,
+    "head_branch": GOVERNANCE_BRANCH,
     "name": core.PRE_PR_WORKFLOW_NAME,
     "path": core.PRE_PR_WORKFLOW_PATH,
     "event": "push",
     "status": "completed",
     "conclusion": "success",
     "id": 100,
+    "actor": {"login": CONNECTOR},
 }
-HOSTED_PROOF = [{"id": 9, "context": core._upgrade_status_context(601), "state": "success"}]
+
+
+def _requested_head_sha(path: str) -> str:
+    return path.split("head_sha=", 1)[1].split("&", 1)[0]
+
+
+TRUSTED_RUN_ID = 209
+HOSTED_PROOF = [
+    {
+        "id": 9,
+        "context": core._upgrade_status_context(601),
+        "state": "success",
+        "creator": {"login": core.TRUSTED_STATUS_CREATOR, "type": "Bot"},
+        "target_url": f"https://github.com/fafa33/Project-Hunter/actions/runs/{TRUSTED_RUN_ID}",
+    }
+]
+TRUSTED_UPGRADE_RUN = {
+    "id": TRUSTED_RUN_ID,
+    "name": core.TRUSTED_UPGRADE_WORKFLOW_NAME,
+    "path": core.TRUSTED_UPGRADE_WORKFLOW_PATH,
+    "event": "pull_request_target",
+    "head_sha": HEAD,
+    "status": "completed",
+    "conclusion": "success",
+    "pull_requests": [{"number": 601, "head": {"sha": HEAD}}],
+}
 
 
 def _commit(sha: str = HEAD, signer: str = CONNECTOR) -> dict:
@@ -681,10 +723,14 @@ def _authorization(
         base_sha=BASE_TIP,
         target_ref=GOVERNANCE_BRANCH,
         paths=ADR_PATHS,
+        changes=_changes_for(ADR_PATHS),
         governance_scopes=("adr-lifecycle",),
         grant_fingerprint=base.fingerprint,
     )
-    return replace(authorization, **overrides)  # type: ignore[arg-type]
+    authorization = replace(authorization, **overrides)  # type: ignore[arg-type]
+    if "changes" not in overrides:
+        authorization = replace(authorization, changes=_changes_for(authorization.paths))
+    return authorization
 
 
 def _admission(
@@ -709,6 +755,15 @@ def _admission(
     head_grant = head_policy if head_policy is not None else grant
     monkeypatch.setattr(ingress, "load_policy", lambda *_a, **_k: (grant, ""))
     monkeypatch.setattr(ingress, "parse_policy", lambda *_a, **_k: (head_grant, ""))
+    monkeypatch.setattr(
+        core,
+        "read_pr_changed_files",
+        lambda *_args: (
+            True,
+            tuple(core.PullRequestFile("modified", path, blob_sha=_digest_for(path)) for path in changed_paths),
+            None,
+        ),
+    )
     monkeypatch.setattr(core, "read_pr_changed_paths", lambda *_args: (True, changed_paths, None))
     monkeypatch.setattr(core, "read_head_preflight_mode", lambda *_args: ("normal", None))
     monkeypatch.setattr(core, "load_ingress_provenance_policy", lambda: (frozenset({CONNECTOR}), "", None))
@@ -733,8 +788,18 @@ def _admission(
             return {"merge_base_commit": {"sha": merge_base}}
         if "statuses" in path:
             return statuses if statuses is not None else HOSTED_PROOF
+        if path == f"actions/runs/{TRUSTED_RUN_ID}":
+            return TRUSTED_UPGRADE_RUN
         if "actions/runs" in path:
-            return {"workflow_runs": [SUCCESSFUL_BRANCH_RUN]}
+            return {
+                "workflow_runs": [
+                    {
+                        **SUCCESSFUL_BRANCH_RUN,
+                        "head_sha": _requested_head_sha(path),
+                        "head_branch": head_ref,
+                    }
+                ]
+            }
         raise AssertionError(path)
 
     monkeypatch.setattr(core, "request_json", fake_request)

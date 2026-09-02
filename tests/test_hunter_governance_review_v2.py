@@ -111,6 +111,32 @@ def test_candidate_admission_tests_first_red_success_stays_draft(monkeypatch):
     assert "Draft-only" in description
 
 
+def test_changed_file_evidence_preserves_deletion_and_rename_semantics(monkeypatch):
+    base_blob = "a" * 40
+    renamed_blob = "b" * 40
+    monkeypatch.setattr(
+        core,
+        "request_json",
+        lambda *_args: [
+            {"filename": "docs/deleted.md", "status": "removed", "sha": base_blob},
+            {
+                "filename": "docs/new.md",
+                "previous_filename": ".github/workflows/old.yml",
+                "status": "renamed",
+                "sha": renamed_blob,
+            },
+        ],
+    )
+
+    ok, files, error = core.read_pr_changed_files("fafa33/Project-Hunter", "token", 410)
+
+    assert ok is True and error is None
+    assert files == (
+        core.PullRequestFile("removed", "docs/deleted.md", blob_sha=""),
+        core.PullRequestFile("renamed", "docs/new.md", ".github/workflows/old.yml", renamed_blob),
+    )
+
+
 def test_protected_preflight_ordinary_candidate_cannot_self_authorize(monkeypatch):
     monkeypatch.setattr(
         core,
@@ -173,6 +199,17 @@ SUCCESSFUL_RUN = {
     "conclusion": "success",
     "id": 100,
 }
+TRUSTED_RUN_ID = 207
+TRUSTED_UPGRADE_RUN = {
+    "id": TRUSTED_RUN_ID,
+    "name": core.TRUSTED_UPGRADE_WORKFLOW_NAME,
+    "path": core.TRUSTED_UPGRADE_WORKFLOW_PATH,
+    "event": "pull_request_target",
+    "head_sha": HEAD,
+    "status": "completed",
+    "conclusion": "success",
+    "pull_requests": [{"number": 501, "head": {"sha": HEAD}}],
+}
 
 
 def _signed(sha: str, signer: str = "claude") -> dict:
@@ -193,6 +230,11 @@ def _unsigned(sha: str, signer: str = "fafa33") -> dict:
 
 def _admission(monkeypatch, commits: list[dict], *, hosted_ci: bool = False, policy=None, extra=None):
     """Drive candidate_admission over a stubbed PR commit range."""
+    monkeypatch.setattr(
+        core,
+        "read_pr_changed_files",
+        lambda *_args: (True, (core.PullRequestFile("modified", "src/hunter/cli.py", blob_sha="a" * 40),), None),
+    )
     monkeypatch.setattr(core, "read_pr_changed_paths", lambda *_args: (True, ("src/hunter/cli.py",), None))
     monkeypatch.setattr(core, "read_head_preflight_mode", lambda *_args: ("normal", None))
     monkeypatch.setattr(
@@ -220,7 +262,17 @@ def _admission(monkeypatch, commits: list[dict], *, hosted_ci: bool = False, pol
         if "statuses" in path:
             # The active connector grant makes the trusted hosted exact-head
             # proof mandatory for every candidate, clone-written included.
-            return [{"id": 7, "context": core._upgrade_status_context(501), "state": "success"}]
+            return [
+                {
+                    "id": 7,
+                    "context": core._upgrade_status_context(501),
+                    "state": "success",
+                    "creator": {"login": core.TRUSTED_STATUS_CREATOR, "type": "Bot"},
+                    "target_url": f"https://github.com/fafa33/Project-Hunter/actions/runs/{TRUSTED_RUN_ID}",
+                }
+            ]
+        if path == f"actions/runs/{TRUSTED_RUN_ID}":
+            return TRUSTED_UPGRADE_RUN
         if hosted_ci and "actions/runs" in path:
             return {"workflow_runs": [SUCCESSFUL_RUN]}
         raise AssertionError(path)
@@ -346,6 +398,11 @@ def test_unavailable_pre_authority_range_evidence_fails_closed(monkeypatch) -> N
 
 
 def test_unavailable_commit_range_evidence_fails_closed(monkeypatch) -> None:
+    monkeypatch.setattr(
+        core,
+        "read_pr_changed_files",
+        lambda *_args: (True, (core.PullRequestFile("modified", "src/hunter/cli.py", blob_sha="a" * 40),), None),
+    )
     monkeypatch.setattr(core, "read_pr_changed_paths", lambda *_args: (True, ("src/hunter/cli.py",), None))
     monkeypatch.setattr(core, "read_head_preflight_mode", lambda *_args: ("normal", None))
     monkeypatch.setattr(core, "read_pr_commits", lambda *_args: (False, (), "GitHub request error: 500"))
@@ -387,6 +444,15 @@ def test_import_ordering_recurrence_prh001_cannot_reach_admitted_candidate_witho
     monkeypatch,
 ) -> None:
     monkeypatch.setattr(
+        core,
+        "read_pr_changed_files",
+        lambda *_args: (
+            True,
+            (core.PullRequestFile("modified", "tests/test_issue_agent_trigger.py", blob_sha="a" * 40),),
+            None,
+        ),
+    )
+    monkeypatch.setattr(
         core, "read_pr_changed_paths", lambda *_args: (True, ("tests/test_issue_agent_trigger.py",), None)
     )
     monkeypatch.setattr(core, "read_head_preflight_mode", lambda *_args: ("normal", None))
@@ -395,6 +461,13 @@ def test_import_ordering_recurrence_prh001_cannot_reach_admitted_candidate_witho
     def fake_request(_repo, _token, _method, path, _payload=None):
         if "pulls/501/commits" in path:
             return [_unsigned(HEAD)]
+        # An ordinary clone-path candidate: outside the connector namespace and
+        # carrying no authorization receipt, so the verified-signature regime
+        # applies to it (Issue #409 decides the channel before the proof).
+        if path.startswith("pulls/501"):
+            return {"head": {"ref": "claude/ordinary-candidate", "sha": HEAD}, "base": {"ref": "main"}}
+        if path.startswith("contents/"):
+            raise transport.GitHubRequestError("Not Found", category="permanent", status_code=404)
         raise AssertionError(path)
 
     monkeypatch.setattr(core, "request_json", fake_request)

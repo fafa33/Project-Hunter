@@ -17,6 +17,7 @@ Three boundaries are covered:
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 from dataclasses import replace
 from pathlib import Path
@@ -27,6 +28,17 @@ import hunter_workflow_state as workflow_state
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def _digest_for(path: str) -> str:
+    """A deterministic stand-in for the blob SHA GitHub reports for `path`."""
+
+    return hashlib.sha1(path.encode("utf-8")).hexdigest()  # noqa: S324
+
+
+def _changes_for(paths: tuple[str, ...]) -> tuple[ingress.ConnectorFileChange, ...]:
+    return tuple(ingress.ConnectorFileChange("modified", path, blob_sha=_digest_for(path)) for path in paths)
+
 
 BASE_TIP = "a" * 40
 STALE_BASE = "b" * 40
@@ -74,7 +86,10 @@ def _request(**overrides: object) -> ingress.ConnectorWriteRequest:
         base_sha=BASE_TIP,
         paths=CONTENT_PATHS,
     )
-    return replace(request, **overrides)  # type: ignore[arg-type]
+    request = replace(request, **overrides)  # type: ignore[arg-type]
+    if "changes" not in overrides:
+        request = replace(request, changes=_changes_for(request.paths))
+    return request
 
 
 def _evaluate(*, tip: str = BASE_TIP, **overrides: object) -> ingress.IngressDecision:
@@ -577,14 +592,41 @@ def test_duplicate_writer_grant_is_refused(tmp_path: Path) -> None:
 
 SUCCESSFUL_BRANCH_RUN = {
     "head_sha": HEAD,
+    "head_branch": CONNECTOR_BRANCH,
     "name": core.PRE_PR_WORKFLOW_NAME,
     "path": core.PRE_PR_WORKFLOW_PATH,
     "event": "push",
     "status": "completed",
     "conclusion": "success",
     "id": 100,
+    "actor": {"login": CONNECTOR},
 }
-HOSTED_PROOF = [{"id": 9, "context": core._upgrade_status_context(501), "state": "success"}]
+
+
+def _requested_head_sha(path: str) -> str:
+    return path.split("head_sha=", 1)[1].split("&", 1)[0]
+
+
+TRUSTED_RUN_ID = 209
+HOSTED_PROOF = [
+    {
+        "id": 9,
+        "context": core._upgrade_status_context(501),
+        "state": "success",
+        "creator": {"login": core.TRUSTED_STATUS_CREATOR, "type": "Bot"},
+        "target_url": f"https://github.com/fafa33/Project-Hunter/actions/runs/{TRUSTED_RUN_ID}",
+    }
+]
+TRUSTED_UPGRADE_RUN = {
+    "id": TRUSTED_RUN_ID,
+    "name": core.TRUSTED_UPGRADE_WORKFLOW_NAME,
+    "path": core.TRUSTED_UPGRADE_WORKFLOW_PATH,
+    "event": "pull_request_target",
+    "head_sha": HEAD,
+    "status": "completed",
+    "conclusion": "success",
+    "pull_requests": [{"number": 501, "head": {"sha": HEAD}}],
+}
 
 
 def _commit(sha: str = HEAD, signer: str = CONNECTOR) -> dict:
@@ -613,10 +655,14 @@ def _authorization(
         base_sha=BASE_TIP,
         target_ref=CONNECTOR_BRANCH,
         paths=CONTENT_PATHS,
+        changes=_changes_for(CONTENT_PATHS),
         governance_scopes=(),
         grant_fingerprint=(grant if grant is not None else _policy()).fingerprint,
     )
-    return replace(authorization, **overrides)  # type: ignore[arg-type]
+    authorization = replace(authorization, **overrides)  # type: ignore[arg-type]
+    if "changes" not in overrides:
+        authorization = replace(authorization, changes=_changes_for(authorization.paths))
+    return authorization
 
 
 def _admission(
@@ -631,6 +677,7 @@ def _admission(
     branch_runs: list[dict] | None = None,
     connector_policy: tuple[bool, frozenset[str], str | None] = (True, frozenset({CONNECTOR}), None),
     signers: frozenset[str] = frozenset({"claude", "fafa33"}),
+    push_actor: str = CONNECTOR,
     policy: ingress.ConnectorIngressPolicy | None = None,
     head_policy: ingress.ConnectorIngressPolicy | None = None,
     head_policy_error: str = "",
@@ -650,6 +697,15 @@ def _admission(
         ingress,
         "parse_policy",
         lambda *_a, **_k: ((None, head_policy_error) if head_policy_error else (head_grant, "")),
+    )
+    monkeypatch.setattr(
+        core,
+        "read_pr_changed_files",
+        lambda *_args: (
+            True,
+            tuple(core.PullRequestFile("modified", path, blob_sha=_digest_for(path)) for path in changed_paths),
+            None,
+        ),
     )
     monkeypatch.setattr(core, "read_pr_changed_paths", lambda *_args: (True, changed_paths, None))
     monkeypatch.setattr(core, "read_head_preflight_mode", lambda *_args: ("normal", None))
@@ -680,8 +736,23 @@ def _admission(
             return {"merge_base_commit": {"sha": merge_base}}
         if "statuses" in path:
             return statuses if statuses is not None else HOSTED_PROOF
+        if path == f"actions/runs/{TRUSTED_RUN_ID}":
+            return TRUSTED_UPGRADE_RUN
         if "actions/runs" in path:
-            return {"workflow_runs": branch_runs if branch_runs is not None else [SUCCESSFUL_BRANCH_RUN]}
+            requested_head = _requested_head_sha(path)
+            runs = (
+                branch_runs
+                if branch_runs is not None
+                else [
+                    {
+                        **SUCCESSFUL_BRANCH_RUN,
+                        "head_sha": requested_head,
+                        "head_branch": head_ref,
+                        "actor": {"login": push_actor},
+                    }
+                ]
+            )
+            return {"workflow_runs": runs}
         raise AssertionError(path)
 
     monkeypatch.setattr(core, "request_json", fake_request)
@@ -859,7 +930,7 @@ def test_connector_head_still_requires_the_exact_head_branch_preflight(monkeypat
     state, description = _admission(monkeypatch, branch_runs=[])
 
     assert state == "failure"
-    assert "exact-head branch preflight is missing" in description
+    assert "authenticated push actor evidence for commit cccccccccc is unavailable" in description
 
 
 def test_hosted_preflight_proof_bound_to_another_pr_does_not_admit(monkeypatch) -> None:
@@ -873,14 +944,36 @@ def test_hosted_preflight_proof_bound_to_another_pr_does_not_admit(monkeypatch) 
     assert "exact-head trusted preflight upgrade status is missing" in description
 
 
-def test_unsigned_connector_commit_is_rejected_before_any_hosted_proof(monkeypatch) -> None:
-    unsigned = {
-        "sha": HEAD,
-        "committer": {"login": CONNECTOR},
+def _unsigned_connector_commit(sha: str = HEAD, signer: str = CONNECTOR) -> dict:
+    """A commit as the GitHub connector API creates it: server-side, unsigned."""
+    return {
+        "sha": sha,
+        "committer": {"login": signer},
         "commit": {"verification": {"verified": False, "reason": "unsigned"}},
     }
 
-    state, description = _admission(monkeypatch, commits=[unsigned])
+
+def test_unsigned_connector_commit_is_admitted_on_connector_evidence(monkeypatch) -> None:
+    """Issue #409: the connector API cannot sign, so a signature cannot be required.
+
+    This candidate is on the connector namespace with a valid exact-head receipt
+    re-derived from trusted evidence, and carries the trusted hosted exact-head
+    proof. Before #409 it was blocked as `unsigned`, which made the authorized
+    connector path unusable.
+    """
+    state, description = _admission(monkeypatch, commits=[_unsigned_connector_commit()])
+
+    assert state == "success", description
+
+
+def test_unsigned_commit_outside_the_connector_channel_is_still_rejected(monkeypatch) -> None:
+    """The clone-capable path is unchanged: no receipt, no namespace, no exemption."""
+    state, description = _admission(
+        monkeypatch,
+        commits=[_unsigned_connector_commit(signer="claude")],
+        head_ref="claude/issue-403-example",
+        receipt=None,
+    )
 
     assert state == "failure"
     assert "no verified pre-push ingress signature" in description
@@ -890,14 +983,16 @@ def test_arbitrary_api_writer_is_rejected_at_admission(monkeypatch) -> None:
     state, description = _admission(monkeypatch, commits=[_commit(signer="drive-by-account")])
 
     assert state == "failure"
-    assert "unauthorized ingress signer drive-by-account" in description
+    # On a connector-origin candidate the writer binding is the check that fires:
+    # the range must be committed by the one authorized writer, whoever signed it.
+    assert "the range carries commits from drive-by-account" in description
 
 
 def test_connector_writer_is_not_accepted_while_the_grant_is_disabled(monkeypatch) -> None:
     state, description = _admission(monkeypatch, connector_policy=(False, frozenset(), None))
 
     assert state == "failure"
-    assert "unauthorized ingress signer" in description
+    assert "the connector write ingress is not active in trusted default-branch state" in description
 
 
 def test_shared_identity_still_cannot_pass_as_local_pre_push_proof(monkeypatch) -> None:
@@ -915,13 +1010,15 @@ def test_shared_identity_still_cannot_pass_as_local_pre_push_proof(monkeypatch) 
         "commits": [_commit(signer=shared)],
         "connector_policy": (True, frozenset({shared}), None),
         "policy": shared_grant,
+        "push_actor": shared,
     }
 
     unproven, description = _admission(
         monkeypatch, receipt=_authorization(grant=shared_grant, writer=shared).document(), statuses=[], **bound
     )
     assert unproven == "failure"
-    assert "a verified signature alone is not pre-push proof" in description
+    assert "requires trusted hosted exact-head canonical preflight proof" in description
+    assert "this is not local pre-push proof" not in description
 
     unauthorized, description = _admission(monkeypatch, receipt=None, **bound)
     assert unauthorized == "failure"
