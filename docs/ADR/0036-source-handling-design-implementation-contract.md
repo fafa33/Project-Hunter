@@ -2,11 +2,11 @@
 
 ## Status
 
-Proposed.
+Accepted.
 
-This drafting contribution creates the ADR record. It does not accept it and
-authorizes no runtime implementation. Acceptance remains a separate,
-owner-authorized lifecycle transition.
+The repository owner accepted ADR 0036 under Issue #402 after the architecture-only drafting contribution, the independent architecture audit (Issue #395 / PR #396), and the targeted re-audit (Issue #397 / PR #398) completed with no blocking architecture finding. This lifecycle transition changes no substantive architectural decision in this record.
+
+Acceptance makes this decision binding architecture. It authorizes the separately governed Source Handling runtime implementation lifecycle tracked by Issue #407; it does not implement runtime code in this acceptance contribution. Issue #390 remains blocked until that runtime seam is implemented and independently validated.
 
 ## Date
 
@@ -67,7 +67,7 @@ every publication call site in the repository is test-only.
 
 ADPR-0012 produced and independent review validated that contract. This ADR
 binds it as architecture. It does not reopen ADR 0033 ownership or its
-invariants, and it does not authorize runtime implementation.
+invariants.
 
 ## Decision
 
@@ -295,7 +295,7 @@ published authority would destroy historical truth.
 
 This ADR does not define or authorize:
 
-- runtime implementation of any component named above;
+- runtime implementation code in this acceptance contribution; implementation is separately governed by Issue #407;
 - the Issue #390 composition root or execution path;
 - span-level classification (ADR 0033 Non-Goal, unchanged);
 - retroactive purge or deletion of already-persisted records (ADR 0033
@@ -310,10 +310,7 @@ This ADR does not define or authorize:
 
 ## Implementation Status
 
-Architecture only. This drafting contribution authorizes no runtime
-implementation. Implementation remains subject to ADR acceptance and
-separately approved scope under the normal development lifecycle, and
-Issue #390 remains blocked until acceptance.
+Architecture accepted under Issue #402. No Source Handling runtime code is implemented by this lifecycle contribution. The separately governed implementation lifecycle is Issue #407. Issue #390 remains blocked until that runtime seam is implemented and independently validated.
 
 ## Consequences
 
