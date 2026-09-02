@@ -31,6 +31,7 @@ from hunter.evidence_intelligence.source_handling_persistence import (
     IssueSourceTransientIntakeBoundary,
     SourceHandlingAuthorityRepository,
     SourceHandlingAuthorityService,
+    SourceHandlingOperatorRoot,
 )
 
 RULE_FIXTURE = Path(__file__).parent / "fixtures" / "source_handling" / "authorization_rule_v1.json"
@@ -51,6 +52,24 @@ def _private_key_bytes() -> bytes:
         encoding=serialization.Encoding.Raw,
         format=serialization.PrivateFormat.Raw,
         encryption_algorithm=serialization.NoEncryption(),
+    )
+
+
+def _public_key_bytes(private_key: bytes) -> bytes:
+    return (
+        Ed25519PrivateKey.from_private_bytes(private_key)
+        .public_key()
+        .public_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PublicFormat.Raw,
+        )
+    )
+
+
+def _operator_root(private_key: bytes, *, genesis_digest: str = RULE_GOLDEN) -> SourceHandlingOperatorRoot:
+    return SourceHandlingOperatorRoot(
+        genesis_rule_sha256=genesis_digest,
+        verification_key_sha256=hashlib.sha256(_public_key_bytes(private_key)).hexdigest(),
     )
 
 
@@ -85,11 +104,12 @@ def _service(
     service = SourceHandlingAuthorityService(
         tmp_path / "evidence.sqlite",
         signing_private_key=active_key,
+        operator_root=_operator_root(active_key),
         provenance_resolver=_provenance,
         clock=active_clock,
     )
     rule = json.loads(RULE_FIXTURE.read_text(encoding="utf-8"))
-    result = service.publish_genesis_rule(rule, expected_golden_sha256=RULE_GOLDEN)
+    result = service.publish_genesis_rule(rule)
     return service, active_clock, active_key, result.record_id
 
 
@@ -321,6 +341,10 @@ def test_missing_or_malformed_signing_key_fails_closed(tmp_path: Path, key: byte
         SourceHandlingAuthorityService(
             tmp_path / "db.sqlite",
             signing_private_key=key,
+            operator_root=SourceHandlingOperatorRoot(
+                genesis_rule_sha256=RULE_GOLDEN,
+                verification_key_sha256="00" * 32,
+            ),
             provenance_resolver=_provenance,
         )
 
@@ -331,6 +355,11 @@ def test_missing_or_malformed_verification_key_fails_closed(tmp_path: Path, key:
         SourceHandlingAuthorityRepository(
             tmp_path / "db.sqlite",
             verification_public_key=key,
+            operator_root=SourceHandlingOperatorRoot(
+                genesis_rule_sha256=RULE_GOLDEN,
+                verification_key_sha256="00" * 32,
+            ),
+            record_integrity_signer=lambda _message: b"",
             provenance_resolver=_provenance,
         )
 
@@ -339,27 +368,113 @@ def test_genesis_digest_replay_and_history_guards(tmp_path: Path) -> None:
     service, _clock, _key, _rule_id = _service(tmp_path)
     rule = json.loads(RULE_FIXTURE.read_text(encoding="utf-8"))
     with pytest.raises(SourceHandlingBlockedError, match="empty history"):
-        service.publish_genesis_rule(rule, expected_golden_sha256=RULE_GOLDEN)
+        service.publish_genesis_rule(rule)
 
     other = copy.deepcopy(rule)
     other["authorization_rule_id"] = "AUTHORIZATION_RULE_V2"
-    digest = hashlib.sha256(json.dumps(other, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
-    with pytest.raises(SourceHandlingBlockedError, match="unexpected"):
-        service.publish_genesis_rule(other, expected_golden_sha256=digest)
+    with pytest.raises(SourceHandlingBlockedError, match="digest mismatch"):
+        service.publish_genesis_rule(other)
 
 
 def test_genesis_golden_digest_mismatch_fails_closed(tmp_path: Path) -> None:
     clock = MutableClock()
+    key = _private_key_bytes()
     service = SourceHandlingAuthorityService(
         tmp_path / "db.sqlite",
-        signing_private_key=_private_key_bytes(),
+        signing_private_key=key,
+        operator_root=_operator_root(key),
         provenance_resolver=_provenance,
         clock=clock,
     )
+    altered = json.loads(RULE_FIXTURE.read_text(encoding="utf-8"))
+    altered["rule_body"]["permissive_evidence_strengths"] = ["CALLER_ASSERTION"]
     with pytest.raises(SourceHandlingBlockedError, match="digest mismatch"):
-        service.publish_genesis_rule(
-            json.loads(RULE_FIXTURE.read_text(encoding="utf-8")),
-            expected_golden_sha256="00" * 32,
+        service.publish_genesis_rule(altered)
+
+
+def test_runtime_caller_cannot_supply_matching_digest_for_arbitrary_genesis(tmp_path: Path) -> None:
+    key = _private_key_bytes()
+    service = SourceHandlingAuthorityService(
+        tmp_path / "db.sqlite",
+        signing_private_key=key,
+        operator_root=_operator_root(key),
+        provenance_resolver=_provenance,
+        clock=MutableClock(),
+    )
+    altered = json.loads(RULE_FIXTURE.read_text(encoding="utf-8"))
+    altered["rule_body"]["permissive_evidence_strengths"] = ["CALLER_ASSERTION"]
+    caller_digest = hashlib.sha256(
+        json.dumps(altered, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+    with pytest.raises(TypeError, match="expected_golden_sha256"):
+        service.publish_genesis_rule(altered, expected_golden_sha256=caller_digest)  # type: ignore[call-arg]
+
+    genuine = json.loads(RULE_FIXTURE.read_text(encoding="utf-8"))
+    assert service.publish_genesis_rule(genuine).record_id
+
+
+def test_genesis_and_verification_key_are_pinned_across_restart(tmp_path: Path) -> None:
+    service, clock, key, rule_id = _service(tmp_path)
+    restarted = SourceHandlingAuthorityService(
+        service.path,
+        signing_private_key=key,
+        operator_root=_operator_root(key),
+        provenance_resolver=_provenance,
+        clock=clock,
+    )
+    assert (
+        resolve_canonical_head(
+            restarted.resolver()("doc-1", clock.now()).store,
+            family="AUTHORIZATION_RULE",
+            scope="SOURCE_HANDLING",
+            cutoff=clock.now(),
+        )["id"]
+        == rule_id
+    )
+
+    unrelated_key = _private_key_bytes()
+    with pytest.raises(SourceHandlingBlockedError, match="operator root|verification key"):
+        SourceHandlingAuthorityService(
+            service.path,
+            signing_private_key=unrelated_key,
+            operator_root=_operator_root(unrelated_key),
+            provenance_resolver=_provenance,
+            clock=clock,
+        )
+
+
+def test_rewritten_genesis_with_recomputed_hash_fails_closed(tmp_path: Path) -> None:
+    service, clock, _key, rule_id = _service(tmp_path)
+    with sqlite3.connect(service.path) as connection:
+        payload = json.loads(
+            str(
+                connection.execute(
+                    "SELECT payload_json FROM source_handling_authority_records WHERE record_id = ?",
+                    (rule_id,),
+                ).fetchone()[0]
+            )
+        )
+        payload["rule_body"]["permissive_evidence_strengths"] = ["CALLER_ASSERTION"]
+        payload_json = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        rewritten_id = hashlib.sha256(payload_json.encode("utf-8")).hexdigest()
+        connection.execute(
+            "UPDATE source_handling_authority_records "
+            "SET record_id = ?, payload_sha256 = ?, payload_json = ? WHERE record_id = ?",
+            (rewritten_id, rewritten_id, payload_json, rule_id),
+        )
+        connection.execute(
+            "UPDATE source_handling_canonical_keys SET current_record_id = ? "
+            "WHERE family = 'AUTHORIZATION_RULE' AND scope = 'SOURCE_HANDLING'",
+            (rewritten_id,),
+        )
+
+    with pytest.raises(SourceHandlingBlockedError, match="TAMPER_DETECTED"):
+        resolve_canonical_head(
+            service.resolver()("doc-1", clock.now()).store,
+            family="AUTHORIZATION_RULE",
+            scope="SOURCE_HANDLING",
+            cutoff=clock.now(),
         )
 
 
@@ -372,6 +487,11 @@ def test_repository_has_no_direct_write_bypass(tmp_path: Path) -> None:
     repository = SourceHandlingAuthorityRepository(
         tmp_path / "db.sqlite",
         verification_public_key=public_key,
+        operator_root=SourceHandlingOperatorRoot(
+            genesis_rule_sha256=RULE_GOLDEN,
+            verification_key_sha256=hashlib.sha256(public_key).hexdigest(),
+        ),
+        record_integrity_signer=private_key.sign,
         provenance_resolver=_provenance,
     )
     with pytest.raises(SourceHandlingBlockedError, match="direct repository authority writes"):
@@ -486,11 +606,13 @@ def test_failed_transaction_does_not_consume_and_same_authorization_retries(tmp_
         expires_at=clock.now() + timedelta(minutes=5),
     )
     with sqlite3.connect(service.path) as connection:
-        connection.execute("""
+        connection.execute(
+            """
             CREATE TRIGGER fail_source_handling_insert
             BEFORE INSERT ON source_handling_authority_records
             BEGIN SELECT RAISE(ABORT, 'simulated crash'); END
-            """)
+            """
+        )
     with pytest.raises(SourceHandlingBlockedError):
         service.publish(
             family="FACT",
@@ -626,12 +748,75 @@ def test_backdated_successor_is_invisible_to_earlier_cutoff(tmp_path: Path) -> N
     assert resolve_canonical_head(view, family="FACT", scope="doc-1", cutoff=clock.now())["id"] == second
 
 
+@pytest.mark.parametrize("delta", [timedelta(minutes=-10), timedelta(minutes=10)])
+def test_direct_admission_time_mutation_fails_tamper_verification(tmp_path: Path, delta: timedelta) -> None:
+    service, clock, _key, rule_id = _service(tmp_path)
+    record_id, _ = _publish(
+        service,
+        family="FACT",
+        scope="doc-1",
+        payload=_fact_payload("doc-1", clock.now()),
+        rule_id=rule_id,
+        expected_head=None,
+        authorization_id="auth:admission:tamper",
+        expires_at=clock.now() + timedelta(minutes=5),
+    )
+    with sqlite3.connect(service.path) as connection:
+        connection.execute(
+            "UPDATE source_handling_authority_records SET admission_time = ? WHERE record_id = ?",
+            ((clock.now() + delta).isoformat().replace("+00:00", "Z"), record_id),
+        )
+
+    with pytest.raises(SourceHandlingBlockedError, match="TAMPER_DETECTED"):
+        service.resolver()("doc-1", clock.now()).store.canonical_records("FACT", "doc-1")
+
+
+def test_tampered_backdated_admission_cannot_change_earlier_replay(tmp_path: Path) -> None:
+    service, clock, _key, rule_id = _service(tmp_path)
+    original_cutoff = clock.now()
+    first, _ = _publish(
+        service,
+        family="FACT",
+        scope="doc-1",
+        payload=_fact_payload("doc-1", original_cutoff),
+        rule_id=rule_id,
+        expected_head=None,
+        authorization_id="auth:admission:first",
+        expires_at=original_cutoff + timedelta(hours=1),
+    )
+    clock.value += timedelta(minutes=10)
+    second, _ = _publish(
+        service,
+        family="FACT",
+        scope="doc-1",
+        payload=_fact_payload("doc-1", original_cutoff, supersedes=first, sensitivity="RESTRICTED"),
+        rule_id=rule_id,
+        expected_head=first,
+        authorization_id="auth:admission:second",
+        expires_at=clock.now() + timedelta(minutes=5),
+    )
+    with sqlite3.connect(service.path) as connection:
+        connection.execute(
+            "UPDATE source_handling_authority_records SET admission_time = ? WHERE record_id = ?",
+            (original_cutoff.isoformat().replace("+00:00", "Z"), second),
+        )
+
+    with pytest.raises(SourceHandlingBlockedError, match="TAMPER_DETECTED"):
+        resolve_canonical_head(
+            service.resolver()("doc-1", original_cutoff).store,
+            family="FACT",
+            scope="doc-1",
+            cutoff=original_cutoff,
+        )
+
+
 def test_restart_persistence_and_read_only_resolver(tmp_path: Path) -> None:
     service, clock, key, rule_id = _service(tmp_path)
     ids = _complete_authority(service, clock, rule_id)
     restarted = SourceHandlingAuthorityService(
         service.path,
         signing_private_key=key,
+        operator_root=_operator_root(key),
         provenance_resolver=_provenance,
         clock=clock,
     )
@@ -745,8 +930,9 @@ def test_expired_authorization_is_not_consumed(tmp_path: Path) -> None:
 
 
 def test_successor_authorization_rule_uses_normal_signed_publication(tmp_path: Path) -> None:
-    service, clock, _key, rule_id = _service(tmp_path)
+    service, clock, key, rule_id = _service(tmp_path)
     clock.value += timedelta(minutes=1)
+    successor_cutoff = clock.now()
     rule = json.loads(RULE_FIXTURE.read_text(encoding="utf-8"))
     payload = {
         **rule,
@@ -768,6 +954,65 @@ def test_successor_authorization_rule_uses_normal_signed_publication(tmp_path: P
     assert successor != rule_id
     assert authorization.authorization_rule_id == rule_id
     assert service.authorization_consumed("auth:rule:v2") is True
+
+    view = service.resolver()("doc-after-rule", successor_cutoff).store
+    assert (
+        resolve_canonical_head(
+            view,
+            family="AUTHORIZATION_RULE",
+            scope="SOURCE_HANDLING",
+            cutoff=successor_cutoff - timedelta(microseconds=1),
+        )["id"]
+        == rule_id
+    )
+    assert (
+        resolve_canonical_head(
+            view,
+            family="AUTHORIZATION_RULE",
+            scope="SOURCE_HANDLING",
+            cutoff=successor_cutoff,
+        )["id"]
+        == successor
+    )
+
+    clock.value += timedelta(minutes=1)
+    ids = _complete_authority(service, clock, successor, document_id="doc-after-rule")
+    assert ids["fact"] and ids["policy"] and ids["registry"]
+
+    restarted = SourceHandlingAuthorityService(
+        service.path,
+        signing_private_key=key,
+        operator_root=_operator_root(key),
+        provenance_resolver=_provenance,
+        clock=clock,
+    )
+    resolved = resolve_pre_model_source_handling(restarted.resolver()("doc-after-rule", clock.now()))
+    assert resolved.authorization_rule["id"] == successor
+
+
+def test_self_authorizing_successor_rule_is_rejected(tmp_path: Path) -> None:
+    service, clock, _key, rule_id = _service(tmp_path)
+    clock.value += timedelta(minutes=1)
+    rule = json.loads(RULE_FIXTURE.read_text(encoding="utf-8"))
+    payload = {
+        **rule,
+        "authorization_rule_id": "AUTHORIZATION_RULE_V2",
+        "scope": "SOURCE_HANDLING",
+        "supersedes_authorization_rule_id": rule_id,
+        **_times(clock.now()),
+    }
+    successor_id = canonical_publication_digest("AUTHORIZATION_RULE", "SOURCE_HANDLING", payload)
+    with pytest.raises(SourceHandlingBlockedError, match="stale authorization rule"):
+        _authorize(
+            service,
+            family="AUTHORIZATION_RULE",
+            scope="SOURCE_HANDLING",
+            payload=payload,
+            rule_id=successor_id,
+            expected_head=rule_id,
+            authorization_id="auth:rule:self",
+            expires_at=clock.now() + timedelta(minutes=5),
+        )
 
 
 def test_authorization_issued_under_superseded_rule_is_stale_and_unconsumed(tmp_path: Path) -> None:

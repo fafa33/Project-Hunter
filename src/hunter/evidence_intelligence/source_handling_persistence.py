@@ -59,6 +59,7 @@ SOURCE_HANDLING_FAMILIES = frozenset({"FACT", "POLICY", "FIELD_CATEGORY_REGISTRY
 SOURCE_HANDLING_RULE_SCOPE = "SOURCE_HANDLING"
 SOURCE_HANDLING_RECORD_SCHEMA_VERSION = "source-handling-authority-record-v1"
 SOURCE_HANDLING_AUTHORIZATION_SCHEMA_VERSION = "source-handling-publication-authorization-v1"
+SOURCE_HANDLING_OPERATOR_ROOT_SCHEMA_VERSION = "source-handling-operator-root-v1"
 
 ProvenanceResolver = Callable[[str, str, datetime], Mapping[str, Any] | None]
 _PUBLICATION_CAPABILITY_SENTINEL = object()
@@ -89,6 +90,18 @@ class SourceHandlingPublicationResult:
     admission_time: datetime
 
 
+@dataclass(frozen=True)
+class SourceHandlingOperatorRoot:
+    """Independently provisioned trust material for one authority database."""
+
+    genesis_rule_sha256: str
+    verification_key_sha256: str
+
+    def __post_init__(self) -> None:
+        _require_sha256("operator genesis digest", self.genesis_rule_sha256)
+        _require_sha256("operator verification-key fingerprint", self.verification_key_sha256)
+
+
 class SourceHandlingAuthorityRepository:
     """Capability-bound SQLite writer for the ADR 0036 authority history."""
 
@@ -97,6 +110,8 @@ class SourceHandlingAuthorityRepository:
         path: str | Path,
         *,
         verification_public_key: bytes,
+        operator_root: SourceHandlingOperatorRoot,
+        record_integrity_signer: Callable[[bytes], bytes],
         provenance_resolver: ProvenanceResolver,
         clock: Clock | None = None,
     ) -> None:
@@ -106,6 +121,14 @@ class SourceHandlingAuthorityRepository:
             encoding=serialization.Encoding.Raw,
             format=serialization.PublicFormat.Raw,
         )
+        if not isinstance(operator_root, SourceHandlingOperatorRoot):
+            raise SourceHandlingBlockedError("operator-provisioned Source Handling root is required")
+        if hashlib.sha256(self._verification_public_key_bytes).hexdigest() != operator_root.verification_key_sha256:
+            raise SourceHandlingBlockedError("Source Handling verification key does not match operator root")
+        if not callable(record_integrity_signer):
+            raise SourceHandlingBlockedError("Source Handling record-integrity signer is required")
+        self._operator_root = operator_root
+        self._record_integrity_signer = record_integrity_signer
         if not callable(provenance_resolver):
             raise SourceHandlingBlockedError("canonical provenance resolver is required")
         self._provenance_resolver = provenance_resolver
@@ -140,6 +163,7 @@ class SourceHandlingAuthorityRepository:
         return SqliteSourceHandlingAuthorityReadView(
             self.path,
             verification_public_key=self._verification_public_key_bytes,
+            operator_root=self._operator_root,
             provenance_resolver=self._provenance_resolver,
         )
 
@@ -193,6 +217,21 @@ class SourceHandlingAuthorityRepository:
         payload_json = _canonical_json(normalized_payload)
         payload_digest = hashlib.sha256(payload_json.encode("utf-8")).hexdigest()
         supersedes_id = _supersedes_id(normalized_payload)
+        if family == "AUTHORIZATION_RULE" and authorization.authorization_rule_id == payload_digest:
+            raise SourceHandlingBlockedError("an authorization rule cannot authorize itself")
+        integrity_signature = self._sign_record_integrity(
+            record_id=payload_digest,
+            family=family,
+            scope=scope,
+            supersedes_record_id=supersedes_id,
+            effective_from=_time_text(_payload_time(normalized_payload, "effective_from")),
+            recorded_at=_time_text(_payload_time(normalized_payload, "recorded_at")),
+            known_at=_time_text(_payload_time(normalized_payload, "known_at")),
+            admission_time=_time_text(admission_time),
+            payload_sha256=payload_digest,
+            authorization_id=authorization.authorization_id,
+            schema_version=SOURCE_HANDLING_RECORD_SCHEMA_VERSION,
+        )
 
         with self._transaction() as connection:
             current_row = connection.execute(
@@ -234,6 +273,7 @@ class SourceHandlingAuthorityRepository:
                 authorization.authorization_rule_id,
                 authorization.known_at,
                 verification_public_key_bytes=self._verification_public_key_bytes,
+                operator_root=self._operator_root,
             )
             requested_change, released_restrictions = _publication_change(
                 connection,
@@ -281,8 +321,9 @@ class SourceHandlingAuthorityRepository:
                     INSERT INTO source_handling_authority_records (
                         record_id, family, scope, supersedes_record_id,
                         effective_from, recorded_at, known_at, admission_time,
-                        payload_sha256, payload_json, authorization_id, schema_version
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        payload_sha256, payload_json, authorization_id, schema_version,
+                        integrity_signature
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         payload_digest,
@@ -297,6 +338,7 @@ class SourceHandlingAuthorityRepository:
                         payload_json,
                         authorization.authorization_id,
                         SOURCE_HANDLING_RECORD_SCHEMA_VERSION,
+                        integrity_signature,
                     ),
                 )
             except sqlite3.IntegrityError as error:
@@ -333,12 +375,13 @@ class SourceHandlingAuthorityRepository:
         self,
         capability: _SourceHandlingGenesisBootstrapCapability,
         rule: Mapping[str, Any],
-        *,
-        expected_golden_sha256: str,
     ) -> SourceHandlingPublicationResult:
         self._require_genesis_capability(capability)
         normalized_rule = _plain_mapping(rule)
-        if hashlib.sha256(_canonical_json(normalized_rule).encode("utf-8")).hexdigest() != expected_golden_sha256:
+        if (
+            hashlib.sha256(_canonical_json(normalized_rule).encode("utf-8")).hexdigest()
+            != self._operator_root.genesis_rule_sha256
+        ):
             raise SourceHandlingBlockedError("authorization-rule bootstrap digest mismatch")
         if normalized_rule.get("authorization_rule_id") != GENESIS_RULE_ID:
             raise SourceHandlingBlockedError("unexpected authorization-rule bootstrap identity")
@@ -347,6 +390,19 @@ class SourceHandlingAuthorityRepository:
         payload_json = _canonical_json(payload)
         record_id = hashlib.sha256(payload_json.encode("utf-8")).hexdigest()
         admission_time = _aware_utc("admission_time", self._clock.now())
+        integrity_signature = self._sign_record_integrity(
+            record_id=record_id,
+            family="AUTHORIZATION_RULE",
+            scope=SOURCE_HANDLING_RULE_SCOPE,
+            supersedes_record_id=None,
+            effective_from=_time_text(_payload_time(payload, "effective_from")),
+            recorded_at=_time_text(_payload_time(payload, "recorded_at")),
+            known_at=_time_text(_payload_time(payload, "known_at")),
+            admission_time=_time_text(admission_time),
+            payload_sha256=record_id,
+            authorization_id=None,
+            schema_version=SOURCE_HANDLING_RECORD_SCHEMA_VERSION,
+        )
 
         with self._transaction() as connection:
             history_count = int(
@@ -361,8 +417,9 @@ class SourceHandlingAuthorityRepository:
                 INSERT INTO source_handling_authority_records (
                     record_id, family, scope, supersedes_record_id,
                     effective_from, recorded_at, known_at, admission_time,
-                    payload_sha256, payload_json, authorization_id, schema_version
-                ) VALUES (?, 'AUTHORIZATION_RULE', ?, NULL, ?, ?, ?, ?, ?, ?, NULL, ?)
+                    payload_sha256, payload_json, authorization_id, schema_version,
+                    integrity_signature
+                ) VALUES (?, 'AUTHORIZATION_RULE', ?, NULL, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
                 """,
                 (
                     record_id,
@@ -374,6 +431,7 @@ class SourceHandlingAuthorityRepository:
                     record_id,
                     payload_json,
                     SOURCE_HANDLING_RECORD_SCHEMA_VERSION,
+                    integrity_signature,
                 ),
             )
             connection.execute(
@@ -387,6 +445,20 @@ class SourceHandlingAuthorityRepository:
             record_id, "AUTHORIZATION_RULE", SOURCE_HANDLING_RULE_SCOPE, admission_time
         )
 
+    def _sign_record_integrity(self, **claims: str | None) -> str:
+        message = _canonical_json(_record_integrity_claims(**claims)).encode("utf-8")
+        try:
+            signature = self._record_integrity_signer(message)
+        except Exception as error:
+            raise SourceHandlingBlockedError("Source Handling record integrity signing failed") from error
+        if not isinstance(signature, bytes) or len(signature) != 64:
+            raise SourceHandlingBlockedError("Source Handling record integrity signature is malformed")
+        try:
+            _load_public_key(self._verification_public_key_bytes).verify(signature, message)
+        except InvalidSignature as error:
+            raise SourceHandlingBlockedError("Source Handling record integrity signature is invalid") from error
+        return signature.hex()
+
     def authorization_consumed(self, authorization_id: str) -> bool:
         with self._connect() as connection:
             row = connection.execute(
@@ -396,8 +468,15 @@ class SourceHandlingAuthorityRepository:
             return row is not None and row["consumed_at"] is not None
 
     def _initialize(self) -> None:
-        with self._connect() as connection:
-            connection.executescript("""
+        with self._connect(verify_operator_root=False) as connection:
+            connection.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS source_handling_operator_root (
+                    singleton_id TEXT PRIMARY KEY CHECK (singleton_id = 'SOURCE_HANDLING'),
+                    genesis_rule_sha256 TEXT NOT NULL,
+                    verification_key_sha256 TEXT NOT NULL,
+                    schema_version TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS source_handling_publication_authorizations (
                     authorization_id TEXT PRIMARY KEY,
                     claims_json TEXT NOT NULL,
@@ -419,6 +498,7 @@ class SourceHandlingAuthorityRepository:
                     payload_json TEXT NOT NULL,
                     authorization_id TEXT,
                     schema_version TEXT NOT NULL,
+                    integrity_signature TEXT,
                     FOREIGN KEY (supersedes_record_id)
                         REFERENCES source_handling_authority_records(record_id),
                     FOREIGN KEY (authorization_id)
@@ -437,14 +517,54 @@ class SourceHandlingAuthorityRepository:
                     FOREIGN KEY (current_record_id)
                         REFERENCES source_handling_authority_records(record_id)
                 );
-                """)
+                """
+            )
+            columns = {
+                str(row["name"])
+                for row in connection.execute("PRAGMA table_info(source_handling_authority_records)").fetchall()
+            }
+            if "integrity_signature" not in columns:
+                connection.execute("ALTER TABLE source_handling_authority_records ADD COLUMN integrity_signature TEXT")
+            pinned = connection.execute(
+                "SELECT * FROM source_handling_operator_root WHERE singleton_id = 'SOURCE_HANDLING'"
+            ).fetchone()
+            if pinned is None:
+                existing_history = int(
+                    connection.execute("SELECT COUNT(*) FROM source_handling_authority_records").fetchone()[0]
+                )
+                if existing_history:
+                    raise SourceHandlingBlockedError(
+                        "operator root cannot be retroactively attached to existing Source Handling history"
+                    )
+                connection.execute(
+                    """
+                    INSERT INTO source_handling_operator_root (
+                        singleton_id, genesis_rule_sha256, verification_key_sha256, schema_version
+                    ) VALUES ('SOURCE_HANDLING', ?, ?, ?)
+                    """,
+                    (
+                        self._operator_root.genesis_rule_sha256,
+                        self._operator_root.verification_key_sha256,
+                        SOURCE_HANDLING_OPERATOR_ROOT_SCHEMA_VERSION,
+                    ),
+                )
+            else:
+                _verify_operator_root_row(pinned, self._operator_root)
+            connection.commit()
 
     @contextlib.contextmanager
-    def _connect(self) -> Iterator[sqlite3.Connection]:
+    def _connect(self, *, verify_operator_root: bool = True) -> Iterator[sqlite3.Connection]:
         connection = sqlite3.connect(self.path, timeout=30.0)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
         try:
+            if verify_operator_root:
+                row = connection.execute(
+                    "SELECT * FROM source_handling_operator_root WHERE singleton_id = 'SOURCE_HANDLING'"
+                ).fetchone()
+                if row is None:
+                    raise SourceHandlingBlockedError("pinned Source Handling operator root is unavailable")
+                _verify_operator_root_row(row, self._operator_root)
             yield connection
         finally:
             connection.close()
@@ -470,6 +590,7 @@ class SqliteSourceHandlingAuthorityReadView(SourceHandlingAuthorityReadView):
         path: str | Path,
         *,
         verification_public_key: bytes,
+        operator_root: SourceHandlingOperatorRoot,
         provenance_resolver: ProvenanceResolver,
     ) -> None:
         self._path = Path(path)
@@ -477,9 +598,16 @@ class SqliteSourceHandlingAuthorityReadView(SourceHandlingAuthorityReadView):
             encoding=serialization.Encoding.Raw,
             format=serialization.PublicFormat.Raw,
         )
+        if not isinstance(operator_root, SourceHandlingOperatorRoot):
+            raise SourceHandlingBlockedError("operator-provisioned Source Handling root is required")
+        if hashlib.sha256(self._verification_public_key_bytes).hexdigest() != operator_root.verification_key_sha256:
+            raise SourceHandlingBlockedError("Source Handling verification key does not match operator root")
+        self._operator_root = operator_root
         if not callable(provenance_resolver):
             raise SourceHandlingBlockedError("canonical provenance resolver is required")
         self._provenance_resolver = provenance_resolver
+        with self._connect():
+            pass
 
     def canonical_records(self, family: str, scope: str) -> tuple[dict[str, Any], ...]:
         _require_family_scope(family, scope)
@@ -581,12 +709,30 @@ class SqliteSourceHandlingAuthorityReadView(SourceHandlingAuthorityReadView):
             raise SourceHandlingBlockedError("canonical publication authorization is missing")
         if not strict_known_eligible(_authorization_times(authorization), cutoff):
             raise SourceHandlingBlockedError("publication authorization was not strict-known at cutoff")
-        rule = resolve_canonical_head(
-            self,
-            family="AUTHORIZATION_RULE",
-            scope=SOURCE_HANDLING_RULE_SCOPE,
-            cutoff=authorization.known_at,
-        )
+        if family == "AUTHORIZATION_RULE":
+            predecessor_id = _supersedes_id(canonical)
+            if predecessor_id is None or predecessor_id != authorization.authorization_rule_id:
+                raise SourceHandlingBlockedError(
+                    "successor authorization rule was not authorized by its exact predecessor"
+                )
+            if authorization.authorization_rule_id == record_id:
+                raise SourceHandlingBlockedError("an authorization rule cannot authorize itself")
+            rule = self.canonical_record_by_id("AUTHORIZATION_RULE", predecessor_id)
+            if rule is None:
+                raise SourceHandlingBlockedError("successor authorizing rule is unavailable")
+            self.verify_canonical_record(
+                family="AUTHORIZATION_RULE",
+                scope=SOURCE_HANDLING_RULE_SCOPE,
+                record=rule,
+                cutoff=authorization.known_at,
+            )
+        else:
+            rule = resolve_canonical_head(
+                self,
+                family="AUTHORIZATION_RULE",
+                scope=SOURCE_HANDLING_RULE_SCOPE,
+                cutoff=authorization.known_at,
+            )
         if rule.get("id") != authorization.authorization_rule_id:
             raise SourceHandlingBlockedError("authorization names a stale authorization rule")
         _validate_authorization_provenance(
@@ -600,6 +746,7 @@ class SqliteSourceHandlingAuthorityReadView(SourceHandlingAuthorityReadView):
             connection,
             row,
             verification_public_key_bytes=self._verification_public_key_bytes,
+            operator_root=self._operator_root,
         )
 
     @contextlib.contextmanager
@@ -610,6 +757,12 @@ class SqliteSourceHandlingAuthorityReadView(SourceHandlingAuthorityReadView):
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
         try:
+            row = connection.execute(
+                "SELECT * FROM source_handling_operator_root WHERE singleton_id = 'SOURCE_HANDLING'"
+            ).fetchone()
+            if row is None:
+                raise SourceHandlingBlockedError("pinned Source Handling operator root is unavailable")
+            _verify_operator_root_row(row, self._operator_root)
             yield connection
         finally:
             connection.close()
@@ -643,6 +796,7 @@ class SourceHandlingAuthorityService:
         path: str | Path,
         *,
         signing_private_key: bytes,
+        operator_root: SourceHandlingOperatorRoot,
         provenance_resolver: ProvenanceResolver,
         clock: Clock | None = None,
     ) -> None:
@@ -657,6 +811,8 @@ class SourceHandlingAuthorityService:
         self._repository = SourceHandlingAuthorityRepository(
             path,
             verification_public_key=public_key,
+            operator_root=operator_root,
+            record_integrity_signer=self._signing_key.sign,
             provenance_resolver=provenance_resolver,
             clock=self._clock,
         )
@@ -671,16 +827,10 @@ class SourceHandlingAuthorityService:
     def resolver(self) -> ProductionSourceHandlingAuthorityResolver:
         return ProductionSourceHandlingAuthorityResolver(self._repository.read_view())
 
-    def publish_genesis_rule(
-        self,
-        rule: Mapping[str, Any],
-        *,
-        expected_golden_sha256: str,
-    ) -> SourceHandlingPublicationResult:
+    def publish_genesis_rule(self, rule: Mapping[str, Any]) -> SourceHandlingPublicationResult:
         return self._repository._publish_genesis_rule(
             self._genesis_capability,
             rule,
-            expected_golden_sha256=expected_golden_sha256,
         )
 
     def issue_authorization(
@@ -862,9 +1012,11 @@ def _decode_durable_record(
     row: sqlite3.Row,
     *,
     verification_public_key_bytes: bytes,
+    operator_root: SourceHandlingOperatorRoot,
 ) -> dict[str, Any]:
     if row["schema_version"] != SOURCE_HANDLING_RECORD_SCHEMA_VERSION:
         raise SourceHandlingBlockedError("unknown durable Source Handling record schema")
+    _verify_record_integrity(row, verification_public_key_bytes)
     payload_json = str(row["payload_json"])
     payload_digest = hashlib.sha256(payload_json.encode("utf-8")).hexdigest()
     if payload_digest != row["payload_sha256"] or payload_digest != row["record_id"]:
@@ -877,6 +1029,14 @@ def _decode_durable_record(
         raise SourceHandlingBlockedError("TAMPER_DETECTED: authority payload is not an object")
     family, scope = str(row["family"]), str(row["scope"])
     _validate_payload_shape(family, scope, payload)
+    if family == "AUTHORIZATION_RULE" and payload.get("authorization_rule_id") == GENESIS_RULE_ID:
+        operator_payload = copy.deepcopy(payload)
+        operator_payload.pop("scope", None)
+        if (
+            hashlib.sha256(_canonical_json(operator_payload).encode("utf-8")).hexdigest()
+            != operator_root.genesis_rule_sha256
+        ):
+            raise SourceHandlingBlockedError("TAMPER_DETECTED: genesis rule does not match operator root")
     if _supersedes_id(payload) != row["supersedes_record_id"]:
         raise SourceHandlingBlockedError("TAMPER_DETECTED: supersession index mismatch")
     for field in ("effective_from", "recorded_at", "known_at"):
@@ -910,6 +1070,72 @@ def _decode_durable_record(
         "publication_authorization": authorization,
         "admission_time": _parse_time(str(row["admission_time"])),
     }
+
+
+def _record_integrity_claims(
+    *,
+    record_id: str,
+    family: str,
+    scope: str,
+    supersedes_record_id: str | None,
+    effective_from: str,
+    recorded_at: str,
+    known_at: str,
+    admission_time: str,
+    payload_sha256: str,
+    authorization_id: str | None,
+    schema_version: str,
+) -> dict[str, str | None]:
+    return {
+        "record_id": record_id,
+        "family": family,
+        "scope": scope,
+        "supersedes_record_id": supersedes_record_id,
+        "effective_from": effective_from,
+        "recorded_at": recorded_at,
+        "known_at": known_at,
+        "admission_time": admission_time,
+        "payload_sha256": payload_sha256,
+        "authorization_id": authorization_id,
+        "schema_version": schema_version,
+    }
+
+
+def _record_integrity_claims_from_row(row: sqlite3.Row) -> dict[str, str | None]:
+    return _record_integrity_claims(
+        record_id=str(row["record_id"]),
+        family=str(row["family"]),
+        scope=str(row["scope"]),
+        supersedes_record_id=(str(row["supersedes_record_id"]) if row["supersedes_record_id"] is not None else None),
+        effective_from=str(row["effective_from"]),
+        recorded_at=str(row["recorded_at"]),
+        known_at=str(row["known_at"]),
+        admission_time=str(row["admission_time"]),
+        payload_sha256=str(row["payload_sha256"]),
+        authorization_id=(str(row["authorization_id"]) if row["authorization_id"] is not None else None),
+        schema_version=str(row["schema_version"]),
+    )
+
+
+def _verify_record_integrity(row: sqlite3.Row, verification_public_key_bytes: bytes) -> None:
+    signature = row["integrity_signature"]
+    if not isinstance(signature, str) or len(signature) != 128 or signature.lower() != signature:
+        raise SourceHandlingBlockedError("TAMPER_DETECTED: record integrity signature is missing or malformed")
+    message = _canonical_json(_record_integrity_claims_from_row(row)).encode("utf-8")
+    try:
+        _load_public_key(verification_public_key_bytes).verify(bytes.fromhex(signature), message)
+    except (ValueError, InvalidSignature) as error:
+        raise SourceHandlingBlockedError("TAMPER_DETECTED: record integrity signature is invalid") from error
+
+
+def _verify_operator_root_row(row: sqlite3.Row, operator_root: SourceHandlingOperatorRoot) -> None:
+    if row["schema_version"] != SOURCE_HANDLING_OPERATOR_ROOT_SCHEMA_VERSION:
+        raise SourceHandlingBlockedError("TAMPER_DETECTED: unknown Source Handling operator-root schema")
+    if (
+        row["genesis_rule_sha256"] != operator_root.genesis_rule_sha256
+        or row["verification_key_sha256"] != operator_root.verification_key_sha256
+    ):
+        raise SourceHandlingBlockedError("TAMPER_DETECTED: durable Source Handling operator root mismatch")
 
 
 def _authorization_claims(authorization: PublicationAuthorization) -> dict[str, Any]:
@@ -1078,6 +1304,7 @@ def _strict_known_rule(
     cutoff: datetime,
     *,
     verification_public_key_bytes: bytes,
+    operator_root: SourceHandlingOperatorRoot,
 ) -> Mapping[str, Any]:
     rows = connection.execute(
         """
@@ -1092,6 +1319,7 @@ def _strict_known_rule(
             connection,
             row,
             verification_public_key_bytes=verification_public_key_bytes,
+            operator_root=operator_root,
         )
         for row in rows
     ]
@@ -1305,6 +1533,16 @@ def _load_public_key(value: bytes) -> Ed25519PublicKey:
         return Ed25519PublicKey.from_public_bytes(value)
     except ValueError as error:
         raise SourceHandlingBlockedError("Ed25519 verification key material is missing or malformed") from error
+
+
+def _require_sha256(name: str, value: object) -> str:
+    if not isinstance(value, str) or len(value) != 64 or value.lower() != value:
+        raise SourceHandlingBlockedError(f"{name} is missing or malformed")
+    try:
+        bytes.fromhex(value)
+    except ValueError as error:
+        raise SourceHandlingBlockedError(f"{name} is missing or malformed") from error
+    return value
 
 
 def _required_text(name: str, value: object) -> str:

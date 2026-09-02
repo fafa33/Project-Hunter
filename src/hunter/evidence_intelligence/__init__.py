@@ -104,6 +104,7 @@ from hunter.evidence_intelligence.source_handling_persistence import (
     ProductionSourceHandlingAuthorityResolver,
     SourceHandlingAuthorityRepository,
     SourceHandlingAuthorityService,
+    SourceHandlingOperatorRoot,
     SourceHandlingPublicationResult,
     SqliteSourceHandlingAuthorityReadView,
 )
@@ -206,6 +207,7 @@ __all__ = [
     "ProductionSourceHandlingAuthorityResolver",
     "SourceHandlingAuthorityRepository",
     "SourceHandlingAuthorityService",
+    "SourceHandlingOperatorRoot",
     "SourceHandlingPublicationResult",
     "SqliteSourceHandlingAuthorityReadView",
     "SourceAuthorityVerificationEvent",
