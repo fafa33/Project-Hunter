@@ -1,1 +1,81 @@
-{"schema":"hunter-connector-write-authorization-v4","claims":{"base_ref":"main","base_sha":"0905c59db24691e026145aa14e2298a40181b481","capability":"governance-maintenance","changes":[{"blob_sha":"32fb738c365f41bbc8ec516dbdbd3b32811cc15a","path":"docs/ADR/0036-source-handling-design-implementation-contract.md","previous_path":"","status":"modified"},{"blob_sha":"4d4d23ffca3084f2817dded52fd6659d445e70bc","path":"docs/ADR/README.md","previous_path":"","status":"modified"},{"blob_sha":"ea7a79f00119232fd4e4a93a070197b9cf9b68b9","path":"docs/architecture-index.md","previous_path":"","status":"modified"}],"governance_scopes":["adr-lifecycle"],"grant_fingerprint":"42041073e00a42628c16bccf7c3848cc7bc52eccc2ecce3b843addee22d657b2","issue":"402","paths":["docs/ADR/0036-source-handling-design-implementation-contract.md","docs/ADR/README.md","docs/architecture-index.md"],"target_ref":"connector/issue-402-accept-adr-0036","writer":"fafa33"},"authorization_id":"bb2951282e98ffb450566e4ad783ed3f7cb55fcc21393d272dddd5ebaaf0b3f7"}
+{
+  "authorization_id": "8092664bf0da34026ae349a39da688426584f4abe667d752315b90c437780633",
+  "claims": {
+    "base_ref": "main",
+    "base_sha": "bbd23e2d59fad8d6d128ea8078cd78bcfa058357",
+    "capability": "feature-branch-write",
+    "changes": [
+      {
+        "blob_sha": "7f996085f90b69b6807d7d55b9666b791c666af1",
+        "path": "src/hunter/evidence_intelligence/source_handling_persistence.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "faca30d4a87090afb4c7ab915ed6e03a7a714d1c",
+        "path": "tests/test_source_handling_production_runtime.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "3c32eeae2ecfcb253dd259a64c71582ade0ed0f9",
+        "path": "src/hunter/evidence_intelligence/__init__.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "d100a28c91e7c890a810a86351e85f950390480c",
+        "path": "src/hunter/evidence_intelligence/intake.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "3c9b2305706cc77c0641ebf9d23c337b4a88b7a8",
+        "path": "src/hunter/evidence_intelligence/pre_model.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "42ebff95ac77db9ec21b0c43cbb7b8cfa8e4f99c",
+        "path": "src/hunter/evidence_intelligence/source_handling.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "c326b7142c4c115fe0c3773c2ab4321336f4244d",
+        "path": "tests/evidence_pre_model_source_handling_fixture.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "fb21c1110db8559941bc1b74f6d2d80695fd340c",
+        "path": "tests/test_source_handling_authority_contract.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "af47c6686ab67bbb81b68b60e0a56a2f1eb62446",
+        "path": "tests/test_source_handling_authority_enforcement.py",
+        "previous_path": "",
+        "status": "modified"
+      }
+    ],
+    "governance_scopes": [],
+    "grant_fingerprint": "42041073e00a42628c16bccf7c3848cc7bc52eccc2ecce3b843addee22d657b2",
+    "issue": "407",
+    "paths": [
+      "src/hunter/evidence_intelligence/__init__.py",
+      "src/hunter/evidence_intelligence/intake.py",
+      "src/hunter/evidence_intelligence/pre_model.py",
+      "src/hunter/evidence_intelligence/source_handling.py",
+      "src/hunter/evidence_intelligence/source_handling_persistence.py",
+      "tests/evidence_pre_model_source_handling_fixture.py",
+      "tests/test_source_handling_authority_contract.py",
+      "tests/test_source_handling_authority_enforcement.py",
+      "tests/test_source_handling_production_runtime.py"
+    ],
+    "target_ref": "connector/issue-407-source-handling-runtime",
+    "writer": "fafa33"
+  },
+  "schema": "hunter-connector-write-authorization-v4"
+}

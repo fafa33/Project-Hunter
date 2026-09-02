@@ -125,14 +125,7 @@ class EvidenceIntelligenceIntakeService:
         normalized_content = normalize_content(reference.content)
         content_hash = _digest(reference.content)
         normalized_content_hash = _digest(normalized_content)
-        document_id = identity(
-            "evidence-intelligence-document",
-            {
-                "source_evidence_id": reference.source_evidence_id,
-                "raw_evidence_id": reference.raw_evidence_id,
-                "normalized_content_hash": normalized_content_hash,
-            },
-        )
+        document_id = evidence_document_id(reference)
         rendition_id = identity(
             "evidence-intelligence-rendition",
             {
@@ -266,6 +259,20 @@ def normalize_content(content: str) -> str:
     lines = content.replace("\r\n", "\n").replace("\r", "\n").split("\n")
     normalized = "\n".join(line.rstrip() for line in lines).strip()
     return normalized or " "
+
+
+def evidence_document_id(reference: EvidenceIntakeReference) -> str:
+    """Derive the canonical document identity without persisting source bytes."""
+
+    normalized_content_hash = _digest(normalize_content(reference.content))
+    return identity(
+        "evidence-intelligence-document",
+        {
+            "source_evidence_id": reference.source_evidence_id,
+            "raw_evidence_id": reference.raw_evidence_id,
+            "normalized_content_hash": normalized_content_hash,
+        },
+    )
 
 
 def _spans_for_document(

@@ -9,8 +9,8 @@ from typing import Any, Literal
 
 from hunter.evidence_intelligence.models import EvidenceSpan
 from hunter.evidence_intelligence.source_handling import (
-    AuthorityStore,
     PublicationAuthorization,
+    SourceHandlingAuthorityReadView,
     SourceHandlingBlockedError,
     derive_source_handling_decision,
     resolve_canonical_head,
@@ -242,7 +242,7 @@ class EvidencePreModelBuildRecord:
 
 @dataclass(frozen=True)
 class EvidencePreModelSourceHandlingAuthority:
-    store: AuthorityStore
+    store: SourceHandlingAuthorityReadView
     fact_scope: str
     policy_scope: str
     cutoff: datetime
@@ -326,7 +326,7 @@ def resolve_pre_model_source_handling(
         scope="SOURCE_HANDLING",
         cutoff=authority.cutoff,
     )
-    if resolved_rule.get("authorization_rule_id") != rule_id:
+    if resolved_rule.get("id") != rule_id:
         raise SourceHandlingBlockedError("authorization rule is stale or non-applicable")
 
     return ResolvedPreModelSourceHandling(

@@ -17,6 +17,25 @@ class SourceHandlingBlockedError(RuntimeError):
     """Raised when Source Handling Authority cannot produce a governed result."""
 
 
+class SourceHandlingAuthorityReadView(typing.Protocol):
+    """Read-only record surface consumed by Source Handling resolution."""
+
+    def canonical_records(self, family: str, scope: str) -> tuple[dict[str, typing.Any], ...]: ...
+
+    def canonical_record_by_id(self, family: str, record_id: str) -> dict[str, typing.Any] | None: ...
+
+    def current_canonical_head_id(self, family: str, scope: str) -> str | None: ...
+
+    def verify_canonical_record(
+        self,
+        *,
+        family: str,
+        scope: str,
+        record: Mapping[str, typing.Any],
+        cutoff: datetime,
+    ) -> None: ...
+
+
 @dataclass(frozen=True)
 class PublicationAuthorization:
     publication_kind: str
@@ -35,6 +54,8 @@ class PublicationAuthorization:
     verifier_type: str | None = None
     released_restrictions: frozenset[str] = frozenset()
     predecessor_ids: tuple[str, ...] = ()
+    expires_at: datetime | None = None
+    issuer_signature: str = ""
 
 
 class AuthorityStore:
@@ -173,6 +194,16 @@ class AuthorityStore:
                 raise SourceHandlingBlockedError("canonical authority identity is ambiguous")
             return matches[0] if matches else None
 
+    def verify_canonical_record(
+        self,
+        *,
+        family: str,
+        scope: str,
+        record: Mapping[str, typing.Any],
+        cutoff: datetime,
+    ) -> None:
+        _reverify_canonical_record(self, family=family, scope=scope, record=record, cutoff=cutoff)
+
     def _register_authorization(self, authorization: PublicationAuthorization) -> None:
         with self._lock:
             if not authorization.authorization_id:
@@ -286,6 +317,8 @@ def publication_authorization(
     verifier_type: str | None = None,
     released_restrictions: set[str] | frozenset[str] | None = None,
     predecessor_ids: Sequence[str] = (),
+    expires_at: datetime | None = None,
+    issuer_signature: str = "",
 ) -> PublicationAuthorization:
     return PublicationAuthorization(
         publication_kind=publication_kind,
@@ -304,6 +337,8 @@ def publication_authorization(
         verifier_type=verifier_type,
         released_restrictions=frozenset(released_restrictions or ()),
         predecessor_ids=tuple(predecessor_ids),
+        expires_at=expires_at,
+        issuer_signature=issuer_signature,
     )
 
 
@@ -489,7 +524,10 @@ def validate_permission_evidence(
 
 
 def strict_known_eligible(record: Mapping[str, typing.Any], cutoff: datetime) -> bool:
-    for field in ("effective_from", "recorded_at", "known_at"):
+    fields = ["effective_from", "recorded_at", "known_at"]
+    if "admission_time" in record:
+        fields.append("admission_time")
+    for field in fields:
         value = _as_datetime(record.get(field))
         if value is None or value > cutoff:
             return False
@@ -540,7 +578,7 @@ def strict_known_head(
 
 
 def resolve_canonical_head(
-    store: AuthorityStore,
+    store: SourceHandlingAuthorityReadView,
     *,
     family: str,
     scope: str,
@@ -550,7 +588,7 @@ def resolve_canonical_head(
     if not records:
         raise SourceHandlingBlockedError("canonical historical authority is absent")
     head = strict_known_head(records, cutoff=cutoff, scope=scope)
-    _reverify_canonical_record(store, family=family, scope=scope, record=head, cutoff=cutoff)
+    store.verify_canonical_record(family=family, scope=scope, record=head, cutoff=cutoff)
     return head
 
 
@@ -579,8 +617,12 @@ def restrictive_fact_join(facts: Sequence[Mapping[str, typing.Any]]) -> dict[str
     historically_unavailable = False
 
     for fact in facts:
+        if fact.get("sensitivity_known") is not True:
+            raise SourceHandlingBlockedError("sensitivity is not known")
         if fact.get("operation_restrictions_known") is not True:
             raise SourceHandlingBlockedError("operation restrictions are not known")
+        if fact.get("persistence_restriction_known") is not True:
+            raise SourceHandlingBlockedError("persistence restriction is not known")
         if fact.get("secret_presence_known") is not True:
             raise SourceHandlingBlockedError("secret presence is not known")
         if fact.get("availability_known") is not True:
@@ -608,7 +650,9 @@ def restrictive_fact_join(facts: Sequence[Mapping[str, typing.Any]]) -> dict[str
         "operation_restrictions": restrictions,
         "persistence_restriction": persistence,
         "secret_presence": secret_presence,
+        "sensitivity_known": True,
         "operation_restrictions_known": True,
+        "persistence_restriction_known": True,
         "secret_presence_known": True,
         "withdrawn": withdrawn,
         "deleted_at_source": deleted_at_source,
@@ -859,7 +903,7 @@ def validate_durable_payload(
 
 
 def enforce_persistence(
-    store: AuthorityStore,
+    store: SourceHandlingAuthorityReadView,
     *,
     fact_scope: str,
     policy_scope: str,
@@ -877,8 +921,7 @@ def enforce_persistence(
     if registry_record is None or not strict_known_eligible(registry_record, cutoff):
         raise SourceHandlingBlockedError("exact historical field-category registry is unavailable")
     registry_scope = str(registry_record.get("scope", ""))
-    _reverify_canonical_record(
-        store,
+    store.verify_canonical_record(
         family="FIELD_CATEGORY_REGISTRY",
         scope=registry_scope,
         record=registry_record,
@@ -1041,6 +1084,7 @@ def _publication_payload_from_record(record: Mapping[str, typing.Any]) -> dict[s
         "source_handling_policy_id",
         "publication_authorization",
         "publication_payload",
+        "admission_time",
     }
     return {
         key: copy.deepcopy(value) for key, value in record.items() if key not in excluded and not key.startswith("_")
@@ -1103,6 +1147,8 @@ def _json_default(value: object) -> object:
             "verifier_type": value.verifier_type,
             "released_restrictions": value.released_restrictions,
             "predecessor_ids": value.predecessor_ids,
+            "expires_at": value.expires_at,
+            "issuer_signature": value.issuer_signature,
         }
     raise TypeError(f"value is not JSON serializable: {type(value).__name__}")
 

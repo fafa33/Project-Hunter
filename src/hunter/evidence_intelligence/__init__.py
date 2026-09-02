@@ -15,6 +15,7 @@ from hunter.evidence_intelligence.intake import (
     EvidenceIntakeReference,
     EvidenceIntakeResult,
     EvidenceIntelligenceIntakeService,
+    evidence_document_id,
     normalize_content,
 )
 from hunter.evidence_intelligence.models import (
@@ -97,6 +98,14 @@ from hunter.evidence_intelligence.smart_prompt_transport import (
     PromptAutomationPayload,
     PromptAutomationTransport,
     PromptAutomationTransportError,
+)
+from hunter.evidence_intelligence.source_handling_persistence import (
+    IssueSourceTransientIntakeBoundary,
+    ProductionSourceHandlingAuthorityResolver,
+    SourceHandlingAuthorityRepository,
+    SourceHandlingAuthorityService,
+    SourceHandlingPublicationResult,
+    SqliteSourceHandlingAuthorityReadView,
 )
 from hunter.evidence_intelligence.validation import (
     EvidenceClassification,
@@ -193,11 +202,18 @@ __all__ = [
     "SecureAIProviderRunner",
     "SmartPromptMachine",
     "SmartPromptMachineError",
+    "IssueSourceTransientIntakeBoundary",
+    "ProductionSourceHandlingAuthorityResolver",
+    "SourceHandlingAuthorityRepository",
+    "SourceHandlingAuthorityService",
+    "SourceHandlingPublicationResult",
+    "SqliteSourceHandlingAuthorityReadView",
     "SourceAuthorityVerificationEvent",
     "SourceEvidenceLink",
     "ValidatedClaimProposal",
     "ValidatedEntityProposal",
     "ValidationRejection",
     "extraction_schema",
+    "evidence_document_id",
     "normalize_content",
 ]
