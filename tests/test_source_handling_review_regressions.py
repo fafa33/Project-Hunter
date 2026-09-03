@@ -59,9 +59,11 @@ def test_publication_admission_time_is_sampled_after_write_transaction_acquisiti
         )
 
     assert service.authorization_consumed("auth:lock-wait") is False
-    assert service.resolver()("doc-lock-wait", clock.now()).store.current_canonical_head_id(
-        "FACT", "doc-lock-wait"
-    ) is None
+    assert (
+        service.resolver()("doc-lock-wait", clock.now())
+        .store.current_canonical_head_id("FACT", "doc-lock-wait")
+        is None
+    )
 
 
 def test_payload_cannot_override_repository_record_id_and_authorization_remains_reusable(tmp_path: Path) -> None:
@@ -89,9 +91,11 @@ def test_payload_cannot_override_repository_record_id_and_authorization_remains_
         )
 
     assert service.authorization_consumed("auth:reserved-id") is False
-    assert service.resolver()("doc-reserved-id", clock.now()).store.current_canonical_head_id(
-        "FACT", "doc-reserved-id"
-    ) is None
+    assert (
+        service.resolver()("doc-reserved-id", clock.now())
+        .store.current_canonical_head_id("FACT", "doc-reserved-id")
+        is None
+    )
 
     result = service.publish(
         family="FACT",
