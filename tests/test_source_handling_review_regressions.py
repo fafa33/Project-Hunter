@@ -5,15 +5,6 @@ from datetime import timedelta
 from pathlib import Path
 
 import pytest
-
-from hunter.evidence_intelligence.intake import EvidenceIntelligenceIntakeService, evidence_document_id
-from hunter.evidence_intelligence.repository import EvidenceIntelligenceRepository
-from hunter.evidence_intelligence.source_handling import SourceHandlingBlockedError
-from hunter.evidence_intelligence.source_handling_persistence import (
-    IssueSourceTransientIntakeBoundary,
-    SourceHandlingAuthorityService,
-)
-
 from test_source_handling_production_runtime import (
     _authorize,
     _complete_authority,
@@ -22,6 +13,14 @@ from test_source_handling_production_runtime import (
     _provenance,
     _reference,
     _service,
+)
+
+from hunter.evidence_intelligence.intake import EvidenceIntelligenceIntakeService, evidence_document_id
+from hunter.evidence_intelligence.repository import EvidenceIntelligenceRepository
+from hunter.evidence_intelligence.source_handling import SourceHandlingBlockedError
+from hunter.evidence_intelligence.source_handling_persistence import (
+    IssueSourceTransientIntakeBoundary,
+    SourceHandlingAuthorityService,
 )
 
 
