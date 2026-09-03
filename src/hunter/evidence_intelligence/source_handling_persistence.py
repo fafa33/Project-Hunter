@@ -29,6 +29,7 @@ from hunter.evidence_intelligence.intake import (
     EvidenceIntakeReference,
     EvidenceIntakeResult,
     EvidenceIntelligenceIntakeService,
+    PreparedEvidenceIntake,
     evidence_document_id,
 )
 from hunter.evidence_intelligence.pre_model import (
@@ -1078,6 +1079,53 @@ class SourceHandlingAuthorityService:
         return self._repository.authorization_consumed(authorization_id)
 
 
+_CONTENT_DERIVED_INTAKE_FIELDS = frozenset(
+    {
+        "chunk_id",
+        "content_hash",
+        "document_id",
+        "event_id",
+        "link_id",
+        "normalized_content_hash",
+        "rendition_id",
+        "span_id",
+        "text_hash",
+        "verification_id",
+        "version_id",
+    }
+)
+_LOCATOR_INTAKE_FIELDS = frozenset({"locator", "source_url"})
+_SOURCE_DERIVED_TEXT_INTAKE_FIELDS = frozenset({"excerpt", "section_title", "title"})
+
+
+def _issue_intake_durable_payload(
+    reference: EvidenceIntakeReference,
+    prepared: PreparedEvidenceIntake,
+) -> dict[str, Any]:
+    categorized: dict[str, dict[str, dict[str, Any]]] = {
+        "content_derived_ids": {},
+        "locator_urls": {},
+        "source_derived_text": {},
+        "intake_metadata": {},
+    }
+    for table, records in prepared.persisted_artifacts().items():
+        for position, artifact in enumerate(records):
+            artifact_key = f"{table}:{position}"
+            for field, value in artifact.items():
+                if field in _CONTENT_DERIVED_INTAKE_FIELDS:
+                    category = "content_derived_ids"
+                elif field in _LOCATOR_INTAKE_FIELDS:
+                    category = "locator_urls"
+                elif field in _SOURCE_DERIVED_TEXT_INTAKE_FIELDS:
+                    category = "source_derived_text"
+                else:
+                    category = "intake_metadata"
+                categorized[category].setdefault(artifact_key, {})[field] = value
+    if any(not fields for fields in categorized.values()):
+        raise SourceHandlingBlockedError("complete Issue Source durable artifact categorization is unavailable")
+    return {"issue_content": reference.content, **categorized}
+
+
 class IssueSourceTransientIntakeBoundary:
     """ADR 0036 gate that keeps raw Issue content transient until retention is allowed."""
 
@@ -1116,13 +1164,18 @@ class IssueSourceTransientIntakeBoundary:
         if not isinstance(fact, Mapping):
             raise SourceHandlingBlockedError("Issue Source fact authority is unavailable")
         secret_presence = set(_string_values(fact.get("secret_presence")))
+        prepared = self._intake.prepare(
+            reference,
+            processing_run_id=processing_run_id,
+            processed_at=cutoff,
+        )
         validate_durable_payload(
             decision=decision,
             registry=resolved.registry_record,
-            payload={"issue_content": reference.content},
+            payload=_issue_intake_durable_payload(reference, prepared),
             secret_presence=secret_presence,
         )
-        return self._intake.ingest(reference, processing_run_id=processing_run_id, processed_at=cutoff)
+        return self._intake.ingest_prepared(prepared)
 
 
 def _decode_durable_record(

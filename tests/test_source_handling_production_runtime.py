@@ -37,6 +37,21 @@ from hunter.evidence_intelligence.source_handling_persistence import (
 RULE_FIXTURE = Path(__file__).parent / "fixtures" / "source_handling" / "authorization_rule_v1.json"
 RULE_GOLDEN = "41119071db0f5c2a2eacfe2848ab6696355195e1ac9c671ee33c4128793aa70a"
 START = datetime(2026, 9, 2, 12, 0, tzinfo=UTC)
+INTAKE_FIELD_MAP = {
+    "issue_content": ["ISSUE_CONTENT"],
+    "content_derived_ids": ["CONTENT_DERIVED_ID"],
+    "locator_urls": ["LOCATOR_URL"],
+    "source_derived_text": ["SOURCE_DERIVED_TEXT"],
+    "intake_metadata": ["OPERATIONAL_METADATA"],
+}
+INTAKE_TABLES = (
+    "evidence_documents",
+    "evidence_document_versions",
+    "evidence_spans",
+    "document_lifecycle_events",
+    "source_authority_verification_events",
+    "document_lifecycle_event_span_links",
+)
 
 
 class MutableClock:
@@ -157,7 +172,7 @@ def _registry_payload(document_id: str, at: datetime, *, registry_id: str) -> di
     return {
         "scope": f"registry:{document_id}:v1",
         "field_category_registry_id": registry_id,
-        "field_map": {"issue_content": ["SOURCE_BYTES"]},
+        "field_map": copy.deepcopy(INTAKE_FIELD_MAP),
         "safe_control_proofs": {},
         **_times(at),
     }
@@ -172,14 +187,18 @@ def _policy_payload(
     persist: str = "ALLOW",
     deletion: str = "ALLOW",
     include_unused_denial: bool = False,
+    category_persist_overrides: dict[str, str] | None = None,
 ) -> dict[str, Any]:
+    overrides = category_persist_overrides or {}
     dispositions = {
-        "SOURCE_BYTES": {
-            "PERSIST": persist,
+        category: {
+            "PERSIST": overrides.get(category, persist),
             "READ_ACCESS": "ALLOW",
             "RECONSTRUCT": "ALLOW",
             "DELETE_OR_EXPIRE": "ALLOW",
         }
+        for categories in INTAKE_FIELD_MAP.values()
+        for category in categories
     }
     if include_unused_denial:
         dispositions["UNUSED_CATEGORY"] = {
@@ -276,6 +295,7 @@ def _complete_authority(
     persist: str = "ALLOW",
     deletion: str = "ALLOW",
     include_unused_denial: bool = False,
+    category_persist_overrides: dict[str, str] | None = None,
 ) -> dict[str, str]:
     fact_id, _ = _publish(
         service,
@@ -310,6 +330,7 @@ def _complete_authority(
             persist=persist,
             deletion=deletion,
             include_unused_denial=include_unused_denial,
+            category_persist_overrides=category_persist_overrides,
         ),
         rule_id=rule_id,
         expected_head=None,
@@ -332,7 +353,12 @@ def _reference(content: str = "ordinary issue content") -> EvidenceIntakeReferen
         source_claimed_authority="repository-owner",
         title="Issue 407",
         content=content,
+        metadata={"issue_number": 407, "labels": ["runtime"]},
     )
+
+
+def _assert_zero_durable_intake(repository: EvidenceIntelligenceRepository) -> None:
+    assert {table: repository.count(table) for table in INTAKE_TABLES} == {table: 0 for table in INTAKE_TABLES}
 
 
 @pytest.mark.parametrize("key", [b"", b"x" * 31, b"x" * 33])
@@ -1297,8 +1323,38 @@ def test_issue_content_allowed_only_after_complete_retention_authority(tmp_path:
     )
     result = boundary.ingest(reference, processing_run_id="run-407", processed_at=clock.now())
     assert result.document.document_id == document_id
-    assert evidence_repository.count("evidence_documents") == 1
-    assert evidence_repository.count("evidence_spans") == 1
+    assert dict(result.document.metadata) == {"issue_number": 407, "labels": ["runtime"]}
+    assert {table: evidence_repository.count(table) for table in INTAKE_TABLES} == {table: 1 for table in INTAKE_TABLES}
+
+
+@pytest.mark.parametrize(
+    "denied_category",
+    ["CONTENT_DERIVED_ID", "LOCATOR_URL", "SOURCE_DERIVED_TEXT", "OPERATIONAL_METADATA"],
+)
+def test_issue_intake_denied_secondary_artifact_fails_before_any_durable_write(
+    tmp_path: Path,
+    denied_category: str,
+) -> None:
+    service, clock, _key, rule_id = _service(tmp_path)
+    reference = _reference()
+    document_id = evidence_document_id(reference)
+    _complete_authority(
+        service,
+        clock,
+        rule_id,
+        document_id=document_id,
+        category_persist_overrides={denied_category: "DENY"},
+    )
+    evidence_repository = EvidenceIntelligenceRepository(service.path)
+    boundary = IssueSourceTransientIntakeBoundary(
+        intake=EvidenceIntelligenceIntakeService(evidence_repository),
+        resolver=service.resolver(),
+    )
+
+    with pytest.raises(SourceHandlingBlockedError, match="persistence is not allowed"):
+        boundary.ingest(reference, processing_run_id="run-407", processed_at=clock.now())
+
+    _assert_zero_durable_intake(evidence_repository)
 
 
 def test_issue_intake_requires_only_payload_categories_to_allow_persistence(tmp_path: Path) -> None:
@@ -1357,5 +1413,4 @@ def test_issue_content_remains_transient_when_authority_blocks(
     )
     with pytest.raises(SourceHandlingBlockedError):
         boundary.ingest(reference, processing_run_id="run-407", processed_at=clock.now())
-    assert evidence_repository.count("evidence_documents") == 0
-    assert evidence_repository.count("evidence_spans") == 0
+    _assert_zero_durable_intake(evidence_repository)
