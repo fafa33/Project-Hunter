@@ -1,18 +1,18 @@
 {
-  "authorization_id": "37fd11ac6a10acf495e2f931589e53308bdb19832f683a2b519a4b544e55c32e",
+  "authorization_id": "25c2f5e75803d2a231d8320c34189da6bb761f1ede545f9c5b2edbc84d9e699b",
   "claims": {
     "base_ref": "main",
     "base_sha": "bbd23e2d59fad8d6d128ea8078cd78bcfa058357",
     "capability": "feature-branch-write",
     "changes": [
       {
-        "blob_sha": "be1d1dd5a3a9699eefc490a2c60465ba8bda52a0",
+        "blob_sha": "87c6ca196559161728eab90f37a601cfcaac1ec9",
         "path": "src/hunter/evidence_intelligence/source_handling_persistence.py",
         "previous_path": "",
         "status": "added"
       },
       {
-        "blob_sha": "ff469bc85da96121565a23e0a968b3cd5f6be8d9",
+        "blob_sha": "b7b2f9a971181ffa518d1a7d734b29b4f03c1167",
         "path": "tests/test_source_handling_production_runtime.py",
         "previous_path": "",
         "status": "added"
