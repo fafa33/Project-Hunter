@@ -1,7 +1,7 @@
 """Final runtime hardening for ADR 0036 Source Handling production seams.
 
 This module installs fail-closed runtime guards identified by the final hostile
-review of Issue #407.  It is imported by the package after the canonical
+review of Issue #407. It is imported by the package after the canonical
 persistence module has loaded so the guards apply to every normal import path,
 including direct submodule imports.
 """
@@ -11,10 +11,11 @@ from __future__ import annotations
 import contextlib
 import sqlite3
 from collections.abc import Iterator, Mapping
-from datetime import timedelta
+from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any
 
-from hunter.evidence_intelligence import source_handling_persistence as persistence
+import hunter.evidence_intelligence.source_handling_persistence as persistence
 from hunter.evidence_intelligence.intake import (
     EvidenceIntakeReference,
     EvidenceIntakeResult,
@@ -31,9 +32,9 @@ _INSTALLED = False
 class _StrictRepositoryClock:
     """Repository clock whose returned instants are strictly monotonic across restarts."""
 
-    def __init__(self, delegate: Clock, path: persistence.Path) -> None:
+    def __init__(self, delegate: Clock, path: Path) -> None:
         self._delegate = delegate
-        self._last = None
+        self._last: datetime | None = None
         if path.exists():
             connection = sqlite3.connect(path)
             try:
@@ -47,7 +48,7 @@ class _StrictRepositoryClock:
             if row is not None and row[0] is not None:
                 self._last = persistence._parse_time(str(row[0]))
 
-    def now(self):
+    def now(self) -> datetime:
         candidate = persistence._aware_utc("repository clock", self._delegate.now())
         if self._last is not None and candidate <= self._last:
             candidate = self._last + timedelta(microseconds=1)
@@ -58,7 +59,7 @@ class _StrictRepositoryClock:
 def _install_repository_clock() -> None:
     original_init = persistence.SourceHandlingAuthorityRepository.__init__
 
-    def hardened_init(self, *args: Any, **kwargs: Any) -> None:
+    def hardened_init(self: Any, *args: Any, **kwargs: Any) -> None:
         original_init(self, *args, **kwargs)
         self._clock = _StrictRepositoryClock(self._clock, self.path)
 
@@ -85,7 +86,7 @@ def _install_fact_completeness_guard() -> None:
 
 
 def _install_read_snapshot_guard() -> None:
-    def snapshot_connect(self) -> Iterator[sqlite3.Connection]:
+    def snapshot_connect(self: Any) -> Iterator[sqlite3.Connection]:
         if not self._path.exists():
             raise SourceHandlingBlockedError("Source Handling authority database is unavailable")
         connection = sqlite3.connect(f"file:{self._path.resolve()}?mode=ro", uri=True, timeout=30.0)
@@ -135,7 +136,7 @@ def _enforce_fact_persistence_restriction(
 
 def _install_issue_intake_guard() -> None:
     def hardened_init(
-        self,
+        self: Any,
         *,
         intake: EvidenceIntelligenceIntakeService,
         resolver: persistence.ProductionSourceHandlingAuthorityResolver,
@@ -150,11 +151,11 @@ def _install_issue_intake_guard() -> None:
         self._clock = clock or SystemClock()
 
     def hardened_ingest(
-        self,
+        self: Any,
         reference: EvidenceIntakeReference,
         *,
         processing_run_id: str,
-        processed_at,
+        processed_at: datetime,
     ) -> EvidenceIntakeResult:
         artifact_time = persistence._aware_utc("Issue Source processed_at", processed_at)
         authority_cutoff = persistence._aware_utc("Issue Source authority cutoff", self._clock.now())
