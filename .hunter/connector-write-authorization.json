@@ -1,12 +1,12 @@
 {
-  "authorization_id": "25c2f5e75803d2a231d8320c34189da6bb761f1ede545f9c5b2edbc84d9e699b",
+  "authorization_id": "c65154e2def11608fb2ba25da1c2219f632a90537deae4629567bc9bc094abbf",
   "claims": {
     "base_ref": "main",
     "base_sha": "bbd23e2d59fad8d6d128ea8078cd78bcfa058357",
     "capability": "feature-branch-write",
     "changes": [
       {
-        "blob_sha": "87c6ca196559161728eab90f37a601cfcaac1ec9",
+        "blob_sha": "3df02f04d1430d8daf26a002ad210365572fb8f3",
         "path": "src/hunter/evidence_intelligence/source_handling_persistence.py",
         "previous_path": "",
         "status": "added"
@@ -14,6 +14,12 @@
       {
         "blob_sha": "b7b2f9a971181ffa518d1a7d734b29b4f03c1167",
         "path": "tests/test_source_handling_production_runtime.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "32ec4db982c14b25e8369ae2af3ccf2700474cb3",
+        "path": "tests/test_source_handling_review_regressions.py",
         "previous_path": "",
         "status": "added"
       },
@@ -72,7 +78,8 @@
       "tests/evidence_pre_model_source_handling_fixture.py",
       "tests/test_source_handling_authority_contract.py",
       "tests/test_source_handling_authority_enforcement.py",
-      "tests/test_source_handling_production_runtime.py"
+      "tests/test_source_handling_production_runtime.py",
+      "tests/test_source_handling_review_regressions.py"
     ],
     "target_ref": "connector/issue-407-source-handling-runtime",
     "writer": "fafa33"
