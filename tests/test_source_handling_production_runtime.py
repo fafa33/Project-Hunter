@@ -869,7 +869,7 @@ def test_missing_predecessor_and_divergent_canonical_key_fail_closed(tmp_path: P
             "WHERE family = 'FACT' AND scope = 'doc-1'",
             (first,),
         )
-    with pytest.raises(SourceHandlingBlockedError, match="complete chain"):
+    with pytest.raises(SourceHandlingBlockedError, match="TAMPER_DETECTED"):
         service.resolver()("doc-1", clock.now()).store.canonical_records("FACT", "doc-1")
     with sqlite3.connect(service.path) as connection:
         connection.execute(
@@ -883,6 +883,235 @@ def test_missing_predecessor_and_divergent_canonical_key_fail_closed(tmp_path: P
         )
     with pytest.raises(SourceHandlingBlockedError):
         service.resolver()("doc-1", clock.now()).store.canonical_records("FACT", "doc-1")
+
+
+def test_authenticated_history_rejects_head_rewind_and_successor_truncation(tmp_path: Path) -> None:
+    service, clock, _key, rule_id = _service(tmp_path)
+    first, _ = _publish(
+        service,
+        family="FACT",
+        scope="doc-1",
+        payload=_fact_payload("doc-1", clock.now()),
+        rule_id=rule_id,
+        expected_head=None,
+        authorization_id="auth:rewind:first",
+        expires_at=clock.now() + timedelta(minutes=5),
+    )
+    second, _ = _publish(
+        service,
+        family="FACT",
+        scope="doc-1",
+        payload=_fact_payload("doc-1", clock.now(), supersedes=first, sensitivity="INTERNAL"),
+        rule_id=rule_id,
+        expected_head=first,
+        authorization_id="auth:rewind:second",
+        expires_at=clock.now() + timedelta(minutes=5),
+    )
+    with sqlite3.connect(service.path) as connection:
+        connection.execute(
+            "UPDATE source_handling_canonical_keys "
+            "SET current_record_id = ?, revision = 1 "
+            "WHERE family = 'FACT' AND scope = 'doc-1'",
+            (first,),
+        )
+        connection.execute(
+            "DELETE FROM source_handling_authority_records WHERE record_id = ?",
+            (second,),
+        )
+
+    with pytest.raises(SourceHandlingBlockedError, match="TAMPER_DETECTED"):
+        service.resolver()("doc-1", clock.now()).store.canonical_records("FACT", "doc-1")
+
+
+def test_authenticated_history_rejects_deleted_middle_record(tmp_path: Path) -> None:
+    service, clock, _key, rule_id = _service(tmp_path)
+    first, _ = _publish(
+        service,
+        family="FACT",
+        scope="doc-1",
+        payload=_fact_payload("doc-1", clock.now()),
+        rule_id=rule_id,
+        expected_head=None,
+        authorization_id="auth:middle:first",
+        expires_at=clock.now() + timedelta(minutes=5),
+    )
+    second, _ = _publish(
+        service,
+        family="FACT",
+        scope="doc-1",
+        payload=_fact_payload("doc-1", clock.now(), supersedes=first, sensitivity="INTERNAL"),
+        rule_id=rule_id,
+        expected_head=first,
+        authorization_id="auth:middle:second",
+        expires_at=clock.now() + timedelta(minutes=5),
+    )
+    _publish(
+        service,
+        family="FACT",
+        scope="doc-1",
+        payload=_fact_payload("doc-1", clock.now(), supersedes=second, sensitivity="RESTRICTED"),
+        rule_id=rule_id,
+        expected_head=second,
+        authorization_id="auth:middle:third",
+        expires_at=clock.now() + timedelta(minutes=5),
+    )
+    with sqlite3.connect(service.path) as connection:
+        connection.execute(
+            "DELETE FROM source_handling_authority_records WHERE record_id = ?",
+            (second,),
+        )
+
+    with pytest.raises(SourceHandlingBlockedError, match="TAMPER_DETECTED"):
+        service.resolver()("doc-1", clock.now()).store.canonical_records("FACT", "doc-1")
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "UPDATE source_handling_canonical_keys SET revision = 1 " "WHERE family = 'FACT' AND scope = 'doc-1'",
+        "UPDATE source_handling_canonical_keys SET current_record_id = "
+        "(SELECT supersedes_record_id FROM source_handling_authority_records "
+        "WHERE record_id = source_handling_canonical_keys.current_record_id) "
+        "WHERE family = 'FACT' AND scope = 'doc-1'",
+    ],
+    ids=["lower-revision", "stale-head"],
+)
+def test_authenticated_history_rejects_canonical_state_rewrite(tmp_path: Path, mutation: str) -> None:
+    service, clock, _key, rule_id = _service(tmp_path)
+    first, _ = _publish(
+        service,
+        family="FACT",
+        scope="doc-1",
+        payload=_fact_payload("doc-1", clock.now()),
+        rule_id=rule_id,
+        expected_head=None,
+        authorization_id="auth:canonical:first",
+        expires_at=clock.now() + timedelta(minutes=5),
+    )
+    _publish(
+        service,
+        family="FACT",
+        scope="doc-1",
+        payload=_fact_payload("doc-1", clock.now(), supersedes=first, sensitivity="INTERNAL"),
+        rule_id=rule_id,
+        expected_head=first,
+        authorization_id="auth:canonical:second",
+        expires_at=clock.now() + timedelta(minutes=5),
+    )
+    with sqlite3.connect(service.path) as connection:
+        connection.execute(mutation)
+
+    with pytest.raises(SourceHandlingBlockedError, match="TAMPER_DETECTED"):
+        service.resolver()("doc-1", clock.now()).store.canonical_records("FACT", "doc-1")
+
+
+def test_consumption_reset_is_tamper_evident_and_authorization_cannot_replay(tmp_path: Path) -> None:
+    service, clock, _key, rule_id = _service(tmp_path)
+    payload = _fact_payload("doc-1", clock.now())
+    _record_id, authorization = _publish(
+        service,
+        family="FACT",
+        scope="doc-1",
+        payload=payload,
+        rule_id=rule_id,
+        expected_head=None,
+        authorization_id="auth:consumption-reset",
+        expires_at=clock.now() + timedelta(minutes=5),
+    )
+    with sqlite3.connect(service.path) as connection:
+        connection.execute(
+            "UPDATE source_handling_publication_authorizations "
+            "SET consumed_at = NULL, consumed_record_id = NULL "
+            "WHERE authorization_id = ?",
+            (authorization.authorization_id,),
+        )
+
+    with pytest.raises(SourceHandlingBlockedError, match="TAMPER_DETECTED"):
+        service.publish(
+            family="FACT",
+            scope="doc-1",
+            expected_current_head_id=None,
+            payload=payload,
+            authorization=authorization,
+        )
+
+
+def test_deleted_publication_and_consumption_reset_cannot_enable_replay(tmp_path: Path) -> None:
+    service, clock, _key, rule_id = _service(tmp_path)
+    payload = _fact_payload("doc-1", clock.now())
+    record_id, authorization = _publish(
+        service,
+        family="FACT",
+        scope="doc-1",
+        payload=payload,
+        rule_id=rule_id,
+        expected_head=None,
+        authorization_id="auth:delete-and-reset",
+        expires_at=clock.now() + timedelta(minutes=5),
+    )
+    with sqlite3.connect(service.path) as connection:
+        connection.execute("DELETE FROM source_handling_canonical_keys WHERE family = 'FACT' AND scope = 'doc-1'")
+        connection.execute(
+            "DELETE FROM source_handling_authority_records WHERE record_id = ?",
+            (record_id,),
+        )
+        connection.execute(
+            "UPDATE source_handling_publication_authorizations "
+            "SET consumed_at = NULL, consumed_record_id = NULL "
+            "WHERE authorization_id = ?",
+            (authorization.authorization_id,),
+        )
+
+    with pytest.raises(SourceHandlingBlockedError, match="TAMPER_DETECTED"):
+        service.publish(
+            family="FACT",
+            scope="doc-1",
+            expected_current_head_id=None,
+            payload=payload,
+            authorization=authorization,
+        )
+
+
+def test_consumption_remains_single_use_after_restart_and_new_authorization_works(tmp_path: Path) -> None:
+    service, clock, key, rule_id = _service(tmp_path)
+    payload = _fact_payload("doc-1", clock.now())
+    _record_id, authorization = _publish(
+        service,
+        family="FACT",
+        scope="doc-1",
+        payload=payload,
+        rule_id=rule_id,
+        expected_head=None,
+        authorization_id="auth:restart-once",
+        expires_at=clock.now() + timedelta(minutes=5),
+    )
+    restarted = SourceHandlingAuthorityService(
+        service.path,
+        signing_private_key=key,
+        operator_root=_operator_root(key),
+        provenance_resolver=_provenance,
+        clock=clock,
+    )
+    with pytest.raises(SourceHandlingBlockedError, match="consumed|head changed"):
+        restarted.publish(
+            family="FACT",
+            scope="doc-1",
+            expected_current_head_id=None,
+            payload=payload,
+            authorization=authorization,
+        )
+
+    new_record, _ = _publish(
+        restarted,
+        family="FACT",
+        scope="doc-2",
+        payload=_fact_payload("doc-2", clock.now()),
+        rule_id=rule_id,
+        expected_head=None,
+        authorization_id="auth:restart-new",
+        expires_at=clock.now() + timedelta(minutes=5),
+    )
+    assert new_record
 
 
 @pytest.mark.parametrize("flag", ["sensitivity_known", "persistence_restriction_known"])

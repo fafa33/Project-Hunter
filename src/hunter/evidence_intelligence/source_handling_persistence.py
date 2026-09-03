@@ -60,6 +60,7 @@ SOURCE_HANDLING_RULE_SCOPE = "SOURCE_HANDLING"
 SOURCE_HANDLING_RECORD_SCHEMA_VERSION = "source-handling-authority-record-v1"
 SOURCE_HANDLING_AUTHORIZATION_SCHEMA_VERSION = "source-handling-publication-authorization-v1"
 SOURCE_HANDLING_OPERATOR_ROOT_SCHEMA_VERSION = "source-handling-operator-root-v1"
+SOURCE_HANDLING_HISTORY_COMMITMENT_SCHEMA_VERSION = "source-handling-history-commitment-v1"
 
 ProvenanceResolver = Callable[[str, str, datetime], Mapping[str, Any] | None]
 _PUBLICATION_CAPABILITY_SENTINEL = object()
@@ -345,6 +346,7 @@ class SourceHandlingAuthorityRepository:
                 raise SourceHandlingBlockedError("authority record identity is immutable") from error
 
             if current_row is None:
+                canonical_revision = 1
                 try:
                     connection.execute(
                         """
@@ -358,6 +360,7 @@ class SourceHandlingAuthorityRepository:
                         "canonical authority head changed; re-resolution required"
                     ) from error
             else:
+                canonical_revision = int(current_row["revision"]) + 1
                 updated = connection.execute(
                     """
                     UPDATE source_handling_canonical_keys
@@ -368,6 +371,18 @@ class SourceHandlingAuthorityRepository:
                 )
                 if updated.rowcount != 1:
                     raise SourceHandlingBlockedError("canonical authority head changed; re-resolution required")
+
+            self._append_history_commitment(
+                connection,
+                record_id=payload_digest,
+                family=family,
+                scope=scope,
+                canonical_revision=canonical_revision,
+                record_integrity_signature=integrity_signature,
+                authorization_id=authorization.authorization_id,
+                authorization_consumed_at=_time_text(admission_time),
+                authorization_consumed_record_id=payload_digest,
+            )
 
         return SourceHandlingPublicationResult(payload_digest, family, scope, admission_time)
 
@@ -441,6 +456,17 @@ class SourceHandlingAuthorityRepository:
                 """,
                 (SOURCE_HANDLING_RULE_SCOPE, record_id),
             )
+            self._append_history_commitment(
+                connection,
+                record_id=record_id,
+                family="AUTHORIZATION_RULE",
+                scope=SOURCE_HANDLING_RULE_SCOPE,
+                canonical_revision=1,
+                record_integrity_signature=integrity_signature,
+                authorization_id=None,
+                authorization_consumed_at=None,
+                authorization_consumed_record_id=None,
+            )
         return SourceHandlingPublicationResult(
             record_id, "AUTHORIZATION_RULE", SOURCE_HANDLING_RULE_SCOPE, admission_time
         )
@@ -459,6 +485,60 @@ class SourceHandlingAuthorityRepository:
             raise SourceHandlingBlockedError("Source Handling record integrity signature is invalid") from error
         return signature.hex()
 
+    def _append_history_commitment(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        record_id: str,
+        family: str,
+        scope: str,
+        canonical_revision: int,
+        record_integrity_signature: str,
+        authorization_id: str | None,
+        authorization_consumed_at: str | None,
+        authorization_consumed_record_id: str | None,
+    ) -> None:
+        previous = connection.execute(
+            "SELECT sequence, commitment_sha256 FROM source_handling_history_commitments "
+            "ORDER BY sequence DESC LIMIT 1"
+        ).fetchone()
+        sequence = int(previous["sequence"]) + 1 if previous is not None else 1
+        previous_commitment_sha256 = str(previous["commitment_sha256"]) if previous is not None else None
+        claims = _history_commitment_claims(
+            sequence=sequence,
+            previous_commitment_sha256=previous_commitment_sha256,
+            record_id=record_id,
+            family=family,
+            scope=scope,
+            canonical_head_id=record_id,
+            canonical_revision=canonical_revision,
+            record_integrity_signature=record_integrity_signature,
+            authorization_id=authorization_id,
+            authorization_consumed_at=authorization_consumed_at,
+            authorization_consumed_record_id=authorization_consumed_record_id,
+        )
+        claims_json = _canonical_json(claims)
+        commitment_sha256 = hashlib.sha256(claims_json.encode("utf-8")).hexdigest()
+        try:
+            signature = self._record_integrity_signer(claims_json.encode("utf-8"))
+        except Exception as error:
+            raise SourceHandlingBlockedError("Source Handling history commitment signing failed") from error
+        if not isinstance(signature, bytes) or len(signature) != 64:
+            raise SourceHandlingBlockedError("Source Handling history commitment signature is malformed")
+        try:
+            _load_public_key(self._verification_public_key_bytes).verify(signature, claims_json.encode("utf-8"))
+        except InvalidSignature as error:
+            raise SourceHandlingBlockedError("Source Handling history commitment signature is invalid") from error
+        connection.execute(
+            """
+            INSERT INTO source_handling_history_commitments (
+                sequence, commitment_sha256, previous_commitment_sha256,
+                claims_json, issuer_signature
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            (sequence, commitment_sha256, previous_commitment_sha256, claims_json, signature.hex()),
+        )
+
     def authorization_consumed(self, authorization_id: str) -> bool:
         with self._connect() as connection:
             row = connection.execute(
@@ -468,7 +548,7 @@ class SourceHandlingAuthorityRepository:
             return row is not None and row["consumed_at"] is not None
 
     def _initialize(self) -> None:
-        with self._connect(verify_operator_root=False) as connection:
+        with self._connect(verify_operator_root=False, verify_history=False) as connection:
             connection.executescript("""
                 CREATE TABLE IF NOT EXISTS source_handling_operator_root (
                     singleton_id TEXT PRIMARY KEY CHECK (singleton_id = 'SOURCE_HANDLING'),
@@ -516,6 +596,25 @@ class SourceHandlingAuthorityRepository:
                     FOREIGN KEY (current_record_id)
                         REFERENCES source_handling_authority_records(record_id)
                 );
+                CREATE TABLE IF NOT EXISTS source_handling_history_commitments (
+                    sequence INTEGER PRIMARY KEY CHECK (sequence > 0),
+                    commitment_sha256 TEXT NOT NULL UNIQUE,
+                    previous_commitment_sha256 TEXT,
+                    claims_json TEXT NOT NULL,
+                    issuer_signature TEXT NOT NULL,
+                    FOREIGN KEY (previous_commitment_sha256)
+                        REFERENCES source_handling_history_commitments(commitment_sha256)
+                );
+                CREATE TRIGGER IF NOT EXISTS source_handling_history_commitments_no_update
+                BEFORE UPDATE ON source_handling_history_commitments
+                BEGIN
+                    SELECT RAISE(ABORT, 'Source Handling history commitments are append-only');
+                END;
+                CREATE TRIGGER IF NOT EXISTS source_handling_history_commitments_no_delete
+                BEFORE DELETE ON source_handling_history_commitments
+                BEGIN
+                    SELECT RAISE(ABORT, 'Source Handling history commitments are append-only');
+                END;
                 """)
             columns = {
                 str(row["name"])
@@ -548,10 +647,20 @@ class SourceHandlingAuthorityRepository:
                 )
             else:
                 _verify_operator_root_row(pinned, self._operator_root)
+            _verify_authenticated_history(
+                connection,
+                verification_public_key_bytes=self._verification_public_key_bytes,
+                operator_root=self._operator_root,
+            )
             connection.commit()
 
     @contextlib.contextmanager
-    def _connect(self, *, verify_operator_root: bool = True) -> Iterator[sqlite3.Connection]:
+    def _connect(
+        self,
+        *,
+        verify_operator_root: bool = True,
+        verify_history: bool = True,
+    ) -> Iterator[sqlite3.Connection]:
         connection = sqlite3.connect(self.path, timeout=30.0)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
@@ -563,6 +672,12 @@ class SourceHandlingAuthorityRepository:
                 if row is None:
                     raise SourceHandlingBlockedError("pinned Source Handling operator root is unavailable")
                 _verify_operator_root_row(row, self._operator_root)
+            if verify_history:
+                _verify_authenticated_history(
+                    connection,
+                    verification_public_key_bytes=self._verification_public_key_bytes,
+                    operator_root=self._operator_root,
+                )
             yield connection
         finally:
             connection.close()
@@ -761,6 +876,11 @@ class SqliteSourceHandlingAuthorityReadView(SourceHandlingAuthorityReadView):
             if row is None:
                 raise SourceHandlingBlockedError("pinned Source Handling operator root is unavailable")
             _verify_operator_root_row(row, self._operator_root)
+            _verify_authenticated_history(
+                connection,
+                verification_public_key_bytes=self._verification_public_key_bytes,
+                operator_root=self._operator_root,
+            )
             yield connection
         finally:
             connection.close()
@@ -1134,6 +1254,208 @@ def _verify_operator_root_row(row: sqlite3.Row, operator_root: SourceHandlingOpe
         or row["verification_key_sha256"] != operator_root.verification_key_sha256
     ):
         raise SourceHandlingBlockedError("TAMPER_DETECTED: durable Source Handling operator root mismatch")
+
+
+def _history_commitment_claims(
+    *,
+    sequence: int,
+    previous_commitment_sha256: str | None,
+    record_id: str,
+    family: str,
+    scope: str,
+    canonical_head_id: str,
+    canonical_revision: int,
+    record_integrity_signature: str,
+    authorization_id: str | None,
+    authorization_consumed_at: str | None,
+    authorization_consumed_record_id: str | None,
+) -> dict[str, Any]:
+    return {
+        "schema_version": SOURCE_HANDLING_HISTORY_COMMITMENT_SCHEMA_VERSION,
+        "sequence": sequence,
+        "previous_commitment_sha256": previous_commitment_sha256,
+        "record_id": record_id,
+        "family": family,
+        "scope": scope,
+        "canonical_head_id": canonical_head_id,
+        "canonical_revision": canonical_revision,
+        "record_integrity_signature": record_integrity_signature,
+        "authorization_id": authorization_id,
+        "authorization_consumed_at": authorization_consumed_at,
+        "authorization_consumed_record_id": authorization_consumed_record_id,
+    }
+
+
+def _history_commitment_claim_keys() -> set[str]:
+    return set(
+        _history_commitment_claims(
+            sequence=1,
+            previous_commitment_sha256=None,
+            record_id="record",
+            family="FACT",
+            scope="scope",
+            canonical_head_id="record",
+            canonical_revision=1,
+            record_integrity_signature="signature",
+            authorization_id=None,
+            authorization_consumed_at=None,
+            authorization_consumed_record_id=None,
+        )
+    )
+
+
+def _verify_authenticated_history(
+    connection: sqlite3.Connection,
+    *,
+    verification_public_key_bytes: bytes,
+    operator_root: SourceHandlingOperatorRoot,
+) -> None:
+    commitment_rows = connection.execute(
+        "SELECT * FROM source_handling_history_commitments ORDER BY sequence"
+    ).fetchall()
+    record_rows = connection.execute("SELECT * FROM source_handling_authority_records").fetchall()
+    canonical_rows = connection.execute("SELECT * FROM source_handling_canonical_keys").fetchall()
+    authorization_rows = connection.execute("SELECT * FROM source_handling_publication_authorizations").fetchall()
+    if not commitment_rows:
+        if (
+            record_rows
+            or canonical_rows
+            or any(
+                row["consumed_at"] is not None or row["consumed_record_id"] is not None for row in authorization_rows
+            )
+        ):
+            raise SourceHandlingBlockedError("TAMPER_DETECTED: authenticated authority history is missing")
+        return
+
+    records_by_id = {str(row["record_id"]): row for row in record_rows}
+    if len(records_by_id) != len(record_rows):
+        raise SourceHandlingBlockedError("TAMPER_DETECTED: durable authority record identity is duplicated")
+    expected_previous: str | None = None
+    expected_sequence = 1
+    committed_record_ids: set[str] = set()
+    committed_consumptions: dict[str, tuple[str, str]] = {}
+    expected_heads: dict[tuple[str, str], tuple[str, int]] = {}
+
+    for commitment_row in commitment_rows:
+        try:
+            claims = json.loads(str(commitment_row["claims_json"]))
+        except (json.JSONDecodeError, TypeError) as error:
+            raise SourceHandlingBlockedError("TAMPER_DETECTED: history commitment claims are malformed") from error
+        if not isinstance(claims, dict) or set(claims) != _history_commitment_claim_keys():
+            raise SourceHandlingBlockedError("TAMPER_DETECTED: history commitment claim set is incomplete")
+        if claims.get("schema_version") != SOURCE_HANDLING_HISTORY_COMMITMENT_SCHEMA_VERSION:
+            raise SourceHandlingBlockedError("TAMPER_DETECTED: unknown history commitment schema")
+        if _canonical_json(claims) != commitment_row["claims_json"]:
+            raise SourceHandlingBlockedError("TAMPER_DETECTED: history commitment claims are not canonical")
+        if claims.get("sequence") != expected_sequence or int(commitment_row["sequence"]) != expected_sequence:
+            raise SourceHandlingBlockedError("TAMPER_DETECTED: history commitment sequence is not contiguous")
+        if (
+            claims.get("previous_commitment_sha256") != expected_previous
+            or commitment_row["previous_commitment_sha256"] != expected_previous
+        ):
+            raise SourceHandlingBlockedError("TAMPER_DETECTED: history commitment chain is broken")
+        claims_json = str(commitment_row["claims_json"])
+        commitment_sha256 = hashlib.sha256(claims_json.encode("utf-8")).hexdigest()
+        if commitment_sha256 != commitment_row["commitment_sha256"]:
+            raise SourceHandlingBlockedError("TAMPER_DETECTED: history commitment digest mismatch")
+        signature = commitment_row["issuer_signature"]
+        if not isinstance(signature, str) or len(signature) != 128 or signature.lower() != signature:
+            raise SourceHandlingBlockedError("TAMPER_DETECTED: history commitment signature is malformed")
+        try:
+            _load_public_key(verification_public_key_bytes).verify(
+                bytes.fromhex(signature), claims_json.encode("utf-8")
+            )
+        except (ValueError, InvalidSignature) as error:
+            raise SourceHandlingBlockedError("TAMPER_DETECTED: history commitment signature is invalid") from error
+
+        record_id = _required_text("history commitment record_id", claims.get("record_id"))
+        family = _required_text("history commitment family", claims.get("family"))
+        scope = _required_text("history commitment scope", claims.get("scope"))
+        _require_family_scope(family, scope)
+        if record_id in committed_record_ids:
+            raise SourceHandlingBlockedError("TAMPER_DETECTED: authority record is committed more than once")
+        record_row = records_by_id.get(record_id)
+        if record_row is None:
+            raise SourceHandlingBlockedError("TAMPER_DETECTED: committed authority record is missing")
+        record = _decode_durable_record(
+            connection,
+            record_row,
+            verification_public_key_bytes=verification_public_key_bytes,
+            operator_root=operator_root,
+        )
+        if record_row["family"] != family or record_row["scope"] != scope:
+            raise SourceHandlingBlockedError("TAMPER_DETECTED: committed authority identity mismatch")
+        if claims.get("canonical_head_id") != record_id:
+            raise SourceHandlingBlockedError("TAMPER_DETECTED: committed canonical head identity mismatch")
+        if claims.get("record_integrity_signature") != record_row["integrity_signature"]:
+            raise SourceHandlingBlockedError("TAMPER_DETECTED: committed record integrity proof mismatch")
+
+        head_key = (family, scope)
+        previous_head = expected_heads.get(head_key)
+        expected_revision = previous_head[1] + 1 if previous_head is not None else 1
+        if claims.get("canonical_revision") != expected_revision:
+            raise SourceHandlingBlockedError("TAMPER_DETECTED: committed canonical revision is not monotonic")
+        predecessor_id = _supersedes_id(record)
+        expected_predecessor = previous_head[0] if previous_head is not None else None
+        if predecessor_id != expected_predecessor:
+            raise SourceHandlingBlockedError("TAMPER_DETECTED: committed authority chain is not linear")
+        expected_heads[head_key] = (record_id, expected_revision)
+
+        authorization_id = claims.get("authorization_id")
+        consumed_at = claims.get("authorization_consumed_at")
+        consumed_record_id = claims.get("authorization_consumed_record_id")
+        if authorization_id is None:
+            if (
+                consumed_at is not None
+                or consumed_record_id is not None
+                or record.get("publication_authorization") is not None
+            ):
+                raise SourceHandlingBlockedError("TAMPER_DETECTED: genesis commitment consumption is invalid")
+        else:
+            normalized_authorization_id = _required_text("history authorization_id", authorization_id)
+            normalized_consumed_at = _required_text("history authorization consumed_at", consumed_at)
+            normalized_consumed_record_id = _required_text(
+                "history authorization consumed_record_id", consumed_record_id
+            )
+            if normalized_consumed_record_id != record_id:
+                raise SourceHandlingBlockedError("TAMPER_DETECTED: committed authorization record mismatch")
+            publication_authorization = record.get("publication_authorization")
+            if (
+                not isinstance(publication_authorization, PublicationAuthorization)
+                or publication_authorization.authorization_id != normalized_authorization_id
+            ):
+                raise SourceHandlingBlockedError("TAMPER_DETECTED: committed authorization identity mismatch")
+            if normalized_authorization_id in committed_consumptions:
+                raise SourceHandlingBlockedError("TAMPER_DETECTED: authorization was committed more than once")
+            committed_consumptions[normalized_authorization_id] = (
+                normalized_consumed_at,
+                normalized_consumed_record_id,
+            )
+
+        committed_record_ids.add(record_id)
+        expected_previous = commitment_sha256
+        expected_sequence += 1
+
+    if committed_record_ids != set(records_by_id):
+        raise SourceHandlingBlockedError("TAMPER_DETECTED: uncommitted authority record exists")
+    actual_heads = {
+        (str(row["family"]), str(row["scope"])): (str(row["current_record_id"]), int(row["revision"]))
+        for row in canonical_rows
+    }
+    if actual_heads != expected_heads:
+        raise SourceHandlingBlockedError("TAMPER_DETECTED: canonical authority state does not match committed history")
+
+    actual_consumptions: dict[str, tuple[str, str]] = {}
+    for authorization_row in authorization_rows:
+        authorization_id = str(authorization_row["authorization_id"])
+        consumed_at = authorization_row["consumed_at"]
+        consumed_record_id = authorization_row["consumed_record_id"]
+        if (consumed_at is None) != (consumed_record_id is None):
+            raise SourceHandlingBlockedError("TAMPER_DETECTED: authorization consumption state is incomplete")
+        if consumed_at is not None and consumed_record_id is not None:
+            actual_consumptions[authorization_id] = (str(consumed_at), str(consumed_record_id))
+    if actual_consumptions != committed_consumptions:
+        raise SourceHandlingBlockedError("TAMPER_DETECTED: authorization consumption does not match committed history")
 
 
 def _authorization_claims(authorization: PublicationAuthorization) -> dict[str, Any]:
