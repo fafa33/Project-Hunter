@@ -230,7 +230,9 @@ def test_metadata_only_fact_blocks_non_metadata_prepared_artifacts(tmp_path: Pat
     assert repository.count("evidence_documents") == 0
 
 
-def test_read_view_verifies_history_inside_one_explicit_snapshot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_read_view_verifies_history_inside_one_explicit_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     service, clock, _key, _rule_id = _service(tmp_path)
     observed: list[bool] = []
     original = source_handling_persistence._verify_authenticated_history
@@ -272,9 +274,7 @@ def test_repository_admission_times_are_strictly_monotonic_with_frozen_clock(tmp
     try:
         values = [
             row[0]
-            for row in connection.execute(
-                "SELECT admission_time FROM source_handling_authority_records ORDER BY rowid"
-            )
+            for row in connection.execute("SELECT admission_time FROM source_handling_authority_records ORDER BY rowid")
         ]
     finally:
         connection.close()
