@@ -70,6 +70,37 @@ SUPPORTED_OPERATION_RESTRICTIONS = frozenset(
     }
 )
 SUPPORTED_SECRET_PRESENCE = frozenset({"SECRET_PRESENT", "CREDENTIAL_PRESENT"})
+SUPPORTED_EVIDENCE_METHODS = frozenset(
+    {
+        "SOURCE_DECLARATION_VERIFIED",
+        "SOURCE_TERMS_VERIFIED",
+        "SOURCE_ACCESS_POLICY_VERIFIED",
+        "SECURITY_CLASSIFICATION_VERIFIED",
+        "REMOVAL_OR_WITHDRAWAL_VERIFIED",
+        "INDEPENDENT_DOCUMENT_REVIEW",
+        "PROVIDER_OBSERVATION",
+        "CALLER_ASSERTION",
+        "AUTOMATED_RESTRICTIVE_DETECTOR",
+        "UNKNOWN",
+    }
+)
+PERMISSIVE_EVIDENCE_STRENGTHS = frozenset({"AUTHORITATIVE_SOURCE_EVIDENCE", "INDEPENDENT_VERIFIED_EVIDENCE"})
+FORBIDDEN_PERMISSION_METHODS = frozenset(
+    {"PROVIDER_OBSERVATION", "CALLER_ASSERTION", "AUTOMATED_RESTRICTIVE_DETECTOR", "UNKNOWN"}
+)
+SUPPORTED_VERIFIER_TYPES = frozenset({"SOURCE_VERIFIER", "SECURITY_VERIFIER", "INDEPENDENT_REVIEWER"})
+AUTHORIZATION_RULE_BODY_FIELDS = frozenset(
+    {
+        "permissive_evidence_strengths",
+        "forbidden_permission_methods",
+        "method_to_verifier_types",
+        "require_payload_binding",
+        "require_authority_component",
+        "require_release_restriction_enumeration",
+        "allow_second_genesis",
+        "allow_self_authorizing_successor",
+    }
+)
 
 ProvenanceResolver = Callable[[str, str, datetime], Mapping[str, Any] | None]
 _PUBLICATION_CAPABILITY_SENTINEL = object()
@@ -1849,6 +1880,80 @@ def _validate_payload_shape(family: str, scope: str, payload: Mapping[str, Any])
             raise SourceHandlingBlockedError("FACT secret presence is unknown")
         if any(not isinstance(secret, str) or secret not in SUPPORTED_SECRET_PRESENCE for secret in secret_presence):
             raise SourceHandlingBlockedError("FACT secret presence is unknown or unsupported")
+    elif family == "AUTHORIZATION_RULE":
+        _validate_authorization_rule_payload(payload)
+
+
+def _validate_authorization_rule_payload(payload: Mapping[str, Any]) -> None:
+    rule_id = payload.get("authorization_rule_id")
+    if not isinstance(rule_id, str) or not rule_id.strip():
+        raise SourceHandlingBlockedError("authorization-rule identity is missing or malformed")
+    schema_version = payload.get("rule_schema_version")
+    if not isinstance(schema_version, int) or isinstance(schema_version, bool) or schema_version != 1:
+        raise SourceHandlingBlockedError("authorization-rule schema version is unsupported")
+
+    body = payload.get("rule_body")
+    if not isinstance(body, Mapping):
+        raise SourceHandlingBlockedError("authorization-rule body is missing or malformed")
+    if set(body) != AUTHORIZATION_RULE_BODY_FIELDS:
+        raise SourceHandlingBlockedError("authorization-rule body fields are incomplete or unsupported")
+
+    strengths = _validated_rule_values(
+        body.get("permissive_evidence_strengths"),
+        field="permissive evidence strengths",
+        supported=PERMISSIVE_EVIDENCE_STRENGTHS,
+    )
+    if not strengths:
+        raise SourceHandlingBlockedError("authorization-rule has no admissible permissive evidence strength")
+
+    forbidden_methods = _validated_rule_values(
+        body.get("forbidden_permission_methods"),
+        field="forbidden permission methods",
+        supported=SUPPORTED_EVIDENCE_METHODS,
+    )
+    if not FORBIDDEN_PERMISSION_METHODS.issubset(forbidden_methods):
+        raise SourceHandlingBlockedError("authorization-rule weakens forbidden permission methods")
+
+    matrix = body.get("method_to_verifier_types")
+    if not isinstance(matrix, Mapping) or set(matrix) != SUPPORTED_EVIDENCE_METHODS:
+        raise SourceHandlingBlockedError("authorization-rule verifier matrix is incomplete or unsupported")
+    usable_method = False
+    for method in SUPPORTED_EVIDENCE_METHODS:
+        verifiers = _validated_rule_values(
+            matrix.get(method),
+            field=f"verifier types for {method}",
+            supported=SUPPORTED_VERIFIER_TYPES,
+        )
+        if method in forbidden_methods:
+            if verifiers:
+                raise SourceHandlingBlockedError("forbidden permission method has authorized verifiers")
+        elif verifiers:
+            usable_method = True
+    if not usable_method:
+        raise SourceHandlingBlockedError("authorization-rule cannot authorize a later governed publication")
+
+    required_claims = {
+        "require_payload_binding": True,
+        "require_authority_component": AUTHORITY_COMPONENT_ID,
+        "require_release_restriction_enumeration": True,
+        "allow_second_genesis": False,
+        "allow_self_authorizing_successor": False,
+    }
+    if any(
+        type(body.get(field)) is not type(expected) or body.get(field) != expected
+        for field, expected in required_claims.items()
+    ):
+        raise SourceHandlingBlockedError("authorization-rule permission claims are invalid or incomplete")
+
+
+def _validated_rule_values(value: object, *, field: str, supported: frozenset[str]) -> frozenset[str]:
+    if not isinstance(value, list):
+        raise SourceHandlingBlockedError(f"authorization-rule {field} are malformed")
+    if any(not isinstance(item, str) or item not in supported for item in value):
+        raise SourceHandlingBlockedError(f"authorization-rule {field} contain an unsupported value")
+    if len(value) != len(set(value)):
+        raise SourceHandlingBlockedError(f"authorization-rule {field} contain duplicate values")
+    return frozenset(value)
 
 
 def _require_family_scope(family: str, scope: str) -> None:

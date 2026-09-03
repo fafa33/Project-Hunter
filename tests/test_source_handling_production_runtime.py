@@ -1255,6 +1255,118 @@ def test_expired_authorization_is_not_consumed(tmp_path: Path) -> None:
     assert service.authorization_consumed("auth:expires") is False
 
 
+@pytest.mark.parametrize(
+    "malformation",
+    [
+        "missing_rule_body",
+        "malformed_rule_body",
+        "missing_required_rule_field",
+        "wrong_nested_field_type",
+        "unknown_evidence_strength",
+        "unknown_evidence_method",
+        "unknown_verifier_type",
+        "incomplete_verifier_matrix",
+        "weakened_forbidden_methods",
+        "invalid_permission_claim",
+        "no_usable_authorization_path",
+        "wrong_schema_version_type",
+    ],
+)
+def test_malformed_successor_rule_is_rejected_without_consumption_or_head_change(
+    tmp_path: Path,
+    malformation: str,
+) -> None:
+    service, clock, key, rule_id = _service(tmp_path)
+    clock.value += timedelta(minutes=1)
+    rule = json.loads(RULE_FIXTURE.read_text(encoding="utf-8"))
+    valid_payload = {
+        **rule,
+        "authorization_rule_id": "AUTHORIZATION_RULE_V2",
+        "scope": "SOURCE_HANDLING",
+        "supersedes_authorization_rule_id": rule_id,
+        **_times(clock.now()),
+    }
+    authorization_id = f"auth:malformed-rule:{malformation}"
+    authorization = _authorize(
+        service,
+        family="AUTHORIZATION_RULE",
+        scope="SOURCE_HANDLING",
+        payload=valid_payload,
+        rule_id=rule_id,
+        expected_head=rule_id,
+        authorization_id=authorization_id,
+        expires_at=clock.now() + timedelta(minutes=5),
+    )
+    malformed = copy.deepcopy(valid_payload)
+    body = malformed["rule_body"]
+    if malformation == "missing_rule_body":
+        malformed.pop("rule_body")
+    elif malformation == "malformed_rule_body":
+        malformed["rule_body"] = "not-an-object"
+    elif malformation == "missing_required_rule_field":
+        body.pop("method_to_verifier_types")
+    elif malformation == "wrong_nested_field_type":
+        body["permissive_evidence_strengths"] = "AUTHORITATIVE_SOURCE_EVIDENCE"
+    elif malformation == "unknown_evidence_strength":
+        body["permissive_evidence_strengths"] = ["UNKNOWN"]
+    elif malformation == "unknown_evidence_method":
+        body["forbidden_permission_methods"].append("NOT_A_METHOD")
+    elif malformation == "unknown_verifier_type":
+        body["method_to_verifier_types"]["SOURCE_TERMS_VERIFIED"] = ["UNKNOWN_VERIFIER"]
+    elif malformation == "incomplete_verifier_matrix":
+        body["method_to_verifier_types"].pop("SOURCE_TERMS_VERIFIED")
+    elif malformation == "weakened_forbidden_methods":
+        body["forbidden_permission_methods"].remove("CALLER_ASSERTION")
+    elif malformation == "invalid_permission_claim":
+        body["require_payload_binding"] = False
+    elif malformation == "no_usable_authorization_path":
+        body["method_to_verifier_types"] = {method: [] for method in body["method_to_verifier_types"]}
+    elif malformation == "wrong_schema_version_type":
+        malformed["rule_schema_version"] = "1"
+    else:
+        raise AssertionError(f"unhandled malformation: {malformation}")
+
+    with pytest.raises(SourceHandlingBlockedError, match="authorization-rule"):
+        service.publish(
+            family="AUTHORIZATION_RULE",
+            scope="SOURCE_HANDLING",
+            expected_current_head_id=rule_id,
+            payload=malformed,
+            authorization=authorization,
+        )
+    assert service.authorization_consumed(authorization_id) is False
+    assert (
+        service.resolver()("doc-after-malformed-rule", clock.now()).store.current_canonical_head_id(
+            "AUTHORIZATION_RULE", "SOURCE_HANDLING"
+        )
+        == rule_id
+    )
+
+    result = service.publish(
+        family="AUTHORIZATION_RULE",
+        scope="SOURCE_HANDLING",
+        expected_current_head_id=rule_id,
+        payload=valid_payload,
+        authorization=authorization,
+    )
+    assert service.authorization_consumed(authorization_id) is True
+    assert result.record_id != rule_id
+
+    restarted = SourceHandlingAuthorityService(
+        service.path,
+        signing_private_key=key,
+        operator_root=_operator_root(key),
+        provenance_resolver=_provenance,
+        clock=clock,
+    )
+    assert (
+        restarted.resolver()("doc-after-malformed-rule", clock.now()).store.current_canonical_head_id(
+            "AUTHORIZATION_RULE", "SOURCE_HANDLING"
+        )
+        == result.record_id
+    )
+
+
 def test_successor_authorization_rule_uses_normal_signed_publication(tmp_path: Path) -> None:
     service, clock, key, rule_id = _service(tmp_path)
     clock.value += timedelta(minutes=1)
