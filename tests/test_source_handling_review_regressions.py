@@ -13,7 +13,7 @@ from hunter.evidence_intelligence.source_handling_persistence import (
     IssueSourceTransientIntakeBoundary,
     SourceHandlingAuthorityService,
 )
-from tests.test_source_handling_production_runtime import (
+from test_source_handling_production_runtime import (
     _authorize,
     _complete_authority,
     _fact_payload,
