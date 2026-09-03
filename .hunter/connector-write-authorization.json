@@ -1,5 +1,5 @@
 {
-  "authorization_id": "f6c40d1143adc4245bd88980143af9bf68bb3f9ed7ef3e276d63684d1a518963",
+  "authorization_id": "3bacb99a411fcb6495c239b303f14d89f7f866b80649896efd5d1f51edf948dc",
   "claims": {
     "base_ref": "main",
     "base_sha": "bbd23e2d59fad8d6d128ea8078cd78bcfa058357",
@@ -12,19 +12,25 @@
         "status": "added"
       },
       {
+        "blob_sha": "000b0622cd247b444c525b5627e8aeb3efbb96e0",
+        "path": "src/hunter/evidence_intelligence/source_handling_runtime_hardening.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
         "blob_sha": "b7b2f9a971181ffa518d1a7d734b29b4f03c1167",
         "path": "tests/test_source_handling_production_runtime.py",
         "previous_path": "",
         "status": "added"
       },
       {
-        "blob_sha": "dd4a5636e87568a143b6680164b7ff86d4f4904a",
+        "blob_sha": "777c29dc79d0ddd94e479a65cbc3b023ca59c6d9",
         "path": "tests/test_source_handling_review_regressions.py",
         "previous_path": "",
         "status": "added"
       },
       {
-        "blob_sha": "9ca997bab9b0baa62dc3f2020a7bb89bc402541e",
+        "blob_sha": "e40c027b5677f84fd25069bfa12c55f13fa6decc",
         "path": "src/hunter/evidence_intelligence/__init__.py",
         "previous_path": "",
         "status": "modified"
@@ -75,6 +81,7 @@
       "src/hunter/evidence_intelligence/pre_model.py",
       "src/hunter/evidence_intelligence/source_handling.py",
       "src/hunter/evidence_intelligence/source_handling_persistence.py",
+      "src/hunter/evidence_intelligence/source_handling_runtime_hardening.py",
       "tests/evidence_pre_model_source_handling_fixture.py",
       "tests/test_source_handling_authority_contract.py",
       "tests/test_source_handling_authority_enforcement.py",
