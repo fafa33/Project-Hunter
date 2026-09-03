@@ -62,6 +62,14 @@ SOURCE_HANDLING_RECORD_SCHEMA_VERSION = "source-handling-authority-record-v1"
 SOURCE_HANDLING_AUTHORIZATION_SCHEMA_VERSION = "source-handling-publication-authorization-v1"
 SOURCE_HANDLING_OPERATOR_ROOT_SCHEMA_VERSION = "source-handling-operator-root-v1"
 SOURCE_HANDLING_HISTORY_COMMITMENT_SCHEMA_VERSION = "source-handling-history-commitment-v1"
+SUPPORTED_OPERATION_RESTRICTIONS = frozenset(
+    {
+        "MODEL_PROCESSING_PROHIBITED",
+        "RECONSTRUCTION_PROHIBITED",
+        "ACCESS_RESTRICTED",
+    }
+)
+SUPPORTED_SECRET_PRESENCE = frozenset({"SECRET_PRESENT", "CREDENTIAL_PRESENT"})
 
 ProvenanceResolver = Callable[[str, str, datetime], Mapping[str, Any] | None]
 _PUBLICATION_CAPABILITY_SENTINEL = object()
@@ -210,6 +218,7 @@ class SourceHandlingAuthorityRepository:
         _require_family_scope(family, scope)
         if family == "AUTHORIZATION_RULE" and expected_current_head_id is None:
             raise SourceHandlingBlockedError("authorization-rule genesis requires operator bootstrap")
+        _validate_payload_shape(family, scope, payload)
         normalized_payload = _plain_mapping(payload)
         _validate_payload_shape(family, scope, normalized_payload)
         _verify_authorization_signature(authorization, self._verification_public_key_bytes)
@@ -972,6 +981,7 @@ class SourceHandlingAuthorityService:
         authorization_id: str | None = None,
     ) -> PublicationAuthorization:
         _require_family_scope(publication_kind, governed_subject_scope)
+        _validate_payload_shape(publication_kind, governed_subject_scope, payload)
         normalized_payload = _plain_mapping(payload)
         _validate_payload_shape(publication_kind, governed_subject_scope, normalized_payload)
         now = _aware_utc("authorization issuance time", self._clock.now())
@@ -1826,10 +1836,19 @@ def _validate_payload_shape(family: str, scope: str, payload: Mapping[str, Any])
             "NO_PERSISTENCE",
         }:
             raise SourceHandlingBlockedError("FACT persistence restriction is unknown or unsupported")
-        if not isinstance(fact.get("operation_restrictions"), list):
+        operation_restrictions = fact.get("operation_restrictions")
+        if not isinstance(operation_restrictions, list):
             raise SourceHandlingBlockedError("FACT operation restrictions are unknown")
-        if not isinstance(fact.get("secret_presence"), list):
+        if any(
+            not isinstance(restriction, str) or restriction not in SUPPORTED_OPERATION_RESTRICTIONS
+            for restriction in operation_restrictions
+        ):
+            raise SourceHandlingBlockedError("FACT operation restriction is unknown or unsupported")
+        secret_presence = fact.get("secret_presence")
+        if not isinstance(secret_presence, list):
             raise SourceHandlingBlockedError("FACT secret presence is unknown")
+        if any(not isinstance(secret, str) or secret not in SUPPORTED_SECRET_PRESENCE for secret in secret_presence):
+            raise SourceHandlingBlockedError("FACT secret presence is unknown or unsupported")
 
 
 def _require_family_scope(family: str, scope: str) -> None:

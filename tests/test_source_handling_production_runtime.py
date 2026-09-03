@@ -1157,6 +1157,79 @@ def test_unknown_fact_dimensions_block_before_authorization(tmp_path: Path, flag
         )
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("secret_presence", ["UNKNOWN"]),
+        ("secret_presence", ["SECRET_PRESENT", "UNKNOWN"]),
+        ("operation_restrictions", ["UNKNOWN"]),
+        ("operation_restrictions", ["ACCESS_RESTRICTED", "UNKNOWN"]),
+        ("secret_presence", [123]),
+        ("secret_presence", ["SECRET_PRESENT", None]),
+        ("operation_restrictions", [{"value": "ACCESS_RESTRICTED"}]),
+        ("operation_restrictions", ["ACCESS_RESTRICTED", False]),
+        ("secret_presence", "SECRET_PRESENT"),
+        ("operation_restrictions", ("ACCESS_RESTRICTED",)),
+    ],
+)
+def test_unknown_or_malformed_fact_restriction_values_block_before_authorization(
+    tmp_path: Path,
+    field: str,
+    value: object,
+) -> None:
+    service, clock, _key, rule_id = _service(tmp_path)
+    payload = _fact_payload("doc-1", clock.now())
+    payload["fact"][field] = value
+
+    with pytest.raises(SourceHandlingBlockedError, match="unknown|unsupported"):
+        _authorize(
+            service,
+            family="FACT",
+            scope="doc-1",
+            payload=payload,
+            rule_id=rule_id,
+            expected_head=None,
+            authorization_id=f"auth:invalid:{field}",
+            expires_at=clock.now() + timedelta(minutes=5),
+        )
+
+
+def test_all_supported_fact_restriction_values_publish_and_resolve(tmp_path: Path) -> None:
+    service, clock, _key, rule_id = _service(tmp_path)
+    payload = _fact_payload("doc-1", clock.now())
+    payload["fact"]["operation_restrictions"] = [
+        "MODEL_PROCESSING_PROHIBITED",
+        "RECONSTRUCTION_PROHIBITED",
+        "ACCESS_RESTRICTED",
+    ]
+    payload["fact"]["secret_presence"] = ["SECRET_PRESENT", "CREDENTIAL_PRESENT"]
+
+    record_id, _authorization = _publish(
+        service,
+        family="FACT",
+        scope="doc-1",
+        payload=payload,
+        rule_id=rule_id,
+        expected_head=None,
+        authorization_id="auth:all-supported-restrictions",
+        expires_at=clock.now() + timedelta(minutes=5),
+    )
+
+    record = resolve_canonical_head(
+        service.resolver()("doc-1", clock.now()).store,
+        family="FACT",
+        scope="doc-1",
+        cutoff=clock.now(),
+    )
+    assert record["id"] == record_id
+    assert set(record["fact"]["operation_restrictions"]) == {
+        "MODEL_PROCESSING_PROHIBITED",
+        "RECONSTRUCTION_PROHIBITED",
+        "ACCESS_RESTRICTED",
+    }
+    assert set(record["fact"]["secret_presence"]) == {"SECRET_PRESENT", "CREDENTIAL_PRESENT"}
+
+
 def test_expired_authorization_is_not_consumed(tmp_path: Path) -> None:
     service, clock, _key, rule_id = _service(tmp_path)
     payload = _fact_payload("doc-1", clock.now())
