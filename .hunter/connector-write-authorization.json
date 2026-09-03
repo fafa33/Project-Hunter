@@ -1,24 +1,24 @@
 {
-  "authorization_id": "8092664bf0da34026ae349a39da688426584f4abe667d752315b90c437780633",
+  "authorization_id": "03d758e888a487885e304b5147d945b5d0cff621897c12b54752a2fb465be7e5",
   "claims": {
     "base_ref": "main",
     "base_sha": "bbd23e2d59fad8d6d128ea8078cd78bcfa058357",
     "capability": "feature-branch-write",
     "changes": [
       {
-        "blob_sha": "7f996085f90b69b6807d7d55b9666b791c666af1",
+        "blob_sha": "8c4e1b712979763e84cd6616693779cb41d9fead",
         "path": "src/hunter/evidence_intelligence/source_handling_persistence.py",
         "previous_path": "",
         "status": "added"
       },
       {
-        "blob_sha": "faca30d4a87090afb4c7ab915ed6e03a7a714d1c",
+        "blob_sha": "0c3b259669c5b85675c2e3f4c15993b20c07254f",
         "path": "tests/test_source_handling_production_runtime.py",
         "previous_path": "",
         "status": "added"
       },
       {
-        "blob_sha": "3c32eeae2ecfcb253dd259a64c71582ade0ed0f9",
+        "blob_sha": "9ca997bab9b0baa62dc3f2020a7bb89bc402541e",
         "path": "src/hunter/evidence_intelligence/__init__.py",
         "previous_path": "",
         "status": "modified"
