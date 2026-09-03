@@ -38,9 +38,7 @@ class _StrictRepositoryClock:
         if path.exists():
             connection = sqlite3.connect(path)
             try:
-                row = connection.execute(
-                    "SELECT MAX(admission_time) FROM source_handling_authority_records"
-                ).fetchone()
+                row = connection.execute("SELECT MAX(admission_time) FROM source_handling_authority_records").fetchone()
             except sqlite3.OperationalError:
                 row = None
             finally:
