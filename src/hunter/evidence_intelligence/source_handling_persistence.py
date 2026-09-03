@@ -255,25 +255,11 @@ class SourceHandlingAuthorityRepository:
         _verify_authorization_signature(authorization, self._verification_public_key_bytes)
         verify_publication(authorization, family, scope, normalized_payload)
         _validate_authorization_payload_times(authorization, normalized_payload)
-        admission_time = _aware_utc("admission_time", self._clock.now())
         payload_json = _canonical_json(normalized_payload)
         payload_digest = hashlib.sha256(payload_json.encode("utf-8")).hexdigest()
         supersedes_id = _supersedes_id(normalized_payload)
         if family == "AUTHORIZATION_RULE" and authorization.authorization_rule_id == payload_digest:
             raise SourceHandlingBlockedError("an authorization rule cannot authorize itself")
-        integrity_signature = self._sign_record_integrity(
-            record_id=payload_digest,
-            family=family,
-            scope=scope,
-            supersedes_record_id=supersedes_id,
-            effective_from=_time_text(_payload_time(normalized_payload, "effective_from")),
-            recorded_at=_time_text(_payload_time(normalized_payload, "recorded_at")),
-            known_at=_time_text(_payload_time(normalized_payload, "known_at")),
-            admission_time=_time_text(admission_time),
-            payload_sha256=payload_digest,
-            authorization_id=authorization.authorization_id,
-            schema_version=SOURCE_HANDLING_RECORD_SCHEMA_VERSION,
-        )
 
         with self._transaction() as connection:
             current_row = connection.execute(
@@ -308,7 +294,6 @@ class SourceHandlingAuthorityRepository:
             stored_authorization = _authorization_from_storage(auth_row)
             if stored_authorization != authorization:
                 raise SourceHandlingBlockedError("publication authorization differs from the issued exact claims")
-            _validate_authorization_window(authorization, admission_time)
 
             rule = _strict_known_rule(
                 connection,
@@ -340,11 +325,27 @@ class SourceHandlingAuthorityRepository:
                 resolver=self._provenance_resolver,
             )
 
+            admission_time = _aware_utc("admission_time", self._clock.now())
+            _validate_authorization_window(authorization, admission_time)
             last_admission = connection.execute(
                 "SELECT MAX(admission_time) FROM source_handling_authority_records"
             ).fetchone()[0]
             if last_admission is not None and admission_time < _parse_time(str(last_admission)):
                 raise SourceHandlingBlockedError("repository admission clock moved backwards")
+
+            integrity_signature = self._sign_record_integrity(
+                record_id=payload_digest,
+                family=family,
+                scope=scope,
+                supersedes_record_id=supersedes_id,
+                effective_from=_time_text(_payload_time(normalized_payload, "effective_from")),
+                recorded_at=_time_text(_payload_time(normalized_payload, "recorded_at")),
+                known_at=_time_text(_payload_time(normalized_payload, "known_at")),
+                admission_time=_time_text(admission_time),
+                payload_sha256=payload_digest,
+                authorization_id=authorization.authorization_id,
+                schema_version=SOURCE_HANDLING_RECORD_SCHEMA_VERSION,
+            )
 
             consumed = connection.execute(
                 """
@@ -445,20 +446,6 @@ class SourceHandlingAuthorityRepository:
         _validate_payload_shape("AUTHORIZATION_RULE", SOURCE_HANDLING_RULE_SCOPE, payload)
         payload_json = _canonical_json(payload)
         record_id = hashlib.sha256(payload_json.encode("utf-8")).hexdigest()
-        admission_time = _aware_utc("admission_time", self._clock.now())
-        integrity_signature = self._sign_record_integrity(
-            record_id=record_id,
-            family="AUTHORIZATION_RULE",
-            scope=SOURCE_HANDLING_RULE_SCOPE,
-            supersedes_record_id=None,
-            effective_from=_time_text(_payload_time(payload, "effective_from")),
-            recorded_at=_time_text(_payload_time(payload, "recorded_at")),
-            known_at=_time_text(_payload_time(payload, "known_at")),
-            admission_time=_time_text(admission_time),
-            payload_sha256=record_id,
-            authorization_id=None,
-            schema_version=SOURCE_HANDLING_RECORD_SCHEMA_VERSION,
-        )
 
         with self._transaction() as connection:
             history_count = int(
@@ -468,6 +455,20 @@ class SourceHandlingAuthorityRepository:
             )
             if history_count:
                 raise SourceHandlingBlockedError("authorization-rule bootstrap requires empty history")
+            admission_time = _aware_utc("admission_time", self._clock.now())
+            integrity_signature = self._sign_record_integrity(
+                record_id=record_id,
+                family="AUTHORIZATION_RULE",
+                scope=SOURCE_HANDLING_RULE_SCOPE,
+                supersedes_record_id=None,
+                effective_from=_time_text(_payload_time(payload, "effective_from")),
+                recorded_at=_time_text(_payload_time(payload, "recorded_at")),
+                known_at=_time_text(_payload_time(payload, "known_at")),
+                admission_time=_time_text(admission_time),
+                payload_sha256=record_id,
+                authorization_id=None,
+                schema_version=SOURCE_HANDLING_RECORD_SCHEMA_VERSION,
+            )
             connection.execute(
                 """
                 INSERT INTO source_handling_authority_records (
@@ -1139,10 +1140,7 @@ _LOCATOR_INTAKE_FIELDS = frozenset({"locator", "source_url"})
 _SOURCE_DERIVED_TEXT_INTAKE_FIELDS = frozenset({"excerpt", "section_title", "title"})
 
 
-def _issue_intake_durable_payload(
-    reference: EvidenceIntakeReference,
-    prepared: PreparedEvidenceIntake,
-) -> dict[str, Any]:
+def _issue_intake_durable_payload(prepared: PreparedEvidenceIntake) -> dict[str, Any]:
     categorized: dict[str, dict[str, dict[str, Any]]] = {
         "content_derived_ids": {},
         "locator_urls": {},
@@ -1164,7 +1162,7 @@ def _issue_intake_durable_payload(
                 categorized[category].setdefault(artifact_key, {})[field] = value
     if any(not fields for fields in categorized.values()):
         raise SourceHandlingBlockedError("complete Issue Source durable artifact categorization is unavailable")
-    return {"issue_content": reference.content, **categorized}
+    return categorized
 
 
 class IssueSourceTransientIntakeBoundary:
@@ -1213,7 +1211,7 @@ class IssueSourceTransientIntakeBoundary:
         validate_durable_payload(
             decision=decision,
             registry=resolved.registry_record,
-            payload=_issue_intake_durable_payload(reference, prepared),
+            payload=_issue_intake_durable_payload(prepared),
             secret_presence=secret_presence,
         )
         return self._intake.ingest_prepared(prepared)
@@ -1276,8 +1274,8 @@ def _decode_durable_record(
         raise SourceHandlingBlockedError("canonical publication authorization is missing")
 
     return {
-        "id": str(row["record_id"]),
         **copy.deepcopy(payload),
+        "id": str(row["record_id"]),
         "publication_payload": copy.deepcopy(payload),
         "publication_authorization": authorization,
         "admission_time": _parse_time(str(row["admission_time"])),
@@ -1842,6 +1840,8 @@ def _validate_complete_chain(records: Sequence[Mapping[str, Any]], *, expected_h
 
 
 def _validate_payload_shape(family: str, scope: str, payload: Mapping[str, Any]) -> None:
+    if "id" in payload:
+        raise SourceHandlingBlockedError("authority payload cannot override repository record identity")
     if payload.get("scope") != scope:
         raise SourceHandlingBlockedError("authority payload scope does not match publication scope")
     for field in ("effective_from", "recorded_at", "known_at"):
