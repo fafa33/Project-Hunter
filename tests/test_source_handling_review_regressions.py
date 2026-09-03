@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import sqlite3
 from datetime import timedelta
 from pathlib import Path
 
@@ -10,11 +11,14 @@ from test_source_handling_production_runtime import (
     _complete_authority,
     _fact_payload,
     _operator_root,
+    _policy_payload,
     _provenance,
+    _publish,
     _reference,
     _service,
 )
 
+import hunter.evidence_intelligence.source_handling_persistence as source_handling_persistence
 from hunter.evidence_intelligence.intake import EvidenceIntelligenceIntakeService, evidence_document_id
 from hunter.evidence_intelligence.repository import EvidenceIntelligenceRepository
 from hunter.evidence_intelligence.source_handling import SourceHandlingBlockedError
@@ -133,6 +137,7 @@ def test_raw_issue_content_denial_does_not_block_allowed_durable_artifacts(tmp_p
     boundary = IssueSourceTransientIntakeBoundary(
         intake=EvidenceIntelligenceIntakeService(evidence_repository),
         resolver=service.resolver(),
+        clock=clock,
     )
     result = boundary.ingest(
         reference,
@@ -142,3 +147,136 @@ def test_raw_issue_content_denial_does_not_block_allowed_durable_artifacts(tmp_p
 
     assert result.document.document_id == document_id
     assert evidence_repository.count("evidence_documents") == 1
+
+
+def test_fact_publication_requires_complete_explicit_availability_state(tmp_path: Path) -> None:
+    service, clock, _key, rule_id = _service(tmp_path)
+    payload = _fact_payload("doc-availability", clock.now())
+    payload["fact"].pop("deleted_at_source")
+
+    with pytest.raises(SourceHandlingBlockedError, match="availability state"):
+        _authorize(
+            service,
+            family="FACT",
+            scope="doc-availability",
+            payload=payload,
+            rule_id=rule_id,
+            expected_head=None,
+            authorization_id="auth:availability-incomplete",
+            expires_at=clock.now() + timedelta(minutes=5),
+        )
+
+
+def test_live_issue_intake_uses_trusted_current_cutoff_not_caller_processed_at(tmp_path: Path) -> None:
+    service, clock, _key, rule_id = _service(tmp_path)
+    reference = _reference("must not bypass a current retention revocation")
+    document_id = evidence_document_id(reference)
+    heads = _complete_authority(service, clock, rule_id, document_id=document_id)
+    stale_processed_at = clock.now()
+
+    clock.value += timedelta(minutes=1)
+    policy = _policy_payload(document_id, clock.now(), registry_id=f"registry:{document_id}:v1", retention="DENY")
+    policy["supersedes_policy_record_id"] = heads["policy"]
+    _publish(
+        service,
+        family="POLICY",
+        scope=f"policy:{document_id}:v1",
+        payload=policy,
+        rule_id=rule_id,
+        expected_head=heads["policy"],
+        authorization_id="auth:policy:revoked",
+        expires_at=clock.now() + timedelta(minutes=5),
+    )
+
+    repository = EvidenceIntelligenceRepository(service.path)
+    boundary = IssueSourceTransientIntakeBoundary(
+        intake=EvidenceIntelligenceIntakeService(repository),
+        resolver=service.resolver(),
+        clock=clock,
+    )
+    with pytest.raises(SourceHandlingBlockedError, match="retention"):
+        boundary.ingest(reference, processing_run_id="run-current-cutoff", processed_at=stale_processed_at)
+    assert repository.count("evidence_documents") == 0
+
+
+def test_metadata_only_fact_blocks_non_metadata_prepared_artifacts(tmp_path: Path) -> None:
+    service, clock, _key, rule_id = _service(tmp_path)
+    reference = _reference("content that would create text and derived identifiers")
+    document_id = evidence_document_id(reference)
+    heads = _complete_authority(service, clock, rule_id, document_id=document_id)
+
+    clock.value += timedelta(minutes=1)
+    fact = _fact_payload(document_id, clock.now(), supersedes=heads["fact"])
+    fact["fact"]["persistence_restriction"] = "METADATA_ONLY"
+    _publish(
+        service,
+        family="FACT",
+        scope=document_id,
+        payload=fact,
+        rule_id=rule_id,
+        expected_head=heads["fact"],
+        authorization_id="auth:fact:metadata-only",
+        expires_at=clock.now() + timedelta(minutes=5),
+    )
+
+    repository = EvidenceIntelligenceRepository(service.path)
+    boundary = IssueSourceTransientIntakeBoundary(
+        intake=EvidenceIntelligenceIntakeService(repository),
+        resolver=service.resolver(),
+        clock=clock,
+    )
+    with pytest.raises(SourceHandlingBlockedError, match="persistence restriction"):
+        boundary.ingest(reference, processing_run_id="run-metadata-only", processed_at=clock.now())
+    assert repository.count("evidence_documents") == 0
+
+
+def test_read_view_verifies_history_inside_one_explicit_snapshot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    service, clock, _key, _rule_id = _service(tmp_path)
+    observed: list[bool] = []
+    original = source_handling_persistence._verify_authenticated_history
+
+    def verifying(connection, **kwargs):
+        observed.append(connection.in_transaction)
+        return original(connection, **kwargs)
+
+    monkeypatch.setattr(source_handling_persistence, "_verify_authenticated_history", verifying)
+    service.resolver()("missing-doc", clock.now()).store.current_canonical_head_id("FACT", "missing-doc")
+    assert observed
+    assert all(observed)
+
+
+def test_repository_admission_times_are_strictly_monotonic_with_frozen_clock(tmp_path: Path) -> None:
+    service, clock, _key, rule_id = _service(tmp_path)
+    _publish(
+        service,
+        family="FACT",
+        scope="doc-monotonic-a",
+        payload=_fact_payload("doc-monotonic-a", clock.now()),
+        rule_id=rule_id,
+        expected_head=None,
+        authorization_id="auth:monotonic-a",
+        expires_at=clock.now() + timedelta(minutes=5),
+    )
+    _publish(
+        service,
+        family="FACT",
+        scope="doc-monotonic-b",
+        payload=_fact_payload("doc-monotonic-b", clock.now()),
+        rule_id=rule_id,
+        expected_head=None,
+        authorization_id="auth:monotonic-b",
+        expires_at=clock.now() + timedelta(minutes=5),
+    )
+
+    connection = sqlite3.connect(service.path)
+    try:
+        values = [
+            row[0]
+            for row in connection.execute(
+                "SELECT admission_time FROM source_handling_authority_records ORDER BY rowid"
+            )
+        ]
+    finally:
+        connection.close()
+    assert values == sorted(values)
+    assert len(values) == len(set(values))
