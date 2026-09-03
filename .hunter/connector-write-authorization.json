@@ -1,5 +1,5 @@
 {
-  "authorization_id": "c65154e2def11608fb2ba25da1c2219f632a90537deae4629567bc9bc094abbf",
+  "authorization_id": "ec0af23a9d266adc389a1b6e8add55efc7ccc3da45fc6953fbeaff3a83349241",
   "claims": {
     "base_ref": "main",
     "base_sha": "bbd23e2d59fad8d6d128ea8078cd78bcfa058357",
@@ -18,7 +18,7 @@
         "status": "added"
       },
       {
-        "blob_sha": "32ec4db982c14b25e8369ae2af3ccf2700474cb3",
+        "blob_sha": "699fd220714be4eb07a6800b319a4aa3e9a87b45",
         "path": "tests/test_source_handling_review_regressions.py",
         "previous_path": "",
         "status": "added"
