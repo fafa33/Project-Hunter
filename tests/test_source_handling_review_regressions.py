@@ -60,8 +60,7 @@ def test_publication_admission_time_is_sampled_after_write_transaction_acquisiti
 
     assert service.authorization_consumed("auth:lock-wait") is False
     assert (
-        service.resolver()("doc-lock-wait", clock.now())
-        .store.current_canonical_head_id("FACT", "doc-lock-wait")
+        service.resolver()("doc-lock-wait", clock.now()).store.current_canonical_head_id("FACT", "doc-lock-wait")
         is None
     )
 
@@ -92,8 +91,7 @@ def test_payload_cannot_override_repository_record_id_and_authorization_remains_
 
     assert service.authorization_consumed("auth:reserved-id") is False
     assert (
-        service.resolver()("doc-reserved-id", clock.now())
-        .store.current_canonical_head_id("FACT", "doc-reserved-id")
+        service.resolver()("doc-reserved-id", clock.now()).store.current_canonical_head_id("FACT", "doc-reserved-id")
         is None
     )
 
@@ -113,9 +111,7 @@ def test_payload_cannot_override_repository_record_id_and_authorization_remains_
         provenance_resolver=_provenance,
         clock=clock,
     )
-    record = restarted.resolver()("doc-reserved-id", clock.now()).store.canonical_record_by_id(
-        "FACT", result.record_id
-    )
+    record = restarted.resolver()("doc-reserved-id", clock.now()).store.canonical_record_by_id("FACT", result.record_id)
     assert record is not None
     assert record["id"] == result.record_id
     assert record["id"] != "attacker-controlled-record-id"
