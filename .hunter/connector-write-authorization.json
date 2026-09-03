@@ -1,5 +1,5 @@
 {
-  "authorization_id": "3bacb99a411fcb6495c239b303f14d89f7f866b80649896efd5d1f51edf948dc",
+  "authorization_id": "76e21c31581d1fddbdd12998bd97b1362b5d4aef7b1684e126482d9ef0b49066",
   "claims": {
     "base_ref": "main",
     "base_sha": "bbd23e2d59fad8d6d128ea8078cd78bcfa058357",
@@ -12,7 +12,7 @@
         "status": "added"
       },
       {
-        "blob_sha": "000b0622cd247b444c525b5627e8aeb3efbb96e0",
+        "blob_sha": "e196f5e5a537fac54864cf8b06e22676b88a965f",
         "path": "src/hunter/evidence_intelligence/source_handling_runtime_hardening.py",
         "previous_path": "",
         "status": "added"
@@ -24,7 +24,7 @@
         "status": "added"
       },
       {
-        "blob_sha": "777c29dc79d0ddd94e479a65cbc3b023ca59c6d9",
+        "blob_sha": "8a481893b72cb63cef1a8ea10e907f8cc241e9ba",
         "path": "tests/test_source_handling_review_regressions.py",
         "previous_path": "",
         "status": "added"
