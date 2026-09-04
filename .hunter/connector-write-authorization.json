@@ -1,5 +1,5 @@
 {
-  "authorization_id": "ccee79cae516137f238a72b56a20655f4792a166e9f1a608835976cdd1e0ed14",
+  "authorization_id": "98b6708efc3f87b3c26d23c80073a9c6dea92d97321152f74d398b3b5f2ce79f",
   "claims": {
     "base_ref": "main",
     "base_sha": "bbd23e2d59fad8d6d128ea8078cd78bcfa058357",
@@ -12,7 +12,7 @@
         "status": "added"
       },
       {
-        "blob_sha": "8eefcf29127c935f860be2f27fa07d7bfd8cef2c",
+        "blob_sha": "fe152af8ed31ca7d90b3b16fe09ce51916c32096",
         "path": "src/hunter/evidence_intelligence/source_handling_runtime_hardening.py",
         "previous_path": "",
         "status": "added"
