@@ -118,4 +118,4 @@ def test_admission_time_is_strictly_monotonic_across_unrelated_authority_scopes(
         connection.close()
 
     assert len(values) >= 3
-    assert all(earlier < later for earlier, later in zip(values, values[1:]))
+    assert all(earlier < later for earlier, later in zip(values, values[1:], strict=False))
