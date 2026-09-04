@@ -112,9 +112,7 @@ def test_admission_time_is_strictly_monotonic_across_unrelated_authority_scopes(
     try:
         values = [
             source_handling_persistence._parse_time(str(row[0]))
-            for row in connection.execute(
-                "SELECT admission_time FROM source_handling_authority_records ORDER BY rowid"
-            )
+            for row in connection.execute("SELECT admission_time FROM source_handling_authority_records ORDER BY rowid")
         ]
     finally:
         connection.close()
