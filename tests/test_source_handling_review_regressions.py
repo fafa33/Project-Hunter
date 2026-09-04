@@ -247,36 +247,48 @@ def test_read_view_verifies_history_inside_one_explicit_snapshot(
     assert all(observed)
 
 
-def test_repository_admission_times_are_strictly_monotonic_with_frozen_clock(tmp_path: Path) -> None:
-    service, clock, _key, rule_id = _service(tmp_path)
-    _publish(
+def test_repository_admission_times_are_strictly_monotonic_with_frozen_clock_across_restart(tmp_path: Path) -> None:
+    service, clock, key, rule_id = _service(tmp_path)
+    first, _ = _publish(
         service,
         family="FACT",
-        scope="doc-monotonic-a",
-        payload=_fact_payload("doc-monotonic-a", clock.now()),
+        scope="doc-monotonic",
+        payload=_fact_payload("doc-monotonic", clock.now()),
         rule_id=rule_id,
         expected_head=None,
-        authorization_id="auth:monotonic-a",
+        authorization_id="auth:monotonic:first",
         expires_at=clock.now() + timedelta(minutes=5),
     )
+
+    restarted = SourceHandlingAuthorityService(
+        service.path,
+        signing_private_key=key,
+        operator_root=_operator_root(key),
+        provenance_resolver=_provenance,
+        clock=clock,
+    )
+    successor = _fact_payload("doc-monotonic", clock.now(), supersedes=first, sensitivity="RESTRICTED")
     _publish(
-        service,
+        restarted,
         family="FACT",
-        scope="doc-monotonic-b",
-        payload=_fact_payload("doc-monotonic-b", clock.now()),
+        scope="doc-monotonic",
+        payload=successor,
         rule_id=rule_id,
-        expected_head=None,
-        authorization_id="auth:monotonic-b",
+        expected_head=first,
+        authorization_id="auth:monotonic:second",
         expires_at=clock.now() + timedelta(minutes=5),
     )
 
     connection = sqlite3.connect(service.path)
     try:
         values = [
-            row[0]
-            for row in connection.execute("SELECT admission_time FROM source_handling_authority_records ORDER BY rowid")
+            source_handling_persistence._parse_time(str(row[0]))
+            for row in connection.execute(
+                "SELECT admission_time FROM source_handling_authority_records "
+                "WHERE family = 'FACT' AND scope = 'doc-monotonic' ORDER BY rowid"
+            )
         ]
     finally:
         connection.close()
-    assert values == sorted(values)
-    assert len(values) == len(set(values))
+    assert len(values) == 2
+    assert values[0] < values[1]
