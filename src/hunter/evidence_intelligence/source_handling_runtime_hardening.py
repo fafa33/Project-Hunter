@@ -68,24 +68,20 @@ def _install_repository_clock() -> None:
         connection = sqlite3.connect(self.path, timeout=30.0)
         try:
             connection.execute("BEGIN IMMEDIATE")
-            connection.execute(
-                """
+            connection.execute("""
                 CREATE UNIQUE INDEX IF NOT EXISTS source_handling_registry_logical_identity_unique
                 ON source_handling_authority_records(
                     json_extract(payload_json, '$.field_category_registry_id')
                 )
                 WHERE family = 'FIELD_CATEGORY_REGISTRY'
-                """
-            )
-            connection.execute(
-                """
+                """)
+            connection.execute("""
                 CREATE UNIQUE INDEX IF NOT EXISTS source_handling_rule_logical_identity_unique
                 ON source_handling_authority_records(
                     json_extract(payload_json, '$.authorization_rule_id')
                 )
                 WHERE family = 'AUTHORIZATION_RULE'
-                """
-            )
+                """)
             connection.commit()
         except sqlite3.IntegrityError as error:
             connection.rollback()
