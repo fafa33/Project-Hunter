@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from dataclasses import replace
 from datetime import timedelta
@@ -7,11 +8,14 @@ from pathlib import Path
 
 import pytest
 from test_source_handling_production_runtime import (
+    RULE_FIXTURE,
     _complete_authority,
     _fact_payload,
     _publish,
     _reference,
+    _registry_payload,
     _service,
+    _times,
 )
 
 import hunter.evidence_intelligence.source_handling_persistence as source_handling_persistence
@@ -119,3 +123,107 @@ def test_admission_time_is_strictly_monotonic_across_unrelated_authority_scopes(
 
     assert len(values) >= 3
     assert all(earlier < later for earlier, later in zip(values, values[1:], strict=False))
+
+
+def test_writer_history_verification_runs_inside_immediate_transaction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, _clock, _key, _rule_id = _service(tmp_path)
+    repository = service._repository
+    original_verify = source_handling_persistence._verify_authenticated_history
+    observed_locked = False
+
+    def verify_inside_writer(connection, **kwargs):
+        nonlocal observed_locked
+        assert connection.in_transaction is True
+        contender = sqlite3.connect(service.path, timeout=0.0)
+        try:
+            with pytest.raises(sqlite3.OperationalError, match="locked"):
+                contender.execute("BEGIN IMMEDIATE")
+            observed_locked = True
+        finally:
+            contender.close()
+        return original_verify(connection, **kwargs)
+
+    monkeypatch.setattr(source_handling_persistence, "_verify_authenticated_history", verify_inside_writer)
+    with repository._transaction():
+        pass
+
+    assert observed_locked is True
+
+
+def test_registry_logical_identity_cannot_be_reused_by_successor(tmp_path: Path) -> None:
+    service, clock, _key, rule_id = _service(tmp_path)
+    scope = "registry:doc-registry-reuse:v1"
+    logical_id = "registry:doc-registry-reuse:v1"
+    first, _ = _publish(
+        service,
+        family="FIELD_CATEGORY_REGISTRY",
+        scope=scope,
+        payload=_registry_payload("doc-registry-reuse", clock.now(), registry_id=logical_id),
+        rule_id=rule_id,
+        expected_head=None,
+        authorization_id="auth:registry-reuse:first",
+        expires_at=clock.now() + timedelta(minutes=5),
+    )
+    successor_payload = _registry_payload("doc-registry-reuse", clock.now(), registry_id=logical_id)
+    successor_payload["supersedes_field_category_registry_id"] = first
+
+    with pytest.raises(SourceHandlingBlockedError, match="identity"):
+        _publish(
+            service,
+            family="FIELD_CATEGORY_REGISTRY",
+            scope=scope,
+            payload=successor_payload,
+            rule_id=rule_id,
+            expected_head=first,
+            authorization_id="auth:registry-reuse:second",
+            expires_at=clock.now() + timedelta(minutes=5),
+        )
+
+    assert service.authorization_consumed("auth:registry-reuse:second") is False
+
+
+def test_authorization_rule_logical_identity_cannot_be_reused_by_successor(tmp_path: Path) -> None:
+    service, clock, _key, rule_id = _service(tmp_path)
+    clock.value += timedelta(minutes=1)
+    rule = json.loads(RULE_FIXTURE.read_text(encoding="utf-8"))
+    first_payload = {
+        **rule,
+        "authorization_rule_id": "AUTHORIZATION_RULE_V2",
+        "scope": "SOURCE_HANDLING",
+        "supersedes_authorization_rule_id": rule_id,
+        **_times(clock.now()),
+    }
+    successor, _ = _publish(
+        service,
+        family="AUTHORIZATION_RULE",
+        scope="SOURCE_HANDLING",
+        payload=first_payload,
+        rule_id=rule_id,
+        expected_head=rule_id,
+        authorization_id="auth:rule-reuse:first",
+        expires_at=clock.now() + timedelta(minutes=5),
+    )
+
+    clock.value += timedelta(minutes=1)
+    reused_payload = {
+        **rule,
+        "authorization_rule_id": "AUTHORIZATION_RULE_V2",
+        "scope": "SOURCE_HANDLING",
+        "supersedes_authorization_rule_id": successor,
+        **_times(clock.now()),
+    }
+    with pytest.raises(SourceHandlingBlockedError, match="identity"):
+        _publish(
+            service,
+            family="AUTHORIZATION_RULE",
+            scope="SOURCE_HANDLING",
+            payload=reused_payload,
+            rule_id=successor,
+            expected_head=successor,
+            authorization_id="auth:rule-reuse:second",
+            expires_at=clock.now() + timedelta(minutes=5),
+        )
+
+    assert service.authorization_consumed("auth:rule-reuse:second") is False
