@@ -10,17 +10,18 @@ from __future__ import annotations
 
 import contextlib
 import sqlite3
-import threading
 from collections.abc import Iterator, Mapping
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+import hunter.evidence_intelligence.repository as evidence_repository
 import hunter.evidence_intelligence.source_handling_persistence as persistence
 from hunter.evidence_intelligence.intake import (
     EvidenceIntakeReference,
     EvidenceIntakeResult,
     EvidenceIntelligenceIntakeService,
+    PreparedEvidenceIntake,
     evidence_document_id,
 )
 from hunter.evidence_intelligence.pre_model import resolve_pre_model_source_handling
@@ -28,16 +29,15 @@ from hunter.evidence_intelligence.source_handling import SourceHandlingBlockedEr
 from hunter.execution import Clock, SystemClock
 
 _INSTALLED = False
+_ISSUE_METADATA_KEYS = frozenset({"issue_number", "labels"})
 
 
 class _StrictRepositoryClock:
-    """Admission clock that is strictly monotonic within one canonical chain."""
+    """Admission clock that is strictly monotonic across the authority repository."""
 
-    def __init__(self, delegate: Clock, path: Path, *, family: str, scope: str) -> None:
+    def __init__(self, delegate: Clock, path: Path) -> None:
         self._delegate = delegate
         self._path = path
-        self._family = family
-        self._scope = scope
 
     def now(self) -> datetime:
         candidate = persistence._aware_utc("repository admission clock", self._delegate.now())
@@ -46,9 +46,7 @@ class _StrictRepositoryClock:
             connection = sqlite3.connect(self._path)
             try:
                 row = connection.execute(
-                    "SELECT admission_time FROM source_handling_authority_records "
-                    "WHERE family = ? AND scope = ? ORDER BY rowid DESC LIMIT 1",
-                    (self._family, self._scope),
+                    "SELECT admission_time FROM source_handling_authority_records ORDER BY rowid DESC LIMIT 1"
                 ).fetchone()
             except sqlite3.OperationalError:
                 row = None
@@ -63,28 +61,12 @@ class _StrictRepositoryClock:
 
 def _install_repository_clock() -> None:
     original_init = persistence.SourceHandlingAuthorityRepository.__init__
-    original_publish = persistence.SourceHandlingAuthorityRepository._publish
 
     def hardened_init(self: Any, *args: Any, **kwargs: Any) -> None:
         original_init(self, *args, **kwargs)
-        self._admission_clock_lock = threading.RLock()
-
-    def hardened_publish(self: Any, *args: Any, **kwargs: Any) -> persistence.SourceHandlingPublicationResult:
-        family = kwargs.get("family")
-        scope = kwargs.get("scope")
-        if not isinstance(family, str) or not isinstance(scope, str):
-            raise SourceHandlingBlockedError("publication family/scope are required for admission ordering")
-        lock = self._admission_clock_lock
-        with lock:
-            delegate = self._clock
-            self._clock = _StrictRepositoryClock(delegate, self.path, family=family, scope=scope)
-            try:
-                return original_publish(self, *args, **kwargs)
-            finally:
-                self._clock = delegate
+        self._clock = _StrictRepositoryClock(self._clock, self.path)
 
     persistence.SourceHandlingAuthorityRepository.__init__ = hardened_init  # type: ignore[method-assign]
-    persistence.SourceHandlingAuthorityRepository._publish = hardened_publish  # type: ignore[method-assign]
 
 
 def _install_fact_completeness_guard() -> None:
@@ -155,6 +137,75 @@ def _enforce_fact_persistence_restriction(
         raise SourceHandlingBlockedError("Issue Source FACT persistence restriction forbids prepared durable artifacts")
 
 
+def _validate_issue_metadata(metadata: Mapping[str, Any]) -> None:
+    if set(metadata) - _ISSUE_METADATA_KEYS:
+        raise SourceHandlingBlockedError("Issue Source metadata contains unsupported non-operational fields")
+    issue_number = metadata.get("issue_number")
+    if not isinstance(issue_number, int) or isinstance(issue_number, bool) or issue_number <= 0:
+        raise SourceHandlingBlockedError("Issue Source issue_number metadata is malformed")
+    labels = metadata.get("labels")
+    if not isinstance(labels, list) or any(not isinstance(label, str) or not label.strip() for label in labels):
+        raise SourceHandlingBlockedError("Issue Source labels metadata is malformed")
+
+
+def _authority_current_cutoff(path: Path, clock: Clock) -> datetime:
+    cutoff = persistence._aware_utc("Issue Source authority cutoff", clock.now())
+    connection = sqlite3.connect(path)
+    try:
+        row = connection.execute(
+            "SELECT admission_time FROM source_handling_authority_records ORDER BY rowid DESC LIMIT 1"
+        ).fetchone()
+    finally:
+        connection.close()
+    if row is not None and row[0] is not None:
+        cutoff = max(cutoff, persistence._parse_time(str(row[0])))
+    return cutoff
+
+
+def _persist_prepared_in_connection(prepared: PreparedEvidenceIntake, connection: sqlite3.Connection) -> None:
+    result = prepared.result
+    evidence_repository._upsert_payload(
+        connection,
+        "evidence_documents",
+        evidence_repository._payload(result.document),
+        key=("document_id",),
+    )
+    evidence_repository._upsert_payload(
+        connection,
+        "evidence_document_versions",
+        evidence_repository._payload(result.document_version),
+        key=("version_id",),
+    )
+    for span in result.spans:
+        evidence_repository._upsert_payload(
+            connection,
+            "evidence_spans",
+            evidence_repository._payload(span),
+            key=("span_id",),
+        )
+    evidence_repository._upsert_payload(
+        connection,
+        "document_lifecycle_events",
+        evidence_repository._payload(result.document_event),
+        key=("event_id",),
+    )
+    evidence_repository._upsert_payload(
+        connection,
+        "source_authority_verification_events",
+        evidence_repository._payload(result.authority_event),
+        key=("verification_id",),
+    )
+    for link in prepared.span_links:
+        payload = evidence_repository._payload(link)
+        payload["event_id"] = payload.pop("owner_id")
+        evidence_repository._upsert_payload(
+            connection,
+            "document_lifecycle_event_span_links",
+            payload,
+            key=("link_id",),
+        )
+
+
 def _install_issue_intake_guard() -> None:
     def hardened_init(
         self: Any,
@@ -179,35 +230,47 @@ def _install_issue_intake_guard() -> None:
         processed_at: datetime,
     ) -> EvidenceIntakeResult:
         artifact_time = persistence._aware_utc("Issue Source processed_at", processed_at)
-        authority_cutoff = persistence._aware_utc("Issue Source authority cutoff", self._clock.now())
+        _validate_issue_metadata(reference.metadata)
         document_id = evidence_document_id(reference)
-        resolved = resolve_pre_model_source_handling(self._resolver(document_id, authority_cutoff))
-        decision = resolved.decision
-        if decision.get("retention_decision") != "ALLOW":
-            raise SourceHandlingBlockedError("Issue Source retention is not allowed")
-        if decision.get("deletion_lifecycle_decision") in {"DELETE", "BLOCKED"}:
-            raise SourceHandlingBlockedError("Issue Source deletion lifecycle blocks durable intake")
-        dispositions = decision.get("durable_dispositions")
-        if not isinstance(dispositions, Mapping) or not dispositions:
-            raise SourceHandlingBlockedError("Issue Source durable dispositions are unavailable")
-        fact = resolved.fact_record.get("fact")
-        if not isinstance(fact, Mapping):
-            raise SourceHandlingBlockedError("Issue Source fact authority is unavailable")
-        secret_presence = set(persistence._string_values(fact.get("secret_presence")))
         prepared = self._intake.prepare(
             reference,
             processing_run_id=processing_run_id,
             processed_at=artifact_time,
         )
         durable_payload = persistence._issue_intake_durable_payload(prepared)
-        _enforce_fact_persistence_restriction(fact=fact, durable_payload=durable_payload)
-        validate_durable_payload(
-            decision=decision,
-            registry=resolved.registry_record,
-            payload=durable_payload,
-            secret_presence=secret_presence,
-        )
-        return self._intake.ingest_prepared(prepared)
+
+        connection = self._intake.repository._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            authority_cutoff = _authority_current_cutoff(self._intake.repository.path, self._clock)
+            resolved = resolve_pre_model_source_handling(self._resolver(document_id, authority_cutoff))
+            decision = resolved.decision
+            if decision.get("retention_decision") != "ALLOW":
+                raise SourceHandlingBlockedError("Issue Source retention is not allowed")
+            if decision.get("deletion_lifecycle_decision") in {"DELETE", "BLOCKED"}:
+                raise SourceHandlingBlockedError("Issue Source deletion lifecycle blocks durable intake")
+            dispositions = decision.get("durable_dispositions")
+            if not isinstance(dispositions, Mapping) or not dispositions:
+                raise SourceHandlingBlockedError("Issue Source durable dispositions are unavailable")
+            fact = resolved.fact_record.get("fact")
+            if not isinstance(fact, Mapping):
+                raise SourceHandlingBlockedError("Issue Source fact authority is unavailable")
+            secret_presence = set(persistence._string_values(fact.get("secret_presence")))
+            _enforce_fact_persistence_restriction(fact=fact, durable_payload=durable_payload)
+            validate_durable_payload(
+                decision=decision,
+                registry=resolved.registry_record,
+                payload=durable_payload,
+                secret_presence=secret_presence,
+            )
+            _persist_prepared_in_connection(prepared, connection)
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+        return prepared.result
 
     persistence.IssueSourceTransientIntakeBoundary.__init__ = hardened_init  # type: ignore[method-assign]
     persistence.IssueSourceTransientIntakeBoundary.ingest = hardened_ingest  # type: ignore[method-assign]
