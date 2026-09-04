@@ -134,7 +134,7 @@ def test_raw_issue_content_denial_does_not_block_allowed_durable_artifacts(tmp_p
     )
 
     evidence_repository = EvidenceIntelligenceRepository(service.path)
-    boundary = IssueSourceTransientIntakeBoundary(
+    boundary = IssueSourceTransientIntakeBoundary(  # type: ignore[call-arg]
         intake=EvidenceIntelligenceIntakeService(evidence_repository),
         resolver=service.resolver(),
         clock=clock,
@@ -189,7 +189,7 @@ def test_live_issue_intake_uses_trusted_current_cutoff_not_caller_processed_at(t
     )
 
     repository = EvidenceIntelligenceRepository(service.path)
-    boundary = IssueSourceTransientIntakeBoundary(
+    boundary = IssueSourceTransientIntakeBoundary(  # type: ignore[call-arg]
         intake=EvidenceIntelligenceIntakeService(repository),
         resolver=service.resolver(),
         clock=clock,
@@ -220,7 +220,7 @@ def test_metadata_only_fact_blocks_non_metadata_prepared_artifacts(tmp_path: Pat
     )
 
     repository = EvidenceIntelligenceRepository(service.path)
-    boundary = IssueSourceTransientIntakeBoundary(
+    boundary = IssueSourceTransientIntakeBoundary(  # type: ignore[call-arg]
         intake=EvidenceIntelligenceIntakeService(repository),
         resolver=service.resolver(),
         clock=clock,
