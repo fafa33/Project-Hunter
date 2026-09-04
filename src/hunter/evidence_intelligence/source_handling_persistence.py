@@ -17,7 +17,7 @@ import secrets
 import sqlite3
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +25,7 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 
+import hunter.evidence_intelligence.repository as evidence_repository
 from hunter.evidence_intelligence.intake import (
     EvidenceIntakeReference,
     EvidenceIntakeResult,
@@ -39,6 +40,7 @@ from hunter.evidence_intelligence.pre_model import (
 from hunter.evidence_intelligence.source_handling import (
     AUTHORITY_COMPONENT_ID,
     GENESIS_RULE_ID,
+    LIFECYCLE_WRITE_BLOCKING_DISPOSITIONS,
     PublicationAuthorization,
     SourceHandlingAuthorityReadView,
     SourceHandlingBlockedError,
@@ -51,6 +53,7 @@ from hunter.evidence_intelligence.source_handling import (
     strict_known_eligible,
     strict_known_head,
     validate_durable_payload,
+    validate_field_category_registry_payload,
     validate_permission_evidence,
     verify_publication,
 )
@@ -325,13 +328,8 @@ class SourceHandlingAuthorityRepository:
                 resolver=self._provenance_resolver,
             )
 
-            admission_time = _aware_utc("admission_time", self._clock.now())
+            admission_time = self._next_admission_time(connection)
             _validate_authorization_window(authorization, admission_time)
-            last_admission = connection.execute(
-                "SELECT MAX(admission_time) FROM source_handling_authority_records"
-            ).fetchone()[0]
-            if last_admission is not None and admission_time < _parse_time(str(last_admission)):
-                raise SourceHandlingBlockedError("repository admission clock moved backwards")
 
             integrity_signature = self._sign_record_integrity(
                 record_id=payload_digest,
@@ -385,6 +383,8 @@ class SourceHandlingAuthorityRepository:
                     ),
                 )
             except sqlite3.IntegrityError as error:
+                if "logical_identity_unique" in str(error):
+                    raise SourceHandlingBlockedError("logical authority identity is duplicated") from error
                 raise SourceHandlingBlockedError("authority record identity is immutable") from error
 
             if current_row is None:
@@ -455,7 +455,7 @@ class SourceHandlingAuthorityRepository:
             )
             if history_count:
                 raise SourceHandlingBlockedError("authorization-rule bootstrap requires empty history")
-            admission_time = _aware_utc("admission_time", self._clock.now())
+            admission_time = self._next_admission_time(connection)
             integrity_signature = self._sign_record_integrity(
                 record_id=record_id,
                 family="AUTHORIZATION_RULE",
@@ -512,6 +512,31 @@ class SourceHandlingAuthorityRepository:
         return SourceHandlingPublicationResult(
             record_id, "AUTHORIZATION_RULE", SOURCE_HANDLING_RULE_SCOPE, admission_time
         )
+
+    def _next_admission_time(self, connection: sqlite3.Connection) -> datetime:
+        """Sample a repository admission instant that is strictly monotonic repository-wide.
+
+        The instant is sampled inside the write transaction, so it reflects the
+        actual append boundary rather than a moment before the writer waited on
+        another writer or spent time signing and verifying.  It is then advanced
+        past the repository-wide maximum across every family and scope, because a
+        frozen or coarse-resolution clock would otherwise stamp two appends with
+        the same instant; a resolver that already observed cutoff ``t`` would then
+        see a later record become eligible for ``t``, and ``(document_id, cutoff)``
+        would stop being lifetime-stable.
+
+        Advancing rather than rejecting keeps a backwards wall clock from wedging
+        the repository.  Authorization expiry is validated against the advanced
+        instant by the caller, so advancement can only fail closed, never widen a
+        publication window.
+        """
+
+        candidate = _aware_utc("admission_time", self._clock.now())
+        row = connection.execute("SELECT MAX(admission_time) FROM source_handling_authority_records").fetchone()
+        if row is None or row[0] is None:
+            return candidate
+        last = _parse_time(str(row[0]))
+        return candidate if candidate > last else last + timedelta(microseconds=1)
 
     def _sign_record_integrity(self, **claims: str | None) -> str:
         message = _canonical_json(_record_integrity_claims(**claims)).encode("utf-8")
@@ -664,6 +689,30 @@ class SourceHandlingAuthorityRepository:
             }
             if "integrity_signature" not in columns:
                 connection.execute("ALTER TABLE source_handling_authority_records ADD COLUMN integrity_signature TEXT")
+            # Logical identities must stay unique across the whole repository.
+            # A registry or rule successor that reuses its predecessor's logical
+            # id makes `canonical_record_by_id` see two rows and reject the
+            # identity as ambiguous, which permanently breaks every historical
+            # replay bound to that id.  Because the history is append-only the
+            # duplicate could never be removed, so uniqueness is enforced by the
+            # database itself rather than by a caller-side check.
+            try:
+                connection.execute("""
+                    CREATE UNIQUE INDEX IF NOT EXISTS source_handling_registry_logical_identity_unique
+                    ON source_handling_authority_records(
+                        json_extract(payload_json, '$.field_category_registry_id')
+                    )
+                    WHERE family = 'FIELD_CATEGORY_REGISTRY'
+                    """)
+                connection.execute("""
+                    CREATE UNIQUE INDEX IF NOT EXISTS source_handling_rule_logical_identity_unique
+                    ON source_handling_authority_records(
+                        json_extract(payload_json, '$.authorization_rule_id')
+                    )
+                    WHERE family = 'AUTHORIZATION_RULE'
+                    """)
+            except sqlite3.IntegrityError as error:
+                raise SourceHandlingBlockedError("logical authority identity is duplicated") from error
             pinned = connection.execute(
                 "SELECT * FROM source_handling_operator_root WHERE singleton_id = 'SOURCE_HANDLING'"
             ).fetchone()
@@ -726,9 +775,29 @@ class SourceHandlingAuthorityRepository:
 
     @contextlib.contextmanager
     def _transaction(self) -> Iterator[sqlite3.Connection]:
-        with self._connect() as connection:
+        """Yield a writer connection whose whole body sees one database generation.
+
+        ``BEGIN IMMEDIATE`` is taken before the operator-root and history
+        verification so a concurrent writer cannot commit between the
+        verifier's commitment, record, authorization, and canonical-head
+        queries.  Verifying first would compare two generations and raise
+        ``TAMPER_DETECTED`` against valid history.
+        """
+
+        with self._connect(verify_operator_root=False, verify_history=False) as connection:
             connection.execute("BEGIN IMMEDIATE")
             try:
+                row = connection.execute(
+                    "SELECT * FROM source_handling_operator_root WHERE singleton_id = 'SOURCE_HANDLING'"
+                ).fetchone()
+                if row is None:
+                    raise SourceHandlingBlockedError("pinned Source Handling operator root is unavailable")
+                _verify_operator_root_row(row, self._operator_root)
+                _verify_authenticated_history(
+                    connection,
+                    verification_public_key_bytes=self._verification_public_key_bytes,
+                    operator_root=self._operator_root,
+                )
                 yield connection
             except Exception:
                 connection.rollback()
@@ -763,6 +832,10 @@ class SqliteSourceHandlingAuthorityReadView(SourceHandlingAuthorityReadView):
         self._provenance_resolver = provenance_resolver
         with self._connect():
             pass
+
+    @property
+    def path(self) -> Path:
+        return self._path
 
     def canonical_records(self, family: str, scope: str) -> tuple[dict[str, Any], ...]:
         _require_family_scope(family, scope)
@@ -906,11 +979,22 @@ class SqliteSourceHandlingAuthorityReadView(SourceHandlingAuthorityReadView):
 
     @contextlib.contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
+        """Yield a read-only connection pinned to one database generation.
+
+        Python's driver does not keep bare ``SELECT`` statements inside a
+        transaction, so an explicit ``BEGIN`` is taken before verification and
+        held through the caller's reads.  Without it a concurrent commit
+        between the verifier's queries reports ``TAMPER_DETECTED`` against
+        valid history, or the caller reads a generation other than the one
+        just verified.
+        """
+
         if not self._path.exists():
             raise SourceHandlingBlockedError("Source Handling authority database is unavailable")
         connection = sqlite3.connect(f"file:{self._path.resolve()}?mode=ro", uri=True, timeout=30.0)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
+        connection.execute("BEGIN")
         try:
             row = connection.execute(
                 "SELECT * FROM source_handling_operator_root WHERE singleton_id = 'SOURCE_HANDLING'"
@@ -925,6 +1009,7 @@ class SqliteSourceHandlingAuthorityReadView(SourceHandlingAuthorityReadView):
             )
             yield connection
         finally:
+            connection.rollback()
             connection.close()
 
 
@@ -935,6 +1020,17 @@ class ProductionSourceHandlingAuthorityResolver:
         if not isinstance(view, SqliteSourceHandlingAuthorityReadView):
             raise TypeError("production resolver requires a read-only SQLite authority view")
         self._view = view
+
+    @property
+    def authority_database_path(self) -> Path:
+        """Resolved path of the authority history this resolver reads.
+
+        Exposed so a durable-write boundary can prove that its own write
+        transaction actually locks this history.  It grants no publication
+        capability: the view behind it stays read-only.
+        """
+
+        return self._view.path
 
     def __call__(self, document_id: str, cutoff: datetime) -> EvidencePreModelSourceHandlingAuthority:
         if not isinstance(document_id, str) or not document_id.strip():
@@ -1165,14 +1261,25 @@ def _issue_intake_durable_payload(prepared: PreparedEvidenceIntake) -> dict[str,
     return categorized
 
 
+ISSUE_SOURCE_METADATA_KEYS = frozenset({"issue_number", "labels"})
+
+
 class IssueSourceTransientIntakeBoundary:
-    """ADR 0036 gate that keeps raw Issue content transient until retention is allowed."""
+    """ADR 0036 gate that keeps raw Issue content transient until retention is allowed.
+
+    The boundary resolves authority and performs the durable intake write inside
+    one ``BEGIN IMMEDIATE`` transaction on the Evidence Intelligence database.
+    Because the Source Handling authority history lives in that same database,
+    holding the write lock means no restrictive FACT or POLICY successor can
+    commit between the authority decision and the write it authorizes.
+    """
 
     def __init__(
         self,
         *,
         intake: EvidenceIntelligenceIntakeService,
         resolver: ProductionSourceHandlingAuthorityResolver,
+        clock: Clock | None = None,
     ) -> None:
         if not isinstance(intake, EvidenceIntelligenceIntakeService):
             raise TypeError("Issue Source boundary requires EvidenceIntelligenceIntakeService")
@@ -1180,6 +1287,7 @@ class IssueSourceTransientIntakeBoundary:
             raise TypeError("Issue Source boundary requires the production read-only resolver")
         self._intake = intake
         self._resolver = resolver
+        self._clock = clock or SystemClock()
 
     def ingest(
         self,
@@ -1188,33 +1296,191 @@ class IssueSourceTransientIntakeBoundary:
         processing_run_id: str,
         processed_at: datetime,
     ) -> EvidenceIntakeResult:
-        cutoff = _aware_utc("Issue Source intake cutoff", processed_at)
+        artifact_time = _aware_utc("Issue Source processed_at", processed_at)
+        _validate_issue_metadata(reference.metadata)
         document_id = evidence_document_id(reference)
-        resolved = resolve_pre_model_source_handling(self._resolver(document_id, cutoff))
-        decision = resolved.decision
-        if decision.get("retention_decision") != "ALLOW":
-            raise SourceHandlingBlockedError("Issue Source retention is not allowed")
-        if decision.get("deletion_lifecycle_decision") in {"DELETE", "BLOCKED"}:
-            raise SourceHandlingBlockedError("Issue Source deletion lifecycle blocks durable intake")
-        dispositions = decision.get("durable_dispositions")
-        if not isinstance(dispositions, Mapping) or not dispositions:
-            raise SourceHandlingBlockedError("Issue Source durable dispositions are unavailable")
-        fact = resolved.fact_record.get("fact")
-        if not isinstance(fact, Mapping):
-            raise SourceHandlingBlockedError("Issue Source fact authority is unavailable")
-        secret_presence = set(_string_values(fact.get("secret_presence")))
         prepared = self._intake.prepare(
             reference,
             processing_run_id=processing_run_id,
-            processed_at=cutoff,
+            processed_at=artifact_time,
         )
-        validate_durable_payload(
-            decision=decision,
-            registry=resolved.registry_record,
-            payload=_issue_intake_durable_payload(prepared),
-            secret_presence=secret_presence,
+        durable_payload = _issue_intake_durable_payload(prepared)
+
+        connection = self._intake.repository._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            _require_coordinated_authority_database(
+                evidence_path=self._intake.repository.path,
+                authority_path=self._resolver.authority_database_path,
+                connection=connection,
+            )
+            # Sampled only after the write lock is held, so the cutoff cannot be
+            # chosen by the caller and cannot precede a successor that is already
+            # durable.  `processed_at` times artifacts only; it is never authority.
+            authority_cutoff = _authority_current_cutoff(connection, self._clock)
+            resolved = resolve_pre_model_source_handling(self._resolver(document_id, authority_cutoff))
+            decision = resolved.decision
+            if decision.get("retention_decision") != "ALLOW":
+                raise SourceHandlingBlockedError("Issue Source retention is not allowed")
+            if decision.get("deletion_lifecycle_decision") in LIFECYCLE_WRITE_BLOCKING_DISPOSITIONS:
+                raise SourceHandlingBlockedError("Issue Source deletion lifecycle blocks durable intake")
+            dispositions = decision.get("durable_dispositions")
+            if not isinstance(dispositions, Mapping) or not dispositions:
+                raise SourceHandlingBlockedError("Issue Source durable dispositions are unavailable")
+            fact = resolved.fact_record.get("fact")
+            if not isinstance(fact, Mapping):
+                raise SourceHandlingBlockedError("Issue Source fact authority is unavailable")
+            secret_presence = set(_string_values(fact.get("secret_presence")))
+            _enforce_fact_persistence_restriction(fact=fact, durable_payload=durable_payload)
+            validate_durable_payload(
+                decision=decision,
+                registry=resolved.registry_record,
+                payload=durable_payload,
+                secret_presence=secret_presence,
+            )
+            _persist_prepared_in_connection(prepared, connection)
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+        return prepared.result
+
+
+def _require_coordinated_authority_database(
+    *,
+    evidence_path: Path,
+    authority_path: Path,
+    connection: sqlite3.Connection,
+) -> None:
+    """Fail closed unless authority and evidence are literally one database.
+
+    The boundary's atomicity claim depends on the intake write transaction also
+    locking the authority history, so a restrictive successor cannot commit
+    between the authority decision and the write it authorizes.  Two separate
+    files silently remove that coordination.  Identity is compared on resolved
+    paths rather than inferred from the presence of an authority table, because
+    a different database carrying a same-named table would satisfy a presence
+    check while the write lock still covered the wrong file.
+    """
+
+    if evidence_path.resolve() != authority_path.resolve():
+        raise SourceHandlingBlockedError(
+            "Issue Source intake requires the Source Handling authority history in the same database"
         )
-        return self._intake.ingest_prepared(prepared)
+    row = connection.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'source_handling_authority_records'"
+    ).fetchone()
+    if row is None:
+        raise SourceHandlingBlockedError(
+            "Issue Source intake requires the Source Handling authority history in the same database"
+        )
+
+
+def _authority_current_cutoff(connection: sqlite3.Connection, clock: Clock) -> datetime:
+    """Repository-owned live cutoff, never a caller-supplied instant.
+
+    The cutoff is the later of the trusted clock and the newest durable
+    admission instant, so a record that is already durable can never be
+    resolved away by a lagging or coarse clock.
+    """
+
+    cutoff = _aware_utc("Issue Source authority cutoff", clock.now())
+    row = connection.execute("SELECT MAX(admission_time) FROM source_handling_authority_records").fetchone()
+    if row is not None and row[0] is not None:
+        cutoff = max(cutoff, _parse_time(str(row[0])))
+    return cutoff
+
+
+def _enforce_fact_persistence_restriction(
+    *,
+    fact: Mapping[str, Any],
+    durable_payload: Mapping[str, Any],
+) -> None:
+    """Apply the resolved FACT persistence restriction to the prepared artifacts.
+
+    A POLICY may return ``retention_decision == "ALLOW"`` and permit every
+    category while the FACT still restricts persistence to derived or metadata
+    representations, so the intermediate levels are enforced here rather than
+    left to the policy.
+    """
+
+    restriction = fact.get("persistence_restriction")
+    nonempty = {name for name, value in durable_payload.items() if isinstance(value, Mapping) and value}
+    if restriction == "FULL_CONTENT_ALLOWED":
+        return
+    if restriction == "DERIVED_ONLY":
+        forbidden = {"source_derived_text"}
+    elif restriction == "METADATA_ONLY":
+        forbidden = {"content_derived_ids", "locator_urls", "source_derived_text"}
+    elif restriction == "NO_PERSISTENCE":
+        forbidden = set(nonempty)
+    else:
+        raise SourceHandlingBlockedError("Issue Source persistence restriction is unknown")
+    if nonempty & forbidden:
+        raise SourceHandlingBlockedError("Issue Source FACT persistence restriction forbids prepared durable artifacts")
+
+
+def _validate_issue_metadata(metadata: Mapping[str, Any]) -> None:
+    """Constrain Issue metadata to a closed set of operational fields.
+
+    `EvidenceDocument.metadata` is persisted verbatim, so an unconstrained
+    mapping would let source content ride into a durable row under the
+    operational-metadata category while its own category was denied.
+    """
+
+    if set(metadata) - ISSUE_SOURCE_METADATA_KEYS:
+        raise SourceHandlingBlockedError("Issue Source metadata contains unsupported non-operational fields")
+    issue_number = metadata.get("issue_number")
+    if not isinstance(issue_number, int) or isinstance(issue_number, bool) or issue_number <= 0:
+        raise SourceHandlingBlockedError("Issue Source issue_number metadata is malformed")
+    labels = metadata.get("labels")
+    if not isinstance(labels, list) or any(not isinstance(label, str) or not label.strip() for label in labels):
+        raise SourceHandlingBlockedError("Issue Source labels metadata is malformed")
+
+
+def _persist_prepared_in_connection(prepared: PreparedEvidenceIntake, connection: sqlite3.Connection) -> None:
+    """Write every prepared durable artifact on the caller's open transaction."""
+
+    result = prepared.result
+    _upsert_evidence_payload(
+        connection, "evidence_documents", evidence_repository._payload(result.document), key=("document_id",)
+    )
+    _upsert_evidence_payload(
+        connection,
+        "evidence_document_versions",
+        evidence_repository._payload(result.document_version),
+        key=("version_id",),
+    )
+    for span in result.spans:
+        _upsert_evidence_payload(connection, "evidence_spans", evidence_repository._payload(span), key=("span_id",))
+    _upsert_evidence_payload(
+        connection,
+        "document_lifecycle_events",
+        evidence_repository._payload(result.document_event),
+        key=("event_id",),
+    )
+    _upsert_evidence_payload(
+        connection,
+        "source_authority_verification_events",
+        evidence_repository._payload(result.authority_event),
+        key=("verification_id",),
+    )
+    for link in prepared.span_links:
+        payload = evidence_repository._payload(link)
+        payload["event_id"] = payload.pop("owner_id")
+        _upsert_evidence_payload(connection, "document_lifecycle_event_span_links", payload, key=("link_id",))
+
+
+def _upsert_evidence_payload(
+    connection: sqlite3.Connection,
+    table: str,
+    payload: dict[str, Any],
+    *,
+    key: tuple[str, ...],
+) -> None:
+    evidence_repository._upsert_payload(connection, table, payload, key=key)
 
 
 def _decode_durable_record(
@@ -1880,6 +2146,13 @@ def _validate_payload_shape(family: str, scope: str, payload: Mapping[str, Any])
             raise SourceHandlingBlockedError("FACT secret presence is unknown")
         if any(not isinstance(secret, str) or secret not in SUPPORTED_SECRET_PRESENCE for secret in secret_presence):
             raise SourceHandlingBlockedError("FACT secret presence is unknown or unsupported")
+        if fact.get("availability_known") is not True:
+            raise SourceHandlingBlockedError("FACT dimension is unknown: availability_known")
+        for field in ("withdrawn", "deleted_at_source", "historically_unavailable"):
+            if type(fact.get(field)) is not bool:
+                raise SourceHandlingBlockedError(f"FACT availability state is unknown or malformed: {field}")
+    elif family == "FIELD_CATEGORY_REGISTRY":
+        validate_field_category_registry_payload(payload)
     elif family == "AUTHORIZATION_RULE":
         _validate_authorization_rule_payload(payload)
 
@@ -2003,7 +2276,17 @@ def _aware_utc(name: str, value: datetime) -> datetime:
 
 
 def _time_text(value: datetime) -> str:
-    return _aware_utc("datetime", value).isoformat().replace("+00:00", "Z")
+    """Render a UTC instant in a fixed-width, lexicographically sortable form.
+
+    ``datetime.isoformat`` omits the fractional part when microsecond is zero,
+    which makes SQLite's TEXT comparison disagree with chronological order
+    (``"...:00Z" > "...:00.000001Z"`` because ``"Z" > "."``).  Every stored
+    timestamp is therefore padded to six fractional digits so ``MAX`` and
+    ``ORDER BY`` over these columns are chronologically correct.
+    """
+
+    normalized = _aware_utc("datetime", value)
+    return f"{normalized.strftime('%Y-%m-%dT%H:%M:%S')}.{normalized.microsecond:06d}Z"
 
 
 def _parse_time(value: str) -> datetime:

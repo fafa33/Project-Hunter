@@ -39,7 +39,7 @@ def test_nested_issue_metadata_cannot_bypass_source_content_dispositions(tmp_pat
     _complete_authority(service, clock, rule_id, document_id=document_id)
 
     repository = EvidenceIntelligenceRepository(service.path)
-    boundary = IssueSourceTransientIntakeBoundary(  # type: ignore[call-arg]
+    boundary = IssueSourceTransientIntakeBoundary(
         intake=EvidenceIntelligenceIntakeService(repository),
         resolver=service.resolver(),
         clock=clock,
@@ -60,7 +60,7 @@ def test_issue_intake_revalidates_authority_while_holding_database_write_lock(
 
     repository = EvidenceIntelligenceRepository(service.path)
     resolver = service.resolver()
-    boundary = IssueSourceTransientIntakeBoundary(  # type: ignore[call-arg]
+    boundary = IssueSourceTransientIntakeBoundary(
         intake=EvidenceIntelligenceIntakeService(repository),
         resolver=resolver,
         clock=clock,

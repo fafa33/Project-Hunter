@@ -12,6 +12,48 @@ from datetime import UTC, datetime
 AUTHORITY_COMPONENT_ID = "EVIDENCE_INTELLIGENCE_SOURCE_HANDLING_AUTHORITY"
 GENESIS_RULE_ID = "AUTHORIZATION_RULE_V1"
 
+#: Closed V1 governed durable data categories (design contract section 7).  A
+#: registry may not introduce categories outside this vocabulary, and any field
+#: whose mapping is absent, malformed, or outside it resolves to
+#: ``UNKNOWN_CATEGORY``, which is never persistable.
+UNKNOWN_DURABLE_CATEGORY = "UNKNOWN_CATEGORY"
+GOVERNED_DURABLE_CATEGORIES = frozenset(
+    {
+        "SOURCE_BYTES",
+        "SOURCE_DERIVED_TEXT",
+        "CONTENT_DERIVED_ID",
+        "LOCATOR_URL",
+        "COORDINATE",
+        "OPERATIONAL_METADATA",
+        "DIAGNOSTIC",
+        "PROVENANCE_ID",
+        "AUDIT_FIELD",
+        "SAFE_CONTROL_ID",
+        "RECONSTRUCTION_METADATA",
+        "ACCESS_CONTROLLED_REPRESENTATION",
+        "LIFECYCLE_STATE",
+        UNKNOWN_DURABLE_CATEGORY,
+    }
+)
+
+#: Restrictive orders from design contract section 8.  A value that is invalid
+#: for its operation is treated as ``BLOCKED``, never as permission.
+CONTENT_DISPOSITION_ORDER = {"ALLOW": 0, "REDACT": 1, "OMIT": 2, "DENY": 3, "BLOCKED": 4}
+LIFECYCLE_DISPOSITION_ORDER = {"ALLOW": 0, "EXPIRE": 1, "DELETE": 2, "BLOCKED": 3}
+
+#: Lifecycle dispositions that forbid a durable write outright.  ``EXPIRE``
+#: establishes a governed expiry obligation rather than a write prohibition, so
+#: it is deliberately absent here and matches the top-level lifecycle rule.
+LIFECYCLE_WRITE_BLOCKING_DISPOSITIONS = frozenset({"DELETE", "BLOCKED"})
+
+#: Design contract section 10 makes secret/credential exclusion absolute for
+#: every canonical secondary durable representation.  The only governed escape
+#: is a ``SAFE_CONTROL_ID`` whose construction is proven by the exact historical
+#: registry, so the exemption is an allowlist rather than a risk denylist: a
+#: category added later is excluded until it is explicitly proven safe.
+SECRET_EXCLUSION_EXEMPT_CATEGORIES = frozenset({"SAFE_CONTROL_ID"})
+PROTECTED_SECRET_PRESENCE = frozenset({"SECRET_PRESENT", "CREDENTIAL_PRESENT"})
+
 
 class SourceHandlingBlockedError(RuntimeError):
     """Raised when Source Handling Authority cannot produce a governed result."""
@@ -851,6 +893,100 @@ def derive_source_handling_decision(
     }
 
 
+def governed_durable_category(value: object) -> str:
+    """Resolve one declared mapping entry to a governed V1 category.
+
+    Design contract section 7: an unknown, omitted, or ambiguous mapping is
+    ``UNKNOWN_CATEGORY``.  Resolution never invents a category and never treats
+    an unrecognized name as safe.
+    """
+
+    if isinstance(value, str) and value in GOVERNED_DURABLE_CATEGORIES:
+        return value
+    return UNKNOWN_DURABLE_CATEGORY
+
+
+def governed_field_categories(field_map: Mapping[str, typing.Any], field: str) -> tuple[str, ...]:
+    """Resolve the governed categories a registry maps one durable field to.
+
+    An absent or empty mapping is ambiguous, so it resolves to a single
+    ``UNKNOWN_CATEGORY`` rather than to an empty set that would vacuously
+    satisfy an all-categories check.
+    """
+
+    declared = field_map.get(field)
+    if isinstance(declared, str):
+        candidates: tuple[object, ...] = (declared,)
+    elif isinstance(declared, (list, tuple, set, frozenset)):
+        candidates = tuple(declared)
+    else:
+        candidates = ()
+    if not candidates:
+        return (UNKNOWN_DURABLE_CATEGORY,)
+    resolved = {governed_durable_category(candidate) for candidate in candidates}
+    return tuple(sorted(resolved))
+
+
+def _disposition_join(values: Sequence[object], order: Mapping[str, int]) -> str:
+    """Most restrictive disposition across every applicable category.
+
+    Design contract section 8: the operation-specific join is applied across
+    every applicable category, and any value invalid for the operation is
+    ``BLOCKED``.  An empty set of applicable categories is ambiguous, so it is
+    ``BLOCKED`` as well.
+    """
+
+    if not values:
+        return "BLOCKED"
+    worst = "ALLOW"
+    for value in values:
+        if not isinstance(value, str) or value not in order:
+            return "BLOCKED"
+        if order[value] > order[worst]:
+            worst = value
+    return worst
+
+
+def effective_persist_disposition(
+    dispositions: Mapping[str, typing.Any],
+    categories: Sequence[str],
+) -> str:
+    """Effective ``PERSIST`` disposition across every applicable category."""
+
+    return _disposition_join(
+        [_category_disposition(dispositions, category, "PERSIST") for category in categories],
+        CONTENT_DISPOSITION_ORDER,
+    )
+
+
+def effective_lifecycle_disposition(
+    dispositions: Mapping[str, typing.Any],
+    categories: Sequence[str],
+) -> str:
+    """Effective ``DELETE_OR_EXPIRE`` disposition across every applicable category.
+
+    Design contract section 8: a mandatory deletion or expiry obligation cannot
+    be erased by an ``ALLOW`` on another category or axis, so a top-level
+    lifecycle ``ALLOW`` never overrides a stricter category-level obligation.
+    """
+
+    return _disposition_join(
+        [_category_disposition(dispositions, category, "DELETE_OR_EXPIRE") for category in categories],
+        LIFECYCLE_DISPOSITION_ORDER,
+    )
+
+
+def _category_disposition(
+    dispositions: Mapping[str, typing.Any],
+    category: str,
+    operation: str,
+) -> object:
+    category_dispositions = dispositions.get(category)
+    if not isinstance(category_dispositions, Mapping):
+        return None
+    return category_dispositions.get(operation)
+
+
 def validate_durable_payload(
     *,
     decision: Mapping[str, typing.Any],
@@ -870,34 +1006,20 @@ def validate_durable_payload(
     if not isinstance(field_map, Mapping) or not isinstance(dispositions, Mapping):
         raise SourceHandlingBlockedError("durable field authority is incomplete")
 
-    protected = bool(secret_presence & {"SECRET_PRESENT", "CREDENTIAL_PRESENT"})
-    protected_risky_categories = {
-        "SOURCE_BYTES",
-        "SOURCE_DERIVED_TEXT",
-        "CONTENT_DERIVED_ID",
-        "LOCATOR_URL",
-        "COORDINATE",
-        "OPERATIONAL_METADATA",
-        "DIAGNOSTIC",
-        "PROVENANCE_ID",
-        "AUDIT_FIELD",
-        "RECONSTRUCTION_METADATA",
-        "ACCESS_CONTROLLED_REPRESENTATION",
-    }
+    protected = bool(set(secret_presence) & PROTECTED_SECRET_PRESENCE)
     for field, value in payload.items():
-        categories = _string_sequence(field_map.get(field))
-        if not categories:
+        categories = governed_field_categories(field_map, field)
+        if UNKNOWN_DURABLE_CATEGORY in categories:
             raise SourceHandlingBlockedError("durable field category is unknown or ambiguous")
         for category in categories:
-            category_dispositions = dispositions.get(category)
-            if not isinstance(category_dispositions, Mapping):
-                raise SourceHandlingBlockedError("durable category disposition unavailable")
-            if category_dispositions.get("PERSIST") != "ALLOW":
-                raise SourceHandlingBlockedError("durable field persistence is not allowed")
             if category == "SAFE_CONTROL_ID":
                 _validate_safe_control_proof(registry=registry, field=field, value=value)
-            if protected and category in protected_risky_categories:
+            elif protected:
                 raise SourceHandlingBlockedError("protected source cannot persist through a risky secondary category")
+        if effective_persist_disposition(dispositions, categories) != "ALLOW":
+            raise SourceHandlingBlockedError("durable field persistence is not allowed")
+        if effective_lifecycle_disposition(dispositions, categories) in LIFECYCLE_WRITE_BLOCKING_DISPOSITIONS:
+            raise SourceHandlingBlockedError("durable field lifecycle disposition forbids a durable write")
         if protected and _derived_from_protected_content(value):
             raise SourceHandlingBlockedError("secret/credential-derived secondary representation cannot persist")
 
@@ -1051,6 +1173,42 @@ def _record_authorization_rule_ids(*records: Mapping[str, typing.Any]) -> set[st
     return rule_ids
 
 
+def validate_field_category_registry_payload(payload: Mapping[str, typing.Any]) -> None:
+    """Validate a `FieldCategoryRegistryRecord` body before it becomes authority.
+
+    Design contract sections 4.3 and 7: the registry carries a logical identity
+    and an exact governed field-to-category mapping drawn from the closed V1
+    vocabulary.  Rejecting an undeclared category at publication keeps an
+    unknown category from ever becoming canonical authority; `validate_durable_payload`
+    independently refuses to persist through one, so a registry admitted before
+    this guard existed still cannot launder content.
+    """
+
+    registry_id = payload.get("field_category_registry_id")
+    if not isinstance(registry_id, str) or not registry_id.strip():
+        raise SourceHandlingBlockedError("field-category registry identity is missing or malformed")
+
+    field_map = payload.get("field_map")
+    if not isinstance(field_map, Mapping) or not field_map:
+        raise SourceHandlingBlockedError("field-category registry mapping is unavailable")
+
+    for field, mapped in field_map.items():
+        if not isinstance(field, str) or not field.strip():
+            raise SourceHandlingBlockedError("field-category registry field identity is malformed")
+        declared = (mapped,) if isinstance(mapped, str) else mapped
+        if not isinstance(declared, (list, tuple)) or not declared:
+            raise SourceHandlingBlockedError("field-category registry mapping entry is malformed")
+        if any(not isinstance(category, str) for category in declared):
+            raise SourceHandlingBlockedError("field-category registry mapping entry is malformed")
+        undeclared = {category for category in declared if category not in GOVERNED_DURABLE_CATEGORIES}
+        if undeclared:
+            raise SourceHandlingBlockedError("field-category registry declares an undeclared durable category")
+
+    proofs = payload.get("safe_control_proofs", {})
+    if not isinstance(proofs, Mapping):
+        raise SourceHandlingBlockedError("field-category registry safe-control proofs are malformed")
+
+
 def _validate_complete_disposition_map(
     dispositions: Mapping[str, typing.Any],
     registry: Mapping[str, typing.Any],
@@ -1058,20 +1216,20 @@ def _validate_complete_disposition_map(
     field_map = registry.get("field_map")
     if not isinstance(field_map, Mapping):
         raise SourceHandlingBlockedError("field-category registry mapping is unavailable")
-    categories = {category for mapped in field_map.values() for category in _string_sequence(mapped)}
+    categories = {category for field in field_map for category in governed_field_categories(field_map, field)}
     if not categories:
         raise SourceHandlingBlockedError("field-category registry has no governed categories")
+    if not categories <= GOVERNED_DURABLE_CATEGORIES:
+        raise SourceHandlingBlockedError("field-category registry declares an undeclared durable category")
 
-    content_values = {"ALLOW", "REDACT", "OMIT", "DENY", "BLOCKED"}
-    lifecycle_values = {"ALLOW", "EXPIRE", "DELETE", "BLOCKED"}
     for category in categories:
         category_dispositions = dispositions.get(category)
         if not isinstance(category_dispositions, Mapping):
             raise SourceHandlingBlockedError("durable category disposition unavailable")
         for operation in ("PERSIST", "READ_ACCESS", "RECONSTRUCT"):
-            if category_dispositions.get(operation) not in content_values:
+            if category_dispositions.get(operation) not in CONTENT_DISPOSITION_ORDER:
                 raise SourceHandlingBlockedError("durable content disposition is missing or invalid")
-        if category_dispositions.get("DELETE_OR_EXPIRE") not in lifecycle_values:
+        if category_dispositions.get("DELETE_OR_EXPIRE") not in LIFECYCLE_DISPOSITION_ORDER:
             raise SourceHandlingBlockedError("durable lifecycle disposition is missing or invalid")
 
 

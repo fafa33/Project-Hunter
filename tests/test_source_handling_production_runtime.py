@@ -38,7 +38,7 @@ RULE_FIXTURE = Path(__file__).parent / "fixtures" / "source_handling" / "authori
 RULE_GOLDEN = "41119071db0f5c2a2eacfe2848ab6696355195e1ac9c671ee33c4128793aa70a"
 START = datetime(2026, 9, 2, 12, 0, tzinfo=UTC)
 INTAKE_FIELD_MAP = {
-    "issue_content": ["ISSUE_CONTENT"],
+    "issue_content": ["SOURCE_BYTES"],
     "content_derived_ids": ["CONTENT_DERIVED_ID"],
     "locator_urls": ["LOCATOR_URL"],
     "source_derived_text": ["SOURCE_DERIVED_TEXT"],

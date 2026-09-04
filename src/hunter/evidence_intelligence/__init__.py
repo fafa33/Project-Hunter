@@ -108,9 +108,6 @@ from hunter.evidence_intelligence.source_handling_persistence import (
     SourceHandlingPublicationResult,
     SqliteSourceHandlingAuthorityReadView,
 )
-from hunter.evidence_intelligence.source_handling_runtime_hardening import (
-    install as _install_source_handling_runtime_hardening,
-)
 from hunter.evidence_intelligence.validation import (
     EvidenceClassification,
     ExtractionValidationResult,
@@ -119,8 +116,6 @@ from hunter.evidence_intelligence.validation import (
     ValidatedEntityProposal,
     ValidationRejection,
 )
-
-_install_source_handling_runtime_hardening()
 
 __all__ = [
     "AUTHORITY_STATUSES",
