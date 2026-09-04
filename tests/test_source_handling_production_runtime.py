@@ -125,6 +125,8 @@ def _service(
     )
     rule = json.loads(RULE_FIXTURE.read_text(encoding="utf-8"))
     result = service.publish_genesis_rule(rule)
+    if active_clock.value <= result.admission_time:
+        active_clock.value = result.admission_time + timedelta(microseconds=1)
     return service, active_clock, active_key, result.record_id
 
 
@@ -281,6 +283,9 @@ def _publish(
         payload=payload,
         authorization=authorization,
     )
+    test_clock = getattr(service, "_clock", None)
+    if isinstance(test_clock, MutableClock) and test_clock.value < result.admission_time:
+        test_clock.value = result.admission_time
     return result.record_id, authorization
 
 
