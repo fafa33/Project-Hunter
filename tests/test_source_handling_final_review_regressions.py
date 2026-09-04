@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import replace
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
@@ -13,11 +14,11 @@ from test_source_handling_production_runtime import (
     _service,
 )
 
+import hunter.evidence_intelligence.source_handling_persistence as source_handling_persistence
 from hunter.evidence_intelligence.intake import EvidenceIntelligenceIntakeService, evidence_document_id
 from hunter.evidence_intelligence.repository import EvidenceIntelligenceRepository
 from hunter.evidence_intelligence.source_handling import SourceHandlingBlockedError
 from hunter.evidence_intelligence.source_handling_persistence import IssueSourceTransientIntakeBoundary
-import hunter.evidence_intelligence.source_handling_persistence as source_handling_persistence
 
 
 def test_nested_issue_metadata_cannot_bypass_source_content_dispositions(tmp_path: Path) -> None:
@@ -94,7 +95,7 @@ def test_admission_time_is_strictly_monotonic_across_unrelated_authority_scopes(
         rule_id=rule_id,
         expected_head=None,
         authorization_id="auth:global-a",
-        expires_at=clock.now(),
+        expires_at=clock.now() + timedelta(minutes=5),
     )
     _publish(
         service,
@@ -104,7 +105,7 @@ def test_admission_time_is_strictly_monotonic_across_unrelated_authority_scopes(
         rule_id=rule_id,
         expected_head=None,
         authorization_id="auth:global-b",
-        expires_at=clock.now(),
+        expires_at=clock.now() + timedelta(minutes=5),
     )
 
     connection = sqlite3.connect(service.path)
