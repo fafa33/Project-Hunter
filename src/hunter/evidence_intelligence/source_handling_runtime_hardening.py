@@ -65,8 +65,64 @@ def _install_repository_clock() -> None:
     def hardened_init(self: Any, *args: Any, **kwargs: Any) -> None:
         original_init(self, *args, **kwargs)
         self._clock = _StrictRepositoryClock(self._clock, self.path)
+        connection = sqlite3.connect(self.path, timeout=30.0)
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS source_handling_registry_logical_identity_unique
+                ON source_handling_authority_records(
+                    json_extract(payload_json, '$.field_category_registry_id')
+                )
+                WHERE family = 'FIELD_CATEGORY_REGISTRY'
+                """
+            )
+            connection.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS source_handling_rule_logical_identity_unique
+                ON source_handling_authority_records(
+                    json_extract(payload_json, '$.authorization_rule_id')
+                )
+                WHERE family = 'AUTHORIZATION_RULE'
+                """
+            )
+            connection.commit()
+        except sqlite3.IntegrityError as error:
+            connection.rollback()
+            raise SourceHandlingBlockedError("logical authority identity is duplicated") from error
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
 
     persistence.SourceHandlingAuthorityRepository.__init__ = hardened_init  # type: ignore[method-assign]
+
+
+def _install_writer_transaction_guard() -> None:
+    def writer_transaction(self: Any) -> Iterator[sqlite3.Connection]:
+        with self._connect(verify_operator_root=False, verify_history=False) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                row = connection.execute(
+                    "SELECT * FROM source_handling_operator_root WHERE singleton_id = 'SOURCE_HANDLING'"
+                ).fetchone()
+                if row is None:
+                    raise SourceHandlingBlockedError("pinned Source Handling operator root is unavailable")
+                persistence._verify_operator_root_row(row, self._operator_root)
+                persistence._verify_authenticated_history(
+                    connection,
+                    verification_public_key_bytes=self._verification_public_key_bytes,
+                    operator_root=self._operator_root,
+                )
+                yield connection
+            except Exception:
+                connection.rollback()
+                raise
+            else:
+                connection.commit()
+
+    persistence.SourceHandlingAuthorityRepository._transaction = contextlib.contextmanager(writer_transaction)
 
 
 def _install_fact_completeness_guard() -> None:
@@ -281,6 +337,7 @@ def install() -> None:
     if _INSTALLED:
         return
     _install_repository_clock()
+    _install_writer_transaction_guard()
     _install_fact_completeness_guard()
     _install_read_snapshot_guard()
     _install_issue_intake_guard()
