@@ -1,5 +1,5 @@
 {
-  "authorization_id": "43d9384b28bc5766ebcb7813963a50e26aa5e2c2d98857dec9737cce64717aac",
+  "authorization_id": "0239e73166613698d3b3ee547bf1d861751efc49da1799aefc6c6702af04e1c2",
   "claims": {
     "base_ref": "main",
     "base_sha": "bbd23e2d59fad8d6d128ea8078cd78bcfa058357",
@@ -12,8 +12,14 @@
         "status": "added"
       },
       {
-        "blob_sha": "8099e729651da40a15725bdf326ff527c0941367",
+        "blob_sha": "6f654b4c702f613350292788c79f491d4bc9f51a",
         "path": "src/hunter/evidence_intelligence/source_handling_runtime_hardening.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "eaa7026a9144f3c8e3714736e191d4a397a524ec",
+        "path": "tests/test_source_handling_final_review_regressions.py",
         "previous_path": "",
         "status": "added"
       },
@@ -85,6 +91,7 @@
       "tests/evidence_pre_model_source_handling_fixture.py",
       "tests/test_source_handling_authority_contract.py",
       "tests/test_source_handling_authority_enforcement.py",
+      "tests/test_source_handling_final_review_regressions.py",
       "tests/test_source_handling_production_runtime.py",
       "tests/test_source_handling_review_regressions.py"
     ],
