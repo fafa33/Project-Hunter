@@ -1,42 +1,42 @@
 {
-  "authorization_id": "98b6708efc3f87b3c26d23c80073a9c6dea92d97321152f74d398b3b5f2ce79f",
+  "authorization_id": "1d0702a96d433573c7c5d63a40ceb40443d00c6eb85ab4f7b28e2faaaac5a31b",
   "claims": {
     "base_ref": "main",
     "base_sha": "bbd23e2d59fad8d6d128ea8078cd78bcfa058357",
     "capability": "feature-branch-write",
     "changes": [
       {
-        "blob_sha": "3df02f04d1430d8daf26a002ad210365572fb8f3",
+        "blob_sha": "fdb6e5f5c72724247df3b9ef289b86e82ce15928",
         "path": "src/hunter/evidence_intelligence/source_handling_persistence.py",
         "previous_path": "",
         "status": "added"
       },
       {
-        "blob_sha": "fe152af8ed31ca7d90b3b16fe09ce51916c32096",
-        "path": "src/hunter/evidence_intelligence/source_handling_runtime_hardening.py",
+        "blob_sha": "154f2e98629f7ef59523b704d83dca6e9bcd7dd8",
+        "path": "tests/test_source_handling_canonical_seam_regressions.py",
         "previous_path": "",
         "status": "added"
       },
       {
-        "blob_sha": "0eca88f76b53a34fcebe995fd9dfb18f9d9004a1",
+        "blob_sha": "4d276ec3cfb1b4ea5a62cb25bb852d72180121af",
         "path": "tests/test_source_handling_final_review_regressions.py",
         "previous_path": "",
         "status": "added"
       },
       {
-        "blob_sha": "ca2116a504fc4dce76852373200d61fc6279c912",
+        "blob_sha": "a56e7795127a7499d1ad6aabaef21ba25da4936d",
         "path": "tests/test_source_handling_production_runtime.py",
         "previous_path": "",
         "status": "added"
       },
       {
-        "blob_sha": "5f864039c59120920d7a927abfe70d3d7120ce55",
+        "blob_sha": "57095cd45b2270d7cb99d3976cf410e94d9a43c4",
         "path": "tests/test_source_handling_review_regressions.py",
         "previous_path": "",
         "status": "added"
       },
       {
-        "blob_sha": "e40c027b5677f84fd25069bfa12c55f13fa6decc",
+        "blob_sha": "9ca997bab9b0baa62dc3f2020a7bb89bc402541e",
         "path": "src/hunter/evidence_intelligence/__init__.py",
         "previous_path": "",
         "status": "modified"
@@ -54,7 +54,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "42ebff95ac77db9ec21b0c43cbb7b8cfa8e4f99c",
+        "blob_sha": "7cd7d64b40cefb6b404d6ea08831c18c165f7ddf",
         "path": "src/hunter/evidence_intelligence/source_handling.py",
         "previous_path": "",
         "status": "modified"
@@ -66,7 +66,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "fb21c1110db8559941bc1b74f6d2d80695fd340c",
+        "blob_sha": "aa6005043e4ecb5d634e9b0cfbcf02275ac7d447",
         "path": "tests/test_source_handling_authority_contract.py",
         "previous_path": "",
         "status": "modified"
@@ -87,10 +87,10 @@
       "src/hunter/evidence_intelligence/pre_model.py",
       "src/hunter/evidence_intelligence/source_handling.py",
       "src/hunter/evidence_intelligence/source_handling_persistence.py",
-      "src/hunter/evidence_intelligence/source_handling_runtime_hardening.py",
       "tests/evidence_pre_model_source_handling_fixture.py",
       "tests/test_source_handling_authority_contract.py",
       "tests/test_source_handling_authority_enforcement.py",
+      "tests/test_source_handling_canonical_seam_regressions.py",
       "tests/test_source_handling_final_review_regressions.py",
       "tests/test_source_handling_production_runtime.py",
       "tests/test_source_handling_review_regressions.py"
