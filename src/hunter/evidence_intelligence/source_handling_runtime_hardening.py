@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import contextlib
 import sqlite3
+import threading
 from collections.abc import Iterator, Mapping
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -30,38 +31,60 @@ _INSTALLED = False
 
 
 class _StrictRepositoryClock:
-    """Repository clock whose returned instants are strictly monotonic across restarts."""
+    """Admission clock that is strictly monotonic within one canonical chain."""
 
-    def __init__(self, delegate: Clock, path: Path) -> None:
+    def __init__(self, delegate: Clock, path: Path, *, family: str, scope: str) -> None:
         self._delegate = delegate
-        self._last: datetime | None = None
-        if path.exists():
-            connection = sqlite3.connect(path)
+        self._path = path
+        self._family = family
+        self._scope = scope
+
+    def now(self) -> datetime:
+        candidate = persistence._aware_utc("repository admission clock", self._delegate.now())
+        last: datetime | None = None
+        if self._path.exists():
+            connection = sqlite3.connect(self._path)
             try:
-                row = connection.execute("SELECT MAX(admission_time) FROM source_handling_authority_records").fetchone()
+                row = connection.execute(
+                    "SELECT admission_time FROM source_handling_authority_records "
+                    "WHERE family = ? AND scope = ? ORDER BY rowid DESC LIMIT 1",
+                    (self._family, self._scope),
+                ).fetchone()
             except sqlite3.OperationalError:
                 row = None
             finally:
                 connection.close()
             if row is not None and row[0] is not None:
-                self._last = persistence._parse_time(str(row[0]))
-
-    def now(self) -> datetime:
-        candidate = persistence._aware_utc("repository clock", self._delegate.now())
-        if self._last is not None and candidate <= self._last:
-            candidate = self._last + timedelta(microseconds=1)
-        self._last = candidate
+                last = persistence._parse_time(str(row[0]))
+        if last is not None and candidate <= last:
+            candidate = last + timedelta(microseconds=1)
         return candidate
 
 
 def _install_repository_clock() -> None:
     original_init = persistence.SourceHandlingAuthorityRepository.__init__
+    original_publish = persistence.SourceHandlingAuthorityRepository._publish
 
     def hardened_init(self: Any, *args: Any, **kwargs: Any) -> None:
         original_init(self, *args, **kwargs)
-        self._clock = _StrictRepositoryClock(self._clock, self.path)
+        self._admission_clock_lock = threading.RLock()
+
+    def hardened_publish(self: Any, *args: Any, **kwargs: Any) -> persistence.SourceHandlingPublicationResult:
+        family = kwargs.get("family")
+        scope = kwargs.get("scope")
+        if not isinstance(family, str) or not isinstance(scope, str):
+            raise SourceHandlingBlockedError("publication family/scope are required for admission ordering")
+        lock = self._admission_clock_lock
+        with lock:
+            delegate = self._clock
+            self._clock = _StrictRepositoryClock(delegate, self.path, family=family, scope=scope)
+            try:
+                return original_publish(self, *args, **kwargs)
+            finally:
+                self._clock = delegate
 
     persistence.SourceHandlingAuthorityRepository.__init__ = hardened_init  # type: ignore[method-assign]
+    persistence.SourceHandlingAuthorityRepository._publish = hardened_publish  # type: ignore[method-assign]
 
 
 def _install_fact_completeness_guard() -> None:
