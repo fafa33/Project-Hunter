@@ -63,7 +63,9 @@ def _base_fact() -> dict[str, object]:
         "operation_restrictions": set(),
         "persistence_restriction": "FULL_CONTENT_ALLOWED",
         "secret_presence": set(),
+        "sensitivity_known": True,
         "operation_restrictions_known": True,
+        "persistence_restriction_known": True,
         "secret_presence_known": True,
         "withdrawn": False,
         "deleted_at_source": False,
@@ -472,7 +474,9 @@ def test_fact_join_preserves_simultaneous_restrictions() -> None:
                 "operation_restrictions": {"MODEL_PROCESSING_PROHIBITED"},
                 "persistence_restriction": "DERIVED_ONLY",
                 "secret_presence": {"SECRET_PRESENT"},
+                "sensitivity_known": True,
                 "operation_restrictions_known": True,
+                "persistence_restriction_known": True,
                 "secret_presence_known": True,
                 "withdrawn": False,
                 "deleted_at_source": False,
@@ -484,7 +488,9 @@ def test_fact_join_preserves_simultaneous_restrictions() -> None:
                 "operation_restrictions": {"ACCESS_RESTRICTED"},
                 "persistence_restriction": "NO_PERSISTENCE",
                 "secret_presence": {"CREDENTIAL_PRESENT"},
+                "sensitivity_known": True,
                 "operation_restrictions_known": True,
+                "persistence_restriction_known": True,
                 "secret_presence_known": True,
                 "withdrawn": True,
                 "deleted_at_source": True,
@@ -558,6 +564,9 @@ def test_historical_registry_identity_cannot_be_substituted_by_current_registry(
         "durable_dispositions": {
             "AUDIT_FIELD": {
                 "PERSIST": "DENY",
+                "READ_ACCESS": "ALLOW",
+                "RECONSTRUCT": "ALLOW",
+                "DELETE_OR_EXPIRE": "ALLOW",
             }
         },
     }
@@ -592,9 +601,15 @@ def test_multicategory_field_uses_most_restrictive_operation_specific_dispositio
         "durable_dispositions": {
             "OPERATIONAL_METADATA": {
                 "PERSIST": "ALLOW",
+                "READ_ACCESS": "ALLOW",
+                "RECONSTRUCT": "ALLOW",
+                "DELETE_OR_EXPIRE": "ALLOW",
             },
             "AUDIT_FIELD": {
                 "PERSIST": "DENY",
+                "READ_ACCESS": "ALLOW",
+                "RECONSTRUCT": "ALLOW",
+                "DELETE_OR_EXPIRE": "ALLOW",
             },
         },
     }
@@ -712,9 +727,15 @@ def test_secret_or_credential_derived_representation_is_structurally_non_persist
         "durable_dispositions": {
             "OPERATIONAL_METADATA": {
                 "PERSIST": "ALLOW",
+                "READ_ACCESS": "ALLOW",
+                "RECONSTRUCT": "ALLOW",
+                "DELETE_OR_EXPIRE": "ALLOW",
             },
             "AUDIT_FIELD": {
                 "PERSIST": "ALLOW",
+                "READ_ACCESS": "ALLOW",
+                "RECONSTRUCT": "ALLOW",
+                "DELETE_OR_EXPIRE": "ALLOW",
             },
         },
     }
@@ -756,6 +777,9 @@ def test_safe_control_metadata_is_not_banned_merely_because_source_contains_secr
         "durable_dispositions": {
             "SAFE_CONTROL_ID": {
                 "PERSIST": "ALLOW",
+                "READ_ACCESS": "ALLOW",
+                "RECONSTRUCT": "ALLOW",
+                "DELETE_OR_EXPIRE": "ALLOW",
             }
         },
     }
@@ -788,9 +812,15 @@ def test_blocked_audit_cannot_leak_protected_content_or_source_derived_diagnosti
         "durable_dispositions": {
             "DIAGNOSTIC": {
                 "PERSIST": "ALLOW",
+                "READ_ACCESS": "ALLOW",
+                "RECONSTRUCT": "ALLOW",
+                "DELETE_OR_EXPIRE": "ALLOW",
             },
             "AUDIT_FIELD": {
                 "PERSIST": "ALLOW",
+                "READ_ACCESS": "ALLOW",
+                "RECONSTRUCT": "ALLOW",
+                "DELETE_OR_EXPIRE": "ALLOW",
             },
         },
     }

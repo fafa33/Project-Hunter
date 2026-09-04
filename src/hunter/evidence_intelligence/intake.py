@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import copy
+from dataclasses import dataclass, field, fields
 from datetime import UTC, datetime
 from typing import Any
 
@@ -94,6 +95,24 @@ class EvidenceIntakeResult:
     spans: tuple[EvidenceSpan, ...]
 
 
+@dataclass(frozen=True)
+class PreparedEvidenceIntake:
+    """Complete, non-persisted artifact set produced by one intake operation."""
+
+    result: EvidenceIntakeResult
+    span_links: tuple[EvidenceSpanLink, ...]
+
+    def persisted_artifacts(self) -> dict[str, tuple[dict[str, Any], ...]]:
+        return {
+            "evidence_documents": (_artifact_payload(self.result.document),),
+            "evidence_document_versions": (_artifact_payload(self.result.document_version),),
+            "evidence_spans": tuple(_artifact_payload(span) for span in self.result.spans),
+            "document_lifecycle_events": (_artifact_payload(self.result.document_event),),
+            "source_authority_verification_events": (_artifact_payload(self.result.authority_event),),
+            "document_lifecycle_event_span_links": tuple(_artifact_payload(link) for link in self.span_links),
+        }
+
+
 class EvidenceIntelligenceIntakeService:
     def __init__(self, repository: EvidenceIntelligenceRepository) -> None:
         self.repository = repository
@@ -110,6 +129,30 @@ class EvidenceIntelligenceIntakeService:
         authority_evidence_id: str | None = None,
         authority_reason: str = "authority recorded from persisted evidence reference",
     ) -> EvidenceIntakeResult:
+        prepared = self.prepare(
+            reference,
+            processing_run_id=processing_run_id,
+            processed_at=processed_at,
+            authority_status=authority_status,
+            verification_method=verification_method,
+            verifier_type=verifier_type,
+            authority_evidence_id=authority_evidence_id,
+            authority_reason=authority_reason,
+        )
+        return self.ingest_prepared(prepared)
+
+    def prepare(
+        self,
+        reference: EvidenceIntakeReference,
+        *,
+        processing_run_id: str,
+        processed_at: datetime | None = None,
+        authority_status: AuthorityStatus = "unverified",
+        verification_method: VerificationMethod = "provider_claim_only",
+        verifier_type: VerifierType = "provider_claim",
+        authority_evidence_id: str | None = None,
+        authority_reason: str = "authority recorded from persisted evidence reference",
+    ) -> PreparedEvidenceIntake:
         if processed_at is None:
             processed_at = datetime.now(tz=UTC)
         if processed_at.tzinfo is None:
@@ -125,14 +168,7 @@ class EvidenceIntelligenceIntakeService:
         normalized_content = normalize_content(reference.content)
         content_hash = _digest(reference.content)
         normalized_content_hash = _digest(normalized_content)
-        document_id = identity(
-            "evidence-intelligence-document",
-            {
-                "source_evidence_id": reference.source_evidence_id,
-                "raw_evidence_id": reference.raw_evidence_id,
-                "normalized_content_hash": normalized_content_hash,
-            },
-        )
+        document_id = evidence_document_id(reference)
         rendition_id = identity(
             "evidence-intelligence-rendition",
             {
@@ -177,7 +213,7 @@ class EvidenceIntelligenceIntakeService:
             authority_verification_evidence_id=authority_evidence_id or reference.source_evidence_id,
             authority_verified_at=processed_at,
             authority_status=authority_status,
-            metadata=dict(reference.metadata),
+            metadata=copy.deepcopy(reference.metadata),
         )
         document_version = EvidenceDocumentVersion(
             version_id=identity(
@@ -242,30 +278,50 @@ class EvidenceIntelligenceIntakeService:
             processing_run_id=processing_run_id,
             schema_version=AUTHORITY_SCHEMA_VERSION,
         )
-
-        self.repository.save_document(document)
-        self.repository.save_document_version(document_version)
-        for span in spans:
-            self.repository.save_span(span)
-        self.repository.save_document_lifecycle_event(document_event)
-        self.repository.save_authority_event(authority_event)
-        self.repository.save_span_links(
-            "document_lifecycle_event_span_links",
-            _document_event_span_links(document_event, spans, processed_at),
-        )
-        return EvidenceIntakeResult(
+        result = EvidenceIntakeResult(
             document=document,
             document_version=document_version,
             document_event=document_event,
             authority_event=authority_event,
             spans=spans,
         )
+        return PreparedEvidenceIntake(
+            result=result,
+            span_links=_document_event_span_links(document_event, spans, processed_at),
+        )
+
+    def ingest_prepared(self, prepared: PreparedEvidenceIntake) -> EvidenceIntakeResult:
+        if not isinstance(prepared, PreparedEvidenceIntake):
+            raise TypeError("prepared Evidence Intelligence intake is required")
+        result = prepared.result
+        self.repository.save_document(result.document)
+        self.repository.save_document_version(result.document_version)
+        for span in result.spans:
+            self.repository.save_span(span)
+        self.repository.save_document_lifecycle_event(result.document_event)
+        self.repository.save_authority_event(result.authority_event)
+        self.repository.save_span_links("document_lifecycle_event_span_links", prepared.span_links)
+        return result
 
 
 def normalize_content(content: str) -> str:
     lines = content.replace("\r\n", "\n").replace("\r", "\n").split("\n")
     normalized = "\n".join(line.rstrip() for line in lines).strip()
     return normalized or " "
+
+
+def evidence_document_id(reference: EvidenceIntakeReference) -> str:
+    """Derive the canonical document identity without persisting source bytes."""
+
+    normalized_content_hash = _digest(normalize_content(reference.content))
+    return identity(
+        "evidence-intelligence-document",
+        {
+            "source_evidence_id": reference.source_evidence_id,
+            "raw_evidence_id": reference.raw_evidence_id,
+            "normalized_content_hash": normalized_content_hash,
+        },
+    )
 
 
 def _spans_for_document(
@@ -353,3 +409,7 @@ def _digest(value: str) -> str:
     # Delegates to the canonical definition in models so there is exactly one
     # content-digest convention across Evidence Intelligence.
     return evidence_text_digest(value)
+
+
+def _artifact_payload(value: object) -> dict[str, Any]:
+    return {item.name: getattr(value, item.name) for item in fields(value)}
