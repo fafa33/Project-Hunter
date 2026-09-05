@@ -2,69 +2,45 @@
   "claims": {
     "acceptance_criteria": [
       {
-        "criterion": "A regression fixture demonstrates that a defect class found and fixed in an earlier PR is rejected when intentionally reintroduced in a later PR.",
-        "evidence": "tests/test_issue_412_prevention_gate.py::test_substring_and_affix_lookalikes_are_refused reintroduces the prefix/suffix/domain identity matching an earlier attempt at this guard accepted, and each lookalike is refused; test_a_foreign_authenticated_ancestor_push_still_blocks_the_range reintroduces the foreign-ancestor push the earlier per-commit rule caught and shows range-level evidence still blocks it; test_a_family_cannot_claim_prevented_without_merge_enforcement_evidence reintroduces the overclaimed-prevention class.",
+        "criterion": "One governed Issue can be explicitly authorized and dispatched into the existing fallback runtime path.",
+        "evidence": "tests/test_issue_agent_execution.py::test_authorized_issue_runs_the_existing_governed_path_end_to_end drives one authorized Issue through a real Source Handling authority history, the real Evidence Intelligence repository, the ADR 0036 production read-only resolver, the canonical SmartPromptMachine, the real signed-envelope issuer and serialize_prompt_automation_handoff; test_issue_text_cannot_choose_route_provider_destination_or_merge runs the same path through the real GovernedAgentFallbackDispatcher. Only provider processes and the git remote are stubbed, so this is an end-to-end proof of the composed path, not of a live production deployment.",
         "id": "AC-1",
         "verdict": "satisfied"
       },
       {
-        "criterion": "A large PR cannot reach Ready until the full hostile review pass is complete and all findings are batched and closed.",
-        "evidence": "scripts/hunter_governance_review_v2.py::verify_pre_ready_hostile_review refuses admission when the review is absent, stale, incomplete against the applicable families, or carries an unresolved blocking finding; the candidate-admission controller returns an unadmitted head to Draft. Covered by test_ready_is_blocked_without_a_pre_ready_hostile_review, test_a_review_of_earlier_content_is_stale_for_this_head, test_an_applicable_family_left_unchecked_blocks_ready, test_an_unresolved_blocking_finding_blocks_ready and test_an_incomplete_adversarial_batch_is_refused.",
+        "criterion": "Authorization and replay behavior are deterministic and fail closed.",
+        "evidence": "authorization_id is recomputed from the document's own claims (test_replay_identity_is_bound_to_exact_authorization_content, 4 mutations); duplicate, restart and crash-retry replay are refused by IssueAgentExecutionLedger (test_duplicate_authorization_is_rejected_and_executes_once, test_replay_after_process_restart_does_not_execute_again, test_crash_between_handoff_persistence_and_dispatch_cannot_duplicate, test_crash_before_any_execution_still_owns_the_authorization, test_ledger_state_is_monotonic); malformed documents and absent configuration fail closed (test_malformed_authorization_fails_closed, test_non_canonical_authorization_fields_fail_closed, test_missing_operational_configuration_fails_closed).",
         "id": "AC-2",
         "verdict": "satisfied"
       },
       {
-        "criterion": "Exact-head evidence shows no stale receipt and no unresolved applicable recurring-defect rule.",
-        "evidence": "This candidate carries no connector authorization receipt: the stale Issue #407 receipt inherited from the default branch is retired at this head, so no stale #407 claim is carried into Issue #412, and the hosted block it caused for every candidate is cleared. scripts/hunter_pre_push.py::_validate_receipt_freshness refuses a stale receipt the candidate does write, and treats retiring an inherited one as a retirement rather than a claim. This review covers every applicable family DFF-007..DFF-015 with no unresolved blocking finding.",
+        "criterion": "Existing Smart Prompt Machine and fallback authority boundaries are reused.",
+        "evidence": "The composition root builds no registry, signer, transport or provider pool of its own: test_composition_root_reuses_existing_authorities_only pins the absence of PROVIDER_ORDER, hazmat, urllib and direct envelope construction in the module; test_fallback_provider_order_is_unchanged_by_this_contribution pins the runtime's own order; test_exact_handoff_is_passed_unchanged_to_the_fallback_runtime pins byte-identical handoff delivery; test_provider_text_is_never_success_without_head_advance and test_fallback_success_still_requires_targeted_validation pin the unchanged success contract; test_composition_root_requires_the_production_read_only_resolver and test_production_resolver_grants_no_publication_capability pin the ADR 0036 read-only seam.",
         "id": "AC-3",
         "verdict": "satisfied"
       },
       {
-        "criterion": "An authorized coding agent can produce a multi-commit PR without manual rewind/force-push solely to satisfy per-commit actor evidence.",
-        "evidence": "scripts/hunter_governance_review_v2.py::verify_range_push_provenance admits a commit published by the authenticated push of the exact head. Covered by test_two_commits_pushed_together_cannot_strand_the_first_commit and by test_connector_ancestor_published_by_the_head_push_is_not_stranded, which replaces the fixture that encoded the defect. This pull request is itself a two-commit range published in one push.",
+        "criterion": "Required secrets/configuration are documented without storing secrets in repository content.",
+        "evidence": "docs/ISSUE_AGENT_TRIGGER.md gains an Operational configuration table naming every required variable and its meaning; no key material, endpoint or credential value appears in the diff. Each variable's absence or malformation is pinned by test_missing_operational_configuration_fails_closed and test_malformed_verification_key_configuration_fails_closed.",
         "id": "AC-4",
         "verdict": "satisfied"
       },
       {
-        "criterion": "Candidate Admission rejects writer/committer mismatch before remote push and reports the exact mismatched provenance claim.",
-        "evidence": "scripts/hunter_pre_push.py::_validate_writer_provenance runs before the canonical preflight and before any network operation, naming author or committer and the offending identity. Covered by test_pre_push_refuses_an_unbound_writer_before_any_network_push, test_agent_committer_with_a_correct_tree_is_rejected_before_any_push and test_author_and_committer_must_each_resolve_to_the_same_bound_writer.",
+        "criterion": "Focused tests and repository CI/governance pass.",
+        "evidence": "Locally on this exact content: 77 focused tests in tests/test_issue_agent_execution.py pass; the related Smart Prompt / source-handling / fallback suites pass (206 tests); python scripts/hunter_pr_preflight.py --mode normal passes every gate (Artifact Guard, Defect Prevention Guard, Ruff, Black, Mypy, Pytest 3582 passed). Hosted required checks run after push and are verified on the pull request before Ready; this claim is local evidence, not a substitute for them.",
         "id": "AC-5",
         "verdict": "satisfied"
       },
       {
-        "criterion": "Commit attribution to an implementation agent can coexist with the authorization-bound writer identity without weakening auditability.",
-        "evidence": "Identity is read only from the author and committer headers, never from message text, so a Co-Authored-By or session trailer cannot establish or rescue an identity. Covered by test_agent_attribution_trailer_cannot_rescue_an_unbound_identity. Both commits in this range carry agent attribution as trailers while being recorded under the bound writer.",
+        "criterion": "One implementation PR only; no helper PR chain.",
+        "evidence": "Two commits on the single branch issue-390-governed-execution-trigger, based exactly on trusted main 3a73af22f261fa38611926d3aa996a2aecd724a3; no other branch or pull request was created for this work.",
         "id": "AC-6",
         "verdict": "satisfied"
       },
       {
-        "criterion": "No auto-merge; separate owner merge approval remains mandatory.",
-        "evidence": "No workflow, policy field or controller path in this diff enables auto-merge or auto-Ready; review_progression.auto_ready and connector hosted_admission.auto_merge remain false and are still structurally validated by the Defect Prevention Guard. The pull request remains Draft.",
+        "criterion": "No merge without separate owner approval.",
+        "evidence": "No merge path is introduced: test_no_auto_merge_path_exists_in_the_composition_root pins the absence of merge and auto-merge tokens in the module and of write permissions or merge steps in the workflow. Auto-merge is not enabled and the pull request is opened as a draft for separate owner approval.",
         "id": "AC-7",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "Machine-readable recurring-defect catalog with applicability, guard mechanism, regression evidence and lifecycle state; historical defects not labelled guarded merely because an old test exists.",
-        "evidence": "docs/DEFECT_REGISTRY.json families[] plus scripts/hunter_defect_prevention_preflight.py::validate_recurring_defect_families, which refuses a stage the declared evidence does not support. The PR #411 families DFF-001..DFF-006 are honestly recorded as regression-tested, not prevented, because no machine guard exists for them.",
-        "id": "AC-8",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "Proof that is still running should publish pending, not failure; invalid proof remains failure.",
-        "evidence": "verify_code_write_ingress_provenance returns a tri-state verdict propagated by candidate_admission. Covered by test_a_running_hosted_proof_is_pending_not_failure, test_an_invalid_hosted_proof_remains_failure and test_an_absent_hosted_proof_remains_failure.",
-        "id": "AC-9",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "Receipt generation is the mandatory final step and any later content change invalidates it.",
-        "evidence": "This candidate is written through the clone-capable pre-push channel and carries no authorization receipt, so no receipt is minted here. The enforcement it requires is implemented and regression-tested (scripts/hunter_pre_push.py::_validate_receipt_freshness, test_content_changed_after_the_receipt_blocks_the_push).",
-        "id": "AC-10",
-        "verdict": "not-applicable"
-      },
-      {
-        "criterion": "Do not implement Issue #390 or touch unrelated runtime/product code; do not reintroduce PR #411 Source Handling runtime changes.",
-        "evidence": "The diff touches no path under src/. It contains only governance policy, the canonical gate chain, the recurring-defect catalog and tests.",
-        "id": "AC-11",
         "verdict": "satisfied"
       }
     ],
@@ -82,259 +58,86 @@
       "transaction-snapshot-consistency"
     ],
     "base_ref": "main",
-    "base_sha": "a61941eff153c87c90c93a0e9b97eecda3413e20",
+    "base_sha": "3a73af22f261fa38611926d3aa996a2aecd724a3",
     "defect_families": [
       {
-        "evidence": "Authorization replay: the review identity is a SHA-256 over exactly its own claims, including the per-file operation and resulting blob and the fork point, so a review cannot be re-aimed at different content. The binding is deliberately to content rather than to a pull-request number, which is documented on verify_claims. Authenticated push evidence is bound to the exact SHA and the exact branch, so a run cannot be replayed onto another commit or another candidate.",
+        "evidence": "Every time in the new code comes from the injected Clock: the ledger claim/dispatch/completion instants, the intake processed_at, and the SmartPromptMachine cutoff. The authorization's own issue_updated_at is caller data and never becomes a cutoff, ordering or admission decision -- test_caller_supplied_issue_time_is_never_execution_authority drives a year-2099 value through a successful execution. The intake boundary's own trusted-cutoff sampling (max of clock and newest durable admission, taken after the write lock) is unchanged and still owns the authority cutoff. Naive datetimes are refused (test_ledger_rejects_naive_times).",
+        "family": "DFF-001",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "The ledger makes no decision across two views: claim does its existence check and its insert inside one BEGIN IMMEDIATE, and both state transitions are single conditional UPDATE statements whose WHERE clause carries the expected prior state and the exact authorization digest, so there is no read-then-write split to drift. The ADR 0036 boundary's single-snapshot authority-plus-write transaction is used unchanged. The compiler resolves authority a second time, later and outside that lock; that resolution can only observe an equal or newer authority head, so a restrictive successor blocks the build rather than being missed -- the drift direction is fail-closed, and the already-durable intake is governed by its own snapshot.",
+        "family": "DFF-002",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "No identity in this path is caller-selected. authorization_id is recomputed from the document's claims and the carried value is only compared, never trusted (test_replay_identity_is_bound_to_exact_authorization_content). document_id comes from the existing content-derived evidence_document_id, execution_owner_id and the intake candidate_id are derived from the recomputed authorization identity, and the recorded label is the repository constant rather than the Issue's own labels. The ledger binds each row to both the identity and a digest of the complete document, so a transition cannot be applied under a different content (test_ledger_transitions_require_the_exact_claimed_content).",
+        "family": "DFF-003",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "The authorization parser requires the exact field set, the exact schema version and the exact governed label, rejects duplicate JSON keys, non-integer or non-positive issue numbers, blank required fields and oversized documents. Configuration is all-or-nothing: each of the eight required variables fails closed on absence, and a malformed verification key fails closed. Absent authority is never read as permission -- an absent authority database, an unpublished document scope and an earlier cutoff all raise rather than substituting current state (test_absent_authority_database_cannot_degrade_to_a_test_double, test_missing_source_handling_authority_for_the_document_fails_closed, test_unknown_document_scope_is_returned_as_absence_not_substituted, test_authority_absent_at_an_earlier_cutoff_is_not_substituted_by_current_state).",
+        "family": "DFF-004",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "The intake reference deliberately carries only the two governed operational metadata fields, and the labels value is the repository constant rather than the Issue's own labels, so no Issue-controlled text can ride into a durable row through the operational-metadata category (test_intake_reference_carries_only_governed_operational_metadata). Issue title and body travel only through their own governed categories, and the resolved FACT persistence restriction and POLICY retention decision block the durable write when they do not permit it (test_fact_persistence_restriction_blocks_durable_intake_and_dispatch, test_denied_retention_blocks_durable_intake_and_dispatch), with no dispatch and no durable document in either case. Downstream, the handoff is non-content lineage only (test_no_issue_text_reaches_the_fallback_runtime).",
+        "family": "DFF-005",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Ledger state advances only forwards: each transition names its expected prior state, so completion cannot skip the durable dispatch record and a completed authorization can be neither re-dispatched nor re-claimed (test_ledger_state_is_monotonic). Ownership survives a process restart because it is durable rather than in-memory (test_replay_after_process_restart_does_not_execute_again, test_ledger_survives_a_reopened_database), and a crash between the durable handoff record and the dispatch leaves a row that refuses the retry (test_crash_between_handoff_persistence_and_dispatch_cannot_duplicate). Every one of these runs under a frozen clock, so no ordering guarantee depends on the clock advancing.",
+        "family": "DFF-006",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "The authorization binds the exact content it was minted for: its identity is the digest of its own claims, so it cannot be carried onto different Issue content, and the ledger row additionally binds a digest of the complete document. It cannot be replayed onto a different operation either -- the task key, prompt profile and route registry are repository constants, and the execution branch, checkout and destination come from captured configuration, so nothing in the document selects what runs (test_issue_text_cannot_choose_route_provider_destination_or_merge). Downstream the signed envelope remains the only accepted lineage: a tampered handoff is refused by the existing verifier (test_tampered_handoff_fails_the_existing_verifier), and an issuer key swapped after bootstrap cannot produce a dispatchable handoff (test_signing_key_swapped_after_bootstrap_cannot_issue_a_dispatchable_handoff).",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "Tamper and history forgery: a hand-edited review is detected by its own digest (test_a_hand_edited_review_is_detected_by_its_own_digest). Renaming a governed file onto an evidence-artifact path can no longer carry the source deletion out of the reviewed set; the exclusion is applied to expanded facts, and the push boundary and trusted admission both refuse a rename onto an evidence path.",
-        "family": "DFF-008",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Connector provenance and evidence lifecycle: the first draft of this gate would have handed the connector channel an unsatisfiable obligation, because the review artifact lies outside the connector's allowed paths -- a candidate carrying one would fail the path check and a candidate without one would fail the review gate. Repaired by excluding both governance-evidence artifacts from the receipt-bound content set while keeping the rename-destination constraint, and by exempting candidates that trigger no applicable family. Covered by test_the_review_artifact_is_governance_evidence_not_authorized_content and test_a_candidate_triggering_no_family_needs_no_review.",
-        "family": "DFF-009",
-        "outcome": "repaired"
-      },
-      {
-        "evidence": "Writer identity: author and committer are resolved independently and exactly against the canonical binding; substring, prefix, suffix and domain lookalikes are refused, a bound name with an unbound email is not a partial match, mixed-writer ranges are refused, and missing or malformed policy, unreadable commit metadata and an unavailable fork point all fail closed. The canonically equivalent spelling is still admitted, so the guard does not block valid work.",
-        "family": "DFF-010",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Range evidence: the positive half (an authenticated push of the exact head on this exact branch by the bound writer) is mandatory, and the negative half (no ancestor may carry an authenticated push by another actor) preserves the security property the previous per-commit rule provided. A head push on another branch publishes nothing, and a malformed range SHA fails closed.",
-        "family": "DFF-011",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Receipt lifecycle: freshness is re-derived from git rather than believed, an exact receipt is not forced into unnecessary churn, an unparseable receipt fails closed, and the evidence-path scope matches what trusted admission re-derives. Repaired during this pass: applicability is derived from the change set, so a receipt inherited from the base branch is base state rather than a claim about a later candidate and removing one is a retirement; a receipt an ordinary branch actually writes is still refused, and a connector-namespace candidate that removes its own is still refused for carrying none. The stale Issue #407 receipt is retired at this head.",
-        "family": "DFF-012",
-        "outcome": "repaired"
-      },
-      {
-        "evidence": "Ready gating: base, change set, applicable families and the governing Issue's acceptance criteria are all re-derived from trusted evidence, so a review can neither describe content that does not exist, nor narrow its own applicability, nor measure itself against criteria it wrote for itself. Unavailable review, family-catalog and Issue evidence all fail closed. Non-blocking findings deliberately do not block, so the gate cannot be satisfied by driving comment count to zero. Repaired during independent review (CDX-413-001): the criteria leg was self-attested and is now bound to the owner-authored Issue.",
+        "evidence": "This review is the complete single adversarial batch over the exact base->HEAD content of 3a73af22f261fa38611926d3aa996a2aecd724a3..HEAD, covering all eleven required dimensions and every applicable recurring-defect family, recorded before Ready. Both findings below were found by this pass and repaired in the reviewed content.",
         "family": "DFF-013",
-        "outcome": "repaired"
-      },
-      {
-        "evidence": "Pending versus failure: only the running state is transient; missing, invalid, untrusted-publisher and wrongly-bound proofs all remain failure. Repaired during independent review (CDX-413-002): a pending head is now reconciled by the candidate-admission controller when the trusted proof lands, so pending cannot become a way to stay Ready while unadmitted.",
-        "family": "DFF-014",
-        "outcome": "repaired"
-      },
-      {
-        "evidence": "Overclaimed prevention: every family in this catalog is validated against the evidence it declares, and the PR #411 families are recorded at regression-tested rather than relabelled as prevented. The guard itself is exercised by paired positive and negative fixtures.",
-        "family": "DFF-015",
         "outcome": "clear"
       }
     ],
     "findings": [
       {
-        "evidence": "The pre-ready review artifact is outside the connector ingress allowed paths, so binding it as receipt-authorized content would have made every connector candidate inadmissible either with or without a review. Resolved by treating both governance-evidence artifacts as evidence rather than content, keeping the rename-destination constraint on both.",
-        "id": "AUD-412-001",
-        "resolution": "resolved",
-        "severity": "blocking"
-      },
-      {
-        "evidence": "Requiring a hostile review of every candidate would have permanently blocked dependency-only candidates, whose authors cannot produce the artifact. Resolved by requiring the review only when at least one recurring-defect family applies, while still verifying any review that is present.",
-        "id": "AUD-412-002",
-        "resolution": "resolved",
-        "severity": "blocking"
-      },
-      {
-        "evidence": "Rename detection is a heuristic that local git and GitHub need not agree on, so a representation-dependent binding would have marked valid reviews stale. Resolved by expanding renames into removal plus addition on both sides.",
-        "id": "AUD-412-003",
-        "resolution": "resolved",
-        "severity": "blocking"
-      },
-      {
-        "evidence": "Applying artifact exclusion to whole rename records would have let a rename onto an artifact path carry the source deletion out of the reviewed change set. Resolved by applying exclusion to the expanded facts, and by refusing renames onto evidence paths at the push boundary.",
-        "id": "AUD-412-004",
-        "resolution": "resolved",
-        "severity": "blocking"
-      },
-      {
-        "evidence": "git diff --raw abbreviates blob SHAs, which are not comparable with the full digests GitHub reports and fail canonical normalisation outright. Resolved with --abbrev=40 and pinned by a regression.",
-        "id": "AUD-412-005",
-        "resolution": "resolved",
-        "severity": "blocking"
-      },
-      {
-        "evidence": "Rejecting a review that names a family unknown to the trusted catalog would have blocked precisely the candidate that adds a family. Resolved by requiring coverage derived from the trusted catalog while tolerating extra names, which cannot make an incomplete review look complete.",
-        "id": "AUD-412-006",
-        "resolution": "resolved",
-        "severity": "blocking"
-      },
-      {
-        "evidence": "A stale local base branch could have widened the governed commit range over already-merged history and blocked a valid push. Resolved by consulting only the remote-tracking base ref and failing closed with an actionable fetch instruction.",
-        "id": "AUD-412-007",
-        "resolution": "resolved",
-        "severity": "blocking"
-      },
-      {
-        "evidence": "GitHub reports a source path for a copied file, which canonicalises to an addition; an addition carrying a source is rejected as malformed, so an ordinary copy would have blocked admission. Resolved by dropping previous_path for every non-rename status.",
-        "id": "AUD-412-008",
-        "resolution": "resolved",
-        "severity": "blocking"
-      },
-      {
-        "evidence": "Found by this candidate's own push boundary refusing its first push. Since PR #411 merged the Issue #407 connector receipt onto the default branch, every later candidate inherits that file at its head. Both the new local receipt-freshness check and the pre-existing trusted connector re-derivation read mere presence as a claim about the current range, so an already-merged receipt spoke for unrelated work: every ordinary candidate was refused for 'carrying a connector authorization receipt outside the connector namespace'. This was a live blocking defect on main, not only in the new code. Resolved on both boundaries with one rule -- a receipt is this candidate's claim only when this candidate writes it, derived from the change set rather than from file presence. The relaxation is confined to the ordinary path: a connector-namespace candidate is unchanged, because every claim in its receipt is already re-derived against this exact range, branch, fork point and grant. An ordinary branch that actually writes a receipt is still refused. DFF-012 was widened to carry this invariant.",
-        "id": "AUD-412-012",
-        "resolution": "resolved",
-        "severity": "blocking"
-      },
-      {
-        "evidence": "Confirmed on the hosted boundary: Hunter Governance Review published 'Candidate admission blocked: branch issue-412-pre-ready-hostile-review-gate-... carries a connector authorization receipt but is outside the connector namespace' for this exact head. The trusted controller runs the default-branch code, so the AUD-412-012 fix cannot apply to its own pull request -- the documented bootstrap property of this repository. The stale artifact itself therefore has to be retired at this head. The Issue #407 receipt on the default branch is bound to a deleted connector/issue-407-* branch and an older fork point, so it can never again be a valid claim for any candidate; the path is per-candidate evidence the connector authorizer overwrites, not an append-only audit record, and git history preserves it. Removing it clears the live block for every candidate, and Issue #412 states directly that stale Issue #407 receipt claims must never be carried into #412. The push boundary was corrected in the same batch so that retiring an inherited receipt is a retirement rather than a claim; a connector-namespace candidate that removes its own receipt is still refused by trusted admission, which requires a namespace candidate to carry one.",
-        "id": "AUD-412-013",
-        "resolution": "resolved",
-        "severity": "blocking"
-      },
-      {
-        "evidence": "The review binds content rather than a pull-request number, so two candidates with a byte-identical diff from the same fork point share a review. This is intentional -- a review is a statement about a diff -- and is now documented on verify_claims rather than left implicit.",
-        "id": "AUD-412-009",
+        "evidence": "The first draft claimed durable ownership before performing the purely local mapping validation, so an authorization that could never execute -- an Issue with an empty body, say -- still permanently consumed its own identity. Repaired by moving the pure mapping and its validation ahead of the claim; nothing durable or external happens before the claim, so the ownership-before-execution ordering is unchanged. Pinned by test_empty_issue_body_fails_closed and test_crash_before_any_execution_still_owns_the_authorization.",
+        "id": "F-1",
         "resolution": "resolved",
         "severity": "non-blocking"
       },
       {
-        "evidence": "A guard_reference is validated structurally (the file exists and the symbol resolves), not semantically: a family could name a real but unrelated guard. Strengthening this would require a semantic link the repository does not currently model. Recorded rather than implemented; it does not make any contribution unsafe.",
-        "id": "AUD-412-010",
-        "resolution": "unresolved",
+        "evidence": "The authorization document carries a SHA-256 identity, not a signature, so it is not self-authenticating: anyone able to reach the trusted issuer endpoint can mint a syntactically valid document for content of their choosing. Judged non-blocking rather than ignored: redesigning the PR #391 issuer edge is outside this Issue's authorized scope, and a second independent gate already holds -- the governed document scope is derived from the exact Issue content, so forged content resolves to a scope for which no FACT, POLICY or FIELD_CATEGORY_REGISTRY was ever published and the execution fails closed before a build exists. Pinned by test_a_forged_authorization_still_cannot_execute_arbitrary_content, and the operator's transport-authentication responsibility is now stated explicitly in docs/ISSUE_AGENT_TRIGGER.md rather than left implied.",
+        "id": "F-2",
+        "resolution": "resolved",
         "severity": "non-blocking"
-      },
-      {
-        "evidence": "Identity comparison case-folds the email local part, which is technically case-sensitive in RFC 5321 although effectively case-insensitive at every relevant provider. Widening rather than narrowing risk is bounded to the two bound identities; recorded for visibility.",
-        "id": "AUD-412-011",
-        "resolution": "unresolved",
-        "severity": "non-blocking"
-      },
-      {
-        "evidence": "Independent review (Codex, P1) on scripts/hunter_pre_ready_review.py: the acceptance-criteria leg of the gate accepted any non-empty candidate-authored list as complete so long as one entry read 'satisfied'. Neither the claimed Issue nor the criterion text was compared with a trusted definition, so a review omitting all but one criterion, or naming one invented criterion, was structurally complete and could admit the candidate. Verified and accurate. Resolved by re-deriving the criteria from the owner-authored governing Issue via the GitHub API in the trusted controller, scoped to the Issue's own 'Acceptance criteria' section, and requiring every derived criterion to be covered; the Issue a review names must also be the Issue its branch binds. Extra entries stay allowed and unavailable Issue evidence fails closed.",
-        "id": "CDX-413-001",
-        "resolution": "resolved",
-        "severity": "blocking"
-      },
-      {
-        "evidence": "Independent review (Codex, P1) on scripts/hunter_governance_review_v2.py: a head marked Ready while the trusted upgrade proof is still running is admitted as pending, and the Draft controller deliberately leaves a pending head alone -- but .github/workflows/hunter-candidate-admission.yml only reconciled on Hunter / Pre-PR Preflight completion, while trusted-upgrade completion triggered the status-only Governance Review. The head could therefore stay Ready indefinitely while unadmitted, contrary to unadmitted_head_state=draft. Verified and accurate, and the window predates this contribution for protected-preflight candidates while this contribution widens it. Resolved by subscribing the candidate-admission controller to Hunter / Trusted Preflight Upgrade completion and widening its event condition to accept a pull_request_target-originated workflow_run, rather than by turning pending back into a failure.",
-        "id": "CDX-413-002",
-        "resolution": "resolved",
-        "severity": "blocking"
-      },
-      {
-        "evidence": "Found while writing the regression for CDX-413-001: the acceptance-criteria parser folded an indented sub-bullet into the text of the criterion above it, so a criterion carrying supporting detail could never be matched by a review that quoted the criterion itself -- a false-positive Ready block. Resolved by treating an indented bullet as sub-detail rather than as a continuation line, pinned by test_indented_sub_bullets_are_detail_not_criteria.",
-        "id": "AUD-412-014",
-        "resolution": "resolved",
-        "severity": "blocking"
       }
     ],
-    "issue": "412",
+    "issue": "390",
     "review_target": [
       {
-        "blob_sha": "77ceebd57606e4e8ed031749c4222aa239e687f3",
-        "path": "scripts/hunter_pre_ready_review.py",
+        "blob_sha": "6994eb07b58a68433cb7dd03d2cba5d5e571cdbb",
+        "path": "src/hunter/automation/issue_agent_execution.py",
         "previous_path": "",
         "status": "added"
       },
       {
-        "blob_sha": "f234bd14c12940dc46a1d0042995362f65d4df21",
-        "path": "scripts/hunter_writer_provenance.py",
+        "blob_sha": "09faee97237c05b79f18a2ba6cc4f90a1f6814ab",
+        "path": "tests/test_issue_agent_execution.py",
         "previous_path": "",
         "status": "added"
       },
       {
-        "blob_sha": "3ee29cf8a8eb0008d97e9abda9f9eea2b4ca9144",
-        "path": "tests/test_issue_412_prevention_gate.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "38916b9e6fd956088640ee1bf8675526bb399333",
-        "path": ".github/workflows/hunter-candidate-admission.yml",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "cc580eae40d60f64a0b40162257c9a5801ad52eb",
-        "path": "docs/CODE_WRITE_POLICY.json",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "bfc35d4a984ea18ff7bd8da9b927655ce747bc26",
-        "path": "docs/DEFECT_PREVENTION_LIFECYCLE.json",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "13dff9d5ac06fa1d0f46a045cf01fb260f35ac8d",
-        "path": "docs/DEFECT_REGISTRY.json",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "7ca31d41f4db4a6041a96af63dfde56aeb9749ee",
-        "path": "scripts/hunter_defect_prevention_preflight.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "d061702514ca4414fe6273277cd288cffacc60e0",
-        "path": "scripts/hunter_governance_review_v2.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "18f5e48656e25102a87cdddf5f21409ed1357840",
-        "path": "scripts/hunter_pre_push.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "2a4167061e1132ce3d4780b2025a8b046a5cbd43",
-        "path": "tests/test_connector_admission_channel.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "f057abf9524999a05a9bee4e26e7423432872f31",
-        "path": "tests/test_connector_write_ingress.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "9ab034a818ae1830f916ba5fba82315f900ad337",
-        "path": "tests/test_governance_maintenance_ingress.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "54efdbee9aa24c53db13c29e3708867b8f4b6188",
-        "path": "tests/test_hunter_governance_review_v2.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "8c2466ff823de26e7bb5c8ed0bab9a5cd3a3e5af",
-        "path": "tests/test_hunter_pre_push.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "e1a97471289df7bfb08d67b6cf6ec7affc8397e1",
-        "path": "tests/test_hunter_reviewer_disposition.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "8afe12a31944d12cf781ba3e6efa92d414ae1414",
-        "path": "tests/test_pr376_prevention_regressions.py",
+        "blob_sha": "fac8f155e16d59e972c47c17c3c0560a2b51a183",
+        "path": "docs/ISSUE_AGENT_TRIGGER.md",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "f24ed276d1bb561711640233fb787384e77b57d34ec7d1ec8ec4ccb2958bb1ee"
+    "review_target_digest": "6d232e981ed69a7cf78fcbe1a43b565ab7f92637e12f123e16a8068d85f3101a"
   },
-  "review_id": "a4ee3fa44220b02934fefcf3b532d6d3989cdb7175af4e6df993798d291ae018",
+  "review_id": "c53ef1384bf5469484a529e94222337fc14242923a0943890a2ed9ebd9097b9b",
   "schema": "hunter.pre-ready-hostile-review.v1"
 }
