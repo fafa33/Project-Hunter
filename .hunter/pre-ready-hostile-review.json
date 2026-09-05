@@ -9,7 +9,7 @@
       },
       {
         "criterion": "Authorization and replay behavior are deterministic and fail closed.",
-        "evidence": "authorization_id is recomputed from the document's own claims (test_replay_identity_is_bound_to_exact_authorization_content, 4 mutations); duplicate, restart and crash-retry replay are refused by IssueAgentExecutionLedger (test_duplicate_authorization_is_rejected_and_executes_once, test_replay_after_process_restart_does_not_execute_again, test_crash_between_handoff_persistence_and_dispatch_cannot_duplicate, test_crash_before_any_execution_still_owns_the_authorization, test_ledger_state_is_monotonic); malformed documents and absent configuration fail closed (test_malformed_authorization_fails_closed, test_non_canonical_authorization_fields_fail_closed, test_missing_operational_configuration_fails_closed).",
+        "evidence": "Trusted origin is proved before anything else: the Ed25519 issuer signature is verified against a bootstrap-captured public key before the ledger claim, durable intake or dispatch (test_valid_public_claims_without_the_trusted_issuer_proof_cannot_dispatch, test_a_signature_lifted_from_another_authorization_is_refused, test_the_issuer_proof_covers_every_authorization_claim, test_issuer_verifying_key_is_captured_at_bootstrap_not_re_read). authorization_id is then recomputed from the document's own claims (test_replay_identity_is_bound_to_exact_authorization_content); duplicate, restart and crash-retry replay are refused by IssueAgentExecutionLedger (test_duplicate_authorization_is_rejected_and_executes_once, test_replay_after_process_restart_does_not_execute_again, test_crash_between_handoff_persistence_and_dispatch_cannot_duplicate, test_crash_before_any_execution_still_owns_the_authorization, test_ledger_state_is_monotonic); malformed documents, malformed signatures and absent configuration fail closed (test_malformed_authorization_fails_closed, test_non_canonical_authorization_fields_fail_closed, test_missing_operational_configuration_fails_closed, test_missing_or_malformed_issuer_verifying_key_fails_closed).",
         "id": "AC-2",
         "verdict": "satisfied"
       },
@@ -27,13 +27,13 @@
       },
       {
         "criterion": "Focused tests and repository CI/governance pass.",
-        "evidence": "Locally on this exact content: 77 focused tests in tests/test_issue_agent_execution.py pass; the related Smart Prompt / source-handling / fallback suites pass (206 tests); python scripts/hunter_pr_preflight.py --mode normal passes every gate (Artifact Guard, Defect Prevention Guard, Ruff, Black, Mypy, Pytest 3582 passed). Hosted required checks run after push and are verified on the pull request before Ready; this claim is local evidence, not a substitute for them.",
+        "evidence": "Locally on this exact content: 129 focused tests across tests/test_issue_agent_execution.py and tests/test_issue_agent_trigger.py pass; python scripts/hunter_pr_preflight.py --mode normal passes every gate (Artifact Guard, Defect Prevention Guard, Ruff, Black, Mypy, Pytest 3616 passed). Hosted required checks run after push and are verified on the pull request; this claim is local evidence, not a substitute for them.",
         "id": "AC-5",
         "verdict": "satisfied"
       },
       {
         "criterion": "One implementation PR only; no helper PR chain.",
-        "evidence": "Two commits on the single branch issue-390-governed-execution-trigger, based exactly on trusted main 3a73af22f261fa38611926d3aa996a2aecd724a3; no other branch or pull request was created for this work.",
+        "evidence": "Four commits on the single branch issue-390-governed-execution-trigger, based exactly on trusted main 3a73af22f261fa38611926d3aa996a2aecd724a3; no other branch or pull request was created for this work. The fourth commit is the repair of the blocking finding from independent review of the third head.",
         "id": "AC-6",
         "verdict": "satisfied"
       },
@@ -76,7 +76,7 @@
         "outcome": "clear"
       },
       {
-        "evidence": "The authorization parser requires the exact field set, the exact schema version and the exact governed label, rejects duplicate JSON keys, non-integer or non-positive issue numbers, blank required fields and oversized documents. Configuration is all-or-nothing: each of the eight required variables fails closed on absence, and a malformed verification key fails closed. Absent authority is never read as permission -- an absent authority database, an unpublished document scope and an earlier cutoff all raise rather than substituting current state (test_absent_authority_database_cannot_degrade_to_a_test_double, test_missing_source_handling_authority_for_the_document_fails_closed, test_unknown_document_scope_is_returned_as_absence_not_substituted, test_authority_absent_at_an_earlier_cutoff_is_not_substituted_by_current_state).",
+        "evidence": "An unverifiable document is refused before any other decision, and a malformed or absent issuer verifying key fails bootstrap closed (test_missing_or_malformed_issuer_verifying_key_fails_closed, test_absent_issuer_verifying_key_fails_closed). The authorization parser requires the exact field set, a canonical 128-character lowercase hexadecimal signature, the exact schema version and the exact governed label, rejects duplicate JSON keys, non-integer or non-positive issue numbers, blank required fields and oversized documents. Configuration is all-or-nothing: each of the eight required variables fails closed on absence, and a malformed verification key fails closed. Absent authority is never read as permission -- an absent authority database, an unpublished document scope and an earlier cutoff all raise rather than substituting current state (test_absent_authority_database_cannot_degrade_to_a_test_double, test_missing_source_handling_authority_for_the_document_fails_closed, test_unknown_document_scope_is_returned_as_absence_not_substituted, test_authority_absent_at_an_earlier_cutoff_is_not_substituted_by_current_state).",
         "family": "DFF-004",
         "outcome": "clear"
       },
@@ -91,13 +91,48 @@
         "outcome": "clear"
       },
       {
-        "evidence": "The authorization binds the exact content it was minted for: its identity is the digest of its own claims, so it cannot be carried onto different Issue content, and the ledger row additionally binds a digest of the complete document. It cannot be replayed onto a different operation either -- the task key, prompt profile and route registry are repository constants, and the execution branch, checkout and destination come from captured configuration, so nothing in the document selects what runs (test_issue_text_cannot_choose_route_provider_destination_or_merge). Downstream the signed envelope remains the only accepted lineage: a tampered handoff is refused by the existing verifier (test_tampered_handoff_fails_the_existing_verifier), and an issuer key swapped after bootstrap cannot produce a dispatchable handoff (test_signing_key_swapped_after_bootstrap_cannot_issue_a_dispatchable_handoff).",
+        "evidence": "Trusted origin is now proved rather than assumed. The workflow that observes the owner's issues:labeled event signs the exact canonical claims with a domain-separated Ed25519 issuer key, and the composition root verifies that signature against a bootstrap-captured public key before the ledger claim, durable intake or dispatch; the execution side holds only the public half, so it can verify an owner authorization and never mint one. A document with correct public claims and a correctly derived identity but no trusted proof cannot dispatch, leaves no ledger row and ingests nothing (test_valid_public_claims_without_the_trusted_issuer_proof_cannot_dispatch). A genuine signature cannot be transplanted onto different claims, and mutating any covered claim while re-deriving the digest is still refused (test_a_signature_lifted_from_another_authorization_is_refused, test_the_issuer_proof_covers_every_authorization_claim, test_issue_number_is_covered_by_the_issuer_proof). The authorization also binds the exact operation: the task key, prompt profile and route registry are repository constants and the branch, checkout and destination come from captured configuration (test_issue_text_cannot_choose_route_provider_destination_or_merge). Downstream the signed envelope remains the only accepted lineage (test_tampered_handoff_fails_the_existing_verifier, test_signing_key_swapped_after_bootstrap_cannot_issue_a_dispatchable_handoff).",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "This review is the complete single adversarial batch over the exact base->HEAD content of 3a73af22f261fa38611926d3aa996a2aecd724a3..HEAD, covering all eleven required dimensions and every applicable recurring-defect family, recorded before Ready. Both findings below were found by this pass and repaired in the reviewed content.",
+        "evidence": "This review is a fresh complete adversarial batch over the exact base->HEAD content of 3a73af22f261fa38611926d3aa996a2aecd724a3..HEAD, covering all eleven required dimensions and every applicable recurring-defect family. The previous review of this candidate was invalidated by the content mutation that repaired the blocking finding from independent owner review, so it was re-taken rather than carried forward. Three findings are recorded below: two found by the earlier pass and repaired, and F-3, the blocking finding independent review raised and this head repairs.",
         "family": "DFF-013",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "This is the family the blocking finding belongs to. The authorization artifact was bound to its own content by a public digest only, which makes a hand-edited document detectable but a forged one perfectly plausible, because every input to the digest is public. It is now bound by a domain-separated Ed25519 signature over the exact canonical claims, so a forged artifact is detectable rather than merely implausible (test_valid_public_claims_without_the_trusted_issuer_proof_cannot_dispatch, test_a_signature_lifted_from_another_authorization_is_refused, test_the_issuer_proof_covers_every_authorization_claim). The other repository-owned artifacts in this change keep their existing content bindings: the pre-ready review binds the base->HEAD change set excluding itself, and docs/DEFECT_REGISTRY.json is validated by the Artifact Guard.",
+        "family": "DFF-008",
+        "outcome": "repaired"
+      },
+      {
+        "evidence": "The prior head restated caller-chosen metadata as provenance: it compared the document's own authorized_by string to configured owner text, which authenticates nothing. The proof now authenticates the writer -- only the workflow holding the issuer secret can mint a document the composition root accepts. The proof is one the authorized channel can actually produce: the workflow already observes the exact issues:labeled event, and it is given the signing secret plus a pinned cryptography install under requirements/ci-constraints.txt, so it is not handed an obligation it cannot satisfy. Absent or malformed key material fails the authorization closed rather than emitting an unsigned document (test_missing_or_malformed_issuer_signing_key_fails_closed, test_authorization_without_an_issuer_signing_authority_fails_closed), and the key is read only from machine-only configuration, never from argv (test_issuer_key_is_never_accepted_from_the_command_line).",
+        "family": "DFF-009",
+        "outcome": "repaired"
+      },
+      {
+        "evidence": "Every commit in the governed range carries author and committer 'Claude <noreply@anthropic.com>', each resolving independently to the authorization-bound writer identity in docs/CODE_WRITE_POLICY.json; implementation-agent attribution stays in Co-Authored-By and Claude-Session trailers and never touches the identity headers. Verified on this exact head by scripts/hunter_writer_provenance.py --check-config and --check-range HEAD, and enforced again by the pre-push boundary. This change alters no part of that mechanism.",
+        "family": "DFF-010",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "The candidate is a four-commit range published across two ordinary pushes, with no rewind, amend, rebase or force-push at any point, and none was needed to produce evidence for any commit: range-level push provenance covers the intermediate commits from the authenticated push of the exact head. The first three commits were already admitted on the previous head under exactly that rule. This change alters no part of that mechanism.",
+        "family": "DFF-011",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Demonstrated rather than merely asserted on this candidate: the previous head's pre-ready review was invalidated by the content mutation that repaired the blocking finding, and it was re-recorded against the new content rather than carried forward, which is what forced this fresh adversarial pass. The review artifact remains the final mutation of the candidate, binds the base->HEAD change set excluding itself, and no receipt inherited from the base branch is read as a claim about this candidate.",
+        "family": "DFF-012",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "This change touches no admission controller, and the family's behaviour was observed live on this pull request: Hunter Governance Review published failure for an absent exact-head trusted proof at PR open, which is the specified verdict for absent rather than running evidence, then re-evaluated on the proof's workflow_run completion and published success. No head was left Ready while unadmitted, and the pending verdict was reserved for the still-running Merge Readiness gate.",
+        "family": "DFF-014",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "The new TOA-001 entry claims status 'guarded', which docs/DEFECT_PREVENTION_LIFECYCLE.json maps to 'detected' and which is supported by the evidence actually present: a resolvable regression test plus a runtime verification boundary. No prevented or merge-enforced state is claimed, because this change establishes no explicit_enforcement entry and no repository ruleset requirement, so claiming more would overclaim. The Defect Prevention Guard validates that declaration mechanically and passes on this exact content.",
+        "family": "DFF-015",
         "outcome": "clear"
       }
     ],
@@ -109,35 +144,65 @@
         "severity": "non-blocking"
       },
       {
-        "evidence": "The authorization document carries a SHA-256 identity, not a signature, so it is not self-authenticating: anyone able to reach the trusted issuer endpoint can mint a syntactically valid document for content of their choosing. Judged non-blocking rather than ignored: redesigning the PR #391 issuer edge is outside this Issue's authorized scope, and a second independent gate already holds -- the governed document scope is derived from the exact Issue content, so forged content resolves to a scope for which no FACT, POLICY or FIELD_CATEGORY_REGISTRY was ever published and the execution fails closed before a build exists. Pinned by test_a_forged_authorization_still_cannot_execute_arbitrary_content, and the operator's transport-authentication responsibility is now stated explicitly in docs/ISSUE_AGENT_TRIGGER.md rather than left implied.",
+        "evidence": "Forged Issue content resolves to a governed document scope for which no FACT, POLICY or FIELD_CATEGORY_REGISTRY was ever published, so it fails closed before a build exists. Pinned by test_a_forged_authorization_still_cannot_execute_arbitrary_content. Superseded as a security argument by F-3: this gate is real but governs content classification, not who authorized execution.",
         "id": "F-2",
         "resolution": "resolved",
         "severity": "non-blocking"
+      },
+      {
+        "evidence": "Raised by independent owner review of head 3667951a. The authorization document was forgeable at the production composition boundary: its SHA-256 authorization_id covers only public Issue fields, so any caller reaching the credential-free issuer endpoint could recompute it and mint a byte-valid document, and comparing authorized_by to configured owner text compares attacker-chosen text to a constant. The earlier disposition treated this as non-blocking and delegated transport authentication to the operator while the repository-owned workflow supplied no authenticator at all, and it leaned on Source Handling as a second gate -- which governs whether an exact document scope may be processed, so for an Issue whose exact content already carries published authority it admits a forged authorization as readily as a genuine one. That disposition was wrong and this head repairs it: the workflow signs the exact canonical claims with a domain-separated Ed25519 issuer key held only as a repository secret, and the composition root verifies that signature against a public key captured once at trusted bootstrap, before the ledger claim, before durable intake and before any dispatch. Recorded as TOA-001 in docs/DEFECT_REGISTRY.json. Pinned by test_valid_public_claims_without_the_trusted_issuer_proof_cannot_dispatch and five further regressions.",
+        "id": "F-3",
+        "resolution": "resolved",
+        "severity": "blocking"
       }
     ],
     "issue": "390",
     "review_target": [
       {
-        "blob_sha": "6994eb07b58a68433cb7dd03d2cba5d5e571cdbb",
+        "blob_sha": "b74b85ef47f844c772c01bf0cd24ad247afc9990",
         "path": "src/hunter/automation/issue_agent_execution.py",
         "previous_path": "",
         "status": "added"
       },
       {
-        "blob_sha": "09faee97237c05b79f18a2ba6cc4f90a1f6814ab",
+        "blob_sha": "38712ac31c439b32b966b7857732416033ce035d",
         "path": "tests/test_issue_agent_execution.py",
         "previous_path": "",
         "status": "added"
       },
       {
-        "blob_sha": "fac8f155e16d59e972c47c17c3c0560a2b51a183",
+        "blob_sha": "305dd0e0909e9596486559a91ce8a18a3b39463d",
+        "path": ".github/workflows/hunter-issue-agent-trigger.yml",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "32424a9484c441e01193db6169e3c124886be15e",
+        "path": "docs/DEFECT_REGISTRY.json",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "3686ff3ed057bf30a26993dc1fe824a68894f760",
         "path": "docs/ISSUE_AGENT_TRIGGER.md",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "616222d7ec7e7ede242437d9f5ee78931aada68f",
+        "path": "scripts/hunter_issue_agent_trigger.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "010d21f51ca464ffdfd2123fdb2b2d8fc26db6e5",
+        "path": "tests/test_issue_agent_trigger.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "6d232e981ed69a7cf78fcbe1a43b565ab7f92637e12f123e16a8068d85f3101a"
+    "review_target_digest": "cc50bd467a14af2b5b8fe1546c8edfedd628c3ecfa740c2a22664c361619e216"
   },
-  "review_id": "c53ef1384bf5469484a529e94222337fc14242923a0943890a2ed9ebd9097b9b",
+  "review_id": "9ab898ca2d6416ba05430f40d466c84e605e276dea937e2bb74c44c1262e6ddc",
   "schema": "hunter.pre-ready-hostile-review.v1"
 }
