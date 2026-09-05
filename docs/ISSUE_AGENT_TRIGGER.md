@@ -2,7 +2,7 @@
 
 Issue #390 adds the first repository-owned execution edge for GitHub Issues. It is intentionally narrower than the existing n8n fallback worker and must not be used to bypass Smart Prompt Machine authority.
 
-The edge has two halves. `scripts/hunter_issue_agent_trigger.py` runs inside GitHub Actions and only *authorizes*: it turns one exact `issues:labeled` event into a deterministic `hunter-issue-agent-authorization-v1` document. `hunter.automation.issue_agent_execution.GovernedIssueAgentExecutionService` is the production composition root that *consumes* that document behind the trusted issuer endpoint. Neither half can execute anything on its own.
+The edge has two halves. `scripts/hunter_issue_agent_trigger.py` runs inside GitHub Actions and only *authorizes*: it turns one exact `issues:labeled` event into a deterministic, issuer-signed `hunter-issue-agent-authorization-v2` document. `hunter.automation.issue_agent_execution.GovernedIssueAgentExecutionService` is the production composition root that *consumes* that document behind the trusted issuer endpoint. Neither half can execute anything on its own.
 
 ## Authorization
 
@@ -13,15 +13,15 @@ Execution is eligible only when all of the following are true:
 - the actor is exactly the repository owner;
 - the target is an open Issue, not a pull request.
 
-The trigger serializes a deterministic `hunter-issue-agent-authorization-v1` document containing the exact Issue identity/content observed at authorization time and a SHA-256 authorization identity. Issue text cannot choose a provider, branch policy, reviewer, or merge behavior.
+The trigger serializes a deterministic, issuer-signed `hunter-issue-agent-authorization-v2` document containing the exact Issue identity/content observed at authorization time and a SHA-256 authorization identity. Issue text cannot choose a provider, branch policy, reviewer, or merge behavior.
 
 ## Dispatch boundary
 
-The workflow requires the repository secret `HUNTER_ISSUE_AGENT_WEBHOOK_URL`. The URL must be a credential-free HTTPS endpoint. Missing or malformed configuration fails closed. Redirects are refused rather than followed: a 3xx response fails the dispatch closed, so a redirected POST can never be downgraded to a GET and reported as a delivered authorization.
+The workflow requires two repository secrets: `HUNTER_ISSUE_AGENT_WEBHOOK_URL` and `HUNTER_ISSUE_AGENT_SIGNING_KEY` (the hex Ed25519 issuer private key, whose public half the consumer holds as `HUNTER_ISSUE_AGENT_VERIFYING_KEY`). A missing or malformed signing key fails the authorization closed before any dispatch. The URL must be a credential-free HTTPS endpoint. Missing or malformed configuration fails closed. Redirects are refused rather than followed: a 3xx response fails the dispatch closed, so a redirected POST can never be downgraded to a GET and reported as a delivered authorization.
 
 This endpoint is a **trusted issuer edge**, not the existing fallback-runtime webhook that expects an already-signed `PromptAutomationEnvelopeHandoff`. Behind it runs `GovernedIssueAgentExecutionService.execute()`, which composes existing authorities in this fixed order and adds no new one:
 
-1. parse the exact authorization document and re-derive its `authorization_id` from its own claims; recheck repository and owner against captured configuration;
+1. parse the exact authorization document, **verify the issuer signature** against the bootstrap-captured public key, re-derive its `authorization_id` from its own claims, and recheck repository and owner against captured configuration;
 2. map the authorization deterministically onto exactly one `PromptTaskRequest` (governed task key, document identity, execution owner, task text);
 3. take durable execution ownership in the `issue_agent_execution_ledger` table before anything can run;
 4. ingest the Issue content through the ADR 0036 `IssueSourceTransientIntakeBoundary`, which resolves the production read-only Source Handling authority and fails closed when retention is not permitted;
@@ -29,7 +29,15 @@ This endpoint is a **trusted issuer edge**, not the existing fallback-runtime we
 6. verify that envelope against the bootstrap-captured issuer verifier and record the exact serialized `PromptAutomationEnvelopeHandoff` durably;
 7. hand those exact bytes, unchanged, to the existing fallback runtime, which keeps its own fixed provider order, remote-HEAD proof, targeted validation, and the no-auto-merge rule.
 
-The authorization document carries a SHA-256 identity, not a signature, so it is not self-authenticating: transport authentication of the trusted issuer endpoint is an operator responsibility. It is not the only barrier, though. The governed document scope is derived from the exact Issue content, so content that was never classified resolves to a scope for which no `FACT`, `POLICY` or `FIELD_CATEGORY_REGISTRY` was ever published, and the execution fails closed before a build exists. Publishing that authority is a separate operator action under ADR 0036, outside this execution path, which can only read it.
+### Trusted origin
+
+The authorization document is signed. The SHA-256 `authorization_id` proves only that the claims are internally consistent, and every field it covers — repository, Issue number, URL, title, body, owner login, governed label, `updated_at` — is public on an owner-authored Issue, so a caller reaching the issuer endpoint could recompute it. It is therefore **never** evidence of who minted the document.
+
+The workflow that actually observes the owner's `issues:labeled` event signs the exact canonical claims with a domain-separated Ed25519 issuer key held only as the repository secret `HUNTER_ISSUE_AGENT_SIGNING_KEY`. The composition root verifies that signature with a public key captured once at trusted bootstrap, before the ledger claim, before durable intake, and before any dispatch. Without a valid proof nothing durable or external happens at all.
+
+The split is asymmetric deliberately: the execution side holds only the public half, so it can verify an owner authorization and can never mint one, and a later environment mutation cannot move the trust root.
+
+Source Handling is a second, independent gate, not a substitute for this one. It governs whether an exact document scope may be processed, so for an Issue whose exact content already carries published authority it would admit a forged authorization as readily as a genuine one. Proving the owner performed the authorization event is the issuer signature's job.
 
 The composition root never signs, never chooses a provider, never selects a destination or branch, and has no merge path. It only reads Source Handling authority: it is built from `SqliteSourceHandlingAuthorityReadView`, never from `SourceHandlingAuthorityService`, so the execution path cannot publish the authority that governs it.
 
@@ -48,7 +56,8 @@ All of the following are required; any missing or malformed value fails closed b
 | `HUNTER_SOURCE_HANDLING_VERIFICATION_KEY_SHA256` | Operator-provisioned fingerprint of that key. |
 | `HUNTER_SOURCE_HANDLING_GENESIS_RULE_SHA256` | Operator-provisioned genesis authorization-rule digest. |
 | `HUNTER_PROMPT_AUTOMATION_VERIFYING_KEY` | Issuer verifier, captured once at bootstrap. |
-| `HUNTER_PROMPT_AUTOMATION_SIGNING_KEY` | Issuer-only signing key. Machine-only; never repository content. |
+| `HUNTER_PROMPT_AUTOMATION_SIGNING_KEY` | Smart Prompt issuer-only signing key. Machine-only; never repository content. |
+| `HUNTER_ISSUE_AGENT_VERIFYING_KEY` | Public half of the Issue authorization issuer key, captured once at bootstrap. |
 
 The existing `HUNTER_AGENT_*` provider, validation and timeout variables continue to configure the fallback runtime unchanged.
 
@@ -63,7 +72,7 @@ The authorization identity is deterministic over repository, Issue number/URL/ti
 ## Security invariants
 
 - No automatic execution on Issue creation/edit/comment.
-- No authorization by non-owner actors.
+- No authorization by non-owner actors, and no authorization without a valid trusted-issuer signature — a document with correct public claims but no issuer proof cannot dispatch.
 - No provider selection from Issue text.
 - No merge instruction from Issue text.
 - No signing key or provider credential is stored in repository content.

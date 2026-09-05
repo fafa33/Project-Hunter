@@ -38,6 +38,7 @@ from hunter.automation.issue_agent_execution import (
     ISSUE_AGENT_PROFILE_REGISTRY,
     ISSUE_AGENT_ROUTE_REGISTRY,
     ISSUE_AGENT_TASK_KEY,
+    ISSUE_AGENT_VERIFYING_KEY_ENV,
     OWNER_LOGIN_ENV,
     REPOSITORY_CHECKOUT_ENV,
     REPOSITORY_ENV,
@@ -47,10 +48,12 @@ from hunter.automation.issue_agent_execution import (
     GovernedIssueAgentExecutionService,
     IssueAgentAuthorization,
     IssueAgentAuthorizationError,
+    IssueAgentAuthorizationVerifier,
     IssueAgentConfigurationError,
     IssueAgentExecutionConfiguration,
     IssueAgentExecutionError,
     IssueAgentExecutionLedger,
+    IssueAgentIssuerError,
     IssueAgentReplayError,
     build_production_source_handling_resolver,
     issue_agent_document_id,
@@ -98,6 +101,14 @@ ISSUE_URL = f"https://github.com/{REPOSITORY}/issues/{ISSUE_NUMBER}"
 ISSUE_TITLE = "Add governed GitHub Issue execution trigger for agent fallback runtime"
 ISSUE_BODY = "src/hunter/example.py::apply_fix must preserve the governed authority boundary."
 UPDATED_AT = "2026-09-05T11:00:00Z"
+ISSUER_SIGNING_KEY_HEX = "33" * 32
+ISSUER_SIGNING_KEY = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(ISSUER_SIGNING_KEY_HEX))
+ISSUER_VERIFYING_KEY_HEX = (
+    ISSUER_SIGNING_KEY.public_key()
+    .public_bytes(encoding=serialization.Encoding.Raw, format=serialization.PublicFormat.Raw)
+    .hex()
+)
+FOREIGN_ISSUER_KEY = Ed25519PrivateKey.from_private_bytes(bytes.fromhex("44" * 32))
 AUTOMATION_SIGNING_KEY_HEX = "11" * 32
 AUTOMATION_VERIFYING_KEY_HEX = "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
 INTAKE_FIELD_MAP = {
@@ -361,12 +372,13 @@ def _event(
     }
 
 
-def _authorization_document(**overrides: Any) -> str:
+def _authorization_document(*, signing_key: Any = ISSUER_SIGNING_KEY, **overrides: Any) -> str:
     """Produce the document exactly as the repository-owned trigger emits it."""
     authorization = trigger.authorize_event(
         _event(**overrides),
         expected_repository=REPOSITORY,
         owner_login=OWNER,
+        signing_key=signing_key,
         authorization_label=ISSUE_AGENT_AUTHORIZATION_LABEL,
     )
     return authorization.to_json()
@@ -486,6 +498,9 @@ class Deployment:
         self.ledger = IssueAgentExecutionLedger(self.database)
         self.fallback = fallback
         self.verifier = PromptAutomationVerifier.from_environment()
+        self.issuer_verifier = IssueAgentAuthorizationVerifier.from_environment(
+            environ={ISSUE_AGENT_VERIFYING_KEY_ENV: ISSUER_VERIFYING_KEY_HEX},
+        )
 
     def service(self, fallback: Any | None = None) -> GovernedIssueAgentExecutionService:
         """A freshly composed service over the same durable state (restart)."""
@@ -499,6 +514,9 @@ class Deployment:
             ledger=IssueAgentExecutionLedger(self.database),
             fallback=fallback if fallback is not None else self.fallback,
             verifier=PromptAutomationVerifier.from_environment(),
+            issuer_verifier=IssueAgentAuthorizationVerifier.from_environment(
+                environ={ISSUE_AGENT_VERIFYING_KEY_ENV: ISSUER_VERIFYING_KEY_HEX},
+            ),
             clock=self.clock,
         )
 
@@ -545,6 +563,7 @@ def test_unauthorized_event_cannot_produce_an_authorization(overrides: dict[str,
             _event(**overrides),
             expected_repository=REPOSITORY,
             owner_login=OWNER,
+            signing_key=ISSUER_SIGNING_KEY,
             authorization_label=ISSUE_AGENT_AUTHORIZATION_LABEL,
         )
 
@@ -562,6 +581,7 @@ def test_non_owner_cannot_authorize_at_either_boundary(tmp_path: Path) -> None:
             _event(sender="someone-else"),
             expected_repository=REPOSITORY,
             owner_login=OWNER,
+            signing_key=ISSUER_SIGNING_KEY,
             authorization_label=ISSUE_AGENT_AUTHORIZATION_LABEL,
         )
 
@@ -571,6 +591,7 @@ def test_non_owner_cannot_authorize_at_either_boundary(tmp_path: Path) -> None:
         _event(sender="someone-else"),
         expected_repository=REPOSITORY,
         owner_login="someone-else",
+        signing_key=ISSUER_SIGNING_KEY,
         authorization_label=ISSUE_AGENT_AUTHORIZATION_LABEL,
     ).to_json()
     deployment = _deployment(tmp_path)
@@ -586,6 +607,7 @@ def test_foreign_repository_authorization_is_refused(tmp_path: Path) -> None:
         event,
         expected_repository="someone/else",
         owner_login=OWNER,
+        signing_key=ISSUER_SIGNING_KEY,
         authorization_label=ISSUE_AGENT_AUTHORIZATION_LABEL,
     ).to_json()
     deployment = _deployment(tmp_path)
@@ -634,7 +656,8 @@ def test_oversized_authorization_fails_closed() -> None:
 @pytest.mark.parametrize(
     "changes",
     [
-        {"schema_version": "hunter-issue-agent-authorization-v2"},
+        {"schema_version": "hunter-issue-agent-authorization-v1"},
+        {"schema_version": "hunter-issue-agent-authorization-v3"},
         {"authorization_label": "documentation"},
         {"issue_number": "390"},
         {"issue_number": True},
@@ -643,6 +666,10 @@ def test_oversized_authorization_fails_closed() -> None:
         {"repository": ""},
         {"authorized_by": ""},
         {"issue_url": ""},
+        {"issuer_signature": ""},
+        {"issuer_signature": "not-hex"},
+        {"issuer_signature": "AB" * 64},
+        {"issuer_signature": "ab" * 63},
         {"extra": "field"},
     ],
 )
@@ -672,6 +699,7 @@ def test_trigger_and_composition_root_share_one_schema_authority() -> None:
         _event(),
         expected_repository=REPOSITORY,
         owner_login=OWNER,
+        signing_key=ISSUER_SIGNING_KEY,
         authorization_label=ISSUE_AGENT_AUTHORIZATION_LABEL,
     )
     parsed = IssueAgentAuthorization.from_json(emitted.to_json())
@@ -1031,6 +1059,7 @@ def test_caller_supplied_issue_time_is_never_execution_authority(tmp_path: Path)
         event,
         expected_repository=REPOSITORY,
         owner_login=OWNER,
+        signing_key=ISSUER_SIGNING_KEY,
         authorization_label=ISSUE_AGENT_AUTHORIZATION_LABEL,
     ).to_json()
     deployment = _deployment(tmp_path)
@@ -1061,6 +1090,7 @@ def test_composition_root_requires_the_production_read_only_resolver(tmp_path: P
             ledger=deployment.ledger,
             fallback=deployment.fallback,
             verifier=deployment.verifier,
+            issuer_verifier=deployment.issuer_verifier,
             clock=deployment.clock,
         )
 
@@ -1113,10 +1143,16 @@ def test_no_comparative_valuation_or_issue_389_activation() -> None:
 
 
 def test_composition_root_reuses_existing_authorities_only() -> None:
-    """No parallel routing, signing, transport or provider system is introduced."""
+    """No parallel routing, signing, transport or provider system is introduced.
+
+    The module holds one public key so it can *verify* the Issue issuer, and it
+    must never gain the ability to mint: no private key type and no signing
+    primitive may appear in it.
+    """
     source = MODULE_PATH.read_text(encoding="utf-8")
     assert "PROVIDER_ORDER" not in source
-    assert "hazmat" not in source
+    assert "Ed25519PrivateKey" not in source
+    assert ".sign(" not in source
     assert "urllib" not in source
     assert "requests" not in source
     assert "PromptAutomationEnvelope(" not in source
@@ -1208,9 +1244,10 @@ def test_composition_root_requires_each_canonical_collaborator(tmp_path: Path) -
         "ledger": deployment.ledger,
         "fallback": deployment.fallback,
         "verifier": deployment.verifier,
+        "issuer_verifier": deployment.issuer_verifier,
         "clock": deployment.clock,
     }
-    for field in ("configuration", "repository", "ledger", "verifier", "fallback"):
+    for field in ("configuration", "repository", "ledger", "verifier", "issuer_verifier", "fallback"):
         arguments = dict(base)
         arguments[field] = object()
         with pytest.raises(IssueAgentConfigurationError):
@@ -1239,3 +1276,129 @@ def test_a_forged_authorization_still_cannot_execute_arbitrary_content(tmp_path:
         deployment.service().execute(forged)
     assert deployment.fallback.documents == []
     assert deployment.repository.count("evidence_documents") == 0
+
+
+# --- Trusted-origin issuer proof (PR #414 review, BLOCKER/P1) ---------------
+
+
+def test_valid_public_claims_without_the_trusted_issuer_proof_cannot_dispatch(tmp_path: Path) -> None:
+    """The regression the blocking review requires.
+
+    An attacker who can reach the credential-free issuer endpoint knows every
+    field the document carries: repository, Issue number, URL, title, body,
+    owner login, label and `updated_at` are all public on an owner-authored
+    Issue, and `authorization_id` is a public digest they can recompute. This
+    builds exactly that document -- byte-identical claims, a correctly derived
+    identity, and Source Handling authority already published for its exact
+    content, so the classification gate would pass -- and proves it still cannot
+    execute, because it carries no proof the owner ever applied the label.
+    """
+    deployment = _deployment(tmp_path)
+    genuine = json.loads(_authorization_document())
+
+    # Same public claims, signed by a key that is not the trusted issuer's.
+    forged = json.loads(_authorization_document(signing_key=FOREIGN_ISSUER_KEY))
+    assert {key: value for key, value in forged.items() if key != "issuer_signature"} == {
+        key: value for key, value in genuine.items() if key != "issuer_signature"
+    }
+    assert forged["authorization_id"] == genuine["authorization_id"]
+    forged_authorization = IssueAgentAuthorization.from_json(json.dumps(forged))
+    assert forged_authorization.authorization_id == forged_authorization.derived_authorization_id
+
+    with pytest.raises(IssueAgentIssuerError, match="trusted Issue authorization issuer"):
+        deployment.service().execute(json.dumps(forged))
+
+    # Nothing durable or external happened: no ledger claim, no intake, no dispatch.
+    assert deployment.ledger.entry(forged_authorization.authorization_id) is None
+    assert deployment.repository.count("evidence_documents") == 0
+    assert deployment.fallback.documents == []
+
+    # And the genuine document, with the same claims, still executes.
+    receipt = deployment.service().execute(json.dumps(genuine))
+    assert deployment.fallback.documents == [receipt.handoff_document]
+
+
+def test_a_signature_lifted_from_another_authorization_is_refused(tmp_path: Path) -> None:
+    """A real issuer signature cannot be transplanted onto different claims."""
+    deployment = _deployment(tmp_path)
+    genuine = json.loads(_authorization_document())
+    other = json.loads(_authorization_document(body=ISSUE_BODY + " but do something else"))
+
+    spliced = dict(other)
+    spliced["issuer_signature"] = genuine["issuer_signature"]
+    with pytest.raises(IssueAgentIssuerError, match="trusted Issue authorization issuer"):
+        deployment.service().execute(json.dumps(spliced))
+    assert deployment.fallback.documents == []
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["repository", "issue_url", "issue_title", "issue_body", "authorized_by", "issue_updated_at"],
+)
+def test_the_issuer_proof_covers_every_authorization_claim(tmp_path: Path, field: str) -> None:
+    """Mutating any covered claim breaks the signature, not merely the digest."""
+    deployment = _deployment(tmp_path)
+    document = json.loads(_authorization_document())
+    document[field] = document[field] + "-tampered"
+    # Re-derive the identity so the cheap digest check cannot be what rejects it.
+    authorization = IssueAgentAuthorization(**{**document, "authorization_id": "placeholder"})
+    document["authorization_id"] = authorization.derived_authorization_id
+
+    parsed = IssueAgentAuthorization.from_json(json.dumps(document))
+    assert parsed.authorization_id == parsed.derived_authorization_id
+    with pytest.raises(IssueAgentIssuerError):
+        deployment.service().execute(json.dumps(document))
+    assert deployment.fallback.documents == []
+
+
+def test_issue_number_is_covered_by_the_issuer_proof(tmp_path: Path) -> None:
+    deployment = _deployment(tmp_path)
+    document = json.loads(_authorization_document())
+    document["issue_number"] = ISSUE_NUMBER + 1
+    authorization = IssueAgentAuthorization(**{**document, "authorization_id": "placeholder"})
+    document["authorization_id"] = authorization.derived_authorization_id
+
+    with pytest.raises(IssueAgentIssuerError):
+        deployment.service().execute(json.dumps(document))
+    assert deployment.fallback.documents == []
+
+
+@pytest.mark.parametrize("value", ["", "   ", "not-hex", "11" * 31, "11" * 33])
+def test_missing_or_malformed_issuer_verifying_key_fails_closed(value: str) -> None:
+    with pytest.raises(IssueAgentConfigurationError, match=ISSUE_AGENT_VERIFYING_KEY_ENV):
+        IssueAgentAuthorizationVerifier.from_environment(environ={ISSUE_AGENT_VERIFYING_KEY_ENV: value})
+
+
+def test_absent_issuer_verifying_key_fails_closed() -> None:
+    with pytest.raises(IssueAgentConfigurationError, match=ISSUE_AGENT_VERIFYING_KEY_ENV):
+        IssueAgentAuthorizationVerifier.from_environment(environ={})
+
+
+def test_issuer_verifying_key_is_captured_at_bootstrap_not_re_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A later environment mutation cannot move the issuer trust root."""
+    deployment = _deployment(tmp_path)
+    service = deployment.service()
+    monkeypatch.setenv(
+        ISSUE_AGENT_VERIFYING_KEY_ENV,
+        FOREIGN_ISSUER_KEY.public_key()
+        .public_bytes(encoding=serialization.Encoding.Raw, format=serialization.PublicFormat.Raw)
+        .hex(),
+    )
+    # Still bound to the key captured at construction: the genuine document runs,
+    # and one signed by the newly-installed key does not.
+    service.execute(_authorization_document())
+    with pytest.raises(IssueAgentIssuerError):
+        deployment.service().execute(_authorization_document(signing_key=FOREIGN_ISSUER_KEY))
+
+
+def test_execution_side_holds_only_the_public_half() -> None:
+    """The verifier carries a public key, so the consumer can never mint."""
+    verifier = IssueAgentAuthorizationVerifier.from_environment(
+        environ={ISSUE_AGENT_VERIFYING_KEY_ENV: ISSUER_VERIFYING_KEY_HEX},
+    )
+    assert verifier._public_key_bytes == bytes.fromhex(ISSUER_VERIFYING_KEY_HEX)
+    assert not hasattr(verifier, "sign")
+    assert ISSUER_VERIFYING_KEY_HEX != ISSUER_SIGNING_KEY_HEX

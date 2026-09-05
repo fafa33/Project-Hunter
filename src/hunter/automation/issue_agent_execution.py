@@ -1,8 +1,8 @@
 """Production composition root for the governed GitHub Issue execution path.
 
 Issue #390. PR #391 delivered the authorization edge only: it proves *who*
-requested execution and emits a deterministic
-``hunter-issue-agent-authorization-v1`` document. Nothing in the repository
+requested execution and emits a deterministic, issuer-signed
+``hunter-issue-agent-authorization-v2`` document. Nothing in the repository
 consumed that document, so an authorized Issue could not reach the existing
 Smart Prompt Machine -> signed handoff -> fallback runtime without someone
 building a parallel path around the authorities that already own each decision.
@@ -11,10 +11,13 @@ This module is that missing consumer and nothing else. It owns no routing, no
 prompt profile, no signing key, no transport, no provider order and no merge
 authority; every one of those stays with the component that already holds it:
 
-``hunter-issue-agent-authorization-v1``
-    parsed and revalidated here against trusted operational configuration. The
-    document's own ``authorization_id`` is recomputed from its exact claims, so
-    replay identity is bound to content rather than to a caller-chosen label.
+``hunter-issue-agent-authorization-v2``
+    parsed and revalidated here against trusted operational configuration. Its
+    Ed25519 issuer signature is verified first, against a public key captured at
+    trusted bootstrap, because the ``authorization_id`` digest covers only public
+    Issue fields and so proves consistency rather than provenance. The digest is
+    then recomputed from the exact claims, binding replay identity to content
+    rather than to a value the caller chose.
 ``IssueAgentExecutionLedger``
     durable execution ownership, claimed *before* any execution begins and
     advanced across the dispatch boundary, so a crash or retry cannot execute
@@ -49,6 +52,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
 from hunter.automation.agent_fallback_runtime import (
     AgentFallbackRuntimeReceipt,
     OperationalAgentFallbackRuntime,
@@ -80,9 +86,17 @@ from hunter.evidence_intelligence.source_handling_persistence import (
 )
 from hunter.execution import Clock, SystemClock
 
-ISSUE_AGENT_AUTHORIZATION_SCHEMA_VERSION = "hunter-issue-agent-authorization-v1"
+ISSUE_AGENT_AUTHORIZATION_SCHEMA_VERSION = "hunter-issue-agent-authorization-v2"
 ISSUE_AGENT_AUTHORIZATION_LABEL = "hunter-agent-execute"
 ISSUE_AGENT_AUTHORIZATION_IDENTITY_PREFIX = "hunter-issue-agent-authorization"
+
+#: Domain separator the issuer mixes into the signed message. It must match
+#: ``scripts/hunter_issue_agent_trigger.py`` exactly; the cross-binding test
+#: pins the two together.
+ISSUE_AGENT_AUTHORIZATION_SIGNATURE_DOMAIN = b"hunter-issue-agent-authorization-v2:"
+ISSUE_AGENT_VERIFYING_KEY_ENV = "HUNTER_ISSUE_AGENT_VERIFYING_KEY"
+_ISSUE_AGENT_KEY_BYTES = 32
+_ISSUE_AGENT_SIGNATURE_BYTES = 64
 ISSUE_AGENT_EXECUTION_RECEIPT_SCHEMA_VERSION = "hunter-issue-agent-execution-receipt-v1"
 
 #: The governed task key for every authorized Issue. Fixed by the repository,
@@ -140,6 +154,10 @@ class IssueAgentReplayError(IssueAgentExecutionError):
     """Raised when an authorization was already claimed by some earlier execution."""
 
 
+class IssueAgentIssuerError(IssueAgentAuthorizationError):
+    """Raised when a document cannot prove it came from the trusted issuer."""
+
+
 class IssueAgentConfigurationError(IssueAgentExecutionError):
     """Raised when required operational configuration is absent or malformed."""
 
@@ -173,9 +191,77 @@ def _aware_utc(name: str, value: datetime) -> datetime:
     return value.astimezone(UTC)
 
 
+def _canonical_issuer_signature(value: object) -> str:
+    """Return one ASCII lowercase Ed25519 signature or fail closed."""
+    if (
+        not isinstance(value, str)
+        or len(value) != _ISSUE_AGENT_SIGNATURE_BYTES * 2
+        or any(character not in "0123456789abcdef" for character in value)
+    ):
+        raise IssueAgentIssuerError("issuer_signature must be a 128-character lowercase hexadecimal Ed25519 signature")
+    return value
+
+
+@dataclass(frozen=True, slots=True)
+class IssueAgentAuthorizationVerifier:
+    """Process-bound issuer verifier captured once from trusted bootstrap.
+
+    This is the authority that answers the question the identity digest cannot:
+    did the trusted workflow that observed the owner's `issues:labeled` event
+    actually mint this document? The public key is captured at bootstrap, so a
+    later environment mutation cannot move the trust root, and the execution
+    side holds only the public half -- it can verify an owner authorization but
+    can never mint one.
+    """
+
+    _public_key_bytes: bytes
+
+    def __post_init__(self) -> None:
+        if type(self._public_key_bytes) is not bytes or len(self._public_key_bytes) != _ISSUE_AGENT_KEY_BYTES:
+            raise IssueAgentConfigurationError(f"issuer verifying key must be exactly {_ISSUE_AGENT_KEY_BYTES} bytes")
+
+    @classmethod
+    def from_environment(
+        cls,
+        *,
+        environ: Mapping[str, str] | None = None,
+    ) -> IssueAgentAuthorizationVerifier:
+        """Capture the verifier key once; absent or malformed material fails closed."""
+        source = os.environ if environ is None else environ
+        value = source.get(ISSUE_AGENT_VERIFYING_KEY_ENV, "")
+        if not isinstance(value, str) or not value.strip():
+            raise IssueAgentConfigurationError(f"{ISSUE_AGENT_VERIFYING_KEY_ENV} must provide the issuer verifying key")
+        try:
+            key = bytes.fromhex(value.strip())
+        except ValueError:
+            raise IssueAgentConfigurationError(
+                f"{ISSUE_AGENT_VERIFYING_KEY_ENV} must be a hex-encoded byte string"
+            ) from None
+        if len(key) != _ISSUE_AGENT_KEY_BYTES:
+            raise IssueAgentConfigurationError(
+                f"{ISSUE_AGENT_VERIFYING_KEY_ENV} must decode to exactly {_ISSUE_AGENT_KEY_BYTES} bytes"
+            )
+        return cls(_public_key_bytes=key)
+
+    def verify(self, authorization: IssueAgentAuthorization) -> None:
+        """Reject any document the trusted issuer did not mint."""
+        if not isinstance(authorization, IssueAgentAuthorization):
+            raise IssueAgentIssuerError("issuer verification requires a parsed authorization")
+        signature = bytes.fromhex(_canonical_issuer_signature(authorization.issuer_signature))
+        try:
+            Ed25519PublicKey.from_public_bytes(self._public_key_bytes).verify(
+                signature,
+                authorization.signed_message,
+            )
+        except InvalidSignature:
+            raise IssueAgentIssuerError(
+                "authorization was not issued by the trusted Issue authorization issuer"
+            ) from None
+
+
 @dataclass(frozen=True, slots=True)
 class IssueAgentAuthorization:
-    """One parsed ``hunter-issue-agent-authorization-v1`` document.
+    """One parsed ``hunter-issue-agent-authorization-v2`` document.
 
     Every field is untrusted caller data except the schema version and the label,
     both of which must equal the repository's governed constants. The document's
@@ -193,6 +279,7 @@ class IssueAgentAuthorization:
     authorization_label: str
     issue_updated_at: str
     authorization_id: str
+    issuer_signature: str
     schema_version: str = ISSUE_AGENT_AUTHORIZATION_SCHEMA_VERSION
 
     @property
@@ -211,9 +298,20 @@ class IssueAgentAuthorization:
         }
 
     @property
+    def signed_message(self) -> bytes:
+        """The exact bytes the issuer signed and the identity digest covers."""
+        canonical = _canonical_json(self.canonical_claims).encode("utf-8")
+        return ISSUE_AGENT_AUTHORIZATION_SIGNATURE_DOMAIN + canonical
+
+    @property
     def derived_authorization_id(self) -> str:
-        """Recompute the trigger's deterministic identity over the exact claims."""
-        digest = hashlib.sha256(_canonical_json(self.canonical_claims).encode("utf-8")).hexdigest()
+        """Recompute the trigger's deterministic identity over the exact claims.
+
+        This proves internal consistency only. Anyone holding the public Issue
+        fields can recompute this digest, so it is never evidence of who minted
+        the document -- that is what the issuer signature is for.
+        """
+        digest = hashlib.sha256(self.signed_message).hexdigest()
         return f"{ISSUE_AGENT_AUTHORIZATION_IDENTITY_PREFIX}:{digest}"
 
     @property
@@ -266,6 +364,7 @@ class IssueAgentAuthorization:
             "authorization_label",
             "issue_updated_at",
             "authorization_id",
+            "issuer_signature",
             "schema_version",
         }
         if set(decoded) != expected:
@@ -284,6 +383,7 @@ class IssueAgentAuthorization:
                 raise IssueAgentAuthorizationError(f"authorization {name} must be non-empty")
         if decoded["authorization_label"] != ISSUE_AGENT_AUTHORIZATION_LABEL:
             raise IssueAgentAuthorizationError("authorization label is not the governed execution label")
+        _canonical_issuer_signature(decoded["issuer_signature"])
 
         authorization = cls(**decoded)
         if authorization.authorization_id != authorization.derived_authorization_id:
@@ -624,7 +724,16 @@ class GovernedIssueAgentExecutionService:
     dispatch boundary.
     """
 
-    __slots__ = ("_configuration", "_ledger", "_machine", "_boundary", "_fallback", "_verifier", "_clock")
+    __slots__ = (
+        "_configuration",
+        "_ledger",
+        "_machine",
+        "_boundary",
+        "_fallback",
+        "_verifier",
+        "_issuer_verifier",
+        "_clock",
+    )
 
     def __init__(
         self,
@@ -635,6 +744,7 @@ class GovernedIssueAgentExecutionService:
         ledger: IssueAgentExecutionLedger,
         fallback: IssueAgentFallbackRuntime,
         verifier: PromptAutomationVerifier,
+        issuer_verifier: IssueAgentAuthorizationVerifier,
         clock: Clock | None = None,
     ) -> None:
         if not isinstance(configuration, IssueAgentExecutionConfiguration):
@@ -649,12 +759,17 @@ class GovernedIssueAgentExecutionService:
             raise IssueAgentConfigurationError("the composition root requires the durable execution ledger")
         if type(verifier) is not PromptAutomationVerifier:
             raise IssueAgentConfigurationError("the composition root requires the process-bound issuer verifier")
+        if type(issuer_verifier) is not IssueAgentAuthorizationVerifier:
+            raise IssueAgentConfigurationError(
+                "the composition root requires the bootstrap-captured Issue authorization verifier"
+            )
         if not callable(getattr(fallback, "dispatch", None)):
             raise IssueAgentConfigurationError("the composition root requires the existing fallback runtime seam")
         self._configuration = configuration
         self._ledger = ledger
         self._fallback = fallback
         self._verifier = verifier
+        self._issuer_verifier = issuer_verifier
         self._clock = clock or SystemClock()
         self._boundary = IssueSourceTransientIntakeBoundary(
             intake=EvidenceIntelligenceIntakeService(repository),
@@ -701,12 +816,19 @@ class GovernedIssueAgentExecutionService:
                 environ=source,
             ),
             verifier=PromptAutomationVerifier.from_environment(environ=source),
+            issuer_verifier=IssueAgentAuthorizationVerifier.from_environment(environ=source),
             clock=clock,
         )
 
     def execute(self, document: str | bytes) -> IssueAgentExecutionReceipt:
         """Run one authorized Issue through the existing governed runtime."""
         authorization = IssueAgentAuthorization.from_json(document)
+        # Trusted origin first. The identity digest proves only that the claims
+        # are self-consistent, and every field it covers is public, so it is not
+        # evidence that the owner performed the `issues:labeled` event. Only the
+        # issuer signature proves that, and nothing durable or external happens
+        # until it verifies.
+        self._issuer_verifier.verify(authorization)
         if authorization.repository != self._configuration.repository:
             raise IssueAgentAuthorizationError("authorization names a different repository than this deployment")
         if authorization.authorized_by != self._configuration.owner_login:
@@ -770,8 +892,11 @@ __all__ = [
     "ISSUE_AGENT_PROFILE_REGISTRY",
     "ISSUE_AGENT_ROUTE_REGISTRY",
     "ISSUE_AGENT_TASK_KEY",
+    "ISSUE_AGENT_VERIFYING_KEY_ENV",
     "IssueAgentAuthorization",
     "IssueAgentAuthorizationError",
+    "IssueAgentAuthorizationVerifier",
+    "IssueAgentIssuerError",
     "IssueAgentConfigurationError",
     "IssueAgentExecutionConfiguration",
     "IssueAgentExecutionError",

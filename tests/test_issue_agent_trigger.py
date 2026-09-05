@@ -9,11 +9,18 @@ from typing import Any
 
 import hunter_issue_agent_trigger as trigger
 import pytest
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 from hunter_issue_agent_trigger import (
     DEFAULT_LABEL,
     IssueAgentTriggerError,
     authorize_event,
+    canonical_claims_message,
+    load_signing_key,
 )
+
+ISSUER_KEY_HEX = "11" * 32
+ISSUER_KEY = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(ISSUER_KEY_HEX))
 
 
 def _event() -> dict[str, Any]:
@@ -33,11 +40,12 @@ def _event() -> dict[str, Any]:
     }
 
 
-def _authorize(event: dict[str, Any]):
+def _authorize(event: dict[str, Any], *, signing_key: Any = ISSUER_KEY):
     return authorize_event(
         event,
         expected_repository="fafa33/Project-Hunter",
         owner_login="fafa33",
+        signing_key=signing_key,
     )
 
 
@@ -191,3 +199,78 @@ def test_malformed_or_non_https_webhook_remains_fail_closed(monkeypatch, url: st
 
     assert "credential-free HTTPS URL" in str(error.value)
     assert handler.requests == []
+
+
+# --- Trusted-origin issuer proof --------------------------------------------
+
+
+def _public_key() -> Ed25519PublicKey:
+    return ISSUER_KEY.public_key()
+
+
+def test_authorization_carries_a_verifiable_issuer_signature() -> None:
+    authorization = _authorize(_event())
+
+    assert len(authorization.issuer_signature) == 128
+    message = canonical_claims_message(
+        {
+            "repository": authorization.repository,
+            "issue_number": authorization.issue_number,
+            "issue_url": authorization.issue_url,
+            "issue_title": authorization.issue_title,
+            "issue_body": authorization.issue_body,
+            "authorized_by": authorization.authorized_by,
+            "authorization_label": authorization.authorization_label,
+            "issue_updated_at": authorization.issue_updated_at,
+            "schema_version": authorization.schema_version,
+        }
+    )
+    # Raises InvalidSignature if the proof does not cover the exact claims.
+    _public_key().verify(bytes.fromhex(authorization.issuer_signature), message)
+
+
+def test_a_different_issuer_key_produces_a_document_the_owner_key_rejects() -> None:
+    foreign = Ed25519PrivateKey.from_private_bytes(bytes.fromhex("22" * 32))
+    forged = _authorize(_event(), signing_key=foreign)
+
+    message = canonical_claims_message(
+        {
+            "repository": forged.repository,
+            "issue_number": forged.issue_number,
+            "issue_url": forged.issue_url,
+            "issue_title": forged.issue_title,
+            "issue_body": forged.issue_body,
+            "authorized_by": forged.authorized_by,
+            "authorization_label": forged.authorization_label,
+            "issue_updated_at": forged.issue_updated_at,
+            "schema_version": forged.schema_version,
+        }
+    )
+    # The claims are identical; only the minting key differs, and that is enough.
+    assert forged.authorization_id == _authorize(_event()).authorization_id
+    with pytest.raises(InvalidSignature):
+        _public_key().verify(bytes.fromhex(forged.issuer_signature), message)
+
+
+def test_authorization_without_an_issuer_signing_authority_fails_closed() -> None:
+    with pytest.raises(IssueAgentTriggerError, match="issuer signing authority"):
+        _authorize(_event(), signing_key=None)
+
+
+@pytest.mark.parametrize("value", [None, "", "   ", "not-hex", "aa", "11" * 31, "11" * 33])
+def test_missing_or_malformed_issuer_signing_key_fails_closed(value: object) -> None:
+    with pytest.raises(IssueAgentTriggerError, match=trigger.SIGNING_KEY_ENV):
+        load_signing_key(value)
+
+
+def test_issuer_key_is_never_accepted_from_the_command_line() -> None:
+    """The key is machine-only configuration, so no flag can carry it in the clear."""
+    parser = trigger._parser()
+    flags = {action.option_strings[0] for action in parser._actions if action.option_strings}
+    assert "--signing-key" not in flags
+    assert not any("key" in flag for flag in flags)
+
+
+def test_signed_message_is_domain_separated() -> None:
+    assert canonical_claims_message({}).startswith(trigger.SIGNATURE_DOMAIN)
+    assert trigger.SIGNATURE_DOMAIN == b"hunter-issue-agent-authorization-v2:"

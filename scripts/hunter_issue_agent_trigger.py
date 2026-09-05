@@ -12,9 +12,19 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = "hunter-issue-agent-authorization-v1"
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+SCHEMA_VERSION = "hunter-issue-agent-authorization-v2"
 DEFAULT_LABEL = "hunter-agent-execute"
 MAX_EVENT_BYTES = 256 * 1024
+SIGNING_KEY_ENV = "HUNTER_ISSUE_AGENT_SIGNING_KEY"
+SIGNING_KEY_BYTES = 32
+SIGNATURE_BYTES = 64
+
+#: Domain separator mixed into the signed message. Without it a signature over
+#: these canonical bytes could be replayed as a signature over any other
+#: structure that happens to canonicalize identically.
+SIGNATURE_DOMAIN = b"hunter-issue-agent-authorization-v2:"
 
 
 class IssueAgentTriggerError(RuntimeError):
@@ -32,10 +42,30 @@ class IssueAgentAuthorization:
     authorization_label: str
     issue_updated_at: str
     authorization_id: str
+    issuer_signature: str
     schema_version: str = SCHEMA_VERSION
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
+def canonical_claims_message(claims: dict[str, Any]) -> bytes:
+    """Return the exact bytes both the identity digest and the signature cover."""
+    canonical = json.dumps(claims, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    return SIGNATURE_DOMAIN + canonical
+
+
+def load_signing_key(value: object) -> Ed25519PrivateKey:
+    """Load the issuer-only Ed25519 private key without echoing secret material."""
+    if not isinstance(value, str) or not value.strip():
+        raise IssueAgentTriggerError(f"{SIGNING_KEY_ENV} must provide the issuer signing key")
+    try:
+        key = bytes.fromhex(value.strip())
+    except ValueError:
+        raise IssueAgentTriggerError(f"{SIGNING_KEY_ENV} must be a hex-encoded byte string") from None
+    if len(key) != SIGNING_KEY_BYTES:
+        raise IssueAgentTriggerError(f"{SIGNING_KEY_ENV} must decode to exactly {SIGNING_KEY_BYTES} bytes")
+    return Ed25519PrivateKey.from_private_bytes(key)
 
 
 def _required_text(name: str, value: object) -> str:
@@ -62,8 +92,19 @@ def authorize_event(
     *,
     expected_repository: str,
     owner_login: str,
+    signing_key: Ed25519PrivateKey,
     authorization_label: str = DEFAULT_LABEL,
 ) -> IssueAgentAuthorization:
+    """Authorize one exact event and bind it to an unforgeable trusted-origin proof.
+
+    The identity digest proves only that the claims are internally consistent;
+    anyone holding the public Issue fields can recompute it. The Ed25519
+    signature is what proves this document was minted by the trusted workflow
+    that observed the owner's `issues:labeled` event, so a caller who can reach
+    the issuer endpoint still cannot mint an authorization.
+    """
+    if not isinstance(signing_key, Ed25519PrivateKey):
+        raise IssueAgentTriggerError("issuer signing authority is required to authorize execution")
     if event.get("action") != "labeled":
         raise IssueAgentTriggerError("only the issues:labeled event is authorized")
 
@@ -109,9 +150,13 @@ def authorize_event(
         "issue_updated_at": updated_at,
         "schema_version": SCHEMA_VERSION,
     }
-    canonical = json.dumps(canonical_claims, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-    authorization_id = f"hunter-issue-agent-authorization:{hashlib.sha256(canonical).hexdigest()}"
-    return IssueAgentAuthorization(**canonical_claims, authorization_id=authorization_id)
+    message = canonical_claims_message(canonical_claims)
+    authorization_id = f"hunter-issue-agent-authorization:{hashlib.sha256(message).hexdigest()}"
+    return IssueAgentAuthorization(
+        **canonical_claims,
+        authorization_id=authorization_id,
+        issuer_signature=signing_key.sign(message).hex(),
+    )
 
 
 class _RejectRedirects(urllib.request.HTTPRedirectHandler):
@@ -159,6 +204,16 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _issuer_signing_key() -> Ed25519PrivateKey:
+    """Read the issuer key from machine-only configuration; never from argv.
+
+    Keeping it off the command line means it cannot land in a process listing,
+    a shell history, or a workflow log line, and there is no flag an operator
+    can accidentally use to pass it in the clear.
+    """
+    return load_signing_key(os.environ.get(SIGNING_KEY_ENV))
+
+
 def main(argv: list[str] | None = None) -> int:
     arguments = _parser().parse_args(argv)
     try:
@@ -166,6 +221,7 @@ def main(argv: list[str] | None = None) -> int:
             _load_event(Path(arguments.event)),
             expected_repository=arguments.repository,
             owner_login=arguments.owner_login,
+            signing_key=_issuer_signing_key(),
             authorization_label=arguments.label,
         )
         document = authorization.to_json()
