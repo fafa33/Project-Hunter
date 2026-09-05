@@ -29,6 +29,8 @@ This endpoint is a **trusted issuer edge**, not the existing fallback-runtime we
 6. verify that envelope against the bootstrap-captured issuer verifier and record the exact serialized `PromptAutomationEnvelopeHandoff` durably;
 7. hand those exact bytes, unchanged, to the existing fallback runtime, which keeps its own fixed provider order, remote-HEAD proof, targeted validation, and the no-auto-merge rule.
 
+The authorization document carries a SHA-256 identity, not a signature, so it is not self-authenticating: transport authentication of the trusted issuer endpoint is an operator responsibility. It is not the only barrier, though. The governed document scope is derived from the exact Issue content, so content that was never classified resolves to a scope for which no `FACT`, `POLICY` or `FIELD_CATEGORY_REGISTRY` was ever published, and the execution fails closed before a build exists. Publishing that authority is a separate operator action under ADR 0036, outside this execution path, which can only read it.
+
 The composition root never signs, never chooses a provider, never selects a destination or branch, and has no merge path. It only reads Source Handling authority: it is built from `SqliteSourceHandlingAuthorityReadView`, never from `SourceHandlingAuthorityService`, so the execution path cannot publish the authority that governs it.
 
 ## Operational configuration
