@@ -147,8 +147,9 @@ def test_protected_preflight_ordinary_candidate_cannot_self_authorize(monkeypatc
     monkeypatch.setattr(
         core,
         "verify_code_write_ingress_provenance",
-        lambda *_args: (True, "ingress provenance verified"),
+        lambda *_args: ("success", "ingress provenance verified"),
     )
+    monkeypatch.setattr(core, "verify_pre_ready_hostile_review", lambda *_args: ("success", "reviewed"))
     monkeypatch.setattr(
         core,
         "read_trusted_upgrade_status",
@@ -278,6 +279,11 @@ def _admission(monkeypatch, commits: list[dict], *, hosted_ci: bool = False, pol
         raise AssertionError(path)
 
     monkeypatch.setattr(core, "request_json", fake_request)
+    # The Issue #412 pre-ready hostile review gate is an independent admission
+    # prerequisite with its own regression suite
+    # (tests/test_issue_412_prevention_gate.py). Stubbing it keeps these fixtures
+    # on the signature/branch-preflight contract they were written for.
+    monkeypatch.setattr(core, "verify_pre_ready_hostile_review", lambda *_args: ("success", "reviewed"))
     return core.candidate_admission("fafa33/Project-Hunter", "token", HEAD, 501)
 
 
@@ -414,9 +420,9 @@ def test_unavailable_commit_range_evidence_fails_closed(monkeypatch) -> None:
 
 
 def test_ingress_provenance_requires_pr_bound_range_evidence() -> None:
-    ok, description = core.verify_code_write_ingress_provenance("fafa33/Project-Hunter", "token", HEAD, None)
+    state, description = core.verify_code_write_ingress_provenance("fafa33/Project-Hunter", "token", HEAD, None)
 
-    assert ok is False
+    assert state == "failure"
     assert "requires PR-bound commit-range evidence" in description
 
 

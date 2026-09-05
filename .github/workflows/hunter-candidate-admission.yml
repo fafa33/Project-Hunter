@@ -11,7 +11,15 @@ on:
       - ready_for_review
   workflow_run:
     workflows:
+      # Branch preflight completion is what makes an ordinary candidate
+      # admissible. Trusted upgrade completion is what makes a candidate that
+      # touches preflight-owned paths admissible: while that proof is running,
+      # admission is pending, and a pending head is deliberately not returned to
+      # Draft. Without this subscription nothing re-evaluates admission once the
+      # proof lands, so a head marked Ready mid-proof could stay Ready while
+      # still unadmitted -- contrary to unadmitted_head_state=draft.
       - Hunter / Pre-PR Preflight
+      - Hunter / Trusted Preflight Upgrade
     types:
       - completed
 
@@ -28,7 +36,9 @@ jobs:
   candidate-admission:
     if: >-
       github.event_name == 'pull_request_target' ||
-      (github.event_name == 'workflow_run' && github.event.workflow_run.event == 'push')
+      (github.event_name == 'workflow_run' &&
+       (github.event.workflow_run.event == 'push' ||
+        github.event.workflow_run.event == 'pull_request_target'))
     name: Hunter Candidate Admission
     runs-on: ubuntu-latest
     timeout-minutes: 5

@@ -803,6 +803,11 @@ def _admission(
         raise AssertionError(path)
 
     monkeypatch.setattr(core, "request_json", fake_request)
+    # The Issue #412 pre-ready hostile review gate is an independent admission
+    # prerequisite with its own regression suite
+    # (tests/test_issue_412_prevention_gate.py). Stubbing it keeps this harness
+    # on the ingress contract it was written for.
+    monkeypatch.setattr(core, "verify_pre_ready_hostile_review", lambda *_args: ("success", "reviewed"))
     return core.candidate_admission("fafa33/Project-Hunter", "token", HEAD, 601)
 
 

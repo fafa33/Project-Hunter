@@ -13,6 +13,12 @@
     "guarded": "detected"
   },
   "rule": "A legacy guarded defect is detection-only unless explicit enforcement evidence upgrades it. Prevented requires local, hosted, and merge enforcement and recurrence escalation. A repository ruleset must mechanically require the canonical merge statuses before merge-enforced or prevented may be claimed.",
+  "family_lifecycle_semantics": {
+    "authority": "docs/DEFECT_REGISTRY.json families[].lifecycle",
+    "purpose": "The legacy defects list records individual historical findings and upgrades them through explicit_enforcement. The families list records machine-enforced recurring-defect families, and a family carries its own stage because the evidence that supports the stage -- applicability, prevention mechanism and boundary, guard reference, regression tests -- is declared on the family itself.",
+    "rule": "A family may claim a stage only when the evidence it declares supports it: above 'recorded' at least one resolvable regression test, above 'regression-tested' a resolvable machine guard at a machine boundary, and 'prevented' additionally a merge-gate boundary plus an explicit_enforcement entry naming that family as prevented. When a family also appears in explicit_enforcement the two states must agree.",
+    "guard": "scripts/hunter_defect_prevention_preflight.py::validate_recurring_defect_families"
+  },
   "explicit_enforcement": {
     "PRH-007": {
       "state": "prevented",

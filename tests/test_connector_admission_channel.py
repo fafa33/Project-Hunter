@@ -171,6 +171,14 @@ def _requested_head_sha(path: str) -> str:
     return path.split("head_sha=", 1)[1].split("&", 1)[0]
 
 
+def _written_receipt_files() -> tuple[core.PullRequestFile, ...]:
+    """Changed-file evidence for a candidate that writes its own receipt."""
+    return tuple(
+        core.PullRequestFile("modified", path, blob_sha=_digest_for(path))
+        for path in (*CONTENT_PATHS, ingress.AUTHORIZATION_RECEIPT_PATH)
+    )
+
+
 def _admission(
     monkeypatch: pytest.MonkeyPatch,
     *,
@@ -263,6 +271,11 @@ def _admission(
         raise AssertionError(path)
 
     monkeypatch.setattr(core, "request_json", fake_request)
+    # The Issue #412 pre-ready hostile review gate is an independent admission
+    # prerequisite with its own regression suite
+    # (tests/test_issue_412_prevention_gate.py). Stubbing it keeps this harness
+    # on the connector ingress channel it was written for.
+    monkeypatch.setattr(core, "verify_pre_ready_hostile_review", lambda *_args: ("success", "reviewed"))
     return core.candidate_admission("fafa33/Project-Hunter", "token", HEAD, PR_NUMBER)
 
 
@@ -288,9 +301,9 @@ def test_connector_admission_is_never_credited_as_local_pre_push_proof(monkeypat
     real = core.verify_code_write_ingress_provenance
 
     def recording(*args):
-        ok, message = real(*args)
+        state, message = real(*args)
         captured.append(message)
-        return ok, message
+        return state, message
 
     monkeypatch.setattr(core, "verify_code_write_ingress_provenance", recording)
     state, _ = _admission(monkeypatch)
@@ -389,12 +402,18 @@ def test_a_receipt_naming_the_clone_signer_is_not_a_granted_writer(monkeypatch) 
 
 
 def test_a_receipt_outside_the_connector_namespace_is_refused(monkeypatch) -> None:
-    """A receipt cannot pull an ordinary branch into the connector channel."""
+    """A receipt cannot pull an ordinary branch into the connector channel.
+
+    A receipt is this candidate's claim only when this candidate writes it, so
+    the changed-file evidence has to say so -- otherwise the file reads as
+    base-branch state inherited from a merged connector contribution.
+    """
     state, description = _admission(
         monkeypatch,
         commits=[_connector_commit()],
         head_ref=ORDINARY_BRANCH,
         receipt=_authorization(target_ref=ORDINARY_BRANCH).document(),
+        changed_files=_written_receipt_files(),
     )
 
     assert state == "failure"
@@ -487,7 +506,20 @@ def test_forged_authorized_committer_cannot_hide_a_foreign_ancestor_push(monkeyp
     assert f"commit {ancestor[:10]} was pushed by authenticated actor 'other-writer'" in description
 
 
-def test_connector_ancestor_without_authenticated_push_evidence_fails(monkeypatch) -> None:
+def test_connector_ancestor_published_by_the_head_push_is_not_stranded(monkeypatch) -> None:
+    """Issue #412 replaces the per-commit evidence rule that produced this state.
+
+    Only the head of a push receives a push-event workflow run, so publishing two
+    locally validated commits in one operation left the ancestor with no run of
+    its own. Requiring one made a valid candidate permanently inadmissible and
+    forced a manual rewind and force-push purely to manufacture evidence.
+
+    The authenticated push of the exact head publishes every commit the pull
+    request lists, so the ancestor is covered. The security property that
+    motivated the old rule is kept by the paired negative case above: an ancestor
+    that *does* carry its own authenticated push by a different actor still
+    blocks the range.
+    """
     ancestor = "d" * 40
     state, description = _admission(
         monkeypatch,
@@ -495,8 +527,15 @@ def test_connector_ancestor_without_authenticated_push_evidence_fails(monkeypatc
         missing_push_shas=frozenset({ancestor}),
     )
 
+    assert state == "success", description
+
+
+def test_connector_head_without_authenticated_push_evidence_fails(monkeypatch) -> None:
+    """The positive half of range-level evidence is still mandatory."""
+    state, description = _admission(monkeypatch, missing_push_shas=frozenset({HEAD}))
+
     assert state == "failure"
-    assert f"authenticated push actor evidence for commit {ancestor[:10]} is unavailable" in description
+    assert f"authenticated push actor evidence for commit {HEAD[:10]} is unavailable" in description
 
 
 def test_content_mutated_after_authorization_on_an_authorized_path_fails(monkeypatch) -> None:
@@ -582,7 +621,31 @@ def test_rename_cannot_hide_a_source_transition_inside_the_receipt_path(monkeypa
     )
 
     assert state == "failure"
-    assert "receipt path may not be deleted, renamed" in description
+    assert "governance evidence path may not be deleted, renamed" in description
+
+
+def test_rename_cannot_hide_a_source_transition_inside_the_review_path(monkeypatch) -> None:
+    """The Issue #412 review artifact is evidence, so it carries the same constraint.
+
+    Both governance-evidence paths are excluded from the receipt-bound content
+    set, so both would otherwise be an unguarded rename destination for a
+    protected source.
+    """
+    import hunter_pre_ready_review as pre_ready
+
+    source = "docs/old.md"
+    destination = pre_ready.REVIEW_RELATIVE_PATH
+    changed = (core.PullRequestFile("renamed", destination, source, _digest_for(destination)),)
+
+    state, description = _admission(
+        monkeypatch,
+        changed_paths=(source, destination),
+        changed_files=changed,
+        receipt=_authorization(paths=(), changes=()).document(),
+    )
+
+    assert state == "failure"
+    assert "governance evidence path may not be deleted, renamed" in description
 
 
 def test_rename_plus_modify_requires_the_exact_destination_blob(monkeypatch) -> None:
@@ -753,11 +816,17 @@ def test_root_of_trust_path_fails_even_on_the_connector_channel(monkeypatch) -> 
 
 
 def test_direct_main_target_is_unrepresentable_on_the_connector_channel(monkeypatch) -> None:
-    """`main` is neither in the namespace nor a branch the pattern can bind."""
+    """`main` is neither in the namespace nor a branch the pattern can bind.
+
+    A receipt is this candidate's claim only when this candidate writes it, so
+    the changed-file evidence has to say so -- otherwise the file reads as
+    base-branch state inherited from a merged connector contribution.
+    """
     state, description = _admission(
         monkeypatch,
         head_ref="main",
         receipt=_authorization(target_ref="main").document(),
+        changed_files=_written_receipt_files(),
     )
 
     assert state == "failure"

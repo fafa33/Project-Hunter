@@ -11,6 +11,7 @@ import argparse
 import base64
 import json
 import os
+import re
 import sys
 import time
 from dataclasses import dataclass
@@ -20,6 +21,7 @@ from urllib.parse import quote, urlparse
 
 import hunter_connector_write_ingress as ingress
 import hunter_github_transport as transport
+import hunter_pre_ready_review as pre_ready
 
 
 @dataclass(frozen=True)
@@ -394,7 +396,7 @@ def verify_code_write_ingress_provenance(
     token: str,
     head_sha: str,
     pr_number: int | None,
-) -> tuple[bool, str]:
+) -> tuple[str, str]:
     """Require positive ingress proof for the whole code-changing range.
 
     Two channels write this repository, and each has its own positive proof. The
@@ -424,25 +426,32 @@ def verify_code_write_ingress_provenance(
     connector origin is established only by the trusted re-derivation, so a
     clone-capable writer cannot reach the connector regime by asserting it, and
     an ordinary candidate still needs its signatures.
+
+    Returns a tri-state ``(state, message)`` where state is ``success``,
+    ``pending`` or ``failure``. Issue #412: a hosted proof that is still running
+    is not a defect in the candidate, and reporting it as ``failure`` published a
+    red signal for a candidate that was merely early. Only ``pending`` is
+    transient; an invalid, absent, untrusted or wrongly-bound proof stays
+    ``failure``.
     """
     if pr_number is None:
-        return False, "Candidate admission blocked: ingress provenance requires PR-bound commit-range evidence."
+        return "failure", "Candidate admission blocked: ingress provenance requires PR-bound commit-range evidence."
 
     signers, floor_sha, policy_error = load_ingress_provenance_policy()
     if policy_error is not None:
-        return False, f"Candidate admission blocked: {policy_error}."
+        return "failure", f"Candidate admission blocked: {policy_error}."
 
     ok, commits, error = read_pr_commits(repository, token, pr_number)
     if not ok:
-        return False, f"Candidate admission blocked: commit-range ingress evidence is unavailable ({error})."
+        return "failure", f"Candidate admission blocked: commit-range ingress evidence is unavailable ({error})."
     if not commits:
-        return False, "Candidate admission blocked: commit-range ingress evidence is empty."
+        return "failure", "Candidate admission blocked: commit-range ingress evidence is empty."
 
     range_shas = {str(entry.get("sha") or "").strip().lower() for entry in commits}
     if not all(_is_commit_sha(sha) for sha in range_shas):
-        return False, "Candidate admission blocked: commit-range ingress evidence carries a malformed commit SHA."
+        return "failure", "Candidate admission blocked: commit-range ingress evidence carries a malformed commit SHA."
     if head_sha.strip().lower() not in range_shas:
-        return False, "Candidate admission blocked: exact head is absent from the PR commit range evidence."
+        return "failure", "Candidate admission blocked: exact head is absent from the PR commit range evidence."
 
     attestation_required = range_shas
     if floor_sha and floor_sha in range_shas:
@@ -450,12 +459,15 @@ def verify_code_write_ingress_provenance(
             repository, token, floor_sha, head_sha
         )
         if not ok_floor:
-            return False, f"Candidate admission blocked: pre-authority range evidence is unavailable ({floor_error})."
+            return (
+                "failure",
+                f"Candidate admission blocked: pre-authority range evidence is unavailable ({floor_error}).",
+            )
         attestation_required = range_shas & beyond_floor
 
     connector_enabled, connector_logins, connector_error = load_connector_write_ingress_policy()
     if connector_error is not None:
-        return False, f"Candidate admission blocked: {connector_error}."
+        return "failure", f"Candidate admission blocked: {connector_error}."
 
     # Which channel wrote this candidate is decided FIRST, from trusted evidence,
     # because the two channels have different -- and mutually impossible --
@@ -465,13 +477,13 @@ def verify_code_write_ingress_provenance(
     # make connector origin unprovable by construction (Issue #409).
     ok_paths, changed_files, paths_error = read_pr_changed_files(repository, token, pr_number)
     if not ok_paths:
-        return False, f"Candidate admission blocked: changed-file evidence is unavailable ({paths_error})."
+        return "failure", f"Candidate admission blocked: changed-file evidence is unavailable ({paths_error})."
     range_commits = tuple(entry for entry in commits if str(entry.get("sha") or "").strip().lower() in range_shas)
     connector = verify_connector_ingress_authorization(
         repository, token, head_sha, pr_number, changed_files, range_commits
     )
     if not connector.ok:
-        return False, connector.message
+        return "failure", connector.message
 
     if connector.origin:
         # Connector-origin: the trusted re-derivation above already proved the
@@ -480,23 +492,26 @@ def verify_code_write_ingress_provenance(
         # fingerprint, and absence of same-candidate self-escalation. What
         # remains is the proof no writer on any channel can mint.
         if not connector_enabled:
-            return False, (
+            return "failure", (
                 "Candidate admission blocked: this candidate is connector-origin but the connector write "
                 "ingress is not active in trusted default-branch state."
             )
         if connector.writer not in connector_logins:
-            return False, (
+            return "failure", (
                 f"Candidate admission blocked: connector writer {connector.writer!r} is not bound by the "
                 "trusted connector grant."
             )
         proof_state, proof_description = read_trusted_upgrade_status(repository, token, head_sha, pr_number)
         if proof_state != "success":
-            return False, (
-                "Candidate admission blocked: a connector-origin range is admitted on connector evidence "
-                "rather than a local commit signature, so it requires trusted hosted exact-head canonical "
-                f"preflight proof ({proof_description})"
+            # A proof that is still running is not an invalid proof (Issue #412).
+            return ("pending" if proof_state == "pending" else "failure"), (
+                "Candidate admission is waiting: " if proof_state == "pending" else "Candidate admission blocked: "
+            ) + (
+                "a connector-origin range is admitted on connector evidence rather than a local commit "
+                "signature, so it requires trusted hosted exact-head canonical preflight proof "
+                f"({proof_description})"
             )
-        return True, (
+        return "success", (
             f"{connector.message} Connector-origin range admitted on connector evidence plus trusted hosted "
             "exact-head canonical preflight proof; this is not local pre-push proof."
         )
@@ -519,16 +534,16 @@ def verify_code_write_ingress_provenance(
             continue
         verification = (entry.get("commit") or {}).get("verification")
         if not isinstance(verification, dict):
-            return False, f"Candidate admission blocked: commit {sha[:10]} carries no ingress signature evidence."
+            return "failure", f"Candidate admission blocked: commit {sha[:10]} carries no ingress signature evidence."
         reason = str(verification.get("reason") or "unknown")
         if verification.get("verified") is not True or reason != "valid":
-            return False, (
+            return "failure", (
                 f"Candidate admission blocked: commit {sha[:10]} has no verified pre-push ingress "
                 f"signature (reason={reason})."
             )
         signer = _ingress_signer(entry)
         if signer not in authorized_ingress:
-            return False, (
+            return "failure", (
                 f"Candidate admission blocked: commit {sha[:10]} was written by unauthorized ingress "
                 f"signer {signer or 'unknown'}."
             )
@@ -536,17 +551,20 @@ def verify_code_write_ingress_provenance(
     if connector_enabled and attestation_required:
         proof_state, proof_description = read_trusted_upgrade_status(repository, token, head_sha, pr_number)
         if proof_state != "success":
-            return False, (
-                "Candidate admission blocked: the connector write ingress is active, so a verified signature "
-                "alone is not pre-push proof; this range requires trusted hosted exact-head canonical "
-                f"preflight proof ({proof_description})"
+            # A proof that is still running is not an invalid proof (Issue #412).
+            return ("pending" if proof_state == "pending" else "failure"), (
+                "Candidate admission is waiting: " if proof_state == "pending" else "Candidate admission blocked: "
+            ) + (
+                "the connector write ingress is active, so a verified signature alone is not pre-push proof; "
+                "this range requires trusted hosted exact-head canonical preflight proof "
+                f"({proof_description})"
             )
-        return True, (
+        return "success", (
             "Verified ingress signatures plus trusted hosted exact-head canonical preflight proof cover "
             "the code-changing commit range."
         )
 
-    return True, "Verified pre-push ingress signatures cover the code-changing commit range."
+    return "success", "Verified pre-push ingress signatures cover the code-changing commit range."
 
 
 def read_head_preflight_mode(repository: str, token: str, head_sha: str) -> tuple[str, str | None]:
@@ -737,6 +755,73 @@ def read_exact_head_push_actor(
     return True, actor, None
 
 
+def verify_range_push_provenance(
+    repository: str,
+    token: str,
+    head_sha: str,
+    head_ref: str,
+    writer: str,
+    range_commits: tuple[dict[str, Any], ...],
+) -> tuple[bool, str]:
+    """Authenticate who published the whole candidate range, not each commit alone.
+
+    Issue #412. Requiring every commit to have been a pushed head in its own
+    right made a perfectly valid multi-commit candidate permanently inadmissible:
+    a single ``git push`` of two locally validated commits gives the intermediate
+    commit no push-event workflow run of its own, so it could never acquire the
+    evidence, and the only recovery was to rewind the branch and force-push the
+    commits one at a time purely to manufacture evidence. That is an evidence
+    model defect, not a property worth preserving.
+
+    The secure range-level replacement rests on what a push actually proves.
+    Every commit GitHub lists for this pull request is, by construction, an
+    ancestor of the exact head. So an authenticated push of that head *published*
+    the entire range: the actor of the head push is accountable for all of it,
+    exactly as they would be for a single squashed commit. That is the positive
+    proof, and it is strictly per-candidate -- the run must name this exact SHA on
+    this exact PR branch, so a push of the same head on another branch, or of
+    another head, proves nothing here.
+
+    The negative half is what keeps this from being a relaxation: an ancestor that
+    *does* carry its own authenticated push run on this branch must have been
+    pushed by the same bound writer. A foreign account that pushed a commit into
+    this branch is therefore still refused, even though the bound writer later
+    pushed a head above it. The only case whose verdict changes is the one the
+    Issue names: an ancestor with no authenticated run at all, which is precisely
+    the commit that was stranded by publishing two commits in one operation.
+    """
+
+    ok_actor, head_actor, actor_error = read_exact_head_push_actor(repository, token, head_sha, head_ref)
+    if not ok_actor:
+        return False, (
+            f"Candidate admission blocked: authenticated push actor evidence for commit {head_sha[:10]} "
+            f"is unavailable ({actor_error})."
+        )
+    if head_actor != writer:
+        return False, (
+            f"Candidate admission blocked: connector authorization names writer {writer!r}, but commit "
+            f"{head_sha[:10]} was pushed by authenticated actor {head_actor!r}."
+        )
+
+    for entry in range_commits:
+        sha = str(entry.get("sha") or "").strip().lower()
+        if not _is_commit_sha(sha):
+            return False, "Candidate admission blocked: connector range carries a malformed commit SHA."
+        if sha == head_sha:
+            continue
+        ok_ancestor, ancestor_actor, _error = read_exact_head_push_actor(repository, token, sha, head_ref)
+        if ok_ancestor and ancestor_actor != writer:
+            return False, (
+                f"Candidate admission blocked: connector authorization names writer {writer!r}, but commit "
+                f"{sha[:10]} was pushed by authenticated actor {ancestor_actor!r}."
+            )
+
+    return True, (
+        f"The exact candidate head {head_sha[:10]} was pushed to {head_ref} by authenticated actor {writer!r}, "
+        f"which publishes all {len(range_commits)} commit(s) in the range."
+    )
+
+
 def read_merge_base(repository: str, token: str, base_ref: str, head_sha: str) -> tuple[bool, str, str | None]:
     """The trusted fork point of the candidate from the base branch."""
     encoded_base = quote(base_ref, safe="")
@@ -795,6 +880,21 @@ def verify_connector_ingress_authorization(
     if state == "unavailable":
         return blocked(f"Candidate admission blocked: authorization receipt evidence is unavailable ({receipt_error}).")
 
+    # A receipt on an ordinary branch is *this candidate's* claim only if this
+    # candidate wrote it. A merged connector contribution leaves its receipt on
+    # the default branch, so from PR #411 onward every later candidate inherits
+    # that file at its head -- and reading mere presence as a claim refused every
+    # ordinary branch for "carrying a receipt outside the connector namespace",
+    # over an already-merged Issue #407 receipt that says nothing about it.
+    # The relaxation is deliberately confined to the ordinary path: a
+    # connector-namespace candidate is unchanged, because every claim in its
+    # receipt is already re-derived against this exact range, branch, fork point
+    # and grant, so an inherited receipt cannot satisfy it anyway. An ordinary
+    # branch that actually writes a receipt is still refused.
+    receipt_written_here = any(item.path == ingress.AUTHORIZATION_RECEIPT_PATH for item in changed_files)
+    if state == "present" and not in_namespace and not receipt_written_here:
+        state = "absent"
+
     if state == "absent":
         if in_namespace:
             return blocked(
@@ -849,25 +949,12 @@ def verify_connector_ingress_authorization(
             f"granted to {writer!r}, which holds {', '.join(sorted(granted))}."
         )
 
-    # PR authorship is static and unsigned committer metadata is caller-chosen.
-    # Authenticate every commit at a push boundary on this exact PR branch. This
-    # deliberately fails closed for an ancestor that was never itself a pushed
-    # head: without an authenticated run there is no evidence of its writer.
-    for entry in range_commits:
-        sha = str(entry.get("sha") or "").strip().lower()
-        if not _is_commit_sha(sha):
-            return blocked("Candidate admission blocked: connector range carries a malformed commit SHA.")
-        ok_actor, push_actor, actor_error = read_exact_head_push_actor(repository, token, sha, head_ref)
-        if not ok_actor:
-            return blocked(
-                f"Candidate admission blocked: authenticated push actor evidence for commit {sha[:10]} "
-                f"is unavailable ({actor_error})."
-            )
-        if push_actor != writer:
-            return blocked(
-                f"Candidate admission blocked: connector authorization names writer {writer!r}, but commit "
-                f"{sha[:10]} was pushed by authenticated actor {push_actor!r}."
-            )
+    # PR authorship is static and unsigned committer metadata is caller-chosen, so
+    # the writer is authenticated at a push boundary on this exact PR branch --
+    # at the range level rather than per commit (Issue #412).
+    ok_range, range_message = verify_range_push_provenance(repository, token, head_sha, head_ref, writer, range_commits)
+    if not ok_range:
+        return blocked(range_message)
 
     ok_no_escalation, escalation_message = verify_no_same_candidate_self_escalation(repository, token, head_sha, policy)
     if not ok_no_escalation:
@@ -928,13 +1015,23 @@ def verify_connector_ingress_authorization(
             f"authorized for {', '.join(expected_scopes) or '(none)'}."
         )
 
-    receipt_transitions = tuple(item for item in changed_files if item.path == ingress.AUTHORIZATION_RECEIPT_PATH)
-    if any(item.status not in {"added", "modified"} or item.previous_path for item in receipt_transitions):
+    # Both governance-evidence artifacts are excluded from the authorized content
+    # set for the same reason: their meaning is re-derived from trusted evidence
+    # rather than granted by the receipt, and a receipt cannot bind an artifact
+    # that is minted after it. Excluding the pre-ready review is not optional --
+    # it is outside the connector's allowed paths, so binding it would make every
+    # connector candidate carrying a review permanently inadmissible while the
+    # review gate refuses every connector candidate without one. Both keep the
+    # same transition constraint, so neither can be a rename destination for a
+    # protected source.
+    EVIDENCE_PATHS = {ingress.AUTHORIZATION_RECEIPT_PATH, pre_ready.REVIEW_RELATIVE_PATH}
+    evidence_transitions = tuple(item for item in changed_files if item.path in EVIDENCE_PATHS)
+    if any(item.status not in {"added", "modified"} or item.previous_path for item in evidence_transitions):
         return blocked(
-            "Candidate admission blocked: the authorization receipt path may not be deleted, renamed, or used "
+            "Candidate admission blocked: a governance evidence path may not be deleted, renamed, or used "
             "as a rename destination."
         )
-    trusted_files = tuple(item for item in changed_files if item.path != ingress.AUTHORIZATION_RECEIPT_PATH)
+    trusted_files = tuple(item for item in changed_files if item.path not in EVIDENCE_PATHS)
     trusted_changes = ingress.normalize_changes(
         tuple(
             ingress.ConnectorFileChange(item.status, item.path, item.previous_path, item.blob_sha)
@@ -1050,6 +1147,195 @@ def read_trusted_upgrade_status(
     return "success", "Exact-head trusted candidate preflight validation passed."
 
 
+def read_head_pre_ready_review(repository: str, token: str, head_sha: str) -> tuple[str, Any, str | None]:
+    """Read the exact-head pre-ready hostile review artifact from trusted evidence."""
+
+    encoded_sha = quote(head_sha, safe="")
+    encoded_path = quote(pre_ready.REVIEW_RELATIVE_PATH, safe="/")
+    try:
+        payload = request_json(repository, token, "GET", f"contents/{encoded_path}?ref={encoded_sha}")
+    except transport.GitHubRequestError as exc:
+        if exc.status_code == 404:
+            return "absent", None, None
+        return "unavailable", None, f"GitHub request error: {exc}"
+    except Exception as exc:
+        return "unavailable", None, f"unexpected error: {type(exc).__name__}: {exc}"
+    if not isinstance(payload, dict) or payload.get("encoding") not in (None, "base64"):
+        return "unavailable", None, "pre-ready hostile review content evidence is malformed"
+    raw = payload.get("content")
+    if not isinstance(raw, str):
+        return "unavailable", None, "pre-ready hostile review content evidence is malformed"
+    try:
+        document = json.loads(base64.b64decode(raw).decode("utf-8"))
+    except Exception as exc:
+        return "invalid", None, f"pre-ready hostile review is not readable JSON ({type(exc).__name__}: {exc})"
+    return "present", document, None
+
+
+#: An ordinary feature branch that names the Issue it implements. The connector
+#: namespace has its own binding in the grant; this covers the clone-capable
+#: naming the repository actually uses (`issue-412-...`, `claude/issue-409-...`).
+_BRANCH_ISSUE = re.compile(r"(?:\A|/)issue-([1-9][0-9]{0,9})(?:-|\Z)")
+
+
+def issue_for_branch(head_ref: str) -> str | None:
+    """The Issue a branch name binds, or None when it binds none."""
+
+    match = _BRANCH_ISSUE.search(head_ref.strip())
+    return match.group(1) if match is not None else None
+
+
+def read_issue_acceptance_criteria(repository: str, token: str, issue_number: str) -> tuple[str, tuple[str, ...], str]:
+    """The governing Issue's acceptance criteria, from trusted GitHub evidence.
+
+    Returns ``(state, criteria, error)`` where state is ``present`` (the Issue was
+    read; criteria may be empty if it defines none) or ``unavailable``. The Issue
+    body is owner-authored and read from the API rather than from the candidate,
+    so a candidate cannot supply the criteria it will then be measured against.
+    """
+
+    try:
+        payload = request_json(repository, token, "GET", f"issues/{quote(issue_number, safe='')}")
+    except Exception as exc:
+        return "unavailable", (), f"{type(exc).__name__}: {exc}"
+    if not isinstance(payload, dict):
+        return "unavailable", (), "issue payload is malformed"
+    if payload.get("pull_request") is not None:
+        return "unavailable", (), f"#{issue_number} is a pull request, not the governing Issue"
+    body = payload.get("body")
+    if body is None:
+        return "present", (), ""
+    if not isinstance(body, str):
+        return "unavailable", (), "issue body evidence is malformed"
+    return "present", pre_ready.parse_issue_acceptance_criteria(body), ""
+
+
+def verify_pre_ready_hostile_review(
+    repository: str,
+    token: str,
+    head_sha: str,
+    pr_number: int | None,
+) -> tuple[str, str]:
+    """Require a complete base->HEAD hostile review bound to this exact content.
+
+    Issue #412. Admission is what lets a candidate stand as Ready, so this is the
+    boundary at which "marking Ready must not be the first time a full hostile
+    review runs" is actually enforced: an unreviewed, stale, incomplete, or
+    still-contested candidate is not admitted, and the candidate-admission
+    controller returns it to Draft.
+
+    Nothing here trusts the review's own account of the candidate. The base and
+    the exact change set are re-derived from trusted pull-request evidence, and
+    the review has to agree with them; the applicable recurring-defect families
+    are re-derived from the trusted changed paths, so a review cannot narrow its
+    own applicability; and the acceptance criteria are re-derived from the
+    owner-authored governing Issue, so a review cannot measure itself against
+    criteria it wrote for itself. Unavailable evidence fails closed rather than
+    passing for want of proof.
+    """
+
+    if pr_number is None:
+        return "failure", "Candidate admission blocked: pre-ready hostile review requires PR-bound range evidence."
+
+    families, families_error = pre_ready.load_families()
+    if families_error:
+        return "failure", f"Candidate admission blocked: {families_error}."
+
+    ok_refs, head_ref, base_ref, refs_error = read_pr_refs(repository, token, pr_number)
+    if not ok_refs:
+        return "failure", f"Candidate admission blocked: pull-request ref evidence is unavailable ({refs_error})."
+    ok_base, merge_base, base_error = read_merge_base(repository, token, base_ref, head_sha)
+    if not ok_base:
+        return "failure", f"Candidate admission blocked: base provenance evidence is unavailable ({base_error})."
+
+    ok_files, changed_files, files_error = read_pr_changed_files(repository, token, pr_number)
+    if not ok_files:
+        return "failure", f"Candidate admission blocked: changed-file evidence is unavailable ({files_error})."
+    canonical: list[ingress.ConnectorFileChange] = []
+    for item in changed_files:
+        status = pre_ready.canonical_status(item.status)
+        if status is None:
+            return (
+                "failure",
+                f"Candidate admission blocked: changed file {item.path!r} carries unrecognised status "
+                f"{item.status!r}, so the pre-ready hostile review cannot be bound to this candidate.",
+            )
+        # `previous_path` is meaningful only for a rename. GitHub also reports it
+        # for a copy, which canonicalises to an addition, and an addition that
+        # carried a source would be rejected as malformed -- a false-positive
+        # block on a perfectly ordinary change.
+        previous_path = item.previous_path if status == "renamed" else ""
+        canonical.append(ingress.ConnectorFileChange(status, item.path, previous_path, item.blob_sha))
+    changes = ingress.normalize_changes(tuple(canonical))
+    if changes is None:
+        return (
+            "failure",
+            "Candidate admission blocked: changed-file operation/content evidence is malformed or ambiguous, "
+            "so the pre-ready hostile review cannot be bound to this candidate.",
+        )
+
+    changed_paths = tuple(
+        sorted({path for change in pre_ready.target_changes(changes) for path in change.affected_paths()})
+    )
+    applicable = pre_ready.applicable_family_ids(families, changed_paths)
+
+    state, document, read_error = read_head_pre_ready_review(repository, token, head_sha)
+    if state == "unavailable":
+        return (
+            "failure",
+            f"Candidate admission blocked: pre-ready hostile review evidence is unavailable ({read_error}).",
+        )
+    if state == "invalid":
+        return "failure", f"Candidate admission blocked: {read_error}."
+
+    if not applicable and document is None:
+        # A candidate that triggers no recurring-defect family has no applicable
+        # prevention rule to be checked against, so demanding a hostile review of
+        # it would be ceremony that blocks valid work -- a dependency pin bump,
+        # for instance. A review that *is* present is still verified, so this can
+        # never become a way to carry a stale or forged one.
+        return "success", "No recurring-defect family applies to this candidate's changed paths."
+
+    # The Issue the review claims must be the Issue the branch binds, when the
+    # branch binds one, so a review cannot be measured against a conveniently
+    # chosen Issue instead of the one this candidate implements.
+    claimed_issue = str(((document or {}).get("claims") or {}).get("issue") or "").strip().lstrip("#")
+    branch_issue = issue_for_branch(head_ref)
+    if branch_issue is not None and claimed_issue and claimed_issue != branch_issue:
+        return "failure", (
+            f"Candidate admission blocked: the pre-ready hostile review claims Issue #{claimed_issue}, but branch "
+            f"{head_ref} binds Issue #{branch_issue}."
+        )
+
+    issue_criteria: tuple[str, ...] | None = None
+    if claimed_issue.isdigit():
+        state_criteria, issue_criteria, criteria_error = read_issue_acceptance_criteria(
+            repository, token, claimed_issue
+        )
+        if state_criteria != "present":
+            return "failure", (
+                f"Candidate admission blocked: governing Issue #{claimed_issue} acceptance-criteria evidence is "
+                f"unavailable ({criteria_error})."
+            )
+
+    verdict = pre_ready.verify_claims(
+        document,
+        base_sha=merge_base,
+        changes=changes,
+        families=families,
+        issue_criteria=issue_criteria or None,
+    )
+    if not verdict.ok:
+        return "failure", f"Candidate admission blocked: {verdict.reason}."
+    claimed_base_ref = str(((document or {}).get("claims") or {}).get("base_ref") or "")
+    if claimed_base_ref != base_ref:
+        return "failure", (
+            f"Candidate admission blocked: the pre-ready hostile review was taken against base branch "
+            f"{claimed_base_ref!r}, not this pull request's {base_ref!r}."
+        )
+    return "success", verdict.reason
+
+
 def candidate_admission(repository: str, token: str, head_sha: str, pr_number: int | None = None) -> tuple[str, str]:
     touches_protected_preflight = False
     if pr_number is not None:
@@ -1066,9 +1352,13 @@ def candidate_admission(repository: str, token: str, head_sha: str, pr_number: i
     if head_mode == "tests-first-red":
         return "failure", "Candidate admission blocked: tests-first-red work must remain Draft-only."
 
-    ok_ingress, ingress_message = verify_code_write_ingress_provenance(repository, token, head_sha, pr_number)
-    if not ok_ingress:
-        return "failure", ingress_message
+    ingress_state, ingress_message = verify_code_write_ingress_provenance(repository, token, head_sha, pr_number)
+    if ingress_state != "success":
+        return ingress_state, ingress_message
+
+    review_state, review_message = verify_pre_ready_hostile_review(repository, token, head_sha, pr_number)
+    if review_state != "success":
+        return review_state, review_message
 
     if touches_protected_preflight:
         if pr_number is None:

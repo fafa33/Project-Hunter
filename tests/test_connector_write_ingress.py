@@ -703,7 +703,21 @@ def _admission(
         "read_pr_changed_files",
         lambda *_args: (
             True,
-            tuple(core.PullRequestFile("modified", path, blob_sha=_digest_for(path)) for path in changed_paths),
+            tuple(core.PullRequestFile("modified", path, blob_sha=_digest_for(path)) for path in changed_paths)
+            + (
+                # A candidate that carries a receipt wrote it; that is what makes
+                # the receipt its own claim rather than base-branch state
+                # inherited from a merged connector contribution.
+                ()
+                if receipt is None
+                else (
+                    core.PullRequestFile(
+                        "modified",
+                        ingress.AUTHORIZATION_RECEIPT_PATH,
+                        blob_sha=_digest_for(ingress.AUTHORIZATION_RECEIPT_PATH),
+                    ),
+                )
+            ),
             None,
         ),
     )
@@ -756,6 +770,11 @@ def _admission(
         raise AssertionError(path)
 
     monkeypatch.setattr(core, "request_json", fake_request)
+    # The Issue #412 pre-ready hostile review gate is an independent admission
+    # prerequisite with its own regression suite
+    # (tests/test_issue_412_prevention_gate.py). Stubbing it keeps this harness
+    # on the ingress contract it was written for.
+    monkeypatch.setattr(core, "verify_pre_ready_hostile_review", lambda *_args: ("success", "reviewed"))
     return core.candidate_admission("fafa33/Project-Hunter", "token", HEAD, 501)
 
 
