@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import hunter_connector_write_ingress as ingress
+import hunter_writer_provenance as provenance
 import yaml
 from hunter_workflow_state import path_matches_scope_entry
 
@@ -36,6 +37,7 @@ REGISTRY_PATH = ROOT / "docs" / "DEFECT_REGISTRY.json"
 LIFECYCLE_PATH = ROOT / "docs" / "DEFECT_PREVENTION_LIFECYCLE.json"
 WRITE_POLICY_PATH = ROOT / "docs" / "CODE_WRITE_POLICY.json"
 REVIEWER_DISPOSITIONS_PATH = ROOT / "docs" / "REVIEWER_FINDING_DISPOSITIONS.json"
+BINDING_FIELD = provenance.BINDING_FIELD
 # Files that define or bind the connector write ingress itself. If the grant let a
 # connector rewrite these, the ingress could widen its own boundary, so the grant
 # is invalid unless its prohibited scope covers every one of them.
@@ -387,7 +389,74 @@ def validate_code_write_policy() -> list[str]:
     if "exact-head" not in ready_requires or "Pre-PR Preflight" not in ready_requires:
         errors.append("Ready progression must require successful exact-head Pre-PR Preflight")
 
+    errors.extend(validate_writer_identity_binding(policy))
     errors.extend(validate_connector_write_ingress(policy))
+    return errors
+
+
+def validate_writer_identity_binding(policy: dict[str, Any]) -> list[str]:
+    """Validate the Issue #412 writer identity binding as a closed, exact allowlist.
+
+    The binding is the thing that decides whether a commit may be published at
+    all, so it is validated by the same authority that validates the ingress
+    grant rather than only by the code that consumes it. Two properties carry the
+    design and both are checked structurally:
+
+    1. the match semantics stay exact and two-sided -- a binding that allowed
+       substring matching, or that let one of author/committer stand in for the
+       other, would admit an unrelated account; and
+    2. every identity is self-consistent -- its canonical values, which are what
+       an agent is told to configure before its first commit, are themselves
+       bound values, so following the instruction cannot produce a commit the
+       binding then rejects.
+
+    Parsing is delegated to the canonical module so the guard and the enforcer
+    cannot drift into two different readings of the same policy.
+    """
+
+    binding, error = provenance.parse_binding(policy)
+    if binding is None:
+        return [f"CODE_WRITE_POLICY {error}"]
+
+    errors: list[str] = []
+    raw = policy.get(BINDING_FIELD)
+    raw = raw if isinstance(raw, dict) else {}
+    for field in ("purpose", "match_semantics", "independence_semantics", "attribution_semantics", "fail_closed"):
+        if not _is_non_empty_str(raw.get(field)):
+            errors.append(f"{BINDING_FIELD} must declare {field}")
+
+    enforcement = raw.get("enforcement")
+    if not isinstance(enforcement, dict):
+        errors.append(f"{BINDING_FIELD} must declare where the binding is enforced")
+    else:
+        for field in ("local_pre_push", "pre_commit_discovery", "governed_range"):
+            if not _is_non_empty_str(enforcement.get(field)):
+                errors.append(f"{BINDING_FIELD}.enforcement must declare {field}")
+
+    signers = policy.get("ingress_provenance", {})
+    authorized = signers.get("authorized_signers") if isinstance(signers, dict) else None
+    if isinstance(authorized, list):
+        allowed = {provenance.normalize_identity_value(str(item)) for item in authorized if _is_non_empty_str(item)}
+        connector = policy.get("connector_write_ingress", {})
+        writers = connector.get("authorized_writers") if isinstance(connector, dict) else None
+        if isinstance(writers, list):
+            allowed |= {
+                provenance.normalize_identity_value(str(entry.get("login")))
+                for entry in writers
+                if isinstance(entry, dict) and _is_non_empty_str(entry.get("login"))
+            }
+        # A Git identity bound to a login that no ingress authorizes would be a
+        # second, silent allowlist sitting beside the authorized one.
+        unbound = sorted(
+            identity.login
+            for identity in binding.identities
+            if provenance.normalize_identity_value(identity.login) not in allowed
+        )
+        if unbound:
+            errors.append(
+                f"{BINDING_FIELD} binds Git identities for logins no ingress authorizes: " + ", ".join(unbound)
+            )
+
     return errors
 
 
@@ -798,6 +867,151 @@ def validate_governance_maintenance_capability(grant: dict[str, Any]) -> list[st
     return errors
 
 
+FAMILY_ID_PATTERN = re.compile(r"\ADFF-[0-9]{3}\Z")
+FAMILY_BOUNDARIES = frozenset({"review", "local-pre-push", "hosted-gate", "merge-gate"})
+#: Boundaries that are an executing machine guard rather than a human pass. A
+#: family claiming one has to name a guard symbol that actually resolves.
+MACHINE_BOUNDARIES = frozenset({"local-pre-push", "hosted-gate", "merge-gate"})
+
+
+def validate_recurring_defect_families(registry: dict[str, Any], lifecycle: dict[str, Any]) -> list[str]:
+    """Structurally validate the machine-enforced recurring-defect family catalog.
+
+    Issue #412 requires each family to carry enough structured information for a
+    stable identity, its applicability, its prevention mechanism, its regression
+    evidence, and its enforcement state -- and, explicitly, that a historical
+    defect is not labelled guarded merely because some old test exists.
+
+    So the enforcement stage is not a free-text claim: it must be supported by
+    the evidence the family itself declares. Above ``recorded`` a resolvable
+    regression test is required; above ``regression-tested`` a resolvable machine
+    guard is required and the boundary must be a machine boundary; and
+    ``prevented`` additionally requires a merge-gate boundary plus explicit
+    lifecycle enforcement evidence for the family. A guard reference is validated
+    the same way a reviewer disposition's is -- the file must exist and the symbol
+    must be found in it -- so a family cannot point at a guard that was renamed
+    or deleted.
+    """
+
+    errors: list[str] = []
+    families = registry.get("families")
+    if not isinstance(families, list) or not families:
+        return ["DEFECT_REGISTRY families must be a non-empty list of recurring-defect families"]
+
+    explicit = lifecycle.get("explicit_enforcement")
+    explicit = explicit if isinstance(explicit, dict) else {}
+
+    seen: set[str] = set()
+    for index, family in enumerate(families):
+        if not isinstance(family, dict):
+            errors.append(f"registry family #{index} must be an object")
+            continue
+        family_id = family.get("id")
+        if not isinstance(family_id, str) or not FAMILY_ID_PATTERN.match(family_id):
+            errors.append(f"registry family #{index} must carry a stable DFF-NNN identity")
+            continue
+        if family_id in seen:
+            errors.append(f"duplicate defect family id: {family_id}")
+        seen.add(family_id)
+
+        for field in ("title", "invariant"):
+            if not _is_non_empty_str(family.get(field)):
+                errors.append(f"{family_id}: {field} must be a non-empty string")
+
+        applicability = family.get("applicability")
+        if not isinstance(applicability, dict):
+            errors.append(f"{family_id}: applicability must be an object")
+        else:
+            scope = applicability.get("changed_paths")
+            if not isinstance(scope, list) or not [item for item in scope if _is_non_empty_str(item)]:
+                errors.append(f"{family_id}: applicability must declare a non-empty changed_paths scope")
+            if not _is_non_empty_str(applicability.get("rationale")):
+                errors.append(f"{family_id}: applicability must explain why that scope is the applicable one")
+
+        prevention = family.get("prevention")
+        boundary = ""
+        guard_reference = ""
+        if not isinstance(prevention, dict):
+            errors.append(f"{family_id}: prevention must be an object")
+        else:
+            if not _is_non_empty_str(prevention.get("mechanism")):
+                errors.append(f"{family_id}: prevention must describe its mechanism")
+            boundary = str(prevention.get("boundary") or "")
+            if boundary not in FAMILY_BOUNDARIES:
+                errors.append(f"{family_id}: prevention boundary must be one of {sorted(FAMILY_BOUNDARIES)}")
+            raw_guard = prevention.get("guard_reference")
+            if raw_guard is not None:
+                if not _is_non_empty_str(raw_guard):
+                    errors.append(f"{family_id}: guard_reference must be a non-empty string when present")
+                else:
+                    guard_reference = str(raw_guard)
+                    problem = _validate_reference_target(guard_reference, role="guard")
+                    if problem:
+                        errors.append(f"{family_id}: invalid guard_reference {guard_reference!r}: {problem}")
+                        guard_reference = ""
+
+        evidence = family.get("regression_evidence")
+        resolvable_tests = 0
+        if not isinstance(evidence, list):
+            errors.append(f"{family_id}: regression_evidence must be a list of pytest targets")
+        else:
+            for reference in evidence:
+                if not _is_non_empty_str(reference):
+                    errors.append(f"{family_id}: regression_evidence entries must be non-empty strings")
+                    continue
+                problem = _validate_reference_target(str(reference), role="test")
+                if problem:
+                    errors.append(f"{family_id}: invalid regression_evidence {reference!r}: {problem}")
+                else:
+                    resolvable_tests += 1
+
+        sources = family.get("sources")
+        if not isinstance(sources, list) or not [item for item in sources if _is_non_empty_str(item)]:
+            errors.append(f"{family_id}: sources must record where the family was established")
+
+        stage = family.get("lifecycle")
+        if stage not in EXPECTED_STAGES:
+            errors.append(f"{family_id}: lifecycle must be one of the canonical stages {list(EXPECTED_STAGES)}")
+            continue
+        stage_index = EXPECTED_STAGES.index(stage)
+
+        if stage_index >= EXPECTED_STAGES.index("regression-tested") and resolvable_tests == 0:
+            errors.append(
+                f"{family_id}: {stage} requires at least one resolvable regression test; a family without one "
+                "is only recorded"
+            )
+        if stage_index >= EXPECTED_STAGES.index("locally-enforced"):
+            if not guard_reference:
+                errors.append(
+                    f"{family_id}: {stage} requires a resolvable guard_reference; an old test alone is detection, "
+                    "not enforcement"
+                )
+            if boundary not in MACHINE_BOUNDARIES:
+                errors.append(f"{family_id}: {stage} requires a machine prevention boundary, not {boundary!r}")
+        if stage == "prevented":
+            if boundary != "merge-gate":
+                errors.append(f"{family_id}: prevented requires a merge-gate boundary, not {boundary!r}")
+            entry = explicit.get(family_id)
+            if not isinstance(entry, dict) or entry.get("state") != "prevented":
+                errors.append(
+                    f"{family_id}: prevented requires explicit merge-enforcement evidence in "
+                    "DEFECT_PREVENTION_LIFECYCLE.json"
+                )
+
+    for family_id in sorted(set(explicit) & seen):
+        entry = explicit[family_id]
+        state = entry.get("state") if isinstance(entry, dict) else None
+        declared = next(
+            family.get("lifecycle") for family in families if isinstance(family, dict) and family.get("id") == family_id
+        )
+        if state != declared:
+            errors.append(
+                f"{family_id}: lifecycle stage {declared!r} disagrees with its explicit enforcement state {state!r}"
+            )
+
+    return errors
+
+
 def validate_defect_prevention_lifecycle() -> list[str]:
     errors: list[str] = []
     registry = _load_object(REGISTRY_PATH)
@@ -813,6 +1027,19 @@ def validate_defect_prevention_lifecycle() -> list[str]:
     legacy = lifecycle.get("legacy_status_semantics")
     if not isinstance(legacy, dict) or legacy.get("guarded") != "detected":
         errors.append("legacy guarded status must map to detected, not prevented")
+
+    family_semantics = lifecycle.get("family_lifecycle_semantics")
+    if not isinstance(family_semantics, dict):
+        errors.append("defect prevention lifecycle must declare family_lifecycle_semantics")
+    else:
+        for field in ("authority", "purpose", "rule", "guard"):
+            if not _is_non_empty_str(family_semantics.get(field)):
+                errors.append(f"family_lifecycle_semantics must declare {field}")
+        guard_reference = family_semantics.get("guard")
+        if _is_non_empty_str(guard_reference):
+            problem = _validate_reference_target(str(guard_reference), role="guard")
+            if problem:
+                errors.append(f"family_lifecycle_semantics guard {guard_reference!r} is invalid: {problem}")
 
     defects = registry.get("defects")
     if not isinstance(defects, list):
@@ -866,6 +1093,7 @@ def validate_defect_prevention_lifecycle() -> list[str]:
         if state == "prevented" and evidence.get("recurrence") is None:
             errors.append(f"{defect_id}: prevented state requires recurrence escalation")
 
+    errors.extend(validate_recurring_defect_families(registry, lifecycle))
     errors.extend(validate_code_write_policy())
     errors.extend(validate_reviewer_finding_dispositions())
     return errors

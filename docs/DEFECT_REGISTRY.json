@@ -1,6 +1,7 @@
 {
   "version": 1,
   "purpose": "Canonical registry of understood review defect classes and their durable cross-PR guards.",
+  "families_purpose": "Machine-enforced recurring-defect families. A family is an invariant plus its applicability, its prevention mechanism, its regression evidence, and the enforcement stage that evidence actually supports. Families are checked against every candidate that touches their applicability scope; the legacy per-defect list above remains the historical record of individual findings.",
   "defects": [
     {
       "id": "PRH-001",
@@ -265,10 +266,10 @@
     {
       "id": "MA-006",
       "class": "retry-authorized-by-caller-intent-rather-than-by-predecessor-outcome-evidence",
-      "source": "Issue #313 ADR 0034 Phase B hostile self-review: prepare_attempt accepted attempt_ordinal > 1 with only a predecessor attempt identity, so a caller could prepare and dispatch a second attempt after an uncertain first attempt whose request the provider may already have accepted. Recurrence on PR #314 independent review (Codex P1): the first guard derived its decision from the caller-supplied predecessor ModelAttemptOutcomeRecord, so a fabricated record naming the predecessor and claiming RETRY_REQUIRES_NEW_ATTEMPT defeated the gate entirely while the repository held an uncertain outcome or none at all \u2014 the prior hardening was insufficient because it checked the shape of the evidence instead of resolving the authority",
+      "source": "Issue #313 ADR 0034 Phase B hostile self-review: prepare_attempt accepted attempt_ordinal > 1 with only a predecessor attempt identity, so a caller could prepare and dispatch a second attempt after an uncertain first attempt whose request the provider may already have accepted. Recurrence on PR #314 independent review (Codex P1): the first guard derived its decision from the caller-supplied predecessor ModelAttemptOutcomeRecord, so a fabricated record naming the predecessor and claiming RETRY_REQUIRES_NEW_ATTEMPT defeated the gate entirely while the repository held an uncertain outcome or none at all — the prior hardening was insufficient because it checked the shape of the evidence instead of resolving the authority",
       "classification": "systemic",
       "guard_boundary": "ModelAdapterService.prepare_attempt, before any authority resolution or durable write",
-      "guard": "a retry requires the predecessor attempt's own DURABLE outcome, resolved from persistence via authoritative_outcome() strict-known at the new attempt's cutoff and following the supersession chain, checked before Source Handling is resolved and before anything durable exists. A caller-supplied record is evidence only: it is compared against the durable one and a mismatch is rejected, never used in its place \u2014 the same treatment prepare_attempt already gives a caller-supplied Source Handling decision and the ADR 0033 persistence invariant requires generally. Retry is admitted only when the durable outcome's retry_authorization is RETRY_REQUIRES_NEW_ATTEMPT, which derive_retry_authorization() grants only where the transport proved non-delivery or the provider established it rejected the request instead of executing it; an attempt with no durable outcome is uncertain and blocks retry. An authorized retry still gets a new attempt, cutoff, Source Handling resolution, handoff, and idempotency key, and terminal_outcome_exists() prevents re-dispatching an attempt that already has an outcome",
+      "guard": "a retry requires the predecessor attempt's own DURABLE outcome, resolved from persistence via authoritative_outcome() strict-known at the new attempt's cutoff and following the supersession chain, checked before Source Handling is resolved and before anything durable exists. A caller-supplied record is evidence only: it is compared against the durable one and a mismatch is rejected, never used in its place — the same treatment prepare_attempt already gives a caller-supplied Source Handling decision and the ADR 0033 persistence invariant requires generally. Retry is admitted only when the durable outcome's retry_authorization is RETRY_REQUIRES_NEW_ATTEMPT, which derive_retry_authorization() grants only where the transport proved non-delivery or the provider established it rejected the request instead of executing it; an attempt with no durable outcome is uncertain and blocks retry. An authorized retry still gets a new attempt, cutoff, Source Handling resolution, handoff, and idempotency key, and terminal_outcome_exists() prevents re-dispatching an attempt that already has an outcome",
       "test": "tests/test_model_adapter_phase_b.py::test_a_fabricated_predecessor_outcome_cannot_authorize_a_retry",
       "status": "guarded"
     },
@@ -298,7 +299,7 @@
       "source": "PR #314 independent review (Codex P2): strict_known_response_artifact ordered ascending with LIMIT 1, so once append_outcome admitted a superseding correction carrying revised response evidence, every later strict-known read returned the original artifact permanently and the correction was invisible",
       "classification": "systemic",
       "guard_boundary": "Model Adapter persistence strict-known historical reads",
-      "guard": "authoritative_outcome() resolves the head of the supersession chain \u2014 the outcome that no other outcome KNOWN AT THE SAME CUTOFF supersedes \u2014 and strict_known_response_artifact() returns the artifact attached to that governing outcome, falling back to the most recent earlier artifact when the correction records no new response evidence. Both remain strict-known, so a correction recorded after the cutoff does not retroactively govern an earlier read and the superseded original is preserved rather than overwritten. The general rule: wherever a record family admits append-only corrections, a historical read must follow the supersession chain, because neither the earliest row nor a blind latest row is the authoritative one",
+      "guard": "authoritative_outcome() resolves the head of the supersession chain — the outcome that no other outcome KNOWN AT THE SAME CUTOFF supersedes — and strict_known_response_artifact() returns the artifact attached to that governing outcome, falling back to the most recent earlier artifact when the correction records no new response evidence. Both remain strict-known, so a correction recorded after the cutoff does not retroactively govern an earlier read and the superseded original is preserved rather than overwritten. The general rule: wherever a record family admits append-only corrections, a historical read must follow the supersession chain, because neither the earliest row nor a blind latest row is the authoritative one",
       "test": "tests/test_model_adapter_phase_b.py::test_a_superseding_correction_is_what_a_later_replay_reads",
       "status": "guarded"
     },
@@ -371,6 +372,421 @@
       "guard": "Issues #403/#405 authorize connector-written candidates without treating that channel as local pre-push proof. hunter_governance_review_v2 decides the ingress channel from trusted evidence before applying its proof contract: ordinary clone-path commits retain the verified-signature requirement across the applicable range, while connector-origin admission re-derives the exact-head receipt against the trusted grant, branch, Issue, merge base, path scope, root-of-trust floor, grant fingerprint, and same-PR anti-self-escalation boundary. The connector writer is authenticated for every commit in the connector range from a trusted push-event Hunter / Pre-PR Preflight workflow run for that commit SHA and the exact PR head branch; missing evidence fails closed, and PR authorship plus unsigned committer metadata are never identity proof. The committer listing remains only a narrowing consistency check, so forged authorized metadata cannot conceal a foreign ancestor writer. Canonical v4 receipt changes distinguish addition, modification, removal, and rename: resulting blobs bind additions/modifications, absence binds removals rather than GitHub's base-blob SHA, and source plus destination plus resulting blob bind renames. Admission preserves status and previous_filename, so same-path mutation, deletion, rename, rename-plus-modification, or protected-source rename requires fresh authorization or fails scope. The hosted upgrade proof is not accepted from context and success alone: its publisher must be github-actions[bot], its canonical target must resolve inside this repository to Hunter / Trusted Preflight Upgrade, and that completed successful pull_request_target run must bind the exact PR and exact head. Hostile tests cover different exact-head and ancestor push actors despite forged authorized committer metadata, missing ancestor push evidence, mixed writers, same-path mutation, deletion using the base blob SHA, protected-source rename, rename-plus-modification, receipt-path rename concealment, forged push-user statuses, wrong App/workflow/PR/head proof, and the preserved base/Issue/branch/path/root-of-trust/signature boundaries.",
       "test": "tests/test_connector_admission_channel.py::test_connector_candidate_is_admitted_without_a_local_commit_signature",
       "status": "guarded"
+    }
+  ],
+  "families": [
+    {
+      "id": "DFF-001",
+      "title": "untrusted-temporal-authority",
+      "invariant": "Time that decides admission, ordering or cutoff is sampled from trusted repository/runtime authority, never accepted from the caller or sampled before the transaction that it orders.",
+      "applicability": {
+        "changed_paths": [
+          "src/hunter/"
+        ],
+        "rationale": "Runtime authority code is where caller-supplied timestamps become admission or ordering decisions."
+      },
+      "prevention": {
+        "mechanism": "Adversarial review of every timestamp that reaches an admission, ordering or cutoff decision, plus the PR #411 regressions that pin trusted-cutoff and post-acquisition sampling.",
+        "boundary": "review"
+      },
+      "regression_evidence": [
+        "tests/test_source_handling_review_regressions.py::test_live_issue_intake_uses_trusted_current_cutoff_not_caller_processed_at",
+        "tests/test_source_handling_review_regressions.py::test_publication_admission_time_is_sampled_after_write_transaction_acquisition"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "PR #411 independent review"
+      ]
+    },
+    {
+      "id": "DFF-002",
+      "title": "transaction-snapshot-inconsistency",
+      "invariant": "A read that validates history and the write that depends on it observe one explicit snapshot; no decision is made across two independently-taken views.",
+      "applicability": {
+        "changed_paths": [
+          "src/hunter/"
+        ],
+        "rationale": "Repository and persistence code is where a validating read and its dependent write can drift apart."
+      },
+      "prevention": {
+        "mechanism": "Adversarial review of every validate-then-write sequence for a single explicit snapshot, plus the PR #411 snapshot regression.",
+        "boundary": "review"
+      },
+      "regression_evidence": [
+        "tests/test_source_handling_review_regressions.py::test_read_view_verifies_history_inside_one_explicit_snapshot"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "PR #411 independent review"
+      ]
+    },
+    {
+      "id": "DFF-003",
+      "title": "logical-identity-reuse",
+      "invariant": "A caller-supplied payload cannot select, override or reuse a repository-assigned logical identity, and an authorization bound to one identity is not reusable for another.",
+      "applicability": {
+        "changed_paths": [
+          "src/hunter/"
+        ],
+        "rationale": "Persistence and authorization code is where a caller-chosen identifier can displace an assigned one."
+      },
+      "prevention": {
+        "mechanism": "Adversarial review of every identity assignment reachable from a caller payload, plus the PR #411 identity-override regression.",
+        "boundary": "review"
+      },
+      "regression_evidence": [
+        "tests/test_source_handling_review_regressions.py::test_payload_cannot_override_repository_record_id_and_authorization_remains_reusable"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "PR #411 independent review"
+      ]
+    },
+    {
+      "id": "DFF-004",
+      "title": "schema-fail-closed-incompleteness",
+      "invariant": "An unknown, absent or partially-declared authority value fails closed; absence is never read as permission and a schema is never satisfied by an incomplete declaration.",
+      "applicability": {
+        "changed_paths": [
+          "src/hunter/"
+        ],
+        "rationale": "Schema and authority-resolution code is where an incomplete declaration can be read as a permissive default."
+      },
+      "prevention": {
+        "mechanism": "Adversarial review of every authority lookup for its absent/unknown branch, plus the PR #411 explicit-availability and permissive-default regressions.",
+        "boundary": "review"
+      },
+      "regression_evidence": [
+        "tests/test_source_handling_review_regressions.py::test_fact_publication_requires_complete_explicit_availability_state",
+        "tests/test_evidence_intelligence_source_handling_f9_contract.py::test_f9_integration_contract_has_no_permissive_retention_default"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "PR #411 independent review"
+      ]
+    },
+    {
+      "id": "DFF-005",
+      "title": "nested-metadata-persistence-bypass",
+      "invariant": "A restriction that excludes content from durable persistence cannot be bypassed by nesting that content inside metadata, a prepared artifact, or any other secondary surface.",
+      "applicability": {
+        "changed_paths": [
+          "src/hunter/"
+        ],
+        "rationale": "Persistence code is where a governed exclusion can be defeated by a secondary carrying surface."
+      },
+      "prevention": {
+        "mechanism": "Adversarial review of every durable write surface against the governing restriction, plus the PR #411 metadata-nesting and credential-surface regressions.",
+        "boundary": "review"
+      },
+      "regression_evidence": [
+        "tests/test_source_handling_review_regressions.py::test_metadata_only_fact_blocks_non_metadata_prepared_artifacts",
+        "tests/test_evidence_intelligence_source_handling_f9_contract.py::test_credential_bearing_surface_bytes_are_structurally_excluded_from_durability"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "PR #411 independent review"
+      ]
+    },
+    {
+      "id": "DFF-006",
+      "title": "monotonicity-and-restart-instability",
+      "invariant": "Ordering guarantees survive a frozen clock, a process restart and a crash-retry; a repeated or non-advancing external clock never produces a non-monotonic admitted order.",
+      "applicability": {
+        "changed_paths": [
+          "src/hunter/"
+        ],
+        "rationale": "Ordering and persistence code is where restart and clock behaviour decide admitted order."
+      },
+      "prevention": {
+        "mechanism": "Adversarial review of every ordering guarantee under frozen-clock and restart conditions, plus the PR #411 monotonicity regression.",
+        "boundary": "review"
+      },
+      "regression_evidence": [
+        "tests/test_source_handling_review_regressions.py::test_repository_admission_times_are_strictly_monotonic_with_frozen_clock_across_restart"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "PR #411 independent review"
+      ]
+    },
+    {
+      "id": "DFF-007",
+      "title": "authorization-replay",
+      "invariant": "An authorization binds the exact operation and content it was minted for; it cannot be replayed onto a different operation, a different path, or different resulting content.",
+      "applicability": {
+        "changed_paths": [
+          "scripts/",
+          "src/hunter/",
+          "docs/CODE_WRITE_POLICY.json",
+          ".hunter/"
+        ],
+        "rationale": "Authorization, ingress and persistence code is where a valid proof can be re-aimed at another target."
+      },
+      "prevention": {
+        "mechanism": "The connector authorization identity is a SHA-256 over the exact claim set including per-file operation and resulting blob, and the trusted controller re-derives every claim from trusted evidence.",
+        "boundary": "hosted-gate",
+        "guard_reference": "scripts/hunter_connector_write_ingress.py::ConnectorWriteAuthorization"
+      },
+      "regression_evidence": [
+        "tests/test_connector_admission_channel.py::test_addition_cannot_replay_a_modification_authorization",
+        "tests/test_connector_admission_channel.py::test_exact_changes_are_part_of_the_authorization_identity"
+      ],
+      "lifecycle": "hosted-enforced",
+      "sources": [
+        "PR #408/#410 independent review",
+        "PR #411 independent review"
+      ]
+    },
+    {
+      "id": "DFF-008",
+      "title": "tamper-and-history-forgery",
+      "invariant": "Repository-owned evidence is bound to its own content, so a hand-edited or forged artifact is detectable rather than merely implausible.",
+      "applicability": {
+        "changed_paths": [
+          "scripts/",
+          ".hunter/",
+          "docs/CODE_WRITE_POLICY.json"
+        ],
+        "rationale": "Evidence artifacts and the controllers that read them are where forgery has to be structurally detectable."
+      },
+      "prevention": {
+        "mechanism": "Every repository-owned evidence artifact carries a digest over exactly its own claims, re-derived by the reader before any claim is believed.",
+        "boundary": "hosted-gate",
+        "guard_reference": "scripts/hunter_connector_write_ingress.py::ConnectorWriteAuthorization"
+      },
+      "regression_evidence": [
+        "tests/test_connector_admission_channel.py::test_forged_receipt_fails",
+        "tests/test_issue_412_prevention_gate.py::test_a_hand_edited_review_is_detected_by_its_own_digest"
+      ],
+      "lifecycle": "hosted-enforced",
+      "sources": [
+        "PR #408/#410 independent review"
+      ]
+    },
+    {
+      "id": "DFF-009",
+      "title": "connector-provenance-evidence-lifecycle",
+      "invariant": "A channel that is authorized to write is granted a proof it can actually produce, and the proof authenticates the writer rather than restating caller-chosen metadata.",
+      "applicability": {
+        "changed_paths": [
+          "scripts/",
+          ".github/workflows/",
+          "docs/CODE_WRITE_POLICY.json",
+          ".hunter/"
+        ],
+        "rationale": "Ingress and admission code is where an authorized channel can be handed an unsatisfiable proof obligation."
+      },
+      "prevention": {
+        "mechanism": "Candidate admission decides the write channel from trusted evidence first and only then requires that channel's own proof; the writer is authenticated from push-event workflow runs.",
+        "boundary": "hosted-gate",
+        "guard_reference": "scripts/hunter_governance_review_v2.py::verify_code_write_ingress_provenance"
+      },
+      "regression_evidence": [
+        "tests/test_connector_admission_channel.py::test_connector_candidate_is_admitted_without_a_local_commit_signature",
+        "tests/test_connector_admission_channel.py::test_committer_metadata_alone_cannot_impersonate_the_granted_writer"
+      ],
+      "lifecycle": "hosted-enforced",
+      "sources": [
+        "Issue #409",
+        "PR #410"
+      ]
+    },
+    {
+      "id": "DFF-010",
+      "title": "writer-identity-not-authorization-bound",
+      "invariant": "Every commit in the governed range carries an author and a committer that each independently resolve to the same authorization-bound writer identity; agent attribution lives in trailers and never in identity.",
+      "applicability": {
+        "changed_paths": [
+          "scripts/",
+          ".githooks/",
+          ".github/workflows/",
+          "docs/CODE_WRITE_POLICY.json",
+          "docs/DEFECT_REGISTRY.json",
+          "docs/DEFECT_PREVENTION_LIFECYCLE.json"
+        ],
+        "rationale": "Any change published through the repository-local push boundary is governed by the writer binding."
+      },
+      "prevention": {
+        "mechanism": "scripts/hunter_pre_push.py validates the governed fork-point..HEAD range against the canonical writer_identity_binding before any remote mutation, and names the exact mismatched provenance claim.",
+        "boundary": "local-pre-push",
+        "guard_reference": "scripts/hunter_writer_provenance.py::evaluate_commit"
+      },
+      "regression_evidence": [
+        "tests/test_issue_412_prevention_gate.py::test_agent_committer_with_a_correct_tree_is_rejected_before_any_push",
+        "tests/test_issue_412_prevention_gate.py::test_agent_attribution_trailer_cannot_rescue_an_unbound_identity",
+        "tests/test_issue_412_prevention_gate.py::test_author_and_committer_must_each_resolve_to_the_same_bound_writer"
+      ],
+      "lifecycle": "locally-enforced",
+      "sources": [
+        "Issue #412",
+        "PR #411 governance-provenance trap"
+      ]
+    },
+    {
+      "id": "DFF-011",
+      "title": "stranded-intermediate-commit-evidence",
+      "invariant": "A valid multi-commit candidate cannot strand an intermediate commit without admissible evidence, and no manual rewind or force-push is ever required solely to manufacture per-commit evidence.",
+      "applicability": {
+        "changed_paths": [
+          "scripts/",
+          ".githooks/",
+          ".github/workflows/",
+          "docs/CODE_WRITE_POLICY.json",
+          "docs/DEFECT_REGISTRY.json",
+          "docs/DEFECT_PREVENTION_LIFECYCLE.json"
+        ],
+        "rationale": "Admission and push-boundary code is where an evidence model can make a valid commit permanently inadmissible."
+      },
+      "prevention": {
+        "mechanism": "Range-level provenance: the authenticated push of the exact head publishes every commit the pull request lists, while an ancestor carrying its own authenticated push by a different actor still blocks.",
+        "boundary": "hosted-gate",
+        "guard_reference": "scripts/hunter_governance_review_v2.py::verify_range_push_provenance"
+      },
+      "regression_evidence": [
+        "tests/test_issue_412_prevention_gate.py::test_two_commits_pushed_together_cannot_strand_the_first_commit",
+        "tests/test_issue_412_prevention_gate.py::test_a_foreign_authenticated_ancestor_push_still_blocks_the_range"
+      ],
+      "lifecycle": "hosted-enforced",
+      "sources": [
+        "Issue #412",
+        "PR #411 multi-commit evidence trap"
+      ]
+    },
+    {
+      "id": "DFF-012",
+      "title": "stale-receipt-published",
+      "invariant": "A receipt is the final mutation of the candidate that writes it: any later content change invalidates it, a stale receipt never reaches the remote, and a receipt inherited unchanged from the base branch is never read as a claim about a later candidate.",
+      "applicability": {
+        "changed_paths": [
+          "scripts/",
+          ".githooks/",
+          ".github/workflows/",
+          "docs/CODE_WRITE_POLICY.json",
+          "docs/DEFECT_REGISTRY.json",
+          "docs/DEFECT_PREVENTION_LIFECYCLE.json",
+          ".hunter/"
+        ],
+        "rationale": "Any candidate that carries an authorization receipt is governed by receipt freshness."
+      },
+      "prevention": {
+        "mechanism": "The push boundary re-derives the governed change set from git and refuses to publish a head whose own receipt no longer binds it, or a rename onto a governance evidence path. Applicability is derived from the change set: a receipt left on the base branch by a merged connector contribution is base state rather than this candidate's claim, and removing such a receipt is a retirement rather than a claim. Trusted admission applies the same rule on the ordinary path.",
+        "boundary": "local-pre-push",
+        "guard_reference": "scripts/hunter_pre_push.py::_validate_receipt_freshness"
+      },
+      "regression_evidence": [
+        "tests/test_issue_412_prevention_gate.py::test_content_changed_after_the_receipt_blocks_the_push",
+        "tests/test_issue_412_prevention_gate.py::test_a_receipt_that_still_binds_the_exact_range_does_not_block_the_push",
+        "tests/test_issue_412_prevention_gate.py::test_a_receipt_inherited_from_the_base_branch_does_not_block_the_push",
+        "tests/test_issue_412_prevention_gate.py::test_an_inherited_receipt_does_not_make_an_ordinary_branch_a_connector_candidate",
+        "tests/test_issue_412_prevention_gate.py::test_an_ordinary_branch_that_writes_a_receipt_is_still_refused",
+        "tests/test_issue_412_prevention_gate.py::test_retiring_an_inherited_receipt_is_not_a_claim_about_this_range",
+        "tests/test_issue_412_prevention_gate.py::test_the_stale_issue_407_receipt_is_not_carried_into_issue_412"
+      ],
+      "lifecycle": "locally-enforced",
+      "sources": [
+        "Issue #412",
+        "Issue #407 receipt churn",
+        "PR #411 merged receipt on the default branch"
+      ]
+    },
+    {
+      "id": "DFF-013",
+      "title": "ready-without-complete-hostile-review",
+      "invariant": "A candidate is admitted for review only when exact-head-bound repository-owned state proves the complete base->HEAD range was hostile-reviewed against the governing Issue acceptance criteria and every applicable recurring-defect family, with no unresolved blocking finding.",
+      "applicability": {
+        "changed_paths": [
+          "src/",
+          "tests/",
+          "scripts/",
+          "build_backend/",
+          ".githooks/",
+          ".github/",
+          "docs/"
+        ],
+        "rationale": "Every candidate that changes repository content a reviewer would have to reason about is governed by the pre-ready hostile review requirement. Dependency manifests (requirements/, the root lockfiles and pyproject.toml) are deliberately outside this scope: a dependency-only candidate has no diff for a hostile pass to review, and demanding one would block every automated dependency update behind an artifact its author cannot produce -- a false-positive merge blockage, which is itself a defect."
+      },
+      "prevention": {
+        "mechanism": "Candidate admission re-derives the base, the exact change set, the applicable families and the governing Issue's acceptance criteria from trusted evidence and refuses an absent, stale, incomplete or contested review; the controller returns the pull request to Draft. The acceptance criteria come from the owner-authored Issue rather than the artifact, so a review cannot measure itself against criteria it wrote for itself, and the Issue it names must be the Issue its branch binds.",
+        "boundary": "hosted-gate",
+        "guard_reference": "scripts/hunter_governance_review_v2.py::verify_pre_ready_hostile_review"
+      },
+      "regression_evidence": [
+        "tests/test_issue_412_prevention_gate.py::test_ready_is_blocked_without_a_pre_ready_hostile_review",
+        "tests/test_issue_412_prevention_gate.py::test_a_review_of_earlier_content_is_stale_for_this_head",
+        "tests/test_issue_412_prevention_gate.py::test_an_unresolved_blocking_finding_blocks_ready",
+        "tests/test_issue_412_prevention_gate.py::test_an_applicable_family_left_unchecked_blocks_ready",
+        "tests/test_issue_412_prevention_gate.py::test_a_review_covering_one_self_authored_criterion_is_refused",
+        "tests/test_issue_412_prevention_gate.py::test_a_review_covering_every_issue_criterion_is_admitted",
+        "tests/test_issue_412_prevention_gate.py::test_a_review_naming_another_issue_than_the_branch_is_refused",
+        "tests/test_issue_412_prevention_gate.py::test_candidate_admission_reconciles_after_the_trusted_upgrade_completes"
+      ],
+      "lifecycle": "hosted-enforced",
+      "sources": [
+        "Issue #412",
+        "PR #413 independent review (Codex P1)"
+      ]
+    },
+    {
+      "id": "DFF-014",
+      "title": "pending-prerequisite-reported-as-failure",
+      "invariant": "A hosted prerequisite that is still running publishes pending; only an invalid, absent, untrusted or wrongly-bound proof publishes failure. A head left pending is re-evaluated when the proof lands, so pending never becomes a way to stay Ready while unadmitted.",
+      "applicability": {
+        "changed_paths": [
+          "scripts/",
+          ".githooks/",
+          ".github/workflows/",
+          "docs/CODE_WRITE_POLICY.json",
+          "docs/DEFECT_REGISTRY.json",
+          "docs/DEFECT_PREVENTION_LIFECYCLE.json"
+        ],
+        "rationale": "Admission and readiness controllers are where a transient state can be published as a defect."
+      },
+      "prevention": {
+        "mechanism": "Candidate admission propagates a tri-state ingress verdict, so a running trusted proof is reported as pending rather than as a blocked candidate, and the candidate-admission controller subscribes to trusted-upgrade completion so a pending head is reconciled once the proof exists.",
+        "boundary": "hosted-gate",
+        "guard_reference": "scripts/hunter_governance_review_v2.py::verify_code_write_ingress_provenance"
+      },
+      "regression_evidence": [
+        "tests/test_issue_412_prevention_gate.py::test_a_running_hosted_proof_is_pending_not_failure",
+        "tests/test_issue_412_prevention_gate.py::test_an_invalid_hosted_proof_remains_failure",
+        "tests/test_issue_412_prevention_gate.py::test_candidate_admission_reconciles_after_the_trusted_upgrade_completes",
+        "tests/test_issue_412_prevention_gate.py::test_the_draft_controller_still_leaves_a_pending_head_alone"
+      ],
+      "lifecycle": "hosted-enforced",
+      "sources": [
+        "Issue #412",
+        "PR #413 independent review (Codex P1)"
+      ]
+    },
+    {
+      "id": "DFF-015",
+      "title": "overclaimed-prevention-state",
+      "invariant": "A defect family may claim an enforcement stage only when the evidence for that stage exists: a resolvable regression test above 'recorded', a resolvable machine guard above 'regression-tested', and a merge-gate boundary with explicit lifecycle enforcement evidence for 'prevented'.",
+      "applicability": {
+        "changed_paths": [
+          "scripts/",
+          ".githooks/",
+          ".github/workflows/",
+          "docs/CODE_WRITE_POLICY.json",
+          "docs/DEFECT_REGISTRY.json",
+          "docs/DEFECT_PREVENTION_LIFECYCLE.json"
+        ],
+        "rationale": "The catalog and its validator are where a detection-only guard can be relabelled as prevention."
+      },
+      "prevention": {
+        "mechanism": "scripts/hunter_defect_prevention_preflight.py structurally validates every family and refuses a stage the declared evidence does not support.",
+        "boundary": "local-pre-push",
+        "guard_reference": "scripts/hunter_defect_prevention_preflight.py::validate_recurring_defect_families"
+      },
+      "regression_evidence": [
+        "tests/test_issue_412_prevention_gate.py::test_a_family_cannot_claim_enforcement_without_a_resolvable_guard",
+        "tests/test_issue_412_prevention_gate.py::test_a_family_cannot_claim_prevented_without_merge_enforcement_evidence"
+      ],
+      "lifecycle": "locally-enforced",
+      "sources": [
+        "Issue #412"
+      ]
     }
   ]
 }

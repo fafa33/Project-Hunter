@@ -18,6 +18,20 @@ def _update(
     return [f"{local_ref} {sha} {remote_ref} {hunter_pre_push.ZERO_SHA}\n"]
 
 
+def _stub_issue_412_boundaries(monkeypatch) -> None:
+    """Neutralise the Issue #412 provenance and receipt checks for this fixture.
+
+    Both are enforced by ``enforce_pre_push`` and both have their own regressions
+    in tests/test_issue_412_prevention_gate.py. Stubbing them here keeps each
+    fixture below on the exact-head/clean-tree/preflight contract it was written
+    for, instead of turning every one of them into an end-to-end git fixture.
+    """
+
+    monkeypatch.setattr(hunter_pre_push, "_validate_writer_provenance", lambda _head: None)
+    monkeypatch.setattr(hunter_pre_push, "_validate_receipt_freshness", lambda _head: None)
+    monkeypatch.setattr(hunter_pre_push, "report_pre_ready_review_state", lambda _head: None)
+
+
 def test_pre_push_blocks_known_deterministic_failure_before_network_push(monkeypatch, tmp_path) -> None:
     def fake_git(*args: str) -> str:
         if args == ("rev-parse", "--show-toplevel"):
@@ -30,6 +44,7 @@ def test_pre_push_blocks_known_deterministic_failure_before_network_push(monkeyp
 
     monkeypatch.setattr(hunter_pre_push, "_run_git", fake_git)
     monkeypatch.setattr(hunter_pre_push.os, "chdir", lambda _path: None)
+    _stub_issue_412_boundaries(monkeypatch)
     monkeypatch.setattr(hunter_pre_push, "_select_preflight_mode", lambda _head: hunter_pre_push.NORMAL_MODE)
     monkeypatch.setattr(
         hunter_pre_push.subprocess,
@@ -52,6 +67,7 @@ def test_pre_push_proof_for_commit_a_cannot_authorize_commit_b(monkeypatch, tmp_
 
     monkeypatch.setattr(hunter_pre_push, "_run_git", fake_git)
     monkeypatch.setattr(hunter_pre_push.os, "chdir", lambda _path: None)
+    _stub_issue_412_boundaries(monkeypatch)
 
     with pytest.raises(RuntimeError, match="exact HEAD"):
         hunter_pre_push.enforce_pre_push(_update(HEAD_B))
@@ -69,6 +85,7 @@ def test_non_branch_source_refspec_targeting_remote_branch_cannot_bypass_exact_h
 
     monkeypatch.setattr(hunter_pre_push, "_run_git", fake_git)
     monkeypatch.setattr(hunter_pre_push.os, "chdir", lambda _path: None)
+    _stub_issue_412_boundaries(monkeypatch)
 
     with pytest.raises(RuntimeError, match="exact HEAD"):
         hunter_pre_push.enforce_pre_push(_update(HEAD_B, local_ref=HEAD_B, remote_ref="refs/heads/feature"))
@@ -86,6 +103,7 @@ def test_pre_push_rejects_dirty_tree_before_preflight(monkeypatch, tmp_path) -> 
 
     monkeypatch.setattr(hunter_pre_push, "_run_git", fake_git)
     monkeypatch.setattr(hunter_pre_push.os, "chdir", lambda _path: None)
+    _stub_issue_412_boundaries(monkeypatch)
 
     with pytest.raises(RuntimeError, match="working tree must be clean"):
         hunter_pre_push.enforce_pre_push(_update())
@@ -105,6 +123,7 @@ def test_pre_push_rechecks_head_after_successful_preflight(monkeypatch, tmp_path
 
     monkeypatch.setattr(hunter_pre_push, "_run_git", fake_git)
     monkeypatch.setattr(hunter_pre_push.os, "chdir", lambda _path: None)
+    _stub_issue_412_boundaries(monkeypatch)
     monkeypatch.setattr(hunter_pre_push, "_select_preflight_mode", lambda _head: hunter_pre_push.NORMAL_MODE)
     monkeypatch.setattr(
         hunter_pre_push.subprocess,

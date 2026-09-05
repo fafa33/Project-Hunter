@@ -41,6 +41,50 @@
     "scope": "every code-changing commit in the pull request range, not only the tip",
     "fail_closed": "Missing policy, empty allowlist, unavailable commit-range evidence, unsigned commit, unverified signature, or unauthorized signer all block candidate admission."
   },
+  "writer_identity_binding": {
+    "purpose": "Canonical machine-readable mapping between an authorized writer and the exact Git author/committer identities its commits may carry. Issue #412: a correct change with an exact receipt was still permanently non-admissible because commits were recorded under an implementation agent's Git identity instead of the authorization-bound writer, and the mismatch surfaced only after a hosted push.",
+    "match": "exact-normalized",
+    "match_semantics": "Both the name and the email are compared after Unicode NFKC normalisation, case folding and whitespace collapsing, then matched exactly against one identity's bound values. Substring, prefix, suffix and domain matching are all forbidden: they would let an unrelated account satisfy the binding.",
+    "require_author_and_committer_independently": true,
+    "independence_semantics": "The author headers and the committer headers are each resolved to a bound identity on their own, and the two must resolve to the same writer. One field matching never authorizes the other, and a bound name paired with an unbound email is not a partial match another identity can complete.",
+    "require_single_writer_per_range": true,
+    "attribution_semantics": "Implementation-agent attribution (for example a Co-Authored-By or session trailer) is carried in commit trailers only. Identity is read exclusively from the author and committer headers, so a trailer can never establish, replace or mutate the authorization-bound writer identity, and an agent keeps its attribution while the commit is recorded under the bound writer.",
+    "identities": [
+      {
+        "login": "claude",
+        "channel": "clone-capable",
+        "git_names": [
+          "Claude"
+        ],
+        "git_emails": [
+          "noreply@anthropic.com"
+        ],
+        "canonical_git_name": "Claude",
+        "canonical_git_email": "noreply@anthropic.com",
+        "evidence": "Commit ced6beaa5b4684380ee8c0ac81916e6a829eece7 (PR #410, merged as 0905c59) carries this exact author and committer identity and resolves to GitHub login 'claude', which ingress_provenance.authorized_signers already binds."
+      },
+      {
+        "login": "fafa33",
+        "channel": "clone-capable",
+        "git_names": [
+          "Farhad5778"
+        ],
+        "git_emails": [
+          "34549283+fafa33@users.noreply.github.com"
+        ],
+        "canonical_git_name": "Farhad5778",
+        "canonical_git_email": "34549283+fafa33@users.noreply.github.com",
+        "evidence": "Every squash commit on the default branch through a61941ef carries this exact author identity and resolves to the repository owner login 'fafa33'."
+      }
+    ],
+    "enforcement": {
+      "local_pre_push": "scripts/hunter_pre_push.py validates every commit in the governed fork-point..HEAD range before any remote mutation and reports the exact mismatched provenance claim.",
+      "pre_commit_discovery": "python scripts/hunter_writer_provenance.py --print-identity [--login <login>]",
+      "governed_range": "merge-base(<remote>/<base_ref>, HEAD)..HEAD. History already on the base branch was admitted under the regime that applied to it and is not re-governed."
+    },
+    "provenance_claims_are_distinct": "Commit author/committer identity, authenticated push actor, and implementation attribution are three different claims and are never conflated. This binding governs commit identity only; the authenticated push actor is verified by the trusted controller from push-event workflow runs, and attribution lives in trailers.",
+    "fail_closed": "Missing policy, a missing or malformed writer_identity_binding, an empty identity list, an identity whose canonical values are not among its own bound values, unreadable commit metadata, an unavailable fork point, an unbound author, an unbound committer, an author and committer bound to different writers, and a range mixing bound writers all block the push."
+  },
   "connector_write_ingress": {
     "governing_issue": "403",
     "purpose": "Narrow governed ingress that lets one explicitly authorized connector writer create code changes on a non-main feature branch. It is an additional fail-closed ingress, never a replacement for or weakening of the repository-local pre-push boundary.",
@@ -114,7 +158,9 @@
       "pyproject.toml",
       "requirements/",
       "build_backend/",
-      "docs/CODE_WRITE_POLICY.json"
+      "docs/CODE_WRITE_POLICY.json",
+      "scripts/hunter_writer_provenance.py",
+      "scripts/hunter_pre_ready_review.py"
     ],
     "root_of_trust_semantics": "The files that decide whether a candidate may be written and admitted at all: the push boundary, the hosted workflows, the canonical gate chain, the connector authorizer, the governance/admission controllers, the merge-readiness controller, the shared scope and transport primitives they depend on, the packaging/tooling pins that define the gates, and this policy. No capability on this ingress may write them and no scope may unblock them, so a candidate can never rewrite the authority under which it is itself evaluated. Mutating them stays a clone-capable, pre-push-bound, independently reviewed, owner-merged change; the trusted controller always evaluates a candidate against the default-branch version of this policy, so such a change takes effect only after merge and never for its own pull request.",
     "self_escalation_boundary": "A candidate may not widen the grant it is authorized under and then rely on the widened grant inside the same pull request. The authorization receipt pins grant_fingerprint, a SHA-256 over the authorization-relevant grant, and the trusted controller re-derives that fingerprint from the default branch: a receipt minted under any other version of the grant is stale and fails admission. The controller additionally compares the candidate head's policy against the trusted one and refuses any connector candidate whose head widens the grant -- a new capability, writer, allowed path, unblocked scope path, authorized Issue, removed prohibition, or removed root-of-trust entry.",
