@@ -14,17 +14,26 @@ from typing import Any
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-SCHEMA_VERSION = "hunter-issue-agent-authorization-v2"
+#: The inner authorization payload named by accepted ADR 0036 s7. Its shape and
+#: its identity derivation are unchanged: this contribution wraps it, and never
+#: redefines it.
+SCHEMA_VERSION = "hunter-issue-agent-authorization-v1"
+
+#: The transport that carries that exact payload plus issuer authentication.
+#: Authentication is added as a separate outer schema precisely so the canonical
+#: inner payload keeps the meaning the accepted ADR gave it.
+ENVELOPE_SCHEMA_VERSION = "hunter-issue-agent-signed-authorization-v1"
+
 DEFAULT_LABEL = "hunter-agent-execute"
 MAX_EVENT_BYTES = 256 * 1024
-SIGNING_KEY_ENV = "HUNTER_ISSUE_AGENT_SIGNING_KEY"
+SIGNING_KEY_ENV = "HUNTER_ISSUE_AGENT_AUTHORIZATION_SIGNING_KEY"
 SIGNING_KEY_BYTES = 32
 SIGNATURE_BYTES = 64
 
 #: Domain separator mixed into the signed message. Without it a signature over
 #: these canonical bytes could be replayed as a signature over any other
 #: structure that happens to canonicalize identically.
-SIGNATURE_DOMAIN = b"hunter-issue-agent-authorization-v2:"
+SIGNATURE_DOMAIN = b"hunter-issue-agent-signed-authorization-v1:"
 
 
 class IssueAgentTriggerError(RuntimeError):
@@ -42,17 +51,41 @@ class IssueAgentAuthorization:
     authorization_label: str
     issue_updated_at: str
     authorization_id: str
-    issuer_signature: str
     schema_version: str = SCHEMA_VERSION
 
+    def payload(self) -> dict[str, Any]:
+        """The exact canonical v1 payload, unchanged by this contribution."""
+        return asdict(self)
+
     def to_json(self) -> str:
-        return json.dumps(asdict(self), sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        return _canonical_json(self.payload())
 
 
-def canonical_claims_message(claims: dict[str, Any]) -> bytes:
-    """Return the exact bytes both the identity digest and the signature cover."""
-    canonical = json.dumps(claims, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-    return SIGNATURE_DOMAIN + canonical
+@dataclass(frozen=True, slots=True)
+class SignedIssueAgentAuthorization:
+    """One canonical v1 payload plus the issuer proof that it was minted here.
+
+    The payload is carried verbatim, so what accepted ADR 0036 s7 names is
+    exactly what travels and exactly what the runtime resolves. The signature
+    covers that whole payload -- including its `authorization_id` and its
+    `schema_version` -- so no field of it can be altered in transit.
+    """
+
+    authorization: dict[str, Any]
+    issuer_signature: str
+    schema_version: str = ENVELOPE_SCHEMA_VERSION
+
+    def to_json(self) -> str:
+        return _canonical_json(asdict(self))
+
+
+def _canonical_json(value: Any) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
+def authorization_signing_message(payload: dict[str, Any]) -> bytes:
+    """Return the exact bytes the issuer signature covers."""
+    return SIGNATURE_DOMAIN + _canonical_json(payload).encode("utf-8")
 
 
 def load_signing_key(value: object) -> Ed25519PrivateKey:
@@ -92,19 +125,16 @@ def authorize_event(
     *,
     expected_repository: str,
     owner_login: str,
-    signing_key: Ed25519PrivateKey,
     authorization_label: str = DEFAULT_LABEL,
 ) -> IssueAgentAuthorization:
-    """Authorize one exact event and bind it to an unforgeable trusted-origin proof.
+    """Authorize one exact event into the canonical v1 payload.
 
-    The identity digest proves only that the claims are internally consistent;
-    anyone holding the public Issue fields can recompute it. The Ed25519
-    signature is what proves this document was minted by the trusted workflow
-    that observed the owner's `issues:labeled` event, so a caller who can reach
-    the issuer endpoint still cannot mint an authorization.
+    Unchanged from PR #391: this decides *whether* the owner authorized the
+    Issue and produces the payload accepted ADR 0036 s7 names. It deliberately
+    carries no proof of origin -- the digest is over public Issue fields, so
+    anyone can recompute it -- which is why the payload alone is no longer
+    executable and `sign_authorization` exists.
     """
-    if not isinstance(signing_key, Ed25519PrivateKey):
-        raise IssueAgentTriggerError("issuer signing authority is required to authorize execution")
     if event.get("action") != "labeled":
         raise IssueAgentTriggerError("only the issues:labeled event is authorized")
 
@@ -150,12 +180,25 @@ def authorize_event(
         "issue_updated_at": updated_at,
         "schema_version": SCHEMA_VERSION,
     }
-    message = canonical_claims_message(canonical_claims)
-    authorization_id = f"hunter-issue-agent-authorization:{hashlib.sha256(message).hexdigest()}"
-    return IssueAgentAuthorization(
-        **canonical_claims,
-        authorization_id=authorization_id,
-        issuer_signature=signing_key.sign(message).hex(),
+    canonical = _canonical_json(canonical_claims).encode("utf-8")
+    authorization_id = f"hunter-issue-agent-authorization:{hashlib.sha256(canonical).hexdigest()}"
+    return IssueAgentAuthorization(**canonical_claims, authorization_id=authorization_id)
+
+
+def sign_authorization(
+    authorization: IssueAgentAuthorization,
+    *,
+    signing_key: Ed25519PrivateKey,
+) -> SignedIssueAgentAuthorization:
+    """Wrap one canonical v1 payload in the issuer-authenticated transport."""
+    if not isinstance(authorization, IssueAgentAuthorization):
+        raise IssueAgentTriggerError("only a canonical authorization payload may be signed")
+    if not isinstance(signing_key, Ed25519PrivateKey):
+        raise IssueAgentTriggerError("issuer signing authority is required to authorize execution")
+    payload = authorization.payload()
+    return SignedIssueAgentAuthorization(
+        authorization=payload,
+        issuer_signature=signing_key.sign(authorization_signing_message(payload)).hex(),
     )
 
 
@@ -221,10 +264,9 @@ def main(argv: list[str] | None = None) -> int:
             _load_event(Path(arguments.event)),
             expected_repository=arguments.repository,
             owner_login=arguments.owner_login,
-            signing_key=_issuer_signing_key(),
             authorization_label=arguments.label,
         )
-        document = authorization.to_json()
+        document = sign_authorization(authorization, signing_key=_issuer_signing_key()).to_json()
         if arguments.authorization_out:
             Path(arguments.authorization_out).write_text(document + "\n", encoding="utf-8")
         if not arguments.no_dispatch:

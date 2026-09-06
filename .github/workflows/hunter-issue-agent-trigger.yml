@@ -34,7 +34,9 @@ jobs:
           persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        # Pinned to the immutable commit for the v6 release line (v6.3.0) rather
+        # than the floating v6 tag, which a tag move could repoint at any time.
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.11.13"
           cache: pip
@@ -52,7 +54,7 @@ jobs:
       - name: Authorize exact Issue event and dispatch to trusted issuer edge
         env:
           HUNTER_ISSUE_AGENT_WEBHOOK_URL: ${{ secrets.HUNTER_ISSUE_AGENT_WEBHOOK_URL }}
-          HUNTER_ISSUE_AGENT_SIGNING_KEY: ${{ secrets.HUNTER_ISSUE_AGENT_SIGNING_KEY }}
+          HUNTER_ISSUE_AGENT_AUTHORIZATION_SIGNING_KEY: ${{ secrets.HUNTER_ISSUE_AGENT_AUTHORIZATION_SIGNING_KEY }}
         run: |
           set -euo pipefail
           python scripts/hunter_issue_agent_trigger.py \

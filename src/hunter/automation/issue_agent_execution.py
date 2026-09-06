@@ -1,8 +1,8 @@
 """Production composition root for the governed GitHub Issue execution path.
 
 Issue #390. PR #391 delivered the authorization edge only: it proves *who*
-requested execution and emits a deterministic, issuer-signed
-``hunter-issue-agent-authorization-v2`` document. Nothing in the repository
+requested execution and emits a deterministic
+``hunter-issue-agent-authorization-v1`` document. Nothing in the repository
 consumed that document, so an authorized Issue could not reach the existing
 Smart Prompt Machine -> signed handoff -> fallback runtime without someone
 building a parallel path around the authorities that already own each decision.
@@ -11,13 +11,16 @@ This module is that missing consumer and nothing else. It owns no routing, no
 prompt profile, no signing key, no transport, no provider order and no merge
 authority; every one of those stays with the component that already holds it:
 
-``hunter-issue-agent-authorization-v2``
-    parsed and revalidated here against trusted operational configuration. Its
-    Ed25519 issuer signature is verified first, against a public key captured at
-    trusted bootstrap, because the ``authorization_id`` digest covers only public
-    Issue fields and so proves consistency rather than provenance. The digest is
-    then recomputed from the exact claims, binding replay identity to content
-    rather than to a value the caller chose.
+``hunter-issue-agent-signed-authorization-v1``
+    the only executable input. It carries the canonical
+    ``hunter-issue-agent-authorization-v1`` payload named by accepted ADR 0036
+    s7 verbatim -- this contribution wraps that document, it never redefines it
+    -- plus the Ed25519 issuer proof. The signature is verified first, against a
+    public key captured at trusted bootstrap, because the ``authorization_id``
+    digest covers only public Issue fields and so proves consistency rather than
+    provenance. A bare unsigned payload is refused on the outer schema and has
+    no execution path. The digest is then recomputed from the exact claims,
+    binding replay identity to content rather than to a value the caller chose.
 ``IssueAgentExecutionLedger``
     durable execution ownership, claimed *before* any execution begins and
     advanced across the dispatch boundary, so a crash or retry cannot execute
@@ -86,15 +89,21 @@ from hunter.evidence_intelligence.source_handling_persistence import (
 )
 from hunter.execution import Clock, SystemClock
 
-ISSUE_AGENT_AUTHORIZATION_SCHEMA_VERSION = "hunter-issue-agent-authorization-v2"
+#: The inner payload named by accepted ADR 0036 s7, carried verbatim and never
+#: redefined here.
+ISSUE_AGENT_AUTHORIZATION_SCHEMA_VERSION = "hunter-issue-agent-authorization-v1"
+
+#: The issuer-authenticated transport that carries it. Only this is executable.
+ISSUE_AGENT_SIGNED_AUTHORIZATION_SCHEMA_VERSION = "hunter-issue-agent-signed-authorization-v1"
+
 ISSUE_AGENT_AUTHORIZATION_LABEL = "hunter-agent-execute"
 ISSUE_AGENT_AUTHORIZATION_IDENTITY_PREFIX = "hunter-issue-agent-authorization"
 
 #: Domain separator the issuer mixes into the signed message. It must match
 #: ``scripts/hunter_issue_agent_trigger.py`` exactly; the cross-binding test
 #: pins the two together.
-ISSUE_AGENT_AUTHORIZATION_SIGNATURE_DOMAIN = b"hunter-issue-agent-authorization-v2:"
-ISSUE_AGENT_VERIFYING_KEY_ENV = "HUNTER_ISSUE_AGENT_VERIFYING_KEY"
+ISSUE_AGENT_AUTHORIZATION_SIGNATURE_DOMAIN = b"hunter-issue-agent-signed-authorization-v1:"
+ISSUE_AGENT_VERIFYING_KEY_ENV = "HUNTER_ISSUE_AGENT_AUTHORIZATION_VERIFYING_KEY"
 _ISSUE_AGENT_KEY_BYTES = 32
 _ISSUE_AGENT_SIGNATURE_BYTES = 64
 ISSUE_AGENT_EXECUTION_RECEIPT_SCHEMA_VERSION = "hunter-issue-agent-execution-receipt-v1"
@@ -191,6 +200,33 @@ def _aware_utc(name: str, value: datetime) -> datetime:
     return value.astimezone(UTC)
 
 
+def _decode_bounded_json_object(document: str | bytes) -> dict[str, Any]:
+    """Decode one bounded UTF-8 JSON object, refusing ambiguous input."""
+    if isinstance(document, bytes):
+        if len(document) > _MAX_AUTHORIZATION_BYTES:
+            raise IssueAgentAuthorizationError("authorization document is too large")
+        try:
+            text = document.decode("utf-8")
+        except UnicodeDecodeError:
+            raise IssueAgentAuthorizationError("authorization document must be UTF-8 JSON") from None
+    elif isinstance(document, str):
+        if len(document.encode("utf-8")) > _MAX_AUTHORIZATION_BYTES:
+            raise IssueAgentAuthorizationError("authorization document is too large")
+        text = document
+    else:
+        raise IssueAgentAuthorizationError("authorization document must be str or bytes")
+
+    try:
+        decoded = json.loads(text, object_pairs_hook=_reject_duplicate_json_keys)
+    except _DuplicateJSONKeyError:
+        raise IssueAgentAuthorizationError("authorization document contains duplicate JSON keys") from None
+    except (RecursionError, ValueError):
+        raise IssueAgentAuthorizationError("authorization document is malformed JSON") from None
+    if not isinstance(decoded, dict):
+        raise IssueAgentAuthorizationError("authorization document must be a JSON object")
+    return decoded
+
+
 def _canonical_issuer_signature(value: object) -> str:
     """Return one ASCII lowercase Ed25519 signature or fail closed."""
     if (
@@ -243,15 +279,15 @@ class IssueAgentAuthorizationVerifier:
             )
         return cls(_public_key_bytes=key)
 
-    def verify(self, authorization: IssueAgentAuthorization) -> None:
-        """Reject any document the trusted issuer did not mint."""
-        if not isinstance(authorization, IssueAgentAuthorization):
-            raise IssueAgentIssuerError("issuer verification requires a parsed authorization")
-        signature = bytes.fromhex(_canonical_issuer_signature(authorization.issuer_signature))
+    def verify(self, signed: SignedIssueAgentAuthorization) -> None:
+        """Reject any envelope the trusted issuer did not mint."""
+        if not isinstance(signed, SignedIssueAgentAuthorization):
+            raise IssueAgentIssuerError("issuer verification requires a parsed signed authorization")
+        signature = bytes.fromhex(_canonical_issuer_signature(signed.issuer_signature))
         try:
             Ed25519PublicKey.from_public_bytes(self._public_key_bytes).verify(
                 signature,
-                authorization.signed_message,
+                signed.authorization.signed_message,
             )
         except InvalidSignature:
             raise IssueAgentIssuerError(
@@ -261,7 +297,7 @@ class IssueAgentAuthorizationVerifier:
 
 @dataclass(frozen=True, slots=True)
 class IssueAgentAuthorization:
-    """One parsed ``hunter-issue-agent-authorization-v2`` document.
+    """One parsed ``hunter-issue-agent-authorization-v1`` payload.
 
     Every field is untrusted caller data except the schema version and the label,
     both of which must equal the repository's governed constants. The document's
@@ -279,7 +315,6 @@ class IssueAgentAuthorization:
     authorization_label: str
     issue_updated_at: str
     authorization_id: str
-    issuer_signature: str
     schema_version: str = ISSUE_AGENT_AUTHORIZATION_SCHEMA_VERSION
 
     @property
@@ -299,9 +334,13 @@ class IssueAgentAuthorization:
 
     @property
     def signed_message(self) -> bytes:
-        """The exact bytes the issuer signed and the identity digest covers."""
-        canonical = _canonical_json(self.canonical_claims).encode("utf-8")
-        return ISSUE_AGENT_AUTHORIZATION_SIGNATURE_DOMAIN + canonical
+        """The exact bytes the issuer signature covers: this whole payload.
+
+        Signing the complete payload rather than only its claims means the
+        carried ``authorization_id`` and ``schema_version`` are covered too, so
+        no field of the canonical v1 document can be altered in transit.
+        """
+        return ISSUE_AGENT_AUTHORIZATION_SIGNATURE_DOMAIN + _canonical_json(asdict(self)).encode("utf-8")
 
     @property
     def derived_authorization_id(self) -> str:
@@ -311,7 +350,7 @@ class IssueAgentAuthorization:
         fields can recompute this digest, so it is never evidence of who minted
         the document -- that is what the issuer signature is for.
         """
-        digest = hashlib.sha256(self.signed_message).hexdigest()
+        digest = hashlib.sha256(_canonical_json(self.canonical_claims).encode("utf-8")).hexdigest()
         return f"{ISSUE_AGENT_AUTHORIZATION_IDENTITY_PREFIX}:{digest}"
 
     @property
@@ -330,30 +369,17 @@ class IssueAgentAuthorization:
 
     @classmethod
     def from_json(cls, document: str | bytes) -> IssueAgentAuthorization:
-        """Parse one bounded exact-schema authorization document or fail closed."""
-        if isinstance(document, bytes):
-            if len(document) > _MAX_AUTHORIZATION_BYTES:
-                raise IssueAgentAuthorizationError("authorization document is too large")
-            try:
-                text = document.decode("utf-8")
-            except UnicodeDecodeError:
-                raise IssueAgentAuthorizationError("authorization document must be UTF-8 JSON") from None
-        elif isinstance(document, str):
-            if len(document.encode("utf-8")) > _MAX_AUTHORIZATION_BYTES:
-                raise IssueAgentAuthorizationError("authorization document is too large")
-            text = document
-        else:
-            raise IssueAgentAuthorizationError("authorization document must be str or bytes")
+        """Parse one bare canonical v1 payload.
 
-        try:
-            decoded = json.loads(text, object_pairs_hook=_reject_duplicate_json_keys)
-        except _DuplicateJSONKeyError:
-            raise IssueAgentAuthorizationError("authorization document contains duplicate JSON keys") from None
-        except (RecursionError, ValueError):
-            raise IssueAgentAuthorizationError("authorization document is malformed JSON") from None
-        if not isinstance(decoded, dict):
-            raise IssueAgentAuthorizationError("authorization document must be a JSON object")
+        This is the ADR-named document, and parsing it proves nothing about who
+        minted it, so it is deliberately *not* an execution entry point. The
+        composition root accepts only ``SignedIssueAgentAuthorization``.
+        """
+        return cls._from_mapping(_decode_bounded_json_object(document))
 
+    @classmethod
+    def _from_mapping(cls, decoded: dict[str, Any]) -> IssueAgentAuthorization:
+        """Validate one exact-schema payload mapping or fail closed."""
         expected = {
             "repository",
             "issue_number",
@@ -364,7 +390,6 @@ class IssueAgentAuthorization:
             "authorization_label",
             "issue_updated_at",
             "authorization_id",
-            "issuer_signature",
             "schema_version",
         }
         if set(decoded) != expected:
@@ -383,12 +408,71 @@ class IssueAgentAuthorization:
                 raise IssueAgentAuthorizationError(f"authorization {name} must be non-empty")
         if decoded["authorization_label"] != ISSUE_AGENT_AUTHORIZATION_LABEL:
             raise IssueAgentAuthorizationError("authorization label is not the governed execution label")
-        _canonical_issuer_signature(decoded["issuer_signature"])
 
         authorization = cls(**decoded)
         if authorization.authorization_id != authorization.derived_authorization_id:
             raise IssueAgentAuthorizationError("authorization identity does not bind the exact authorization claims")
         return authorization
+
+
+@dataclass(frozen=True, slots=True)
+class SignedIssueAgentAuthorization:
+    """One canonical v1 payload plus the proof that the trusted issuer minted it.
+
+    This is the only executable form. The payload it carries is exactly the
+    document accepted ADR 0036 s7 names, unchanged and unredefined; the proof of
+    origin lives out here in the transport, so authentication was added without
+    touching the meaning of the inner schema.
+
+    The signature covers the whole payload -- every claim, its
+    ``authorization_id`` and its ``schema_version`` -- so no field of the
+    canonical document can be altered in transit, and a signature minted for one
+    payload cannot be transplanted onto another.
+    """
+
+    authorization: IssueAgentAuthorization
+    issuer_signature: str
+    schema_version: str = ISSUE_AGENT_SIGNED_AUTHORIZATION_SCHEMA_VERSION
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.authorization, IssueAgentAuthorization):
+            raise IssueAgentAuthorizationError("signed authorization must carry a canonical v1 payload")
+        if self.schema_version != ISSUE_AGENT_SIGNED_AUTHORIZATION_SCHEMA_VERSION:
+            raise IssueAgentAuthorizationError("unknown signed authorization schema version")
+        _canonical_issuer_signature(self.issuer_signature)
+
+    @classmethod
+    def from_json(cls, document: str | bytes) -> SignedIssueAgentAuthorization:
+        """Parse one bounded exact-schema signed authorization or fail closed.
+
+        A bare ``hunter-issue-agent-authorization-v1`` payload fails here on the
+        outer field set: it is no longer an executable document, and the failure
+        is a schema mismatch rather than a missing-signature afterthought.
+        """
+        decoded = _decode_bounded_json_object(document)
+        expected = {"authorization", "issuer_signature", "schema_version"}
+        if set(decoded) != expected:
+            raise IssueAgentAuthorizationError("signed authorization document schema mismatch")
+        if decoded["schema_version"] != ISSUE_AGENT_SIGNED_AUTHORIZATION_SCHEMA_VERSION:
+            raise IssueAgentAuthorizationError("unknown signed authorization schema version")
+        if not isinstance(decoded["issuer_signature"], str):
+            raise IssueAgentIssuerError("issuer_signature must be text")
+        payload = decoded["authorization"]
+        if not isinstance(payload, dict):
+            raise IssueAgentAuthorizationError("signed authorization must carry a JSON object payload")
+        return cls(
+            authorization=IssueAgentAuthorization._from_mapping(payload),
+            issuer_signature=decoded["issuer_signature"],
+        )
+
+    def to_json(self) -> str:
+        return _canonical_json(
+            {
+                "authorization": asdict(self.authorization),
+                "issuer_signature": self.issuer_signature,
+                "schema_version": self.schema_version,
+            }
+        )
 
 
 def issue_agent_task_text(authorization: IssueAgentAuthorization) -> str:
@@ -821,14 +905,20 @@ class GovernedIssueAgentExecutionService:
         )
 
     def execute(self, document: str | bytes) -> IssueAgentExecutionReceipt:
-        """Run one authorized Issue through the existing governed runtime."""
-        authorization = IssueAgentAuthorization.from_json(document)
+        """Run one signed authorization through the existing governed runtime.
+
+        The only accepted input is a ``hunter-issue-agent-signed-authorization-v1``
+        envelope. A bare canonical v1 payload is refused on the outer schema, so
+        an unsigned document has no execution path here at all.
+        """
+        signed = SignedIssueAgentAuthorization.from_json(document)
         # Trusted origin first. The identity digest proves only that the claims
         # are self-consistent, and every field it covers is public, so it is not
         # evidence that the owner performed the `issues:labeled` event. Only the
         # issuer signature proves that, and nothing durable or external happens
         # until it verifies.
-        self._issuer_verifier.verify(authorization)
+        self._issuer_verifier.verify(signed)
+        authorization = signed.authorization
         if authorization.repository != self._configuration.repository:
             raise IssueAgentAuthorizationError("authorization names a different repository than this deployment")
         if authorization.authorized_by != self._configuration.owner_login:
@@ -891,6 +981,7 @@ __all__ = [
     "ISSUE_AGENT_EXECUTION_RECEIPT_SCHEMA_VERSION",
     "ISSUE_AGENT_PROFILE_REGISTRY",
     "ISSUE_AGENT_ROUTE_REGISTRY",
+    "ISSUE_AGENT_SIGNED_AUTHORIZATION_SCHEMA_VERSION",
     "ISSUE_AGENT_TASK_KEY",
     "ISSUE_AGENT_VERIFYING_KEY_ENV",
     "IssueAgentAuthorization",
@@ -911,6 +1002,7 @@ __all__ = [
     "SOURCE_HANDLING_GENESIS_RULE_SHA256_ENV",
     "SOURCE_HANDLING_VERIFICATION_KEY_ENV",
     "SOURCE_HANDLING_VERIFICATION_KEY_SHA256_ENV",
+    "SignedIssueAgentAuthorization",
     "SourceHandlingBlockedError",
     "build_production_source_handling_resolver",
     "issue_agent_document_id",
