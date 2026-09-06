@@ -841,16 +841,18 @@
     {
       "id": "DFF-017",
       "title": "candidate-configuration-unrunnable-in-the-trusted-environment",
-      "invariant": "A candidate's own configuration may not require tooling that the trusted default-branch controller's environment has no reason to provide. The trusted controller executes the repository's gate commands inside the candidate tree under the trusted environment, so a requirement the candidate declares for itself must be one that environment can already satisfy.",
+      "invariant": "A candidate's own configuration may not require tooling that the trusted default-branch controller's environment has no reason to provide, and the trusted environment may not execute a lane it cannot honour. The trusted controller executes the repository's gate commands inside the candidate tree under the trusted environment, so a requirement the candidate declares for itself must be one that environment can already satisfy, and any optional-runner requirement the trusted environment declares for itself must be one it provisions from its own checkout rather than from the candidate's.",
       "applicability": {
         "changed_paths": [
+          ".github/workflows/hunter-trusted-preflight-upgrade.yml",
           "pyproject.toml",
+          "scripts/hunter_defect_prevention_preflight.py",
           "scripts/hunter_pr_preflight.py"
         ],
-        "rationale": "The repository's own gate configuration and gate definition are where a candidate can declare a requirement that only its own environment satisfies, while the trusted controller runs the same commands under another. The dependency pin files are deliberately excluded: adding a pin is not the defect, requiring it from a configuration the trusted environment must execute under is."
+        "rationale": "The repository's own gate configuration and gate definition are where a candidate can declare a requirement that only its own environment satisfies. The trusted workflow and the trusted controller are the mirror image: they define the environment that has to execute it, and are where a declared lane can be separated from the provisioning that makes it runnable. The dependency pin files are deliberately excluded: adding a pin is not the defect, requiring it from a configuration the trusted environment must execute under is."
       },
       "prevention": {
-        "mechanism": "Accelerators and other optional-plugin requirements are declared by the hosted boundaries that install them, never by the repository configuration the trusted controller has to execute under. Three properties are asserted directly rather than the flag spelling: the repository configuration declares no such requirement, a lane that declares one installs the plugin first under the pinned constraints, and an unavailable plugin fails the command line loudly instead of silently running something weaker than the lane that was asked for.",
+        "mechanism": "Accelerators and other optional-plugin requirements are declared by the boundaries that install them, never by the repository configuration the trusted controller has to execute under. Asserted as properties rather than as flag spelling: the repository configuration declares no such requirement; a lane that declares one installs the plugin first under the pinned constraints; an unavailable plugin fails the command line loudly instead of silently running something weaker than the lane that was asked for; the trusted controller refuses, before any gate runs, both a lane its environment cannot honour and a lane that is not exactly the canonical distribution-only token sequence -- the only surface on which a parallel proof could come to select fewer tests than the serial one; and the trusted controller reads the candidate's own pytest configuration from every source pytest reads it from and refuses a worker or selection option declared there, so the rule no longer rests only on a test the candidate itself owns.",
         "boundary": "review"
       },
       "regression_evidence": [
@@ -858,11 +860,24 @@
         "tests/test_validation_stage_contract.py::test_the_parallel_lane_provisions_its_worker_plugin_before_using_it",
         "tests/test_validation_stage_contract.py::test_an_unavailable_worker_plugin_fails_loudly_rather_than_running_serially",
         "tests/test_validation_stage_contract.py::test_the_parallel_lane_changes_distribution_and_never_test_selection",
-        "tests/test_validation_stage_contract.py::test_every_canonical_preflight_step_declares_the_same_parallel_lane"
+        "tests/test_validation_stage_contract.py::test_every_canonical_preflight_step_declares_the_same_parallel_lane",
+        "tests/test_issue_419_trusted_parallel_lane.py::test_the_trusted_workflow_provisions_the_runner_by_name_from_its_own_checkout",
+        "tests/test_issue_419_trusted_parallel_lane.py::test_the_trusted_workflow_verifies_the_runner_before_declaring_the_lane",
+        "tests/test_issue_419_trusted_parallel_lane.py::test_a_missing_trusted_runner_fails_the_declared_lane_closed",
+        "tests/test_issue_419_trusted_parallel_lane.py::test_a_missing_trusted_runner_fails_verification_loudly",
+        "tests/test_issue_419_trusted_parallel_lane.py::test_a_lane_that_is_not_the_canonical_distribution_set_is_refused",
+        "tests/test_issue_419_trusted_parallel_lane.py::test_the_trusted_lane_selects_exactly_what_the_serial_lane_selects",
+        "tests/test_issue_419_trusted_parallel_lane.py::test_no_candidate_file_can_reach_the_trusted_runner_provisioning",
+        "tests/test_issue_419_trusted_parallel_lane.py::test_a_candidate_addopt_that_rewrites_its_own_validation_is_refused",
+        "tests/test_issue_419_trusted_parallel_lane.py::test_a_candidate_addopt_that_changes_nothing_selective_is_allowed",
+        "tests/test_issue_419_trusted_parallel_lane.py::test_the_declaration_is_found_in_every_configuration_source_pytest_reads",
+        "tests/test_issue_419_trusted_parallel_lane.py::test_a_declaration_bound_to_another_tool_or_section_is_not_this_rule",
+        "tests/test_issue_419_trusted_parallel_lane.py::test_unreadable_candidate_pytest_configuration_fails_closed"
       ],
       "lifecycle": "regression-tested",
       "sources": [
-        "Issue #415 Trusted Candidate Preflight Validation failure on PR #416 head 327242b (2026-09-06)"
+        "Issue #415 Trusted Candidate Preflight Validation failure on PR #416 head 327242b (2026-09-06)",
+        "Issue #419 trusted-lane parallelization (2026-09-06)"
       ]
     }
   ]

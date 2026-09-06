@@ -151,16 +151,58 @@ narrow reuse, never widen it.
 ## Where the parallel lane is declared
 
 The full repository suite runs with `-n auto --dist loadfile`, declared as
-`PYTEST_ADDOPTS` on the hosted steps that invoke the canonical preflight — not
-in the repository's own `[tool.pytest.ini_options]`.
+`PYTEST_ADDOPTS` by each boundary that runs it — not in the repository's own
+`[tool.pytest.ini_options]`.
 
 That placement is load-bearing, not cosmetic. The trusted default-branch
 controller validates a candidate by executing *this repository's* gate commands
 inside the candidate tree using the **trusted** environment. A candidate that
 pinned worker flags in its own pytest configuration would be demanding a plugin
-that environment has no reason to have installed, and would make its own trusted
+of an environment it does not provision, and would make its own trusted
 validation unrunnable. The accelerator therefore belongs to the boundaries that
 install it.
+
+Issue [#419](https://github.com/fafa33/Project-Hunter/issues/419) made
+`Trusted Candidate Preflight Validation` one of those boundaries. It installs
+`pytest-xdist` by name under `requirements/ci-constraints.txt`, verifies the
+runner with `hunter_defect_prevention_preflight.py --verify-parallel-runner`,
+and only then declares the lane on the gate-chain step. Every one of those comes
+from the trusted default-branch checkout at the workspace root; the candidate is
+read into `./candidate` and never installed from, so no candidate manifest, pin,
+pytest configuration or plugin can change which runner executes its validation,
+or whether one exists at all.
+
+Two refusals keep that honest, both in the trusted controller and both before
+any gate runs:
+
+| Declared lane | Trusted environment | Result |
+| --- | --- | --- |
+| canonical `-n auto --dist loadfile` | runner provisioned | the parallel lane runs |
+| canonical | runner absent | refused — the job fails, it does not run serially |
+| anything else | any | refused — the only surface on which selection could narrow |
+| empty | any | the serial lane runs, unchanged |
+
+The last row is not a fallback. Nothing may turn a declared lane into a
+different execution under the same proof name; but parallelism is a speed
+property and never a proof property, so a boundary that declares nothing simply
+runs the same gate chain over the same tests more slowly.
+
+Proof scope is unchanged by construction, not by inspection: the gate commands
+in `TRUSTED_CANDIDATE_QUALITY_GATES` are untouched, so the executed command line
+is byte-identical to the serial one and the only difference is an environment
+variable that carries distribution controls exclusively.
+
+The other end of that surface is the candidate's own pytest configuration, which
+the trusted `pytest` gate reads because it runs inside the candidate tree. The
+trusted controller now reads it first, from every source pytest reads it from —
+`pyproject.toml`, `pytest.ini`, `tox.ini`, `setup.cfg` — and refuses a candidate
+that declares a worker option (`-n`, `--numprocesses`, `--dist`) or a selection
+option (`-k`, `-m`, `--ignore`, `--deselect`, `--lf`, `-x`, `--maxfail`, …) in
+its own `addopts`. The first would demand a runner of an environment the
+candidate does not provision; the second would quietly narrow the suite the
+trusted proof is supposed to be a proof of. Everything else a project legitimately
+puts in `addopts` — reporting, strictness, durations — stays allowed, and the
+rule no longer rests only on a test the candidate itself owns.
 
 `loadfile` keeps every test in a file on one worker, so intra-file ordering and
 module-scoped state behave exactly as they do serially and only whole files run
@@ -182,20 +224,18 @@ on one worker; several other CLI-execution tests are 18-28s each. Splitting
 those files, or making the CLI fixtures cheaper, is what would move the floor
 further — not more workers.
 
-Two hosted jobs remain outside this lane and are known, deliberate exceptions:
+**Trusted Candidate Preflight Validation** was the one hosted job left outside
+this lane, running serially because the trusted environment did not yet own the
+worker plugin. Issue #419 gave it that ownership, and it now runs the same
+declaration. Measured on the same suite, hosted:
 
-- **Trusted Candidate Preflight Validation** runs the suite serially (about
-  10m30 hosted) because it executes the candidate under the *trusted*
-  environment, which has no reason to carry a worker plugin the candidate's own
-  environment supplies. It can adopt the same `PYTEST_ADDOPTS` declaration only
-  once the plugin is a trusted dependency — that is, after this contribution
-  merges — so it is a sequenced follow-up rather than something this
-  contribution can do to itself.
-- **CI reuse** is opportunistic, for the concurrency reason above.
+| | Serial (PR #418, head `76d16e0`) | Parallel (Issue #419) |
+| --- | --- | --- |
+| Pytest gate | 529.8s over 3,747 tests | see the PR's own run |
+| gate chain step | 566s | |
+| job wall-clock | 599s | |
 
-Neither is on the path this contribution set out to shorten: a candidate is
-reviewable once the hosted branch preflight and `Quality Gates` are green, which
-now happens in about five minutes.
+**CI reuse** remains opportunistic, for the concurrency reason above.
 
 ## What no stage may do
 

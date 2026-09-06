@@ -46,10 +46,13 @@ testpaths = ["tests"]
 # Issue #415: the parallel lane is deliberately NOT pinned here. The trusted
 # default-branch controller executes this repository's `pytest` command inside a
 # candidate tree using the *trusted* environment, so a candidate that pinned
-# worker flags in its own pytest configuration would make its own trusted
-# validation unrunnable -- the candidate would be demanding a plugin the trusted
-# environment has no reason to have installed. The hosted jobs that own the full
-# lane carry PYTEST_ADDOPTS instead; see docs/VALIDATION_STAGE_CONTRACT.md.
+# worker flags in its own pytest configuration would be demanding a plugin of an
+# environment it does not provision -- and would make its own trusted validation
+# unrunnable. Each boundary that runs the full suite in parallel declares the
+# lane itself, as PYTEST_ADDOPTS, and installs the runner first. Issue #419 made
+# the trusted default-branch controller one of those boundaries: it owns and
+# provisions the runner for the candidate it validates, which is precisely why
+# the declaration still may not live here. See docs/VALIDATION_STAGE_CONTRACT.md.
 
 [tool.ruff]
 line-length = 120
