@@ -139,13 +139,27 @@ def test_failed_governance_status_blocks(monkeypatch):
     assert "Hunter Governance Review=failure" in decision.description
 
 
-def test_stale_governance_pending_does_not_lock_resolved_mergeability(monkeypatch):
+def test_governance_pending_blocks_even_on_resolved_mergeability(monkeypatch):
+    """Issue #417: a governance wait is a real dependency, not a stale artefact.
+
+    This previously passed such a status through, on the premise that the
+    governance controller could publish pending only while GitHub mergeability
+    was unresolved -- something readiness can re-observe for itself. Governance
+    now also publishes pending to mean "the required trusted exact-head proof is
+    still running", which readiness cannot derive, so passing it would let a
+    candidate reach ready-to-merge on a proof that does not yet exist.
+
+    Blocking here cannot become permanent: the governance controller republishes
+    on every event and on its schedule, so a wait that has since resolved is
+    replaced rather than left behind.
+    """
     _install_green(monkeypatch)
     monkeypatch.setattr(core, "latest_status", lambda _sha, _context: {"id": 99, "state": "pending"})
 
     _sha, decision = core.decide(501)
 
-    assert decision.state == "success"
+    assert decision.state == "pending"
+    assert core.GOVERNANCE_CONTEXT in decision.description
 
 
 def test_shared_head_waits_for_unique_attribution(monkeypatch):

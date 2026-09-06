@@ -2,75 +2,45 @@
   "claims": {
     "acceptance_criteria": [
       {
-        "criterion": "A sequence diagram / executable contract documents exactly which boundary owns: focused dev verification, pre-push safety, hosted full exact-head proof, candidate admission, PR integration compatibility, and merge readiness.",
-        "evidence": "docs/VALIDATION_STAGE_CONTRACT.md carries the mermaid sequence diagram and the ownership table; docs/VALIDATION_STAGE_CONTRACT.json is the machine-readable form declaring owner, boundary, proof, full_repository_suite policy and a must_not per stage. tests/test_validation_stage_contract.py::test_contract_declares_the_whole_pipeline_in_order pins all seven stages in pipeline order, and ::test_documented_contract_covers_every_declared_stage binds the prose to the manifest.",
-        "id": "AC-1",
+        "criterion": "Do not weaken candidate admission or trusted-proof requirements.",
+        "evidence": "No requirement is removed. The only new outcome is pending, which is returned in place of a failure and never in place of a success. Every prior failure branch -- terminated run, foreign head, wrong workflow name or path, wrong event, unbound run, untrusted publisher, malformed status, absent run -- is preserved and independently regressed in tests/test_issue_417_governance_waiting_state.py.",
+        "id": "R-1",
         "verdict": "satisfied"
       },
       {
-        "criterion": "No normal candidate can execute the same full repository Pytest suite more than once for the same immutable candidate identity unless the validation definition/configuration changed.",
-        "evidence": "Exactly one stage may declare full_repository_suite=always, asserted by ::test_exactly_one_stage_owns_the_authoritative_full_repository_proof. Pre-push runs PUSH_SAFETY_GATES, which excludes the Pytest gate (::test_pre_push_declares_and_runs_no_full_repository_suite). Locally, --reuse-receipt turned a second full lane on the unchanged identity from 416s into 0.078s. CI reuses the trusted proof when the integration tree is byte-identical.",
-        "id": "AC-2",
+        "criterion": "Do not treat absence of proof as success.",
+        "evidence": "read_trusted_upgrade_status returns success only on the unchanged completed-and-verified path. A genuinely absent run still returns missing, which every call site maps to failure; test_no_eligible_trusted_run_at_all_stays_missing and test_a_completed_eligible_run_without_a_status_is_not_waiting pin both halves.",
+        "id": "R-2",
         "verdict": "satisfied"
       },
       {
-        "criterion": "CLAUDE.md and the repository agent instruction surface no longer instruct an agent to perform a redundant manual full preflight immediately before a hook that performs the same proof.",
-        "evidence": "Both surfaces now direct focused verification during implementation and say to push through the hook rather than rehearse it. The canonical command string is retained in a hosted-authority context, which keeps PRH-002 (tests/test_hunter_pr_preflight.py::test_agent_instructions_reference_machine_contract_surfaces) and tests/test_recent_preflight_defect_registry.py::test_agents_reference_canonical_preflight_command satisfied without restoring the redundant instruction. Both surfaces additionally point at the stage contract, asserted by ::test_agent_instruction_surfaces_point_at_the_stage_contract.",
-        "id": "AC-3",
+        "criterion": "Distinguish at least these states deterministically: eligible trusted run in progress -> waiting/pending; eligible trusted run completed successfully and exact-head proof valid -> success; eligible trusted run completed with failure -> failure; proof malformed/stale/foreign-head/mismatched -> failure; no eligible trusted run/proof path exists where one is required -> failure.",
+        "evidence": "All five are asserted directly. Waiting is decided from run status in TRUSTED_RUN_ACTIVE_STATES for a run that passes the same identity predicate the completed proof must pass, so the decision is a function of observable run state rather than of message text.",
+        "id": "R-3",
         "verdict": "satisfied"
       },
       {
-        "criterion": "Pre-push still blocks all currently protected pre-network rewrite/provenance defects.",
-        "evidence": "enforce_pre_push retains clean tree, exact-head SHA binding, writer provenance over the governed range, connector receipt freshness, governance-evidence rename refusal, preflight-mode validity and the post-lane HEAD/tree recheck, in that order. tests/test_hunter_pre_push.py::test_pre_push_still_blocks_every_pre_network_rewrite_defect fires each provenance check in turn and asserts the order they are reached; the whole of tests/test_issue_412_prevention_gate.py (117 fixtures) passes unchanged.",
-        "id": "AC-4",
+        "criterion": "Avoid periodic re-publication of identical red failure messages while the same trusted run is merely in progress.",
+        "evidence": "While the same head and same active run persist, the controller publishes pending with a stable description instead of a red failure, so repeated governance runs no longer emit a new red signal for an unchanged, non-defective condition.",
+        "id": "R-4",
         "verdict": "satisfied"
       },
       {
-        "criterion": "Candidate Admission continues to fail closed without trusted hosted proof for the exact candidate HEAD.",
-        "evidence": "scripts/hunter_candidate_admission.py and hunter_governance_review_v2.candidate_admission are unmodified by this candidate. Observed live on this PR: Hunter Governance Review published failure on heads 327242b, 25b0745, 46e3ecd and d778351 while the trusted exact-head proof was absent, and this candidate has never been admitted.",
-        "id": "AC-5",
+        "criterion": "Status text should name the dependency clearly, e.g. Waiting for trusted exact-head preflight proof.",
+        "evidence": "TRUSTED_PROOF_WAITING_DESCRIPTION is exactly that string and is pinned by test_the_waiting_description_names_the_dependency. It is a constant consumed by the decision, never parsed by it.",
+        "id": "R-5",
         "verdict": "satisfied"
       },
       {
-        "criterion": "Any proof reuse is keyed to immutable content identity plus a deterministic validation-definition identity; stale/mismatched receipts are refused.",
-        "evidence": "scripts/hunter_validation_receipt.py binds content identity (the Git tree object), definition identity (SHA-256 over the declared DEFINITION_PATHS plus the gate chain) and toolchain identity. tests/test_validation_proof_reuse.py parametrises every DEFINITION_PATHS entry to prove each one moves the identity, and ::test_gate_chain_is_part_of_the_definition_identity proves a gate-list edit retires prior proof even when no file moved.",
-        "id": "AC-6",
+        "criterion": "Add deterministic tests covering the state transitions above, including the PR #416 scenario where governance was red only because the trusted run had not finished yet.",
+        "evidence": "tests/test_issue_417_governance_waiting_state.py adds 31 fixtures including test_the_same_head_succeeds_once_the_trusted_proof_lands, which drives the PR #416 sequence on byte-identical candidate content: waiting while the run is active, then success once the proof exists. Thirteen of the new fixtures were confirmed to fail against the pre-fix source and pass against the repair.",
+        "id": "R-6",
         "verdict": "satisfied"
       },
       {
-        "criterion": "A no-op push / Everything up-to-date path performs no synthetic full validation and creates no empty commit.",
-        "evidence": "tests/test_validation_stage_contract.py::test_no_op_push_runs_no_validation_at_all makes _run_git, _run_push_safety_lane and subprocess.run raise on call and asserts enforce_pre_push returns 0 for an empty and a whitespace-only update list; ::test_deleting_a_remote_branch_runs_no_validation covers the zero-SHA delete refspec. No empty commit exists in this range: every commit carries substantive content.",
-        "id": "AC-7",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "Tests demonstrate changed HEAD, changed validation definition, stale receipt, malformed receipt, and foreign-HEAD proof all fail closed.",
-        "evidence": "tests/test_validation_proof_reuse.py covers each named case directly: changed head, foreign head, changed definition, changed toolchain, stale, future-dated, non-passing result, five malformed document shapes, missing field, naive timestamp, unknown lane, unreadable and absent receipt files. The CI resolver is covered for divergent integration tree, missing/unsuccessful/incomplete/foreign-head/other-workflow/non-push runs, malformed payloads, unavailable git evidence and a toolchain that does not match its pin.",
-        "id": "AC-8",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "Existing full test suite remains green.",
-        "evidence": "Hosted Quality Gates on head 25b0745: 3710 passed in 250.80s across four workers. Hunter Pre-PR Preflight and Trusted Candidate Preflight Validation both concluded success on 25b0745 and 46e3ecd, the latter running the same suite serially under the trusted environment.",
-        "id": "AC-9",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "Benchmark evidence is recorded from before and after on representative repository state. Target: final code change -> reviewable PR normally <= 5\u20138 minutes hosted wall-clock, or document the measured limiting factor if infrastructure prevents that target.",
-        "evidence": "Hunter / Pre-PR Preflight on this same branch: 10m00s at base afcee3c, 5m13s at 25b0745. Hosted Pytest 536.55s/3628 to 250.80s/3710. Local 4 vCPU 416.2s serial to 126.0s parallel. docs/VALIDATION_STAGE_CONTRACT.md records the limits rather than rounding them away: the loadfile floor is the slowest single file, the trusted job stays serial until the plugin is a trusted dependency, and CI reuse is opportunistic.",
-        "id": "AC-10",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "No accepted ADR is modified unless independent architecture review proves a binding architectural conflict. Prefer an implementation/governance optimization under existing authority.",
-        "evidence": "No file under docs/ADR/ is in the reviewed change set. The contribution introduces no new authority or registry: the stage contract documents ownership that already existed, and the reuse authority is a derived, non-durable identity check. The only policy edit adds two root_of_trust_paths entries, which narrows the connector grant rather than widening it.",
-        "id": "AC-11",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "No merge, auto-merge, or force-push from this contribution.",
-        "evidence": "PR #416 is Draft and unmerged; auto-merge was never enabled. Every push to origin/issue-415-validation-performance has been fast-forward (afcee3c..327242b..25b0745..46e3ecd..d778351). One amend occurred before the branch was ever pushed, so no published history was rewritten.",
-        "id": "AC-12",
+        "criterion": "No auto-Ready, auto-merge, force-push, or weakening of human merge approval.",
+        "evidence": "No readiness, promotion or merge authority is added. The merge-readiness change is strictly restrictive: a governance pending that previously passed now blocks. The candidate-admission controller leaves a waiting head untouched rather than promoting it. The push was fast-forward through the real pre-push boundary.",
+        "id": "R-7",
         "verdict": "satisfied"
       }
     ],
@@ -88,233 +58,138 @@
       "transaction-snapshot-consistency"
     ],
     "base_ref": "main",
-    "base_sha": "afcee3c231c6b8d1652874277f25d293ca7936d4",
+    "base_sha": "765774fbb777ae8dbf844fb401763eff1d2bf383",
     "defect_families": [
       {
-        "evidence": "The candidate mints one new proof object, and it cannot be replayed: a receipt binds the exact Git tree, the definition identity and the toolchain, and verify() refuses on any mismatch before any acceptance branch is reached. There is no path in verify() that accepts a receipt on the strength of something the receipt itself asserts. The head binding additionally stops two heads carrying an identical tree from borrowing each other's proof (::test_foreign_head_proof_fails_closed). The connector authorization receipt is untouched by this candidate.",
+        "evidence": "No authorization is minted, consumed or re-aimed. The change reads run state and returns a verdict; the trusted proof's own authorization semantics are untouched, and the identity predicate that binds a run to one exact head and one pull request is now shared rather than duplicated, so it cannot drift on one path only.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "A hand-edited receipt is detectable because none of its identities are trusted: each is recomputed by the verifier from content it already holds, so an edited receipt can only narrow reuse, never widen it. The CI resolver never reads a candidate-supplied artifact at all -- its anchors are Git content addressing and the Actions run record, neither of which a writer can forge. Receipts are git-ignored, so no forged receipt can travel in a candidate.",
+        "evidence": "Nothing new is written or trusted from candidate-supplied content. Run status, name, path, event, head_sha and pull_requests all come from the Actions API read by the trusted default-branch controller; a candidate cannot forge them, and no decision reads message text.",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "No channel's proof obligation changed. The trusted hosted exact-head proof stays required for every candidate, which is why no PREFLIGHT_OWNED_PATHS entry was added for the new files: require_for_all_candidates already covers them. tests/test_validation_proof_reuse.py::test_reuse_names_the_same_trusted_workflow_candidate_admission_requires pins the reuse resolver's workflow name and path to the trusted controller's constants so the two cannot drift into meaning different proofs.",
+        "evidence": "No channel's proof obligation changed. Both the connector-origin and ordinary-candidate branches still require the trusted hosted exact-head proof; only the reported state while that proof is legitimately in flight changed, from failure to pending.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "Every commit in afcee3c..d778351 carries author and committer Claude <noreply@anthropic.com>, the identity bound to login 'claude' in writer_identity_binding; agent attribution is carried in Co-Authored-By and Claude-Session trailers only. _validate_writer_provenance still runs at the push boundary before any network mutation and was exercised on each of the four pushes.",
+        "evidence": "Both commits in this range carry author and committer Claude <noreply@anthropic.com>, the identity bound to login 'claude' in writer_identity_binding, with agent attribution confined to trailers. The push boundary validated the governed range before any remote mutation.",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "The range is four commits, each pushed as it was made, and each is a substantive content change: no intermediate commit is stranded and no rewind or force-push was needed at any point. The one amend happened before the branch existed on the remote.",
+        "evidence": "Two substantive commits, published by ordinary fast-forward pushes. No commit is empty, no rewind or force-push was performed, and no intermediate commit is stranded.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "_validate_receipt_freshness is unchanged and still runs before the lane. This candidate writes no connector authorization receipt, so the inherited-receipt path applies and correctly makes no claim about this range. The separately introduced validation receipt is deliberately not a published artifact: it is git-ignored, so it can never be the stale receipt this family is about, and recording it is best-effort so a cache failure cannot turn a green run red.",
+        "evidence": "This candidate writes no connector authorization receipt, so the inherited-receipt path applies and makes no claim about this range. _validate_receipt_freshness is unmodified and ran at the push boundary.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "verify_pre_ready_hostile_review is unmodified and still gates admission. This review is the artifact that family requires: recorded against the exact base->HEAD content, covering all eleven applicable families and all twelve Issue #415 acceptance criteria, with no unresolved blocking finding. Its correct operation was observed live -- it blocked this very candidate while the inherited Issue #390 review was on the branch.",
+        "evidence": "verify_pre_ready_hostile_review is unmodified and still gates admission ahead of the trusted-proof dependency. This review is the artifact it requires, recorded against the exact base->HEAD content; test_a_real_blocker_alongside_an_active_run_is_failure_not_waiting proves a stale review still outranks an active trusted run.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "No prerequisite reporting path was changed. The new CI resolver never publishes a status; it emits a step output and always exits 0, so an unavailable prerequisite makes CI run the full lane rather than publish a spurious failure. Observed live on this PR: Hunter Governance Review reported the absent trusted proof while it was still running, then advanced to the next gate once it landed.",
+        "evidence": "This family recurred and is the subject of the change. The tri-state existed and propagated correctly, but the evidence source did not: the trusted workflow publishes its status from its final job, so an absent status was read as an absent proof path for the entire time the proof was being produced. The family's invariant and prevention mechanism now state that 'still running' is decided from observable run state for the exact head rather than from the presence of a published status, and five new regressions are declared. Adversarially probed: unavailable and malformed run evidence fail closed rather than reporting a wait, an ineligible lookalike run earns no wait on any of the four identity fields, an unbound run earns none, and a concurrent independent blocker outranks the wait.",
         "family": "DFF-014",
-        "outcome": "clear"
+        "outcome": "repaired"
       },
       {
-        "evidence": "Two families are added and neither overclaims. DFF-016 claims hosted-enforced and carries a resolvable non-test guard reference (hunter_validation_receipt.py::verify) at a machine boundary plus six resolvable regression tests. DFF-017 claims only regression-tested with a review boundary and no guard_reference, which is the honest stage for an invariant whose enforcement is a pytest fixture rather than a gate symbol. PRH-007's explicit_enforcement local field was rewritten to describe what the boundary now actually does rather than leaving a stale claim standing.",
+        "evidence": "No lifecycle stage is raised. DFF-014 remains hosted-enforced with a resolvable non-test guard reference at a machine boundary; only its invariant, mechanism, regression evidence and sources were strengthened to describe what the code now actually enforces.",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "This is the family the candidate introduces, and independent owner review found its invariant was not actually enforced on one of the two production paths: the local reuse caller omitted the head binding while the push boundary supplied it, so content identity alone decided reuse there. Repaired by making the binding non-optional rather than by remembering to pass it -- verify() has no default for head_sha, and reuse_blocker resolves it from the repository when a caller has not. Adversarially probed beyond that: a run of another workflow wearing the same name, a non-push event, a superseded green run for the same head, a foreign-head run, a malformed payload and unavailable git evidence are each refused by their own fixture, and the same-tree different-commit case is now driven through the production caller rather than the verifier.",
+        "evidence": "Validation-proof identity and reuse are untouched by this change. No file under the reuse authority is modified, no proof identity rule is altered, and the #416 validation-performance behaviour is unchanged.",
         "family": "DFF-016",
-        "outcome": "repaired"
-      },
-      {
-        "evidence": "This family exists because the candidate committed the defect and it was caught by the trusted controller on head 327242b. Repaired in 25b0745 by moving the worker flags to the hosted steps that install the plugin, then made enforceable in d778351 by four fixtures covering placement, provisioning, distribution-only semantics and loud failure when the plugin is absent. Each fixture was verified against its own injected violation and only its own.",
-        "family": "DFF-017",
-        "outcome": "repaired"
+        "outcome": "clear"
       }
     ],
     "findings": [
       {
-        "evidence": "Pinning -n auto --dist loadfile in the candidate's own [tool.pytest.ini_options] made the candidate's own trusted validation unrunnable: Trusted Candidate Preflight Validation on head 327242b failed with 'pytest: error: unrecognized arguments: -n --dist loadfile' because the trusted controller executes this repository's gate commands inside the candidate tree under the trusted environment, which has no reason to carry the plugin. Repaired in 25b0745 by moving the lane to PYTEST_ADDOPTS on the two hosted steps that install the pinned dev extra; verified against a clean interpreter carrying only the trusted pins, which collects all 3710 tests with no xdist installed. Registered as DFF-017. Trusted Candidate Preflight Validation has concluded success on every head since.",
+        "evidence": "Merge readiness passed a pending governance status through whenever mergeability was resolved, on the premise that governance could publish pending only while mergeability was unresolved. Issue #417 invalidates that premise: governance now publishes pending to mean the required trusted exact-head proof is still running, which readiness cannot derive for itself, so the shortcut would have let a candidate reach ready-to-merge on a proof that does not yet exist. Repaired by making governance pending block as pending. It cannot become a permanent lock because the governance controller republishes on every event and on its schedule. The test that encoded the old premise was replaced with one that states the new contract and the reason for it, and a paired fixture proves a successful governance status still passes.",
         "id": "F-1",
         "resolution": "resolved",
         "severity": "blocking"
       },
       {
-        "evidence": "DFF-017's first applicability scope listed 'requirements/', which silently widened the pre-ready hostile-review applicable-family set onto the dependency manifests that tests/test_issue_412_prevention_gate.py::test_dependency_manifests_are_deliberately_outside_the_review_scope pins as deliberately out of scope. That pinned fixture caught it. Repaired by narrowing the scope to pyproject.toml and scripts/hunter_pr_preflight.py: adding a pin is not the defect, requiring it from a configuration the trusted environment must execute under is.",
+        "evidence": "Adding the active-run lookup introduced a second GitHub read on the no-status path, which surfaced a pre-existing test fake in tests/test_pr376_prevention_regressions.py that answered every request path with the same status list. The PR #376 invariant is unchanged; its fake now answers each read separately so it keeps testing wrong-PR authorization rather than incidentally exercising the new lookup.",
         "id": "F-2",
         "resolution": "resolved",
-        "severity": "blocking"
+        "severity": "non-blocking"
       },
       {
-        "evidence": "CI proof reuse is opportunistic rather than deterministic: a branch push and its pull-request event fire seconds apart, so Quality Gates usually starts before the proof it could reuse exists and correctly refuses. Recorded in docs/VALIDATION_STAGE_CONTRACT.md rather than fixed, because the two hosted lanes run concurrently and making CI wait for a reusable proof would raise wall-clock time in order to lower it. Reuse still fires on re-runs and whenever the proof lands first, and the invariant it enforces -- identical content is never validated twice -- holds regardless.",
+        "evidence": "The waiting lookup issues one additional Actions API request, and only on the branch where no matching status exists. A completed candidate takes the unchanged path and costs nothing extra; the added cost falls exactly on the window the change exists to describe correctly.",
         "id": "F-3",
         "resolution": "resolved",
         "severity": "non-blocking"
       },
       {
-        "evidence": "report_full_repository_proof_ownership catches broadly and degrades to a NOTE. Deliberate and asserted by review of the call site: the function is informational only, so a failure to report which boundary owns the full proof must never block a push that has already satisfied every enforcing check. It cannot mask an enforcement failure because it runs after the lane and owns no verdict.",
+        "evidence": "The hosted full lane refused head ab6aa64: tests/test_hunter_workflow_state.py::test_all_checks_green_inherits_the_canonical_stale_governance_allowance asserted that a governance status of pending on a mergeable head is green, which is the canonical allowance this Issue removes. scripts/hunter_workflow_state.py derives ALL_CHECKS_GREEN by evaluating a blocker-neutralised observation through the canonical merge-readiness decision precisely so it keeps no copy of that policy, so the evaluator itself needed no change and correctly inherited the new block; only its test expectation and a docstring naming the old allowance were stale. Repaired by stating the inherited behaviour, with a paired fixture proving a successful governance status still reaches MERGE_READY so the block is state-specific rather than a blanket refusal. The full suite passes on the repaired content (3,747 passed).",
         "id": "F-4",
-        "resolution": "resolved",
-        "severity": "non-blocking"
-      },
-      {
-        "evidence": "Independent owner review of head fda1ad0 found that the local validation-receipt reuse path did not bind reuse to the current HEAD: hunter_pr_preflight._reuse_blocker() called receipts.reuse_blocker(root) without a head, reuse_blocker defaulted head_sha to None, and verify() skipped the head comparison, so a receipt recorded for commit A could authorize a different commit B carrying the same tree, definition and toolchain. The finding is correct and the strongest evidence for it was internal: the push boundary passed the head while the preflight caller did not, and this review's own DFF-016 answer had asserted the binding held. Repaired by removing the default -- verify() now requires head_sha, so the binding cannot be dropped by omitting a keyword, and reuse_blocker resolves the head itself when a caller has not established one. The regression drives the production caller with two real commits resolving to the same tree (an amended message), and was confirmed to fail against the pre-fix code and pass against the repair; a second fixture pins that verify() cannot be called without the binding at all. Recorded as RFD-416-001 and folded into DFF-016's prevention mechanism.",
-        "id": "F-5",
         "resolution": "resolved",
         "severity": "blocking"
       }
     ],
-    "issue": "415",
+    "issue": "417",
     "review_target": [
       {
-        "blob_sha": "48e927715c77058579f88fd6fdb5385a38583d2b",
-        "path": "docs/VALIDATION_STAGE_CONTRACT.json",
+        "blob_sha": "64a397060dd4b074aa02eff930f79c8f94b1a286",
+        "path": "tests/test_issue_417_governance_waiting_state.py",
         "previous_path": "",
         "status": "added"
       },
       {
-        "blob_sha": "6e1076a46b4800366a02e1b0e8e8ed9f9d56ec43",
-        "path": "docs/VALIDATION_STAGE_CONTRACT.md",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "5627039d54475b39e18c092e3b004f73118de01b",
-        "path": "scripts/hunter_validation_receipt.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "6a013a6cf8addb2387f0240fd0afe2d3d2125187",
-        "path": "scripts/hunter_validation_reuse.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "5ecb1af7b06610a637a618f49dc7ac4eca6deaee",
-        "path": "tests/test_validation_proof_reuse.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "295cfda50e7fffd5f09a486050030a8db27db653",
-        "path": "tests/test_validation_stage_contract.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "5e0b40df13e74913fe8969f0fa19dd3b623e5f82",
-        "path": ".github/instructions/project-hunter.instructions.md",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "fad19c3ac04e613c71e7265e36c5e68c4630c809",
-        "path": ".github/workflows/ci.yml",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "c281f3385232c831b7be2b855c344d77d4b526ba",
-        "path": ".github/workflows/hunter-pre-pr-preflight.yml",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "6de92dfab86e4b0f3624bf7dd8499650e5970dac",
-        "path": ".gitignore",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "5b1aa9aa4d5309489032eb1e18b40307c9ddcd95",
-        "path": "CLAUDE.md",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "69aa61a90dce1faa673321268ce8890b31bc378d",
-        "path": "docs/CI.md",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "cd5a19ecdeec55ffd83450b102684f13f1b6bff1",
-        "path": "docs/CODE_WRITE_POLICY.json",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "a3575d49f5282938108aca08bdaf4589c0ee6e1c",
-        "path": "docs/DEFECT_PREVENTION_LIFECYCLE.json",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "6d2bc95cfc9a93a4b2083371c74452dabc92ea90",
+        "blob_sha": "db70abbac7c68966e8d8c4f4b1b68ab9195bfe8a",
         "path": "docs/DEFECT_REGISTRY.json",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "45138ce782ab519fdc44cba7deec12677f955376",
-        "path": "docs/REVIEWER_FINDING_DISPOSITIONS.json",
+        "blob_sha": "9948d9d8770b0535109105428cf7967da66d87b1",
+        "path": "scripts/hunter_governance_review_v2.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "81c51838af08c39175a1923adf107c49a095bf19",
-        "path": "pyproject.toml",
+        "blob_sha": "cef645dfaa3a688aa4041be76053fb9b13ff3eba",
+        "path": "scripts/hunter_merge_readiness_v2.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "0cc787d87dda614f274e26b0f9f71b712be07732",
-        "path": "requirements/ci-constraints.txt",
+        "blob_sha": "c19322248337f38916e35442ef826afed84ff1aa",
+        "path": "scripts/hunter_workflow_state.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "83a2108d059e8b7783621a31d810834ac2e56163",
-        "path": "scripts/hunter_pr_preflight.py",
+        "blob_sha": "6fad2e50270a478dc4fb7d3db18dfeb719ff5a61",
+        "path": "tests/test_hunter_merge_readiness_v2.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "b02fe89c045257b0a5ba7ce45b91986ff68088d8",
-        "path": "scripts/hunter_pre_push.py",
+        "blob_sha": "6a569caf3de534a3b1ffb43b36b2bd50424404c4",
+        "path": "tests/test_hunter_workflow_state.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "60d1a91f1a9046aed145a9be8883723f5bcc5709",
-        "path": "tests/conftest.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "0052f43b1dbd892415475b4629cb4b622e4c3519",
-        "path": "tests/test_hunter_pre_push.py",
+        "blob_sha": "99c64209aa91c65498bb5a1d420c19cc3d8357b5",
+        "path": "tests/test_pr376_prevention_regressions.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "9d2749b3778a90758994bc0a68ba81b10a51f70f48fbc69e0c79fd2cb8f43b03"
+    "review_target_digest": "0da82f86f388262d3ecd8aff6b41c61235c16b236e782f8385a6108969d58dbf"
   },
-  "review_id": "84d18ae7300e2751170e68c56ae0666c5b56a214a3e01e2737ca39b2ebba2eb6",
+  "review_id": "521158a6304b12a1ea98b8e9b88dbe3788e0d9452854ceb9e0da4f8d68095702",
   "schema": "hunter.pre-ready-hostile-review.v1"
 }
