@@ -9,7 +9,7 @@
       },
       {
         "criterion": "Authorization and replay behavior are deterministic and fail closed.",
-        "evidence": "Trusted origin is proved before anything else: the Ed25519 issuer signature is verified against a bootstrap-captured public key before the ledger claim, durable intake or dispatch (test_valid_public_claims_without_the_trusted_issuer_proof_cannot_dispatch, test_a_signature_lifted_from_another_authorization_is_refused, test_the_issuer_proof_covers_every_authorization_claim, test_issuer_verifying_key_is_captured_at_bootstrap_not_re_read). authorization_id is then recomputed from the document's own claims (test_replay_identity_is_bound_to_exact_authorization_content); duplicate, restart and crash-retry replay are refused by IssueAgentExecutionLedger (test_duplicate_authorization_is_rejected_and_executes_once, test_replay_after_process_restart_does_not_execute_again, test_crash_between_handoff_persistence_and_dispatch_cannot_duplicate, test_crash_before_any_execution_still_owns_the_authorization, test_ledger_state_is_monotonic); malformed documents, malformed signatures and absent configuration fail closed (test_malformed_authorization_fails_closed, test_non_canonical_authorization_fields_fail_closed, test_missing_operational_configuration_fails_closed, test_missing_or_malformed_issuer_verifying_key_fails_closed).",
+        "evidence": "Trusted origin is proved before anything else, and only the signed transport is executable: hunter-issue-agent-signed-authorization-v1 carries the canonical v1 payload verbatim plus an Ed25519 issuer signature verified against a bootstrap-captured public key before the ledger claim, durable intake or dispatch (test_valid_public_claims_without_the_trusted_issuer_proof_cannot_dispatch, which proves both a bare unsigned payload and a foreign-signed envelope fail; test_a_signature_lifted_from_another_authorization_is_refused; test_the_issuer_proof_covers_every_authorization_claim; test_issue_number_and_schema_version_are_covered_by_the_issuer_proof; test_issuer_verifying_key_is_captured_at_bootstrap_not_re_read). The payload's authorization_id is then recomputed from its own claims (test_replay_identity_is_bound_to_exact_authorization_content); duplicate, restart and crash-retry replay are refused by IssueAgentExecutionLedger (test_duplicate_authorization_is_rejected_and_executes_once, test_replay_after_process_restart_does_not_execute_again, test_crash_between_handoff_persistence_and_dispatch_cannot_duplicate, test_crash_before_any_execution_still_owns_the_authorization, test_ledger_state_is_monotonic); malformed documents at either level, malformed signatures and absent configuration fail closed (test_malformed_authorization_fails_closed, test_duplicate_json_keys_fail_closed, test_non_canonical_authorization_fields_fail_closed, test_missing_operational_configuration_fails_closed, test_missing_or_malformed_issuer_verifying_key_fails_closed).",
         "id": "AC-2",
         "verdict": "satisfied"
       },
@@ -27,13 +27,13 @@
       },
       {
         "criterion": "Focused tests and repository CI/governance pass.",
-        "evidence": "Locally on this exact content: 129 focused tests across tests/test_issue_agent_execution.py and tests/test_issue_agent_trigger.py pass; python scripts/hunter_pr_preflight.py --mode normal passes every gate (Artifact Guard, Defect Prevention Guard, Ruff, Black, Mypy, Pytest 3616 passed). Hosted required checks run after push and are verified on the pull request; this claim is local evidence, not a substitute for them.",
+        "evidence": "Locally on this exact content: 133 focused tests across tests/test_issue_agent_execution.py and tests/test_issue_agent_trigger.py pass; python scripts/hunter_pr_preflight.py --mode normal passes every gate (Artifact Guard, Defect Prevention Guard, Ruff, Black, Mypy, Pytest 3628 passed). Hosted required checks run after push and are verified on the pull request; this claim is local evidence, not a substitute for them.",
         "id": "AC-5",
         "verdict": "satisfied"
       },
       {
         "criterion": "One implementation PR only; no helper PR chain.",
-        "evidence": "Four commits on the single branch issue-390-governed-execution-trigger, based exactly on trusted main 3a73af22f261fa38611926d3aa996a2aecd724a3; no other branch or pull request was created for this work. The fourth commit is the repair of the blocking finding from independent review of the third head.",
+        "evidence": "Six commits on the single branch issue-390-governed-execution-trigger, based exactly on trusted main 3a73af22f261fa38611926d3aa996a2aecd724a3; no other branch or pull request was created for this work. The last two commits repair the blocking finding from independent review and then restructure that repair so the accepted ADR 0036 payload is preserved rather than redefined.",
         "id": "AC-6",
         "verdict": "satisfied"
       },
@@ -91,22 +91,22 @@
         "outcome": "clear"
       },
       {
-        "evidence": "Trusted origin is now proved rather than assumed. The workflow that observes the owner's issues:labeled event signs the exact canonical claims with a domain-separated Ed25519 issuer key, and the composition root verifies that signature against a bootstrap-captured public key before the ledger claim, durable intake or dispatch; the execution side holds only the public half, so it can verify an owner authorization and never mint one. A document with correct public claims and a correctly derived identity but no trusted proof cannot dispatch, leaves no ledger row and ingests nothing (test_valid_public_claims_without_the_trusted_issuer_proof_cannot_dispatch). A genuine signature cannot be transplanted onto different claims, and mutating any covered claim while re-deriving the digest is still refused (test_a_signature_lifted_from_another_authorization_is_refused, test_the_issuer_proof_covers_every_authorization_claim, test_issue_number_is_covered_by_the_issuer_proof). The authorization also binds the exact operation: the task key, prompt profile and route registry are repository constants and the branch, checkout and destination come from captured configuration (test_issue_text_cannot_choose_route_provider_destination_or_merge). Downstream the signed envelope remains the only accepted lineage (test_tampered_handoff_fails_the_existing_verifier, test_signing_key_swapped_after_bootstrap_cannot_issue_a_dispatchable_handoff).",
+        "evidence": "Trusted origin is proved rather than assumed, and authentication was added as a separate outer schema so the canonical payload accepted ADR 0036 s7 names is carried verbatim rather than redefined. Only hunter-issue-agent-signed-authorization-v1 is executable: the workflow that observes the owner's issues:labeled event signs the whole v1 payload -- claims, authorization_id and schema_version -- under a domain separator with a dedicated key distinct from the Smart Prompt automation keypair, and the composition root verifies against a bootstrap-captured public key before the ledger claim, durable intake or dispatch. The execution side holds only the public half (test_execution_side_holds_only_the_public_half, test_the_issuer_keypair_is_separate_from_prompt_automation_signing). A self-consistent payload with a correctly recomputed identity cannot dispatch either bare or foreign-signed, leaves no ledger row and ingests nothing (test_valid_public_claims_without_the_trusted_issuer_proof_cannot_dispatch). A genuine signature cannot be transplanted onto a different payload, and mutating any covered field while re-deriving the digest is still refused (test_a_signature_lifted_from_another_authorization_is_refused, test_the_issuer_proof_covers_every_authorization_claim, test_issue_number_and_schema_version_are_covered_by_the_issuer_proof). The authorization also binds the exact operation: the task key, prompt profile and route registry are repository constants and the branch, checkout and destination come from captured configuration (test_issue_text_cannot_choose_route_provider_destination_or_merge). Downstream the signed envelope remains the only accepted lineage (test_tampered_handoff_fails_the_existing_verifier, test_signing_key_swapped_after_bootstrap_cannot_issue_a_dispatchable_handoff).",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "This review is a fresh complete adversarial batch over the exact base->HEAD content of 3a73af22f261fa38611926d3aa996a2aecd724a3..HEAD, covering all eleven required dimensions and every applicable recurring-defect family. The previous review of this candidate was invalidated by the content mutation that repaired the blocking finding from independent owner review, so it was re-taken rather than carried forward. Three findings are recorded below: two found by the earlier pass and repaired, and F-3, the blocking finding independent review raised and this head repairs.",
+        "evidence": "This review is a fresh complete adversarial batch over the exact base->HEAD content of 3a73af22f261fa38611926d3aa996a2aecd724a3..HEAD, covering all eleven required dimensions and every applicable recurring-defect family. The previous review was invalidated by the content mutation that restructured the repair, so it was re-taken rather than carried forward. Four findings are recorded: two from the first pass, F-3 the blocking finding independent owner review raised, and F-4 a guard defect this pass found in the repository's own action-pin check.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "This is the family the blocking finding belongs to. The authorization artifact was bound to its own content by a public digest only, which makes a hand-edited document detectable but a forged one perfectly plausible, because every input to the digest is public. It is now bound by a domain-separated Ed25519 signature over the exact canonical claims, so a forged artifact is detectable rather than merely implausible (test_valid_public_claims_without_the_trusted_issuer_proof_cannot_dispatch, test_a_signature_lifted_from_another_authorization_is_refused, test_the_issuer_proof_covers_every_authorization_claim). The other repository-owned artifacts in this change keep their existing content bindings: the pre-ready review binds the base->HEAD change set excluding itself, and docs/DEFECT_REGISTRY.json is validated by the Artifact Guard.",
+        "evidence": "This is the family the blocking finding belongs to. The authorization artifact was bound to its own content by a public digest only, which makes a hand-edited document detectable but a forged one perfectly plausible, because every input to the digest is public. It is now carried inside a transport bound by a domain-separated Ed25519 signature over the exact payload, so a forged artifact is detectable rather than merely implausible, and the canonical payload keeps its own identity derivation unchanged (test_v1_identity_derivation_is_unchanged_by_this_contribution). The two modules that describe these documents are pinned to one meaning, including the domain separator and both key environment names (test_trigger_and_composition_root_share_one_schema_authority). Other repository-owned artifacts keep their existing content bindings: the pre-ready review binds the base->HEAD change set excluding itself, and docs/DEFECT_REGISTRY.json is validated by the Artifact Guard.",
         "family": "DFF-008",
         "outcome": "repaired"
       },
       {
-        "evidence": "The prior head restated caller-chosen metadata as provenance: it compared the document's own authorized_by string to configured owner text, which authenticates nothing. The proof now authenticates the writer -- only the workflow holding the issuer secret can mint a document the composition root accepts. The proof is one the authorized channel can actually produce: the workflow already observes the exact issues:labeled event, and it is given the signing secret plus a pinned cryptography install under requirements/ci-constraints.txt, so it is not handed an obligation it cannot satisfy. Absent or malformed key material fails the authorization closed rather than emitting an unsigned document (test_missing_or_malformed_issuer_signing_key_fails_closed, test_authorization_without_an_issuer_signing_authority_fails_closed), and the key is read only from machine-only configuration, never from argv (test_issuer_key_is_never_accepted_from_the_command_line).",
+        "evidence": "The prior design restated caller-chosen metadata as provenance: it compared the document's own authorized_by string to configured owner text, which authenticates nothing. The proof now authenticates the writer -- only the workflow holding the dedicated issuer secret can mint a document the composition root accepts. It is a proof the authorized channel can actually produce: the workflow already observes the exact issues:labeled event, and it is given the signing secret plus a constraint-pinned cryptography install on a commit-pinned setup-python, so it is not handed an obligation it cannot satisfy. Absent or malformed key material fails the authorization closed rather than emitting an unsigned document (test_missing_or_malformed_issuer_signing_key_fails_closed, test_signing_requires_a_canonical_payload_and_a_real_key), and the key is read only from machine-only configuration, never from argv (test_issuer_key_is_never_accepted_from_the_command_line).",
         "family": "DFF-009",
         "outcome": "repaired"
       },
@@ -131,7 +131,7 @@
         "outcome": "clear"
       },
       {
-        "evidence": "The new TOA-001 entry claims status 'guarded', which docs/DEFECT_PREVENTION_LIFECYCLE.json maps to 'detected' and which is supported by the evidence actually present: a resolvable regression test plus a runtime verification boundary. No prevented or merge-enforced state is claimed, because this change establishes no explicit_enforcement entry and no repository ruleset requirement, so claiming more would overclaim. The Defect Prevention Guard validates that declaration mechanically and passes on this exact content.",
+        "evidence": "The TOA-001 entry claims status 'guarded', which docs/DEFECT_PREVENTION_LIFECYCLE.json maps to 'detected' and which is supported by the evidence actually present: a resolvable regression test plus a runtime verification boundary. No prevented or merge-enforced state is claimed, because this change establishes no explicit_enforcement entry and no repository ruleset requirement, so claiming more would overclaim. The Defect Prevention Guard validates that declaration mechanically and passes on this exact content. The corrected action-pin guard is likewise narrowed to the invariant it can actually evidence rather than a wording it cannot justify.",
         "family": "DFF-015",
         "outcome": "clear"
       }
@@ -154,55 +154,67 @@
         "id": "F-3",
         "resolution": "resolved",
         "severity": "blocking"
+      },
+      {
+        "evidence": "Found by this pass while pinning actions/setup-python to an immutable commit. tests/test_hunter_pr_preflight.py::test_workflows_use_current_node24_action_majors asserted the literal string 'actions/setup-python@v6', so it rejected a SHA pin to that very release -- a brittle wording check blocking canonically valid, strictly stronger output, which the repository's own guidance names as a guard defect. Corrected to test the invariant it means: on the required major, expressed either as the major tag or as a 40-hex commit whose version comment names the release. It is not weakened -- a commit pin carrying no version comment now fails rather than passing silently, and a wrong major still fails in both forms -- and the resolution is covered directly by test_action_major_resolution.",
+        "id": "F-4",
+        "resolution": "resolved",
+        "severity": "non-blocking"
       }
     ],
     "issue": "390",
     "review_target": [
       {
-        "blob_sha": "b74b85ef47f844c772c01bf0cd24ad247afc9990",
+        "blob_sha": "3145a73b8aee5d83b367303a68de8adf045a132f",
         "path": "src/hunter/automation/issue_agent_execution.py",
         "previous_path": "",
         "status": "added"
       },
       {
-        "blob_sha": "38712ac31c439b32b966b7857732416033ce035d",
+        "blob_sha": "e007a9ae653fd7613bd1b8c4c9bfe839c4396834",
         "path": "tests/test_issue_agent_execution.py",
         "previous_path": "",
         "status": "added"
       },
       {
-        "blob_sha": "305dd0e0909e9596486559a91ce8a18a3b39463d",
+        "blob_sha": "97e86d7fb660080fc2390d17ba77cfee9fd8ddfa",
         "path": ".github/workflows/hunter-issue-agent-trigger.yml",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "32424a9484c441e01193db6169e3c124886be15e",
+        "blob_sha": "3ab48d34f0407e5b669b8daafdc5d853f60b47f5",
         "path": "docs/DEFECT_REGISTRY.json",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "3686ff3ed057bf30a26993dc1fe824a68894f760",
+        "blob_sha": "2994f4477951f358979125733e649c5f100e49a3",
         "path": "docs/ISSUE_AGENT_TRIGGER.md",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "616222d7ec7e7ede242437d9f5ee78931aada68f",
+        "blob_sha": "6ccb8b77a1b9ce176d904d1db37f2e377426289c",
         "path": "scripts/hunter_issue_agent_trigger.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "010d21f51ca464ffdfd2123fdb2b2d8fc26db6e5",
+        "blob_sha": "1dd779dc29bfb5f964d0b8985122771936720dc6",
+        "path": "tests/test_hunter_pr_preflight.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "624e0620caaa41fe8bf59b22f785cfca01d063d6",
         "path": "tests/test_issue_agent_trigger.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "cc50bd467a14af2b5b8fe1546c8edfedd628c3ecfa740c2a22664c361619e216"
+    "review_target_digest": "74c4d52aa9fd88f9ad36a72704ad2482ca8840a04f25df48753c90d7f72aa2f5"
   },
-  "review_id": "9ab898ca2d6416ba05430f40d466c84e605e276dea937e2bb74c44c1262e6ddc",
+  "review_id": "2d620d162df235dcd8201945c55f2fe7ad84493093db5afd8b4926a17616ac18",
   "schema": "hunter.pre-ready-hostile-review.v1"
 }
