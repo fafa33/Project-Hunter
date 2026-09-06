@@ -146,7 +146,7 @@ def commit_tree_identity(root: Path, commit: str) -> str:
     return tree_identity(_run_git(root, "rev-parse", f"{commit}^{{tree}}"))
 
 
-def head_sha(root: Path) -> str:
+def resolve_head_sha(root: Path) -> str:
     """The exact commit whose tree a receipt is being bound to."""
     return _run_git(root, "rev-parse", "HEAD")
 
@@ -348,7 +348,7 @@ def verify(
     receipt: ValidationReceipt,
     expected: ValidationIdentity,
     *,
-    head_sha: str | None = None,
+    head_sha: str,
     now: datetime | None = None,
     max_age_seconds: int = DEFAULT_MAX_AGE_SECONDS,
 ) -> str | None:
@@ -356,6 +356,14 @@ def verify(
 
     Every branch here is a refusal. There is deliberately no path that accepts
     a receipt because of something the receipt itself asserts.
+
+    ``head_sha`` is required rather than optional. It was optional once, and the
+    local reuse path silently omitted it while the push boundary supplied it --
+    so content identity alone decided reuse on one of the two production paths.
+    Two commits can carry the same tree (an amended message is the everyday
+    case), so that path would have let a proof recorded for one candidate
+    authorize another. A binding that can be dropped by forgetting a keyword is
+    not a binding; having no default is what makes forgetting impossible.
     """
     if receipt.lane != FULL_LANE:
         return f"receipt is for the {receipt.lane!r} lane, not the full repository lane"
@@ -363,7 +371,7 @@ def verify(
         return f"receipt records result {receipt.result!r}, which is not a proof"
     if receipt.content_identity != expected.content:
         return f"receipt content identity {receipt.content_identity} is not {expected.content}"
-    if head_sha is not None and receipt.head_sha != head_sha:
+    if receipt.head_sha != head_sha:
         return f"receipt head {receipt.head_sha} is foreign to {head_sha}"
     if receipt.definition_identity != expected.definition:
         return "validation definition changed since the receipt was produced"
@@ -422,12 +430,19 @@ def reuse_blocker(
     now: datetime | None = None,
     max_age_seconds: int = DEFAULT_MAX_AGE_SECONDS,
 ) -> str | None:
-    """Why the recorded local receipt may not stand in for a full-lane run."""
+    """Why the recorded local receipt may not stand in for a full-lane run.
+
+    ``head_sha`` is resolved from the repository when the caller has not already
+    established one. A caller that has -- the push boundary, which validated the
+    exact head before anything else -- passes it in, but a caller that simply
+    asks "may I reuse?" must not thereby get an unbound answer.
+    """
     try:
         expected = current_identity(root)
+        bound_head = head_sha if head_sha is not None else resolve_head_sha(root)
     except ValidationEvidenceUnavailable as exc:
         return f"validation identity is unavailable ({exc})"
     receipt, problem = load(receipt_path(root))
     if receipt is None:
         return problem
-    return verify(receipt, expected, head_sha=head_sha, now=now, max_age_seconds=max_age_seconds)
+    return verify(receipt, expected, head_sha=bound_head, now=now, max_age_seconds=max_age_seconds)

@@ -812,11 +812,13 @@
         "rationale": "The validation boundaries and the reuse authority are where a proof made for one candidate can be re-aimed at another, and where removing duplicate proof can quietly become removing proof."
       },
       "prevention": {
-        "mechanism": "One place decides reuse, from identities the verifier recomputes rather than accepts: the Git tree content identity, the validation-definition identity over the declared definition files and the gate chain, and the measured toolchain. A receipt can therefore only narrow reuse, never widen it, and every non-matching branch falls back to executing the full lane.",
+        "mechanism": "One place decides reuse, from identities the verifier recomputes rather than accepts: the Git tree content identity, the validation-definition identity over the declared definition files and the gate chain, the measured toolchain, and the exact head. The head binding carries no default, so a caller cannot drop it by omitting a keyword -- the defect independent review found on PR #416, where the push boundary supplied it and the local reuse path did not, letting content identity alone decide on one of the two production paths. A receipt can therefore only narrow reuse, never widen it, and every non-matching branch falls back to executing the full lane.",
         "boundary": "hosted-gate",
         "guard_reference": "scripts/hunter_validation_receipt.py::verify"
       },
       "regression_evidence": [
+        "tests/test_validation_proof_reuse.py::test_a_receipt_for_one_commit_is_refused_on_another_commit_with_the_same_tree",
+        "tests/test_validation_proof_reuse.py::test_verification_cannot_be_asked_to_skip_the_head_binding",
         "tests/test_validation_proof_reuse.py::test_changed_head_invalidates_reusable_proof",
         "tests/test_validation_proof_reuse.py::test_foreign_head_proof_fails_closed",
         "tests/test_validation_proof_reuse.py::test_changed_validation_definition_invalidates_reusable_proof",
@@ -826,7 +828,8 @@
       ],
       "lifecycle": "hosted-enforced",
       "sources": [
-        "Issue #415"
+        "Issue #415",
+        "PR #416 independent owner review on 2026-09-06"
       ]
     },
     {

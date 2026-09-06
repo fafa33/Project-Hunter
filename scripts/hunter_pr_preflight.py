@@ -75,7 +75,7 @@ def _record_receipt() -> None:
 
     root = _repository_root()
     try:
-        receipts.record(root, head_sha=receipts.head_sha(root), produced_by="local-preflight")
+        receipts.record(root, head_sha=receipts.resolve_head_sha(root), produced_by="local-preflight")
     except (receipts.ValidationEvidenceUnavailable, OSError) as exc:
         print(f"[Hunter Pre-PR] NOTE: full-lane receipt was not recorded ({exc})", flush=True)
         return

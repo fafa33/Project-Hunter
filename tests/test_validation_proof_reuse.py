@@ -11,6 +11,7 @@ asserts the boundary refuses it.
 from __future__ import annotations
 
 import json
+import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -59,9 +60,21 @@ def test_matching_identity_is_reusable() -> None:
     assert receipts.verify(_receipt(), IDENTITY, head_sha=HEAD, now=NOW) is None
 
 
+def test_verification_cannot_be_asked_to_skip_the_head_binding() -> None:
+    """The binding has no default, so no caller can drop it by omission.
+
+    This is the property the defect turned on: `head_sha` was optional, the push
+    boundary passed it and the local reuse path did not, and nothing detected
+    the difference. A required keyword makes that divergence impossible to
+    write rather than merely discouraged.
+    """
+    with pytest.raises(TypeError):
+        receipts.verify(_receipt(), IDENTITY, now=NOW)  # type: ignore[call-arg]
+
+
 def test_changed_head_invalidates_reusable_proof() -> None:
     """A new commit is new content, so its tree identity is a different identity."""
-    blocker = receipts.verify(_receipt(content_identity=OTHER_CONTENT), IDENTITY, now=NOW)
+    blocker = receipts.verify(_receipt(content_identity=OTHER_CONTENT), IDENTITY, head_sha=HEAD, now=NOW)
 
     assert blocker is not None
     assert "content identity" in blocker
@@ -81,13 +94,13 @@ def test_foreign_head_proof_fails_closed() -> None:
 
 
 def test_changed_validation_definition_invalidates_reusable_proof() -> None:
-    blocker = receipts.verify(_receipt(definition_identity="sha256:other"), IDENTITY, now=NOW)
+    blocker = receipts.verify(_receipt(definition_identity="sha256:other"), IDENTITY, head_sha=HEAD, now=NOW)
 
     assert blocker == "validation definition changed since the receipt was produced"
 
 
 def test_changed_toolchain_invalidates_reusable_proof() -> None:
-    blocker = receipts.verify(_receipt(toolchain_identity="sha256:other"), IDENTITY, now=NOW)
+    blocker = receipts.verify(_receipt(toolchain_identity="sha256:other"), IDENTITY, head_sha=HEAD, now=NOW)
 
     assert blocker == "validation toolchain changed since the receipt was produced"
 
@@ -95,20 +108,20 @@ def test_changed_toolchain_invalidates_reusable_proof() -> None:
 def test_stale_receipt_fails_closed() -> None:
     stale = _receipt(produced_at=NOW - timedelta(seconds=receipts.DEFAULT_MAX_AGE_SECONDS + 1))
 
-    blocker = receipts.verify(stale, IDENTITY, now=NOW)
+    blocker = receipts.verify(stale, IDENTITY, head_sha=HEAD, now=NOW)
 
     assert blocker is not None
     assert "stale" in blocker
 
 
 def test_receipt_dated_in_the_future_fails_closed() -> None:
-    blocker = receipts.verify(_receipt(produced_at=NOW + timedelta(minutes=1)), IDENTITY, now=NOW)
+    blocker = receipts.verify(_receipt(produced_at=NOW + timedelta(minutes=1)), IDENTITY, head_sha=HEAD, now=NOW)
 
     assert blocker == "receipt was produced in the future"
 
 
 def test_failed_result_is_never_a_proof() -> None:
-    blocker = receipts.verify(_receipt(result=receipts.FAILED), IDENTITY, now=NOW)
+    blocker = receipts.verify(_receipt(result=receipts.FAILED), IDENTITY, head_sha=HEAD, now=NOW)
 
     assert blocker is not None
     assert "not a proof" in blocker
@@ -225,6 +238,60 @@ def test_every_declared_definition_file_changes_the_definition_identity(tmp_path
     target.write_bytes(target.read_bytes() + b"\n# validation definition drift\n")
 
     assert receipts.definition_identity(root) != before
+
+
+def _git(root: Path, *args: str) -> str:
+    completed = subprocess.run(
+        ("git", "-c", "user.name=Test", "-c", "user.email=test@example.com", *args),
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return completed.stdout.strip()
+
+
+def _committed_definition_repo(tmp_path: Path) -> Path:
+    """A real repository carrying the validation-definition files, one commit deep."""
+    root = _definition_root(tmp_path)
+    # The receipt store is ignored in the real repository; without that here the
+    # recorded receipt would itself dirty the tree and there would be no content
+    # identity to bind.
+    (root / ".gitignore").write_text(f"{receipts.RECEIPT_DIR.as_posix()}/\n", encoding="utf-8")
+    _git(root, "init", "-q")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "definition files")
+    return root
+
+
+def test_a_receipt_for_one_commit_is_refused_on_another_commit_with_the_same_tree(tmp_path: Path) -> None:
+    """The production reuse path binds the head, not only the content.
+
+    Two commits can carry a byte-identical tree -- amending a message is the
+    everyday way to produce one -- so content identity alone would let a proof
+    recorded for one candidate authorize another. This drives `reuse_blocker`,
+    the function the preflight actually calls, rather than `verify` directly:
+    the binding was previously present in the verifier and lost at that caller,
+    so a fixture that called the verifier could not have caught it.
+    """
+    root = _committed_definition_repo(tmp_path)
+    first_head = receipts.resolve_head_sha(root)
+    tree = receipts.content_identity(root)
+    receipts.record(root, head_sha=first_head, produced_by="local-preflight")
+
+    assert receipts.reuse_blocker(root) is None, "the commit the receipt was recorded on must reuse it"
+
+    _git(root, "commit", "-q", "--amend", "-m", "same tree, different commit")
+    second_head = receipts.resolve_head_sha(root)
+
+    # The premise of the test: genuinely the same content, genuinely a new commit.
+    assert second_head != first_head
+    assert receipts.content_identity(root) == tree
+
+    blocker = receipts.reuse_blocker(root)
+
+    assert blocker is not None, "a receipt for another commit must not authorize this one"
+    assert "foreign" in blocker
 
 
 def test_missing_definition_file_fails_closed(tmp_path: Path) -> None:

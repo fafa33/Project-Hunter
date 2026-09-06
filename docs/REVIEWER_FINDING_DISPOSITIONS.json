@@ -65,6 +65,20 @@
       "permanent_disposition_evidence": "Candidate admission verifies exact head SHA and fails closed when head moves.",
       "guard_reference": "scripts/hunter_candidate_admission.py::enforce_candidate_admission",
       "test_reference": "tests/test_pr376_prevention_regressions.py::test_stale_candidate_admission_event_cannot_draft_newer_head"
+    },
+    {
+      "id": "RFD-416-001",
+      "source_provenance": {
+        "reviewer": "fafa33 (repository owner)",
+        "pr_number": 416,
+        "reference": "Independent exact-head review of fda1ad0 against Issue #415: local validation-receipt reuse did not bind reuse to the current HEAD"
+      },
+      "validation_state": "validated",
+      "classification": "new_systemic_defect",
+      "resolution_state": "resolved",
+      "permanent_disposition_evidence": "Confirmed on the reviewed head: hunter_pr_preflight._reuse_blocker() called receipts.reuse_blocker(root) without a head, reuse_blocker defaulted head_sha to None, and verify() skipped the head comparison entirely -- so a receipt recorded for commit A could be reused on a different commit B carrying the same tree, definition and toolchain. The push boundary passed the head and the local reuse path did not, and nothing detected the divergence. Repaired by removing the default: verify() now requires head_sha, so no caller can drop the binding by omitting a keyword, and reuse_blocker resolves the head from the repository when a caller has not already established one. The regression drives the production caller with two real commits that resolve to the same tree, and was confirmed to fail against the pre-fix code and pass against the repair.",
+      "guard_reference": "scripts/hunter_validation_receipt.py::verify",
+      "test_reference": "tests/test_validation_proof_reuse.py::test_a_receipt_for_one_commit_is_refused_on_another_commit_with_the_same_tree"
     }
   ]
 }

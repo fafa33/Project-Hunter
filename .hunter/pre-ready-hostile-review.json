@@ -136,9 +136,9 @@
         "outcome": "clear"
       },
       {
-        "evidence": "This is the family the candidate introduces, and it is answered against its own implementation. Every non-matching branch of verify() and resolve() ends in the full lane; there is no acceptance path that does not first recompute all three identities. Adversarially probed: a run of another workflow wearing the same name, a non-push event, a superseded green run for the same head, a foreign-head run, a malformed payload and unavailable git evidence are each refused by their own fixture.",
+        "evidence": "This is the family the candidate introduces, and independent owner review found its invariant was not actually enforced on one of the two production paths: the local reuse caller omitted the head binding while the push boundary supplied it, so content identity alone decided reuse there. Repaired by making the binding non-optional rather than by remembering to pass it -- verify() has no default for head_sha, and reuse_blocker resolves it from the repository when a caller has not. Adversarially probed beyond that: a run of another workflow wearing the same name, a non-push event, a superseded green run for the same head, a foreign-head run, a malformed payload and unavailable git evidence are each refused by their own fixture, and the same-tree different-commit case is now driven through the production caller rather than the verifier.",
         "family": "DFF-016",
-        "outcome": "clear"
+        "outcome": "repaired"
       },
       {
         "evidence": "This family exists because the candidate committed the defect and it was caught by the trusted controller on head 327242b. Repaired in 25b0745 by moving the worker flags to the hosted steps that install the plugin, then made enforceable in d778351 by four fixtures covering placement, provisioning, distribution-only semantics and loud failure when the plugin is absent. Each fixture was verified against its own injected violation and only its own.",
@@ -170,6 +170,12 @@
         "id": "F-4",
         "resolution": "resolved",
         "severity": "non-blocking"
+      },
+      {
+        "evidence": "Independent owner review of head fda1ad0 found that the local validation-receipt reuse path did not bind reuse to the current HEAD: hunter_pr_preflight._reuse_blocker() called receipts.reuse_blocker(root) without a head, reuse_blocker defaulted head_sha to None, and verify() skipped the head comparison, so a receipt recorded for commit A could authorize a different commit B carrying the same tree, definition and toolchain. The finding is correct and the strongest evidence for it was internal: the push boundary passed the head while the preflight caller did not, and this review's own DFF-016 answer had asserted the binding held. Repaired by removing the default -- verify() now requires head_sha, so the binding cannot be dropped by omitting a keyword, and reuse_blocker resolves the head itself when a caller has not established one. The regression drives the production caller with two real commits resolving to the same tree (an amended message), and was confirmed to fail against the pre-fix code and pass against the repair; a second fixture pins that verify() cannot be called without the binding at all. Recorded as RFD-416-001 and folded into DFF-016's prevention mechanism.",
+        "id": "F-5",
+        "resolution": "resolved",
+        "severity": "blocking"
       }
     ],
     "issue": "415",
@@ -303,6 +309,6 @@
     ],
     "review_target_digest": "a4965ad9649eac6eeac595343120af9158b5ad9aa8e255835349d349ad10cac2"
   },
-  "review_id": "bda7a5a67682f7332f63b1f81ca4d6746d48704de8e14fe5e0016a3d19075032",
+  "review_id": "941420c1c48c37bcb4c8b0d63cb72d017ea3e69a229fba92cf1051206a817fa3",
   "schema": "hunter.pre-ready-hostile-review.v1"
 }
