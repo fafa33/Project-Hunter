@@ -129,6 +129,11 @@ def _run_git(root: Path, *args: str) -> str:
     return completed.stdout.strip()
 
 
+def is_object_sha(value: str) -> bool:
+    """Whether ``value`` is a fully resolved 40-hex Git object name."""
+    return bool(_TREE_SHA_RE.match(value or ""))
+
+
 def tree_identity(tree_sha: str) -> str:
     """Name a Git tree object as a content identity."""
     if not _TREE_SHA_RE.match(tree_sha):

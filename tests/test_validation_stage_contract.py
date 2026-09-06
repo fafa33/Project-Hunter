@@ -178,6 +178,57 @@ def test_integration_stage_reuses_only_on_content_identity() -> None:
     )
 
 
+PARALLEL_LANE = "-n auto --dist loadfile"
+CANONICAL_PREFLIGHT_COMMAND = "python scripts/hunter_pr_preflight.py"
+
+
+def _canonical_preflight_steps() -> list[tuple[Path, dict[str, Any]]]:
+    import yaml
+
+    found: list[tuple[Path, dict[str, Any]]] = []
+    workflows = ROOT / ".github" / "workflows"
+    for path in sorted((*workflows.glob("*.yml"), *workflows.glob("*.yaml"))):
+        document = yaml.safe_load(path.read_text(encoding="utf-8"))
+        if not isinstance(document, dict):
+            continue
+        for job in (document.get("jobs") or {}).values():
+            if not isinstance(job, dict):
+                continue
+            for step in job.get("steps") or []:
+                if isinstance(step, dict) and CANONICAL_PREFLIGHT_COMMAND in str(step.get("run", "")):
+                    found.append((path, step))
+    return found
+
+
+def test_every_canonical_preflight_step_declares_the_same_parallel_lane() -> None:
+    """The parallel lane is declared per step, so drift between them is the risk."""
+    steps = _canonical_preflight_steps()
+
+    assert steps, "expected the canonical preflight to be invoked by a hosted workflow"
+    for path, step in steps:
+        assert (step.get("env") or {}).get("PYTEST_ADDOPTS") == PARALLEL_LANE, path
+
+
+def test_repository_pytest_configuration_does_not_pin_the_parallel_lane() -> None:
+    """The candidate may not demand a plugin its own trusted validation lacks.
+
+    The trusted default-branch controller executes this repository's `pytest`
+    command inside the candidate tree using the *trusted* environment. A
+    candidate that pinned worker flags in its own pytest configuration would
+    therefore make its own trusted validation unrunnable -- observed on this
+    contribution as `pytest: error: unrecognized arguments: -n --dist loadfile`
+    from the Trusted Candidate Preflight Validation job. The lane belongs to the
+    boundaries that install the plugin, not to the repository's configuration.
+    """
+    configuration = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    section = configuration.split("[tool.pytest.ini_options]", 1)[1].split("\n[", 1)[0]
+    declarations = [
+        line for line in section.splitlines() if line.strip() and not line.lstrip().startswith("#") and "=" in line
+    ]
+
+    assert not [line for line in declarations if line.lstrip().startswith("addopts")], declarations
+
+
 def test_merge_control_stages_remain_human_terminated() -> None:
     """No stage after merge readiness may be automated away."""
     human = _stage("human-merge-approval")

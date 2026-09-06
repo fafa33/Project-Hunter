@@ -112,6 +112,16 @@ unsuccessful run, a run belonging to another head or another workflow, a
 toolchain that does not match its pin, or a receipt that does not verify.
 Refusing reuse is always safe — it costs time, not proof.
 
+Reuse is therefore opportunistic, and deliberately so. Pushing a branch and
+opening or updating a pull request happen seconds apart, so `CI` usually starts
+while the branch preflight is still running and correctly refuses to reuse a
+proof that does not exist yet. It reuses on a later `synchronize`, on a re-run,
+and whenever the hosted proof landed first. That is the right trade: the two
+hosted lanes run **concurrently**, so making `CI` wait for a proof it could then
+reuse would raise wall-clock time in order to lower it. The wall-clock win comes
+from the two *serial* local full runs that no longer happen before the push, and
+from the parallel test lane; what `CI` reuse saves is duplicated runner work.
+
 ## Proof identity and invalidation
 
 `scripts/hunter_validation_receipt.py` is the only place that decides whether a
@@ -137,6 +147,27 @@ A receipt is refused, and the full lane runs, when any of these hold:
 A receipt is never a trust anchor. Every identity it carries is recomputed by
 the verifier from content the verifier already holds, so a receipt can only
 narrow reuse, never widen it.
+
+## Where the parallel lane is declared
+
+The full repository suite runs with `-n auto --dist loadfile`, declared as
+`PYTEST_ADDOPTS` on the hosted steps that invoke the canonical preflight — not
+in the repository's own `[tool.pytest.ini_options]`.
+
+That placement is load-bearing, not cosmetic. The trusted default-branch
+controller validates a candidate by executing *this repository's* gate commands
+inside the candidate tree using the **trusted** environment. A candidate that
+pinned worker flags in its own pytest configuration would be demanding a plugin
+that environment has no reason to have installed, and would make its own trusted
+validation unrunnable. The accelerator therefore belongs to the boundaries that
+install it.
+
+`loadfile` keeps every test in a file on one worker, so intra-file ordering and
+module-scoped state behave exactly as they do serially and only whole files run
+concurrently. The one shared-state hazard parallelism exposed was the
+session-level repository-cleanliness check in `tests/conftest.py`, which compares
+whole-repository snapshots and would read other workers' transient files; it is
+now controller-only. No test required a serial lane.
 
 ## What no stage may do
 

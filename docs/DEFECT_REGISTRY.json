@@ -828,6 +828,30 @@
       "sources": [
         "Issue #415"
       ]
+    },
+    {
+      "id": "DFF-017",
+      "title": "candidate-configuration-unrunnable-in-the-trusted-environment",
+      "invariant": "A candidate's own configuration may not require tooling that the trusted default-branch controller's environment has no reason to provide. The trusted controller executes the repository's gate commands inside the candidate tree under the trusted environment, so a requirement the candidate declares for itself must be one that environment can already satisfy.",
+      "applicability": {
+        "changed_paths": [
+          "pyproject.toml",
+          "scripts/hunter_pr_preflight.py"
+        ],
+        "rationale": "The repository's own gate configuration and gate definition are where a candidate can declare a requirement that only its own environment satisfies, while the trusted controller runs the same commands under another. The dependency pin files are deliberately excluded: adding a pin is not the defect, requiring it from a configuration the trusted environment must execute under is."
+      },
+      "prevention": {
+        "mechanism": "Accelerators and other optional-plugin requirements are declared by the hosted boundaries that install them, never by the repository configuration the trusted controller has to execute under. The placement is asserted directly rather than the flag spelling.",
+        "boundary": "review"
+      },
+      "regression_evidence": [
+        "tests/test_validation_stage_contract.py::test_repository_pytest_configuration_does_not_pin_the_parallel_lane",
+        "tests/test_validation_stage_contract.py::test_every_canonical_preflight_step_declares_the_same_parallel_lane"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "Issue #415 Trusted Candidate Preflight Validation failure on PR #416 head 327242b (2026-09-06)"
+      ]
     }
   ]
 }

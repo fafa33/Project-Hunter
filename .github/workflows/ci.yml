@@ -62,4 +62,12 @@ jobs:
 
       - name: Run shared deterministic preflight
         if: steps.validation-reuse.outputs.reusable != 'true'
+        env:
+          # Issue #415: the full repository suite is this pipeline's long pole,
+          # so the boundaries that own it run it in parallel. `loadfile` keeps
+          # every test in a file on one worker, so intra-file ordering and
+          # module-scoped state behave exactly as they do serially and only
+          # whole files run concurrently. Measured on 4 vCPU over 3,628 tests:
+          # 416s serial, 126s parallel.
+          PYTEST_ADDOPTS: -n auto --dist loadfile
         run: python scripts/hunter_pr_preflight.py --mode normal

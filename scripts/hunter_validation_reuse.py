@@ -132,7 +132,7 @@ def resolve(
     """Decide whether this job may stand on the trusted exact-head proof."""
     if event_name != "pull_request":
         return ReuseDecision(False, f"{event_name or 'unknown'} events validate their own tree in full")
-    if not receipts._TREE_SHA_RE.match(head_sha or ""):
+    if not receipts.is_object_sha(head_sha):
         return ReuseDecision(False, "no exact candidate head SHA is available")
     if (root / MODE_MARKER).exists():
         return ReuseDecision(False, "a tests-first-red head is never full repository proof")
@@ -213,7 +213,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--event-name", default=os.environ.get("GITHUB_EVENT_NAME", ""))
     parser.add_argument("--head-sha", default=os.environ.get("PR_HEAD_SHA", ""))
     parser.add_argument("--repository", default=os.environ.get("GH_REPO", ""))
-    parser.parse_args(argv)
     args = parser.parse_args(argv)
 
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or ""

@@ -58,4 +58,7 @@ jobs:
       - name: Run shared deterministic preflight
         env:
           PREFLIGHT_MODE: ${{ steps.preflight-mode.outputs.mode }}
+          # The authoritative full repository proof, so the parallel lane matters
+          # most here. See the identical declaration in ci.yml.
+          PYTEST_ADDOPTS: -n auto --dist loadfile
         run: python scripts/hunter_pr_preflight.py --mode "${PREFLIGHT_MODE}"

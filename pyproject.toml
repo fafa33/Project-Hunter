@@ -43,13 +43,13 @@ hunter = "hunter.__main__:main"
 [tool.pytest.ini_options]
 pythonpath = ["src", "scripts"]
 testpaths = ["tests"]
-# Issue #415: the full repository suite is the pipeline's long pole, so the one
-# boundary that owns it runs it in parallel. `loadfile` keeps every test in a
-# file on a single worker, so intra-file ordering and module-scoped state behave
-# exactly as they do serially and only whole files run concurrently -- the
-# cheapest form of parallelism that introduces no new sharing between tests.
-# Measured on 4 vCPU over 3,628 tests: 416s serial, 126s parallel.
-addopts = "-n auto --dist loadfile"
+# Issue #415: the parallel lane is deliberately NOT pinned here. The trusted
+# default-branch controller executes this repository's `pytest` command inside a
+# candidate tree using the *trusted* environment, so a candidate that pinned
+# worker flags in its own pytest configuration would make its own trusted
+# validation unrunnable -- the candidate would be demanding a plugin the trusted
+# environment has no reason to have installed. The hosted jobs that own the full
+# lane carry PYTEST_ADDOPTS instead; see docs/VALIDATION_STAGE_CONTRACT.md.
 
 [tool.ruff]
 line-length = 120
