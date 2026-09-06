@@ -59,6 +59,13 @@ PREFLIGHT_UPGRADE_STATUS_PREFIX = "Hunter Trusted Preflight Upgrade / PR #"
 TRUSTED_UPGRADE_WORKFLOW_NAME = "Hunter / Trusted Preflight Upgrade"
 TRUSTED_UPGRADE_WORKFLOW_PATH = ".github/workflows/hunter-trusted-preflight-upgrade.yml"
 TRUSTED_STATUS_CREATOR = "github-actions[bot]"
+#: Run states GitHub reports for a workflow run that has been accepted and has
+#: not finished. A run in one of these is a dependency this candidate is waiting
+#: on, not a defect it has.
+TRUSTED_RUN_ACTIVE_STATES = frozenset({"queued", "in_progress", "waiting", "requested", "pending"})
+#: Issue #417. The dependency is named explicitly so an operator can tell
+#: "the proof has not finished yet" from "the proof failed" without reading logs.
+TRUSTED_PROOF_WAITING_DESCRIPTION = "Waiting for trusted exact-head preflight proof"
 ROOT = Path(__file__).resolve().parents[1] if "__file__" in globals() else Path(".")
 REVIEWER_DISPOSITIONS_PATH = ROOT / "docs" / "REVIEWER_FINDING_DISPOSITIONS.json"
 PREFLIGHT_OWNED_PATHS = frozenset(
@@ -1073,6 +1080,91 @@ def _upgrade_status_context(pr_number: int) -> str:
     return f"{PREFLIGHT_UPGRADE_STATUS_PREFIX}{pr_number}"
 
 
+def is_trusted_upgrade_run(run: Any, head_sha: str) -> bool:
+    """Whether ``run`` is the trusted upgrade workflow for exactly this head.
+
+    Every field is matched, never the name alone: a workflow that merely calls
+    itself the same thing, a re-dispatch under another event, or a run belonging
+    to another head are all rejected. Both the completed-proof path and the
+    Issue #417 waiting path resolve eligibility here, so the two cannot drift
+    into disagreeing about which runs count.
+    """
+
+    return (
+        isinstance(run, dict)
+        and str(run.get("name") or "") == TRUSTED_UPGRADE_WORKFLOW_NAME
+        and str(run.get("path") or "") == TRUSTED_UPGRADE_WORKFLOW_PATH
+        and str(run.get("event") or "") == "pull_request_target"
+        and str(run.get("head_sha") or "").strip().lower() == head_sha.strip().lower()
+    )
+
+
+def is_trusted_upgrade_run_bound_to(run: Any, head_sha: str, pr_number: int) -> bool:
+    """Whether the run additionally reports this exact pull request and head."""
+
+    if not isinstance(run, dict):
+        return False
+    pull_requests = run.get("pull_requests")
+    if not isinstance(pull_requests, list):
+        return False
+    return any(
+        isinstance(pr, dict)
+        and int(pr.get("number") or 0) == pr_number
+        and str((pr.get("head") or {}).get("sha") or "").strip().lower() == head_sha.strip().lower()
+        for pr in pull_requests
+    )
+
+
+def read_active_trusted_upgrade_run(
+    repository: str,
+    token: str,
+    head_sha: str,
+    pr_number: int,
+) -> tuple[str, str]:
+    """Whether an eligible trusted exact-head run is legitimately still running.
+
+    Issue #417. The trusted upgrade status is published by the workflow's final
+    job, so for the whole time the proof is being produced there is no status to
+    read at all. Reading that absence as "no proof exists" made a candidate red
+    for ten minutes while its own required proof was running normally -- a
+    recurrence of DFF-014 through a different evidence source.
+
+    The answer is taken from observable run state, never from message text, and
+    a run qualifies only if it passes the same identity checks the completed
+    proof must pass. Unavailable or malformed evidence fails closed: a candidate
+    is never described as merely waiting because this lookup could not tell.
+    """
+
+    encoded_sha = quote(head_sha, safe="")
+    try:
+        payload = request_json(
+            repository,
+            token,
+            "GET",
+            f"actions/runs?head_sha={encoded_sha}&event=pull_request_target&per_page=100",
+        )
+    except Exception as exc:
+        return (
+            "failure",
+            f"Candidate admission blocked: trusted workflow run evidence is unavailable "
+            f"({type(exc).__name__}: {exc}).",
+        )
+    if not isinstance(payload, dict):
+        return "failure", "Candidate admission blocked: trusted workflow run evidence is malformed."
+    runs = payload.get("workflow_runs")
+    if not isinstance(runs, list):
+        return "failure", "Candidate admission blocked: trusted workflow_runs payload is malformed."
+
+    for run in runs:
+        if not is_trusted_upgrade_run(run, head_sha):
+            continue
+        if not is_trusted_upgrade_run_bound_to(run, head_sha, pr_number):
+            continue
+        if str(run.get("status") or "") in TRUSTED_RUN_ACTIVE_STATES:
+            return "active", TRUSTED_PROOF_WAITING_DESCRIPTION
+    return "absent", ""
+
+
 def read_trusted_upgrade_status(
     repository: str,
     token: str,
@@ -1089,6 +1181,15 @@ def read_trusted_upgrade_status(
         status for status in payload if isinstance(status, dict) and str(status.get("context") or "") == context
     ]
     if not matching:
+        # Issue #417: no status yet is not the same fact as no proof path. The
+        # trusted workflow publishes its status last, so an eligible run that is
+        # still executing is a dependency wait, and only a genuinely absent run
+        # is the missing-proof failure this branch reports.
+        active_state, active_description = read_active_trusted_upgrade_run(repository, token, head_sha, pr_number)
+        if active_state == "active":
+            return "pending", active_description
+        if active_state == "failure":
+            return "failure", active_description
         return "missing", "Candidate admission blocked: exact-head trusted preflight upgrade status is missing."
 
     latest = max(matching, key=lambda status: int(status.get("id") or 0))
@@ -1122,13 +1223,7 @@ def read_trusted_upgrade_status(
         )
     if not isinstance(run, dict):
         return "failure", "Candidate admission blocked: trusted workflow run evidence is malformed."
-    if (
-        int(run.get("id") or 0) != run_id
-        or str(run.get("name") or "") != TRUSTED_UPGRADE_WORKFLOW_NAME
-        or str(run.get("path") or "") != TRUSTED_UPGRADE_WORKFLOW_PATH
-        or str(run.get("event") or "") != "pull_request_target"
-        or str(run.get("head_sha") or "").strip().lower() != head_sha
-    ):
+    if int(run.get("id") or 0) != run_id or not is_trusted_upgrade_run(run, head_sha):
         return "failure", "Candidate admission blocked: status does not identify the trusted exact-head workflow."
     run_status = str(run.get("status") or "")
     run_conclusion = str(run.get("conclusion") or "")
@@ -1136,13 +1231,7 @@ def read_trusted_upgrade_status(
         return "pending", "Waiting for exact-head trusted candidate preflight workflow to complete."
     if run_conclusion != "success":
         return "failure", f"Candidate admission blocked: trusted workflow conclusion={run_conclusion or 'unknown'}."
-    pull_requests = run.get("pull_requests")
-    if not isinstance(pull_requests, list) or not any(
-        isinstance(pr, dict)
-        and int(pr.get("number") or 0) == pr_number
-        and str((pr.get("head") or {}).get("sha") or "").strip().lower() == head_sha
-        for pr in pull_requests
-    ):
+    if not is_trusted_upgrade_run_bound_to(run, head_sha, pr_number):
         return "failure", "Candidate admission blocked: trusted workflow run is not bound to this exact PR and head."
     return "success", "Exact-head trusted candidate preflight validation passed."
 

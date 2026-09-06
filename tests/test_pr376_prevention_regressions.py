@@ -103,7 +103,12 @@ def test_trusted_upgrade_status_is_bound_to_exact_pr_context(monkeypatch) -> Non
 
 
 def test_wrong_pr_trusted_upgrade_status_cannot_authorize(monkeypatch) -> None:
-    def fake_request(_repo, _token, _method, _path, _payload=None):
+    def fake_request(_repo, _token, _method, path, _payload=None):
+        if path.startswith("actions/runs?"):
+            # Issue #417 consults active runs once no status matches this PR.
+            # There is none here, so the wrong-PR status remains the only
+            # evidence and must still authorize nothing.
+            return {"workflow_runs": []}
         return [
             {
                 "id": 10,

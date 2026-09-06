@@ -322,13 +322,14 @@ def evaluate(observation: ReadinessObservation) -> Decision:
             pass
         elif state in {"failure", "error"}:
             failed.append(f"{GOVERNANCE_CONTEXT}={state}")
-        elif state == "pending" and mergeable is True:
-            # The lightweight governance controller can publish pending only while
-            # GitHub mergeability is unresolved. The caller re-read the live PR
-            # and observed mergeable=True, so an older pending status is stale and
-            # must not become a permanent merge lock.
-            pass
         else:
+            # Issue #417: governance pending is a real, current dependency wait --
+            # a required trusted exact-head proof that is legitimately still
+            # running -- and not merely an artefact of unresolved mergeability.
+            # It therefore blocks as pending rather than passing. This is
+            # fail-closed and self-healing: the governance controller republishes
+            # on every event and schedule, so a pending that has since been
+            # resolved is replaced rather than left as a permanent merge lock.
             pending.append(GOVERNANCE_CONTEXT)
 
     if failed:

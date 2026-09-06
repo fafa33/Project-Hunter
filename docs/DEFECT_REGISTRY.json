@@ -740,7 +740,7 @@
     {
       "id": "DFF-014",
       "title": "pending-prerequisite-reported-as-failure",
-      "invariant": "A hosted prerequisite that is still running publishes pending; only an invalid, absent, untrusted or wrongly-bound proof publishes failure. A head left pending is re-evaluated when the proof lands, so pending never becomes a way to stay Ready while unadmitted.",
+      "invariant": "A hosted prerequisite that is still running publishes pending; only an invalid, absent, untrusted or wrongly-bound proof publishes failure. 'Still running' is decided from observable run state for the exact candidate head, never from the presence of a published status, because a proof that publishes its status last has no status for the whole time it is being produced. A head left pending is re-evaluated when the proof lands, and pending never satisfies admission, readiness or merge.",
       "applicability": {
         "changed_paths": [
           "scripts/",
@@ -753,7 +753,7 @@
         "rationale": "Admission and readiness controllers are where a transient state can be published as a defect."
       },
       "prevention": {
-        "mechanism": "Candidate admission propagates a tri-state ingress verdict, so a running trusted proof is reported as pending rather than as a blocked candidate, and the candidate-admission controller subscribes to trusted-upgrade completion so a pending head is reconciled once the proof exists.",
+        "mechanism": "Candidate admission propagates a tri-state ingress verdict, so a running trusted proof is reported as pending rather than as a blocked candidate, and the candidate-admission controller subscribes to trusted-upgrade completion so a pending head is reconciled once the proof exists. Where the proof's status is absent, the controller additionally resolves whether an eligible trusted run for that exact head is queued or in progress, using the same identity predicate the completed proof must satisfy, so the two cannot disagree about which runs count. Unavailable or malformed run evidence fails closed rather than being described as merely waiting, and an independent governance blocker is evaluated before the dependency wait so a real defect is never reported as a clean wait.",
         "boundary": "hosted-gate",
         "guard_reference": "scripts/hunter_governance_review_v2.py::verify_code_write_ingress_provenance"
       },
@@ -761,12 +761,18 @@
         "tests/test_issue_412_prevention_gate.py::test_a_running_hosted_proof_is_pending_not_failure",
         "tests/test_issue_412_prevention_gate.py::test_an_invalid_hosted_proof_remains_failure",
         "tests/test_issue_412_prevention_gate.py::test_candidate_admission_reconciles_after_the_trusted_upgrade_completes",
-        "tests/test_issue_412_prevention_gate.py::test_the_draft_controller_still_leaves_a_pending_head_alone"
+        "tests/test_issue_412_prevention_gate.py::test_the_draft_controller_still_leaves_a_pending_head_alone",
+        "tests/test_issue_417_governance_waiting_state.py::test_an_eligible_active_trusted_run_is_waiting_not_failure",
+        "tests/test_issue_417_governance_waiting_state.py::test_an_ineligible_active_run_is_not_a_waiting_dependency",
+        "tests/test_issue_417_governance_waiting_state.py::test_a_real_blocker_alongside_an_active_run_is_failure_not_waiting",
+        "tests/test_issue_417_governance_waiting_state.py::test_merge_readiness_does_not_read_a_governance_wait_as_success",
+        "tests/test_issue_417_governance_waiting_state.py::test_the_same_head_succeeds_once_the_trusted_proof_lands"
       ],
       "lifecycle": "hosted-enforced",
       "sources": [
         "Issue #412",
-        "PR #413 independent review (Codex P1)"
+        "PR #413 independent review (Codex P1)",
+        "Issue #417 (recurrence observed on PR #416 head fda1ad0)"
       ]
     },
     {
