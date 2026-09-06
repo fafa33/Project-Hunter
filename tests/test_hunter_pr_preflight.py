@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -293,17 +294,67 @@ def test_full_history_must_belong_to_checkout_preceding_preflight() -> None:
     assert _preflight_checkout_depths(workflow) == [1]
 
 
+#: The action major each governed workflow must be on.
+REQUIRED_ACTION_MAJORS = {"actions/checkout": 7, "actions/setup-python": 6}
+
+#: Either the floating major tag, or an immutable commit pin whose trailing
+#: comment names the release it points at. A SHA pin is the stronger form -- a
+#: tag can be repointed and a commit cannot -- so the invariant is "on the
+#: required major", not "spelled @vN".
+_ACTION_REF = re.compile(
+    r"uses:\s*(?P<action>[\w.-]+/[\w.-]+)@(?P<ref>\S+)(?:\s*#\s*v(?P<comment_major>\d+)(?:\.\d+)*)?\s*$"
+)
+
+
+def action_major(ref: str, comment_major: str | None) -> int | None:
+    """The action major a `uses:` reference resolves to, or None if unreadable.
+
+    A bare `@vN` carries its own major. A 40-hex commit carries none, so the
+    version comment beside it is what names the release -- which is why a SHA
+    pin without that comment is unreadable here and fails rather than passing
+    silently.
+    """
+
+    if re.fullmatch(r"v(\d+)(?:\.\d+)*", ref):
+        return int(ref[1:].split(".", 1)[0])
+    if re.fullmatch(r"[0-9a-f]{40}", ref):
+        return int(comment_major) if comment_major is not None else None
+    return None
+
+
 def test_workflows_use_current_node24_action_majors() -> None:
     workflow_dir = ROOT / ".github" / "workflows"
     workflow_paths = sorted((*workflow_dir.glob("*.yml"), *workflow_dir.glob("*.yaml")))
     for path in workflow_paths:
         text = path.read_text(encoding="utf-8")
         for line in text.splitlines():
-            stripped = line.strip()
-            if "uses: actions/checkout@" in stripped:
-                assert stripped.endswith("actions/checkout@v7"), path
-            if "uses: actions/setup-python@" in stripped:
-                assert stripped.endswith("actions/setup-python@v6"), path
+            match = _ACTION_REF.search(line.strip())
+            if match is None:
+                continue
+            required = REQUIRED_ACTION_MAJORS.get(match.group("action"))
+            if required is None:
+                continue
+            resolved = action_major(match.group("ref"), match.group("comment_major"))
+            assert resolved == required, f"{path}: {line.strip()}"
+
+
+@pytest.mark.parametrize(
+    ("ref", "comment_major", "expected"),
+    [
+        ("v6", None, 6),
+        ("v6.3.0", None, 6),
+        ("v5", None, 5),
+        ("ece7cb06caefa5fff74198d8649806c4678c61a1", "6", 6),
+        ("ece7cb06caefa5fff74198d8649806c4678c61a1", "5", 5),
+        # A commit pin with no version comment names no release, so it is
+        # unreadable rather than assumed current.
+        ("ece7cb06caefa5fff74198d8649806c4678c61a1", None, None),
+        ("main", None, None),
+        ("", None, None),
+    ],
+)
+def test_action_major_resolution(ref: str, comment_major: str | None, expected: int | None) -> None:
+    assert action_major(ref, comment_major) == expected
 
 
 def test_agent_instructions_reference_machine_contract_surfaces() -> None:

@@ -33,9 +33,28 @@ jobs:
           ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
 
+      - name: Set up Python
+        # Pinned to the immutable commit for the v6 release line (v6.3.0) rather
+        # than the floating v6 tag, which a tag move could repoint at any time.
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11.13"
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            requirements/ci-constraints.txt
+
+      - name: Install pinned issuer signing dependency
+        env:
+          PIP_CONSTRAINT: requirements/ci-constraints.txt
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check "cryptography>=50.0.0,<51"
+
       - name: Authorize exact Issue event and dispatch to trusted issuer edge
         env:
           HUNTER_ISSUE_AGENT_WEBHOOK_URL: ${{ secrets.HUNTER_ISSUE_AGENT_WEBHOOK_URL }}
+          HUNTER_ISSUE_AGENT_AUTHORIZATION_SIGNING_KEY: ${{ secrets.HUNTER_ISSUE_AGENT_AUTHORIZATION_SIGNING_KEY }}
         run: |
           set -euo pipefail
           python scripts/hunter_issue_agent_trigger.py \

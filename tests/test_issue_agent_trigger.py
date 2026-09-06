@@ -2,18 +2,28 @@ from __future__ import annotations
 
 import copy
 import email
+import hashlib
 import io
+import json
 import urllib.request
 import urllib.response
 from typing import Any
 
 import hunter_issue_agent_trigger as trigger
 import pytest
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 from hunter_issue_agent_trigger import (
     DEFAULT_LABEL,
     IssueAgentTriggerError,
+    authorization_signing_message,
     authorize_event,
+    load_signing_key,
+    sign_authorization,
 )
+
+ISSUER_KEY_HEX = "11" * 32
+ISSUER_KEY = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(ISSUER_KEY_HEX))
 
 
 def _event() -> dict[str, Any]:
@@ -39,6 +49,10 @@ def _authorize(event: dict[str, Any]):
         expected_repository="fafa33/Project-Hunter",
         owner_login="fafa33",
     )
+
+
+def _signed(event: dict[str, Any], *, signing_key: Any = ISSUER_KEY):
+    return sign_authorization(_authorize(event), signing_key=signing_key)
 
 
 def test_owner_label_authorization_is_deterministic_and_content_cannot_choose_provider() -> None:
@@ -191,3 +205,91 @@ def test_malformed_or_non_https_webhook_remains_fail_closed(monkeypatch, url: st
 
     assert "credential-free HTTPS URL" in str(error.value)
     assert handler.requests == []
+
+
+# --- Trusted-origin issuer proof --------------------------------------------
+
+
+def _public_key() -> Ed25519PublicKey:
+    return ISSUER_KEY.public_key()
+
+
+def test_signed_envelope_carries_the_exact_canonical_v1_payload() -> None:
+    """The accepted-ADR payload travels verbatim; authentication wraps it."""
+    authorization = _authorize(_event())
+    signed = _signed(_event())
+
+    assert signed.schema_version == trigger.ENVELOPE_SCHEMA_VERSION == "hunter-issue-agent-signed-authorization-v1"
+    assert signed.authorization == authorization.payload()
+    assert signed.authorization["schema_version"] == trigger.SCHEMA_VERSION == "hunter-issue-agent-authorization-v1"
+    assert set(signed.authorization) == {
+        "repository",
+        "issue_number",
+        "issue_url",
+        "issue_title",
+        "issue_body",
+        "authorized_by",
+        "authorization_label",
+        "issue_updated_at",
+        "authorization_id",
+        "schema_version",
+    }
+
+
+def test_issuer_signature_covers_the_whole_payload() -> None:
+    signed = _signed(_event())
+    assert len(signed.issuer_signature) == 128
+    # Raises InvalidSignature if the proof does not cover the exact payload.
+    _public_key().verify(
+        bytes.fromhex(signed.issuer_signature),
+        authorization_signing_message(signed.authorization),
+    )
+
+
+def test_a_different_issuer_key_produces_a_document_the_owner_key_rejects() -> None:
+    foreign = Ed25519PrivateKey.from_private_bytes(bytes.fromhex("22" * 32))
+    forged = _signed(_event(), signing_key=foreign)
+
+    # The payload is identical; only the minting key differs, and that is enough.
+    assert forged.authorization == _signed(_event()).authorization
+    with pytest.raises(InvalidSignature):
+        _public_key().verify(
+            bytes.fromhex(forged.issuer_signature),
+            authorization_signing_message(forged.authorization),
+        )
+
+
+def test_signing_requires_a_canonical_payload_and_a_real_key() -> None:
+    with pytest.raises(IssueAgentTriggerError, match="issuer signing authority"):
+        sign_authorization(_authorize(_event()), signing_key=None)
+    with pytest.raises(IssueAgentTriggerError, match="canonical authorization payload"):
+        sign_authorization({"repository": "fafa33/Project-Hunter"}, signing_key=ISSUER_KEY)
+
+
+@pytest.mark.parametrize("value", [None, "", "   ", "not-hex", "aa", "11" * 31, "11" * 33])
+def test_missing_or_malformed_issuer_signing_key_fails_closed(value: object) -> None:
+    with pytest.raises(IssueAgentTriggerError, match=trigger.SIGNING_KEY_ENV):
+        load_signing_key(value)
+
+
+def test_issuer_key_is_never_accepted_from_the_command_line() -> None:
+    """The key is machine-only configuration, so no flag can carry it in the clear."""
+    parser = trigger._parser()
+    flags = {action.option_strings[0] for action in parser._actions if action.option_strings}
+    assert "--signing-key" not in flags
+    assert not any("key" in flag for flag in flags)
+
+
+def test_signed_message_is_domain_separated_by_the_envelope_schema() -> None:
+    assert authorization_signing_message({}).startswith(trigger.SIGNATURE_DOMAIN)
+    assert trigger.SIGNATURE_DOMAIN == b"hunter-issue-agent-signed-authorization-v1:"
+
+
+def test_v1_identity_derivation_is_unchanged_by_this_contribution() -> None:
+    """The canonical payload's own identity is still the plain claim digest."""
+    authorization = _authorize(_event())
+    claims = {key: value for key, value in authorization.payload().items() if key != "authorization_id"}
+    canonical = json.dumps(claims, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    assert authorization.authorization_id == (
+        f"hunter-issue-agent-authorization:{hashlib.sha256(canonical).hexdigest()}"
+    )
