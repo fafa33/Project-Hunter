@@ -9,6 +9,10 @@ on:
       - main
 
 permissions:
+  # Reading the trusted exact-head branch preflight run record is what lets an
+  # identical integration tree stand on proof that already exists instead of
+  # re-running it. Read-only: this job publishes nothing.
+  actions: read
   contents: read
 
 concurrency:
@@ -43,5 +47,19 @@ jobs:
           set -euo pipefail
           python -m pip install --disable-pip-version-check -c requirements/ci-constraints.txt -e ".[dev]"
 
+      # Issue #415: when the tree GitHub would merge is byte-for-byte the tree the
+      # trusted exact-head branch preflight already validated, re-running the
+      # identical suite establishes nothing. Anything else -- a divergent
+      # integration tree, a missing or unsuccessful trusted run, unavailable
+      # evidence -- falls back to the full lane below.
+      - name: Resolve exact-identity validation reuse
+        id: validation-reuse
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python scripts/hunter_validation_reuse.py
+
       - name: Run shared deterministic preflight
+        if: steps.validation-reuse.outputs.reusable != 'true'
         run: python scripts/hunter_pr_preflight.py --mode normal

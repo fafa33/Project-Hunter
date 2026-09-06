@@ -19,6 +19,7 @@ dev = [
   "black>=26.3.1,<27",
   "mypy>=1.10,<2",
   "pytest>=9,<10",
+  "pytest-xdist>=3.8,<4",
   "ruff>=0.6,<1",
   "types-PyYAML>=6,<7",
 ]
@@ -42,6 +43,13 @@ hunter = "hunter.__main__:main"
 [tool.pytest.ini_options]
 pythonpath = ["src", "scripts"]
 testpaths = ["tests"]
+# Issue #415: the full repository suite is the pipeline's long pole, so the one
+# boundary that owns it runs it in parallel. `loadfile` keeps every test in a
+# file on a single worker, so intra-file ordering and module-scoped state behave
+# exactly as they do serially and only whole files run concurrently -- the
+# cheapest form of parallelism that introduces no new sharing between tests.
+# Measured on 4 vCPU over 3,628 tests: 416s serial, 126s parallel.
+addopts = "-n auto --dist loadfile"
 
 [tool.ruff]
 line-length = 120

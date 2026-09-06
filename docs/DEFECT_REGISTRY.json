@@ -797,6 +797,37 @@
       "sources": [
         "Issue #412"
       ]
+    },
+    {
+      "id": "DFF-016",
+      "title": "validation-proof-reused-without-immutable-identity",
+      "invariant": "An expensive validation proof is reusable only for the exact immutable content, validation definition and toolchain it was produced under. A changed head, a foreign head, a changed validation definition, a changed toolchain, a stale, malformed, unsuccessful or unverifiable proof, and unavailable evidence all refuse reuse and run the full lane.",
+      "applicability": {
+        "changed_paths": [
+          ".githooks/",
+          ".github/workflows/",
+          "docs/VALIDATION_STAGE_CONTRACT.json",
+          "scripts/"
+        ],
+        "rationale": "The validation boundaries and the reuse authority are where a proof made for one candidate can be re-aimed at another, and where removing duplicate proof can quietly become removing proof."
+      },
+      "prevention": {
+        "mechanism": "One place decides reuse, from identities the verifier recomputes rather than accepts: the Git tree content identity, the validation-definition identity over the declared definition files and the gate chain, and the measured toolchain. A receipt can therefore only narrow reuse, never widen it, and every non-matching branch falls back to executing the full lane.",
+        "boundary": "hosted-gate",
+        "guard_reference": "scripts/hunter_validation_receipt.py::verify"
+      },
+      "regression_evidence": [
+        "tests/test_validation_proof_reuse.py::test_changed_head_invalidates_reusable_proof",
+        "tests/test_validation_proof_reuse.py::test_foreign_head_proof_fails_closed",
+        "tests/test_validation_proof_reuse.py::test_changed_validation_definition_invalidates_reusable_proof",
+        "tests/test_validation_proof_reuse.py::test_stale_receipt_fails_closed",
+        "tests/test_validation_proof_reuse.py::test_malformed_receipt_documents_fail_closed",
+        "tests/test_validation_proof_reuse.py::test_another_workflow_wearing_the_same_name_cannot_authorize_reuse"
+      ],
+      "lifecycle": "hosted-enforced",
+      "sources": [
+        "Issue #415"
+      ]
     }
   ]
 }

@@ -16,15 +16,23 @@ For a materially architectural change, verify the applicable architecture before
 
 Use the smallest correct change. Do not weaken tests or evidence requirements to make a check pass.
 
-Before pushing an ordinary code-changing candidate, ensure the repository-owned hooks are enabled with `python scripts/install_hunter_git_hooks.py`. The `.githooks/pre-push` hook is the machine-enforced push boundary: it requires a clean tree, binds the pushed branch SHA to the checked-out exact HEAD, runs `python scripts/hunter_pr_preflight.py --mode normal`, and rechecks HEAD/tree state before authorizing network push. Agent prose or a remembered green run is never a substitute for this hook.
+`docs/VALIDATION_STAGE_CONTRACT.md`, and its machine-readable form `docs/VALIDATION_STAGE_CONTRACT.json`, define which boundary owns which proof. Each stage owns one thing, and no stage re-establishes what another stage has already established for the same immutable content.
 
-Before pushing an ordinary code-changing candidate, run when available:
+While implementing, verify with focused work: the tests affected by the change plus the relevant lint and type checks. Do not run the full repository suite repeatedly, and never re-run it on an unchanged HEAD for reassurance.
+
+Before pushing an ordinary code-changing candidate, ensure the repository-owned hooks are enabled with `python scripts/install_hunter_git_hooks.py`. The `.githooks/pre-push` hook is the machine-enforced push boundary; push through it rather than rehearsing it by hand first. It requires a clean tree, binds the pushed branch SHA to the checked-out exact HEAD, validates writer provenance over the governed range and connector receipt freshness, runs the deterministic push-safety gates (Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black, Mypy), and rechecks HEAD/tree state before authorizing network push. Agent prose or a remembered green run is never a substitute for this hook.
+
+The authoritative full repository proof is the hosted exact-head `Hunter / Pre-PR Preflight` run of:
 
 ```text
 python scripts/hunter_pr_preflight.py --mode normal
 ```
 
-Normal mode requires the deterministic Artifact Guard plus Ruff, Black, Mypy, and Pytest to pass. The Artifact Guard validates the canonical defect registry and changed governed artifacts. For an intentional tests-first RED commit only, create `.hunter-preflight-mode` containing exactly `tests-first-red` and commit that marker on the exact branch head being pushed. That mode is valid only when the Artifact Guard, Ruff, Black, and Mypy pass and Pytest exits with a real test-failure result. It is a Draft tests-first hygiene signal, never merge readiness. Before implementation or any green candidate resumes, remove `.hunter-preflight-mode`, commit that removal on the branch head being pushed, and return to normal mode.
+Normal mode requires the deterministic Artifact Guard plus Ruff, Black, Mypy, and Pytest to pass. The Artifact Guard validates the canonical defect registry and changed governed artifacts. Trusted candidate admission fails closed without a successful run bound to the exact candidate head, so that proof is mandatory -- it is simply produced once, hosted, instead of being repeated locally. If you do choose to run the full lane locally, run it as `python scripts/hunter_pr_preflight.py --mode normal --record-receipt --reuse-receipt` so the same immutable identity is never validated twice.
+
+A push reporting `Everything up-to-date` has mutated nothing and needs no proof: do not launch a synthetic validation run for it, and never create an empty commit to manufacture a new validation identity.
+
+For an intentional tests-first RED commit only, create `.hunter-preflight-mode` containing exactly `tests-first-red` and commit that marker on the exact branch head being pushed. That mode is valid only when the Artifact Guard, Ruff, Black, and Mypy pass and Pytest exits with a real test-failure result; because the RED result is itself the proof being made, that is the one lane where Pytest still runs at the push boundary. It is a Draft tests-first hygiene signal, never merge readiness. Before implementation or any green candidate resumes, remove `.hunter-preflight-mode`, commit that removal on the branch head being pushed, and return to normal mode.
 
 Before treating a hosted Pre-PR run as proof or opening a PR based on it, verify that the run's commit SHA exactly equals the current branch HEAD. A run number, "latest" label, or remembered green result alone is not exact-head evidence.
 

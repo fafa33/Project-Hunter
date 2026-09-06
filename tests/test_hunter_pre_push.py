@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 
+import hunter_pr_preflight
 import hunter_pre_push
 import pytest
 
@@ -169,13 +171,58 @@ def test_repository_hook_is_executable_and_calls_canonical_enforcer() -> None:
     assert "python scripts/hunter_pre_push.py" in text
 
 
-def test_enforcer_builds_canonical_normal_preflight_command() -> None:
+def test_normal_mode_runs_the_push_safety_lane_rather_than_the_full_repository_suite() -> None:
+    """Issue #415: the full lane is the hosted boundary's proof, not this one's.
+
+    The canonical command spelling is unchanged -- normal mode still means the
+    same seven gates wherever it is invoked. What changed is that the push
+    boundary no longer invokes it, because re-proving the whole repository here
+    established nothing candidate admission did not already require.
+    """
     assert hunter_pre_push._preflight_command(hunter_pre_push.NORMAL_MODE) == (
         "python",
         "scripts/hunter_pr_preflight.py",
         "--mode",
         "normal",
     )
+    assert hunter_pre_push._lane_label(hunter_pre_push.NORMAL_MODE) == "push-safety lane"
+    assert hunter_pr_preflight.PYTEST_GATE not in hunter_pr_preflight.PUSH_SAFETY_GATES
+
+
+def test_pre_push_still_blocks_every_pre_network_rewrite_defect(monkeypatch, tmp_path) -> None:
+    """The checks that are only repairable by rewriting history all still run.
+
+    Each one is stubbed to fire in turn, so this fails if any of them stops
+    being reached from the boundary rather than merely stops failing.
+    """
+    order: list[str] = []
+
+    def fake_git(*args: str) -> str:
+        if args == ("rev-parse", "--show-toplevel"):
+            return str(tmp_path)
+        if args == ("rev-parse", "HEAD"):
+            return HEAD_A
+        if args == ("status", "--porcelain=v1", "--untracked-files=normal"):
+            return ""
+        raise AssertionError(args)
+
+    monkeypatch.setattr(hunter_pre_push, "_run_git", fake_git)
+    monkeypatch.setattr(hunter_pre_push.os, "chdir", lambda _path: None)
+
+    def failing(name: str) -> Callable[[str], None]:
+        def check(_head: str) -> None:
+            order.append(name)
+            raise RuntimeError(name)
+
+        return check
+
+    for name in ("_validate_writer_provenance", "_validate_receipt_freshness"):
+        monkeypatch.setattr(hunter_pre_push, name, failing(name))
+        with pytest.raises(RuntimeError, match=name):
+            hunter_pre_push.enforce_pre_push(_update())
+        monkeypatch.setattr(hunter_pre_push, name, lambda _head: None)
+
+    assert order == ["_validate_writer_provenance", "_validate_receipt_freshness"]
 
 
 def test_hook_installer_owns_repository_hooks_path() -> None:

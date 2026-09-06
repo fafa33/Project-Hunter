@@ -22,8 +22,8 @@
   "explicit_enforcement": {
     "PRH-007": {
       "state": "prevented",
-      "local": ".githooks/pre-push -> python scripts/hunter_pre_push.py -> python scripts/hunter_pr_preflight.py --mode normal",
-      "hosted": "Exact-head Hunter / Pre-PR Preflight runs on pushed branch heads; the trusted Hunter Governance Review independently rejects a PR head without a successful exact-head branch preflight and verifies main ruleset conformance",
+      "local": ".githooks/pre-push -> python scripts/hunter_pre_push.py enforces, before any network mutation, a clean tree, the pushed branch SHA bound to the checked-out exact HEAD, writer provenance over the governed range, connector authorization receipt freshness, governance-evidence path protection, preflight-mode validity, and the deterministic push-safety gates (Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black, Mypy). Issue #415 moved the full repository suite out of this boundary and into the single authoritative hosted exact-head proof, which candidate admission already required; docs/VALIDATION_STAGE_CONTRACT.json is the machine-readable ownership contract.",
+      "hosted": "Exact-head Hunter / Pre-PR Preflight is the authoritative full repository proof and runs the complete canonical normal preflight on pushed branch heads; the trusted Hunter Governance Review independently rejects a PR head without a successful exact-head branch preflight and verifies main ruleset conformance. CI reuses that proof only for a byte-identical integration tree, keyed to immutable identity and never to a mutable latest-green notion.",
       "merge": "Active GitHub ruleset Protect main mechanically requires Quality Gates, dependency-review, CodeQL, Hunter Governance Review, and Hunter Merge Readiness, with no bypass actors",
       "recurrence": "Any pushed-head recurrence is a prevention-system failure and requires enforcement-gap correction in docs/REVIEWER_FINDING_DISPOSITIONS.json"
     }

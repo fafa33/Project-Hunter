@@ -154,6 +154,8 @@
       "scripts/hunter_workflow_state.py",
       "scripts/hunter_github_transport.py",
       "scripts/hunter_pre_push.py",
+      "scripts/hunter_validation_receipt.py",
+      "scripts/hunter_validation_reuse.py",
       "scripts/install_hunter_git_hooks.py",
       "pyproject.toml",
       "requirements/",
@@ -162,7 +164,7 @@
       "scripts/hunter_writer_provenance.py",
       "scripts/hunter_pre_ready_review.py"
     ],
-    "root_of_trust_semantics": "The files that decide whether a candidate may be written and admitted at all: the push boundary, the hosted workflows, the canonical gate chain, the connector authorizer, the governance/admission controllers, the merge-readiness controller, the shared scope and transport primitives they depend on, the packaging/tooling pins that define the gates, and this policy. No capability on this ingress may write them and no scope may unblock them, so a candidate can never rewrite the authority under which it is itself evaluated. Mutating them stays a clone-capable, pre-push-bound, independently reviewed, owner-merged change; the trusted controller always evaluates a candidate against the default-branch version of this policy, so such a change takes effect only after merge and never for its own pull request.",
+    "root_of_trust_semantics": "The files that decide whether a candidate may be written and admitted at all: the push boundary, the hosted workflows, the canonical gate chain, the connector authorizer, the governance/admission controllers, the merge-readiness controller, the validation-proof identity and reuse authority that decides when an existing proof may stand in for a run, the shared scope and transport primitives they depend on, the packaging/tooling pins that define the gates, and this policy. No capability on this ingress may write them and no scope may unblock them, so a candidate can never rewrite the authority under which it is itself evaluated. Mutating them stays a clone-capable, pre-push-bound, independently reviewed, owner-merged change; the trusted controller always evaluates a candidate against the default-branch version of this policy, so such a change takes effect only after merge and never for its own pull request.",
     "self_escalation_boundary": "A candidate may not widen the grant it is authorized under and then rely on the widened grant inside the same pull request. The authorization receipt pins grant_fingerprint, a SHA-256 over the authorization-relevant grant, and the trusted controller re-derives that fingerprint from the default branch: a receipt minted under any other version of the grant is stale and fails admission. The controller additionally compares the candidate head's policy against the trusted one and refuses any connector candidate whose head widens the grant -- a new capability, writer, allowed path, unblocked scope path, authorized Issue, removed prohibition, or removed root-of-trust entry.",
     "additional_capabilities": {
       "governance-maintenance": {
