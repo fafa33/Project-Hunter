@@ -169,6 +169,34 @@ session-level repository-cleanliness check in `tests/conftest.py`, which compare
 whole-repository snapshots and would read other workers' transient files; it is
 now controller-only. No test required a serial lane.
 
+### Measured limits
+
+Hosted, on four workers: 3,710 tests in 250.8s, against the 536.55s the
+governing Issue records for 3,628 tests before this change. Locally on 4 vCPU:
+416.2s serial, 126.0s parallel.
+
+The lane's floor is set by the slowest single file, because `loadfile` gives
+that file to one worker. `tests/test_market_validation.py` holds three of the
+ten slowest tests (42.6s, 22.8s and 12.4s locally) and the whole file must run
+on one worker; several other CLI-execution tests are 18-28s each. Splitting
+those files, or making the CLI fixtures cheaper, is what would move the floor
+further — not more workers.
+
+Two hosted jobs remain outside this lane and are known, deliberate exceptions:
+
+- **Trusted Candidate Preflight Validation** runs the suite serially (about
+  10m30 hosted) because it executes the candidate under the *trusted*
+  environment, which has no reason to carry a worker plugin the candidate's own
+  environment supplies. It can adopt the same `PYTEST_ADDOPTS` declaration only
+  once the plugin is a trusted dependency — that is, after this contribution
+  merges — so it is a sequenced follow-up rather than something this
+  contribution can do to itself.
+- **CI reuse** is opportunistic, for the concurrency reason above.
+
+Neither is on the path this contribution set out to shorten: a candidate is
+reviewable once the hosted branch preflight and `Quality Gates` are green, which
+now happens in about five minutes.
+
 ## What no stage may do
 
 - Run the same full repository suite twice for the same immutable candidate
