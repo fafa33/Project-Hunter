@@ -2,45 +2,69 @@
   "claims": {
     "acceptance_criteria": [
       {
-        "criterion": "Do not weaken candidate admission or trusted-proof requirements.",
-        "evidence": "No requirement is removed. The only new outcome is pending, which is returned in place of a failure and never in place of a success. Every prior failure branch -- terminated run, foreign head, wrong workflow name or path, wrong event, unbound run, untrusted publisher, malformed status, absent run -- is preserved and independently regressed in tests/test_issue_417_governance_waiting_state.py.",
+        "criterion": "The trusted default-branch environment must explicitly own and provision the parallel test runner dependency; do not rely on candidate-added pytest plugins or candidate-global addopts.",
+        "evidence": "The trusted workflow gains a step of its own that installs pytest-xdist by name under requirements/ci-constraints.txt and then verifies it with hunter_defect_prevention_preflight.py --verify-parallel-runner. Both the install command and the pin are read from the trusted default-branch checkout at the workspace root; the candidate lives in ./candidate and is never installed from. test_the_trusted_workflow_provisions_the_runner_by_name_from_its_own_checkout and test_no_candidate_file_can_reach_the_trusted_runner_provisioning assert both halves structurally.",
         "id": "R-1",
         "verdict": "satisfied"
       },
       {
-        "criterion": "Do not treat absence of proof as success.",
-        "evidence": "read_trusted_upgrade_status returns success only on the unchanged completed-and-verified path. A genuinely absent run still returns missing, which every call site maps to failure; test_no_eligible_trusted_run_at_all_stays_missing and test_a_completed_eligible_run_without_a_status_is_not_waiting pin both halves.",
+        "criterion": "Keep candidate repository pytest configuration runnable in a clean non-xdist trusted environment unless the trusted workflow itself deliberately enables xdist.",
+        "evidence": "No worker flag enters [tool.pytest.ini_options]; the declaration stays an environment variable owned by the declaring boundary. test_a_clean_environment_without_the_runner_can_still_run_this_repository collects this repository under -p no:xdist and requires exit 0, which is what an environment that never installed the plugin actually does; test_repository_pytest_configuration_forces_no_worker_flags pins the configuration itself; and trusted_lane_problem('') is accepted, so an undeclared lane still runs the same gate chain serially.",
         "id": "R-2",
         "verdict": "satisfied"
       },
       {
-        "criterion": "Distinguish at least these states deterministically: eligible trusted run in progress -> waiting/pending; eligible trusted run completed successfully and exact-head proof valid -> success; eligible trusted run completed with failure -> failure; proof malformed/stale/foreign-head/mismatched -> failure; no eligible trusted run/proof path exists where one is required -> failure.",
-        "evidence": "All five are asserted directly. Waiting is decided from run status in TRUSTED_RUN_ACTIVE_STATES for a run that passes the same identity predicate the completed proof must pass, so the decision is a function of observable run state rather than of message text.",
+        "criterion": "Parallelization must be distribution-only and test-selection equivalent to the existing serial trusted suite: no -k, -m, --ignore, --deselect, --lf, -x, path narrowing, or other selection-changing flags.",
+        "evidence": "The gate commands are untouched, so the executed command line is byte-identical to the serial one and the difference is one environment variable. Proven three ways: test_the_trusted_gate_commands_are_unchanged_by_the_lane drives the production runner with and without the lane and requires identical command lists; test_the_trusted_lane_selects_exactly_what_the_serial_lane_selects collects a fixture tree both ways and compares node ids; and the controller refuses any declaration that is not exactly the canonical token sequence, so eleven narrowing spellings are rejected by equality rather than by a blocklist.",
         "id": "R-3",
         "verdict": "satisfied"
       },
       {
-        "criterion": "Avoid periodic re-publication of identical red failure messages while the same trusted run is merely in progress.",
-        "evidence": "While the same head and same active run persist, the controller publishes pending with a stable description instead of a red failure, so repeated governance runs no longer emit a new red signal for an unchanged, non-defective condition.",
+        "criterion": "Missing/unavailable xdist in the trusted lane must fail loudly, not silently fall back to a weaker/ambiguous proof.",
+        "evidence": "Two independent refusals. The workflow's verification step fails the job before any gate runs, naming the distribution and stating that the lane must not silently run serially. Independently, run_candidate_quality_gates re-checks the declared lane against the environment and returns 2 without launching a single gate. test_a_missing_trusted_runner_fails_verification_loudly and test_a_missing_trusted_runner_fails_the_declared_lane_closed hold both, the latter asserting that subprocess.run is never reached.",
         "id": "R-4",
         "verdict": "satisfied"
       },
       {
-        "criterion": "Status text should name the dependency clearly, e.g. Waiting for trusted exact-head preflight proof.",
-        "evidence": "TRUSTED_PROOF_WAITING_DESCRIPTION is exactly that string and is pinned by test_the_waiting_description_names_the_dependency. It is a constant consumed by the decision, never parsed by it.",
+        "criterion": "Preserve exact-head binding, trusted-default-branch authority, candidate admission, governance review, merge readiness, writer provenance, connector protections, and separate human merge approval.",
+        "evidence": "No control-flow in any of those paths is touched. The trusted workflow keeps its exact-head checkout, its untrusted-input isolation, its read-only validation job and its separate status-write publisher; validate-candidate still holds contents: read only. test_exact_head_proof_identity_is_unchanged pins the receipt schema, definition paths, toolchain distributions and the required keyword-only head_sha; test_the_trusted_workflow_still_binds_the_exact_candidate_head pins the head binding and both job permission blocks; and test_the_governance_identity_predicate_still_matches_this_workflow pins that governance still recognises the workflow by name and path after the edit. Nothing marks Ready, merges, or enables auto-merge.",
         "id": "R-5",
         "verdict": "satisfied"
       },
       {
-        "criterion": "Add deterministic tests covering the state transitions above, including the PR #416 scenario where governance was red only because the trusted run had not finished yet.",
-        "evidence": "tests/test_issue_417_governance_waiting_state.py adds 31 fixtures including test_the_same_head_succeeds_once_the_trusted_proof_lands, which drives the PR #416 sequence on byte-identical candidate content: waiting while the run is active, then success once the proof exists. Thirteen of the new fixtures were confirmed to fail against the pre-fix source and pass against the repair.",
+        "criterion": "Preserve fail-closed behavior for malformed/stale/foreign/mismatched proof.",
+        "evidence": "Unchanged, and re-pinned rather than assumed: test_a_proof_that_is_not_this_candidates_still_fails_closed drives the production verifier through foreign head, mismatched content, changed definition, changed toolchain, a failed result and a wrong lane, and requires a refusal for each. The two new refusals added here are themselves fail-closed: unavailable runner evidence and an unrecognised lane both stop the chain rather than proceeding.",
         "id": "R-6",
         "verdict": "satisfied"
       },
       {
-        "criterion": "No auto-Ready, auto-merge, force-push, or weakening of human merge approval.",
-        "evidence": "No readiness, promotion or merge authority is added. The merge-readiness change is strictly restrictive: a governance pending that previously passed now blocks. The candidate-admission controller leaves a waiting head untouched rather than promoting it. The push was fast-forward through the real pre-push boundary.",
+        "criterion": "Add deterministic regression coverage proving: trusted lane owns/provisions xdist; candidate/global pytest config does not force xdist; trusted parallel lane selects the same tests as serial; missing plugin fails clearly; exact-head proof identity/provenance is unchanged; no candidate can alter the trusted runner dependency/toolchain for its own validation.",
+        "evidence": "tests/test_issue_419_trusted_parallel_lane.py adds 73 fixtures covering every listed property, plus the adversarial pass over the new refusal surfaces: attached and separated option spellings, all four pytest configuration sources, wrong-tool and wrong-section bindings, quoted values that merely look like options, long options sharing a prefix with forbidden ones, unparseable configuration, and a hostile candidate tree carrying its own xdist module and a conflicting pin. Twenty-five of the new fixtures were confirmed to fail against the pre-fix source.",
         "id": "R-7",
+        "verdict": "satisfied"
+      },
+      {
+        "criterion": "Benchmark before/after on representative full-suite state.",
+        "evidence": "Before is hosted production evidence, not an estimate: the Trusted Candidate Preflight Validation job on PR #418 head 76d16e05 ran 3,747 tests in 529.81s of Pytest inside a 566s gate-chain step and a 599s job, reproduced within 4s across the three preceding successful runs. After is measured on this candidate's own hosted run of the same job. Locally on 4 vCPU the suite runs 3,820 tests in 180.3s under the lane.",
+        "id": "R-8",
+        "verdict": "satisfied"
+      },
+      {
+        "criterion": "Target: reduce Trusted Candidate Preflight Validation wall-clock from ~10 minutes toward the existing ~4-6 minute hosted full-lane range, or document the measured limiting factor.",
+        "evidence": "Both are recorded. The measured limiting factor is the loadfile floor: every test in a file runs on one worker, and tests/test_market_validation.py totals about 115s of that on a single worker locally (60.1s, 27.9s, 16.2s and 10.6s in its four slowest tests). Splitting those files, not adding workers, is what would move the floor; docs/VALIDATION_STAGE_CONTRACT.md records it.",
+        "id": "R-9",
+        "verdict": "satisfied"
+      },
+      {
+        "criterion": "Keep the change narrowly scoped. Do not mix in Issue-agent webhook deployment, connector capability changes, or unrelated architecture work.",
+        "evidence": "Six files: the trusted workflow, the trusted controller, the repository's pytest configuration comment, the stage-contract prose, DFF-017, and one new test file. No ADR, no stage added to the validation stage contract, no new registry or authority, no runtime, provider or agent code, and no new merge-blocking workflow. The one addition beyond the literal ask -- refusing candidate addopts that rewrite their own validation -- is the adversarial pass on the surface being changed, sits in the controller already being edited, and is scoped to worker and selection options only.",
+        "id": "R-10",
+        "verdict": "satisfied"
+      },
+      {
+        "criterion": "No auto-Ready, auto-merge, force-push, or weakening of human owner merge approval.",
+        "evidence": "No readiness, promotion or merge authority is added or touched. The PR is opened as Draft; the push is a fast-forward through the real .githooks/pre-push boundary with no --no-verify, no force, and no empty commit.",
+        "id": "R-11",
         "verdict": "satisfied"
       }
     ],
@@ -58,138 +82,131 @@
       "transaction-snapshot-consistency"
     ],
     "base_ref": "main",
-    "base_sha": "765774fbb777ae8dbf844fb401763eff1d2bf383",
+    "base_sha": "c770243afbe7ff57aa6b7d34a86034eff325da36",
     "defect_families": [
       {
-        "evidence": "No authorization is minted, consumed or re-aimed. The change reads run state and returns a verdict; the trusted proof's own authorization semantics are untouched, and the identity predicate that binds a run to one exact head and one pull request is now shared rather than duplicated, so it cannot drift on one path only.",
+        "evidence": "No authorization is minted, consumed or re-aimed. The change adds two refusals and one provisioning step; the trusted workflow's authority split -- read-only validation job, separate status-write publisher -- is byte-for-byte what it was, and the publisher still derives its status solely from needs.validate-candidate.result.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "Nothing new is written or trusted from candidate-supplied content. Run status, name, path, event, head_sha and pull_requests all come from the Actions API read by the trusted default-branch controller; a candidate cannot forge them, and no decision reads message text.",
+        "evidence": "Nothing is written, and no history or evidence record is produced by this change. The candidate tree is read for its pytest configuration only, with tomllib and configparser, neither of which executes candidate content; a candidate file that cannot be parsed is reported as an error rather than skipped.",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "No channel's proof obligation changed. Both the connector-origin and ordinary-candidate branches still require the trusted hosted exact-head proof; only the reported state while that proof is legitimately in flight changed, from failure to pending.",
+        "evidence": "Connector write ingress, its authorization receipt and its freshness rules are untouched. The connector authorization receipt path remains excluded from the reviewed target set for the canonical reason, and MUST_BE_PROHIBITED_FROM_CONNECTOR_WRITES already covers the trusted workflow this contribution edits.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "Both commits in this range carry author and committer Claude <noreply@anthropic.com>, the identity bound to login 'claude' in writer_identity_binding, with agent attribution confined to trailers. The push boundary validated the governed range before any remote mutation.",
+        "evidence": "Writer provenance is unchanged. Both commits on this range carry the same authorization-bound writer as author and committer, and the pre-push boundary validates provenance over the governed range before authorizing the network push.",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "Two substantive commits, published by ordinary fast-forward pushes. No commit is empty, no rewind or force-push was performed, and no intermediate commit is stranded.",
+        "evidence": "No intermediate evidence is stranded: the contribution is two commits, the second recording this review, and every artifact it touches is bound to the exact head being pushed rather than to a run identity or a moment in time.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "This candidate writes no connector authorization receipt, so the inherited-receipt path applies and makes no claim about this range. _validate_receipt_freshness is unmodified and ran at the push boundary.",
+        "evidence": "No receipt is published or reused by this change. Editing scripts/hunter_defect_prevention_preflight.py and pyproject.toml changes the validation-definition identity, which retires every prior local receipt rather than letting one carry over -- the conservative direction. Receipt verification, including the required head_sha, is unmodified and re-pinned by test.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "verify_pre_ready_hostile_review is unmodified and still gates admission ahead of the trusted-proof dependency. This review is the artifact it requires, recorded against the exact base->HEAD content; test_a_real_blocker_alongside_an_active_run_is_failure_not_waiting proves a stale review still outranks an active trusted run.",
+        "evidence": "This review is recorded against the exact c770243..HEAD content before the head is offered as ready for anything, covers all eleven applicable families and all eleven requirements the Issue states, and carries no unresolved blocking finding.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "This family recurred and is the subject of the change. The tri-state existed and propagated correctly, but the evidence source did not: the trusted workflow publishes its status from its final job, so an absent status was read as an absent proof path for the entire time the proof was being produced. The family's invariant and prevention mechanism now state that 'still running' is decided from observable run state for the exact head rather than from the presence of a published status, and five new regressions are declared. Adversarially probed: unavailable and malformed run evidence fail closed rather than reporting a wait, an ineligible lookalike run earns no wait on any of the four identity fields, an unbound run earns none, and a concurrent independent blocker outranks the wait.",
+        "evidence": "The waiting semantics repaired in #417 are preserved and re-pinned against the now-parallel lane: the trusted workflow still publishes its status from its final job, so the no-status window is shorter but not gone, and test_a_running_parallel_trusted_proof_is_still_reported_as_waiting requires it to read as pending with the canonical description. test_waiting_still_satisfies_neither_admission_nor_merge_readiness, test_no_eligible_trusted_run_is_still_a_missing_proof and test_a_foreign_head_run_never_becomes_a_wait_for_this_candidate hold the three boundaries around it. No new prerequisite is reported as failure: both new refusals are genuine defects, not waits.",
         "family": "DFF-014",
-        "outcome": "repaired"
+        "outcome": "clear"
       },
       {
-        "evidence": "No lifecycle stage is raised. DFF-014 remains hosted-enforced with a resolvable non-test guard reference at a machine boundary; only its invariant, mechanism, regression evidence and sources were strengthened to describe what the code now actually enforces.",
+        "evidence": "DFF-017's lifecycle stage is deliberately left at regression-tested. Its invariant, mechanism, applicability and regression evidence are strengthened to describe what the code now actually enforces, and nothing is claimed as prevented that is not enforced at the boundary named. The stage-contract prose likewise records the loadfile floor as a measured limit rather than as a solved problem.",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "Validation-proof identity and reuse are untouched by this change. No file under the reuse authority is modified, no proof identity rule is altered, and the #416 validation-performance behaviour is unchanged.",
+        "evidence": "Proof identity is untouched: the receipt schema, DEFINITION_PATHS, TOOLCHAIN_DISTRIBUTIONS and the keyword-only, defaultless head_sha are asserted verbatim by test_exact_head_proof_identity_is_unchanged. Reuse is not widened -- the only movement is that editing two definition files retires existing receipts. Parallelism is applied to execution, never to identity.",
         "family": "DFF-016",
         "outcome": "clear"
+      },
+      {
+        "evidence": "This is the family's own subject, and the recurrence risk is now closed from both sides. The candidate side is unchanged: no worker flag in the repository's pytest configuration. The trusted side is new: it provisions the runner it declares, verifies it before declaring, refuses a lane it cannot honour, refuses a lane that is not the canonical distribution-only sequence, and refuses a candidate that declares worker or selection options in its own addopts -- so the rule no longer rests on a test the candidate owns. The family's invariant, mechanism, applicability scope and regression evidence are updated to match.",
+        "family": "DFF-017",
+        "outcome": "repaired"
       }
     ],
     "findings": [
       {
-        "evidence": "Merge readiness passed a pending governance status through whenever mergeability was resolved, on the premise that governance could publish pending only while mergeability was unresolved. Issue #417 invalidates that premise: governance now publishes pending to mean the required trusted exact-head proof is still running, which readiness cannot derive for itself, so the shortcut would have let a candidate reach ready-to-merge on a proof that does not yet exist. Repaired by making governance pending block as pending. It cannot become a permanent lock because the governance controller republishes on every event and on its schedule. The test that encoded the old premise was replaced with one that states the new contract and the reason for it, and a paired fixture proves a successful governance status still passes.",
+        "evidence": "Adversarial pass on the surface being changed. The trusted pytest gate runs with the candidate tree as its working directory, so the candidate's own [tool.pytest.ini_options] addopts are read by the run that is supposed to prove the candidate. A candidate declaring addopts = \"-k nothing\" would have narrowed its own trusted proof to almost nothing, and the only thing standing against it was a test inside the candidate's own suite. Repaired in the trusted controller: validate_candidate_preflight_definition now reads pyproject.toml, pytest.ini, tox.ini and setup.cfg from the candidate and refuses a worker or selection option declared in any of them, before any gate executes. Scoped to those two classes so that reporting, strictness and duration options stay legitimate; paired negative and positive fixtures pin both directions.",
         "id": "F-1",
         "resolution": "resolved",
         "severity": "blocking"
       },
       {
-        "evidence": "Adding the active-run lookup introduced a second GitHub read on the no-status path, which surfaced a pre-existing test fake in tests/test_pr376_prevention_regressions.py that answered every request path with the same status list. The PR #376 invariant is unchanged; its fake now answers each read separately so it keeps testing wrong-PR authorization rather than incidentally exercising the new lookup.",
+        "evidence": "A candidate can still rewrite the body of a regression test it owns, including the ones DFF-017 names. The registry guard resolves those targets, so deleting them fails closed, but it does not read what they assert. This is inherent to a model where the candidate supplies its own suite and is not introduced here; F-1 is the part of it that this contribution could actually move out of candidate control, and did. Recorded rather than silently accepted.",
         "id": "F-2",
         "resolution": "resolved",
         "severity": "non-blocking"
       },
       {
-        "evidence": "The waiting lookup issues one additional Actions API request, and only on the branch where no matching status exists. A completed candidate takes the unchanged path and costs nothing extra; the added cost falls exactly on the window the change exists to describe correctly.",
+        "evidence": "requirements/ci-constraints.txt is deliberately not added to DFF-017's applicability scope, repeating the narrowing made during #415: adding a pin is not the defect this family describes, and widening the scope onto dependency manifests would pull unrelated contributions into pre-ready review ceremony for no prevention gain. The trusted workflow and the trusted controller were added instead, because those are where a declared lane can be separated from the provisioning that makes it runnable.",
         "id": "F-3",
         "resolution": "resolved",
         "severity": "non-blocking"
       },
       {
-        "evidence": "The hosted full lane refused head ab6aa64: tests/test_hunter_workflow_state.py::test_all_checks_green_inherits_the_canonical_stale_governance_allowance asserted that a governance status of pending on a mergeable head is green, which is the canonical allowance this Issue removes. scripts/hunter_workflow_state.py derives ALL_CHECKS_GREEN by evaluating a blocker-neutralised observation through the canonical merge-readiness decision precisely so it keeps no copy of that policy, so the evaluator itself needed no change and correctly inherited the new block; only its test expectation and a docstring naming the old allowance were stale. Repaired by stating the inherited behaviour, with a paired fixture proving a successful governance status still reaches MERGE_READY so the block is state-specific rather than a blanket refusal. The full suite passes on the repaired content (3,747 passed).",
+        "evidence": "Two independent refusals now guard runner availability -- the workflow verification step and the controller's own precondition -- which is duplication. Kept deliberately: the workflow step reports the cause before the ten-minute chain starts, and the controller check is the one a future caller cannot forget to add. Neither can pass while the other fails, and both are asserted.",
         "id": "F-4",
         "resolution": "resolved",
-        "severity": "blocking"
+        "severity": "non-blocking"
       }
     ],
-    "issue": "417",
+    "issue": "419",
     "review_target": [
       {
-        "blob_sha": "64a397060dd4b074aa02eff930f79c8f94b1a286",
-        "path": "tests/test_issue_417_governance_waiting_state.py",
+        "blob_sha": "96bc5a4c07157464b13e8dc94b9ed16ed0c9389e",
+        "path": "tests/test_issue_419_trusted_parallel_lane.py",
         "previous_path": "",
         "status": "added"
       },
       {
-        "blob_sha": "db70abbac7c68966e8d8c4f4b1b68ab9195bfe8a",
+        "blob_sha": "023ef2a33b192ec96090479a888872ecdf80161b",
+        "path": ".github/workflows/hunter-trusted-preflight-upgrade.yml",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "c83d689bfd4332daa0c2534f77e139c41ce4bf97",
         "path": "docs/DEFECT_REGISTRY.json",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "9948d9d8770b0535109105428cf7967da66d87b1",
-        "path": "scripts/hunter_governance_review_v2.py",
+        "blob_sha": "879c95e8cc507b0f83c3d27e3e9addcc53854eb4",
+        "path": "docs/VALIDATION_STAGE_CONTRACT.md",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "cef645dfaa3a688aa4041be76053fb9b13ff3eba",
-        "path": "scripts/hunter_merge_readiness_v2.py",
+        "blob_sha": "22360afeffb37c0c04e609f7a99b292befced420",
+        "path": "pyproject.toml",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "c19322248337f38916e35442ef826afed84ff1aa",
-        "path": "scripts/hunter_workflow_state.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "6fad2e50270a478dc4fb7d3db18dfeb719ff5a61",
-        "path": "tests/test_hunter_merge_readiness_v2.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "6a569caf3de534a3b1ffb43b36b2bd50424404c4",
-        "path": "tests/test_hunter_workflow_state.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "99c64209aa91c65498bb5a1d420c19cc3d8357b5",
-        "path": "tests/test_pr376_prevention_regressions.py",
+        "blob_sha": "9244bb6caf3275183274680f8461cb32d5bef6cb",
+        "path": "scripts/hunter_defect_prevention_preflight.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "0da82f86f388262d3ecd8aff6b41c61235c16b236e782f8385a6108969d58dbf"
+    "review_target_digest": "883e53b2dedfb2fdc5783077317fc61ed1dae2e93e4ef76e35704af0faeee70c"
   },
-  "review_id": "521158a6304b12a1ea98b8e9b88dbe3788e0d9452854ceb9e0da4f8d68095702",
+  "review_id": "3c9e059b672680bad8aed1708de3e88ea71f738f0b2be721daa7277931b018f7",
   "schema": "hunter.pre-ready-hostile-review.v1"
 }

@@ -2,10 +2,15 @@ from __future__ import annotations
 
 import argparse
 import ast
+import configparser
+import importlib.util
 import json
 import os
 import re
+import shlex
 import subprocess
+import tomllib
+from importlib import metadata
 from pathlib import Path
 from typing import Any, Literal
 
@@ -33,6 +38,55 @@ TRUSTED_CANDIDATE_QUALITY_GATES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Mypy", ("mypy",)),
     ("Pytest", ("pytest",)),
 )
+#: Issue #419: how the trusted default-branch lane distributes the candidate
+#: suite across worker processes. Distribution controls only -- they change how
+#: the suite is spread, never which tests are selected -- so the parallel proof
+#: and the serial proof cover exactly the same tests. The gate commands above are
+#: unchanged by parallelism: the lane is declared by the trusted workflow as
+#: PYTEST_ADDOPTS, so the executed command line stays byte-identical and proof
+#: scope cannot drift with it.
+TRUSTED_PARALLEL_LANE: tuple[str, ...] = ("-n", "auto", "--dist", "loadfile")
+#: The distribution the trusted default branch installs to honour that lane, and
+#: the plugin it registers. Both are checked: an importable module with no
+#: resolvable distribution is not a provisioned dependency, and a resolvable
+#: distribution that will not import cannot register the options either.
+TRUSTED_PARALLEL_RUNNER_DISTRIBUTION = "pytest-xdist"
+TRUSTED_PARALLEL_RUNNER_PLUGIN = "xdist"
+#: Where pytest reads a project's own ``addopts`` from. All four are checked:
+#: a rule that covered only ``pyproject.toml`` would be satisfied by moving the
+#: declaration one file sideways.
+CANDIDATE_PYTEST_CONFIG_SOURCES: tuple[str, ...] = ("pyproject.toml", "pytest.ini", "tox.ini", "setup.cfg")
+#: Options a candidate may not put in its own ``addopts``, because the trusted
+#: controller executes that configuration when it validates the candidate. The
+#: worker options would demand a runner of an environment the candidate does not
+#: provision (DFF-017); the selection options would quietly narrow the very suite
+#: the trusted proof is supposed to be a proof of. Everything else -- reporting,
+#: strictness, durations -- is the candidate's business and stays allowed.
+FORBIDDEN_CANDIDATE_ADDOPTS: tuple[str, ...] = (
+    "--collect-only",
+    "--co",
+    "--deselect",
+    "--dist",
+    "--exitfirst",
+    "--failed-first",
+    "--ff",
+    "--ignore",
+    "--ignore-glob",
+    "--last-failed",
+    "--lf",
+    "--maxfail",
+    "--new-first",
+    "--nf",
+    "--numprocesses",
+    "--stepwise",
+    "--sw",
+    "-k",
+    "-m",
+    "-n",
+    "-x",
+)
+#: Short options whose value may be attached rather than separated (``-nauto``).
+_ATTACHABLE_SHORT_ADDOPTS: tuple[str, ...] = ("-k", "-m", "-n")
 REGISTRY_PATH = ROOT / "docs" / "DEFECT_REGISTRY.json"
 LIFECYCLE_PATH = ROOT / "docs" / "DEFECT_PREVENTION_LIFECYCLE.json"
 WRITE_POLICY_PATH = ROOT / "docs" / "CODE_WRITE_POLICY.json"
@@ -1144,6 +1198,94 @@ def _workflow_has_unconditional_exit_before_preflight(content: str) -> bool:
     return False
 
 
+def _forbidden_addopt(token: str) -> str | None:
+    """The forbidden option ``token`` spells, or ``None``.
+
+    Matched on the option itself rather than on the raw text, so ``-k slow``,
+    ``-kslow``, ``--maxfail=1`` and ``--ignore tests/`` are all the same finding,
+    and a value that merely looks like an option (``-m`` inside a quoted marker
+    expression) is not one -- the caller has already tokenized with shell rules,
+    so only actual argument positions reach here.
+    """
+    if not token.startswith("-"):
+        return None
+    option = token.split("=", 1)[0]
+    if option in FORBIDDEN_CANDIDATE_ADDOPTS:
+        return option
+    for short in _ATTACHABLE_SHORT_ADDOPTS:
+        if token.startswith(short) and len(token) > len(short):
+            return short
+    return None
+
+
+def _declared_candidate_addopts(candidate_root: Path) -> tuple[list[tuple[str, str]], list[str]]:
+    """Every ``addopts`` a candidate declares, with where it declared it.
+
+    Reads the four sources pytest itself reads. An unreadable or malformed one is
+    an error rather than an omission: a rule derived from a file that failed to
+    parse would silently pass everything it could not see.
+    """
+    declarations: list[tuple[str, str]] = []
+    errors: list[str] = []
+    for relative in CANDIDATE_PYTEST_CONFIG_SOURCES:
+        path = candidate_root / relative
+        if not path.is_file():
+            continue
+        try:
+            if relative == "pyproject.toml":
+                document = tomllib.loads(path.read_text(encoding="utf-8"))
+                section = document.get("tool", {}).get("pytest", {}).get("ini_options", {})
+                sections = {"[tool.pytest.ini_options]": section} if isinstance(section, dict) else {}
+            else:
+                parser = configparser.ConfigParser()
+                parser.read_string(path.read_text(encoding="utf-8"))
+                sections = {
+                    f"[{name}]": dict(parser[name]) for name in ("pytest", "tool:pytest") if parser.has_section(name)
+                }
+        except (OSError, UnicodeError, ValueError, configparser.Error) as exc:
+            errors.append(f"candidate pytest configuration is unreadable: {relative} ({type(exc).__name__}: {exc})")
+            continue
+
+        for label, values in sections.items():
+            declared = values.get("addopts")
+            if declared is None:
+                continue
+            if isinstance(declared, str):
+                declarations.append((f"{relative} {label}", declared))
+            elif isinstance(declared, list) and all(isinstance(item, str) for item in declared):
+                declarations.append((f"{relative} {label}", " ".join(declared)))
+            else:
+                errors.append(f"candidate {relative} {label} addopts must be a string or a list of strings")
+    return declarations, errors
+
+
+def validate_candidate_pytest_configuration(candidate_root: Path) -> list[str]:
+    """Refuse a candidate whose own pytest configuration rewrites its validation.
+
+    The trusted controller runs the repository's ``pytest`` gate *inside* the
+    candidate tree, so the candidate's own configuration is read by the run that
+    is supposed to prove the candidate. Two things must not reach it: a worker
+    requirement of an environment the candidate does not provision, and anything
+    that decides which tests are selected. Checked here, from trusted code and
+    before any gate executes, rather than only by a test the candidate owns.
+    """
+    declarations, errors = _declared_candidate_addopts(candidate_root)
+    for where, declared in declarations:
+        try:
+            tokens = shlex.split(declared)
+        except ValueError as exc:
+            errors.append(f"candidate {where} addopts is not parseable ({exc})")
+            continue
+        for token in tokens:
+            option = _forbidden_addopt(token)
+            if option is not None:
+                errors.append(
+                    f"candidate {where} addopts declares {option}, which changes what its own trusted "
+                    f"validation runs: {declared.strip()!r}"
+                )
+    return errors
+
+
 def validate_candidate_preflight_definition(candidate_root: Path) -> list[str]:
     errors: list[str] = []
     workflow_path = candidate_root / ".github" / "workflows" / "hunter-pre-pr-preflight.yml"
@@ -1183,7 +1325,79 @@ def validate_candidate_preflight_definition(candidate_root: Path) -> list[str]:
         except (SyntaxError, TypeError, ValueError) as exc:
             errors.append(f"candidate preflight script structure error: {exc}")
 
+    errors.extend(validate_candidate_pytest_configuration(candidate_root))
+
     return errors
+
+
+def trusted_parallel_runner_problem() -> str | None:
+    """Why this environment cannot execute the trusted parallel lane, or ``None``.
+
+    Asked of the interpreter that is about to launch the gate chain, which is the
+    trusted default-branch environment itself -- never of the candidate. The
+    candidate's own configuration, dependency manifests and pins live in a
+    separate checkout that this environment never installs from, so nothing a
+    candidate declares can add, remove, downgrade or substitute the runner that
+    executes its validation.
+    """
+    if importlib.util.find_spec(TRUSTED_PARALLEL_RUNNER_PLUGIN) is None:
+        return (
+            f"the trusted parallel test runner {TRUSTED_PARALLEL_RUNNER_DISTRIBUTION} does not import as "
+            f"{TRUSTED_PARALLEL_RUNNER_PLUGIN!r} in the trusted environment"
+        )
+    try:
+        metadata.version(TRUSTED_PARALLEL_RUNNER_DISTRIBUTION)
+    except metadata.PackageNotFoundError:
+        return (
+            f"the trusted parallel test runner {TRUSTED_PARALLEL_RUNNER_DISTRIBUTION} is not an installed "
+            "distribution in the trusted environment"
+        )
+    return None
+
+
+def trusted_lane_problem(addopts: str) -> str | None:
+    """Why the declared trusted pytest lane may not be executed, or ``None``.
+
+    Two refusals, both fail-closed. A declaration this environment cannot honour
+    is refused rather than run some other way: a lane that quietly became serial
+    would publish a different execution under the same proof name, and the
+    difference would be invisible in the status it produces. A declaration that
+    is not exactly the canonical distribution-only lane is refused too, because
+    that is the only surface on which selection could be narrowed -- `-k`, `-m`,
+    `--deselect`, `--ignore`, `-x`, `--lf` or a path would all arrive here.
+
+    An empty declaration is the serial trusted lane and stays valid. Parallelism
+    is a speed property, never a proof property: the gate chain, the commands and
+    the tests selected are identical either way, so nothing is weakened by
+    running without it -- only by running something other than what was declared.
+    """
+    tokens = tuple(addopts.split())
+    if not tokens:
+        return None
+    if tokens != TRUSTED_PARALLEL_LANE:
+        return (
+            f"PYTEST_ADDOPTS declares {' '.join(tokens)}, which is not the canonical trusted "
+            f"distribution-only lane {' '.join(TRUSTED_PARALLEL_LANE)}"
+        )
+    return trusted_parallel_runner_problem()
+
+
+def verify_trusted_parallel_runner() -> int:
+    """Report whether the trusted environment can run the parallel candidate lane."""
+    problem = trusted_parallel_runner_problem()
+    if problem is not None:
+        print(f"[Trusted Parallel Runner] FAIL: {problem}")
+        print(
+            "[Trusted Parallel Runner] FAIL: the trusted candidate lane declares parallel execution and "
+            "must not silently run serially under the same proof name."
+        )
+        return 2
+    version = metadata.version(TRUSTED_PARALLEL_RUNNER_DISTRIBUTION)
+    print(
+        f"[Trusted Parallel Runner] PASS: {TRUSTED_PARALLEL_RUNNER_DISTRIBUTION} {version} is provisioned by the "
+        f"trusted default branch; lane: pytest {' '.join(TRUSTED_PARALLEL_LANE)}"
+    )
+    return 0
 
 
 def run_candidate_quality_gates(candidate_root: Path) -> int:
@@ -1200,6 +1414,16 @@ def run_candidate_quality_gates(candidate_root: Path) -> int:
     env = os.environ.copy()
     env["GITHUB_TOKEN"] = ""
     env["GH_TOKEN"] = ""
+
+    lane_problem = trusted_lane_problem(env.get("PYTEST_ADDOPTS", ""))
+    if lane_problem is not None:
+        print(f"[Trusted Candidate Gates] FAIL: {lane_problem}", flush=True)
+        print(
+            "[Trusted Candidate Gates] FAIL: the trusted lane executes what it declares or nothing at all; "
+            "it does not fall back to a different execution under the same proof name.",
+            flush=True,
+        )
+        return 2
 
     for name, command in TRUSTED_CANDIDATE_QUALITY_GATES:
         printable = " ".join(command)
@@ -1231,7 +1455,18 @@ def main() -> int:
         metavar="PATH",
         help="Execute every required candidate quality gate from the trusted controller.",
     )
+    parser.add_argument(
+        "--verify-parallel-runner",
+        action="store_true",
+        help=(
+            "Verify that the trusted environment has the parallel test runner its candidate lane declares, "
+            "failing loudly rather than letting the lane degrade into a different execution."
+        ),
+    )
     args = parser.parse_args()
+
+    if args.verify_parallel_runner:
+        return verify_trusted_parallel_runner()
 
     if args.validate_candidate:
         candidate_errors = validate_candidate_preflight_definition(args.validate_candidate)

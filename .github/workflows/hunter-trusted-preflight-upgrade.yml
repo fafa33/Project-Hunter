@@ -6,6 +6,12 @@ name: Hunter / Trusted Preflight Upgrade
 # candidate cannot self-authorize by weakening hunter_pr_preflight.py.
 # The separate publisher job is the only job with status-write authority and never
 # executes candidate code.
+#
+# Issue #419: the trusted environment -- not the candidate -- owns, provisions and
+# declares the parallel test runner its full-suite gate runs under. Everything
+# installed here comes from the trusted default-branch checkout at the workspace
+# root; the candidate is only ever read from ./candidate, so no candidate
+# manifest, pin, pytest configuration or plugin can change what executes it.
 
 on:
   pull_request_target:
@@ -60,6 +66,20 @@ jobs:
           set -euo pipefail
           python -m pip install --disable-pip-version-check -c requirements/ci-constraints.txt -e ".[dev]"
 
+      # Named explicitly rather than left to arrive with the dev extra: the lane
+      # below is only honest if this environment is the one that owns the runner.
+      # Both the install and the pin come from the trusted default-branch tree at
+      # the workspace root, so the candidate cannot reach either. The verification
+      # fails the job loudly when the runner is absent, instead of letting the
+      # gate chain discover it as an argument-parsing error mid-suite.
+      - name: Provision and verify the trusted parallel test runner
+        env:
+          PIP_CONSTRAINT: requirements/ci-constraints.txt
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check -c requirements/ci-constraints.txt pytest-xdist
+          python scripts/hunter_defect_prevention_preflight.py --verify-parallel-runner
+
       - name: Validate candidate gate structure with trusted code
         run: |
           set -euo pipefail
@@ -69,6 +89,14 @@ jobs:
         env:
           GITHUB_TOKEN: ""
           GH_TOKEN: ""
+          # Issue #419: distribution only. `loadfile` keeps every test in a file
+          # on one worker, so intra-file ordering and module-scoped state behave
+          # exactly as they do serially and only whole files run concurrently.
+          # The gate commands are untouched, so the trusted proof selects exactly
+          # the tests the serial lane selected. The trusted controller refuses to
+          # run at all if this declaration is anything but the canonical
+          # distribution-only lane, or if this environment cannot honour it.
+          PYTEST_ADDOPTS: -n auto --dist loadfile
         run: |
           set -euo pipefail
           python scripts/hunter_defect_prevention_preflight.py --run-candidate-gates candidate
