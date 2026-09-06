@@ -129,6 +129,12 @@
         "id": "F-3",
         "resolution": "resolved",
         "severity": "non-blocking"
+      },
+      {
+        "evidence": "The hosted full lane refused head ab6aa64: tests/test_hunter_workflow_state.py::test_all_checks_green_inherits_the_canonical_stale_governance_allowance asserted that a governance status of pending on a mergeable head is green, which is the canonical allowance this Issue removes. scripts/hunter_workflow_state.py derives ALL_CHECKS_GREEN by evaluating a blocker-neutralised observation through the canonical merge-readiness decision precisely so it keeps no copy of that policy, so the evaluator itself needed no change and correctly inherited the new block; only its test expectation and a docstring naming the old allowance were stale. Repaired by stating the inherited behaviour, with a paired fixture proving a successful governance status still reaches MERGE_READY so the block is state-specific rather than a blanket refusal. The full suite passes on the repaired content (3,747 passed).",
+        "id": "F-4",
+        "resolution": "resolved",
+        "severity": "blocking"
       }
     ],
     "issue": "417",
@@ -158,8 +164,20 @@
         "status": "modified"
       },
       {
+        "blob_sha": "c19322248337f38916e35442ef826afed84ff1aa",
+        "path": "scripts/hunter_workflow_state.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
         "blob_sha": "6fad2e50270a478dc4fb7d3db18dfeb719ff5a61",
         "path": "tests/test_hunter_merge_readiness_v2.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "6a569caf3de534a3b1ffb43b36b2bd50424404c4",
+        "path": "tests/test_hunter_workflow_state.py",
         "previous_path": "",
         "status": "modified"
       },
@@ -170,8 +188,8 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "9c28344f761413d8435015228346f77584498a3ec35cb3ecb962e1d56fe44fac"
+    "review_target_digest": "0da82f86f388262d3ecd8aff6b41c61235c16b236e782f8385a6108969d58dbf"
   },
-  "review_id": "2fa333d9ab45c44d7a7bc801def9302618b8d92fce38d667e0d321d1027de05b",
+  "review_id": "521158a6304b12a1ea98b8e9b88dbe3788e0d9452854ceb9e0da4f8d68095702",
   "schema": "hunter.pre-ready-hostile-review.v1"
 }
