@@ -10,6 +10,8 @@ exactly one stage claims it.
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -207,6 +209,112 @@ def test_every_canonical_preflight_step_declares_the_same_parallel_lane() -> Non
     assert steps, "expected the canonical preflight to be invoked by a hosted workflow"
     for path, step in steps:
         assert (step.get("env") or {}).get("PYTEST_ADDOPTS") == PARALLEL_LANE, path
+
+
+#: The lane may change how the suite is distributed across workers. It may not
+#: change which tests are selected: an "accelerator" that quietly narrowed the
+#: run would be a weaker proof wearing the same name.
+#: The lane exactly as the hosted steps declare it, in order, so the fixtures
+#: below execute it rather than paraphrase it.
+DISTRIBUTION_ONLY_TOKENS_ORDERED = ("-n", "auto", "--dist", "loadfile")
+DISTRIBUTION_ONLY_TOKENS = frozenset(DISTRIBUTION_ONLY_TOKENS_ORDERED)
+
+#: How a lane that owns parallel execution provisions the plugin it needs.
+DEV_EXTRA_INSTALL = '-e ".[dev]"'
+PINNED_CONSTRAINTS = "requirements/ci-constraints.txt"
+WORKER_PLUGIN_DISTRIBUTION = "pytest-xdist"
+
+
+def _jobs_declaring_the_parallel_lane() -> list[tuple[Path, list[dict[str, Any]], int]]:
+    """Every (workflow, steps, index) where a step declares the parallel lane."""
+    import yaml
+
+    found: list[tuple[Path, list[dict[str, Any]], int]] = []
+    workflows = ROOT / ".github" / "workflows"
+    for path in sorted((*workflows.glob("*.yml"), *workflows.glob("*.yaml"))):
+        document = yaml.safe_load(path.read_text(encoding="utf-8"))
+        if not isinstance(document, dict):
+            continue
+        for job in (document.get("jobs") or {}).values():
+            if not isinstance(job, dict):
+                continue
+            steps = [step for step in (job.get("steps") or []) if isinstance(step, dict)]
+            for index, step in enumerate(steps):
+                if "-n" in str((step.get("env") or {}).get("PYTEST_ADDOPTS", "")).split():
+                    found.append((path, steps, index))
+    return found
+
+
+def test_the_parallel_lane_provisions_its_worker_plugin_before_using_it() -> None:
+    """A lane may only ask for workers if it is the lane that installs them.
+
+    This is the other half of the placement rule. Keeping the flags out of the
+    repository's pytest configuration stops a candidate from imposing the plugin
+    on environments that never asked for it; requiring the declaring job to
+    install the dev extra first is what stops the flags from being declared
+    somewhere that cannot honour them either.
+    """
+    declaring = _jobs_declaring_the_parallel_lane()
+
+    assert declaring, "expected at least one hosted job to own the parallel full lane"
+    for path, steps, index in declaring:
+        installs = [
+            step
+            for step in steps[:index]
+            if DEV_EXTRA_INSTALL in str(step.get("run", "")) and PINNED_CONSTRAINTS in str(step.get("run", ""))
+        ]
+        assert installs, f"{path}: the parallel lane is declared without a preceding pinned dev-extra install"
+
+    configuration = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    assert WORKER_PLUGIN_DISTRIBUTION in configuration, "the worker plugin must be a declared dev dependency"
+    constraints = (ROOT / "requirements" / PINNED_CONSTRAINTS.split("/", 1)[1]).read_text(encoding="utf-8")
+    assert f"{WORKER_PLUGIN_DISTRIBUTION}==" in constraints, "the worker plugin must be pinned for the hosted lanes"
+
+
+def test_the_parallel_lane_changes_distribution_and_never_test_selection() -> None:
+    """Serial and parallel runs must select the same tests.
+
+    Asserted over the declaration rather than by running the suite twice: the
+    tokens are the whole surface, so an option that narrows selection -- `-k`,
+    `-m`, `--ignore`, `--deselect`, `-x`, `--lf` or a path -- cannot reach the
+    lane without failing here first.
+    """
+    for path, steps, index in _jobs_declaring_the_parallel_lane():
+        tokens = str(steps[index]["env"]["PYTEST_ADDOPTS"]).split()
+        assert set(tokens) <= DISTRIBUTION_ONLY_TOKENS, (path, tokens)
+
+
+def test_an_unavailable_worker_plugin_fails_loudly_rather_than_running_serially() -> None:
+    """No silent fallback from the parallel lane to a weaker path.
+
+    `-p no:xdist` reproduces exactly what an environment without the plugin
+    does: the options are registered by the plugin, so pytest rejects the
+    command line instead of quietly ignoring the flags and running something
+    other than the lane that was asked for. This is the same failure the trusted
+    controller reported when the flags were pinned repository-wide, and it is
+    the behaviour that makes that placement rule enforceable rather than
+    advisory.
+    """
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-p",
+            "no:xdist",
+            "--collect-only",
+            "-q",
+            *DISTRIBUTION_ONLY_TOKENS_ORDERED,
+            "tests/test_validation_stage_contract.py",
+        ],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode != 0
+    assert "unrecognized arguments" in (completed.stderr + completed.stdout)
 
 
 def test_repository_pytest_configuration_does_not_pin_the_parallel_lane() -> None:
