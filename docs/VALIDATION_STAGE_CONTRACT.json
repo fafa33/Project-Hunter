@@ -1,0 +1,74 @@
+{
+  "version": 1,
+  "governing_issue": "415",
+  "purpose": "Machine-readable ownership contract for Project Hunter candidate validation. Each stage names the boundary that owns it, the proof it is responsible for, and whether it may execute the full repository test suite. A stage may not duplicate proof another stage already owns.",
+  "full_repository_suite_semantics": {
+    "never": "This stage must not execute the full repository test suite. Its proof is either cheaper than the suite or is owned by another stage.",
+    "always": "This stage executes the full repository test suite against the exact candidate content on every candidate. Exactly one stage may declare this: it is the authoritative full exact-head proof.",
+    "only-when-content-identity-differs": "This stage executes the full repository test suite only when the content it validates is not the content an authoritative proof already covers. Identical content is never re-validated."
+  },
+  "reuse_semantics": {
+    "identity": "Reuse is keyed to immutable content identity (a Git tree object), the validation-definition identity, and the executing toolchain identity. Mutable notions such as a run number or 'latest green' are never reuse authority.",
+    "fail_closed": "A changed head, a foreign head, a changed validation definition, a changed toolchain, a stale receipt, a malformed receipt, an unsuccessful result, and unavailable evidence all refuse reuse and fall back to executing the full lane.",
+    "authority": "scripts/hunter_validation_receipt.py"
+  },
+  "stages": [
+    {
+      "id": "focused-development-verification",
+      "owner": "implementation agent",
+      "boundary": "local-development",
+      "proof": "Affected tests plus the lint and type checks relevant to the change.",
+      "full_repository_suite": "never",
+      "must_not": "Repeat a repository-wide validation on an unchanged head merely for reassurance, or manually duplicate the proof a later boundary already owns."
+    },
+    {
+      "id": "pre-push-safety",
+      "owner": ".githooks/pre-push -> scripts/hunter_pre_push.py",
+      "boundary": "local-pre-push",
+      "proof": "Everything whose discovery after publication would require rewriting history or force-pushing: a clean working tree, the pushed branch SHA bound to the checked-out exact HEAD, writer provenance over the governed range, connector authorization receipt freshness, governance-evidence path protection, and preflight-mode validity. Plus the cheap deterministic gates -- Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy -- which fail fast before any expensive work.",
+      "full_repository_suite": "never",
+      "must_not": "Re-run the full repository test suite. Nothing that suite discovers requires a history rewrite to repair, and the hosted exact-head proof is what trusted candidate admission actually requires.",
+      "exception": "A committed .hunter-preflight-mode declaring tests-first-red runs Pytest here, because the declared RED result is itself the proof being made. It is a Draft hygiene signal and never full repository proof."
+    },
+    {
+      "id": "hosted-full-exact-head-proof",
+      "owner": "Hunter / Pre-PR Preflight (.github/workflows/hunter-pre-pr-preflight.yml)",
+      "boundary": "hosted-gate",
+      "proof": "The complete canonical normal preflight -- Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black, Mypy and Pytest -- executed against the exact pushed branch head.",
+      "full_repository_suite": "always",
+      "must_not": "Be replaced by any locally asserted proof. The run record is read from the Actions API by immutable head SHA, so no writer on any channel can mint it."
+    },
+    {
+      "id": "candidate-admission",
+      "owner": "scripts/hunter_candidate_admission.py via hunter_governance_review_v2.candidate_admission",
+      "boundary": "hosted-gate",
+      "proof": "Trusted default-branch verification that a successful exact-head hosted proof, valid preflight mode, code-write ingress provenance and pre-ready hostile review all exist for the exact candidate head. Fails closed and returns the candidate to Draft otherwise.",
+      "full_repository_suite": "never",
+      "must_not": "Accept a run that does not belong to the exact candidate head, or accept a proof asserted by the candidate rather than recorded by the trusted controller."
+    },
+    {
+      "id": "pull-request-integration-compatibility",
+      "owner": "CI / Quality Gates (.github/workflows/ci.yml)",
+      "boundary": "hosted-gate",
+      "proof": "That the tree GitHub would actually merge is valid. When that integration tree is byte-for-byte the tree the authoritative hosted proof already validated, the proof is reused; when main has advanced into a materially different integration tree, the full lane runs against it.",
+      "full_repository_suite": "only-when-content-identity-differs",
+      "must_not": "Re-run the identical full repository suite over identical candidate content merely because a pull request exists, or reuse a proof on any basis other than immutable identity."
+    },
+    {
+      "id": "merge-readiness",
+      "owner": "Hunter Merge Readiness (scripts/hunter_merge_readiness_v2.py)",
+      "boundary": "merge-gate",
+      "proof": "Current GitHub state: Draft state, mergeability, unresolved substantive review threads, current CHANGES_REQUESTED, and the required Quality Gates, dependency-review, CodeQL and Hunter Governance Review checks on the exact head.",
+      "full_repository_suite": "never",
+      "must_not": "Substitute process history, PR prose, or a superseded run for current state."
+    },
+    {
+      "id": "human-merge-approval",
+      "owner": "repository owner",
+      "boundary": "human",
+      "proof": "Explicit human approval and merge.",
+      "full_repository_suite": "never",
+      "must_not": "Be automated. No auto-merge, no auto-Ready, and no agent merge."
+    }
+  ]
+}

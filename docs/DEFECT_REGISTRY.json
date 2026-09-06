@@ -797,6 +797,67 @@
       "sources": [
         "Issue #412"
       ]
+    },
+    {
+      "id": "DFF-016",
+      "title": "validation-proof-reused-without-immutable-identity",
+      "invariant": "An expensive validation proof is reusable only for the exact immutable content, validation definition and toolchain it was produced under. A changed head, a foreign head, a changed validation definition, a changed toolchain, a stale, malformed, unsuccessful or unverifiable proof, and unavailable evidence all refuse reuse and run the full lane.",
+      "applicability": {
+        "changed_paths": [
+          ".githooks/",
+          ".github/workflows/",
+          "docs/VALIDATION_STAGE_CONTRACT.json",
+          "scripts/"
+        ],
+        "rationale": "The validation boundaries and the reuse authority are where a proof made for one candidate can be re-aimed at another, and where removing duplicate proof can quietly become removing proof."
+      },
+      "prevention": {
+        "mechanism": "One place decides reuse, from identities the verifier recomputes rather than accepts: the Git tree content identity, the validation-definition identity over the declared definition files and the gate chain, the measured toolchain, and the exact head. The head binding carries no default, so a caller cannot drop it by omitting a keyword -- the defect independent review found on PR #416, where the push boundary supplied it and the local reuse path did not, letting content identity alone decide on one of the two production paths. A receipt can therefore only narrow reuse, never widen it, and every non-matching branch falls back to executing the full lane.",
+        "boundary": "hosted-gate",
+        "guard_reference": "scripts/hunter_validation_receipt.py::verify"
+      },
+      "regression_evidence": [
+        "tests/test_validation_proof_reuse.py::test_a_receipt_for_one_commit_is_refused_on_another_commit_with_the_same_tree",
+        "tests/test_validation_proof_reuse.py::test_verification_cannot_be_asked_to_skip_the_head_binding",
+        "tests/test_validation_proof_reuse.py::test_changed_head_invalidates_reusable_proof",
+        "tests/test_validation_proof_reuse.py::test_foreign_head_proof_fails_closed",
+        "tests/test_validation_proof_reuse.py::test_changed_validation_definition_invalidates_reusable_proof",
+        "tests/test_validation_proof_reuse.py::test_stale_receipt_fails_closed",
+        "tests/test_validation_proof_reuse.py::test_malformed_receipt_documents_fail_closed",
+        "tests/test_validation_proof_reuse.py::test_another_workflow_wearing_the_same_name_cannot_authorize_reuse"
+      ],
+      "lifecycle": "hosted-enforced",
+      "sources": [
+        "Issue #415",
+        "PR #416 independent owner review on 2026-09-06"
+      ]
+    },
+    {
+      "id": "DFF-017",
+      "title": "candidate-configuration-unrunnable-in-the-trusted-environment",
+      "invariant": "A candidate's own configuration may not require tooling that the trusted default-branch controller's environment has no reason to provide. The trusted controller executes the repository's gate commands inside the candidate tree under the trusted environment, so a requirement the candidate declares for itself must be one that environment can already satisfy.",
+      "applicability": {
+        "changed_paths": [
+          "pyproject.toml",
+          "scripts/hunter_pr_preflight.py"
+        ],
+        "rationale": "The repository's own gate configuration and gate definition are where a candidate can declare a requirement that only its own environment satisfies, while the trusted controller runs the same commands under another. The dependency pin files are deliberately excluded: adding a pin is not the defect, requiring it from a configuration the trusted environment must execute under is."
+      },
+      "prevention": {
+        "mechanism": "Accelerators and other optional-plugin requirements are declared by the hosted boundaries that install them, never by the repository configuration the trusted controller has to execute under. Three properties are asserted directly rather than the flag spelling: the repository configuration declares no such requirement, a lane that declares one installs the plugin first under the pinned constraints, and an unavailable plugin fails the command line loudly instead of silently running something weaker than the lane that was asked for.",
+        "boundary": "review"
+      },
+      "regression_evidence": [
+        "tests/test_validation_stage_contract.py::test_repository_pytest_configuration_does_not_pin_the_parallel_lane",
+        "tests/test_validation_stage_contract.py::test_the_parallel_lane_provisions_its_worker_plugin_before_using_it",
+        "tests/test_validation_stage_contract.py::test_an_unavailable_worker_plugin_fails_loudly_rather_than_running_serially",
+        "tests/test_validation_stage_contract.py::test_the_parallel_lane_changes_distribution_and_never_test_selection",
+        "tests/test_validation_stage_contract.py::test_every_canonical_preflight_step_declares_the_same_parallel_lane"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "Issue #415 Trusted Candidate Preflight Validation failure on PR #416 head 327242b (2026-09-06)"
+      ]
     }
   ]
 }

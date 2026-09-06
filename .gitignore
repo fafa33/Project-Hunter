@@ -6,6 +6,7 @@ __pycache__/
 .DS_Store
 .secrets/
 .mypy_cache/
+.hunter/validation-receipts/
 *.pid
 *.log
 nohup.out

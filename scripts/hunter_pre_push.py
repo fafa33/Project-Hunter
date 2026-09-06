@@ -1,10 +1,21 @@
 """The repository-owned push boundary.
 
-Beyond running the canonical preflight on the exact checked-out HEAD, this
-boundary is where Issue #412 requires provenance and evidence-lifecycle defects
-to be caught: *before* any remote mutation, with an actionable diagnosis, rather
-than after a hosted push has already created a state that needs a rewind to
-escape.
+This boundary is where Issue #412 requires provenance and evidence-lifecycle
+defects to be caught: *before* any remote mutation, with an actionable
+diagnosis, rather than after a hosted push has already created a state that
+needs a rewind to escape.
+
+Issue #415 sharpened what that means. The boundary owns exactly the defects
+whose discovery *after* publication would force a history rewrite or a
+force-push -- commit identity, a stale authorization receipt, a ref that is not
+the checked-out head -- plus the cheap deterministic gates, which fail fast and
+cost seconds. It does not own the full repository test suite: a failing test is
+repaired by the next commit with no rewind, so paying nine minutes here to
+learn ten minutes early was duplicating, not protecting. The authoritative
+exact-head full repository proof belongs to the hosted branch preflight, which
+is the evidence trusted candidate admission has always actually required and
+which no writer on any channel can mint. ``docs/VALIDATION_STAGE_CONTRACT.json``
+is the machine-readable form of that ownership split.
 """
 
 from __future__ import annotations
@@ -17,7 +28,9 @@ from collections.abc import Iterable
 from pathlib import Path
 
 import hunter_connector_write_ingress as ingress
+import hunter_pr_preflight as preflight
 import hunter_pre_ready_review as review
+import hunter_validation_receipt as receipts
 import hunter_writer_provenance as provenance
 
 ZERO_SHA = "0" * 40
@@ -100,6 +113,56 @@ def _select_preflight_mode(head_sha: str) -> str:
 
 def _preflight_command(mode: str) -> tuple[str, ...]:
     return ("python", "scripts/hunter_pr_preflight.py", "--mode", mode)
+
+
+def _run_push_safety_lane() -> int:
+    """Run the deterministic gates that must pass before any network mutation.
+
+    Every gate here is cheap and fails fast, so a formatting or registry defect
+    is reported in seconds instead of behind ten minutes of tests. The full
+    repository suite is deliberately not among them; see the module docstring.
+    """
+    return preflight.run_quality_gates(preflight.PUSH_SAFETY_GATES)
+
+
+def _lane_label(mode: str) -> str:
+    if mode == TESTS_FIRST_RED_MODE:
+        return "canonical tests-first-red preflight"
+    return "push-safety lane"
+
+
+def report_full_repository_proof_ownership(repo_root: Path, head_sha: str, mode: str) -> None:
+    """Say who owns the full repository proof for this head -- and never re-run it.
+
+    A recorded local receipt for this exact identity is reported rather than
+    repeated: Issue #415 forbids validating one immutable candidate with the
+    same suite twice. Without one, the hosted exact-head branch preflight owns
+    that proof and trusted candidate admission fails closed until it lands, so
+    nothing is being skipped here -- only moved to the boundary that owns it.
+    """
+
+    if mode == TESTS_FIRST_RED_MODE:
+        print(
+            "[Hunter Pre-Push] DRAFT-ONLY: tests-first-red proves a declared RED result, "
+            "which is never full repository proof."
+        )
+        return
+
+    try:
+        blocker = receipts.reuse_blocker(repo_root, head_sha=head_sha)
+    except Exception as exc:  # noqa: BLE001 - reporting must never block an otherwise authorized push
+        print(f"[Hunter Pre-Push] NOTE: full repository proof ownership is unreportable ({exc})")
+        return
+    if blocker is None:
+        print(
+            f"[Hunter Pre-Push] LOCAL-FULL-PROOF: a recorded receipt already covers exact HEAD {head_sha}; "
+            "the full lane is not re-run."
+        )
+        return
+    print(
+        f"[Hunter Pre-Push] HOSTED-OWNS-FULL-PROOF: {blocker}. "
+        "Hunter / Pre-PR Preflight validates this exact head and candidate admission fails closed without it."
+    )
 
 
 def _validate_writer_provenance(head_sha: str) -> None:
@@ -223,13 +286,16 @@ def enforce_pre_push(lines: Iterable[str]) -> int:
     _validate_receipt_freshness(before_head)
     mode = _select_preflight_mode(before_head)
 
-    completed = subprocess.run(_preflight_command(mode), check=False)
-    if completed.returncode != 0:
+    if mode == TESTS_FIRST_RED_MODE:
+        returncode = subprocess.run(_preflight_command(mode), check=False).returncode
+    else:
+        returncode = _run_push_safety_lane()
+    if returncode != 0:
         print(
-            f"[Hunter Pre-Push] BLOCKED: canonical {mode} preflight exited {completed.returncode}",
+            f"[Hunter Pre-Push] BLOCKED: {_lane_label(mode)} exited {returncode}",
             file=sys.stderr,
         )
-        return completed.returncode or 1
+        return returncode or 1
 
     after_head = _run_git("rev-parse", "HEAD")
     if after_head != before_head:
@@ -242,8 +308,9 @@ def enforce_pre_push(lines: Iterable[str]) -> int:
         print(f"[Hunter Pre-Push] BLOCKED: {error}", file=sys.stderr)
         return 2
 
+    report_full_repository_proof_ownership(repo_root, after_head, mode)
     report_pre_ready_review_state(after_head)
-    print(f"[Hunter Pre-Push] PASS: exact HEAD {after_head} passed canonical {mode} preflight")
+    print(f"[Hunter Pre-Push] PASS: exact HEAD {after_head} passed the {_lane_label(mode)}")
     return 0
 
 

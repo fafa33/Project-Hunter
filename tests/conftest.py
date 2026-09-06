@@ -32,13 +32,28 @@ def _repository_status(root: Path) -> str | None:
     return completed.stdout
 
 
+def _is_xdist_worker(session: pytest.Session) -> bool:
+    """Whether this process is a parallel worker rather than the controller.
+
+    Issue #415 parallelised the suite. This check compares one whole-repository
+    snapshot against another, so a worker running it would be reading a tree
+    that its siblings are concurrently using -- a transient file belonging to
+    another worker would look like this session leaking state. The controller
+    is the only process that observes the session as a whole, so it is the only
+    process that can answer the question the check is asking.
+    """
+    return hasattr(session.config, "workerinput")
+
+
 def pytest_sessionstart(session: pytest.Session) -> None:
     global _INITIAL_STATUS
+    if _is_xdist_worker(session):
+        return
     _INITIAL_STATUS = _repository_status(Path(str(session.config.rootpath)))
 
 
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
-    if _INITIAL_STATUS is None:
+    if _INITIAL_STATUS is None or _is_xdist_worker(session):
         return
     final_status = _repository_status(Path(str(session.config.rootpath)))
     if final_status is None or final_status != _INITIAL_STATUS:
