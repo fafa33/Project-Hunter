@@ -324,10 +324,30 @@ def test_merge_ready_is_exactly_the_canonical_readiness_decision(overrides: dict
     assert established.detail == canonical.description
 
 
-def test_all_checks_green_inherits_the_canonical_stale_governance_allowance() -> None:
-    """A canonically valid state must not be rejected by this evaluator."""
+def test_all_checks_green_inherits_the_canonical_governance_pending_block() -> None:
+    """This evaluator restates no policy: it follows the canonical decision.
+
+    Before Issue #417 a governance status of pending on a mergeable head was a
+    canonically allowed state, because governance could publish pending only
+    while mergeability was unresolved. Governance now also publishes pending to
+    mean the required trusted exact-head proof is still running, so the canonical
+    decision blocks -- and this evaluator must block with it rather than keep its
+    own copy of the old allowance.
+    """
 
     observation = _observation(governance_status={"id": 99, "state": "pending"}, mergeable=True)
+    report = evaluate_workflow_state(observation=observation)
+
+    established = {finding.state: finding for finding in report.findings}
+    assert established[WorkflowState.ALL_CHECKS_GREEN].established is False
+    assert report.derived is not WorkflowState.MERGE_READY
+    assert readiness.GOVERNANCE_CONTEXT in established[WorkflowState.ALL_CHECKS_GREEN].detail
+
+
+def test_all_checks_green_still_holds_for_a_successful_governance_status() -> None:
+    """The inherited block is governance-state specific, not a blanket refusal."""
+
+    observation = _observation(governance_status={"id": 99, "state": "success"}, mergeable=True)
     report = evaluate_workflow_state(observation=observation)
 
     established = {finding.state: finding for finding in report.findings}

@@ -150,8 +150,9 @@ class PullRequestObservation:
         """The same observation with every non-check blocker neutralised.
 
         Evaluating this through the canonical decision is what makes
-        ALL_CHECKS_GREEN mean exactly what merge readiness means by it,
-        including the stale-governance-pending allowance, without restating it.
+        ALL_CHECKS_GREEN mean exactly what merge readiness means by it --
+        including, since Issue #417, that a governance status of pending is a
+        real dependency wait and not a green check -- without restating it.
         """
 
         return readiness.StaticReadinessObservation(
