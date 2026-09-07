@@ -265,18 +265,17 @@ the issuer start command with the repository-owned provenance resolver, persiste
 variables that are safe to commit (assigned via Railway's `$variable` references). Deploy by connecting the `Project-Hunter` repository and
 creating a Service from it, then set the remaining variables as a Railway Variable Group / Service variables.
 
-#### Railway Bootstrap Steps (a–i)
+#### Railway Bootstrap Steps (a–g)
 
-The issuer requires a Source Handling authority root and genesis rule before it can read the evidence database. The operator provisions these
-with a one-shot bootstrap script, then deploys the issuer without any signing key in its runtime.
+The issuer requires a Source Handling authority root and genesis rule before it can read the evidence database, then requires the per-Issue
+`FACT` / `FIELD_CATEGORY_REGISTRY` / `POLICY` authority records (with their `EVIDENCE` / `VERIFIER` provenance antecedents) before an
+authorized Issue can execute. The operator provisions these with the bootstrap and per-Issue provisioning scripts, then deploys the issuer
+without any signing key in its runtime.
 
-**a. Attach the persistent Volume** — `railway.toml` mounts a `Volume` at `/data` and sets `HUNTER_ISSUE_AGENT_EVIDENCE_DB=/data/evidence.sqlite`.
-
-**b. Set the signing key env (bootstrap-only)** — set `HUNTER_SOURCE_HANDLING_SIGNING_KEY` as a Railway **Secret** (not a regular variable).
-This is the hex-encoded Ed25519 private key matching the pinned public key. It is consumed only by the bootstrap and provenance provisioning
-steps; the issuer runtime never holds it.
-
-**c. Run the bootstrap script once** — execute as a Railway Job (one-off command):
+**a. Attach the persistent Volume and bootstrap the root + genesis rule** — `railway.toml` mounts a `Volume` at `/data` and sets
+`HUNTER_ISSUE_AGENT_EVIDENCE_DB=/data/evidence.sqlite`. Set `HUNTER_SOURCE_HANDLING_SIGNING_KEY` as a Railway **Secret** (not a regular
+variable): the hex-encoded Ed25519 private key matching the pinned public key, consumed only by the bootstrap and provisioning steps. Run
+the bootstrap script once as a Railway Job (one-off command):
 
 ```bash
 python scripts/bootstrap_source_handling_authority.py \
@@ -286,7 +285,8 @@ python scripts/bootstrap_source_handling_authority.py \
 
 The script reads `HUNTER_SOURCE_HANDLING_SIGNING_KEY` from the environment, derives the public key and the three non-secret operator values,
 pins the operator root row, and publishes the genesis authorization rule. It is idempotent when the existing state exactly matches; any
-mismatch (foreign root, wrong key, successor chain) fails closed without replacing authority state.
+mismatch (foreign root, wrong key, successor chain) fails closed without replacing authority state. The signing key is consumed from the
+environment **or** `--signing-key-file`, never both (the CLI fails closed before opening the database if both are supplied).
 
 The genesis rule is always the repository-owned `config/source_handling/authorization_rule_v1.json`, pinned to canonical digest
 `41119071db0f5c2a2eacfe2848ab6696355195e1ac9c671ee33c4128793aa70a`; the CLI accepts no alternate rule path. A missing, malformed, or
@@ -300,42 +300,70 @@ On a fresh database the output is:
 }
 ```
 
-**d. Capture the 3 non-secret outputs** — extract from the JSON:
-- `HUNTER_SOURCE_HANDLING_VERIFICATION_KEY`
-- `HUNTER_SOURCE_HANDLING_VERIFICATION_KEY_SHA256`
-- `HUNTER_SOURCE_HANDLING_GENESIS_RULE_SHA256`
+Capture `HUNTER_SOURCE_HANDLING_VERIFICATION_KEY`, `HUNTER_SOURCE_HANDLING_VERIFICATION_KEY_SHA256`, and
+`HUNTER_SOURCE_HANDLING_GENESIS_RULE_SHA256`; these are safe to store as regular variables or references (public-key- and rule-derived,
+non-secret).
 
-These are safe to store as Railway regular variables or commit references; they are derived from the public key and the rule content.
+**b. Provision the exact issue authority records** — run the per-Issue provisioning CLI against the same database and signing key for the
+first authorized Issue it will execute:
 
-**e. Set issuer runtime variables** — on the Railway Service, set:
-- `HUNTER_SOURCE_HANDLING_VERIFICATION_KEY` (from step d)
-- `HUNTER_SOURCE_HANDLING_VERIFICATION_KEY_SHA256` (from step d)
-- `HUNTER_SOURCE_HANDLING_GENESIS_RULE_SHA256` (from step d)
+```bash
+python scripts/provision_source_handling_issue_authority.py \
+  --database /data/evidence.sqlite \
+  --repository <owner>/<repo> \
+  --issue-number <n> \
+  --issue-url https://github.com/<owner>/<repo>/issues/<n> \
+  --issue-title "<title>" \
+  --issue-body "<body>" \
+  --authorized-by <login> \
+  --issue-updated-at <updated_at> \
+  --authorization-id <authorization_id> \
+  --json
+```
+
+The CLI derives the exact `github-issue:<repository>#<number>` document identity from the same authorization claims the trigger will POST,
+derives the `FACT`, `FIELD_CATEGORY_REGISTRY`, and `POLICY` records from repository-owned contracts and defaults, and publishes each with an
+authority-signed authorization derived from the genesis rule. It refuses to run against anything but the pinned production genesis rule and
+refuses to run unless `HUNTER_ISSUE_AGENT_EVIDENCE_DB`, `HUNTER_SOURCE_HANDLING_VERIFICATION_KEY`,
+`HUNTER_SOURCE_HANDLING_VERIFICATION_KEY_SHA256`, and `HUNTER_SOURCE_HANDLING_GENESIS_RULE_SHA256` are exported and match this exact
+bootstrap (the same environment the issuer runtime will use). It never invents data: if the exact canonical content of any required record
+cannot be derived it stops with the specific missing contract.
+
+**c. EVIDENCE / VERIFIER provenance** — the same provisioning run first writes the six `EVIDENCE` / `VERIFIER` provenance records the three
+issuances require (`evidence:auth:fact:<document_id>`, `verifier:auth:fact:<document_id>`, and the `registry` / `policy` equivalents), at
+the operator provisioning as-of `--as-of`. The Source Handling contract forbids backdating an authority record before its physical admission,
+so the records' claimed as-of is the operator provisioning instant and the CLI prints the exact `as_of` it used. Record it: pinning that same
+`--as-of` on a re-run makes the whole provisioning exactly idempotent (already-provisioned, nothing mutated); any other would-be difference
+fails closed before it writes or supersedes anything.
+
+**d. Set issuer runtime variables** — on the Railway Service, set:
+- `HUNTER_SOURCE_HANDLING_VERIFICATION_KEY` (from step a)
+- `HUNTER_SOURCE_HANDLING_VERIFICATION_KEY_SHA256` (from step a)
+- `HUNTER_SOURCE_HANDLING_GENESIS_RULE_SHA256` (from step a)
 - `HUNTER_PROMPT_AUTOMATION_SIGNING_KEY` (secret)
 - `HUNTER_PROMPT_AUTOMATION_VERIFYING_KEY`
 - `HUNTER_ISSUE_AGENT_AUTHORIZATION_VERIFYING_KEY`
 - `HUNTER_ISSUE_AGENT_REPOSITORY`, `HUNTER_ISSUE_AGENT_OWNER_LOGIN`, `HUNTER_ISSUE_AGENT_EXECUTION_BRANCH`, `HUNTER_ISSUE_AGENT_REPO_DIR`
 - Fallback runtime provider variables (`HUNTER_AGENT_*`)
+- `HUNTER_ISSUE_AGENT_EVIDENCE_DB=/data/evidence.sqlite` (already set by `railway.toml`)
 
-**f. Remove the signing key env** — delete or unset `HUNTER_SOURCE_HANDLING_SIGNING_KEY` from the Railway Service. The issuer runtime must
-not have access to the signing key. The provenance provisioning step (h) re-uses it temporarily, then it is removed again.
+**e. Remove the bootstrap-only signing material** — delete or unset `HUNTER_SOURCE_HANDLING_SIGNING_KEY` from the Railway Service. The
+issuer runtime must not have access to the signing key; bootstrap and per-Issue provisioning are the only steps that re-set it, temporarily,
+and it is removed again immediately afterwards.
 
-**g. Deploy the issuer** — trigger a Railway deploy. The `railway.toml` start command runs:
+**f. Deploy the issuer** — trigger a Railway deploy. The `railway.toml` start command runs:
 
 ```text
 python scripts/hunter_issue_agent_issuer.py --host 0.0.0.0 --port $PORT \
   --provenance-resolver hunter.evidence_intelligence.source_handling_provenance.production_provenance_resolver
 ```
 
-At this point the issuer can read the authority root and genesis rule but no provenance records yet; any authorization attempt fails closed
-until step (h) provisions the required `EVIDENCE` / `VERIFIER` provenance records.
+The issuer reads the pinned operator root and genesis rule, and each authorization attempt re-verifies the provisioned `EVIDENCE` / `VERIFIER`
+provenance antecedents against the same database with the exact strength/method/verifier type the operator provisioned.
 
-**h. Provision the exact provenance records** — set `HUNTER_SOURCE_HANDLING_SIGNING_KEY` again temporarily and run the provenance CLI (see
-"Provisioning Source Handling Provenance" above) for each `EVIDENCE` / `VERIFIER` identity the issuer will name. Then remove the signing
-key env again.
-
-**i. Live authorized E2E** — apply the `hunter-agent-execute` label to a test Issue. The trigger workflow signs and POSTs the authorization;
-the issuer verifies, executes, and dispatches to the fallback runtime. Check issuer and runtime logs for the complete path.
+**g. Live authorized E2E** — apply the `hunter-agent-execute` label to a test Issue. The trigger workflow signs and POSTs the authorization;
+the issuer verifies, resolves the pre-model Source Handling decision for the exact document, executes, and dispatches to the fallback runtime.
+Check issuer and runtime logs for the complete path.
 
 #### Railway Configuration Reference
 

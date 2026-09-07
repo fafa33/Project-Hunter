@@ -2,51 +2,27 @@
   "claims": {
     "acceptance_criteria": [
       {
-        "criterion": "An operator can provision a fresh /data/evidence.sqlite with the pinned operator root and genesis rule using one operator command, without hand-written SQL and without depending on a tests/ fixture.",
-        "evidence": "scripts/bootstrap_source_handling_authority.py requires only --database and consumes the signing key from HUNTER_SOURCE_HANDLING_SIGNING_KEY or --signing-key-file; it contains no INSERT/UPDATE executescript and no fixture import. All authority material enters through the repository's service path. test_source_handling_bootstrap.py exercises a fresh temp DB end-to-end (root+genesis present; exactly one AUTHORIZATION_RULE genesis, one canonical key, one history commitment, one publication authorization). The live /data mount on Railway is the operator Volume step tracked by #423/#390, not a committed-content property.",
+        "criterion": "One narrow Draft PR bound to this Issue resolving exactly the two findings above (no redesign, no scope creep).",
+        "evidence": "The candidate touches exactly: scripts/provision_source_handling_issue_authority.py (new per-Issue provisioning CLI), scripts/bootstrap_source_handling_authority.py (only the dual-source guard + docstring), tests/test_source_handling_provisioning.py (new), tests/test_source_handling_bootstrap.py (two new tests only), docs/ISSUE_AGENT_ISSUER_DEPLOYMENT.md (Railway order only). No source module outside those scripts, no new services, no registry or persistence changes.",
         "id": "C-1",
         "verdict": "satisfied"
       },
       {
-        "criterion": "The 32-byte Ed25519 signing key is consumed only for bootstrap, never echoed, never persisted, and never emitted in output.",
-        "evidence": "_load_signing_key reads exactly 32 bytes from hex env or file and raises for empty/non-hex/wrong-length values; the outcome map contains only verification_key, verification_key_sha256 and genesis_rule_sha256; neither --json nor the text output prints the private key. test_bootstrap_security_boundary_no_signing_key_in_output pins the output key set, and the runtime suite pins the issuer edge has no signing-key env requirement.",
+        "criterion": "Canonical pre-ready hostile review regenerated for the exact candidate head.",
+        "evidence": "This judgement was recorded with scripts/hunter_pre_ready_review.py --base 8c26e09... --head 8c26e09...bf68e8c --issue 430 and then re-verified with the same arguments; the resulting .hunter/pre-ready-hostile-review.json binds the exact blob SHAs of the candidate change set (review_target / review_target_digest derived from git diff --raw, excluding only the review's own artifact path).",
         "id": "C-2",
         "verdict": "satisfied"
       },
       {
-        "criterion": "Authority state is published through the canonical service/genesis-bootstrap capability, not by the script writing rows directly.",
-        "evidence": "The script constructs SourceHandlingAuthorityService with the derived operator root and production_provenance_resolver, then calls publish_genesis_rule; the genesis bootstrap capability performs payload validation, the empty-history precondition, signature binding, and the protected BEGIN IMMEDIATE write sequence. The script contains no SQL text.",
+        "criterion": "Complete-for-Review optimization: provisioning command for one Issue + mutual-exclusion fix + tests + deployment doc updated to the (a)-(g) Railway order.",
+        "evidence": "The provisioning CLI provisions FACT / FIELD_CATEGORY_REGISTRY / POLICY for one Issue with its six EVIDENCE/VERIFIER antecedents and is covered by 7 new tests (happy path resolves through resolve_pre_model_source_handling at the runtime boundary; exact rerun idempotent; authority mismatch fails closed; existing-but-mismatched authority head fails before any provenance write; provenance mismatch fails closed; as-of predating the rule or the Issue update fails closed; operator env guard; dual-source mutual exclusion). The bootstrap mutual-exclusion fix has 2 new tests (unit ValueError + CLI SystemExit with fresh DB untouched). The Railway deployment doc now lists steps (a)-(g) in the mandated order.",
         "id": "C-3",
         "verdict": "satisfied"
       },
       {
-        "criterion": "Bootstrap is idempotent only for an exact digest match; every mismatch fails closed and never replaces authority state.",
-        "evidence": "Idempotency is decided by comparing current_canonical_head_id(\"AUTHORIZATION_RULE\", scope) to sha256(_canonical_json({...rule, \"scope\": \"SOURCE_HANDLING\"})): exact match => already-provisioned; any other head or a foreign root => SourceHandlingBlockedError('existing authority genesis does not match the production rule; refusing to re-bootstrap') via parser.error (exit 2). test_idempotent_rerun_does_not_touch_state, test_mismatched_genesis_digest_fails_closed (direct operator_root tamper), test_existing_foreign_root_fails_closed and the re-run leaves the DB byte-stable.",
+        "criterion": "Live Railway Issue E2E is unblocked by the provisioned authority (verified via the runtime pre-model resolution boundary in tests).",
+        "evidence": "test_provisioning_publishes_exact_authority_records_for_one_issue provisions a fresh database through the CLI and then resolves the exact issue document identity with resolve_pre_model_source_handling at cutoff = updated_at + 1 day: fact_record.id, registry_record.id, decision.retention_decision == ALLOW, decision.field_category_registry_id == registry:<document_id>:v1, and authorization_rule.id == the genesis rule record id; provenance antecedents verified by the production resolver.",
         "id": "C-4",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "The three non-secret HUNTER_SOURCE_HANDLING_* outputs derive deterministically and satisfy the issuer runtime contract.",
-        "evidence": "verification_key = Raw Ed25519 public key of the derived private key; verification_key_sha256 = sha256(verification_key); genesis_rule_sha256 = sha256(_canonical_json(rule)) without scope, which is the operator root's genesis_rule_sha256 field. The runtime read-path test provisions via SourceHandlingProvenanceAuthorityRepository and resolves successfully through SourceHandlingProvenanceView using only these outputs plus the operator root, with no signing key present.",
-        "id": "C-5",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "The repository-owned production rule is byte-identical to the pinned golden fixture, lives outside any tests/ directory, and is the only rule the production CLI can use.",
-        "evidence": "config/source_handling/authorization_rule_v1.json has canonical digest 41119071db0f5c2a2eacfe2848ab6696355195e1ac9c671ee33c4128793aa70a and raw-byte digest ab45d07e79293b46c30e26f3d297ed8ab5b43e79e5157800a506d501e147ecce; the CLI exposes no --rule option (test_production_cli_accepts_no_rule_override pins that the flag is rejected and no database is created), the script constant PINNED_PRODUCTION_RULE_SHA256 equals the fixture digest, and _load_production_rule fails closed for a missing, malformed or digest-mismatched rule before any authority state is written.",
-        "id": "C-6",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "The Railway deployment doc records the exact operator bootstrap sequence (a)-(i).",
-        "evidence": "docs/ISSUE_AGENT_ISSUER_DEPLOYMENT.md Option 3 now has 'Railway Bootstrap Steps (a-i)': volume, signing key, one-shot bootstrap, capture non-secret outputs, runtime vars, remove signing key, deploy, provenance records, live authorized E2E.",
-        "id": "C-7",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "No architectural widening, #423/#390 untouched, exactly one Draft PR, and the hostile review is recorded against this exact head.",
-        "evidence": "The candidate adds config/scripts/tests/docs only; no src/hunter production behavior changed. #423/#390 remain open (live Railway operational proof). PR #429 is Draft; pre-ready hostile review recorded for issue 428 at base 5388d8c..head 449a30e.",
-        "id": "C-8",
         "verdict": "satisfied"
       }
     ],
@@ -64,140 +40,138 @@
       "transaction-snapshot-consistency"
     ],
     "base_ref": "main",
-    "base_sha": "5388d8c67bdc491fe84ac3b3e17c8d540fe9c1ba",
+    "base_sha": "8c26e096c4656d7fac96f4dc30af17538ea31c04",
     "defect_families": [
       {
-        "evidence": "untrusted-temporal-authority: the genesis rule's effective_from and claims come from the repository-owned config file; the script contributes no payload time. datetime.now(UTC) feeds only the read-view cutoff for the idempotency probe and never reaches admission, ordering or the signed record.",
-        "family": "DFF-001",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "transaction-snapshot-consistency: publish_genesis_rule executes inside the repository's protected BEGIN IMMEDIATE read->verify->validate->insert->update->commit sequence (root row pinned and validated in the same transaction), so a bootstrap cannot observe a half-pinned root; a concurrent double-bootstrap on a fresh DB fails closed rather than racing.",
-        "family": "DFF-002",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "schema-fail-closed-incompleteness: a fresh DB is fully initialized by the service; the bootstrap smoke verified the exact minimal schema (operator root + authority records + canonical keys + history commitments + publication authorizations) with no provenance tables created; a bare DB fails closed on the runtime read path ('provenance tables are unavailable') rather than degrading.",
-        "family": "DFF-004",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "monotonicity-and-restart-instability: restart of bootstrap is the idempotent re-run path: identical head => already-provisioned and byte-stable; any difference fails closed. Re-running cannot branch history because genesis content, record id and signatures are deterministic and the capability forbids a second genesis with non-empty history.",
-        "family": "DFF-006",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "authorization-replay: re-running bootstrap reproduces only the exact pinned genesis; re-deriving the same record with the same key is the intended already-provisioned path and indistinguishable from the original. A replayed run with a different key cannot be confused with the original: root/verification-key mismatch fails closed via operator-root verification.",
+        "evidence": "DFF-007 swept on the provisioning path: every derived record scope is bound to issue_agent_document_id(authorization) (github-issue:repo#N) and the two registry/policy scopes derive from that exact id; the rule id is the genesis record id via bootstrap._expected_genesis_record_id, never a caller-supplied rule string; the operator environment guard (EVIDENCE_DATABASE_ENV/VERIFICATION_KEY/SHA/GENESIS_RULE_SHA256) must match this exact bootstrap and signing key, or the run fails closed before any write. test_provisioning_requires_operator_environment_configuration pins the guard; the happy path asserts the exact canonical (family, scope) keys.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "tamper-and-history-forgery: mismatched operator root, foreign root, and digest-tampered genesis are pinned by test_mismatched_genesis_digest_fails_closed and test_existing_foreign_root_fails_closed; the service refuses to pin a root over non-empty authority history (retroactive-attach detection), and the genesis record is content-addressed so a forged head cannot satisfy the expected record id.",
+        "evidence": "DFF-008 swept: record ids are content-addressed and derived byte-for-byte as the repository service derives them (sha256 of _canonical_json(_plain_mapping(payload)) for authority records via _publish; sha256 of the provenance claims payload for provenance records), and _provision_authority_record re-verifies the published result.record_id equals the derived id, so a forgery or a service deviation is structurally detectable and blocks the success report. Provenance exact-head pre-check computes the would-be id and refuses to supersede a different head.",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "connector-provenance-evidence-lifecycle: the candidate does not alter the connector or its receipt contract; the bootstrap writes only authority root + genesis through the service and emits non-secret JSON state. Evidence/VERIFIER provenance records remain the separate operator provenance step, so no connector evidence lifecycle is created, extended or bypassed by this change.",
+        "evidence": "DFF-009 swept: the CLI itself raised an unsatisfiable proof obligation on the first end-to-end attempt - records claimed known_at = issue_updated_at (a past instant) while physical admission is wall-clock now, so the authority publication's provenance-antecedent validation found the EVIDENCE/VERIFIER antecedents not strict-known at the authority known_at ('canonical publication provenance is incomplete', SystemExit 2). Resolved by the explicit --as-of operator instant and the authority-time clamp authority_at = max(as_of, max provenance admission), which is a deterministic function of the pinned as-of. The happy path now issues all three authorizations and consumes them, with exactly six provenance records present.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "writer-identity-not-authorization-bound: the bootstrap's signing key is bound to the derived operator root: verification_key_sha256 in the pinned root is over the exact public key derived from the consumed private key, and _derived_digests cannot produce a root inconsistent with the key used to sign the genesis.",
+        "evidence": "DFF-010 swept: bootstrap's _load_signing_key silently preferred the file over the environment and never errored; now both sources together raise an explicit deterministic ValueError before any database is opened (the raise precedes the database argument parsing path). test_signing_key_sources_are_mutually_exclusive (unit) and test_both_signing_key_sources_fail_closed_before_db_open (CLI, asserts the fresh database is not created) pin both success and fail-closed shapes. The provisioning CLI consumes the same shared loader and gains the same mutual-exclusion property via test_provisioning_signing_key_sources_are_mutually_exclusive. The authority-head exact pre-check likewise enforces prevention at the earliest boundary: it fails closed before any provenance or authority write, not merely by detecting a mismatch after mutation.",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "stranded-intermediate-commit-evidence: bootstrap is a single synchronous operation with no intermediate receiptable evidence; the root row and genesis insert-verify-validate-update-commit run in one protected transaction and the script's success path only reports after commit, so no stranded intermediate state can be presented as authority evidence.",
+        "evidence": "DFF-011 swept: nothing in this candidate makes a valid commit permanently inadmissible. The as-of guards reject an as-of predating the genesis rule (clear error), predating the Issue's updated_at, and -- after normalization, immediately and before the provenance repository is constructed or any provenance/authority write occurs -- a FUTURE as-of ('the provisioning as-of must not be in the future'); the redundant later future check was removed. test_provisioning_refuses_future_as_of_before_any_mutation leaves the database with only the genesis/canonical state: zero per-Issue provenance records and heads, zero FACT/FIELD_CATEGORY_REGISTRY/POLICY authority records, unchanged canonical keys and operator root.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "stale-receipt-published: this candidate publishes no receipt and does not flip Ready; it is a Draft PR, and the bootstrap status output (bootstrapped/already-provisioned) is recomputed from the database on every run, never read from a previously persisted receipt.",
+        "evidence": "DFF-012 swept: the provisioning CLI mints no connector authorization receipts and introduces no receipt-freshness path; the only new persisted writes are the provenance/authority records through the repository service, and connector receipt freshness over the pushed range remains enforced by the repository-local push boundary. No receipt-driven admission logic is added or changed.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "ready-without-complete-hostile-review: PR #429 is Draft; this review is recorded against the exact head 449a30e for the applicable DFF-007..016 families and all eleven adversarial dimensions before any Ready election, and the push-safety lane is the gate that enforces it.",
+        "evidence": "DFF-013 swept: this pre-ready hostile review is being recorded for the exact candidate head (base 8c26e09, head bf68e8c) via scripts/hunter_pre_ready_review.py --record --issue 430 and verified with the same base/head arguments before push; the review covers all ten applicable families and the four Issue acceptance bullets.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "pending-prerequisite-reported-as-failure: the candidate treats live Railway /data provisioning and live E2E as outstanding operator steps (#423/#390), tracked and documented as follow-ups rather than claimed, and no test reports them as failures of this candidate.",
+        "evidence": "DFF-014 swept: idempotency is exact-match only. On a re-run pinned to the recorded as_of, every would-be provenance id and authority record id equals the current head, so nothing is written (test_provisioning_exact_rerun_is_idempotent asserts byte-stable canonical keys, revision 1, identical record counts). Any other authority content (test_provisioning_mismatched_authority_content_fails_closed, sensitivity RESTRICTED) fails closed before write with 'refusing to replace provisioned authority state', and a mismatched existing authority head is now detected and rejected before ANY provenance write (test_provisioning_mismatched_authority_head_fails_before_any_provenance_write: existing FACT head + zero per-Issue provenance, then SystemExit 2, zero provenance/authority writes, canonical keys and record counts unchanged). A different provenance head also fails closed before any write. The printed as_of is the pinned, deterministic operator instant - not a fresh transient each run.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "overclaimed-prevention-state: the recorded claims are limited to committed-content properties (deterministic fresh bootstrap, idempotent rerun, fail-closed mismatches, runtime read path); live E2E and hosted gate results are explicitly stated as not claimed here, consistent with the exact-head evidence actually supplied by the suite.",
+        "evidence": "DFF-015 swept: the mutual-exclusion guard is enforced at the earliest practical boundary - the shared _load_signing_key raises before the database path is even read, not merely detected by a later check; the regression test proves a fresh DB is untouched. The provisioning config guard (DFF-009-adjacent) also fails before any write. These are prevention-by-construction at entry, not detection-only.",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "validation-proof-reused-without-immutable-identity: bootstrap identity and idempotency are bound to the content-addressed genesis record id (sha256 over the canonical genesis payload including scope) and the canonical rule digest; re-running re-derives both deterministically, so a successful verification can only be reused against immutable identical authority content.",
+        "evidence": "DFF-016 swept: each FACT / FIELD_CATEGORY_REGISTRY / POLICY issuance names its own EVIDENCE and VERIFIER identity, and all six provenance records are written before the first issuance; the authority-time clamp keeps known_at at or after the highest provenance admission so each record remains resolvable at its own known_at, and the clamp is a deterministic function of the pinned as-of so the exact re-run reproduces identical records without removing or duplicating proof. No proof is ever dropped to shorten a path.",
         "family": "DFF-016",
         "outcome": "clear"
       }
     ],
     "findings": [
       {
-        "evidence": "Adversarial review of the file-variant key input found the initial implementation passed the signing_key_file path itself where the hex-decoded key material must go, so an operator using --signing-key-file would fail spuriously at best and silently misdecode a crafted path at worst. Resolved in the candidate by _load_signing_key reading Path(signing_key_file).read_text(encoding=\"utf-8\").strip() (an empty file maps to the explicit 'signing key file is empty' error), pinned by test_signing_key_file_variant_bootstraps on the exact head.",
+        "evidence": "The provisioning CLI wrote the six EVIDENCE/VERIFIER provenance records before checking whether existing FACT / FIELD_CATEGORY_REGISTRY / POLICY authority heads exactly matched the would-be records, so a run against an existing-but-mismatched authority head mutated provenance before rejecting the authority. Resolved by deriving the expected record id for all three authority families, reading each current canonical head through the repository resolver store (current_canonical_head_id), and failing closed before any provenance write on the first mismatch; exact-match heads remain on the idempotent path. New regression test pins zero provenance/authority writes and unchanged canonical state.",
         "id": "F-1",
         "resolution": "resolved",
         "severity": "blocking"
       },
       {
-        "evidence": "An early attempt to exercise the fail-closed mismatch path by injecting a foreign rule with a CALLER_ASSERTION method was invalid because lightweight payload validation rejects such a body before any authority comparison. The candidate pins the real tamper surface deterministically instead: test_mismatched_genesis_digest_fails_closed tampers source_handling_operator_root.genesis_rule_sha256 directly and asserts the bootstrap fails closed with the refusal message and a byte-stable DB.",
+        "evidence": "Backdating the per-Issue records to issue_updated_at is impossible in this contract: authority records' claimed known_at must be at or after their physical admission, and an Issue classified 'now' cannot be knowable before its last update. The first end-to-end run failed with 'canonical publication provenance is incomplete' (SystemExit 2) because the EVIDENCE/VERIFIER antecedents were admitted later than the authority records' known_at. Resolved with the explicit operator --as-of instant and the clamp authority_at = max(as_of, max provenance admission), itself a deterministic function of the pinned as-of. Happy path green; exact rerun idempotent.",
         "id": "F-2",
-        "resolution": "resolved",
-        "severity": "non-blocking"
-      },
-      {
-        "evidence": "Independent review found the bootstrap accepted a generic --rule path override, which weakens the production invariant that the genesis authorization rule is the repository-owned canonical rule: an operator (or a compromised invocation) could publish an arbitrary, still-payload-valid rule as the root of trust. Resolved by removing the option entirely; the CLI now always loads config/source_handling/authorization_rule_v1.json through _load_production_rule(), which fails closed (SystemExit 2, no database created) when the file is missing, malformed or its canonical digest differs from PINNED_PRODUCTION_RULE_SHA256. Pinned by test_production_cli_accepts_no_rule_override, test_missing_production_rule_fails_closed, test_malformed_production_rule_fails_closed and test_tampered_production_rule_fails_closed at the exact head.",
-        "id": "F-5",
         "resolution": "resolved",
         "severity": "blocking"
       },
       {
-        "evidence": "The --signing-key-file help and the module docstring call the two key sources mutually exclusive, but _load_signing_key silently prefers the file when both are present. This cannot mint a wrong root or leak a key (both feed the same derivation), but an operator with the env var set who also passes --signing-key-file gets file-first behaviour without being told; a follow-up should make the precedence explicit or fatal.",
+        "evidence": "A future --as-of could previously reach provenance writes before the redundant future-time check that sat later in the write path, violating fail-closed-before-mutation. Resolved by moving the future as-of rejection to immediately after on_or_after is parsed and normalized, before the provenance repository is constructed and before any provenance/authority write, and removing the later redundant check. New regression test (fresh bootstrapped DB + future --as-of) pins exit 2 with zero per-Issue provenance records, zero FACT/FIELD_CATEGORY_REGISTRY/POLICY authority records, and unchanged genesis/root and canonical state.",
+        "id": "F-2",
+        "resolution": "resolved",
+        "severity": "blocking"
+      },
+      {
+        "evidence": "The exact-head provenance pre-check queried source_handling_provenance_heads before the provenance schema existed on a fresh database, failing with sqlite3.OperationalError 'no such table'. Resolved by constructing SourceHandlingProvenanceAuthorityRepository (whose initializer creates the schema idempotently) before running the head pre-check. The fresh-database happy path now passes.",
         "id": "F-3",
+        "resolution": "resolved",
+        "severity": "blocking"
+      },
+      {
+        "evidence": "bootstrap_source_handling_authority._load_signing_key silently preferred --signing-key-file over HUNTER_SOURCE_HANDLING_SIGNING_KEY and never errored, so a misconfigured operator could be masking a stale env value. Resolved: both sources together raise an explicit deterministic ValueError before any database is opened; the provisioning CLI inherits the same loader. Unit and CLI-level tests pin the pre-DB fail-closed.",
+        "id": "F-4",
+        "resolution": "resolved",
+        "severity": "blocking"
+      },
+      {
+        "evidence": "Two racing provisioning processes on the same empty database both observe absent heads; the second writer's provenance writes then no-op or supersede depending on content, while the authority issue_authorization/publish path has its own genesis-style guards. Safe and fail-closed in both orders, but the graceful classification of the loser as already-provisioned is left to a follow-up rather than implemented here.",
+        "id": "F-5",
         "resolution": "unresolved",
         "severity": "non-blocking"
       },
       {
-        "evidence": "Two racing bootstrap processes on an empty DB both observe existing_head=None; the second writer's genesis attempt then hits the genesis empty-history/compare guard and errors (fail-closed, no corruption, protected by DFF-002). A more graceful outcome would re-read and classify already-provisioned, but the current behaviour is safe and acceptable; noted as a follow-up, not a release blocker.",
-        "id": "F-4",
+        "evidence": "Classification content (sensitivity, restrictions, dispositions) comes from operator-supplied options, not from reading the live Issue content; a real-content verification step remains the operator's responsibility (the command fails closed on a missing document contract rather than inventing content). Accepted for this operator-only provisioning path.",
+        "id": "F-6",
         "resolution": "unresolved",
         "severity": "non-blocking"
       }
     ],
-    "issue": "428",
+    "issue": "430",
     "review_target": [
       {
-        "blob_sha": "d3b72cb7ff56685f452142eecaa2b56c9b5da564",
-        "path": "config/source_handling/authorization_rule_v1.json",
+        "blob_sha": "e9707d300c5ae476c1c5542f0c3a7640d0f1923f",
+        "path": "scripts/provision_source_handling_issue_authority.py",
         "previous_path": "",
         "status": "added"
       },
       {
-        "blob_sha": "afca3dcdf224ae80ee41a5f270296e602bf5bfa2",
+        "blob_sha": "cbc77361bc70b9bc85d56c5d292e2df87dc402bf",
+        "path": "tests/test_source_handling_provisioning.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "912211659f3cfc1591b9c4d7c831ab934f1f9b72",
+        "path": "docs/ISSUE_AGENT_ISSUER_DEPLOYMENT.md",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "a9de2084c76bc2e7e7dfa26d271355582e14e7c7",
         "path": "scripts/bootstrap_source_handling_authority.py",
         "previous_path": "",
-        "status": "added"
+        "status": "modified"
       },
       {
-        "blob_sha": "84bb6f3b92267d09ba9bbfd84008d074cd533a86",
+        "blob_sha": "94bf881d3b22e4b89a6cd85895c6d34c62ab0e55",
         "path": "tests/test_source_handling_bootstrap.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "5b9c2b34caef9108c85a9d1b9dafe42d8253d39f",
-        "path": "docs/ISSUE_AGENT_ISSUER_DEPLOYMENT.md",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "230d4a1c1825667e06adc7448cdfac88e068b920bdc71db333fadae7ae657506"
+    "review_target_digest": "47de1813bbb4be09eb7c7efaadaea343f24555a029143ab98aaf999ee97d969c"
   },
-  "review_id": "7a85af383ef78fdfa59ff2d1c280e4cfd63c05b346794342e282b2bee11f7c83",
+  "review_id": "7e81802a1277a7f8b07e5ce7098752c5a8c30adc11651af1530c446b740afdb5",
   "schema": "hunter.pre-ready-hostile-review.v1"
 }
