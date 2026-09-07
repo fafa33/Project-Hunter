@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -375,3 +376,132 @@ def test_authorization_fails_closed_without_provisioned_provenance(
         clock.value = genesis.admission_time + timedelta(microseconds=1)
     with pytest.raises(SourceHandlingBlockedError):
         _complete_authority(service, clock, genesis.record_id, document_id="doc-1")
+
+
+def test_competing_corrections_from_same_predecessor_cannot_branch(tmp_path: Path) -> None:
+    db, key, root, clock = _provisioned_database(tmp_path)
+    provisioner = _provisioner(db, key, root, clock)
+    provisioner.record_provenance(
+        **_evidence_args(identity="evidence:race", at=START, strength="AUTHORITATIVE_SOURCE_EVIDENCE")
+    )
+    correction_at = START + timedelta(minutes=5)
+    clock.value = correction_at
+    worker_a = _provisioner(db, key, root, clock)
+    worker_b = _provisioner(db, key, root, clock)
+
+    barrier = threading.Barrier(3)
+    outcomes: dict[str, tuple[str, str]] = {}
+
+    def attempt(name: str, worker: SourceHandlingProvenanceAuthorityRepository, strength: str) -> None:
+        try:
+            barrier.wait(timeout=30)
+            record_id = worker.record_provenance(
+                **_evidence_args(identity="evidence:race", at=correction_at, strength=strength)
+            )
+            outcomes[name] = ("recorded", record_id)
+        except SourceHandlingBlockedError as error:
+            outcomes[name] = ("blocked", str(error))
+        except Exception as error:  # noqa: BLE001 - surface unexpected failures so a silent pass is impossible
+            outcomes[name] = ("unexpected", f"{type(error).__name__}: {error}")
+
+    writers = [
+        threading.Thread(target=attempt, args=("a", worker_a, "INDEPENDENT_VERIFIED_EVIDENCE")),
+        threading.Thread(target=attempt, args=("b", worker_b, "REFUTED_BY_AUTHORITY_EVIDENCE")),
+    ]
+    for writer in writers:
+        writer.start()
+    barrier.wait(timeout=30)
+    for writer in writers:
+        writer.join(timeout=60)
+        assert not writer.is_alive()
+
+    assert any(outcome[0] == "recorded" for outcome in outcomes.values())
+
+    connection = sqlite3.connect(db)
+    connection.row_factory = sqlite3.Row
+    rows = connection.execute(
+        f"SELECT record_id, supersedes_record_id FROM {SOURCE_HANDLING_PROVENANCE_RECORDS} "
+        "WHERE provenance_id = 'evidence:race' ORDER BY admission_time, record_id"
+    ).fetchall()
+    head = connection.execute(
+        f"SELECT current_record_id, revision FROM {SOURCE_HANDLING_PROVENANCE_HEADS} "
+        "WHERE provenance_id = 'evidence:race' AND provenance_kind = 'EVIDENCE'"
+    ).fetchone()
+    connection.close()
+
+    assert len(rows) >= 2
+    genesis = rows[0]
+    assert genesis["supersedes_record_id"] is None
+    direct_successors = [row for row in rows[1:] if row["supersedes_record_id"] == genesis["record_id"]]
+    assert len(direct_successors) == 1, "two competing corrections were admitted against the same predecessor"
+    for previous, record in zip(rows, rows[1:], strict=False):
+        assert record["supersedes_record_id"] == previous["record_id"]
+    assert head is not None
+    assert int(head["revision"]) == len(rows)
+    assert str(head["current_record_id"]) == rows[-1]["record_id"]
+    resolved = _view(db, key, root).resolve("evidence:race", "EVIDENCE", correction_at + timedelta(days=1))
+    assert resolved is not None
+    assert resolved["record_id"] == rows[-1]["record_id"]
+
+
+def test_write_lock_is_held_for_the_entire_protected_sequence(tmp_path: Path) -> None:
+    db, key, root, clock = _provisioned_database(tmp_path)
+    worker_a = _provisioner(db, key, root, clock)
+    worker_a.record_provenance(**_evidence_args(identity="evidence:lock", at=START))
+    correction_at = START + timedelta(minutes=5)
+    clock.value = correction_at
+
+    submitted = threading.Event()
+    completed = threading.Event()
+    outcomes: dict[str, str] = {}
+
+    def competitor() -> None:
+        try:
+            submitted.set()
+            worker_b = _provisioner(db, key, root, clock)
+            worker_b.record_provenance(
+                **_evidence_args(identity="evidence:lock", at=correction_at, strength="INDEPENDENT_VERIFIED_EVIDENCE")
+            )
+            outcomes["result"] = "recorded"
+        except SourceHandlingBlockedError as error:
+            outcomes["result"] = str(error)
+        except Exception as error:  # noqa: BLE001 - surface unexpected failures so a silent pass is impossible
+            outcomes["result"] = f"unexpected: {type(error).__name__}: {error}"
+        finally:
+            completed.set()
+
+    with worker_a._transaction() as connection:
+        locked = connection.execute(
+            "SELECT * FROM source_handling_operator_root WHERE singleton_id = 'SOURCE_HANDLING'"
+        ).fetchone()
+        assert locked is not None
+        writer = threading.Thread(target=competitor)
+        writer.start()
+        assert submitted.wait(timeout=5)
+        assert not completed.wait(timeout=0.5), "a second writer interleaved while the first transaction was active"
+    writer.join(timeout=30)
+    assert not writer.is_alive()
+    assert completed.is_set()
+    assert outcomes["result"] != ""
+
+    connection = sqlite3.connect(db)
+    connection.row_factory = sqlite3.Row
+    rows = connection.execute(
+        f"SELECT record_id, supersedes_record_id FROM {SOURCE_HANDLING_PROVENANCE_RECORDS} "
+        "WHERE provenance_id = 'evidence:lock' ORDER BY admission_time, record_id"
+    ).fetchall()
+    head = connection.execute(
+        f"SELECT current_record_id, revision FROM {SOURCE_HANDLING_PROVENANCE_HEADS} "
+        "WHERE provenance_id = 'evidence:lock' AND provenance_kind = 'EVIDENCE'"
+    ).fetchone()
+    connection.close()
+
+    genesis = rows[0]
+    assert genesis["supersedes_record_id"] is None
+    direct_successors = [row for row in rows[1:] if row["supersedes_record_id"] == genesis["record_id"]]
+    assert len(direct_successors) == 1, "two competing corrections were admitted against the same predecessor"
+    for previous, record in zip(rows, rows[1:], strict=False):
+        assert record["supersedes_record_id"] == previous["record_id"]
+    assert head is not None
+    assert int(head["revision"]) == len(rows)
+    assert str(head["current_record_id"]) == rows[-1]["record_id"]

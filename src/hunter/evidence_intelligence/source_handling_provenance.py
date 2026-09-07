@@ -343,6 +343,7 @@ class SourceHandlingProvenanceAuthorityRepository:
         self._clock = clock if clock is not None else _SystemClock()
         if hashlib.sha256(self._verification_public_key_bytes).hexdigest() != operator_root.verification_key_sha256:
             raise SourceHandlingBlockedError("provenance signing key does not match the pinned operator root")
+        self._initialize()
 
     def _sign(self, claims: Mapping[str, object]) -> str:
         message = _canonical_json(claims).encode("utf-8")
@@ -366,6 +367,23 @@ class SourceHandlingProvenanceAuthorityRepository:
         last = _parse_time(str(row[0]))
         return candidate if candidate > last else last + timedelta(microseconds=1)
 
+    def _initialize(self) -> None:
+        """Create the provenance schema on a plain connection, outside any write.
+
+        ``executescript`` implicitly commits any pending transaction under
+        legacy transaction control, so running it inside ``_transaction`` would
+        release the ``BEGIN IMMEDIATE`` write lock before the current head is
+        read.  Initialization is therefore a separate, idempotent step that runs
+        before the protected write transaction begins.
+        """
+
+        connection = sqlite3.connect(self.path, timeout=30.0)
+        connection.execute("PRAGMA foreign_keys = ON")
+        try:
+            connection.executescript(_SCHEMA)
+        finally:
+            connection.close()
+
     @contextlib.contextmanager
     def _transaction(self) -> Iterator[sqlite3.Connection]:
         connection = sqlite3.connect(self.path, timeout=30.0)
@@ -382,7 +400,6 @@ class SourceHandlingProvenanceAuthorityRepository:
             if pinned is None:
                 raise SourceHandlingBlockedError("pinned Source Handling operator root is unavailable")
             _verify_operator_root_row(pinned, self._operator_root)
-            connection.executescript(_SCHEMA)
             yield connection
         except Exception:
             connection.rollback()
