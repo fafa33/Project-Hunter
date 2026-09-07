@@ -2,75 +2,51 @@
   "claims": {
     "acceptance_criteria": [
       {
-        "criterion": "A trusted issuer edge can be started/deployed from trusted repository-owned code/config.",
-        "evidence": "scripts/hunter_issue_agent_issuer.py vends IssuerServer as repository-owned code: configuration is derived from repository-owned environment defaults through IssuerConfiguration.from_environment and the merged compose_services composition root, and the suite starts the real server on ephemeral ports. .github/workflows/hunter-issue-agent-issuer-deploy.yml ships the trusted deploy path, and test_healthz_is_ok, test_authorized_issue_runs_the_governed_path_over_http and test_missing_operational_configuration_fails_closed exercise start, readiness and the fail-closed configuration surface.",
+        "criterion": "Railway can build and start the existing trusted issuer edge from repository-owned configuration.",
+        "evidence": "railway.toml (repository-owned) sets [build] builder = \"RAILPACK\" and [deploy] startCommand to the unmodified scripts/hunter_issue_agent_issuer.py entrypoint with --host 0.0.0.0 --port $PORT and the repository-owned production provenance resolver, plus a /healthz healthcheck. The issuer edge itself is untouched; only repo-owned config and the resolver seam were added. A live Railway start requires the operator variables/volume and is tracked by #423/#390, but the deterministic start command and build definition are present in the candidate.",
         "id": "C-1",
         "verdict": "satisfied"
       },
       {
-        "criterion": "The GitHub trigger can reach it using the documented secret-backed webhook URL.",
-        "evidence": "docs/ISSUE_AGENT_ISSUER_DEPLOYMENT.md documents the two secret-backed values (HUNTER_ISSUE_AGENT_WEBHOOK_URL and the issuer authorization signing key) and the deploy workflow is committed, but live provisioning of those secrets and GitHub-trigger reachability of a deployed edge cannot be demonstrated from committed content in this slice. The operational proof is outstanding and Issue #423 remains open, so this criterion cannot be adjudged from the candidate itself.",
+        "criterion": "Startup fails closed when required authority/configuration is absent or malformed.",
+        "evidence": "test_production_resolver_missing_environment_fails_closed pins that a provenance resolver with missing environment fails closed; test_missing_provenance_tables_fail_closed pins that absent provenance tables are not degraded; test_view_with_wrong_verification_key_fails_closed pins that key material not pinned to the operator root fails; and the issuer's own test_missing_operational_configuration_fails_closed (unchanged, exercised in the related suite) pins transport startup fail-closed behaviour.",
         "id": "C-2",
-        "verdict": "not-applicable"
+        "verdict": "satisfied"
       },
       {
-        "criterion": "One authorized Issue event passes end-to-end through authorization -> SmartPromptMachine build -> persistence -> signed handoff -> fallback runtime boundary.",
-        "evidence": "test_authorized_issue_runs_the_governed_path_over_http drives one explicitly authorized synthetic Issue event over HTTP end-to-end: issauth/v1 signature and identity verified, the merged SmartPromptMachine build produced, the canonical build persisted to the evidence database before the signed PromptAutomationEnvelopeHandoff is issued, and the unchanged envelope forwarded to the fallback runtime whose success rule is remote HEAD advance plus targeted validation (test_provider_text_is_never_receipt_of_success, test_the_exact_handoff_is_passed_unchanged_to_the_runtime).",
+        "criterion": "Production provenance resolution is deterministic and authority-bound.",
+        "evidence": "production_provenance_resolver builds a read-only SourceHandlingProvenanceView once from the operator environment and resolves the last strict-known record at the given cutoff: every row carries a SHA-256 record identity, an Ed25519 signature over the canonical claims, an explicit kind shape, and canonical timestamps; history commitments (single genesis, linear supersession, strictly advancing known_at, signed/revisioned head) are re-derived from stored rows, never from process state. test_resolve_and_unknown_identities, test_full_authority_publication_with_real_production_resolver and test_production_resolver_resolves_from_environment pin deterministic authority-bound resolution.",
         "id": "C-3",
         "verdict": "satisfied"
       },
       {
-        "criterion": "Unauthorized/replayed/malformed events fail closed.",
-        "evidence": "Fail-closed transport matrix, each branch pinned by the focused suite: unknown path 404 (test_unknown_paths_fail_closed); missing Content-Length 411 (test_missing_content_length_is_refused); invalid/incomplete Content-Length 400 (test_invalid_content_length_is_refused); oversized payload 413 refused before any body read (test_oversized_content_length_is_refused_before_reading); withheld body 408 under the bounded read deadline (test_a_stalled_body_does_not_block_healthz_or_other_requests, test_a_stalled_body_is_terminated_within_the_read_deadline); malformed/duplicate-key/unsigned envelope 400 (test_malformed_bodies_fail_closed, test_duplicate_json_keys_fail_closed, test_bare_unsigned_payload_is_not_executable); forged/lifted signature and foreign signer 401 (test_a_foreign_signer_is_refused_before_execution, test_a_signature_lifted_from_another_authorization_is_refused); foreign repository 403 after signature verification (test_foreign_repository_is_refused_after_verification); replay 409 with exactly one execution (test_duplicate_authorization_is_rejected_and_executes_once, test_replay_after_process_restart_does_not_execute_again); missing Source Handling authority and denied retention 422; configuration and persistence failure 500 (test_an_unexpected_runtime_failure_is_reported_as_fail_closed_500).",
+        "criterion": "Evidence/replay SQLite lives on a documented Railway Volume path.",
+        "evidence": "railway.toml and docs/ISSUE_AGENT_ISSUER_DEPLOYMENT.md \"Option 3: Railway\" document the Volume mount at /data with HUNTER_ISSUE_AGENT_EVIDENCE_DB=/data/evidence.sqlite; the doc states the Railway filesystem outside an attached Volume is not authoritative persistent storage and that the canonical Evidence/replay DB must live on the mounted Volume. The provenance writer/view resolve the exact database path (single source of truth HUNTER_ISSUE_AGENT_EVIDENCE_DB), so both authority and replay state live on the volume.",
         "id": "C-4",
         "verdict": "satisfied"
       },
       {
-        "criterion": "No secret value is stored in repository content.",
-        "evidence": "Repository content carries only environment-variable names, never secret values: provisioning documentation names HUNTER_ISSUE_AGENT_WEBHOOK_URL and the signing-key variable; the verifying key is captured from os.environ at bootstrap, never a committed value (test_issuer_verifying_key_is_captured_at_bootstrap_not_reead); the deterministic harness fabricates keys at runtime from machine env seeds; and test_issuer_edge_reuses_existing_authorities_only asserts the transport source holds no private-key material (.sign( and Ed25519PrivateKey absent), with the repository secret-scan guard enforced at the push boundary.",
+        "criterion": "/healthz can become healthy on the deployed service once operator secrets/config are present.",
+        "evidence": "The unmodified issuer edge serves /healthz (healthz path in scripts/hunter_issue_agent_issuer.py) and railway.toml wires healthcheckPath = \"/healthz\" with a 120s timeout. Live health on the deployed Railway service cannot be demonstrated from committed content in this slice: it requires the operator-entered variables and volume creation, which are outstanding steps tracked by #423/#390.",
         "id": "C-5",
-        "verdict": "satisfied"
+        "verdict": "not-applicable"
       },
       {
-        "criterion": "Focused tests, exact-head hosted validation, Governance Review, independent review, and Merge Readiness are green.",
-        "evidence": "These gates are current GitHub state adjudicated on the exact head after Ready election, not properties provable from committed content. This review is the pre-ready attestation that binds the d46af60..HEAD blob-exact target the hosted lane receives; the push boundary already enforces exact-head hosted validation (hunter_pr_preflight.py --mode normal) and the deterministic guards. A green status for the external controllers therefore cannot be minted here and is not claimed.",
+        "criterion": "Focused tests and repository CI/governance pass.",
+        "evidence": "The focused suite passes (18/18 including the two new concurrency regressions) and the related issuer/execution suite passes (198 passed) with ruff, black and mypy green at the exact head. Hosted exact-head CI/governance results are current GitHub state adjudicated after Ready election, not properties provable from committed content, so they are not claimed here.",
         "id": "C-6",
         "verdict": "not-applicable"
       },
       {
-        "criterion": "Issue #390 can be closed only after this operational proof exists.",
-        "evidence": "Nothing in the candidate closes Issue #390 or declares the operational proof complete: the close condition is preserved, the E2E coverage remains synthetic (explicitly authorized test-issued event, not a live production webhook event), and the outstanding live proof is recorded as finding F-4 with Issue #423 deliberately left open.",
+        "criterion": "PR remains Draft until independent exact-head review finds no blocker.",
+        "evidence": "Whether the PR remains Draft is current GitHub state, not a property of committed content. This review is the pre-ready hostile-review attestation bound to the exact base..HEAD content for that independent exact-head review to consume; it cannot mint the Draft state itself.",
         "id": "C-7",
-        "verdict": "satisfied"
+        "verdict": "not-applicable"
       },
       {
-        "criterion": "The edge must reuse the merged production SmartPromptMachine composition root and consume hunter-issue-agent-authorization-v1 exactly; there must be no second prompt/build path.",
-        "evidence": "The transport's only downstream authority is the signed hunter-issue-agent-authorization-v1 envelope parsed by SignedIssueAgentAuthorization.from_json, and execution runs through the merged compose_services root from hunter.automation.issue_agent_execution; test_issuer_edge_reuses_existing_authorities_only pins that the edge composes existing authorities only and that the source contains no signing capability or parallel transport (no Ed25519PrivateKey, no .sign().",
-        "id": "R-8",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "The canonical Smart Prompt build must be persisted before the signed automation handoff is issued.",
-        "evidence": "execute_authorization persists the canonical build and authorization receipt into the evidence database inside the handler boundary before the signed PromptAutomationEnvelopeHandoff is produced and forwarded; test_crash_between_handoff_persistence_and_dispatch_cannot_duplicate, test_duplicate_authorization_is_rejected_and_executes_once and test_replay_after_process_restart_does_not_execute_again pin persist-before-forward and duplicate-free execution.",
-        "id": "R-9",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "The signed PromptAutomationEnvelopeHandoff and provider text must pass unchanged into the existing fallback runtime; provider text alone is never success.",
-        "evidence": "test_the_exact_handoff_is_passed_unchanged_to_the_runtime requires the runtime to receive the byte-exact signed envelope with issue text unchanged; test_no_issue_text_reaches_the_fallback_runtime and test_provider_text_is_never_receipt_of_success pin that raw text is not honoured and that success requires remote HEAD advance plus targeted validation.",
-        "id": "R-10",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "No issue text, webhook caller, or request body controls provider ordering, route/profile selection, Source Handling, context policy, retention, or evidence authority.",
-        "evidence": "Downstream decisions derive from IssuerConfiguration and the merged profile/route registries (the engineering-review profile and the issue-agent route registry), never from body content; test_no_issue_text_reaches_the_fallback_runtime, test_missing_source_handling_authority_fails_closed_422, test_denied_retention_fails_closed_422 and test_missing_operational_configuration_fails_closed pin that missing or caller-contradicted authority fails closed.",
-        "id": "R-11",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "The transport must have an explicit, small concurrency bound and a finite request read deadline so one unauthenticated client cannot starve the edge or hold a worker indefinitely.",
-        "evidence": "_BoundedThreadingHTTPServer (ThreadingMixIn with a Semaphore worker cap, default 8) rejects a saturated socket with a deterministic 503 and daemon threads keep shutdown deterministic; every request runs under Handler.timeout (default 15s), so a declared-but-withheld body is failed closed with 408 within a bounded time. test_the_worker_bound_is_enforced_with_a_deterministic_503, test_a_stalled_body_does_not_block_healthz_or_other_requests and test_a_stalled_body_is_terminated_within_the_read_deadline regression-pin all three under the real server.",
-        "id": "R-12",
+        "criterion": "#423/#390 remain open pending real live E2E operational proof.",
+        "evidence": "Nothing in the candidate closes #423 or #390: the E2E coverage remains synthetic (explicitly authorized test-issued record, not a live production GitHub webhook event), live Railway secret provisioning, the real HTTPS service URL and the final live authorized-issue proof remain operator steps, and finding F-3 records the outstanding operational proof with both Issues left open.",
+        "id": "C-8",
         "verdict": "satisfied"
       }
     ],
@@ -88,114 +64,104 @@
       "transaction-snapshot-consistency"
     ],
     "base_ref": "main",
-    "base_sha": "d46af60d2c75de30172141c3d1aa6d3161f0ab48",
+    "base_sha": "36f3b5826a0fcdba1f45c35d2e59ee0f65cf0109",
     "defect_families": [
       {
-        "evidence": "No authorization can be re-aimed: the edge binds the issuer-signature proof to the exact authorization claims (test_the_issuer_proof_covers_every_authorization_claim), a signature lifted from another authorization is refused (test_a_signature_lifted_from_another_authorization_is_refused), and a foreign repository is refused after verification (test_foreign_repository_is_refused_after_verification).",
+        "evidence": "Every timestamp that reaches admission, ordering or cutoff is derived from the operator-owned clock: _next_admission_time = max(clock.now(), MAX(admission_time) + 1\u00b5s) with _aware_utc, and a caller or payload contributes no time. Cutoff resolution trusts only the operator-provisioned effective_from/recorded_at/known_at/admission_time, each round-tripped through canonical _time_text. test_conflicting_same_known_at_rejected_at_write and test_backdated_known_at_is_not_admitted_until_admission pin the ordering and admission boundaries.",
+        "family": "DFF-001",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "One real BEGIN IMMEDIATE spans the whole protected sequence: read operator root -> verify root -> read current head -> validate predecessor/revision -> insert record -> update head -> commit. Schema initialization now runs once in _initialize() on its own connection before the write transaction, so the implicit commit inside executescript can no longer release the write lock mid-sequence. test_write_lock_is_held_for_the_entire_protected_sequence holds a writer transaction open and proves a second independent repository instance cannot interleave until it commits, and test_competing_corrections_from_same_predecessor_cannot_branch races two independent instances against a shared genesis and proves at most one direct successor is admitted with a linear revisioned head.",
+        "family": "DFF-002",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "A record identity is SHA-256 over the canonical claims EXCLUDING supersedes_record_id, so re-recording identical current-head content is the same identity (idempotent by construction) while any distinct correction yields a distinct identity; the heads table keys on (provenance_id, provenance_kind) with a UNIQUE current_record_id so an identity is current for at most one lineage. test_record_resolve_and_unknown_identities and the idempotent re-record path pin identity semantics.",
+        "family": "DFF-003",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Every absent/unknown branch fails closed: missing provenance tables raise SourceHandlingBlockedError (test_missing_provenance_tables_fail_closed); unknown identity returns None only when genuinely unresolved (otherwise 'provenance history is not completely knowable at cutoff'); wrong verification key or unverifiable signature raises (test_view_with_wrong_verification_key_fails_closed, tamper tests); missing/malformed environment fails closed (test_production_resolver_missing_environment_fails_closed); unknown provenance_kind is rejected by the column CHECK. The concurrency fix preserves this: a blocked or rejected competitor surfaces SourceHandlingBlockedError, never an out-of-band state.",
+        "family": "DFF-004",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Provenance is persisted in dedicated append-only tables (UPDATE/DELETE triggers on the record table, delete-blocking trigger on the heads table), never a nested or attached metadata surface, and only in the exact Evidence Intelligence database named by HUNTER_ISSUE_AGENT_EVIDENCE_DB whose path is documented on the Railway volume. No ephemeral filesystem assumption is introduced; the issuer's existing persistence for the canonical build, authorization receipt and replay state is unchanged.",
+        "family": "DFF-005",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Admission_time is repository-wide monotonic (MAX+1\u00b5s with a frozen-clock-safe max), revision strictly increases per lineage, known_at strictly increases along the chain, and every invariant is re-derived from stored rows on each read (_validate_chain) rather than from process or clock state, so restart cannot perturb any ordering guarantee. The concurrency tests also assert head revision equals record count after a multi-writer race, pinning restart/ordering behaviour under contention.",
+        "family": "DFF-006",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "This range does not touch the connectors, .githooks, .github/workflows or the .hunter channel governing authorization identity: the issuer's existing replay protection (test_replay_after_process_restart_does_not_execute_again), repository/owner binding, and authorization verification are exercised by the unchanged related suite, and the new resolver/writer introduce no capability to re-aim or replay an authorization -- resolve is deterministic and read-only, and the writer is operator-owned, never run in the issuer runtime.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "No forgery surface is introduced: the transport parses only the canonical signed envelope and proves the exact-handoff bytes unchanged into the runtime (test_the_exact_handoff_is_passed_unchanged_to_the_runtime); internal failure detail is never sent to callers and the stall tests assert no Traceback or internal wording in the 408 response.",
-        "family": "DFF-008",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Admission stays satisfiable: an explicitly authorized synthetic event executes exactly once through the governed path (test_authorized_issue_runs_the_governed_path_over_http) while unsatisfiable or foreign events fail closed at the transport (404/411/400/413/408/401/403/409/422/500 matrix), and a saturated transport fails closed with a deterministic 503 instead of queueing behind an unbounded backlog.",
-        "family": "DFF-009",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Writer provenance and the connector push boundary are untouched by this range; both authored commits on the range carry verified SSH writer signatures and were committed through the repository-local pre-push hook, which re-validates provenance over the governed range before authorizing the network push.",
-        "family": "DFF-010",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "No evidence is stranded: this review binds the d46af60..HEAD blob-exact target (the review artifact itself excluded), and the prior commits forwarded their proof to the same exact-head identity rather than a run identity or moment.",
-        "family": "DFF-011",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "No connector authorization receipt is published or reused by this range; the connector receipt path stays excluded from reviewed targets for the canonical reason and receipt-freshness semantics are not loosened.",
-        "family": "DFF-012",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "The pre-ready hostile review is the subject here: the review is recorded against the exact d46af60..HEAD content, covers all ten applicable families, all seven acceptance criteria Issue #423 defines, and the six additional swept statements, and carries no unresolved blocking finding.",
+        "evidence": "This review is the pre-ready hostile-review attestation: it is recorded against the exact 36f3b5826..HEAD content (blob SHAs and review_target_digest re-derived by the script), covers all applicable families (DFF-001..007, DFF-013), all adversarial dimensions, and the governing Issue #426's acceptance criteria, and carries no unresolved blocking finding as recorded here.",
         "family": "DFF-013",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "No transient run state is published as a defect: the review is content-bound (blob SHAs and a target digest), not run-bound, and names no live gate result as proof of anything.",
-        "family": "DFF-014",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "No guard is relabelled: the candidate's tests regression-pin behaviour end-to-end under the real server, and nothing in this range edits the defect catalog, its validator, or the prevention lifecycle document.",
-        "family": "DFF-015",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "The validation reuse authority is untouched: this candidate carries its own server suite validated at the exact head by the push boundary, and nothing in the range modifies the validation stage contract or re-aims a proof made for another candidate.",
-        "family": "DFF-016",
         "outcome": "clear"
       }
     ],
     "findings": [
       {
-        "evidence": "Single-worker body-starvation denial-of-service in the issuer edge: a client declares a body and withholds it, occupying the only request thread and stalling /healthz and authorized requests. Found in this adversarial pass and corrected in-commit by a bounded concurrent server (explicit default 8-worker cap, deterministic 503 on saturation, daemon threads) and a finite per-connection read deadline that fails the withheld body with a deterministic 408. The three stall regressions pin the fix under the real server.",
+        "evidence": "Identity was initially defined over a payload that included supersedes_record_id, making an idempotent re-record of unchanged current-head content produce a new record_id and therefore be misread as a different identity or as a rejected correction. Resolved by defining record_id = SHA-256 over the canonical claims EXCLUDING supersedes_record_id, so re-recording identical content is the same identity while supersession stays bound by the signed claims and linear-chain validation. Pinned by the idempotent re-record path and test_schema_is_idempotent_across_repository_instances.",
         "id": "F-1",
         "resolution": "resolved",
         "severity": "blocking"
       },
       {
-        "evidence": "Transport failure responses could in principle expose internal framing details to unauthenticated callers. Resolved by generic flat error bodies with no internal state or traceback (the stall tests assert no Traceback or internal wording), keeping the failure surface opaque.",
+        "evidence": "The strictly-later recommended known_at check ran before the idempotent short-circuit, so a writer re-recording unchanged current-head content was rejected as backdated. Resolved by returning the idempotent identity before enforcing the strictly-later correction rule, and by storing the boosted head_known_at used by both paths in one place. Pinned by test_conflicting_same_known_at_rejected_at_write, test_backdated_known_at_is_not_admitted_until_admission and the idempotent re-record tests.",
         "id": "F-2",
         "resolution": "resolved",
-        "severity": "non-blocking"
+        "severity": "blocking"
       },
       {
-        "evidence": "Worker-slot accounting across abrupt thread exit. Resolved by releasing the Semaphore in process_request_thread finally and on the accept path when thread spawn fails, so the explicit worker bound is exact and a slot can never be leaked; the bounded read deadline caps any dwell.",
+        "evidence": "Live Railway operational proof remains outstanding: operator-entered variables (verification key, key SHA-256, genesis rule SHA-256, automation signing/verifying keys, authorization verifying key, repository/owner/execution-branch variables), creation of the /data Volume, and setting HUNTER_ISSUE_AGENT_WEBHOOK_URL from the real deployed HTTPS domain are operator steps, and a live authorized Issue event passing end-to-end against the deployed service has not been demonstrated. #423 and #390 remain open pending that proof; nothing in this range closes them.",
         "id": "F-3",
-        "resolution": "resolved",
-        "severity": "non-blocking"
-      },
-      {
-        "evidence": "Live operational proof pending: the documented secrets (HUNTER_ISSUE_AGENT_WEBHOOK_URL and the issuer authorization signing key) are not yet provisioned in production and a deployed trusted edge reached by the GitHub trigger has not been proven end-to-end. This candidate is an implementation slice, not the closing change, so Issue #423 remains open and nothing in the range closes Issue #390.",
-        "id": "F-4",
         "resolution": "unresolved",
         "severity": "non-blocking"
+      },
+      {
+        "evidence": "Independent review found that _transaction() ran connection.executescript(_SCHEMA) inside BEGIN IMMEDIATE: under legacy transaction control executescript implicitly commits a pending transaction, releasing the intended write lock before record_provenance read the current head, so two independent writers could race from the same current_record_id and admit different successors. Resolved by moving schema initialization to _initialize(), an idempotent step on its own connection before the protected transaction begins, so BEGIN IMMEDIATE now remains active for the entire read->verify->validate->insert->update->commit sequence. Pinned by test_write_lock_is_held_for_the_entire_protected_sequence (deterministically fails on the previous build) and test_competing_corrections_from_same_predecessor_cannot_branch (end-to-end linearity under a two-writer race).",
+        "id": "F-4",
+        "resolution": "resolved",
+        "severity": "blocking"
       }
     ],
-    "issue": "423",
+    "issue": "426",
     "review_target": [
       {
-        "blob_sha": "38dd88cf53745c47edf8b1a108cec8fe1a5c7cde",
-        "path": ".github/workflows/hunter-issue-agent-issuer-deploy.yml",
+        "blob_sha": "220350a1722511dfc72797d8e28b392e910f6237",
+        "path": "railway.toml",
         "previous_path": "",
         "status": "added"
       },
       {
-        "blob_sha": "b90ccca1d3807295aab07cdad83502adc5e69ef2",
+        "blob_sha": "6f3dbf85ffe640823c8889e7cabf121629a8b1a6",
+        "path": "src/hunter/evidence_intelligence/source_handling_provenance.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "4b9edeea25d5b82b0bb2af5cf4f593dc0624a467",
+        "path": "tests/test_source_handling_provenance.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "80cf3303d7dcd8244f67881754236986233a4536",
         "path": "docs/ISSUE_AGENT_ISSUER_DEPLOYMENT.md",
         "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "3ce2c0964ba2760aebfa1ed5859c6fa7a94d1212",
-        "path": "scripts/hunter_issue_agent_issuer.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "02cde52c446f0b305dd8e1161a17ffccff5b36dc",
-        "path": "tests/test_issue_agent_issuer.py",
-        "previous_path": "",
-        "status": "added"
+        "status": "modified"
       }
     ],
-    "review_target_digest": "4fdbad7475df9d418e3052c279b172fbf330f35edf0743fbef93dbed5d1beacd"
+    "review_target_digest": "4b1285fede8c71ceb3a1a7e64c2e099e6c74b0b8ce003dffcf87ea31a9953b20"
   },
-  "review_id": "a86e607e0c9e41fb4987817c224fe094318adeb1dc48691958a6f6c8575a72f7",
+  "review_id": "5ebe890b11cbe72cc32d6d71a04ff463d2969557f2afe739feddaab3993aceb1",
   "schema": "hunter.pre-ready-hostile-review.v1"
 }

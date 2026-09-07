@@ -19,9 +19,11 @@ The following must be provisioned **before** deployment:
    - Public key SHA-256: `HUNTER_SOURCE_HANDLING_VERIFICATION_KEY_SHA256` (environment variable)
    - Genesis rule SHA-256: `HUNTER_SOURCE_HANDLING_GENESIS_RULE_SHA256` (environment variable)
 
-4. **Evidence Intelligence database** with Source Handling authority history
+4. **Evidence Intelligence database** with Source Handling authority history **and provisioning provenance**
    - Must be accessible at the path configured by `HUNTER_ISSUE_AGENT_EVIDENCE_DB`
    - Must contain the genesis rule, FACT, POLICY, and FIELD_CATEGORY_REGISTRY records for authorized Issue scopes
+   - Must contain a strict-known provenance record per `EVIDENCE` / `VERIFIER` identity those authorizations will name
+     (see "Provisioning Source Handling Provenance")
 
 5. **Repository checkout** for provider commands
    - Path configured by `HUNTER_ISSUE_AGENT_REPO_DIR`
@@ -70,18 +72,62 @@ The deployed issuer edge requires these environment variables (set in your deplo
 | `HUNTER_ISSUE_AGENT_AUTHORIZATION_VERIFYING_KEY` | Secret | Hex Ed25519 public key (issue authorization) |
 | `HUNTER_AGENT_*` | Secret/Config | Existing fallback runtime provider config |
 
-## The Provenance Resolver (required, operator-supplied)
+## The Provenance Resolver (required, repository-owned)
 
 The issuer edge requires `--provenance-resolver <dotted.path.to.callable>` at startup. This is the canonical `ProvenanceResolver` callable
-`(provenance_id: str, provenance_kind: str, cutoff: datetime) -> Mapping[str, Any] | None` that the same operator used when the Source
-Handling authority history was provisioned. It is an authority callable, not a configuration value, and the issuer deliberately has **no
-default**: an unwired deployment fails closed at startup rather than resolving provenance as "absent but acceptable".
+`(provenance_id: str, provenance_kind: str, cutoff: datetime) -> Mapping[str, Any] | None` consulted by the Source Handling read path for
+every `EVIDENCE` and `VERIFIER` identity named by a publication authorization. The issuer deliberately has **no default**: an unwired
+deployment fails closed at startup rather than resolving provenance as "absent but acceptable".
+
+Issue #426 supplies the canonical production implementation in this repository:
+
+```text
+hunter.evidence_intelligence.source_handling_provenance.production_provenance_resolver
+```
+
+It is wired to the same four operator-provisioned environment variables the Source Handling read path already uses, in the same Evidence
+database (`HUNTER_ISSUE_AGENT_EVIDENCE_DB`):
+
+- `HUNTER_ISSUE_AGENT_EVIDENCE_DB` — canonical evidence + authority (+ provenance) database
+- `HUNTER_SOURCE_HANDLING_VERIFICATION_KEY` — hex-encoded Ed25519 public key
+- `HUNTER_SOURCE_HANDLING_VERIFICATION_KEY_SHA256` — sha256 of that public key
+- `HUNTER_SOURCE_HANDLING_GENESIS_RULE_SHA256` — genesis authorization-rule digest
+
+All four must match the exact values pinned in the `source_handling_operator_root` row of the database. A missing, malformed, operator-root
+mismatched, tampered or otherwise unreadable configuration raises `SourceHandlingBlockedError`, and the resolver never falls back to a
+latest-record digest. It resolves only records that are strict-known at the cutoff: content that was not yet knowable or not yet admitted
+at the cutoff, or whose chain is ambiguous at the cutoff, is not returned.
 
 > Every FACT / POLICY / FIELD_CATEGORY_REGISTRY authorization references `EVIDENCE` and `VERIFIER` provenance records. If the deployed
-> resolver does not answer those identities with the exact strength/method the operator published, or answers `None`, the execution path
-> raises `SourceHandlingBlockedError` and the request fails closed (HTTP 422). The same resolver must be used at provisioning time and at
-> the issuer edge, so deploy it as a small operator-owned module reachable from the issuer's `PYTHONPATH`, or wire a repository example
-> to the same underlying evidence/verifier registry.
+> resolver does not answer those identities with the exact strength/method the operator provisioned, or answers `None`, the execution path
+> raises `SourceHandlingBlockedError` and the request fails closed (HTTP 422).
+
+## Provisioning Source Handling Provenance (operator step, before deployment)
+
+The evidence database must already hold a provenance record for every `EVIDENCE` and `VERIFIER` identity an authorization will name. Provenance
+is a supporting fact about the Source Handling Authority, persisted in append-only tables (`source_handling_provenance_records` and
+`source_handling_provenance_heads`) inside **the same** Evidence database, bound to the same pinned operator root and signed with the same
+Ed25519 key material as the authority records. The operator provisions it with the repository CLI:
+
+```bash
+python -m hunter.evidence_intelligence.source_handling_provenance \
+  --database /data/evidence.sqlite \
+  --signing-key-hex "${HUNTER_SOURCE_HANDLING_SIGNING_KEY}" \
+  --verification-key-hex "${HUNTER_SOURCE_HANDLING_VERIFICATION_KEY}" \
+  --verification-key-sha256 "${HUNTER_SOURCE_HANDLING_VERIFICATION_KEY_SHA256}" \
+  --genesis-rule-sha256 "${HUNTER_SOURCE_HANDLING_GENESIS_RULE_SHA256}" \
+  --record '{"provenance_id":"evidence:auth:fact:issue-123","provenance_kind":"EVIDENCE","authority_identity":"<operator id>","effective_from":"2026-09-02T12:00:00Z","recorded_at":"2026-09-02T12:00:00Z","known_at":"2026-09-02T12:00:00Z","evidence_strength":"AUTHORITATIVE_SOURCE_EVIDENCE","evidence_method":"SOURCE_TERMS_VERIFIED"}' \
+  --record '{"provenance_id":"verifier:auth:fact:issue-123","provenance_kind":"VERIFIER","authority_identity":"<operator id>","effective_from":"2026-09-02T12:00:00Z","recorded_at":"2026-09-02T12:00:00Z","known_at":"2026-09-02T12:00:00Z","verifier_type":"SOURCE_VERIFIER"}'
+```
+
+`HUNTER_SOURCE_HANDLING_SIGNING_KEY` is the hex-encoded Ed25519 **private** key matching the pinned public key. It is **operator-only**: the
+issuer runtime never holds a provenance signing key (it only verifies with the public key). Guidance:
+
+- Provision provenance **before** you deploy so it is already present when the first authorization arrives.
+- `recorded_at` and `known_at` must be at or before the provisioning instant (`known_at` is the instant the fact became knowable).
+- Corrections supersede the current head and must be knowable **strictly later**; re-provisioning the identical current head is an idempotent
+  no-op, and re-provisioning already-superseded content fails closed.
+- The CLI returns the content-addressed `record_id` (sha256 of the canonical record claims) for each record.
 
 ## Generating the Keypairs
 
@@ -187,7 +233,7 @@ primary_region = "ord"
   destination = "/data"
 
 [processes]
-  app = "python scripts/hunter_issue_agent_issuer.py --host 0.0.0.0 --port 8080 --provenance-resolver my_issuer_ops.provenance_resolver"
+  app = "python scripts/hunter_issue_agent_issuer.py --host 0.0.0.0 --port 8080 --provenance-resolver hunter.evidence_intelligence.source_handling_provenance.production_provenance_resolver"
 
 [http_service]
   internal_port = 8080
@@ -212,7 +258,39 @@ fly secrets set \
 fly deploy
 ```
 
-### Option 3: Self-hosted / Docker Compose
+### Option 3: Railway
+
+Railway runs a single Service (one process). The repository ships a repo-owned `railway.toml` that defines the build steps, the HTTP port,
+the issuer start command with the repository-owned provenance resolver, persistent storage for the evidence database, and the operational
+variables that are safe to commit (assigned via Railway's `$variable` references). Deploy by connecting the `Project-Hunter` repository and
+creating a Service from it, then set the remaining variables as a Railway Variable Group / Service variables.
+
+1. **Persistent evidence database** — `railway.toml` mounts a `Volume` at `/data` and sets `HUNTER_ISSUE_AGENT_EVIDENCE_DB=/data/evidence.sqlite`.
+   Provision the Source Handling authority history and the provenance records (see "Provisioning Source Handling Provenance") on that volume
+   before (or immediately after) the first deploy; the resolver fails closed until they are present.
+
+2. **Set the secrets as variables** on the Service:
+   `HUNTER_SOURCE_HANDLING_VERIFICATION_KEY`, `HUNTER_SOURCE_HANDLING_VERIFICATION_KEY_SHA256`,
+   `HUNTER_SOURCE_HANDLING_GENESIS_RULE_SHA256`, `HUNTER_PROMPT_AUTOMATION_SIGNING_KEY`,
+   `HUNTER_PROMPT_AUTOMATION_VERIFYING_KEY`, `HUNTER_ISSUE_AGENT_AUTHORIZATION_VERIFYING_KEY`, and the fallback runtime provider
+   variables (`HUNTER_AGENT_*`). Use Railway variable references (e.g. `${{ HUNTER_SOURCE_HANDLING_VERIFICATION_KEY }}`) for any value that
+   must not be committed.
+
+3. **Set the deployment variables** on the Service:
+   `HUNTER_ISSUE_AGENT_REPOSITORY`, `HUNTER_ISSUE_AGENT_OWNER_LOGIN`, `HUNTER_ISSUE_AGENT_EXECUTION_BRANCH`, `HUNTER_ISSUE_AGENT_REPO_DIR`.
+   The Railway-provided `PORT` is consumed by the start command as `--port $PORT`.
+
+4. **Create the volume and deploy** — Railway provisions the `/data` Volume from `railway.toml` and runs the issuer as:
+
+   ```text
+   python scripts/hunter_issue_agent_issuer.py --host 0.0.0.0 --port $PORT \
+     --provenance-resolver hunter.evidence_intelligence.source_handling_provenance.production_provenance_resolver
+   ```
+
+5. **Configure the webhook URL** — copy the generated service URL (public + 443) and set
+   `HUNTER_ISSUE_AGENT_WEBHOOK_URL` to `<service-url>/issue-agent/authorize` as a GitHub repository secret.
+
+### Option 4: Self-hosted / Docker Compose
 
 ```yaml
 # docker-compose.yml
@@ -242,7 +320,7 @@ services:
     volumes:
       - evidence_data:/data
       - ./repo:/workspace
-    command: python scripts/hunter_issue_agent_issuer.py --host 0.0.0.0 --port 8080 --provenance-resolver my_issuer_ops.provenance_resolver
+    command: python scripts/hunter_issue_agent_issuer.py --host 0.0.0.0 --port 8080 --provenance-resolver hunter.evidence_intelligence.source_handling_provenance.production_provenance_resolver
 
 volumes:
   evidence_data:
@@ -285,7 +363,7 @@ USER hunter
 
 EXPOSE 8080
 
-CMD ["python", "scripts/hunter_issue_agent_issuer.py", "--host", "0.0.0.0", "--port", "8080", "--provenance-resolver", "my_issuer_ops.provenance_resolver"]
+CMD ["python", "scripts/hunter_issue_agent_issuer.py", "--host", "0.0.0.0", "--port", "8080", "--provenance-resolver", "hunter.evidence_intelligence.source_handling_provenance.production_provenance_resolver"]
 ```
 
 ## Verifying the Deployment
