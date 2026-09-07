@@ -383,6 +383,55 @@ def test_provisioning_refuses_as_of_predating_genesis_rule_or_issue_update(
             assert connection.execute("SELECT COUNT(*) FROM source_handling_provenance_records").fetchone()[0] == 0
 
 
+def test_provisioning_refuses_future_as_of_before_any_mutation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    database, key, updated_at = _prepare(tmp_path, monkeypatch)
+    future_as_of = (datetime.now(UTC) + timedelta(days=2)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+    with sqlite3.connect(database) as connection:
+        before_keys = connection.execute(
+            "SELECT family, scope, current_record_id, revision FROM source_handling_canonical_keys " "ORDER BY family"
+        ).fetchall()
+        before_authority_records = connection.execute(
+            "SELECT COUNT(*) FROM source_handling_authority_records"
+        ).fetchone()[0]
+        root_before = connection.execute(
+            "SELECT genesis_rule_sha256, verification_key_sha256 FROM source_handling_operator_root "
+            "WHERE singleton_id = 'SOURCE_HANDLING'"
+        ).fetchone()
+
+    with pytest.raises(SystemExit) as excinfo:
+        _run_provisioning(database, key, _arguments(database, updated_at, as_of=future_as_of))
+    assert excinfo.value.code == 2
+    assert "must not be in the future" in capsys.readouterr().err
+
+    with sqlite3.connect(database) as connection:
+        provenance_table = connection.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+            ("source_handling_provenance_records",),
+        ).fetchone()
+        if provenance_table is not None:
+            assert connection.execute("SELECT COUNT(*) FROM source_handling_provenance_records").fetchone()[0] == 0
+            assert connection.execute("SELECT COUNT(*) FROM source_handling_provenance_heads").fetchone()[0] == 0
+        authority_count = connection.execute(
+            "SELECT COUNT(*) FROM source_handling_authority_records WHERE family != 'AUTHORIZATION_RULE'"
+        ).fetchone()[0]
+        assert authority_count == 0
+        after_keys = connection.execute(
+            "SELECT family, scope, current_record_id, revision FROM source_handling_canonical_keys " "ORDER BY family"
+        ).fetchall()
+        root_after = connection.execute(
+            "SELECT genesis_rule_sha256, verification_key_sha256 FROM source_handling_operator_root "
+            "WHERE singleton_id = 'SOURCE_HANDLING'"
+        ).fetchone()
+    assert after_keys == before_keys
+    assert connection.execute("SELECT COUNT(*) FROM source_handling_authority_records").fetchone()[0] == (
+        before_authority_records
+    )
+    assert root_after == root_before
+
+
 def test_provisioning_requires_operator_environment_configuration(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

@@ -564,6 +564,8 @@ def _run(
     rule_known_at = _parse_time(rule["known_at"])
     on_or_after = as_of if as_of is not None else datetime.now(UTC)
     on_or_after = _aware_utc("provisioning as-of", on_or_after)
+    if on_or_after > datetime.now(UTC):
+        raise SourceHandlingBlockedError("the provisioning as-of must not be in the future")
     if on_or_after < rule_known_at:
         raise SourceHandlingBlockedError(
             f"the provisioning as-of {_time_text(on_or_after)} predates the genesis authorization rule "
@@ -637,8 +639,6 @@ def _run(
     # derives identical records and stays already-provisioned.
     predefined = _max_provenance_admission(database)
     authority_at = max(on_or_after, predefined) if predefined is not None else on_or_after
-    if authority_at > datetime.now(UTC):
-        raise SourceHandlingBlockedError("the provisioning as-of must not be in the future")
 
     plans = _family_plans(
         document_id=document_id,
