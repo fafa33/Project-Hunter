@@ -326,6 +326,38 @@ def test_signing_key_file_variant_bootstraps(tmp_path: Path) -> None:
         assert root[0] == _verification_key_sha256(key)
 
 
+# --- signing key sources (mutually exclusive) --------------------------------
+
+
+def test_signing_key_sources_are_mutually_exclusive() -> None:
+    other_key = _signing_key_hex(_private_key_bytes())
+    with pytest.raises(ValueError, match="provide exactly one source"):
+        bootstrap._load_signing_key(environ={bootstrap.SIGNING_KEY_ENV: other_key}, signing_key_file="key.hex")
+    assert (
+        bootstrap._load_signing_key(environ={bootstrap.SIGNING_KEY_ENV: "ab" * 32}, signing_key_file=None)
+        == b"\xab" * 32
+    )
+
+
+def test_both_signing_key_sources_fail_closed_before_db_open(tmp_path: Path) -> None:
+    database = tmp_path / "evidence.sqlite"
+    key = _private_key_bytes()
+    key_file = tmp_path / "source-handling-signing-key.hex"
+    key_file.write_text(_signing_key_hex(key), encoding="utf-8")
+    saved = os.environ.get(bootstrap.SIGNING_KEY_ENV)
+    os.environ[bootstrap.SIGNING_KEY_ENV] = _signing_key_hex(key)
+    try:
+        with pytest.raises(SystemExit) as excinfo:
+            bootstrap.main(["--database", str(database), "--signing-key-file", str(key_file)])
+        assert excinfo.value.code == 2
+    finally:
+        if saved is None:
+            os.environ.pop(bootstrap.SIGNING_KEY_ENV, None)
+        else:
+            os.environ[bootstrap.SIGNING_KEY_ENV] = saved
+    assert not database.exists()
+
+
 # --- idempotency --------------------------------------------------------------
 
 

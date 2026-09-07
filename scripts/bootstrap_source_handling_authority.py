@@ -16,9 +16,9 @@ written.
 
 The Source Handling private signing key is consumed only here (from the
 ``HUNTER_SOURCE_HANDLING_SIGNING_KEY`` environment variable or a
-``--signing-key-file``); it is derived into the three non-secret operator
-outputs the issuer runtime requires, and it is never printed. The issuer
-runtime never holds this key.
+``--signing-key-file``, mutually exclusive sources); it is derived into the
+three non-secret operator outputs the issuer runtime requires, and it is never
+printed. The issuer runtime never holds this key.
 
 The command is idempotent only when the existing operator root and genesis
 exactly match the derived material; any mismatch (foreign root, mismatched
@@ -62,7 +62,18 @@ _DEFAULT_RULE = _REPO_ROOT / "config" / "source_handling" / "authorization_rule_
 
 
 def _load_signing_key(*, environ: Mapping[str, str], signing_key_file: str | None) -> bytes:
-    """Return the 32-byte Ed25519 private key without echoing it."""
+    """Return the 32-byte Ed25519 private key without echoing it.
+
+    Exactly one source may be supplied: the ``HUNTER_SOURCE_HANDLING_SIGNING_KEY``
+    environment variable or ``--signing-key-file``. Providing both is an explicit
+    deterministic error before any database is opened, so a silently preferred
+    source can never mask a misconfigured operator.
+    """
+    if signing_key_file is not None and (environ.get(SIGNING_KEY_ENV) or "").strip():
+        raise ValueError(
+            f"signing key is provided both as ${SIGNING_KEY_ENV} and as --signing-key-file; "
+            "provide exactly one source"
+        )
     if signing_key_file is not None:
         source = f"file {signing_key_file!r}"
         value = Path(signing_key_file).read_text(encoding="utf-8").strip()
