@@ -426,6 +426,43 @@ def _require_rule_strict_known(
         ) from error
 
 
+def _expected_authority_record_id(plan: Mapping[str, Any]) -> str:
+    """The content-addressed record id the would-be publication must produce, byte-for-byte as ``_publish`` derives it."""
+    return hashlib.sha256(_canonical_json(_plain_mapping(plan["payload"])).encode("utf-8")).hexdigest()
+
+
+def _check_authority_heads_exact(
+    *,
+    database: str,
+    signing_key: bytes,
+    operator_root: SourceHandlingOperatorRoot,
+    plans: Sequence[Mapping[str, Any]],
+) -> None:
+    """Fail closed before any provenance write if an authority head already heads other content.
+
+    Reads each current canonical head through the repository's own resolver store
+    (``current_canonical_head_id``), never hand-written SQL. An existing head that
+    differs from the derived content proves this run would have to replace
+    provisioned state, so it fails closed with zero writes instead of superseding.
+    """
+    service = SourceHandlingAuthorityService(
+        database,
+        signing_private_key=signing_key,
+        operator_root=operator_root,
+        provenance_resolver=PROVENANCE_RESOLVER,
+    )
+    store = service.resolver()("provision-authority-precheck", datetime.now(UTC)).store
+    for plan in plans:
+        current_head = store.current_canonical_head_id(plan["family"], plan["scope"])
+        if current_head is None:
+            continue
+        if current_head != _expected_authority_record_id(plan):
+            raise SourceHandlingBlockedError(
+                f"existing {plan['family']} head for scope {plan['scope']!r} does not match the derived content; "
+                "refusing to replace provisioned authority state"
+            )
+
+
 def _provision_authority_record(
     *,
     database: str,
@@ -443,7 +480,7 @@ def _provision_authority_record(
     now = datetime.now(UTC)
     store = service.resolver()(f"provision-{plan['family']}", now).store
     payload = plan["payload"]
-    expected_record_id = hashlib.sha256(_canonical_json(_plain_mapping(payload)).encode("utf-8")).hexdigest()
+    expected_record_id = _expected_authority_record_id(plan)
     current_head = store.current_canonical_head_id(plan["family"], plan["scope"])
     if current_head == expected_record_id:
         return {"record_id": expected_record_id, "status": "already-provisioned"}
@@ -552,6 +589,30 @@ def _run(
     )
     _check_provenance_heads_exact(database, provenance_plans, on_or_after)
     _require_rule_strict_known(database, signing_key, operator_root, on_or_after)
+
+    # Fail closed on an existing but mismatched authority head BEFORE any
+    # provenance record is written. The would-be authority records are derived
+    # at the later of the operator as-of and the provenance admission already in
+    # the database; on an exactly-pinned re-run no provenance write changes that
+    # admission, so this preview coincides with the records the write phase
+    # derives and an exact-match head stays on the idempotent path. A mismatch
+    # here therefore proves the run would have to replace provisioned authority
+    # state, and it stops with zero writes.
+    preview_admission = _max_provenance_admission(database)
+    preview_at = max(on_or_after, preview_admission) if preview_admission is not None else on_or_after
+    preview_plans = _family_plans(
+        document_id=document_id,
+        at=preview_at,
+        rule_id=authorization_rule_id,
+        fact_options=fact_options,
+        policy_options=policy_options,
+    )
+    _check_authority_heads_exact(
+        database=database,
+        signing_key=signing_key,
+        operator_root=operator_root,
+        plans=preview_plans,
+    )
 
     for plan in provenance_plans:
         provenance_repository.record_provenance(

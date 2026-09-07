@@ -284,6 +284,68 @@ def test_provisioning_mismatched_authority_content_fails_closed(
     assert all(row[3] == 1 for row in after)
 
 
+def test_provisioning_mismatched_authority_head_fails_before_any_provenance_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    database, key, updated_at = _prepare(tmp_path, monkeypatch)
+
+    capsys.readouterr()
+    _run_provisioning(database, key, _arguments(database, updated_at))
+    baseline = json.loads(capsys.readouterr().out)
+    as_of = baseline["as_of"]
+
+    # Model "existing mismatched authority head, no per-Issue provenance yet":
+    # drop the per-Issue provenance records (append-only guards lifted only to
+    # build this fixture; the next repository initialization re-creates them) so
+    # the re-run sees existing authority state with zero provenance antecedents.
+    with sqlite3.connect(database) as connection:
+        for trigger in (
+            "source_handling_provenance_no_delete",
+            "source_handling_provenance_no_update",
+            "source_handling_provenance_head_no_delete",
+        ):
+            connection.execute(f"DROP TRIGGER IF EXISTS {trigger}")
+        connection.execute("DELETE FROM source_handling_provenance_records")
+        connection.execute("DELETE FROM source_handling_provenance_heads")
+        before_keys = connection.execute(
+            "SELECT family, scope, current_record_id, revision FROM source_handling_canonical_keys "
+            "WHERE family != 'AUTHORIZATION_RULE' ORDER BY family"
+        ).fetchall()
+        before_authority_records = connection.execute(
+            "SELECT COUNT(*) FROM source_handling_authority_records"
+        ).fetchone()[0]
+        before_authorizations = connection.execute(
+            "SELECT COUNT(*) FROM source_handling_publication_authorizations"
+        ).fetchone()[0]
+
+    with pytest.raises(SystemExit) as excinfo:
+        _run_provisioning(
+            database,
+            key,
+            _arguments(database, updated_at, sensitivity="RESTRICTED", as_of=as_of),
+        )
+    assert excinfo.value.code == 2
+    err = capsys.readouterr().err
+    assert "refusing to replace provisioned authority state" in err
+
+    with sqlite3.connect(database) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM source_handling_provenance_records").fetchone()[0] == 0
+        assert connection.execute("SELECT COUNT(*) FROM source_handling_provenance_heads").fetchone()[0] == 0
+        assert connection.execute("SELECT COUNT(*) FROM source_handling_authority_records").fetchone()[0] == (
+            before_authority_records
+        )
+        assert (
+            connection.execute("SELECT COUNT(*) FROM source_handling_publication_authorizations").fetchone()[0]
+            == before_authorizations
+        )
+        after_keys = connection.execute(
+            "SELECT family, scope, current_record_id, revision FROM source_handling_canonical_keys "
+            "WHERE family != 'AUTHORIZATION_RULE' ORDER BY family"
+        ).fetchall()
+    assert after_keys == before_keys
+    assert all(row[3] == 1 for row in after_keys)
+
+
 def test_provisioning_refuses_as_of_predating_genesis_rule_or_issue_update(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
