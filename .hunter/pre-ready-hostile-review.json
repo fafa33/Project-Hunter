@@ -15,7 +15,7 @@
       },
       {
         "criterion": "Complete-for-Review optimization: provisioning command for one Issue + mutual-exclusion fix + tests + deployment doc updated to the (a)-(g) Railway order.",
-        "evidence": "The provisioning CLI provisions FACT / FIELD_CATEGORY_REGISTRY / POLICY for one Issue with its six EVIDENCE/VERIFIER antecedents and is covered by 6 new tests (happy path resolves through resolve_pre_model_source_handling at the runtime boundary; exact rerun idempotent; mismatch fails closed; as-of predating the rule or the Issue update fails closed; operator env guard; dual-source mutual exclusion). The bootstrap mutual-exclusion fix has 2 new tests (unit ValueError + CLI SystemExit with fresh DB untouched). The Railway deployment doc now lists steps (a)-(g) in the mandated order.",
+        "evidence": "The provisioning CLI provisions FACT / FIELD_CATEGORY_REGISTRY / POLICY for one Issue with its six EVIDENCE/VERIFIER antecedents and is covered by 7 new tests (happy path resolves through resolve_pre_model_source_handling at the runtime boundary; exact rerun idempotent; authority mismatch fails closed; existing-but-mismatched authority head fails before any provenance write; provenance mismatch fails closed; as-of predating the rule or the Issue update fails closed; operator env guard; dual-source mutual exclusion). The bootstrap mutual-exclusion fix has 2 new tests (unit ValueError + CLI SystemExit with fresh DB untouched). The Railway deployment doc now lists steps (a)-(g) in the mandated order.",
         "id": "C-3",
         "verdict": "satisfied"
       },
@@ -58,7 +58,7 @@
         "outcome": "clear"
       },
       {
-        "evidence": "DFF-010 swept: bootstrap's _load_signing_key silently preferred the file over the environment and never errored; now both sources together raise an explicit deterministic ValueError before any database is opened (the raise precedes the database argument parsing path). test_signing_key_sources_are_mutually_exclusive (unit) and test_both_signing_key_sources_fail_closed_before_db_open (CLI, asserts the fresh database is not created) pin both success and fail-closed shapes. The provisioning CLI consumes the same shared loader and gains the same mutual-exclusion property via test_provisioning_signing_key_sources_are_mutually_exclusive.",
+        "evidence": "DFF-010 swept: bootstrap's _load_signing_key silently preferred the file over the environment and never errored; now both sources together raise an explicit deterministic ValueError before any database is opened (the raise precedes the database argument parsing path). test_signing_key_sources_are_mutually_exclusive (unit) and test_both_signing_key_sources_fail_closed_before_db_open (CLI, asserts the fresh database is not created) pin both success and fail-closed shapes. The provisioning CLI consumes the same shared loader and gains the same mutual-exclusion property via test_provisioning_signing_key_sources_are_mutually_exclusive. The authority-head exact pre-check likewise enforces prevention at the earliest boundary: it fails closed before any provenance or authority write, not merely by detecting a mismatch after mutation.",
         "family": "DFF-010",
         "outcome": "clear"
       },
@@ -78,7 +78,7 @@
         "outcome": "clear"
       },
       {
-        "evidence": "DFF-014 swept: idempotency is exact-match only. On a re-run pinned to the recorded as_of, every would-be provenance id and authority record id equals the current head, so nothing is written (test_provisioning_exact_rerun_is_idempotent asserts byte-stable canonical keys, revision 1, identical record counts). Any other content (test_provisioning_mismatched_authority_content_fails_closed, sensitivity RESTRICTED) fails closed before write with 'refusing to replace provisioned authority state', and a different provenance head fails closed before any write. The printed as_of is the pinned, deterministic operator instant - not a fresh transient each run.",
+        "evidence": "DFF-014 swept: idempotency is exact-match only. On a re-run pinned to the recorded as_of, every would-be provenance id and authority record id equals the current head, so nothing is written (test_provisioning_exact_rerun_is_idempotent asserts byte-stable canonical keys, revision 1, identical record counts). Any other authority content (test_provisioning_mismatched_authority_content_fails_closed, sensitivity RESTRICTED) fails closed before write with 'refusing to replace provisioned authority state', and a mismatched existing authority head is now detected and rejected before ANY provenance write (test_provisioning_mismatched_authority_head_fails_before_any_provenance_write: existing FACT head + zero per-Issue provenance, then SystemExit 2, zero provenance/authority writes, canonical keys and record counts unchanged). A different provenance head also fails closed before any write. The printed as_of is the pinned, deterministic operator instant - not a fresh transient each run.",
         "family": "DFF-014",
         "outcome": "clear"
       },
@@ -95,32 +95,38 @@
     ],
     "findings": [
       {
-        "evidence": "Backdating the per-Issue records to issue_updated_at is impossible in this contract: authority records' claimed known_at must be at or after their physical admission, and an Issue classified 'now' cannot be knowable before its last update. The first end-to-end run failed with 'canonical publication provenance is incomplete' (SystemExit 2) because the EVIDENCE/VERIFIER antecedents were admitted later than the authority records' known_at. Resolved with the explicit operator --as-of instant and the clamp authority_at = max(as_of, max provenance admission), itself a deterministic function of the pinned as-of. Happy path green; exact rerun idempotent.",
+        "evidence": "The provisioning CLI wrote the six EVIDENCE/VERIFIER provenance records before checking whether existing FACT / FIELD_CATEGORY_REGISTRY / POLICY authority heads exactly matched the would-be records, so a run against an existing-but-mismatched authority head mutated provenance before rejecting the authority. Resolved by deriving the expected record id for all three authority families, reading each current canonical head through the repository resolver store (current_canonical_head_id), and failing closed before any provenance write on the first mismatch; exact-match heads remain on the idempotent path. New regression test pins zero provenance/authority writes and unchanged canonical state.",
         "id": "F-1",
         "resolution": "resolved",
         "severity": "blocking"
       },
       {
-        "evidence": "The exact-head provenance pre-check queried source_handling_provenance_heads before the provenance schema existed on a fresh database, failing with sqlite3.OperationalError 'no such table'. Resolved by constructing SourceHandlingProvenanceAuthorityRepository (whose initializer creates the schema idempotently) before running the head pre-check. The fresh-database happy path now passes.",
+        "evidence": "Backdating the per-Issue records to issue_updated_at is impossible in this contract: authority records' claimed known_at must be at or after their physical admission, and an Issue classified 'now' cannot be knowable before its last update. The first end-to-end run failed with 'canonical publication provenance is incomplete' (SystemExit 2) because the EVIDENCE/VERIFIER antecedents were admitted later than the authority records' known_at. Resolved with the explicit operator --as-of instant and the clamp authority_at = max(as_of, max provenance admission), itself a deterministic function of the pinned as-of. Happy path green; exact rerun idempotent.",
         "id": "F-2",
         "resolution": "resolved",
         "severity": "blocking"
       },
       {
-        "evidence": "bootstrap_source_handling_authority._load_signing_key silently preferred --signing-key-file over HUNTER_SOURCE_HANDLING_SIGNING_KEY and never errored, so a misconfigured operator could be masking a stale env value. Resolved: both sources together raise an explicit deterministic ValueError before any database is opened; the provisioning CLI inherits the same loader. Unit and CLI-level tests pin the pre-DB fail-closed.",
+        "evidence": "The exact-head provenance pre-check queried source_handling_provenance_heads before the provenance schema existed on a fresh database, failing with sqlite3.OperationalError 'no such table'. Resolved by constructing SourceHandlingProvenanceAuthorityRepository (whose initializer creates the schema idempotently) before running the head pre-check. The fresh-database happy path now passes.",
         "id": "F-3",
         "resolution": "resolved",
         "severity": "blocking"
       },
       {
-        "evidence": "Two racing provisioning processes on the same empty database both observe absent heads; the second writer's provenance writes then no-op or supersede depending on content, while the authority issue_authorization/publish path has its own genesis-style guards. Safe and fail-closed in both orders, but the graceful classification of the loser as already-provisioned is left to a follow-up rather than implemented here.",
+        "evidence": "bootstrap_source_handling_authority._load_signing_key silently preferred --signing-key-file over HUNTER_SOURCE_HANDLING_SIGNING_KEY and never errored, so a misconfigured operator could be masking a stale env value. Resolved: both sources together raise an explicit deterministic ValueError before any database is opened; the provisioning CLI inherits the same loader. Unit and CLI-level tests pin the pre-DB fail-closed.",
         "id": "F-4",
+        "resolution": "resolved",
+        "severity": "blocking"
+      },
+      {
+        "evidence": "Two racing provisioning processes on the same empty database both observe absent heads; the second writer's provenance writes then no-op or supersede depending on content, while the authority issue_authorization/publish path has its own genesis-style guards. Safe and fail-closed in both orders, but the graceful classification of the loser as already-provisioned is left to a follow-up rather than implemented here.",
+        "id": "F-5",
         "resolution": "unresolved",
         "severity": "non-blocking"
       },
       {
         "evidence": "Classification content (sensitivity, restrictions, dispositions) comes from operator-supplied options, not from reading the live Issue content; a real-content verification step remains the operator's responsibility (the command fails closed on a missing document contract rather than inventing content). Accepted for this operator-only provisioning path.",
-        "id": "F-5",
+        "id": "F-6",
         "resolution": "unresolved",
         "severity": "non-blocking"
       }
@@ -128,13 +134,13 @@
     "issue": "430",
     "review_target": [
       {
-        "blob_sha": "b61ba99cef76ac940c5a45b52844cc38a3789252",
+        "blob_sha": "2ca8c7cc4b11d51d1459a50edce9dd638a2dcc85",
         "path": "scripts/provision_source_handling_issue_authority.py",
         "previous_path": "",
         "status": "added"
       },
       {
-        "blob_sha": "f4b42bbb6db648b444ba6dda7b03a641647b1805",
+        "blob_sha": "93d31584378537f07db9ebfa9187e613a1a83c71",
         "path": "tests/test_source_handling_provisioning.py",
         "previous_path": "",
         "status": "added"
@@ -158,8 +164,8 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "7aa258cec5e72515316f70dea2799121a45f02135803649a6fff69b2e501bc58"
+    "review_target_digest": "21bf23ccc2108a81c0595675ddf35c38cd8ed908a8d8c435572c89832757f42f"
   },
-  "review_id": "8f79bcd96fb394ec611890a6448241a0cf493cc224c8b56832f10001e5676a70",
+  "review_id": "30a1746f92f8b23b1df0edc0be206a922e74d9fc75c4a7df4c8fc9ab57c97ced",
   "schema": "hunter.pre-ready-hostile-review.v1"
 }
