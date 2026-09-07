@@ -288,6 +288,10 @@ The script reads `HUNTER_SOURCE_HANDLING_SIGNING_KEY` from the environment, deri
 pins the operator root row, and publishes the genesis authorization rule. It is idempotent when the existing state exactly matches; any
 mismatch (foreign root, wrong key, successor chain) fails closed without replacing authority state.
 
+The genesis rule is always the repository-owned `config/source_handling/authorization_rule_v1.json`, pinned to canonical digest
+`41119071db0f5c2a2eacfe2848ab6696355195e1ac9c671ee33c4128793aa70a`; the CLI accepts no alternate rule path. A missing, malformed, or
+digest-mismatched production rule fails closed before any authority state is written.
+
 On a fresh database the output is:
 
 ```json

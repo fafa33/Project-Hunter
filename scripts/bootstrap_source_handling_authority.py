@@ -7,6 +7,13 @@ repository-owned genesis ``AUTHORIZATION_RULE`` into the exact evidence database
 the issuer will read at runtime, without any hand-written SQL and without any
 test fixture dependency.
 
+The genesis rule is always the repository-owned
+``config/source_handling/authorization_rule_v1.json``, pinned to canonical
+digest ``41119071db0f5c2a2eacfe2848ab6696355195e1ac9c671ee33c4128793aa70a``;
+the CLI accepts no alternate rule path. A missing, malformed, or
+digest-mismatched production rule fails closed before any authority state is
+written.
+
 The Source Handling private signing key is consumed only here (from the
 ``HUNTER_SOURCE_HANDLING_SIGNING_KEY`` environment variable or a
 ``--signing-key-file``); it is derived into the three non-secret operator
@@ -48,6 +55,8 @@ VERIFICATION_KEY_ENV = "HUNTER_SOURCE_HANDLING_VERIFICATION_KEY"
 VERIFICATION_KEY_SHA256_ENV = "HUNTER_SOURCE_HANDLING_VERIFICATION_KEY_SHA256"
 GENESIS_RULE_SHA256_ENV = "HUNTER_SOURCE_HANDLING_GENESIS_RULE_SHA256"
 
+PINNED_PRODUCTION_RULE_SHA256 = "41119071db0f5c2a2eacfe2848ab6696355195e1ac9c671ee33c4128793aa70a"
+
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _DEFAULT_RULE = _REPO_ROOT / "config" / "source_handling" / "authorization_rule_v1.json"
 
@@ -78,6 +87,34 @@ def _canonical_genesis_payload(rule: Mapping[str, Any]) -> dict[str, Any]:
     return {**_plain_mapping(rule), "scope": SOURCE_HANDLING_RULE_SCOPE}
 
 
+def _canonical_digest(rule: Mapping[str, Any]) -> str:
+    return hashlib.sha256(_canonical_json(_plain_mapping(rule)).encode("utf-8")).hexdigest()
+
+
+def _load_production_rule() -> dict[str, Any]:
+    """Load the repository-owned production rule, failing closed on any deviation."""
+    path = _DEFAULT_RULE
+    try:
+        rule_raw = path.read_text(encoding="utf-8")
+    except FileNotFoundError as error:
+        raise SourceHandlingBlockedError(f"production authorization rule is missing: {path}") from error
+    except OSError as error:
+        raise SourceHandlingBlockedError(f"production authorization rule is unreadable: {path}") from error
+    try:
+        rule = json.loads(rule_raw)
+    except json.JSONDecodeError as error:
+        raise SourceHandlingBlockedError(f"production authorization rule is malformed: {path}") from error
+    if not isinstance(rule, dict):
+        raise SourceHandlingBlockedError(f"production authorization rule must be a JSON object: {path}")
+    digest = _canonical_digest(rule)
+    if digest != PINNED_PRODUCTION_RULE_SHA256:
+        raise SourceHandlingBlockedError(
+            f"production authorization rule digest {digest} does not match the pinned canonical "
+            f"digest {PINNED_PRODUCTION_RULE_SHA256}; refusing to bootstrap"
+        )
+    return rule
+
+
 def _expected_genesis_record_id(rule: Mapping[str, Any]) -> str:
     payload = _canonical_genesis_payload(rule)
     return hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
@@ -94,7 +131,7 @@ def _derived_digests(signing_key: bytes, rule: Mapping[str, Any]) -> tuple[str, 
     )
     verification_key_hex = verification_key.hex()
     verification_key_sha256 = hashlib.sha256(verification_key).hexdigest()
-    genesis_rule_sha256 = hashlib.sha256(_canonical_json(_plain_mapping(rule)).encode("utf-8")).hexdigest()
+    genesis_rule_sha256 = _canonical_digest(rule)
     return verification_key_hex, verification_key_sha256, genesis_rule_sha256
 
 
@@ -157,21 +194,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=None,
         help=f"path to a file containing the hex-encoded Ed25519 signing key (mutually exclusive with ${SIGNING_KEY_ENV})",
     )
-    parser.add_argument(
-        "--rule",
-        default=str(_DEFAULT_RULE),
-        help="path to the canonical production authorization rule (default: repository-owned config rule)",
-    )
     parser.add_argument("--json", action="store_true", help="emit machine-readable non-secret JSON on success")
     arguments = parser.parse_args(argv)
 
     try:
         signing_key = _load_signing_key(environ=os.environ, signing_key_file=arguments.signing_key_file)
-        rule_path = Path(arguments.rule)
-        rule_raw = rule_path.read_text(encoding="utf-8")
-        rule = json.loads(rule_raw)
-        if not isinstance(rule, dict):
-            raise ValueError("authorization rule JSON must be an object")
+        rule = _load_production_rule()
         outcome = _run(arguments.database, signing_key, rule)
     except (ValueError, OSError, json.JSONDecodeError, SourceHandlingBlockedError) as error:
         parser.error(str(error))

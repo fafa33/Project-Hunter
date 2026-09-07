@@ -103,13 +103,11 @@ def _provenance(provenance_id: str, provenance_kind: str, cutoff: datetime) -> d
 def _bootstrap(
     database: Path,
     private_key: bytes,
-    *,
-    rule: Path = CONFIG_RULE,
 ) -> None:
     saved = os.environ.get(bootstrap.SIGNING_KEY_ENV)
     os.environ[bootstrap.SIGNING_KEY_ENV] = _signing_key_hex(private_key)
     try:
-        bootstrap.main(["--database", str(database), "--rule", str(rule), "--json"])
+        bootstrap.main(["--database", str(database), "--json"])
     finally:
         if saved is None:
             os.environ.pop(bootstrap.SIGNING_KEY_ENV, None)
@@ -180,6 +178,7 @@ def _advance_rule_chain(database: Path, private_key: bytes) -> str:
 def test_production_rule_canonical_digest_matches_the_pinned_golden() -> None:
     payload = json.loads(CONFIG_RULE.read_text(encoding="utf-8"))
     assert _canonical_sha256(payload) == RULE_GOLDEN
+    assert RULE_GOLDEN == bootstrap.PINNED_PRODUCTION_RULE_SHA256
     assert payload["authorization_rule_id"] == "AUTHORIZATION_RULE_V1"
 
 
@@ -189,6 +188,80 @@ def test_production_rule_matches_the_test_fixture_content_and_lives_outside_test
     assert _canonical_sha256(production) == _canonical_sha256(fixture)
     assert "config/source_handling/authorization_rule_v1.json" in str(bootstrap._DEFAULT_RULE)
     assert "tests/" not in str(bootstrap._DEFAULT_RULE)
+
+
+def test_production_cli_accepts_no_rule_override(tmp_path: Path) -> None:
+    database = tmp_path / "evidence.sqlite"
+    with pytest.raises(SystemExit) as excinfo:
+        bootstrap.main(["--database", str(database), "--rule", str(FIXTURE_RULE), "--json"])
+    assert excinfo.value.code == 2
+    assert not database.exists()
+
+
+def test_missing_production_rule_fails_closed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    database = tmp_path / "evidence.sqlite"
+    key = _private_key_bytes()
+    monkeypatch.setattr(bootstrap, "_DEFAULT_RULE", tmp_path / "missing_rule.json")
+    saved = os.environ.get(bootstrap.SIGNING_KEY_ENV)
+    os.environ[bootstrap.SIGNING_KEY_ENV] = _signing_key_hex(key)
+    try:
+        with pytest.raises(SystemExit) as excinfo:
+            bootstrap.main(["--database", str(database), "--json"])
+    finally:
+        if saved is None:
+            os.environ.pop(bootstrap.SIGNING_KEY_ENV, None)
+        else:
+            os.environ[bootstrap.SIGNING_KEY_ENV] = saved
+    assert excinfo.value.code == 2
+    assert not database.exists()
+
+
+def test_malformed_production_rule_fails_closed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    database = tmp_path / "evidence.sqlite"
+    key = _private_key_bytes()
+    bad_rule = tmp_path / "malformed_rule.json"
+    bad_rule.write_text("{ not json", encoding="utf-8")
+    monkeypatch.setattr(bootstrap, "_DEFAULT_RULE", bad_rule)
+    saved = os.environ.get(bootstrap.SIGNING_KEY_ENV)
+    os.environ[bootstrap.SIGNING_KEY_ENV] = _signing_key_hex(key)
+    try:
+        with pytest.raises(SystemExit) as excinfo:
+            bootstrap.main(["--database", str(database), "--json"])
+    finally:
+        if saved is None:
+            os.environ.pop(bootstrap.SIGNING_KEY_ENV, None)
+        else:
+            os.environ[bootstrap.SIGNING_KEY_ENV] = saved
+    assert excinfo.value.code == 2
+    assert not database.exists()
+
+
+def test_tampered_production_rule_fails_closed(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    database = tmp_path / "evidence.sqlite"
+    key = _private_key_bytes()
+    tampered_rule = tmp_path / "tampered_rule.json"
+    payload = json.loads(CONFIG_RULE.read_text(encoding="utf-8"))
+    payload["authorization_rule_id"] = "AUTHORIZATION_RULE_TAMPERED"
+    tampered_rule.write_text(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(bootstrap, "_DEFAULT_RULE", tampered_rule)
+    saved = os.environ.get(bootstrap.SIGNING_KEY_ENV)
+    os.environ[bootstrap.SIGNING_KEY_ENV] = _signing_key_hex(key)
+    try:
+        with pytest.raises(SystemExit) as excinfo:
+            bootstrap.main(["--database", str(database), "--json"])
+    finally:
+        if saved is None:
+            os.environ.pop(bootstrap.SIGNING_KEY_ENV, None)
+        else:
+            os.environ[bootstrap.SIGNING_KEY_ENV] = saved
+    assert excinfo.value.code == 2
+    assert "does not match the pinned canonical digest" in capsys.readouterr().err
+    assert not database.exists()
 
 
 # --- fresh database bootstrap -------------------------------------------------
