@@ -265,29 +265,91 @@ the issuer start command with the repository-owned provenance resolver, persiste
 variables that are safe to commit (assigned via Railway's `$variable` references). Deploy by connecting the `Project-Hunter` repository and
 creating a Service from it, then set the remaining variables as a Railway Variable Group / Service variables.
 
-1. **Persistent evidence database** — `railway.toml` mounts a `Volume` at `/data` and sets `HUNTER_ISSUE_AGENT_EVIDENCE_DB=/data/evidence.sqlite`.
-   Provision the Source Handling authority history and the provenance records (see "Provisioning Source Handling Provenance") on that volume
-   before (or immediately after) the first deploy; the resolver fails closed until they are present.
+#### Railway Bootstrap Steps (a–i)
 
-2. **Set the secrets as variables** on the Service:
-   `HUNTER_SOURCE_HANDLING_VERIFICATION_KEY`, `HUNTER_SOURCE_HANDLING_VERIFICATION_KEY_SHA256`,
-   `HUNTER_SOURCE_HANDLING_GENESIS_RULE_SHA256`, `HUNTER_PROMPT_AUTOMATION_SIGNING_KEY`,
-   `HUNTER_PROMPT_AUTOMATION_VERIFYING_KEY`, `HUNTER_ISSUE_AGENT_AUTHORIZATION_VERIFYING_KEY`, and the fallback runtime provider
-   variables (`HUNTER_AGENT_*`). Use Railway variable references (e.g. `${{ HUNTER_SOURCE_HANDLING_VERIFICATION_KEY }}`) for any value that
-   must not be committed.
+The issuer requires a Source Handling authority root and genesis rule before it can read the evidence database. The operator provisions these
+with a one-shot bootstrap script, then deploys the issuer without any signing key in its runtime.
 
-3. **Set the deployment variables** on the Service:
+**a. Attach the persistent Volume** — `railway.toml` mounts a `Volume` at `/data` and sets `HUNTER_ISSUE_AGENT_EVIDENCE_DB=/data/evidence.sqlite`.
+
+**b. Set the signing key env (bootstrap-only)** — set `HUNTER_SOURCE_HANDLING_SIGNING_KEY` as a Railway **Secret** (not a regular variable).
+This is the hex-encoded Ed25519 private key matching the pinned public key. It is consumed only by the bootstrap and provenance provisioning
+steps; the issuer runtime never holds it.
+
+**c. Run the bootstrap script once** — execute as a Railway Job (one-off command):
+
+```bash
+python scripts/bootstrap_source_handling_authority.py \
+  --database /data/evidence.sqlite \
+  --json
+```
+
+The script reads `HUNTER_SOURCE_HANDLING_SIGNING_KEY` from the environment, derives the public key and the three non-secret operator values,
+pins the operator root row, and publishes the genesis authorization rule. It is idempotent when the existing state exactly matches; any
+mismatch (foreign root, wrong key, successor chain) fails closed without replacing authority state.
+
+The genesis rule is always the repository-owned `config/source_handling/authorization_rule_v1.json`, pinned to canonical digest
+`41119071db0f5c2a2eacfe2848ab6696355195e1ac9c671ee33c4128793aa70a`; the CLI accepts no alternate rule path. A missing, malformed, or
+digest-mismatched production rule fails closed before any authority state is written.
+
+On a fresh database the output is:
+
+```json
+{
+  "HUNTER_SOURCE_HANDLING_GENESIS_RULE_SHA256":"41119071...","HUNTER_SOURCE_HANDLING_VERIFICATION_KEY":"<hex>","HUNTER_SOURCE_HANDLING_VERIFICATION_KEY_SHA256":"<sha256>","database":"/data/evidence.sqlite","genesis_record_id":"<hex>","operator_root":"pinned","status":"bootstrapped"
+}
+```
+
+**d. Capture the 3 non-secret outputs** — extract from the JSON:
+- `HUNTER_SOURCE_HANDLING_VERIFICATION_KEY`
+- `HUNTER_SOURCE_HANDLING_VERIFICATION_KEY_SHA256`
+- `HUNTER_SOURCE_HANDLING_GENESIS_RULE_SHA256`
+
+These are safe to store as Railway regular variables or commit references; they are derived from the public key and the rule content.
+
+**e. Set issuer runtime variables** — on the Railway Service, set:
+- `HUNTER_SOURCE_HANDLING_VERIFICATION_KEY` (from step d)
+- `HUNTER_SOURCE_HANDLING_VERIFICATION_KEY_SHA256` (from step d)
+- `HUNTER_SOURCE_HANDLING_GENESIS_RULE_SHA256` (from step d)
+- `HUNTER_PROMPT_AUTOMATION_SIGNING_KEY` (secret)
+- `HUNTER_PROMPT_AUTOMATION_VERIFYING_KEY`
+- `HUNTER_ISSUE_AGENT_AUTHORIZATION_VERIFYING_KEY`
+- `HUNTER_ISSUE_AGENT_REPOSITORY`, `HUNTER_ISSUE_AGENT_OWNER_LOGIN`, `HUNTER_ISSUE_AGENT_EXECUTION_BRANCH`, `HUNTER_ISSUE_AGENT_REPO_DIR`
+- Fallback runtime provider variables (`HUNTER_AGENT_*`)
+
+**f. Remove the signing key env** — delete or unset `HUNTER_SOURCE_HANDLING_SIGNING_KEY` from the Railway Service. The issuer runtime must
+not have access to the signing key. The provenance provisioning step (h) re-uses it temporarily, then it is removed again.
+
+**g. Deploy the issuer** — trigger a Railway deploy. The `railway.toml` start command runs:
+
+```text
+python scripts/hunter_issue_agent_issuer.py --host 0.0.0.0 --port $PORT \
+  --provenance-resolver hunter.evidence_intelligence.source_handling_provenance.production_provenance_resolver
+```
+
+At this point the issuer can read the authority root and genesis rule but no provenance records yet; any authorization attempt fails closed
+until step (h) provisions the required `EVIDENCE` / `VERIFIER` provenance records.
+
+**h. Provision the exact provenance records** — set `HUNTER_SOURCE_HANDLING_SIGNING_KEY` again temporarily and run the provenance CLI (see
+"Provisioning Source Handling Provenance" above) for each `EVIDENCE` / `VERIFIER` identity the issuer will name. Then remove the signing
+key env again.
+
+**i. Live authorized E2E** — apply the `hunter-agent-execute` label to a test Issue. The trigger workflow signs and POSTs the authorization;
+the issuer verifies, executes, and dispatches to the fallback runtime. Check issuer and runtime logs for the complete path.
+
+#### Railway Configuration Reference
+
+1. **Set the secrets as variables** on the Service:
+   `HUNTER_PROMPT_AUTOMATION_SIGNING_KEY`, `HUNTER_ISSUE_AGENT_AUTHORIZATION_VERIFYING_KEY`. The Source Handling non-secret values are set
+   as regular variables (derived from step d above).
+
+2. **Set the deployment variables** on the Service:
    `HUNTER_ISSUE_AGENT_REPOSITORY`, `HUNTER_ISSUE_AGENT_OWNER_LOGIN`, `HUNTER_ISSUE_AGENT_EXECUTION_BRANCH`, `HUNTER_ISSUE_AGENT_REPO_DIR`.
    The Railway-provided `PORT` is consumed by the start command as `--port $PORT`.
 
-4. **Create the volume and deploy** — Railway provisions the `/data` Volume from `railway.toml` and runs the issuer as:
+3. **Create the volume and deploy** — Railway provisions the `/data` Volume from `railway.toml` and runs the issuer as shown above.
 
-   ```text
-   python scripts/hunter_issue_agent_issuer.py --host 0.0.0.0 --port $PORT \
-     --provenance-resolver hunter.evidence_intelligence.source_handling_provenance.production_provenance_resolver
-   ```
-
-5. **Configure the webhook URL** — copy the generated service URL (public + 443) and set
+4. **Configure the webhook URL** — copy the generated service URL (public + 443) and set
    `HUNTER_ISSUE_AGENT_WEBHOOK_URL` to `<service-url>/issue-agent/authorize` as a GitHub repository secret.
 
 ### Option 4: Self-hosted / Docker Compose
