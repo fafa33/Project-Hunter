@@ -18,7 +18,9 @@ from __future__ import annotations
 import hashlib
 import http.client
 import json
+import socket
 import subprocess
+import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -514,8 +516,20 @@ class Deployment:
 
 
 class Webhook:
-    def __init__(self, services: issuer.IssuerServices) -> None:
-        self.server = issuer.IssuerServer("127.0.0.1", 0, services)
+    def __init__(
+        self,
+        services: issuer.IssuerServices,
+        *,
+        read_timeout: float = 15.0,
+        max_workers: int = 8,
+    ) -> None:
+        self.server = issuer.IssuerServer(
+            "127.0.0.1",
+            0,
+            services,
+            read_timeout=read_timeout,
+            max_workers=max_workers,
+        )
         self.server.start()
         self.port = self.server._server.server_address[1]
 
@@ -566,8 +580,8 @@ def _automation_keys(monkeypatch: pytest.MonkeyPatch) -> None:
 def webhook() -> Any:
     hooks: list[Webhook] = []
 
-    def _make(services: issuer.IssuerServices) -> Webhook:
-        hook = Webhook(services)
+    def _make(services: issuer.IssuerServices, **kwargs: Any) -> Webhook:
+        hook = Webhook(services, **kwargs)
         hooks.append(hook)
         return hook
 
@@ -964,6 +978,107 @@ def test_issuer_edge_reuses_existing_authorities_only(tmp_path: Path, monkeypatc
     source = Path("scripts/hunter_issue_agent_issuer.py").read_text(encoding="utf-8")
     assert "Ed25519PrivateKey" not in source
     assert ".sign(" not in source
+
+
+# --- Bounded concurrency + finite read deadline (slowloris regressions) -----
+#
+# An unauthenticated client can send a valid Content-Length and withhold the
+# body. These tests prove the real server bounds of that attack: the stalled
+# connection holds at most one worker, unrelated requests still complete within
+# a strict bounded time, and the stalled client itself is terminated within the
+# configured read deadline with a deterministic error.
+
+
+def _open_stalled_authorize(port: int, *, content_length: int, partial: bytes) -> socket.socket:
+    """Open a POST, declare a body, send only part of it, and hold the socket."""
+    connection = socket.create_connection(("127.0.0.1", port), timeout=5)
+    connection.sendall(
+        b"POST /issue-agent/authorize HTTP/1.1\r\n"
+        b"Host: 127.0.0.1\r\n"
+        b"Content-Type: application/json\r\n"
+        b"Connection: close\r\n"
+        b"Content-Length: " + str(content_length).encode("ascii") + b"\r\n\r\n" + partial
+    )
+    return connection
+
+
+def _drain_until_done(sock: socket.socket, *, timeout: float) -> bytes:
+    """Read until EOF or the socket deadline; never wait indefinitely."""
+    sock.settimeout(timeout)
+    received = b""
+    while True:
+        try:
+            chunk = sock.recv(4096)
+        except TimeoutError:
+            break
+        if not chunk:
+            break
+        received += chunk
+    return received
+
+
+def test_a_stalled_body_does_not_block_healthz_or_other_requests(tmp_path: Path, webhook: Any) -> None:
+    """One withheld body never starves /healthz or a normal request."""
+    hook = webhook(Deployment(tmp_path).services(), read_timeout=1.0, max_workers=8)
+
+    staller = _open_stalled_authorize(hook.port, content_length=64, partial=b'{"partial"')
+    try:
+        # /healthz completes while the stalled body occupies one worker.
+        started = time.monotonic()
+        status, body = hook.get("/healthz")
+        assert time.monotonic() - started < 2.0
+        assert status == 200
+        assert json.loads(body) == {"status": "ok", "service": "hunter-issue-agent-issuer"}
+
+        # A second normal request is not blocked either.
+        started = time.monotonic()
+        status, _ = hook.post(b"{}")
+        assert time.monotonic() - started < 2.0
+        assert status == 400
+    finally:
+        received = _drain_until_done(staller, timeout=5.0)
+        staller.close()
+
+    # The stalled client itself was terminated with a deterministic 408.
+    assert b"408" in received
+
+
+def test_a_stalled_body_is_terminated_within_the_read_deadline(tmp_path: Path, webhook: Any) -> None:
+    """A withheld body is failed closed within the configured read deadline."""
+    hook = webhook(Deployment(tmp_path).services(), read_timeout=0.5, max_workers=8)
+
+    started = time.monotonic()
+    staller = _open_stalled_authorize(hook.port, content_length=64, partial=b'{"partial"')
+    received = _drain_until_done(staller, timeout=2.5)
+    staller.close()
+    elapsed = time.monotonic() - started
+
+    assert b"408" in received, received
+    assert elapsed < 2.5
+    assert b"Traceback" not in received
+    assert b"internal" not in received.lower()
+
+
+def test_the_worker_bound_is_enforced_with_a_deterministic_503(tmp_path: Path, webhook: Any) -> None:
+    """When every worker is busy the transport fails closed instead of queueing."""
+    hook = webhook(Deployment(tmp_path).services(), read_timeout=4.0, max_workers=1)
+
+    staller = _open_stalled_authorize(hook.port, content_length=64, partial=b'{"partial"')
+    try:
+        # The single worker is held by the stalled body; the next request must
+        # be rejected deterministically (never hung) and never allocated more
+        # than the configured worker bound.
+        status = 200
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            status, _ = hook.get("/healthz")
+            if status == 503:
+                break
+        assert status == 503
+    finally:
+        received = _drain_until_done(staller, timeout=5.0)
+        staller.close()
+    assert b"408" in received
 
 
 def _git_repo(path: Path) -> Path:

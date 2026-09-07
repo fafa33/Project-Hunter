@@ -25,6 +25,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+from socketserver import ThreadingMixIn
 from typing import Any, Final
 
 from hunter.automation.agent_fallback_runtime import (
@@ -80,6 +81,17 @@ from hunter.execution import Clock, SystemClock
 
 #: Maximum request body size in bytes (256 KiB)
 _MAX_REQUEST_BYTES: Final[int] = 256 * 1024
+
+#: Small explicit bound on concurrent request workers. A stalled body holds
+#: exactly one slot and is released by the read deadline below, so an
+#: unauthenticated client can never monopolize the transport with one-thread
+#: starvation or unbounded thread churn.
+_MAX_CONCURRENT_REQUEST_WORKERS: Final[int] = 8
+
+#: Finite socket read deadline applied to every request connection before the
+#: body is read, so a client that withholds its declared body terminates within
+#: a bounded time (fail-closed 408) instead of occupying a worker indefinitely.
+_REQUEST_READ_TIMEOUT_SECONDS: Final[float] = 15.0
 
 #: Fixed registries (repository-owned constants)
 _ISSUE_AGENT_PROFILE_REGISTRY: Final = PromptMachineProfileRegistry((ENGINEERING_REVIEW_FIX_PROFILE,))
@@ -296,7 +308,13 @@ def _canonical_json(value: object) -> str:
 
 
 class _IssuerRequestHandler(BaseHTTPRequestHandler):
-    """HTTP handler for the trusted issuer edge."""
+    """HTTP handler for the trusted issuer edge.
+
+    ``timeout`` is set per-server on the concrete subclass: it is the finite
+    socket read deadline applied by ``setup()`` before any byte is trusted, so
+    a connection that stalls while awaiting its declared body is bounded instead
+    of holding a worker forever.
+    """
 
     services: IssuerServices | None = None
     shutdown_event: threading.Event | None = None
@@ -321,7 +339,11 @@ class _IssuerRequestHandler(BaseHTTPRequestHandler):
             self._send_error(413, "Payload Too Large")
             return
 
-        body = self.rfile.read(length)
+        try:
+            body = self.rfile.read(length)
+        except TimeoutError:
+            self._send_error(408, "Request body read timed out")
+            return
         if len(body) != length:
             self._send_error(400, "Incomplete request body")
             return
@@ -399,8 +421,74 @@ class _IssuerRequestHandler(BaseHTTPRequestHandler):
         logging.getLogger(__name__).info("%s - %s", self.address_string(), format % args)
 
 
+class _BoundedThreadingHTTPServer(ThreadingMixIn, HTTPServer):
+    """HTTPServer with a small, explicit concurrency bound.
+
+    A request is admitted to a worker only while a slot is free; when every
+    worker is busy the transport answers with a deterministic 503 at the
+    socket instead of queueing behind an unbounded thread. Workers are daemon
+    threads so shutdown is never blocked by a stalled peer, and every admitted
+    request runs under the connection's finite read deadline, so a withheld
+    body can hold a slot only until that deadline fires.
+    """
+
+    daemon_threads = True
+    allow_reuse_address = True
+
+    def __init__(
+        self,
+        server_address: tuple[str, int],
+        RequestHandlerClass: type[BaseHTTPRequestHandler],
+        *,
+        max_workers: int,
+    ) -> None:
+        if max_workers < 1:
+            raise ValueError("concurrent worker bound must be a positive integer")
+        super().__init__(server_address, RequestHandlerClass)
+        self._worker_slots = threading.Semaphore(max_workers)
+
+    def process_request(self, request: Any, client_address: Any) -> None:
+        if not self._worker_slots.acquire(blocking=False):
+            self._reject_saturated(request)
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self._worker_slots.release()
+            self.shutdown_request(request)
+            raise
+
+    def process_request_thread(self, request: Any, client_address: Any) -> None:
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._worker_slots.release()
+
+    def _reject_saturated(self, request: Any) -> None:
+        """Fail closed on a bounded 503 without leaking internal detail."""
+        try:
+            request.settimeout(5.0)
+            request.sendall(
+                b"HTTP/1.1 503 Service Unavailable\r\n"
+                b"Content-Type: application/json\r\n"
+                b"Content-Length: 0\r\n"
+                b"Connection: close\r\n\r\n"
+            )
+        except OSError:
+            pass
+
+
 class IssuerServer:
-    """Threaded HTTP server for the trusted issuer edge."""
+    """Bounded concurrent HTTP server for the trusted issuer edge.
+
+    Requests run in workers drawn from a small explicit pool (a busy transport
+    is told 503 at the socket, never queued behind an unbounded thread), and
+    every connection carries a finite read deadline, so a client that opens a
+    connection and withholds its body terminates within a bounded time instead
+    of occupying a worker indefinitely. Shutdown stays deterministic: the
+    accept loop is stopped and any in-flight worker is a daemon.
+    """
 
     def __init__(
         self,
@@ -409,6 +497,8 @@ class IssuerServer:
         services: IssuerServices,
         *,
         shutdown_event: threading.Event | None = None,
+        read_timeout: float = _REQUEST_READ_TIMEOUT_SECONDS,
+        max_workers: int = _MAX_CONCURRENT_REQUEST_WORKERS,
     ) -> None:
         self._host = host
         self._port = port
@@ -416,9 +506,14 @@ class IssuerServer:
 
         class Handler(_IssuerRequestHandler):
             shutdown_event = self._shutdown_event
+            timeout = read_timeout
 
         Handler.services = services
-        self._server = HTTPServer((host, port), Handler)
+        self._server = _BoundedThreadingHTTPServer(
+            (host, port),
+            Handler,
+            max_workers=max_workers,
+        )
         self._thread: threading.Thread | None = None
 
     def start(self) -> None:
