@@ -63,7 +63,7 @@
         "outcome": "clear"
       },
       {
-        "evidence": "DFF-011 swept: nothing in this candidate makes a valid commit permanently inadmissible. The as-of guards reject an as-of predating the genesis rule (clear error) and predating the Issue's updated_at, and reject a future as-of; provenance data is written only after the exact-head pre-check and rule strict-known pre-check pass. test_provisioning_refuses_as_of_predating_genesis_rule_or_issue_update leaves the database with only the genesis record.",
+        "evidence": "DFF-011 swept: nothing in this candidate makes a valid commit permanently inadmissible. The as-of guards reject an as-of predating the genesis rule (clear error), predating the Issue's updated_at, and -- after normalization, immediately and before the provenance repository is constructed or any provenance/authority write occurs -- a FUTURE as-of ('the provisioning as-of must not be in the future'); the redundant later future check was removed. test_provisioning_refuses_future_as_of_before_any_mutation leaves the database with only the genesis/canonical state: zero per-Issue provenance records and heads, zero FACT/FIELD_CATEGORY_REGISTRY/POLICY authority records, unchanged canonical keys and operator root.",
         "family": "DFF-011",
         "outcome": "clear"
       },
@@ -107,6 +107,12 @@
         "severity": "blocking"
       },
       {
+        "evidence": "A future --as-of could previously reach provenance writes before the redundant future-time check that sat later in the write path, violating fail-closed-before-mutation. Resolved by moving the future as-of rejection to immediately after on_or_after is parsed and normalized, before the provenance repository is constructed and before any provenance/authority write, and removing the later redundant check. New regression test (fresh bootstrapped DB + future --as-of) pins exit 2 with zero per-Issue provenance records, zero FACT/FIELD_CATEGORY_REGISTRY/POLICY authority records, and unchanged genesis/root and canonical state.",
+        "id": "F-2",
+        "resolution": "resolved",
+        "severity": "blocking"
+      },
+      {
         "evidence": "The exact-head provenance pre-check queried source_handling_provenance_heads before the provenance schema existed on a fresh database, failing with sqlite3.OperationalError 'no such table'. Resolved by constructing SourceHandlingProvenanceAuthorityRepository (whose initializer creates the schema idempotently) before running the head pre-check. The fresh-database happy path now passes.",
         "id": "F-3",
         "resolution": "resolved",
@@ -134,13 +140,13 @@
     "issue": "430",
     "review_target": [
       {
-        "blob_sha": "2ca8c7cc4b11d51d1459a50edce9dd638a2dcc85",
+        "blob_sha": "e9707d300c5ae476c1c5542f0c3a7640d0f1923f",
         "path": "scripts/provision_source_handling_issue_authority.py",
         "previous_path": "",
         "status": "added"
       },
       {
-        "blob_sha": "93d31584378537f07db9ebfa9187e613a1a83c71",
+        "blob_sha": "cbc77361bc70b9bc85d56c5d292e2df87dc402bf",
         "path": "tests/test_source_handling_provisioning.py",
         "previous_path": "",
         "status": "added"
@@ -164,8 +170,8 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "21bf23ccc2108a81c0595675ddf35c38cd8ed908a8d8c435572c89832757f42f"
+    "review_target_digest": "47de1813bbb4be09eb7c7efaadaea343f24555a029143ab98aaf999ee97d969c"
   },
-  "review_id": "30a1746f92f8b23b1df0edc0be206a922e74d9fc75c4a7df4c8fc9ab57c97ced",
+  "review_id": "7e81802a1277a7f8b07e5ce7098752c5a8c30adc11651af1530c446b740afdb5",
   "schema": "hunter.pre-ready-hostile-review.v1"
 }
