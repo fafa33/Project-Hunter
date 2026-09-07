@@ -32,8 +32,8 @@
         "verdict": "satisfied"
       },
       {
-        "criterion": "The repository-owned production rule is byte-identical to the pinned golden fixture and lives outside any tests/ directory.",
-        "evidence": "config/source_handling/authorization_rule_v1.json has canonical digest 41119071db0f5c2a2eacfe2848ab6696355195e1ac9c671ee33c4128793aa70a and raw-byte digest ab45d07e79293b46c30e26f3d297ed8ab5b43e79e5157800a506d501e147ecce; test_production_rule_matches_the_test_fixture_content_and_lives_outside_tests requires absolute-path _DEFAULT_RULE outside config/tests and asserts the canonical digest equals the fixture's.",
+        "criterion": "The repository-owned production rule is byte-identical to the pinned golden fixture, lives outside any tests/ directory, and is the only rule the production CLI can use.",
+        "evidence": "config/source_handling/authorization_rule_v1.json has canonical digest 41119071db0f5c2a2eacfe2848ab6696355195e1ac9c671ee33c4128793aa70a and raw-byte digest ab45d07e79293b46c30e26f3d297ed8ab5b43e79e5157800a506d501e147ecce; the CLI exposes no --rule option (test_production_cli_accepts_no_rule_override pins that the flag is rejected and no database is created), the script constant PINNED_PRODUCTION_RULE_SHA256 equals the fixture digest, and _load_production_rule fails closed for a missing, malformed or digest-mismatched rule before any authority state is written.",
         "id": "C-6",
         "verdict": "satisfied"
       },
@@ -151,6 +151,12 @@
         "severity": "non-blocking"
       },
       {
+        "evidence": "Independent review found the bootstrap accepted a generic --rule path override, which weakens the production invariant that the genesis authorization rule is the repository-owned canonical rule: an operator (or a compromised invocation) could publish an arbitrary, still-payload-valid rule as the root of trust. Resolved by removing the option entirely; the CLI now always loads config/source_handling/authorization_rule_v1.json through _load_production_rule(), which fails closed (SystemExit 2, no database created) when the file is missing, malformed or its canonical digest differs from PINNED_PRODUCTION_RULE_SHA256. Pinned by test_production_cli_accepts_no_rule_override, test_missing_production_rule_fails_closed, test_malformed_production_rule_fails_closed and test_tampered_production_rule_fails_closed at the exact head.",
+        "id": "F-5",
+        "resolution": "resolved",
+        "severity": "blocking"
+      },
+      {
         "evidence": "The --signing-key-file help and the module docstring call the two key sources mutually exclusive, but _load_signing_key silently prefers the file when both are present. This cannot mint a wrong root or leak a key (both feed the same derivation), but an operator with the env var set who also passes --signing-key-file gets file-first behaviour without being told; a follow-up should make the precedence explicit or fatal.",
         "id": "F-3",
         "resolution": "unresolved",
@@ -172,26 +178,26 @@
         "status": "added"
       },
       {
-        "blob_sha": "1cbbd4c20fb2b4b23eaccb82f0ddac673a47d2ad",
+        "blob_sha": "afca3dcdf224ae80ee41a5f270296e602bf5bfa2",
         "path": "scripts/bootstrap_source_handling_authority.py",
         "previous_path": "",
         "status": "added"
       },
       {
-        "blob_sha": "5146e83982809e5e5984e50c5ed089bb6303a58a",
+        "blob_sha": "84bb6f3b92267d09ba9bbfd84008d074cd533a86",
         "path": "tests/test_source_handling_bootstrap.py",
         "previous_path": "",
         "status": "added"
       },
       {
-        "blob_sha": "7937d52438dcdec1b7e07399ec106e88322e5c04",
+        "blob_sha": "5b9c2b34caef9108c85a9d1b9dafe42d8253d39f",
         "path": "docs/ISSUE_AGENT_ISSUER_DEPLOYMENT.md",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "dc0d1e66d376d5642fe199bcd510124dde4f542aa6d38415930df7803439416a"
+    "review_target_digest": "230d4a1c1825667e06adc7448cdfac88e068b920bdc71db333fadae7ae657506"
   },
-  "review_id": "4c828f96d54af523a12392e1e5713106ee007fcc38b8cc4f062cb839ac701764",
+  "review_id": "7a85af383ef78fdfa59ff2d1c280e4cfd63c05b346794342e282b2bee11f7c83",
   "schema": "hunter.pre-ready-hostile-review.v1"
 }
