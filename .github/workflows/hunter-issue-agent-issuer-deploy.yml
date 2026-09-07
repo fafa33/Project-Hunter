@@ -1,0 +1,104 @@
+name: Hunter / Issue Agent Issuer Deploy
+
+# Deploys the trusted issuer edge for governed Issue agent execution.
+# This workflow is manually triggered and deploys to the configured platform.
+# The deployed endpoint URL must be configured as the repository secret
+# HUNTER_ISSUE_AGENT_WEBHOOK_URL.
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Deployment environment (production|staging)"
+        required: true
+        default: "production"
+        type: choice
+        options:
+          - production
+          - staging
+
+concurrency:
+  group: hunter-issue-agent-issuer-${{ github.event.inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy trusted issuer edge
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write  # For OIDC to cloud provider
+
+    env:
+      ENVIRONMENT: ${{ github.event.inputs.environment }}
+
+    steps:
+      - name: Checkout trusted repository
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11.13"
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            requirements/ci-constraints.txt
+
+      - name: Install dependencies
+        env:
+          PIP_CONSTRAINT: requirements/ci-constraints.txt
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check -c requirements/ci-constraints.txt -e ".[dev]"
+
+      - name: Verify issuer entrypoint
+        run: |
+          set -euo pipefail
+          python scripts/hunter_issue_agent_issuer.py --help
+
+      # Platform-specific deployment steps.
+      # Replace with your target platform (Cloud Run, Fly.io, Railway, etc.)
+      # The example below shows Google Cloud Run deployment using OIDC.
+      #
+      # - name: Authenticate to Google Cloud
+      #   uses: google-github-actions/auth@v2
+      #   with:
+      #     credentials_json: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
+      #     project_id: ${{ secrets.GCP_PROJECT_ID }}
+      #
+      # - name: Deploy to Cloud Run
+      #   id: deploy
+      #   uses: google-github-actions/deploy-cloudrun@v2
+      #   with:
+      #     service: hunter-issue-agent-issuer-${{ env.ENVIRONMENT }}
+      #     region: us-central1
+      #     source: .
+      #     flags: >-
+      #       --port=8080
+      #       --memory=512Mi
+      #       --cpu=1
+      #       --min-instances=0
+      #       --max-instances=3
+      #       --timeout=300
+      #       --concurrency=10
+      #       --set-env-vars=HUNTER_ISSUE_AGENT_REPOSITORY=${{ github.repository }},HUNTER_ISSUE_AGENT_OWNER_LOGIN=${{ github.repository_owner }},HUNTER_ISSUE_AGENT_EVIDENCE_DB=/data/evidence.sqlite,HUNTER_ISSUE_AGENT_EXECUTION_BRANCH=issue-agent-execution,HUNTER_ISSUE_AGENT_REPO_DIR=/workspace,HUNTER_SOURCE_HANDLING_VERIFICATION_KEY=${{ secrets.HUNTER_SOURCE_HANDLING_VERIFICATION_KEY }},HUNTER_SOURCE_HANDLING_VERIFICATION_KEY_SHA256=${{ secrets.HUNTER_SOURCE_HANDLING_VERIFICATION_KEY_SHA256 }},HUNTER_SOURCE_HANDLING_GENESIS_RULE_SHA256=${{ secrets.HUNTER_SOURCE_HANDLING_GENESIS_RULE_SHA256 }},HUNTER_PROMPT_AUTOMATION_VERIFYING_KEY=${{ secrets.HUNTER_PROMPT_AUTOMATION_VERIFYING_KEY }},HUNTER_PROMPT_AUTOMATION_SIGNING_KEY=${{ secrets.HUNTER_PROMPT_AUTOMATION_SIGNING_KEY }},HUNTER_ISSUE_AGENT_AUTHORIZATION_VERIFYING_KEY=${{ secrets.HUNTER_ISSUE_AGENT_AUTHORIZATION_VERIFYING_KEY }},PYTHONPATH=/workspace/src
+      #       --service-account=${{ secrets.GCP_SERVICE_ACCOUNT_EMAIL }}
+      #       --vpc-connector=projects/${{ secrets.GCP_PROJECT_ID }}/locations/us-central1/connectors/hunter-vpc
+      #
+      # - name: Output issuer URL
+      #   run: |
+      #     echo "Issuer deployed to: ${{ steps.deploy.outputs.url }}"
+      #     echo "Configure HUNTER_ISSUE_AGENT_WEBHOOK_URL = ${{ steps.deploy.outputs.url }}/issue-agent/authorize"
+
+      - name: Placeholder - replace with your deployment target
+        run: |
+          echo "This workflow is a template. Replace the deployment steps with your platform."
+          echo "Required: a persistent HTTPS endpoint that runs scripts/hunter_issue_agent_issuer.py"
+          echo "The endpoint URL + /issue-agent/authorize must be set as HUNTER_ISSUE_AGENT_WEBHOOK_URL"
+          exit 0
