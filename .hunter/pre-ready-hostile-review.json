@@ -9,13 +9,13 @@
       },
       {
         "criterion": "Startup fails closed when required authority/configuration is absent or malformed.",
-        "evidence": "test_production_resolver_missing_environment_fails_closed and test_production_resolver_missing_environment_fails_closed pin that a provenance resolver with missing environment fails closed; test_missing_provenance_tables_fail_closed pins that absent provenance tables are not degraded; test_view_with_wrong_verification_key_fails_closed pins that key material not pinned to the operator root fails; and the issuer's own test_missing_operational_configuration_fails_closed (unchanged, exercised in the related suite) pins transport startup fail-closed behaviour.",
+        "evidence": "test_production_resolver_missing_environment_fails_closed pins that a provenance resolver with missing environment fails closed; test_missing_provenance_tables_fail_closed pins that absent provenance tables are not degraded; test_view_with_wrong_verification_key_fails_closed pins that key material not pinned to the operator root fails; and the issuer's own test_missing_operational_configuration_fails_closed (unchanged, exercised in the related suite) pins transport startup fail-closed behaviour.",
         "id": "C-2",
         "verdict": "satisfied"
       },
       {
         "criterion": "Production provenance resolution is deterministic and authority-bound.",
-        "evidence": "production_provenance_resolver builds a read-only SourceHandlingProvenanceView once from the operator environment and resolves the last strict-known record at the given cutoff: every row carries a SHA-256 record identity, an Ed25519 signature over the canonical claims, an explicit kind shape, and canonical timestamps; history commitments (single genesis, linear supersession, strictly advancing known_at, signed/revisioned head) are re-derived from stored rows, never from process state. test_resolve_and_unknown_identities, test_full_authority_publication_with_real_production_resolver and test_production_resolver_resolves_from_environment pin deterministic authority-bound resolution using verifier: authority_identity and evidence: authority_identity records.",
+        "evidence": "production_provenance_resolver builds a read-only SourceHandlingProvenanceView once from the operator environment and resolves the last strict-known record at the given cutoff: every row carries a SHA-256 record identity, an Ed25519 signature over the canonical claims, an explicit kind shape, and canonical timestamps; history commitments (single genesis, linear supersession, strictly advancing known_at, signed/revisioned head) are re-derived from stored rows, never from process state. test_resolve_and_unknown_identities, test_full_authority_publication_with_real_production_resolver and test_production_resolver_resolves_from_environment pin deterministic authority-bound resolution.",
         "id": "C-3",
         "verdict": "satisfied"
       },
@@ -33,7 +33,7 @@
       },
       {
         "criterion": "Focused tests and repository CI/governance pass.",
-        "evidence": "The focused suite passes (16/16) and the related issuer/execution suite passes (196 passed) with ruff, black and mypy green at the exact head. Hosted exact-head CI/governance results are current GitHub state adjudicated after Ready election, not properties provable from committed content, so they are not claimed here.",
+        "evidence": "The focused suite passes (18/18 including the two new concurrency regressions) and the related issuer/execution suite passes (198 passed) with ruff, black and mypy green at the exact head. Hosted exact-head CI/governance results are current GitHub state adjudicated after Ready election, not properties provable from committed content, so they are not claimed here.",
         "id": "C-6",
         "verdict": "not-applicable"
       },
@@ -72,7 +72,7 @@
         "outcome": "clear"
       },
       {
-        "evidence": "The writer wraps BEGIN IMMEDIATE, re-verifies the pinned operator root inside the same exclusive transaction, and applies head-CAS (current_record_id equality + revision+1) so validate-then-write cannot race a concurrent writer; the view is a read-only (mode=ro) connection that never writes. test_full_authority_publication_with_real_production_resolver and test_schema_is_idempotent_across_repository_instances exercise the snapshot surface.",
+        "evidence": "One real BEGIN IMMEDIATE spans the whole protected sequence: read operator root -> verify root -> read current head -> validate predecessor/revision -> insert record -> update head -> commit. Schema initialization now runs once in _initialize() on its own connection before the write transaction, so the implicit commit inside executescript can no longer release the write lock mid-sequence. test_write_lock_is_held_for_the_entire_protected_sequence holds a writer transaction open and proves a second independent repository instance cannot interleave until it commits, and test_competing_corrections_from_same_predecessor_cannot_branch races two independent instances against a shared genesis and proves at most one direct successor is admitted with a linear revisioned head.",
         "family": "DFF-002",
         "outcome": "clear"
       },
@@ -82,7 +82,7 @@
         "outcome": "clear"
       },
       {
-        "evidence": "Every absent/unknown branch fails closed: missing provenance tables raise SourceHandlingBlockedError (test_missing_provenance_tables_fail_closed); unknown identity returns None only when genuinely unresolved (otherwise 'provenance history is not completely knowable at cutoff'); wrong verification key or unverifiable signature raises (test_view_with_wrong_verification_key_fails_closed, tamper tests); missing/malformed environment fails closed (test_production_resolver_missing_environment_fails_closed); unknown provenance_kind is rejected by the column CHECK.",
+        "evidence": "Every absent/unknown branch fails closed: missing provenance tables raise SourceHandlingBlockedError (test_missing_provenance_tables_fail_closed); unknown identity returns None only when genuinely unresolved (otherwise 'provenance history is not completely knowable at cutoff'); wrong verification key or unverifiable signature raises (test_view_with_wrong_verification_key_fails_closed, tamper tests); missing/malformed environment fails closed (test_production_resolver_missing_environment_fails_closed); unknown provenance_kind is rejected by the column CHECK. The concurrency fix preserves this: a blocked or rejected competitor surfaces SourceHandlingBlockedError, never an out-of-band state.",
         "family": "DFF-004",
         "outcome": "clear"
       },
@@ -92,7 +92,7 @@
         "outcome": "clear"
       },
       {
-        "evidence": "Admission_time is repository-wide monotonic (MAX+1\u00b5s with a frozen-clock-safe max), revision strictly increases per lineage, known_at strictly increases along the chain, and every invariant is re-derived from stored rows on each read (_validate_chain) rather than from process or clock state, so restart cannot perturb any ordering guarantee. test_schema_is_idempotent_across_repository_instances and the strictly-later correction regression pin restart and ordering behaviour.",
+        "evidence": "Admission_time is repository-wide monotonic (MAX+1\u00b5s with a frozen-clock-safe max), revision strictly increases per lineage, known_at strictly increases along the chain, and every invariant is re-derived from stored rows on each read (_validate_chain) rather than from process or clock state, so restart cannot perturb any ordering guarantee. The concurrency tests also assert head revision equals record count after a multi-writer race, pinning restart/ordering behaviour under contention.",
         "family": "DFF-006",
         "outcome": "clear"
       },
@@ -115,7 +115,7 @@
         "severity": "blocking"
       },
       {
-        "evidence": "The strictly-later recommended known_at check ran before the idempotent short-circuit, so a writer re-recording unchanged current-head content was rejected as backdated. Resolved by returning the idempotent identity before enforcing the strictly-later correction rule, and by storing the boostrapped head_known_at used by both paths in one place. Pinned by test_conflicting_same_known_at_rejected_at_write, test_backdated_known_at_is_not_admitted_until_admission and the idempotent re-record tests.",
+        "evidence": "The strictly-later recommended known_at check ran before the idempotent short-circuit, so a writer re-recording unchanged current-head content was rejected as backdated. Resolved by returning the idempotent identity before enforcing the strictly-later correction rule, and by storing the boosted head_known_at used by both paths in one place. Pinned by test_conflicting_same_known_at_rejected_at_write, test_backdated_known_at_is_not_admitted_until_admission and the idempotent re-record tests.",
         "id": "F-2",
         "resolution": "resolved",
         "severity": "blocking"
@@ -125,6 +125,12 @@
         "id": "F-3",
         "resolution": "unresolved",
         "severity": "non-blocking"
+      },
+      {
+        "evidence": "Independent review found that _transaction() ran connection.executescript(_SCHEMA) inside BEGIN IMMEDIATE: under legacy transaction control executescript implicitly commits a pending transaction, releasing the intended write lock before record_provenance read the current head, so two independent writers could race from the same current_record_id and admit different successors. Resolved by moving schema initialization to _initialize(), an idempotent step on its own connection before the protected transaction begins, so BEGIN IMMEDIATE now remains active for the entire read->verify->validate->insert->update->commit sequence. Pinned by test_write_lock_is_held_for_the_entire_protected_sequence (deterministically fails on the previous build) and test_competing_corrections_from_same_predecessor_cannot_branch (end-to-end linearity under a two-writer race).",
+        "id": "F-4",
+        "resolution": "resolved",
+        "severity": "blocking"
       }
     ],
     "issue": "426",
@@ -136,13 +142,13 @@
         "status": "added"
       },
       {
-        "blob_sha": "8e691511ff0f2b74e737e45e64378fc2851a99e4",
+        "blob_sha": "6f3dbf85ffe640823c8889e7cabf121629a8b1a6",
         "path": "src/hunter/evidence_intelligence/source_handling_provenance.py",
         "previous_path": "",
         "status": "added"
       },
       {
-        "blob_sha": "823cba4a5272b3b3afd8b794b3b926447fbf7480",
+        "blob_sha": "4b9edeea25d5b82b0bb2af5cf4f593dc0624a467",
         "path": "tests/test_source_handling_provenance.py",
         "previous_path": "",
         "status": "added"
@@ -154,8 +160,8 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "64d27a4030d3cfb9f0ce2d30035638cf3bfd91454319696771686b7a8962689a"
+    "review_target_digest": "4b1285fede8c71ceb3a1a7e64c2e099e6c74b0b8ce003dffcf87ea31a9953b20"
   },
-  "review_id": "d78c6094954414e81e04cc6e5510cd432a42e92c63f3afd23893a6d6b720894b",
+  "review_id": "5ebe890b11cbe72cc32d6d71a04ff463d2969557f2afe739feddaab3993aceb1",
   "schema": "hunter.pre-ready-hostile-review.v1"
 }
