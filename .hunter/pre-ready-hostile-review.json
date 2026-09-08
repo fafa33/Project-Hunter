@@ -141,18 +141,30 @@
         "id": "F-4",
         "resolution": "resolved",
         "severity": "blocking"
+      },
+      {
+        "evidence": "Codex found that validate_policy_body accepted unknown durable disposition categories when required governed categories were otherwise present. Resolved by rejecting any durable_dispositions category not in GOVERNED_DURABLE_CATEGORIES and additionally excluding UNKNOWN_CATEGORY from persistable policy categories. Regression coverage proves invented categories such as MADE_UP_SAFE_CATEGORY fail closed.",
+        "id": "F-5",
+        "resolution": "resolved",
+        "severity": "blocking"
+      },
+      {
+        "evidence": "Codex found that non-string JSON array/object values in top-level policy decisions and durable dispositions could raise TypeError during set/dict membership instead of SourceHandlingBlockedError. Resolved by explicit isinstance(value, str) checks before membership for all top-level decisions, content dispositions, and lifecycle dispositions. Regression coverage proves list/dict values fail closed through governed SourceHandlingBlockedError paths.",
+        "id": "F-6",
+        "resolution": "resolved",
+        "severity": "blocking"
       }
     ],
     "issue": "432",
     "review_target": [
       {
-        "blob_sha": "a349c0f3e27d2992cc77dfdf3defee15ca9b5ebb",
+        "blob_sha": "065b171bcbada6e81dab040e2e229dfa7908f60c",
         "path": "scripts/provision_source_handling_issue_authority.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "34397df4e5ecfcb2f06ff882fc154b8e97121358",
+        "blob_sha": "631b3e39f03451eb9c288416c5a382a0c86198f9",
         "path": "src/hunter/evidence_intelligence/source_handling.py",
         "previous_path": "",
         "status": "modified"
@@ -164,14 +176,14 @@
         "status": "modified"
       },
       {
-        "blob_sha": "7433777ba42e3531d38ad8357fca331e0e49362a",
+        "blob_sha": "02d07077f80ad7d531e105f607489e840e3ed1a6",
         "path": "tests/test_source_handling_provisioning.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "fb6ceed203cb0c5c583b20dad081fe0ce91dfe4656f6fe49a181da5de0a165f9"
+    "review_target_digest": "3714cc5904661a3952f5ea7207affa5935e71d6302847ac14b155cedc11375df"
   },
-  "review_id": "bd8e578384cf39c9c29075ed031d0ac08533ca5f80bf82820254a2be73deea08",
+  "review_id": "7003f55289a0e939be373d67ba6f8b7651e86a805af702391ed130bdffc91142",
   "schema": "hunter.pre-ready-hostile-review.v1"
 }
