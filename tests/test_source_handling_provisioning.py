@@ -471,3 +471,318 @@ def test_provisioning_signing_key_sources_are_mutually_exclusive(
         else:
             os.environ[provisioning.SIGNING_KEY_ENV] = saved
     assert not database.exists()
+
+
+# --- regression tests for Issue #432 / PR #431 findings -------------------
+
+
+def test_finding_1_unrelated_issue_provenance_scoping(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Finding 1: Unrelated Issues/provenance must not change an Issue's authority timestamp."""
+    database, key, updated_at = _prepare(tmp_path, monkeypatch)
+
+    # Provision Issue A
+    capsys.readouterr()
+    _run_provisioning(database, key, _arguments(database, updated_at, issue_number=430, authorization_id="auth-A"))
+    outcome_a = json.loads(capsys.readouterr().out)
+    as_of_a = outcome_a["as_of"]
+
+    # Provision Issue B later
+    capsys.readouterr()
+    updated_at_b = _issue_updated_at_text()
+    _run_provisioning(database, key, _arguments(database, updated_at_b, issue_number=431, authorization_id="auth-B"))
+    outcome_b = json.loads(capsys.readouterr().out)
+    assert outcome_b["status"] == "provisioned"
+
+    # Rerun Issue A with A's original --as-of
+    capsys.readouterr()
+    _run_provisioning(
+        database,
+        key,
+        _arguments(database, updated_at, issue_number=430, authorization_id="auth-A", as_of=as_of_a),
+    )
+    rerun_a = json.loads(capsys.readouterr().out)
+
+    assert rerun_a["status"] == "already-provisioned"
+    assert rerun_a["as_of"] == as_of_a
+    assert rerun_a["records"]["FACT"]["record_id"] == outcome_a["records"]["FACT"]["record_id"]
+    assert (
+        rerun_a["records"]["FIELD_CATEGORY_REGISTRY"]["record_id"]
+        == outcome_a["records"]["FIELD_CATEGORY_REGISTRY"]["record_id"]
+    )
+    assert rerun_a["records"]["POLICY"]["record_id"] == outcome_a["records"]["POLICY"]["record_id"]
+
+
+@pytest.mark.parametrize(
+    "extra_args, expected_error_substring",
+    [
+        (
+            ["--processing-decision", "INVALID_DECISION"],
+            "policy decision is missing or invalid: processing_decision 'INVALID_DECISION'",
+        ),
+        (
+            ["--retention-decision", "INVALID_DECISION"],
+            "policy decision is missing or invalid: retention_decision 'INVALID_DECISION'",
+        ),
+        (
+            ["--reconstruction-decision", "INVALID_DECISION"],
+            "policy decision is missing or invalid: reconstruction_decision 'INVALID_DECISION'",
+        ),
+        (
+            ["--access-decision", "INVALID_DECISION"],
+            "policy decision is missing or invalid: access_decision 'INVALID_DECISION'",
+        ),
+        (
+            ["--deletion-lifecycle-decision", "INVALID_DECISION"],
+            "policy decision is missing or invalid: deletion_lifecycle_decision 'INVALID_DECISION'",
+        ),
+        (["--persist-disposition", "INVALID_DISPOSITION"], "durable content disposition is missing or invalid"),
+        (["--read-access-disposition", "INVALID_DISPOSITION"], "durable content disposition is missing or invalid"),
+        (["--reconstruct-disposition", "INVALID_DISPOSITION"], "durable content disposition is missing or invalid"),
+        (
+            ["--delete-or-expire-disposition", "INVALID_DISPOSITION"],
+            "durable lifecycle disposition is missing or invalid",
+        ),
+        (["--sensitivity", "INVALID_SENSITIVITY"], "FACT sensitivity 'INVALID_SENSITIVITY' is unknown or unsupported"),
+        (
+            ["--persistence-restriction", "INVALID_RESTRICTION"],
+            "FACT persistence restriction 'INVALID_RESTRICTION' is unknown or unsupported",
+        ),
+        (
+            ["--operation-restriction", "INVALID_RESTRICTION"],
+            "FACT operation restriction 'INVALID_RESTRICTION' is unknown or unsupported",
+        ),
+        (["--secret-presence", "INVALID_SECRET"], "FACT secret presence 'INVALID_SECRET' is unknown or unsupported"),
+    ],
+)
+def test_finding_2_invalid_vocabulary_fails_closed_before_any_write(
+    extra_args: list[str],
+    expected_error_substring: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Finding 2: Every invalid policy decision or disposition family fails closed before any persistent write."""
+    database, key, updated_at = _prepare(tmp_path, monkeypatch)
+
+    capsys.readouterr()
+    invalid_args = _arguments(database, updated_at, issue_number=432) + extra_args
+    with pytest.raises(SystemExit) as excinfo:
+        _run_provisioning(database, key, invalid_args)
+    assert excinfo.value.code == 2
+    assert expected_error_substring in capsys.readouterr().err
+
+    # Verify a fresh database has zero per-Issue provenance or authority records written for Issue 432
+    with sqlite3.connect(database) as connection:
+        provenance_table = connection.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+            ("source_handling_provenance_records",),
+        ).fetchone()
+        if provenance_table is not None:
+            assert connection.execute("SELECT COUNT(*) FROM source_handling_provenance_records").fetchone()[0] == 0
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM source_handling_authority_records WHERE family != 'AUTHORIZATION_RULE'"
+            ).fetchone()[0]
+            == 0
+        )
+
+
+def test_finding_3_interrupted_provisioning_recovery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Finding 3: Interrupted provisioning can recover without manual --as-of and converge canonically."""
+    database, key, updated_at = _prepare(tmp_path, monkeypatch)
+
+    authorization = _authorization(432, updated_at, "auth-432-interrupted")
+    document_id = issue_agent_document_id(authorization)
+
+    # Manually write 2 of the 6 provenance records to simulate an interrupted provisioning run
+    rule = bootstrap._load_production_rule()
+    _, verification_key_sha256, genesis_rule_sha256 = bootstrap._derived_digests(key, rule)
+    operator_root = SourceHandlingOperatorRoot(
+        genesis_rule_sha256=genesis_rule_sha256,
+        verification_key_sha256=verification_key_sha256,
+    )
+    provenance_repo = provenance_module.SourceHandlingProvenanceAuthorityRepository(
+        database,
+        signing_private_key=key,
+        operator_root=operator_root,
+    )
+
+    start_instant = provisioning._parse_time(updated_at)
+    plans = provisioning._provenance_plans(
+        document_id=document_id,
+        authority_identity=provisioning.AUTHORITY_COMPONENT_ID,
+        at=start_instant,
+    )
+
+    # Write only the first 2 provenance records
+    for plan in plans[:2]:
+        provenance_repo.record_provenance(
+            provenance_id=plan["provenance_id"],
+            provenance_kind=plan["provenance_kind"],
+            authority_identity=plan["authority_identity"],
+            effective_from=start_instant,
+            recorded_at=start_instant,
+            known_at=start_instant,
+            evidence_strength=plan["evidence_strength"],
+            evidence_method=plan["evidence_method"],
+            verifier_type=plan["verifier_type"],
+        )
+
+    with sqlite3.connect(database) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM source_handling_provenance_records").fetchone()[0] == 2
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM source_handling_authority_records WHERE family != 'AUTHORIZATION_RULE'"
+            ).fetchone()[0]
+            == 0
+        )
+
+    # Run a normal retry with NO --as-of
+    capsys.readouterr()
+    _run_provisioning(
+        database,
+        key,
+        _arguments(database, updated_at, issue_number=432, authorization_id="auth-432-interrupted"),
+    )
+    outcome = json.loads(capsys.readouterr().out)
+
+    assert outcome["status"] == "provisioned"
+    assert outcome["document_id"] == document_id
+
+    # Verify database converged to 6 provenance records and 3 per-Issue authority heads
+    with sqlite3.connect(database) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM source_handling_provenance_records").fetchone()[0] == 6
+        assert connection.execute("SELECT COUNT(*) FROM source_handling_authority_records").fetchone()[0] == 4
+        records = connection.execute(
+            "SELECT family, scope, revision FROM source_handling_canonical_keys ORDER BY family"
+        ).fetchall()
+        assert records == [
+            ("AUTHORIZATION_RULE", "SOURCE_HANDLING", 1),
+            ("FACT", document_id, 1),
+            ("FIELD_CATEGORY_REGISTRY", f"registry:{document_id}:v1", 1),
+            ("POLICY", f"policy:{document_id}:v1", 1),
+        ]
+
+    # Another retry (with NO --as-of) should return already-provisioned
+    capsys.readouterr()
+    _run_provisioning(
+        database,
+        key,
+        _arguments(database, updated_at, issue_number=432, authorization_id="auth-432-interrupted"),
+    )
+    rerun_outcome = json.loads(capsys.readouterr().out)
+    assert rerun_outcome["status"] == "already-provisioned"
+
+
+def test_finding_3_mismatched_partial_state_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Finding 3: Interrupted provisioning with mismatched partial state must fail closed."""
+    database, key, updated_at = _prepare(tmp_path, monkeypatch)
+
+    authorization = _authorization(433, updated_at, "auth-433-mismatch")
+    document_id = issue_agent_document_id(authorization)
+
+    rule = bootstrap._load_production_rule()
+    _, verification_key_sha256, genesis_rule_sha256 = bootstrap._derived_digests(key, rule)
+    operator_root = SourceHandlingOperatorRoot(
+        genesis_rule_sha256=genesis_rule_sha256,
+        verification_key_sha256=verification_key_sha256,
+    )
+    provenance_repo = provenance_module.SourceHandlingProvenanceAuthorityRepository(
+        database,
+        signing_private_key=key,
+        operator_root=operator_root,
+    )
+
+    start_instant = provisioning._parse_time(updated_at)
+    plans = provisioning._provenance_plans(
+        document_id=document_id,
+        authority_identity="ORIGINAL_AUTHORITY_IDENTITY",
+        at=start_instant,
+    )
+
+    # Write partial provenance with ORIGINAL_AUTHORITY_IDENTITY
+    for plan in plans[:2]:
+        provenance_repo.record_provenance(
+            provenance_id=plan["provenance_id"],
+            provenance_kind=plan["provenance_kind"],
+            authority_identity="ORIGINAL_AUTHORITY_IDENTITY",
+            effective_from=start_instant,
+            recorded_at=start_instant,
+            known_at=start_instant,
+            evidence_strength=plan["evidence_strength"],
+            evidence_method=plan["evidence_method"],
+            verifier_type=plan["verifier_type"],
+        )
+
+    # Retry with default authority identity (which differs from "ORIGINAL_AUTHORITY_IDENTITY")
+    capsys.readouterr()
+    with pytest.raises(SystemExit) as excinfo:
+        _run_provisioning(
+            database,
+            key,
+            _arguments(database, updated_at, issue_number=433, authorization_id="auth-433-mismatch"),
+        )
+    assert excinfo.value.code == 2
+    assert "already heads different content" in capsys.readouterr().err
+
+
+def test_finding_3_partial_provenance_wrong_kind_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Finding 3: Partial provenance created under the wrong provenance_kind fails closed on retry."""
+    database, key, updated_at = _prepare(tmp_path, monkeypatch)
+
+    authorization = _authorization(434, updated_at, "auth-434-wrong-kind")
+    document_id = issue_agent_document_id(authorization)
+
+    rule = bootstrap._load_production_rule()
+    _, verification_key_sha256, genesis_rule_sha256 = bootstrap._derived_digests(key, rule)
+    operator_root = SourceHandlingOperatorRoot(
+        genesis_rule_sha256=genesis_rule_sha256,
+        verification_key_sha256=verification_key_sha256,
+    )
+    provenance_repo = provenance_module.SourceHandlingProvenanceAuthorityRepository(
+        database,
+        signing_private_key=key,
+        operator_root=operator_root,
+    )
+
+    start_instant = provisioning._parse_time(updated_at)
+    prov_id = f"evidence:auth:fact:{document_id}"
+
+    # Manually write a provenance record using planned prov_id under WRONG provenance_kind ("VERIFIER" instead of "EVIDENCE")
+    provenance_repo.record_provenance(
+        provenance_id=prov_id,
+        provenance_kind="VERIFIER",  # WRONG KIND!
+        authority_identity=provisioning.AUTHORITY_COMPONENT_ID,
+        effective_from=start_instant,
+        recorded_at=start_instant,
+        known_at=start_instant,
+        verifier_type=provisioning.VERIFIER_TYPE,
+    )
+
+    # Retry normally with no --as-of
+    capsys.readouterr()
+    with pytest.raises(SystemExit) as excinfo:
+        _run_provisioning(
+            database,
+            key,
+            _arguments(database, updated_at, issue_number=434, authorization_id="auth-434-wrong-kind"),
+        )
+    assert excinfo.value.code == 2
+    assert "exists under unexpected kind 'VERIFIER'" in capsys.readouterr().err
+
+    # Verify no additional canonical per-Issue authority state was published
+    with sqlite3.connect(database) as connection:
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM source_handling_authority_records WHERE family != 'AUTHORIZATION_RULE'"
+            ).fetchone()[0]
+            == 0
+        )

@@ -54,11 +54,14 @@ from hunter.automation.issue_agent_execution import (
 from hunter.evidence_intelligence.source_handling import (
     AUTHORITY_COMPONENT_ID,
     resolve_canonical_head,
+    validate_policy_body,
 )
 from hunter.evidence_intelligence.source_handling_persistence import (
     PERMISSIVE_EVIDENCE_STRENGTHS,
     SOURCE_HANDLING_RULE_SCOPE,
     SUPPORTED_EVIDENCE_METHODS,
+    SUPPORTED_OPERATION_RESTRICTIONS,
+    SUPPORTED_SECRET_PRESENCE,
     SUPPORTED_VERIFIER_TYPES,
     SourceHandlingAuthorityService,
     SourceHandlingBlockedError,
@@ -352,10 +355,98 @@ def _check_provenance_heads_exact(
         connection.close()
 
 
-def _max_provenance_admission(database: str) -> datetime | None:
+def _validate_options(fact_options: _FactOptions, policy_options: _PolicyOptions) -> None:
+    """Validate Fact and Policy options against canonical vocabularies before writing any state."""
+    if fact_options.sensitivity not in {"PUBLIC", "INTERNAL", "CONFIDENTIAL", "RESTRICTED"}:
+        raise SourceHandlingBlockedError(f"FACT sensitivity {fact_options.sensitivity!r} is unknown or unsupported")
+    if fact_options.persistence_restriction not in {
+        "FULL_CONTENT_ALLOWED",
+        "DERIVED_ONLY",
+        "METADATA_ONLY",
+        "NO_PERSISTENCE",
+    }:
+        raise SourceHandlingBlockedError(
+            f"FACT persistence restriction {fact_options.persistence_restriction!r} is unknown or unsupported"
+        )
+    for restriction in fact_options.operation_restrictions:
+        if restriction not in SUPPORTED_OPERATION_RESTRICTIONS:
+            raise SourceHandlingBlockedError(f"FACT operation restriction {restriction!r} is unknown or unsupported")
+    for secret in fact_options.secret_presence:
+        if secret not in SUPPORTED_SECRET_PRESENCE:
+            raise SourceHandlingBlockedError(f"FACT secret presence {secret!r} is unknown or unsupported")
+
+    policy_body = {
+        "processing_decision": policy_options.processing_decision,
+        "retention_decision": policy_options.retention_decision,
+        "reconstruction_decision": policy_options.reconstruction_decision,
+        "access_decision": policy_options.access_decision,
+        "deletion_lifecycle_decision": policy_options.deletion_lifecycle_decision,
+        "durable_dispositions": {
+            "DUMMY_CATEGORY": {
+                "PERSIST": policy_options.persist_disposition,
+                "READ_ACCESS": policy_options.read_access_disposition,
+                "RECONSTRUCT": policy_options.reconstruct_disposition,
+                "DELETE_OR_EXPIRE": policy_options.delete_or_expire_disposition,
+            }
+        },
+    }
+    validate_policy_body(policy_body, require_durable_dispositions=True)
+
+
+def _existing_provenance_info(
+    database: str,
+    planned_pairs: Sequence[tuple[str, str]],
+) -> tuple[datetime | None, str | None]:
+    """Inspect existing provenance records for the planned (provenance_id, provenance_kind) pairs."""
+    if not planned_pairs:
+        return None, None
+    planned_ids = [p[0] for p in planned_pairs]
+    planned_dict = dict(planned_pairs)
     connection = sqlite3.connect(database)
     try:
-        row = connection.execute(f"SELECT MAX(admission_time) FROM {SOURCE_HANDLING_PROVENANCE_RECORDS}").fetchone()
+        placeholders = ",".join("?" for _ in planned_ids)
+        rows = connection.execute(
+            f"SELECT provenance_id, provenance_kind, known_at, authority_identity FROM {SOURCE_HANDLING_PROVENANCE_RECORDS} "
+            f"WHERE provenance_id IN ({placeholders}) ORDER BY admission_time ASC",
+            tuple(planned_ids),
+        ).fetchall()
+        if not rows:
+            return None, None
+
+        for row in rows:
+            prov_id, prov_kind = str(row[0]), str(row[1])
+            expected_kind = planned_dict.get(prov_id)
+            if expected_kind != prov_kind:
+                raise SourceHandlingBlockedError(
+                    f"provenance identity {prov_id!r} exists under unexpected kind {prov_kind!r} (expected {expected_kind!r})"
+                )
+
+        known_ats = {str(row[2]) for row in rows}
+        if len(known_ats) > 1:
+            raise SourceHandlingBlockedError(
+                "existing provenance records for this Issue carry inconsistent known_at timestamps"
+            )
+        known_at = _parse_time(rows[0][2])
+        authority_identity = str(rows[0][3])
+        return known_at, authority_identity
+    finally:
+        connection.close()
+
+
+def _max_provenance_admission(database: str, planned_pairs: Sequence[tuple[str, str]]) -> datetime | None:
+    """Get max admission time strictly for the planned (provenance_id, provenance_kind) pairs."""
+    if not planned_pairs:
+        return None
+    connection = sqlite3.connect(database)
+    try:
+        conditions = " OR ".join("(provenance_id = ? AND provenance_kind = ?)" for _ in planned_pairs)
+        params: list[str] = []
+        for pid, pkind in planned_pairs:
+            params.extend([pid, pkind])
+        row = connection.execute(
+            f"SELECT MAX(admission_time) FROM {SOURCE_HANDLING_PROVENANCE_RECORDS} WHERE {conditions}",
+            tuple(params),
+        ).fetchone()
         if row is None or row[0] is None:
             return None
         return _parse_time(str(row[0]))
@@ -553,6 +644,8 @@ def _run(
     as_of: datetime | None,
 ) -> dict[str, Any]:
     _assert_canonical_provenance_values()
+    _validate_options(fact_options, policy_options)
+
     _, verification_key_sha256, genesis_rule_sha256 = bootstrap._derived_digests(signing_key, rule)
     operator_root = SourceHandlingOperatorRoot(
         genesis_rule_sha256=genesis_rule_sha256,
@@ -562,7 +655,28 @@ def _run(
     document_id = issue_agent_document_id(authorization)
     issued_at = _issue_updated_at(authorization)
     rule_known_at = _parse_time(rule["known_at"])
-    on_or_after = as_of if as_of is not None else datetime.now(UTC)
+
+    # Construction initializes the provenance schema (idempotently), so the
+    # existing provenance query and exact-match head pre-check below can read deterministically.
+    provenance_repository = SourceHandlingProvenanceAuthorityRepository(
+        database,
+        signing_private_key=signing_key,
+        operator_root=operator_root,
+    )
+
+    dummy_plan_list = _provenance_plans(
+        document_id=document_id,
+        authority_identity=provenance_authority_identity,
+        at=datetime.now(UTC),
+    )
+    planned_pairs = tuple((p["provenance_id"], p["provenance_kind"]) for p in dummy_plan_list)
+
+    if as_of is not None:
+        on_or_after = as_of
+    else:
+        existing_known_at, _ = _existing_provenance_info(database, planned_pairs)
+        on_or_after = existing_known_at if existing_known_at is not None else datetime.now(UTC)
+
     on_or_after = _aware_utc("provisioning as-of", on_or_after)
     if on_or_after > datetime.now(UTC):
         raise SourceHandlingBlockedError("the provisioning as-of must not be in the future")
@@ -582,13 +696,6 @@ def _run(
         authority_identity=provenance_authority_identity,
         at=on_or_after,
     )
-    # Construction initializes the provenance schema (idempotently), so the
-    # exact-match head pre-check below can read the current heads deterministically.
-    provenance_repository = SourceHandlingProvenanceAuthorityRepository(
-        database,
-        signing_private_key=signing_key,
-        operator_root=operator_root,
-    )
     _check_provenance_heads_exact(database, provenance_plans, on_or_after)
     _require_rule_strict_known(database, signing_key, operator_root, on_or_after)
 
@@ -600,7 +707,7 @@ def _run(
     # derives and an exact-match head stays on the idempotent path. A mismatch
     # here therefore proves the run would have to replace provisioned authority
     # state, and it stops with zero writes.
-    preview_admission = _max_provenance_admission(database)
+    preview_admission = _max_provenance_admission(database, planned_pairs)
     preview_at = max(on_or_after, preview_admission) if preview_admission is not None else on_or_after
     preview_plans = _family_plans(
         document_id=document_id,
@@ -637,7 +744,7 @@ def _run(
     # as-of and the highest provenance admission just written. That bound is a
     # deterministic function of the pinned as-of, so an exactly-pinned re-run
     # derives identical records and stays already-provisioned.
-    predefined = _max_provenance_admission(database)
+    predefined = _max_provenance_admission(database, planned_pairs)
     authority_at = max(on_or_after, predefined) if predefined is not None else on_or_after
 
     plans = _family_plans(
@@ -726,9 +833,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         "access_decision",
         "deletion_lifecycle_decision",
     ):
-        parser.add_argument(f"--{field}", default=_REPOSITORY_DEFAULTS[field], help=f"top-level policy {field}")
+        parser.add_argument(
+            f"--{field.replace('_', '-')}",
+            f"--{field}",
+            default=_REPOSITORY_DEFAULTS[field],
+            help=f"top-level policy {field}",
+        )
     for axis in ("PERSIST", "READ_ACCESS", "RECONSTRUCT", "DELETE_OR_EXPIRE"):
-        parser.add_argument(f"--{axis.lower()}-disposition", default="ALLOW", help=f"durable disposition for {axis}")
+        parser.add_argument(
+            f"--{axis.lower().replace('_', '-')}-disposition",
+            f"--{axis.lower()}_disposition",
+            default="ALLOW",
+            help=f"durable disposition for {axis}",
+        )
     parser.add_argument(
         "--authority-identity",
         default=AUTHORITY_COMPONENT_ID,

@@ -55,6 +55,7 @@ from hunter.evidence_intelligence.source_handling import (
     validate_durable_payload,
     validate_field_category_registry_payload,
     validate_permission_evidence,
+    validate_policy_body,
     verify_publication,
 )
 from hunter.execution import Clock, SystemClock
@@ -2153,8 +2154,20 @@ def _validate_payload_shape(family: str, scope: str, payload: Mapping[str, Any])
                 raise SourceHandlingBlockedError(f"FACT availability state is unknown or malformed: {field}")
     elif family == "FIELD_CATEGORY_REGISTRY":
         validate_field_category_registry_payload(payload)
+    elif family == "POLICY":
+        _validate_policy_payload(payload)
     elif family == "AUTHORIZATION_RULE":
         _validate_authorization_rule_payload(payload)
+
+
+def _validate_policy_payload(payload: Mapping[str, Any]) -> None:
+    registry_id = payload.get("field_category_registry_id")
+    if not isinstance(registry_id, str) or not registry_id.strip():
+        raise SourceHandlingBlockedError("policy-bound registry identity is missing or malformed")
+    body = payload.get("policy_body")
+    if not isinstance(body, Mapping):
+        raise SourceHandlingBlockedError("policy body is missing or malformed")
+    validate_policy_body(body, require_durable_dispositions=True)
 
 
 def _validate_authorization_rule_payload(payload: Mapping[str, Any]) -> None:
