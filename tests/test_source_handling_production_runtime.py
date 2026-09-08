@@ -21,11 +21,15 @@ from hunter.evidence_intelligence.intake import (
 from hunter.evidence_intelligence.pre_model import resolve_pre_model_source_handling
 from hunter.evidence_intelligence.repository import EvidenceIntelligenceRepository
 from hunter.evidence_intelligence.source_handling import (
+    DURABLE_DISPOSITION_OPERATIONS,
+    UNKNOWN_DURABLE_CATEGORY,
     PublicationAuthorization,
     SourceHandlingBlockedError,
     canonical_publication_digest,
     publication_authorization,
     resolve_canonical_head,
+    validate_durable_payload,
+    validate_policy_body,
 )
 from hunter.evidence_intelligence.source_handling_persistence import (
     IssueSourceTransientIntakeBoundary,
@@ -1160,6 +1164,77 @@ def test_unknown_fact_dimensions_block_before_authorization(tmp_path: Path, flag
             authorization_id=f"auth:unknown:{flag}",
             expires_at=clock.now() + timedelta(minutes=5),
         )
+
+
+def test_unknown_category_blocked_policy_resolves_but_cannot_authorize_persistence(tmp_path: Path) -> None:
+    service, clock, _key, rule_id = _service(tmp_path)
+    document_id = "doc-unknown-category"
+    _publish(
+        service,
+        family="FACT",
+        scope=document_id,
+        payload=_fact_payload(document_id, clock.now()),
+        rule_id=rule_id,
+        expected_head=None,
+        authorization_id="auth:fact:unknown-category",
+        expires_at=clock.now() + timedelta(minutes=5),
+    )
+    registry_logical_id = f"registry:{document_id}:v1"
+    registry_payload = _registry_payload(document_id, clock.now(), registry_id=registry_logical_id)
+    registry_payload["field_map"] = {"unclassified": [UNKNOWN_DURABLE_CATEGORY]}
+    _publish(
+        service,
+        family="FIELD_CATEGORY_REGISTRY",
+        scope=registry_logical_id,
+        payload=registry_payload,
+        rule_id=rule_id,
+        expected_head=None,
+        authorization_id="auth:registry:unknown-category",
+        expires_at=clock.now() + timedelta(minutes=5),
+    )
+    policy_payload = _policy_payload(document_id, clock.now(), registry_id=registry_logical_id)
+    policy_payload["policy_body"]["durable_dispositions"] = {
+        UNKNOWN_DURABLE_CATEGORY: {operation: "BLOCKED" for operation in DURABLE_DISPOSITION_OPERATIONS}
+    }
+    _publish(
+        service,
+        family="POLICY",
+        scope=f"policy:{document_id}:v1",
+        payload=policy_payload,
+        rule_id=rule_id,
+        expected_head=None,
+        authorization_id="auth:policy:unknown-category",
+        expires_at=clock.now() + timedelta(minutes=5),
+    )
+
+    resolved = resolve_pre_model_source_handling(service.resolver()(document_id, clock.now()))
+    assert resolved.decision["durable_dispositions"][UNKNOWN_DURABLE_CATEGORY] == {
+        operation: "BLOCKED" for operation in DURABLE_DISPOSITION_OPERATIONS
+    }
+    with pytest.raises(SourceHandlingBlockedError, match="unknown or ambiguous"):
+        validate_durable_payload(
+            decision=resolved.decision,
+            registry=resolved.registry_record,
+            payload={"unclassified": "must remain transient"},
+            secret_presence=set(),
+        )
+
+
+@pytest.mark.parametrize("operation", sorted(DURABLE_DISPOSITION_OPERATIONS))
+def test_unknown_category_rejects_any_nonblocking_disposition(operation: str) -> None:
+    dispositions = {candidate: "BLOCKED" for candidate in DURABLE_DISPOSITION_OPERATIONS}
+    dispositions[operation] = "ALLOW"
+    policy = {
+        "processing_decision": "ALLOW",
+        "retention_decision": "ALLOW",
+        "reconstruction_decision": "ALLOW",
+        "access_decision": "ALLOW",
+        "deletion_lifecycle_decision": "ALLOW",
+        "durable_dispositions": {UNKNOWN_DURABLE_CATEGORY: dispositions},
+    }
+
+    with pytest.raises(SourceHandlingBlockedError, match="must be explicitly BLOCKED"):
+        validate_policy_body(policy)
 
 
 @pytest.mark.parametrize(

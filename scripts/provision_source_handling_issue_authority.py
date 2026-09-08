@@ -322,37 +322,29 @@ def _provenance_plans(
 
 
 def _check_provenance_heads_exact(
-    database: str,
     plans: Sequence[Mapping[str, Any]],
     at: datetime,
 ) -> None:
-    """Fail closed before any write if an identity already heads other content."""
-    connection = sqlite3.connect(database)
-    try:
-        for plan in plans:
-            row = connection.execute(
-                f"SELECT current_record_id FROM {SOURCE_HANDLING_PROVENANCE_HEADS} "
-                "WHERE provenance_id = ? AND provenance_kind = ?",
-                (plan["provenance_id"], plan["provenance_kind"]),
-            ).fetchone()
-            if row is None:
-                continue
-            expected = _provenance_record_id(
-                provenance_id=plan["provenance_id"],
-                provenance_kind=plan["provenance_kind"],
-                authority_identity=plan["authority_identity"],
-                at=at,
-                evidence_strength=plan["evidence_strength"],
-                evidence_method=plan["evidence_method"],
-                verifier_type=plan["verifier_type"],
+    """Fail closed before any write unless each existing head verifies and exactly matches."""
+    cutoff = datetime.now(UTC)
+    for plan in plans:
+        record = PROVENANCE_RESOLVER(plan["provenance_id"], plan["provenance_kind"], cutoff)
+        if record is None:
+            continue
+        expected = _provenance_record_id(
+            provenance_id=plan["provenance_id"],
+            provenance_kind=plan["provenance_kind"],
+            authority_identity=plan["authority_identity"],
+            at=at,
+            evidence_strength=plan["evidence_strength"],
+            evidence_method=plan["evidence_method"],
+            verifier_type=plan["verifier_type"],
+        )
+        if record.get("record_id") != expected:
+            raise SourceHandlingBlockedError(
+                f"provenance identity {plan['provenance_id']} already heads different content; "
+                "fix the inputs or pin --as-of to the original provisioning instant instead of superseding"
             )
-            if row[0] != expected:
-                raise SourceHandlingBlockedError(
-                    f"provenance identity {plan['provenance_id']} already heads different content; "
-                    "fix the inputs or pin --as-of to the original provisioning instant instead of superseding"
-                )
-    finally:
-        connection.close()
 
 
 def _validate_options(fact_options: _FactOptions, policy_options: _PolicyOptions) -> None:
@@ -397,38 +389,65 @@ def _existing_provenance_info(
     database: str,
     planned_pairs: Sequence[tuple[str, str]],
 ) -> tuple[datetime | None, str | None]:
-    """Inspect existing provenance records for the planned (provenance_id, provenance_kind) pairs."""
+    """Resolve and verify existing provenance for the planned identities."""
     if not planned_pairs:
         return None, None
     planned_ids = [p[0] for p in planned_pairs]
     planned_dict = dict(planned_pairs)
     connection = sqlite3.connect(database)
     try:
+        tables = {
+            str(row[0])
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (?, ?)",
+                (SOURCE_HANDLING_PROVENANCE_RECORDS, SOURCE_HANDLING_PROVENANCE_HEADS),
+            ).fetchall()
+        }
+        expected_tables = {SOURCE_HANDLING_PROVENANCE_RECORDS, SOURCE_HANDLING_PROVENANCE_HEADS}
+        if not tables:
+            return None, None
+        if tables != expected_tables:
+            raise SourceHandlingBlockedError("Source Handling provenance storage is incomplete")
+
         placeholders = ",".join("?" for _ in planned_ids)
         rows = connection.execute(
-            f"SELECT provenance_id, provenance_kind, known_at, authority_identity FROM {SOURCE_HANDLING_PROVENANCE_RECORDS} "
-            f"WHERE provenance_id IN ({placeholders}) ORDER BY admission_time ASC",
+            f"SELECT DISTINCT provenance_id, provenance_kind FROM {SOURCE_HANDLING_PROVENANCE_RECORDS} "
+            f"WHERE provenance_id IN ({placeholders}) ORDER BY provenance_id, provenance_kind",
             tuple(planned_ids),
         ).fetchall()
         if not rows:
             return None, None
 
+        cutoff = datetime.now(UTC)
+        resolved_records: list[Mapping[str, Any]] = []
         for row in rows:
             prov_id, prov_kind = str(row[0]), str(row[1])
+            record = PROVENANCE_RESOLVER(prov_id, prov_kind, cutoff)
+            if record is None:
+                raise SourceHandlingBlockedError(
+                    f"existing provenance identity {prov_id!r} is not strict-known at the recovery cutoff"
+                )
             expected_kind = planned_dict.get(prov_id)
             if expected_kind != prov_kind:
                 raise SourceHandlingBlockedError(
                     f"provenance identity {prov_id!r} exists under unexpected kind {prov_kind!r} (expected {expected_kind!r})"
                 )
+            if record.get("provenance_id") != prov_id or record.get("provenance_kind") != prov_kind:
+                raise SourceHandlingBlockedError("resolved provenance identity or kind does not match recovery input")
+            resolved_records.append(record)
 
-        known_ats = {str(row[2]) for row in rows}
+        known_ats = {_aware_utc("recovered provenance known_at", record.get("known_at")) for record in resolved_records}
         if len(known_ats) > 1:
             raise SourceHandlingBlockedError(
                 "existing provenance records for this Issue carry inconsistent known_at timestamps"
             )
-        known_at = _parse_time(rows[0][2])
-        authority_identity = str(rows[0][3])
-        return known_at, authority_identity
+        authority_identities = {record.get("authority_identity") for record in resolved_records}
+        authority_identity = next(iter(authority_identities)) if len(authority_identities) == 1 else None
+        if not isinstance(authority_identity, str) or not authority_identity.strip():
+            raise SourceHandlingBlockedError(
+                "existing provenance records for this Issue carry inconsistent authority identities"
+            )
+        return next(iter(known_ats)), authority_identity
     finally:
         connection.close()
 
@@ -666,11 +685,6 @@ def _run(
     if as_of is not None:
         on_or_after = as_of
     else:
-        provenance_repository = SourceHandlingProvenanceAuthorityRepository(
-            database,
-            signing_private_key=signing_key,
-            operator_root=operator_root,
-        )
         existing_known_at, _ = _existing_provenance_info(database, planned_pairs)
         on_or_after = existing_known_at if existing_known_at is not None else datetime.now(UTC)
 
@@ -688,19 +702,18 @@ def _run(
             f"({_time_text(issued_at)}); a classification fact cannot be known before the Issue state it describes"
         )
 
-    if as_of is not None:
-        provenance_repository = SourceHandlingProvenanceAuthorityRepository(
-            database,
-            signing_private_key=signing_key,
-            operator_root=operator_root,
-        )
+    provenance_repository = SourceHandlingProvenanceAuthorityRepository(
+        database,
+        signing_private_key=signing_key,
+        operator_root=operator_root,
+    )
 
     provenance_plans = _provenance_plans(
         document_id=document_id,
         authority_identity=provenance_authority_identity,
         at=on_or_after,
     )
-    _check_provenance_heads_exact(database, provenance_plans, on_or_after)
+    _check_provenance_heads_exact(provenance_plans, on_or_after)
     _require_rule_strict_known(database, signing_key, operator_root, on_or_after)
 
     # Fail closed on an existing but mismatched authority head BEFORE any

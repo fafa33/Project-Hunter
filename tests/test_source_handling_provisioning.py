@@ -6,6 +6,7 @@ import os
 import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import bootstrap_source_handling_authority as bootstrap
 import provision_source_handling_issue_authority as provisioning
@@ -154,6 +155,44 @@ def _prepare(
     _export_operator_environment(monkeypatch, database, key)
     monkeypatch.setattr(provenance_module, "_production_view", None)
     return database, key, _issue_updated_at_text()
+
+
+def _record_partial_provenance(
+    database: Path,
+    key: bytes,
+    *,
+    document_id: str,
+    at: datetime,
+    count: int = 2,
+) -> tuple[dict[str, Any], ...]:
+    rule = bootstrap._load_production_rule()
+    _, verification_key_sha256, genesis_rule_sha256 = bootstrap._derived_digests(key, rule)
+    repository = provenance_module.SourceHandlingProvenanceAuthorityRepository(
+        database,
+        signing_private_key=key,
+        operator_root=SourceHandlingOperatorRoot(
+            genesis_rule_sha256=genesis_rule_sha256,
+            verification_key_sha256=verification_key_sha256,
+        ),
+    )
+    plans = provisioning._provenance_plans(
+        document_id=document_id,
+        authority_identity=provisioning.AUTHORITY_COMPONENT_ID,
+        at=at,
+    )
+    for plan in plans[:count]:
+        repository.record_provenance(
+            provenance_id=plan["provenance_id"],
+            provenance_kind=plan["provenance_kind"],
+            authority_identity=plan["authority_identity"],
+            effective_from=at,
+            recorded_at=at,
+            known_at=at,
+            evidence_strength=plan["evidence_strength"],
+            evidence_method=plan["evidence_method"],
+            verifier_type=plan["verifier_type"],
+        )
+    return plans
 
 
 # --- happy path --------------------------------------------------------------
@@ -687,6 +726,119 @@ def test_finding_3_interrupted_provisioning_recovery(
     assert rerun_outcome["status"] == "already-provisioned"
 
 
+def test_recovery_rejects_tampered_partial_provenance_before_any_additional_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    database, key, updated_at = _prepare(tmp_path, monkeypatch)
+    authorization = _authorization(435, updated_at, "auth-435-tampered-partial")
+    document_id = issue_agent_document_id(authorization)
+    at = provisioning._parse_time(updated_at)
+    plans = _record_partial_provenance(database, key, document_id=document_id, at=at, count=1)
+
+    with sqlite3.connect(database) as connection:
+        connection.execute("DROP TRIGGER source_handling_provenance_no_update")
+        connection.execute(
+            "UPDATE source_handling_provenance_records SET known_at = ? "
+            "WHERE provenance_id = ? AND provenance_kind = ?",
+            (
+                provisioning._time_text(at - timedelta(seconds=1)),
+                plans[0]["provenance_id"],
+                plans[0]["provenance_kind"],
+            ),
+        )
+        before = (
+            connection.execute("SELECT COUNT(*) FROM source_handling_provenance_records").fetchone()[0],
+            connection.execute("SELECT COUNT(*) FROM source_handling_provenance_heads").fetchone()[0],
+            connection.execute("SELECT COUNT(*) FROM source_handling_authority_records").fetchone()[0],
+            connection.execute("SELECT COUNT(*) FROM source_handling_publication_authorizations").fetchone()[0],
+        )
+
+    with pytest.raises(SystemExit) as excinfo:
+        _run_provisioning(
+            database,
+            key,
+            _arguments(database, updated_at, issue_number=435, authorization_id="auth-435-tampered-partial"),
+        )
+    assert excinfo.value.code == 2
+    assert "TAMPER_DETECTED" in capsys.readouterr().err
+
+    with sqlite3.connect(database) as connection:
+        after = (
+            connection.execute("SELECT COUNT(*) FROM source_handling_provenance_records").fetchone()[0],
+            connection.execute("SELECT COUNT(*) FROM source_handling_provenance_heads").fetchone()[0],
+            connection.execute("SELECT COUNT(*) FROM source_handling_authority_records").fetchone()[0],
+            connection.execute("SELECT COUNT(*) FROM source_handling_publication_authorizations").fetchone()[0],
+        )
+    assert after == before == (1, 1, 1, 0)
+
+
+def test_matching_forged_provenance_head_and_content_id_cannot_bypass_signature_verification(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    database, key, updated_at = _prepare(tmp_path, monkeypatch)
+    authorization = _authorization(436, updated_at, "auth-436-forged-head")
+    document_id = issue_agent_document_id(authorization)
+    at = provisioning._parse_time(updated_at)
+    plans = _record_partial_provenance(database, key, document_id=document_id, at=at, count=1)
+    plan = plans[0]
+    forged_at = at - timedelta(seconds=1)
+    forged_id = provisioning._provenance_record_id(
+        provenance_id=str(plan["provenance_id"]),
+        provenance_kind=str(plan["provenance_kind"]),
+        authority_identity=str(plan["authority_identity"]),
+        at=forged_at,
+        evidence_strength=plan["evidence_strength"],
+        evidence_method=plan["evidence_method"],
+        verifier_type=plan["verifier_type"],
+    )
+    forged_time = provisioning._time_text(forged_at)
+
+    with sqlite3.connect(database) as connection:
+        connection.execute("DROP TRIGGER source_handling_provenance_no_update")
+        connection.execute(
+            "UPDATE source_handling_provenance_records "
+            "SET record_id = ?, effective_from = ?, recorded_at = ?, known_at = ? "
+            "WHERE provenance_id = ? AND provenance_kind = ?",
+            (
+                forged_id,
+                forged_time,
+                forged_time,
+                forged_time,
+                plan["provenance_id"],
+                plan["provenance_kind"],
+            ),
+        )
+        connection.execute(
+            "UPDATE source_handling_provenance_heads SET current_record_id = ? "
+            "WHERE provenance_id = ? AND provenance_kind = ?",
+            (forged_id, plan["provenance_id"], plan["provenance_kind"]),
+        )
+        before = (
+            connection.execute("SELECT COUNT(*) FROM source_handling_provenance_records").fetchone()[0],
+            connection.execute("SELECT COUNT(*) FROM source_handling_provenance_heads").fetchone()[0],
+            connection.execute("SELECT COUNT(*) FROM source_handling_authority_records").fetchone()[0],
+            connection.execute("SELECT COUNT(*) FROM source_handling_publication_authorizations").fetchone()[0],
+        )
+
+    with pytest.raises(SystemExit) as excinfo:
+        _run_provisioning(
+            database,
+            key,
+            _arguments(database, updated_at, issue_number=436, authorization_id="auth-436-forged-head"),
+        )
+    assert excinfo.value.code == 2
+    assert "TAMPER_DETECTED" in capsys.readouterr().err
+
+    with sqlite3.connect(database) as connection:
+        after = (
+            connection.execute("SELECT COUNT(*) FROM source_handling_provenance_records").fetchone()[0],
+            connection.execute("SELECT COUNT(*) FROM source_handling_provenance_heads").fetchone()[0],
+            connection.execute("SELECT COUNT(*) FROM source_handling_authority_records").fetchone()[0],
+            connection.execute("SELECT COUNT(*) FROM source_handling_publication_authorizations").fetchone()[0],
+        )
+    assert after == before == (1, 1, 1, 0)
+
+
 def test_finding_3_mismatched_partial_state_fails_closed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -818,6 +970,46 @@ def test_policy_validator_rejects_unknown_durable_category() -> None:
 
     with pytest.raises(SourceHandlingBlockedError, match="durable category is unknown or not persistable"):
         validate_policy_body(policy)
+
+
+def test_policy_validator_requires_the_exact_canonical_operation_key_set() -> None:
+    from hunter.evidence_intelligence.source_handling import SourceHandlingBlockedError, validate_policy_body
+
+    def policy(dispositions: dict[object, object]) -> dict[str, object]:
+        return {
+            "processing_decision": "ALLOW",
+            "retention_decision": "ALLOW",
+            "reconstruction_decision": "ALLOW",
+            "access_decision": "ALLOW",
+            "deletion_lifecycle_decision": "ALLOW",
+            "durable_dispositions": {"SOURCE_BYTES": dispositions},
+        }
+
+    exact = {
+        "PERSIST": "ALLOW",
+        "READ_ACCESS": "ALLOW",
+        "RECONSTRUCT": "ALLOW",
+        "DELETE_OR_EXPIRE": "ALLOW",
+    }
+    validate_policy_body(policy(exact))
+
+    missing_key: dict[object, object] = dict(exact)
+    del missing_key["RECONSTRUCT"]
+    extra_key: dict[object, object] = dict(exact)
+    extra_key["EXPORT"] = "ALLOW"
+    integer_key: dict[object, object] = dict(exact)
+    integer_key[7] = "ALLOW"
+    none_key: dict[object, object] = dict(exact)
+    none_key[None] = "ALLOW"
+    malformed_maps: tuple[dict[object, object], ...] = (
+        missing_key,
+        extra_key,
+        integer_key,
+        none_key,
+    )
+    for malformed in malformed_maps:
+        with pytest.raises(SourceHandlingBlockedError, match="operation keys are incomplete or unsupported"):
+            validate_policy_body(policy(malformed))
 
 
 @pytest.mark.parametrize("bad_value", [["ALLOW"], {"decision": "ALLOW"}])
