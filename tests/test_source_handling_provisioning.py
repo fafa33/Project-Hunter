@@ -389,6 +389,15 @@ def test_provisioning_refuses_future_as_of_before_any_mutation(
     database, key, updated_at = _prepare(tmp_path, monkeypatch)
     future_as_of = (datetime.now(UTC) + timedelta(days=2)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
+    def _unexpected_repository_init(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("storage initialized before explicit as-of validation")
+
+    monkeypatch.setattr(
+        provisioning,
+        "SourceHandlingProvenanceAuthorityRepository",
+        _unexpected_repository_init,
+    )
+
     with sqlite3.connect(database) as connection:
         before_keys = connection.execute(
             "SELECT family, scope, current_record_id, revision FROM source_handling_canonical_keys " "ORDER BY family"

@@ -656,14 +656,6 @@ def _run(
     issued_at = _issue_updated_at(authorization)
     rule_known_at = _parse_time(rule["known_at"])
 
-    # Construction initializes the provenance schema (idempotently), so the
-    # existing provenance query and exact-match head pre-check below can read deterministically.
-    provenance_repository = SourceHandlingProvenanceAuthorityRepository(
-        database,
-        signing_private_key=signing_key,
-        operator_root=operator_root,
-    )
-
     dummy_plan_list = _provenance_plans(
         document_id=document_id,
         authority_identity=provenance_authority_identity,
@@ -674,6 +666,11 @@ def _run(
     if as_of is not None:
         on_or_after = as_of
     else:
+        provenance_repository = SourceHandlingProvenanceAuthorityRepository(
+            database,
+            signing_private_key=signing_key,
+            operator_root=operator_root,
+        )
         existing_known_at, _ = _existing_provenance_info(database, planned_pairs)
         on_or_after = existing_known_at if existing_known_at is not None else datetime.now(UTC)
 
@@ -689,6 +686,13 @@ def _run(
         raise SourceHandlingBlockedError(
             f"the provisioning as-of {_time_text(on_or_after)} predates the Issue's updated_at "
             f"({_time_text(issued_at)}); a classification fact cannot be known before the Issue state it describes"
+        )
+
+    if as_of is not None:
+        provenance_repository = SourceHandlingProvenanceAuthorityRepository(
+            database,
+            signing_private_key=signing_key,
+            operator_root=operator_root,
         )
 
     provenance_plans = _provenance_plans(
