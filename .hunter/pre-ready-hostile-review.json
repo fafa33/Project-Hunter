@@ -153,6 +153,12 @@
         "id": "F-6",
         "resolution": "resolved",
         "severity": "blocking"
+      },
+      {
+        "evidence": "Full CI found that the new unknown-category rejection invalidated a production-runtime fixture that used the non-governed sentinel UNUSED_CATEGORY to model an unused disposition. The production contract remains that unknown policy categories fail closed, while governed but payload-unused categories may exist without affecting persistence. Resolved by replacing the test fixture sentinel with the governed DIAGNOSTIC category, preserving both the Codex fix and the production semantics. Targeted and related Source Handling test suites pass.",
+        "id": "F-7",
+        "resolution": "resolved",
+        "severity": "blocking"
       }
     ],
     "issue": "432",
@@ -176,14 +182,20 @@
         "status": "modified"
       },
       {
+        "blob_sha": "6298fcb3ea07c1bc8aaf2cd16a1d59b66bcded40",
+        "path": "tests/test_source_handling_production_runtime.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
         "blob_sha": "02d07077f80ad7d531e105f607489e840e3ed1a6",
         "path": "tests/test_source_handling_provisioning.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "3714cc5904661a3952f5ea7207affa5935e71d6302847ac14b155cedc11375df"
+    "review_target_digest": "b2841e3b6a10749d1b5db001dd4b3c40f2a7dfe691d022db46cd6b866691346c"
   },
-  "review_id": "7003f55289a0e939be373d67ba6f8b7651e86a805af702391ed130bdffc91142",
+  "review_id": "b47a1c9f8e996d62e92f102c1d8f62be6359e525bcf07c1fc40ec55fe77d630b",
   "schema": "hunter.pre-ready-hostile-review.v1"
 }
