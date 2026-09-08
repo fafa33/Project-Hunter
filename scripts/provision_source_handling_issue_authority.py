@@ -382,7 +382,7 @@ def _validate_options(fact_options: _FactOptions, policy_options: _PolicyOptions
         "access_decision": policy_options.access_decision,
         "deletion_lifecycle_decision": policy_options.deletion_lifecycle_decision,
         "durable_dispositions": {
-            "DUMMY_CATEGORY": {
+            "SOURCE_BYTES": {
                 "PERSIST": policy_options.persist_disposition,
                 "READ_ACCESS": policy_options.read_access_disposition,
                 "RECONSTRUCT": policy_options.reconstruct_disposition,

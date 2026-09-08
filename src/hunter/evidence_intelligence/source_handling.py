@@ -62,20 +62,25 @@ def validate_policy_body(
 
     for key, allowed in TOP_LEVEL_POLICY_DECISION_VOCABULARY.items():
         val = policy_body.get(key)
-        if val not in allowed:
+        if not isinstance(val, str) or val not in allowed:
             raise SourceHandlingBlockedError(f"policy decision is missing or invalid: {key} {val!r}")
 
     if require_durable_dispositions:
         dispositions = policy_body.get("durable_dispositions")
         if not isinstance(dispositions, Mapping) or not dispositions:
             raise SourceHandlingBlockedError("durable dispositions are missing or malformed")
-        for _category, cat_disps in dispositions.items():
+        persistable_categories = GOVERNED_DURABLE_CATEGORIES - {UNKNOWN_DURABLE_CATEGORY}
+        for category, cat_disps in dispositions.items():
+            if not isinstance(category, str) or category not in persistable_categories:
+                raise SourceHandlingBlockedError(f"durable category is unknown or not persistable: {category!r}")
             if not isinstance(cat_disps, Mapping):
                 raise SourceHandlingBlockedError("durable category disposition unavailable")
             for op in ("PERSIST", "READ_ACCESS", "RECONSTRUCT"):
-                if cat_disps.get(op) not in CONTENT_DISPOSITION_ORDER:
+                disposition = cat_disps.get(op)
+                if not isinstance(disposition, str) or disposition not in CONTENT_DISPOSITION_ORDER:
                     raise SourceHandlingBlockedError("durable content disposition is missing or invalid")
-            if cat_disps.get("DELETE_OR_EXPIRE") not in LIFECYCLE_DISPOSITION_ORDER:
+            lifecycle_disposition = cat_disps.get("DELETE_OR_EXPIRE")
+            if not isinstance(lifecycle_disposition, str) or lifecycle_disposition not in LIFECYCLE_DISPOSITION_ORDER:
                 raise SourceHandlingBlockedError("durable lifecycle disposition is missing or invalid")
 
 

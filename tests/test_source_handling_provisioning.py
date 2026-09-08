@@ -795,3 +795,76 @@ def test_finding_3_partial_provenance_wrong_kind_fails_closed(
             ).fetchone()[0]
             == 0
         )
+
+
+def test_policy_validator_rejects_unknown_durable_category() -> None:
+    from hunter.evidence_intelligence.source_handling import SourceHandlingBlockedError, validate_policy_body
+
+    policy = {
+        "processing_decision": "ALLOW",
+        "retention_decision": "ALLOW",
+        "reconstruction_decision": "ALLOW",
+        "access_decision": "ALLOW",
+        "deletion_lifecycle_decision": "ALLOW",
+        "durable_dispositions": {
+            "MADE_UP_SAFE_CATEGORY": {
+                "PERSIST": "ALLOW",
+                "READ_ACCESS": "ALLOW",
+                "RECONSTRUCT": "ALLOW",
+                "DELETE_OR_EXPIRE": "ALLOW",
+            }
+        },
+    }
+
+    with pytest.raises(SourceHandlingBlockedError, match="durable category is unknown or not persistable"):
+        validate_policy_body(policy)
+
+
+@pytest.mark.parametrize("bad_value", [["ALLOW"], {"decision": "ALLOW"}])
+def test_policy_validator_rejects_non_string_values_with_governed_error(bad_value: object) -> None:
+    from hunter.evidence_intelligence.source_handling import SourceHandlingBlockedError, validate_policy_body
+
+    base = {
+        "processing_decision": "ALLOW",
+        "retention_decision": "ALLOW",
+        "reconstruction_decision": "ALLOW",
+        "access_decision": "ALLOW",
+        "deletion_lifecycle_decision": "ALLOW",
+        "durable_dispositions": {
+            "SOURCE_BYTES": {
+                "PERSIST": "ALLOW",
+                "READ_ACCESS": "ALLOW",
+                "RECONSTRUCT": "ALLOW",
+                "DELETE_OR_EXPIRE": "ALLOW",
+            }
+        },
+    }
+
+    top_level = dict(base)
+    top_level["processing_decision"] = bad_value
+    with pytest.raises(SourceHandlingBlockedError, match="policy decision is missing or invalid"):
+        validate_policy_body(top_level)
+
+    disposition = dict(base)
+    disposition["durable_dispositions"] = {
+        "SOURCE_BYTES": {
+            "PERSIST": bad_value,
+            "READ_ACCESS": "ALLOW",
+            "RECONSTRUCT": "ALLOW",
+            "DELETE_OR_EXPIRE": "ALLOW",
+        }
+    }
+    with pytest.raises(SourceHandlingBlockedError, match="durable content disposition is missing or invalid"):
+        validate_policy_body(disposition)
+
+    lifecycle = dict(base)
+    lifecycle["durable_dispositions"] = {
+        "SOURCE_BYTES": {
+            "PERSIST": "ALLOW",
+            "READ_ACCESS": "ALLOW",
+            "RECONSTRUCT": "ALLOW",
+            "DELETE_OR_EXPIRE": bad_value,
+        }
+    }
+    with pytest.raises(SourceHandlingBlockedError, match="durable lifecycle disposition is missing or invalid"):
+        validate_policy_body(lifecycle)
