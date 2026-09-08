@@ -3,19 +3,19 @@
     "acceptance_criteria": [
       {
         "criterion": "Scope provenance admission lookup to the current Issue only so unrelated Issues/provenance do not change an Issue's authority timestamp.",
-        "evidence": "_max_provenance_admission now takes planned_pairs (tuple of (provenance_id, provenance_kind)) and queries SELECT MAX(admission_time) FROM source_handling_provenance_records WHERE (provenance_id = ? AND provenance_kind = ?) OR ..., scoping admission lookup strictly to the Issue's exact provenance pairs. Verified by test_finding_1_unrelated_issue_provenance_scoping.",
+        "evidence": "_max_provenance_admission accepts only the current Issue's exact planned (provenance_id, provenance_kind) pairs. test_finding_1_unrelated_issue_provenance_scoping proves a later unrelated Issue cannot move the first Issue's authority timestamp or content-addressed heads.",
         "id": "C-1",
         "verdict": "satisfied"
       },
       {
         "criterion": "Validate the complete Source Handling policy decision/disposition vocabulary before any provenance or authority write.",
-        "evidence": "validate_policy_body in source_handling.py serves as the canonical shared policy vocabulary authority. _validate_options in provision_source_handling_issue_authority.py and _validate_policy_payload in source_handling_persistence.py reuse validate_policy_body to validate all top-level decisions and durable dispositions before any write. Verified by parameterized test_finding_2_invalid_vocabulary_fails_closed_before_any_write covering all decision and disposition families.",
+        "evidence": "The shared validate_policy_body validator is used by production resolution, persistence preflight, and the provisioning option preflight. It enforces the governed category vocabulary, the exact four operation keys, type-safe disposition values, and UNKNOWN_CATEGORY's all-BLOCKED shape before provisioning writes.",
         "id": "C-2",
         "verdict": "satisfied"
       },
       {
         "criterion": "Make interrupted provisioning recoverable without manually supplied --as-of.",
-        "evidence": "_existing_provenance_info inspects existing provenance records using planned (provenance_id, provenance_kind) pairs to recover known_at as on_or_after when --as-of is omitted. Fails closed if any planned provenance identity exists under an unexpected provenance_kind or carries mismatched content. Verified by test_finding_3_interrupted_provisioning_recovery, test_finding_3_mismatched_partial_state_fails_closed, and test_finding_3_partial_provenance_wrong_kind_fails_closed.",
+        "evidence": "No---as-of recovery discovers only the current Issue's planned identities, resolves every discovered pair through the production provenance resolver before using known_at, and then checks exact content heads. Valid partial state converges to six provenance records and FACT/REGISTRY/POLICY; tampered, forged, wrong-kind, or mismatched state fails before an additional provenance or authority write.",
         "id": "C-3",
         "verdict": "satisfied"
       }
@@ -37,126 +37,144 @@
     "base_sha": "109a796e3a23ef294ff32885179dd76dd8016f6f",
     "defect_families": [
       {
-        "evidence": "Every derived record scope remains bound to issue_agent_document_id(authorization) (github-issue:repo#N).",
-        "family": "DFF-007",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Record IDs are content-addressed and verified via_expected_authority_record_id and record_provenance.",
-        "family": "DFF-008",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Authority known_at is clamped to max(on_or_after, max_provenance_admission) for the Issue's specific (provenance_id, provenance_kind) pairs.",
-        "family": "DFF-009",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "validate_policy_body checks options and policy payloads before any persistent write.",
-        "family": "DFF-010",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Temporal bounds and vocabulary checks fail closed before database mutation.",
-        "family": "DFF-011",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Connector receipt freshness and write policies remain preserved.",
-        "family": "DFF-012",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Pre-ready hostile review recorded for candidate head against Issue #432.",
-        "family": "DFF-013",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Idempotency is exact-match only; mismatched partial state, wrong provenance kind, or mismatched authority state fails closed without superseding.",
-        "family": "DFF-014",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Vocabulary and option validation occurs prior to write transactions via shared validate_policy_body.",
-        "family": "DFF-015",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Interrupted provisioning recovers existing known_at bound by (provenance_id, provenance_kind) to preserve exact proof antecedents.",
-        "family": "DFF-016",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Provisioning does not trust caller time for admitted ordering; authority known_at is derived/clamped against persisted provenance admission state and fails closed when required temporal authority cannot be proven.",
+        "evidence": "Provisioning rejects future and pre-authority --as-of values before storage initialization; no---as-of recovery derives time only from signature-verified current-Issue provenance.",
         "family": "DFF-001",
         "outcome": "clear"
       },
       {
-        "evidence": "Validation and persistence remain transaction-bound through the existing Source Handling persistence path; no new split-view validation/write path is introduced by this patch.",
+        "evidence": "Authority validation and publication remain on the existing transaction-bound Source Handling service path; the change adds preflight validation and verified recovery without a new persistence path.",
         "family": "DFF-002",
         "outcome": "clear"
       },
       {
-        "evidence": "Derived authority and provenance identities remain repository-assigned/content-addressed and issue-scoped; caller payloads cannot override or reuse logical identities across Issues.",
+        "evidence": "Authority and provenance logical identities remain repository-derived, content-addressed, and bound to the exact Issue document identity.",
         "family": "DFF-003",
         "outcome": "clear"
       },
       {
-        "evidence": "Canonical validate_policy_body rejects unknown, absent, or incomplete decision/disposition vocabulary before any authority or provenance mutation, preserving fail-closed behavior.",
+        "evidence": "The canonical policy validator rejects invented categories, missing or extra operation keys, malformed keys and values, and any non-BLOCKED UNKNOWN_CATEGORY disposition through SourceHandlingBlockedError.",
         "family": "DFF-004",
         "outcome": "clear"
       },
       {
-        "evidence": "The patch does not create a secondary persistence surface; existing Source Handling persistence restrictions continue to govern provenance, authority, metadata, and prepared artifact paths.",
+        "evidence": "UNKNOWN_CATEGORY remains non-persistable: it may be declared only with four explicit BLOCKED dispositions, and durable payload validation rejects fields that resolve to the sentinel.",
         "family": "DFF-005",
         "outcome": "clear"
       },
       {
-        "evidence": "Interrupted retries recover persisted provenance known_at using exact provenance identity/kind pairs, preserving monotonic admitted ordering across restart/retry without requiring a caller-supplied timestamp.",
+        "evidence": "Valid interrupted retries recover the verified provenance known_at and converge exactly; mismatched or tampered partial state fails without additional provenance or authority records.",
         "family": "DFF-006",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "All derived scopes and planned provenance identities remain bound to issue_agent_document_id for the exact authorization's repository and Issue number.",
+        "family": "DFF-007",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Content-addressed authority and provenance record IDs are preserved, and a matching-looking forged provenance record/head ID cannot bypass production signature and chain verification.",
+        "family": "DFF-008",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Strict-known recovery resolves through the production tamper-verifying provenance view before known_at is trusted, while authority known_at remains bounded by the current Issue's admitted provenance.",
+        "family": "DFF-009",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Policy publication preflight and runtime resolution use the same validate_policy_body implementation and exact canonical disposition operation vocabulary.",
+        "family": "DFF-010",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Malformed policy JSON shapes, non-string keys or values, unknown categories, and tampered recovered provenance fail through governed SourceHandlingBlockedError paths rather than permissive fallbacks or raw Python exceptions.",
+        "family": "DFF-011",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "The candidate does not weaken connector receipt freshness, scope, or authenticated-write policy.",
+        "family": "DFF-012",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "This canonical review is recorded against base 109a796e3a23ef294ff32885179dd76dd8016f6f, Issue 432, and the exact candidate content.",
+        "family": "DFF-013",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Idempotency is exact-match only; foreign content, wrong provenance kind, inconsistent timestamps or authority identities, and mismatched authority heads fail without superseding state.",
+        "family": "DFF-014",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Complete Fact and Policy vocabularies, including the exact durable operation-key set, are validated before the first Issue provenance or authority record is written.",
+        "family": "DFF-015",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Recovered retry state is selected by exact current-Issue provenance identities and kinds, authenticated by the production resolver, and checked for one consistent timestamp and authority identity before use.",
+        "family": "DFF-016",
         "outcome": "clear"
       }
     ],
     "findings": [
       {
-        "evidence": "Provenance admission lookup was global across all issues; fixed by filtering WHERE (provenance_id = ? AND provenance_kind = ?) for the current issue's exact pairs.",
+        "evidence": "Provenance admission lookup was database-wide; it is now restricted to the current Issue's exact six planned identity/kind pairs.",
         "id": "F-1",
         "resolution": "resolved",
         "severity": "blocking"
       },
       {
-        "evidence": "Policy decision/disposition vocabulary was not validated before provenance writes; fixed by validate_policy_body in source_handling.py reused by _validate_options and _validate_policy_payload prior to any write.",
+        "evidence": "Provisioning could write unsupported policy vocabulary; all Fact and Policy options now pass canonical preflight before any Issue provenance or authority write.",
         "id": "F-2",
         "resolution": "resolved",
         "severity": "blocking"
       },
       {
-        "evidence": "Interrupted provisioning without --as-of could not recover or didn't check provenance_kind; fixed by recovering existing_known_at bound by exact (provenance_id, provenance_kind) pairs, failing closed on wrong kind.",
+        "evidence": "Interrupted no---as-of provisioning could not recover; valid exact partial state now recovers its timestamp and converges, while mismatched state fails closed.",
         "id": "F-3",
         "resolution": "resolved",
         "severity": "blocking"
       },
       {
-        "evidence": "Codex found that explicit invalid --as-of values could initialize SourceHandlingProvenanceAuthorityRepository before temporal validation, allowing schema/database mutation before fail-closed rejection. Resolved by delaying repository initialization on the explicit --as-of path until after future/genesis-rule/Issue-updated_at validation, while preserving early initialization only for the no---as-of recovery path. Regression test monkeypatches SourceHandlingProvenanceAuthorityRepository to raise if storage initialization occurs before explicit future --as-of rejection.",
+        "evidence": "Explicit invalid or future --as-of values previously initialized storage first; temporal validation now precedes repository initialization, with a regression that makes any early initialization fail.",
         "id": "F-4",
         "resolution": "resolved",
         "severity": "blocking"
       },
       {
-        "evidence": "Codex found that validate_policy_body accepted unknown durable disposition categories when required governed categories were otherwise present. Resolved by rejecting any durable_dispositions category not in GOVERNED_DURABLE_CATEGORIES and additionally excluding UNKNOWN_CATEGORY from persistable policy categories. Regression coverage proves invented categories such as MADE_UP_SAFE_CATEGORY fail closed.",
+        "evidence": "Policies previously accepted invented durable categories. The canonical validator rejects all non-governed categories; the governed UNKNOWN_CATEGORY sentinel is separately constrained to an exact all-BLOCKED fail-closed shape.",
         "id": "F-5",
         "resolution": "resolved",
         "severity": "blocking"
       },
       {
-        "evidence": "Codex found that non-string JSON array/object values in top-level policy decisions and durable dispositions could raise TypeError during set/dict membership instead of SourceHandlingBlockedError. Resolved by explicit isinstance(value, str) checks before membership for all top-level decisions, content dispositions, and lifecycle dispositions. Regression coverage proves list/dict values fail closed through governed SourceHandlingBlockedError paths.",
+        "evidence": "Non-string policy and disposition values could raise raw TypeError. Explicit type checks now route malformed values through SourceHandlingBlockedError.",
         "id": "F-6",
         "resolution": "resolved",
         "severity": "blocking"
       },
       {
-        "evidence": "Full CI found that the new unknown-category rejection invalidated a production-runtime fixture that used the non-governed sentinel UNUSED_CATEGORY to model an unused disposition. The production contract remains that unknown policy categories fail closed, while governed but payload-unused categories may exist without affecting persistence. Resolved by replacing the test fixture sentinel with the governed DIAGNOSTIC category, preserving both the Codex fix and the production semantics. Targeted and related Source Handling test suites pass.",
+        "evidence": "A runtime test fixture used an invented UNUSED_CATEGORY. It now uses the governed payload-unused DIAGNOSTIC category without weakening the production validator.",
         "id": "F-7",
+        "resolution": "resolved",
+        "severity": "blocking"
+      },
+      {
+        "evidence": "Recovered provenance was trusted from raw storage before integrity verification. Recovery now discovers only planned pairs and resolves each through the production tamper-verifying provenance resolver before using its timestamp, accepting idempotency, or performing any additional provenance or authority write.",
+        "id": "F-8",
+        "resolution": "resolved",
+        "severity": "blocking"
+      },
+      {
+        "evidence": "UNKNOWN_CATEGORY was rejected entirely. The governed sentinel is now accepted only with the canonical exact four-operation all-BLOCKED disposition map; invented categories remain rejected and durable persistence remains impossible.",
+        "id": "F-9",
+        "resolution": "resolved",
+        "severity": "blocking"
+      },
+      {
+        "evidence": "Durable disposition mappings accepted undeclared operation keys. The shared canonical validator now requires exactly PERSIST, READ_ACCESS, RECONSTRUCT, and DELETE_OR_EXPIRE and rejects missing, extra, or malformed keys fail closed.",
+        "id": "F-10",
         "resolution": "resolved",
         "severity": "blocking"
       }
@@ -164,13 +182,13 @@
     "issue": "432",
     "review_target": [
       {
-        "blob_sha": "065b171bcbada6e81dab040e2e229dfa7908f60c",
+        "blob_sha": "63db6116074f45cc0b1eda12d84603228a8811c7",
         "path": "scripts/provision_source_handling_issue_authority.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "631b3e39f03451eb9c288416c5a382a0c86198f9",
+        "blob_sha": "8d5777a9421f330cfde04e757be196d7f0613bd2",
         "path": "src/hunter/evidence_intelligence/source_handling.py",
         "previous_path": "",
         "status": "modified"
@@ -182,20 +200,20 @@
         "status": "modified"
       },
       {
-        "blob_sha": "6298fcb3ea07c1bc8aaf2cd16a1d59b66bcded40",
+        "blob_sha": "665f56b4a44b87a40a8bcdcae2a2711f40e1e169",
         "path": "tests/test_source_handling_production_runtime.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "02d07077f80ad7d531e105f607489e840e3ed1a6",
+        "blob_sha": "ae11bd4511d67e42603db8f30c0858623d9b23da",
         "path": "tests/test_source_handling_provisioning.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "b2841e3b6a10749d1b5db001dd4b3c40f2a7dfe691d022db46cd6b866691346c"
+    "review_target_digest": "f2a9c0b49aa89f09290764733abacbe38a55c4df1d408ea3aacd8c12c75d678b"
   },
-  "review_id": "b47a1c9f8e996d62e92f102c1d8f62be6359e525bcf07c1fc40ec55fe77d630b",
+  "review_id": "0e6fc4c268a3f892cc2340cb492d8a6def8afb5b8447d7a179d6f9567b0e787a",
   "schema": "hunter.pre-ready-hostile-review.v1"
 }
