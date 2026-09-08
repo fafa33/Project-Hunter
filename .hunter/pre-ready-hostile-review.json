@@ -135,12 +135,18 @@
         "id": "F-3",
         "resolution": "resolved",
         "severity": "blocking"
+      },
+      {
+        "evidence": "Codex found that explicit invalid --as-of values could initialize SourceHandlingProvenanceAuthorityRepository before temporal validation, allowing schema/database mutation before fail-closed rejection. Resolved by delaying repository initialization on the explicit --as-of path until after future/genesis-rule/Issue-updated_at validation, while preserving early initialization only for the no---as-of recovery path. Regression test monkeypatches SourceHandlingProvenanceAuthorityRepository to raise if storage initialization occurs before explicit future --as-of rejection.",
+        "id": "F-4",
+        "resolution": "resolved",
+        "severity": "blocking"
       }
     ],
     "issue": "432",
     "review_target": [
       {
-        "blob_sha": "d8740a549af38011470aaaa9fc09a61cfd7a8855",
+        "blob_sha": "a349c0f3e27d2992cc77dfdf3defee15ca9b5ebb",
         "path": "scripts/provision_source_handling_issue_authority.py",
         "previous_path": "",
         "status": "modified"
@@ -158,14 +164,14 @@
         "status": "modified"
       },
       {
-        "blob_sha": "46271452f4eca1638664610105e6b4ed04208059",
+        "blob_sha": "7433777ba42e3531d38ad8357fca331e0e49362a",
         "path": "tests/test_source_handling_provisioning.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "8c70124b9566be8a4b707ed4f5f0b2bbc298d3980f6f5eba0c9bd36b180a7332"
+    "review_target_digest": "fb6ceed203cb0c5c583b20dad081fe0ce91dfe4656f6fe49a181da5de0a165f9"
   },
-  "review_id": "6714cd934aba40f07935bde97cad826af9bdfe5a2e1e8e7ba576cec81b30c37d",
+  "review_id": "bd8e578384cf39c9c29075ed031d0ac08533ca5f80bf82820254a2be73deea08",
   "schema": "hunter.pre-ready-hostile-review.v1"
 }
