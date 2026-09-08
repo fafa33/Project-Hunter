@@ -203,7 +203,7 @@ def _policy_payload(
         for category in categories
     }
     if include_unused_denial:
-        dispositions["UNUSED_CATEGORY"] = {
+        dispositions["DIAGNOSTIC"] = {
             "PERSIST": "DENY",
             "READ_ACCESS": "DENY",
             "RECONSTRUCT": "DENY",
