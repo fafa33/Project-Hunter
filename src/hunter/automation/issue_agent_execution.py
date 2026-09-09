@@ -78,6 +78,8 @@ from hunter.evidence_intelligence.intake import (
 )
 from hunter.evidence_intelligence.repository import EvidenceIntelligenceRepository
 from hunter.evidence_intelligence.smart_prompt_routing import (
+    ENGINEERING_IMPLEMENT_PROFILE,
+    ENGINEERING_IMPLEMENT_ROUTE,
     ENGINEERING_REVIEW_FIX_PROFILE,
     ENGINEERING_REVIEW_FIX_ROUTE,
     ENGINEERING_REVIEW_FIX_TASK_KEY,
@@ -123,9 +125,11 @@ ISSUE_AGENT_TASK_KEY = ENGINEERING_REVIEW_FIX_TASK_KEY
 #: The exact registries this composition root routes through. Building them once
 #: as module constants makes the route/profile pair a repository-owned fact
 #: rather than something a caller assembles per execution.
-ISSUE_AGENT_PROFILE_REGISTRY = PromptMachineProfileRegistry((ENGINEERING_REVIEW_FIX_PROFILE,))
+ISSUE_AGENT_PROFILE_REGISTRY = PromptMachineProfileRegistry(
+    (ENGINEERING_REVIEW_FIX_PROFILE, ENGINEERING_IMPLEMENT_PROFILE)
+)
 ISSUE_AGENT_ROUTE_REGISTRY = PromptTaskRouteRegistry(
-    (ENGINEERING_REVIEW_FIX_ROUTE,),
+    (ENGINEERING_REVIEW_FIX_ROUTE, ENGINEERING_IMPLEMENT_ROUTE),
     profiles=ISSUE_AGENT_PROFILE_REGISTRY,
 )
 

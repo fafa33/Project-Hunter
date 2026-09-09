@@ -27,15 +27,16 @@ from hunter.evidence_intelligence.engineering_task_ingress import (
     GovernedEngineeringTaskIngress,
     PromptTaskOversizeError,
 )
-from hunter.evidence_intelligence.pre_model import EvidenceCapabilityConstraint, EvidencePromptSpecification
 from hunter.evidence_intelligence.repository import EvidenceIntelligenceRepository
 from hunter.evidence_intelligence.smart_prompt_machine import (
     PromptCompilationResult,
     PromptContextCompiler,
-    PromptMachineProfile,
     PromptMachineProfileRegistry,
 )
 from hunter.evidence_intelligence.smart_prompt_routing import (
+    ENGINEERING_IMPLEMENT_PROFILE,
+    ENGINEERING_IMPLEMENT_ROUTE,
+    ENGINEERING_IMPLEMENT_TASK_KEY,
     ENGINEERING_REVIEW_FIX_MAX_PROMPT_BYTES,
     ENGINEERING_REVIEW_FIX_PROFILE,
     ENGINEERING_REVIEW_FIX_ROUTE,
@@ -44,7 +45,6 @@ from hunter.evidence_intelligence.smart_prompt_routing import (
     PromptRouteConflict,
     PromptTaskAuthorityError,
     PromptTaskRequest,
-    PromptTaskRoute,
     PromptTaskRouteRegistry,
     SmartPromptMachine,
 )
@@ -63,40 +63,6 @@ def _verifier() -> PromptAutomationVerifier:
     return PromptAutomationVerifier.from_environment(
         environ={"HUNTER_PROMPT_AUTOMATION_VERIFYING_KEY": _AUTOMATION_VERIFYING_KEY_HEX}
     )
-
-
-ENGINEERING_IMPLEMENT_PROFILE = PromptMachineProfile(
-    profile_id="engineering-implement",
-    version="1",
-    task_type="ENGINEERING_IMPLEMENT",
-    workflow_stage="engineering-implement",
-    output_contract_id="engineering-implement",
-    output_contract_version="1",
-    context_policy_id="engineering-implement",
-    context_policy_version="1",
-    required_span_ids=(),
-    specification=EvidencePromptSpecification(
-        specification_id="engineering-implement",
-        version="1",
-        compiler_version="1",
-        trusted_system_constraints="Apply only the governed engineering objective.",
-        task_instruction="Execute only the bounded engineering objective.",
-        output_contract='{"type":"object"}',
-    ),
-    capability=EvidenceCapabilityConstraint(
-        constraint_id="engineering-implement-bytes",
-        version="1",
-        maximum_input_bytes=1_024,
-        reserved_completion_bytes=256,
-    ),
-)
-ENGINEERING_IMPLEMENT_ROUTE = PromptTaskRoute(
-    route_id="engineering-implement-route",
-    version="1",
-    task_key="engineering.implement",
-    profile_id=ENGINEERING_IMPLEMENT_PROFILE.profile_id,
-    profile_version=ENGINEERING_IMPLEMENT_PROFILE.version,
-)
 
 
 def _compose_machine(
@@ -219,11 +185,13 @@ def test_non_bounded_engineering_oversize_fails_closed_with_machine_reason(
 ) -> None:
     _machine, ingress, captured = _implement_machine(monkeypatch)
     del _machine
+    budget = ENGINEERING_IMPLEMENT_PROFILE.capability.available_input_bytes
+    actual_bytes = budget + 512
     request = PromptTaskRequest(
         document_id="implement-1",
         execution_owner_id="task-1",
-        task_key=ENGINEERING_IMPLEMENT_ROUTE.task_key,
-        task_text="f" * 2_000,
+        task_key=ENGINEERING_IMPLEMENT_TASK_KEY,
+        task_text="f" * actual_bytes,
     )
 
     with pytest.raises(PromptTaskOversizeError) as captured_error:
@@ -234,16 +202,16 @@ def test_non_bounded_engineering_oversize_fails_closed_with_machine_reason(
     assert "task_key=engineering.implement" in reason
     assert "route=engineering-implement-route" in reason
     assert "profile=engineering-implement" in reason
-    assert "maximum=768" in reason
-    assert "actual=2000" in reason
-    assert captured_error.value.task_key == ENGINEERING_IMPLEMENT_ROUTE.task_key
+    assert f"maximum={budget}" in reason
+    assert f"actual={actual_bytes}" in reason
+    assert captured_error.value.task_key == ENGINEERING_IMPLEMENT_TASK_KEY
     assert captured_error.value.route_id == ENGINEERING_IMPLEMENT_ROUTE.route_id
-    assert captured_error.value.maximum_input_bytes == 768
-    assert captured_error.value.actual_bytes == 2_000
+    assert captured_error.value.maximum_input_bytes == budget
+    assert captured_error.value.actual_bytes == actual_bytes
 
-    budget = ingress.budget_for(ENGINEERING_IMPLEMENT_ROUTE.task_key)
-    assert budget.bounded_within_policy is False
-    assert budget.maximum_input_bytes == 768
+    governed_budget = ingress.budget_for(ENGINEERING_IMPLEMENT_TASK_KEY)
+    assert governed_budget.bounded_within_policy is False
+    assert governed_budget.maximum_input_bytes == budget
     assert "request" not in captured
 
 
@@ -323,8 +291,10 @@ def test_ingress_binds_to_the_exact_governed_registries(monkeypatch: pytest.Monk
     _machine, ingress, captured = _review_fix_machine(monkeypatch)
     del _machine
     del captured
-    assert ingress.route_registry_identity == ISSUE_AGENT_ROUTE_REGISTRY.registry_identity
-    assert ingress.profile_registry_identity == ISSUE_AGENT_PROFILE_REGISTRY.registry_identity
+    profiles = PromptMachineProfileRegistry((ENGINEERING_REVIEW_FIX_PROFILE,))
+    routes = PromptTaskRouteRegistry((ENGINEERING_REVIEW_FIX_ROUTE,), profiles=profiles)
+    assert ingress.route_registry_identity == routes.registry_identity
+    assert ingress.profile_registry_identity == profiles.registry_identity
 
     dual_profiles = PromptMachineProfileRegistry((ENGINEERING_REVIEW_FIX_PROFILE, ENGINEERING_IMPLEMENT_PROFILE))
     dual_routes = PromptTaskRouteRegistry((ENGINEERING_REVIEW_FIX_ROUTE,), profiles=dual_profiles)
@@ -354,4 +324,10 @@ def test_one_canonical_ingress_across_both_production_execution_paths() -> None:
 
     resolved = ISSUE_AGENT_ROUTE_REGISTRY.resolve(ENGINEERING_REVIEW_FIX_TASK_KEY)
     assert resolved.route_identity == ENGINEERING_REVIEW_FIX_ROUTE.route_identity
+    implemented = ISSUE_AGENT_ROUTE_REGISTRY.resolve(ENGINEERING_IMPLEMENT_TASK_KEY)
+    assert implemented.route_identity == ENGINEERING_IMPLEMENT_ROUTE.route_identity
+    assert (
+        ISSUE_AGENT_PROFILE_REGISTRY.resolve(implemented.profile_id, implemented.profile_version).profile_identity
+        == ENGINEERING_IMPLEMENT_PROFILE.profile_identity
+    )
     assert ISSUE_AGENT_ROUTE_REGISTRY.profile_registry_identity == ISSUE_AGENT_PROFILE_REGISTRY.registry_identity
