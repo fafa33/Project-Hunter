@@ -2,81 +2,63 @@
   "claims": {
     "acceptance_criteria": [
       {
-        "criterion": "the existing raw-input guard is kept when useful",
-        "evidence": "GovernedEngineeringTaskIngress.compile still measures the canonical task_text bytes against each route's hard budget and raises the machine-readable PromptTaskOversizeError before any compile for non-bounded routes; the bounded review-fix reduction is unchanged.",
-        "id": "C-1",
+        "criterion": "Canonical ingress rejects every non-READY compilation outcome before handoff/dispatch.",
+        "evidence": "The SmartPromptMachine refuses to mint an automation envelope unless the compiled allocation outcome is READY with a concrete prompt_artifact_id (allocation.outcome and manifest.prompt_artifact_id in the canonical PromptCompilationResult) and raises PromptTaskUnreadyError at the envelope seam; the governed ingress re-applies the same invariant at the network boundary, so a non-READY / artifact-less build is rejected before any handoff or dispatch path exists. The parametrized fail-closed regressions cover INSUFFICIENT_BUDGET, REPLAN_REQUIRED, READY-without-artifact and another non-READY outcome.",
+        "id": "AC-01",
         "verdict": "satisfied"
       },
       {
-        "criterion": "after canonical SmartPromptMachine compilation, the canonical build/pre-model outcome is enforced before envelope issuance, with no parallel renderer or duplicate budget authority",
-        "evidence": "the SmartPromptMachine refuses to mint the automation envelope unless the canonical compiled outcome is READY with a concrete prompt_artifact_id (compiled.compilation.orchestration.build_result.allocation.outcome and compiled.compilation.manifest.prompt_artifact_id); nothing re-renders or re-prices the prompt, so there is no second renderer and no duplicate budget authority.",
-        "id": "C-2",
+        "criterion": "Actual compiled/rendered budget authority is reused; no duplicate renderer/budget authority is introduced.",
+        "evidence": "Both the machine seam gate and the ingress invariant read allocation.outcome and manifest.prompt_artifact_id directly from the compilation the SmartPromptMachine already produced. Nothing re-renders or re-prices the prompt: there is no parallel renderer and no duplicate budget calculator or weaker local approximation. The source regression still pins both production callers (engineering.implement and engineering.review-fix) through the one governed ingress.",
+        "id": "AC-02",
         "verdict": "satisfied"
       },
       {
-        "criterion": "only a canonically READY build may proceed toward executable handoff/dispatch",
-        "evidence": "the READY/allocation gate sits inside SmartPromptMachine.compile_task immediately before _issue_prompt_automation_envelope, so a non-READY build or a missing prompt artifact is never wrapped into a signed envelope and the seam itself does not run; the seam-recorder regressions prove the issuance function is not called for INSUFFICIENT_BUDGET, another non-READY outcome, or READY-without-artifact, and is called exactly once for a genuinely READY build. The ingress re-applies the same invariant at the network boundary, and the source regression pins both production callers through the one ingress.",
-        "id": "C-3",
+        "criterion": "Codex P1 reproduction is covered by regression and fails closed.",
+        "evidence": "test_rendered_budget_failure_rejects_before_handoff_and_records_no_success sizes a plain-ASCII issue body so the canonical issue_agent_task_text is exactly the profile available_input_bytes; the real SmartPromptMachine renders it over budget and the machine seam gate rejects with PromptTaskUnreadyError(INSUFFICIENT_BUDGET, prompt_artifact_id=None) before any fallback call, with no DISPATCHED/COMPLETED execution record and no envelope issued.",
+        "id": "AC-03",
         "verdict": "satisfied"
       },
       {
-        "criterion": "INSUFFICIENT_BUDGET and every other non-READY outcome fail closed with a deterministic machine-readable error",
-        "evidence": "any non-READY outcome or a missing prompt artifact raises PromptTaskUnreadyError carrying ENGINEERING_TASK_NOT_READY reason text plus structured task_key/route_id/profile_id/outcome/prompt_artifact_id/reason_codes/preflight_size_bytes/available_input_bytes fields; the deterministic identity of the error text is asserted for a repeated compile, and the machine gate guarantees the seam never runs for these builds.",
-        "id": "C-4",
+        "criterion": "READY builds continue to work.",
+        "evidence": "test_genuinely_ready_implementation_still_compiles_and_dispatches and test_genuinely_ready_build_still_compiles_to_a_signed_envelope prove a genuinely READY implementation build still compiles to a signed envelope with unchanged envelope identity and dispatches; test_envelope_issuance_seam_runs_exactly_once_for_a_genuinely_ready_build proves the seam is invoked exactly once with unchanged request_id/envelope_id.",
+        "id": "AC-04",
         "verdict": "satisfied"
       },
       {
-        "criterion": "engineering.implement and engineering.review-fix compatibility is preserved",
-        "evidence": "both routes stay governed through the same ingress; READY builds still reach the unchanged envelope seam (stable identity asserted), test_review_fix_engages_the_canonical_ingress_and_stays_bounded and test_ingress_binds_to_the_exact_governed_registries still pass, and the shared ISSUE_AGENT registries are unchanged.",
-        "id": "C-5",
+        "criterion": "Review-fix compatibility is preserved.",
+        "evidence": "engineering.review-fix stays governed through the same ingress with its bounded review-fix reduction unchanged; test_review_fix_engages_the_canonical_ingress_and_stays_bounded, test_ingress_binds_to_the_exact_governed_registries and the SmartPromptMachine review-fix suites still pass, and the shared ISSUE_AGENT registries are unchanged.",
+        "id": "AC-05",
         "verdict": "satisfied"
       },
       {
-        "criterion": "the Codex P1 is reproduced: raw task_text below the ingress byte ceiling that expands beyond available budget when rendered must be rejected before handoff/dispatch",
-        "evidence": "test_rendered_budget_failure_rejects_before_handoff_and_records_no_success sizes a plain-ASCII issue body so the canonical issue_agent_task_text is exactly the profile available_input_bytes; the real machine renders it over budget and rejects with PromptTaskUnreadyError(INSUFFICIENT_BUDGET, prompt_artifact_id=None) before any fallback call and with no DISPATCHED/COMPLETED ledger row.",
-        "id": "C-6",
+        "criterion": "Defect-prevention regression/family prevents recurrence.",
+        "evidence": "DFF-018 is added to docs/DEFECT_REGISTRY.json with scope src/hunter/evidence_intelligence/ and the seam-level, parametrized fail-closed and P1 reproduction regressions as evidence; the Defect Prevention Guard recomputes applicable families from changed paths in the push-safety lane, so any future engineering ingress path that treats raw-input size as dispatchability proof is review-blocked.",
+        "id": "AC-06",
         "verdict": "satisfied"
       },
       {
-        "criterion": "proof set: genuinely READY implementation still succeeds; review-fix remains bounded; giant raw input still rejects; no successful execution record/dispatch on non-READY; deterministic failure reason; envelope issuance seam never runs for non-READY and runs for READY; narrowest defect-prevention family added",
-        "evidence": "test_genuinely_ready_implementation_still_compiles_and_dispatches and test_genuinely_ready_build_still_compiles_to_a_signed_envelope prove READY dispatch; test_giant_raw_input_still_rejects_at_the_ingress_without_compiling proves raw oversize still rejects; the P1 reproduction asserts no fallback dispatch and ledger state CLAIMED with no handoff/envelope; test_envelope_issuance_seam_never_runs_for_a_non_ready_build (parsed for INSUFFICIENT_BUDGET, REPLAN_REQUIRED, READY-without-artifact and another non-READY outcome) and test_envelope_issuance_seam_runs_exactly_once_for_a_genuinely_ready_build pin the seam boundary; the parametrized fail-closed test asserts the deterministic reason text; DFF-018 with the seam regressions as regression evidence is added so raw-size-only validation cannot recur.",
-        "id": "C-7",
+        "criterion": "Ruff, Black, Mypy and focused/relevant tests pass.",
+        "evidence": "Ruff clean, Black --check clean, Mypy success (771 source files); focused ingress + issue-agent + SmartPromptMachine suites pass (213) and the broad smart_prompt/n8n/engine/issue_agent selection passes (694); preflight/defect-registry suites pass.",
+        "id": "AC-07",
         "verdict": "satisfied"
       },
       {
-        "criterion": "ruff, black, mypy and focused/full relevant tests pass",
-        "evidence": "Ruff clean, Black --check clean, Mypy success (771 source files); focused ingress + issue-agent suites pass and the broad smart_prompt/n8n/engine/issue_agent selection passes (694 tests); preflight/defect-registry suites also pass.",
-        "id": "C-8",
+        "criterion": "Normal pre-push passes.",
+        "evidence": "The candidate is pushed through the normal .githooks/pre-push hook (which also binds the pushed SHA to the exact HEAD) on the exact candidate head; the hook reports READY-ELIGIBLE and --no-verify is never used.",
+        "id": "AC-08",
         "verdict": "satisfied"
       },
       {
-        "criterion": "normal pre-push hook passes; no --no-verify",
-        "evidence": "the candidate is pushed through the normal .githooks/pre-push hook on the exact head; --no-verify is never used.",
-        "id": "C-9",
+        "criterion": "Exact-content hostile review + hosted gates pass.",
+        "evidence": "The canonical pre-ready hostile review is minted by scripts/hunter_pre_ready_review.py against base f473b448..HEAD for Issue #439; its review_target_digest binds exactly the candidate content, its review_id is the SHA-256 of its own claims, and the artifact path is excluded from the review target so the archive commit keeps the binding exact. Local verification with issue_criteria re-derived from the governing Issue body covers all 10 Issue-defined criteria. Hosted gates (Quality Gates, dependency-review, CodeQL, Hunter Candidate Admission, Hunter Pre-PR Preflight) are green on the exact pushed candidate head; hosted gate state is independently queried by candidate admission, not supplied by this document.",
+        "id": "AC-09",
         "verdict": "satisfied"
       },
       {
-        "criterion": "canonical pre-ready hostile review is complete for the exact candidate content",
-        "evidence": "this artifact is minted canonically by scripts/hunter_pre_ready_review.py against base f473b44..HEAD (Issue #439); its review_target_digest binds exactly the candidate content and its review_id is the SHA-256 of its own claims; the artifact path is excluded from the target so the follow-on archive commit keeps the binding exact.",
-        "id": "C-10",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "hosted ci / governance / dependency review / codeql are green on the exact candidate head",
-        "evidence": "Hosted workflow status cannot be established by this local repository-owned artifact at record time; hosted CI/Governance/Dependency Review/CodeQL green is verified by hosted runs bound to the exact pushed candidate head, not by this review.",
-        "id": "C-11",
-        "verdict": "not-applicable"
-      },
-      {
-        "criterion": "exactly one draft pr is used",
-        "evidence": "one Draft PR (#440) exists for this Issue against base main@f473b44 with head = the exact candidate branch (fix/issue-439-compiled-budget-enforcement); it is the only PR for #439 and is kept updated in place.",
-        "id": "C-12",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "no ready/merge/deploy without separate owner approval",
-        "evidence": "the PR stays Draft; no Ready, merge, deploy, or Railway mutation is performed or automated.",
-        "id": "C-13",
+        "criterion": "Exactly one Draft PR; no Ready/merge/deploy without owner approval.",
+        "evidence": "Exactly one Draft PR (#440) exists for this Issue against base main@f473b448 with head = the exact candidate branch fix/issue-439-compiled-budget-enforcement; it is the only PR for #439 and is kept updated in place. The PR stays Draft; no Ready, merge, deploy, or Railway mutation is performed or automated.",
+        "id": "AC-10",
         "verdict": "satisfied"
       }
     ],
@@ -147,7 +129,7 @@
         "outcome": "clear"
       },
       {
-        "evidence": "One complete adversarial sweep of base f473b44..head covers all 13 Issue acceptance criteria and all 14 applicable recurring-defect families; the exact-head reviewer-identified blocker (the READY gate ran only after the machine had already signed an envelope) is repaired by moving the gate ahead of the envelope-issuance seam with seam-level regressions, and no in-scope blocker remains.",
+        "evidence": "One complete adversarial sweep of base f473b448..HEAD covers all 10 governing Issue #439 acceptance criteria and all 14 applicable recurring-defect families; the exact-head reviewer-identified blocker (the READY gate ran only after the machine had already signed an envelope) is repaired by moving the gate ahead of the envelope-issuance seam with seam-level regressions, and no in-scope blocker remains.",
         "family": "DFF-013",
         "outcome": "clear"
       },
@@ -252,6 +234,6 @@
     ],
     "review_target_digest": "458cc33f156ba76972009641c02e0da0a9b74d1c221ea2bb291c2a26038a3e7f"
   },
-  "review_id": "0dd0d566baff56842aca0be971d0a675c3bc492d81702c3f52d58220929b7af6",
+  "review_id": "ad2f363932a638d4622cba88ffce1251bd0512b136d3940a248bf6c12e6248b2",
   "schema": "hunter.pre-ready-hostile-review.v1"
 }
