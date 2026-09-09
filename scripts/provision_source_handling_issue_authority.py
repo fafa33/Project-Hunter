@@ -326,7 +326,7 @@ def _check_provenance_heads_exact(
     at: datetime,
 ) -> None:
     """Fail closed before any write unless each existing head verifies and exactly matches."""
-    cutoff = datetime.now(UTC)
+    cutoff = datetime.max.replace(tzinfo=UTC)
     for plan in plans:
         record = PROVENANCE_RESOLVER(plan["provenance_id"], plan["provenance_kind"], cutoff)
         if record is None:

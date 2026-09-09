@@ -839,6 +839,66 @@ def test_matching_forged_provenance_head_and_content_id_cannot_bypass_signature_
     assert after == before == (1, 1, 1, 0)
 
 
+def test_future_known_signed_successor_fails_before_any_provisioning_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    database, key, updated_at = _prepare(tmp_path, monkeypatch)
+    authorization = _authorization(437, updated_at, "auth-437-future-head")
+    document_id = issue_agent_document_id(authorization)
+    at = provisioning._parse_time(updated_at)
+    plans = _record_partial_provenance(database, key, document_id=document_id, at=at, count=1)
+    future = datetime.now(UTC) + timedelta(days=1)
+
+    class FutureClock:
+        def now(self) -> datetime:
+            return future
+
+    repository = provenance_module.SourceHandlingProvenanceAuthorityRepository(
+        database,
+        signing_private_key=key,
+        operator_root=_operator_root(key),
+        clock=FutureClock(),
+    )
+    plan = plans[0]
+    repository.record_provenance(
+        provenance_id=plan["provenance_id"],
+        provenance_kind=plan["provenance_kind"],
+        authority_identity=plan["authority_identity"],
+        effective_from=future,
+        recorded_at=future,
+        known_at=future,
+        evidence_strength=plan["evidence_strength"],
+        evidence_method=plan["evidence_method"],
+        verifier_type=plan["verifier_type"],
+    )
+
+    with sqlite3.connect(database) as connection:
+        before = (
+            connection.execute("SELECT COUNT(*) FROM source_handling_provenance_records").fetchone()[0],
+            connection.execute("SELECT COUNT(*) FROM source_handling_provenance_heads").fetchone()[0],
+            connection.execute("SELECT COUNT(*) FROM source_handling_authority_records").fetchone()[0],
+            connection.execute("SELECT COUNT(*) FROM source_handling_publication_authorizations").fetchone()[0],
+        )
+
+    with pytest.raises(SystemExit) as excinfo:
+        _run_provisioning(
+            database,
+            key,
+            _arguments(database, updated_at, issue_number=437, authorization_id="auth-437-future-head"),
+        )
+    assert excinfo.value.code == 2
+    assert "already heads different content" in capsys.readouterr().err
+
+    with sqlite3.connect(database) as connection:
+        after = (
+            connection.execute("SELECT COUNT(*) FROM source_handling_provenance_records").fetchone()[0],
+            connection.execute("SELECT COUNT(*) FROM source_handling_provenance_heads").fetchone()[0],
+            connection.execute("SELECT COUNT(*) FROM source_handling_authority_records").fetchone()[0],
+            connection.execute("SELECT COUNT(*) FROM source_handling_publication_authorizations").fetchone()[0],
+        )
+    assert after == before == (2, 1, 1, 0)
+
+
 def test_finding_3_mismatched_partial_state_fails_closed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
