@@ -33,7 +33,7 @@
       },
       {
         "criterion": "existing engineering.review-fix behavior remains compatible",
-        "evidence": "the review-fix route/profile, bounded reducer, and EXACT identities are unchanged; test_review_fix_engages_the_canonical_ingress_and_stays_bounded and the existing engineering-fix suite pass.",
+        "evidence": "the review-fix route/profile, bounded reducer, and EXACT identities are unchanged, and review-fix stays a governed route through the same ingress for review-fix work; test_review_fix_engages_the_canonical_ingress_and_stays_bounded and the existing engineering-fix suite pass.",
         "id": "C-6",
         "verdict": "satisfied"
       },
@@ -45,7 +45,7 @@
       },
       {
         "criterion": "ruff, black, mypy and focused/full relevant tests pass",
-        "evidence": "Ruff clean, Black --check clean, Mypy success; focused suites pass (680 smart_prompt/n8n/engine/issue_agent tests).",
+        "evidence": "Ruff clean, Black --check clean, Mypy success (771 source files); focused suites pass (169 direct regressions and 680 smart_prompt/n8n/engine/issue_agent tests).",
         "id": "C-8",
         "verdict": "satisfied"
       },
@@ -57,7 +57,7 @@
       },
       {
         "criterion": "canonical pre-ready hostile review is complete for the exact candidate content",
-        "evidence": "this artifact is minted canonically by scripts/hunter_pre_ready_review.py against base 7ca5bf6..head b995821; its review_target_digest binds exactly this candidate content and its review_id is the SHA-256 of its own claims.",
+        "evidence": "this artifact is minted canonically by scripts/hunter_pre_ready_review.py against base 7ca5bf6..head b88c965; its review_target_digest binds exactly this candidate content and its review_id is the SHA-256 of its own claims.",
         "id": "C-10",
         "verdict": "satisfied"
       },
@@ -69,7 +69,7 @@
       },
       {
         "criterion": "exactly one draft pr is used",
-        "evidence": "PR #438 (fix/issue-436-smart-prompt-engineering-ingress) is the single Draft PR for this Issue, base main@7ca5bf6 head b995821.",
+        "evidence": "PR #438 (fix/issue-436-smart-prompt-engineering-ingress) is the single Draft PR for this Issue, base main@7ca5bf6 head b88c965.",
         "id": "C-12",
         "verdict": "satisfied"
       },
@@ -127,7 +127,7 @@
         "outcome": "clear"
       },
       {
-        "evidence": "Authorization remains bound to the repository-owned route/profile pair; caller text cannot select route, provider, model, branch, reviewer, merge, or profile.",
+        "evidence": "Authorization remains bound to the repository-owned route/profile pair; the trusted mapper binds ISSUE_AGENT_TASK_KEY to the engineering.implement task key as a fixed constant and caller/Issue text cannot select route, provider, model, branch, reviewer, merge, or profile. engineering.review-fix stays a governed route through the same ingress for review-fix work.",
         "family": "DFF-007",
         "outcome": "clear"
       },
@@ -157,7 +157,7 @@
         "outcome": "clear"
       },
       {
-        "evidence": "One complete adversarial sweep of base 7ca5bf6..head b995821 covers all 13 Issue acceptance criteria and all 16 applicable recurring-defect families; no in-scope P1/P2 blocker remains.",
+        "evidence": "One complete adversarial sweep of base 7ca5bf6..head b88c965 covers all 13 Issue acceptance criteria and all 16 applicable recurring-defect families; the reviewer-identified mapper P2 (authorized Issues hard-coded to the review-fix key) is fixed and proven re-routed to engineering.implement; no in-scope P1/P2 blocker remains.",
         "family": "DFF-013",
         "outcome": "clear"
       },
@@ -197,8 +197,14 @@
         "severity": "blocking"
       },
       {
-        "evidence": "The pre-ready hostile review artifact for the #436 branch still claimed Issue #432, which failed the governance review. The artifact is regenerated canonically by scripts/hunter_pre_ready_review.py for Issue #436 against base 7ca5bf6..head b995821, binding the exact candidate digest; it no longer names #432.",
+        "evidence": "The pre-ready hostile review artifact for the #436 branch still claimed Issue #432, which failed the governance review. The artifact is regenerated canonically by scripts/hunter_pre_ready_review.py for Issue #436 against base 7ca5bf6..head, binding the exact candidate digest; it no longer names #432.",
         "id": "F-4",
+        "resolution": "resolved",
+        "severity": "blocking"
+      },
+      {
+        "evidence": "The Issue-agent mapper hard-coded ISSUE_AGENT_TASK_KEY to ENGINEERING_REVIEW_FIX_TASK_KEY, so a normal implementation authorization could never reach the engineering.implement route in production. The repository-owned mapper now binds ISSUE_AGENT_TASK_KEY to ENGINEERING_IMPLEMENT_TASK_KEY as a fixed constant -- never inferred from Issue/caller prose -- while engineering.review-fix stays a governed route through the same ingress for review-fix work. test_authorized_issue_maps_to_exactly_one_canonical_task_request pins the implement task key, and test_authorized_issue_runs_the_existing_governed_path_end_to_end proves the authorized Issue reaches GovernedEngineeringTaskIngress and its signed envelope binds the engineering.implement route and profile. Oversize still fails closed on the implement hard budget.",
+        "id": "F-5",
         "resolution": "resolved",
         "severity": "blocking"
       }
@@ -212,7 +218,7 @@
         "status": "added"
       },
       {
-        "blob_sha": "0f32007a8e75f37ed4406b43c96f0f020bc7b211",
+        "blob_sha": "460f6ec68553efdb4077cb57eba7020ffcd95e1e",
         "path": "tests/test_engineering_task_ingress.py",
         "previous_path": "",
         "status": "added"
@@ -224,7 +230,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "9f2b36de041026cb954739b6ca0249a75d7af66d",
+        "blob_sha": "c2dd73d84d26af7881d89bb746b178ffce0f10e1",
         "path": "src/hunter/automation/issue_agent_execution.py",
         "previous_path": "",
         "status": "modified"
@@ -236,14 +242,20 @@
         "status": "modified"
       },
       {
+        "blob_sha": "fd99dca070635e023ec008049aca876d0da0aa48",
+        "path": "tests/test_issue_agent_execution.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
         "blob_sha": "9e9d3c6f13eca5f5799c27beb2fd372b6fc92214",
         "path": "tests/test_issue_agent_issuer.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "a3fc8fc899b3cdaea299f73cef6e0e7e105fba520e3d9718d4122ffe676e2e21"
+    "review_target_digest": "a106dc69fef0d28da1df5c384aca0a3bf6b3ea0a4ca4caac861799ea3c8e2334"
   },
-  "review_id": "cb2085c827b7eb0a64d6718a0432c9a1bd205c06142beaa953a997577d2fa015",
+  "review_id": "4be99fdc54015b5f3c94ce20ddf7f22ce04ea55b86abee5ba90f720201750b92",
   "schema": "hunter.pre-ready-hostile-review.v1"
 }
