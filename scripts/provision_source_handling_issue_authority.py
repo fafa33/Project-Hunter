@@ -860,6 +860,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.add_argument(
             f"--{axis.lower().replace('_', '-')}-disposition",
             f"--{axis.lower()}_disposition",
+            *((f"--{axis.lower()}-disposition",) if "_" in axis else ()),
             default="ALLOW",
             help=f"durable disposition for {axis}",
         )

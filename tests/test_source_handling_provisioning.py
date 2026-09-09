@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import os
@@ -130,6 +131,37 @@ def _arguments(
     if as_of is not None:
         arguments += ["--as-of", as_of]
     return arguments
+
+
+@pytest.mark.parametrize(
+    ("option", "destination"),
+    [
+        ("--read_access-disposition", "read_access_disposition"),
+        ("--delete_or_expire-disposition", "delete_or_expire_disposition"),
+        ("--read-access-disposition", "read_access_disposition"),
+        ("--delete-or-expire-disposition", "delete_or_expire_disposition"),
+        ("--read_access_disposition", "read_access_disposition"),
+        ("--delete_or_expire_disposition", "delete_or_expire_disposition"),
+    ],
+)
+def test_disposition_cli_aliases_preserve_destination(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, option: str, destination: str
+) -> None:
+    original_parse_args = argparse.ArgumentParser.parse_args
+    captured = argparse.Namespace()
+
+    class ParsingComplete(Exception):
+        pass
+
+    def capture_args(parser: argparse.ArgumentParser, args: Any = None, namespace: Any = None) -> argparse.Namespace:
+        nonlocal captured
+        captured = original_parse_args(parser, args, namespace)
+        raise ParsingComplete
+
+    monkeypatch.setattr(argparse.ArgumentParser, "parse_args", capture_args)
+    with pytest.raises(ParsingComplete):
+        provisioning.main(_arguments(tmp_path / "unused.sqlite", _issue_updated_at_text()) + [option, "ALLOW"])
+    assert getattr(captured, destination) == "ALLOW"
 
 
 def _run_provisioning(database: Path, private_key: bytes, arguments: list[str]) -> None:
