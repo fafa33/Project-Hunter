@@ -2,27 +2,21 @@
   "claims": {
     "acceptance_criteria": [
       {
-        "criterion": "One narrow Draft PR bound to this Issue resolving exactly the two findings above (no redesign, no scope creep).",
-        "evidence": "The candidate touches exactly: scripts/provision_source_handling_issue_authority.py (new per-Issue provisioning CLI), scripts/bootstrap_source_handling_authority.py (only the dual-source guard + docstring), tests/test_source_handling_provisioning.py (new), tests/test_source_handling_bootstrap.py (two new tests only), docs/ISSUE_AGENT_ISSUER_DEPLOYMENT.md (Railway order only). No source module outside those scripts, no new services, no registry or persistence changes.",
+        "criterion": "Scope provenance admission lookup to the current Issue only so unrelated Issues/provenance do not change an Issue's authority timestamp.",
+        "evidence": "_max_provenance_admission now takes planned_pairs (tuple of (provenance_id, provenance_kind)) and queries SELECT MAX(admission_time) FROM source_handling_provenance_records WHERE (provenance_id = ? AND provenance_kind = ?) OR ..., scoping admission lookup strictly to the Issue's exact provenance pairs. Verified by test_finding_1_unrelated_issue_provenance_scoping.",
         "id": "C-1",
         "verdict": "satisfied"
       },
       {
-        "criterion": "Canonical pre-ready hostile review regenerated for the exact candidate head.",
-        "evidence": "This judgement was recorded with scripts/hunter_pre_ready_review.py --base 8c26e09... --head 8c26e09...bf68e8c --issue 430 and then re-verified with the same arguments; the resulting .hunter/pre-ready-hostile-review.json binds the exact blob SHAs of the candidate change set (review_target / review_target_digest derived from git diff --raw, excluding only the review's own artifact path).",
+        "criterion": "Validate the complete Source Handling policy decision/disposition vocabulary before any provenance or authority write.",
+        "evidence": "validate_policy_body in source_handling.py serves as the canonical shared policy vocabulary authority. _validate_options in provision_source_handling_issue_authority.py and _validate_policy_payload in source_handling_persistence.py reuse validate_policy_body to validate all top-level decisions and durable dispositions before any write. Verified by parameterized test_finding_2_invalid_vocabulary_fails_closed_before_any_write covering all decision and disposition families.",
         "id": "C-2",
         "verdict": "satisfied"
       },
       {
-        "criterion": "Complete-for-Review optimization: provisioning command for one Issue + mutual-exclusion fix + tests + deployment doc updated to the (a)-(g) Railway order.",
-        "evidence": "The provisioning CLI provisions FACT / FIELD_CATEGORY_REGISTRY / POLICY for one Issue with its six EVIDENCE/VERIFIER antecedents and is covered by 7 new tests (happy path resolves through resolve_pre_model_source_handling at the runtime boundary; exact rerun idempotent; authority mismatch fails closed; existing-but-mismatched authority head fails before any provenance write; provenance mismatch fails closed; as-of predating the rule or the Issue update fails closed; operator env guard; dual-source mutual exclusion). The bootstrap mutual-exclusion fix has 2 new tests (unit ValueError + CLI SystemExit with fresh DB untouched). The Railway deployment doc now lists steps (a)-(g) in the mandated order.",
+        "criterion": "Make interrupted provisioning recoverable without manually supplied --as-of.",
+        "evidence": "_existing_provenance_info inspects existing provenance records using planned (provenance_id, provenance_kind) pairs to recover known_at as on_or_after when --as-of is omitted. Fails closed if any planned provenance identity exists under an unexpected provenance_kind or carries mismatched content. Verified by test_finding_3_interrupted_provisioning_recovery, test_finding_3_mismatched_partial_state_fails_closed, and test_finding_3_partial_provenance_wrong_kind_fails_closed.",
         "id": "C-3",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "Live Railway Issue E2E is unblocked by the provisioned authority (verified via the runtime pre-model resolution boundary in tests).",
-        "evidence": "test_provisioning_publishes_exact_authority_records_for_one_issue provisions a fresh database through the CLI and then resolves the exact issue document identity with resolve_pre_model_source_handling at cutoff = updated_at + 1 day: fact_record.id, registry_record.id, decision.retention_decision == ALLOW, decision.field_category_registry_id == registry:<document_id>:v1, and authorization_rule.id == the genesis rule record id; provenance antecedents verified by the production resolver.",
-        "id": "C-4",
         "verdict": "satisfied"
       }
     ],
@@ -40,138 +34,168 @@
       "transaction-snapshot-consistency"
     ],
     "base_ref": "main",
-    "base_sha": "8c26e096c4656d7fac96f4dc30af17538ea31c04",
+    "base_sha": "109a796e3a23ef294ff32885179dd76dd8016f6f",
     "defect_families": [
       {
-        "evidence": "DFF-007 swept on the provisioning path: every derived record scope is bound to issue_agent_document_id(authorization) (github-issue:repo#N) and the two registry/policy scopes derive from that exact id; the rule id is the genesis record id via bootstrap._expected_genesis_record_id, never a caller-supplied rule string; the operator environment guard (EVIDENCE_DATABASE_ENV/VERIFICATION_KEY/SHA/GENESIS_RULE_SHA256) must match this exact bootstrap and signing key, or the run fails closed before any write. test_provisioning_requires_operator_environment_configuration pins the guard; the happy path asserts the exact canonical (family, scope) keys.",
+        "evidence": "Every derived record scope remains bound to issue_agent_document_id(authorization) (github-issue:repo#N).",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "DFF-008 swept: record ids are content-addressed and derived byte-for-byte as the repository service derives them (sha256 of _canonical_json(_plain_mapping(payload)) for authority records via _publish; sha256 of the provenance claims payload for provenance records), and _provision_authority_record re-verifies the published result.record_id equals the derived id, so a forgery or a service deviation is structurally detectable and blocks the success report. Provenance exact-head pre-check computes the would-be id and refuses to supersede a different head.",
+        "evidence": "Record IDs are content-addressed and verified via_expected_authority_record_id and record_provenance.",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "DFF-009 swept: the CLI itself raised an unsatisfiable proof obligation on the first end-to-end attempt - records claimed known_at = issue_updated_at (a past instant) while physical admission is wall-clock now, so the authority publication's provenance-antecedent validation found the EVIDENCE/VERIFIER antecedents not strict-known at the authority known_at ('canonical publication provenance is incomplete', SystemExit 2). Resolved by the explicit --as-of operator instant and the authority-time clamp authority_at = max(as_of, max provenance admission), which is a deterministic function of the pinned as-of. The happy path now issues all three authorizations and consumes them, with exactly six provenance records present.",
+        "evidence": "Authority known_at is clamped to max(on_or_after, max_provenance_admission) for the Issue's specific (provenance_id, provenance_kind) pairs.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "DFF-010 swept: bootstrap's _load_signing_key silently preferred the file over the environment and never errored; now both sources together raise an explicit deterministic ValueError before any database is opened (the raise precedes the database argument parsing path). test_signing_key_sources_are_mutually_exclusive (unit) and test_both_signing_key_sources_fail_closed_before_db_open (CLI, asserts the fresh database is not created) pin both success and fail-closed shapes. The provisioning CLI consumes the same shared loader and gains the same mutual-exclusion property via test_provisioning_signing_key_sources_are_mutually_exclusive. The authority-head exact pre-check likewise enforces prevention at the earliest boundary: it fails closed before any provenance or authority write, not merely by detecting a mismatch after mutation.",
+        "evidence": "validate_policy_body checks options and policy payloads before any persistent write.",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "DFF-011 swept: nothing in this candidate makes a valid commit permanently inadmissible. The as-of guards reject an as-of predating the genesis rule (clear error), predating the Issue's updated_at, and -- after normalization, immediately and before the provenance repository is constructed or any provenance/authority write occurs -- a FUTURE as-of ('the provisioning as-of must not be in the future'); the redundant later future check was removed. test_provisioning_refuses_future_as_of_before_any_mutation leaves the database with only the genesis/canonical state: zero per-Issue provenance records and heads, zero FACT/FIELD_CATEGORY_REGISTRY/POLICY authority records, unchanged canonical keys and operator root.",
+        "evidence": "Temporal bounds and vocabulary checks fail closed before database mutation.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "DFF-012 swept: the provisioning CLI mints no connector authorization receipts and introduces no receipt-freshness path; the only new persisted writes are the provenance/authority records through the repository service, and connector receipt freshness over the pushed range remains enforced by the repository-local push boundary. No receipt-driven admission logic is added or changed.",
+        "evidence": "Connector receipt freshness and write policies remain preserved.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "DFF-013 swept: this pre-ready hostile review is being recorded for the exact candidate head (base 8c26e09, head bf68e8c) via scripts/hunter_pre_ready_review.py --record --issue 430 and verified with the same base/head arguments before push; the review covers all ten applicable families and the four Issue acceptance bullets.",
+        "evidence": "Pre-ready hostile review recorded for candidate head against Issue #432.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "DFF-014 swept: idempotency is exact-match only. On a re-run pinned to the recorded as_of, every would-be provenance id and authority record id equals the current head, so nothing is written (test_provisioning_exact_rerun_is_idempotent asserts byte-stable canonical keys, revision 1, identical record counts). Any other authority content (test_provisioning_mismatched_authority_content_fails_closed, sensitivity RESTRICTED) fails closed before write with 'refusing to replace provisioned authority state', and a mismatched existing authority head is now detected and rejected before ANY provenance write (test_provisioning_mismatched_authority_head_fails_before_any_provenance_write: existing FACT head + zero per-Issue provenance, then SystemExit 2, zero provenance/authority writes, canonical keys and record counts unchanged). A different provenance head also fails closed before any write. The printed as_of is the pinned, deterministic operator instant - not a fresh transient each run.",
+        "evidence": "Idempotency is exact-match only; mismatched partial state, wrong provenance kind, or mismatched authority state fails closed without superseding.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "DFF-015 swept: the mutual-exclusion guard is enforced at the earliest practical boundary - the shared _load_signing_key raises before the database path is even read, not merely detected by a later check; the regression test proves a fresh DB is untouched. The provisioning config guard (DFF-009-adjacent) also fails before any write. These are prevention-by-construction at entry, not detection-only.",
+        "evidence": "Vocabulary and option validation occurs prior to write transactions via shared validate_policy_body.",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "DFF-016 swept: each FACT / FIELD_CATEGORY_REGISTRY / POLICY issuance names its own EVIDENCE and VERIFIER identity, and all six provenance records are written before the first issuance; the authority-time clamp keeps known_at at or after the highest provenance admission so each record remains resolvable at its own known_at, and the clamp is a deterministic function of the pinned as-of so the exact re-run reproduces identical records without removing or duplicating proof. No proof is ever dropped to shorten a path.",
+        "evidence": "Interrupted provisioning recovers existing known_at bound by (provenance_id, provenance_kind) to preserve exact proof antecedents.",
         "family": "DFF-016",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Provisioning does not trust caller time for admitted ordering; authority known_at is derived/clamped against persisted provenance admission state and fails closed when required temporal authority cannot be proven.",
+        "family": "DFF-001",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Validation and persistence remain transaction-bound through the existing Source Handling persistence path; no new split-view validation/write path is introduced by this patch.",
+        "family": "DFF-002",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Derived authority and provenance identities remain repository-assigned/content-addressed and issue-scoped; caller payloads cannot override or reuse logical identities across Issues.",
+        "family": "DFF-003",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Canonical validate_policy_body rejects unknown, absent, or incomplete decision/disposition vocabulary before any authority or provenance mutation, preserving fail-closed behavior.",
+        "family": "DFF-004",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "The patch does not create a secondary persistence surface; existing Source Handling persistence restrictions continue to govern provenance, authority, metadata, and prepared artifact paths.",
+        "family": "DFF-005",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Interrupted retries recover persisted provenance known_at using exact provenance identity/kind pairs, preserving monotonic admitted ordering across restart/retry without requiring a caller-supplied timestamp.",
+        "family": "DFF-006",
         "outcome": "clear"
       }
     ],
     "findings": [
       {
-        "evidence": "The provisioning CLI wrote the six EVIDENCE/VERIFIER provenance records before checking whether existing FACT / FIELD_CATEGORY_REGISTRY / POLICY authority heads exactly matched the would-be records, so a run against an existing-but-mismatched authority head mutated provenance before rejecting the authority. Resolved by deriving the expected record id for all three authority families, reading each current canonical head through the repository resolver store (current_canonical_head_id), and failing closed before any provenance write on the first mismatch; exact-match heads remain on the idempotent path. New regression test pins zero provenance/authority writes and unchanged canonical state.",
+        "evidence": "Provenance admission lookup was global across all issues; fixed by filtering WHERE (provenance_id = ? AND provenance_kind = ?) for the current issue's exact pairs.",
         "id": "F-1",
         "resolution": "resolved",
         "severity": "blocking"
       },
       {
-        "evidence": "Backdating the per-Issue records to issue_updated_at is impossible in this contract: authority records' claimed known_at must be at or after their physical admission, and an Issue classified 'now' cannot be knowable before its last update. The first end-to-end run failed with 'canonical publication provenance is incomplete' (SystemExit 2) because the EVIDENCE/VERIFIER antecedents were admitted later than the authority records' known_at. Resolved with the explicit operator --as-of instant and the clamp authority_at = max(as_of, max provenance admission), itself a deterministic function of the pinned as-of. Happy path green; exact rerun idempotent.",
+        "evidence": "Policy decision/disposition vocabulary was not validated before provenance writes; fixed by validate_policy_body in source_handling.py reused by _validate_options and _validate_policy_payload prior to any write.",
         "id": "F-2",
         "resolution": "resolved",
         "severity": "blocking"
       },
       {
-        "evidence": "A future --as-of could previously reach provenance writes before the redundant future-time check that sat later in the write path, violating fail-closed-before-mutation. Resolved by moving the future as-of rejection to immediately after on_or_after is parsed and normalized, before the provenance repository is constructed and before any provenance/authority write, and removing the later redundant check. New regression test (fresh bootstrapped DB + future --as-of) pins exit 2 with zero per-Issue provenance records, zero FACT/FIELD_CATEGORY_REGISTRY/POLICY authority records, and unchanged genesis/root and canonical state.",
-        "id": "F-2",
-        "resolution": "resolved",
-        "severity": "blocking"
-      },
-      {
-        "evidence": "The exact-head provenance pre-check queried source_handling_provenance_heads before the provenance schema existed on a fresh database, failing with sqlite3.OperationalError 'no such table'. Resolved by constructing SourceHandlingProvenanceAuthorityRepository (whose initializer creates the schema idempotently) before running the head pre-check. The fresh-database happy path now passes.",
+        "evidence": "Interrupted provisioning without --as-of could not recover or didn't check provenance_kind; fixed by recovering existing_known_at bound by exact (provenance_id, provenance_kind) pairs, failing closed on wrong kind.",
         "id": "F-3",
         "resolution": "resolved",
         "severity": "blocking"
       },
       {
-        "evidence": "bootstrap_source_handling_authority._load_signing_key silently preferred --signing-key-file over HUNTER_SOURCE_HANDLING_SIGNING_KEY and never errored, so a misconfigured operator could be masking a stale env value. Resolved: both sources together raise an explicit deterministic ValueError before any database is opened; the provisioning CLI inherits the same loader. Unit and CLI-level tests pin the pre-DB fail-closed.",
+        "evidence": "Codex found that explicit invalid --as-of values could initialize SourceHandlingProvenanceAuthorityRepository before temporal validation, allowing schema/database mutation before fail-closed rejection. Resolved by delaying repository initialization on the explicit --as-of path until after future/genesis-rule/Issue-updated_at validation, while preserving early initialization only for the no---as-of recovery path. Regression test monkeypatches SourceHandlingProvenanceAuthorityRepository to raise if storage initialization occurs before explicit future --as-of rejection.",
         "id": "F-4",
         "resolution": "resolved",
         "severity": "blocking"
       },
       {
-        "evidence": "Two racing provisioning processes on the same empty database both observe absent heads; the second writer's provenance writes then no-op or supersede depending on content, while the authority issue_authorization/publish path has its own genesis-style guards. Safe and fail-closed in both orders, but the graceful classification of the loser as already-provisioned is left to a follow-up rather than implemented here.",
+        "evidence": "Codex found that validate_policy_body accepted unknown durable disposition categories when required governed categories were otherwise present. Resolved by rejecting any durable_dispositions category not in GOVERNED_DURABLE_CATEGORIES and additionally excluding UNKNOWN_CATEGORY from persistable policy categories. Regression coverage proves invented categories such as MADE_UP_SAFE_CATEGORY fail closed.",
         "id": "F-5",
-        "resolution": "unresolved",
-        "severity": "non-blocking"
+        "resolution": "resolved",
+        "severity": "blocking"
       },
       {
-        "evidence": "Classification content (sensitivity, restrictions, dispositions) comes from operator-supplied options, not from reading the live Issue content; a real-content verification step remains the operator's responsibility (the command fails closed on a missing document contract rather than inventing content). Accepted for this operator-only provisioning path.",
+        "evidence": "Codex found that non-string JSON array/object values in top-level policy decisions and durable dispositions could raise TypeError during set/dict membership instead of SourceHandlingBlockedError. Resolved by explicit isinstance(value, str) checks before membership for all top-level decisions, content dispositions, and lifecycle dispositions. Regression coverage proves list/dict values fail closed through governed SourceHandlingBlockedError paths.",
         "id": "F-6",
-        "resolution": "unresolved",
-        "severity": "non-blocking"
+        "resolution": "resolved",
+        "severity": "blocking"
+      },
+      {
+        "evidence": "Full CI found that the new unknown-category rejection invalidated a production-runtime fixture that used the non-governed sentinel UNUSED_CATEGORY to model an unused disposition. The production contract remains that unknown policy categories fail closed, while governed but payload-unused categories may exist without affecting persistence. Resolved by replacing the test fixture sentinel with the governed DIAGNOSTIC category, preserving both the Codex fix and the production semantics. Targeted and related Source Handling test suites pass.",
+        "id": "F-7",
+        "resolution": "resolved",
+        "severity": "blocking"
       }
     ],
-    "issue": "430",
+    "issue": "432",
     "review_target": [
       {
-        "blob_sha": "e9707d300c5ae476c1c5542f0c3a7640d0f1923f",
+        "blob_sha": "065b171bcbada6e81dab040e2e229dfa7908f60c",
         "path": "scripts/provision_source_handling_issue_authority.py",
         "previous_path": "",
-        "status": "added"
+        "status": "modified"
       },
       {
-        "blob_sha": "cbc77361bc70b9bc85d56c5d292e2df87dc402bf",
+        "blob_sha": "631b3e39f03451eb9c288416c5a382a0c86198f9",
+        "path": "src/hunter/evidence_intelligence/source_handling.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "b09c5a7fe40b243ed81478fd7e4a8d987fada9ec",
+        "path": "src/hunter/evidence_intelligence/source_handling_persistence.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "6298fcb3ea07c1bc8aaf2cd16a1d59b66bcded40",
+        "path": "tests/test_source_handling_production_runtime.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "02d07077f80ad7d531e105f607489e840e3ed1a6",
         "path": "tests/test_source_handling_provisioning.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "912211659f3cfc1591b9c4d7c831ab934f1f9b72",
-        "path": "docs/ISSUE_AGENT_ISSUER_DEPLOYMENT.md",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "a9de2084c76bc2e7e7dfa26d271355582e14e7c7",
-        "path": "scripts/bootstrap_source_handling_authority.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "94bf881d3b22e4b89a6cd85895c6d34c62ab0e55",
-        "path": "tests/test_source_handling_bootstrap.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "47de1813bbb4be09eb7c7efaadaea343f24555a029143ab98aaf999ee97d969c"
+    "review_target_digest": "b2841e3b6a10749d1b5db001dd4b3c40f2a7dfe691d022db46cd6b866691346c"
   },
-  "review_id": "7e81802a1277a7f8b07e5ce7098752c5a8c30adc11651af1530c446b740afdb5",
+  "review_id": "b47a1c9f8e996d62e92f102c1d8f62be6359e525bcf07c1fc40ec55fe77d630b",
   "schema": "hunter.pre-ready-hostile-review.v1"
 }

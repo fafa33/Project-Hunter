@@ -23,6 +23,7 @@ from hunter.evidence_intelligence.repository import EvidenceIntelligenceReposito
 from hunter.evidence_intelligence.source_handling import (
     PublicationAuthorization,
     SourceHandlingBlockedError,
+    _validate_complete_disposition_map,
     canonical_publication_digest,
     publication_authorization,
     resolve_canonical_head,
@@ -203,7 +204,7 @@ def _policy_payload(
         for category in categories
     }
     if include_unused_denial:
-        dispositions["UNUSED_CATEGORY"] = {
+        dispositions["DIAGNOSTIC"] = {
             "PERSIST": "DENY",
             "READ_ACCESS": "DENY",
             "RECONSTRUCT": "DENY",
@@ -1604,3 +1605,113 @@ def test_issue_content_remains_transient_when_authority_blocks(
     with pytest.raises(SourceHandlingBlockedError):
         boundary.ingest(reference, processing_run_id="run-407", processed_at=clock.now())
     _assert_zero_durable_intake(evidence_repository)
+
+
+def test_unknown_category_with_canonical_blocked_dispositions_passes() -> None:
+    registry = {
+        "field_category_registry_id": "registry-v1",
+        "field_map": {"some_field": ["UNKNOWN_CATEGORY"]},
+    }
+    dispositions = {
+        "UNKNOWN_CATEGORY": {
+            "PERSIST": "BLOCKED",
+            "READ_ACCESS": "BLOCKED",
+            "RECONSTRUCT": "BLOCKED",
+            "DELETE_OR_EXPIRE": "BLOCKED",
+        }
+    }
+    _validate_complete_disposition_map(dispositions, registry)
+
+
+@pytest.mark.parametrize(
+    "permissive_disposition",
+    [
+        {"PERSIST": "ALLOW", "READ_ACCESS": "BLOCKED", "RECONSTRUCT": "BLOCKED", "DELETE_OR_EXPIRE": "BLOCKED"},
+        {"PERSIST": "BLOCKED", "READ_ACCESS": "ALLOW", "RECONSTRUCT": "BLOCKED", "DELETE_OR_EXPIRE": "BLOCKED"},
+        {"PERSIST": "BLOCKED", "READ_ACCESS": "BLOCKED", "RECONSTRUCT": "ALLOW", "DELETE_OR_EXPIRE": "BLOCKED"},
+        {"PERSIST": "BLOCKED", "READ_ACCESS": "BLOCKED", "RECONSTRUCT": "BLOCKED", "DELETE_OR_EXPIRE": "ALLOW"},
+        {"PERSIST": "BLOCKED", "READ_ACCESS": "BLOCKED", "RECONSTRUCT": "BLOCKED", "DELETE_OR_EXPIRE": "EXPIRE"},
+        {"PERSIST": "BLOCKED", "READ_ACCESS": "BLOCKED", "RECONSTRUCT": "BLOCKED", "DELETE_OR_EXPIRE": "DELETE"},
+        {"PERSIST": "DENY", "READ_ACCESS": "BLOCKED", "RECONSTRUCT": "BLOCKED", "DELETE_OR_EXPIRE": "BLOCKED"},
+    ],
+)
+def test_permissive_unknown_category_disposition_fails(permissive_disposition: dict[str, str]) -> None:
+    registry = {
+        "field_category_registry_id": "registry-v1",
+        "field_map": {"some_field": ["UNKNOWN_CATEGORY"]},
+    }
+    dispositions = {"UNKNOWN_CATEGORY": permissive_disposition}
+    with pytest.raises(SourceHandlingBlockedError, match="UNKNOWN_CATEGORY disposition must be fail-closed BLOCKED"):
+        _validate_complete_disposition_map(dispositions, registry)
+
+
+def test_invented_category_fails_validation() -> None:
+    registry = {
+        "field_category_registry_id": "registry-v1",
+        "field_map": {"some_field": ["INVENTED_CATEGORY"]},
+    }
+    dispositions = {
+        "INVENTED_CATEGORY": {
+            "PERSIST": "ALLOW",
+            "READ_ACCESS": "ALLOW",
+            "RECONSTRUCT": "ALLOW",
+            "DELETE_OR_EXPIRE": "ALLOW",
+        }
+    }
+    with pytest.raises(SourceHandlingBlockedError, match="undeclared"):
+        _validate_complete_disposition_map(dispositions, registry)
+
+
+def test_durable_disposition_map_missing_key_fails() -> None:
+    registry = {
+        "field_category_registry_id": "registry-v1",
+        "field_map": {"some_field": ["SOURCE_BYTES"]},
+    }
+    dispositions = {
+        "SOURCE_BYTES": {
+            "PERSIST": "ALLOW",
+            "READ_ACCESS": "ALLOW",
+            "DELETE_OR_EXPIRE": "ALLOW",
+        }
+    }
+    with pytest.raises(
+        SourceHandlingBlockedError, match="durable category disposition map keys are invalid or malformed"
+    ):
+        _validate_complete_disposition_map(dispositions, registry)
+
+
+def test_durable_disposition_map_extra_key_fails() -> None:
+    registry = {
+        "field_category_registry_id": "registry-v1",
+        "field_map": {"some_field": ["SOURCE_BYTES"]},
+    }
+    dispositions = {
+        "SOURCE_BYTES": {
+            "PERSIST": "ALLOW",
+            "READ_ACCESS": "ALLOW",
+            "RECONSTRUCT": "ALLOW",
+            "DELETE_OR_EXPIRE": "ALLOW",
+            "EXPORT": "ALLOW",
+        }
+    }
+    with pytest.raises(
+        SourceHandlingBlockedError, match="durable category disposition map keys are invalid or malformed"
+    ):
+        _validate_complete_disposition_map(dispositions, registry)
+
+
+def test_durable_disposition_map_malformed_key_or_value_fails() -> None:
+    registry = {
+        "field_category_registry_id": "registry-v1",
+        "field_map": {"some_field": ["SOURCE_BYTES"]},
+    }
+    dispositions = {
+        "SOURCE_BYTES": {
+            "PERSIST": "INVALID_PERMIT",
+            "READ_ACCESS": "ALLOW",
+            "RECONSTRUCT": "ALLOW",
+            "DELETE_OR_EXPIRE": "ALLOW",
+        }
+    }
+    with pytest.raises(SourceHandlingBlockedError, match="durable content disposition is missing or invalid"):
+        _validate_complete_disposition_map(dispositions, registry)
