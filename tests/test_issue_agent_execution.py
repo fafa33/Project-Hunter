@@ -71,6 +71,10 @@ from hunter.automation.n8n_handoff import (
     PromptAutomationHandoffError,
     serialize_prompt_automation_handoff,
 )
+from hunter.evidence_intelligence.engineering_task_ingress import (
+    PromptTaskOversizeError,
+    PromptTaskUnreadyError,
+)
 from hunter.evidence_intelligence.intake import evidence_document_id
 from hunter.evidence_intelligence.pre_model import (
     EvidencePreModelSourceHandlingAuthority,
@@ -1496,3 +1500,76 @@ def test_the_workflow_pins_setup_python_to_an_immutable_commit() -> None:
     assert "actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1" in workflow
     assert "actions/setup-python@v6" not in workflow
     assert "secrets.HUNTER_ISSUE_AGENT_AUTHORIZATION_SIGNING_KEY" in workflow
+
+
+# --- Issue #439: rendered budget, not raw size, decides dispatchability --------
+
+
+def _raw_size_wrapped_body() -> tuple[IssueAgentAuthorization, str]:
+    """An authorization whose raw task text passes the ingress byte ceiling but
+    whose canonical machine render exceeds the available budget.
+
+    Deterministic, with no parallel renderer: the governed ingress measures the
+    canonical ``issue_agent_task_text`` bytes (line-rate over the issue body) and
+    the profile declares the hard available-input budget, so a plain-ASCII body
+    sized so that ``len(task_text_bytes) == available_input_bytes`` is guaranteed
+    to render larger -- the machine wraps the caller task text in the objective
+    JSON, spec and authority sections before context and missingness.
+    """
+    budget = ENGINEERING_IMPLEMENT_PROFILE.capability.available_input_bytes
+    one_byte = _inner(_authorization_document(body="x"))
+    fixed = len(issue_agent_task_text(one_byte).encode("utf-8")) - 1
+    body = "x" * (budget - fixed)
+    authorization = _inner(_authorization_document(body=body))
+    assert len(issue_agent_task_text(authorization).encode("utf-8")) == budget
+    return authorization, body
+
+
+def test_rendered_budget_failure_rejects_before_handoff_and_records_no_success(tmp_path: Path) -> None:
+    authorization, body = _raw_size_wrapped_body()
+
+    deployment = _deployment(tmp_path, body=body)
+    fallback = GovernedFallbackAdapter(deployment.verifier, heads=["a" * 40, "c" * 40])
+    service = deployment.service(fallback)
+
+    with pytest.raises(PromptTaskUnreadyError) as raised:
+        service.execute(_authorization_document(body=body))
+
+    error = raised.value
+    assert error.outcome == "INSUFFICIENT_BUDGET"
+    assert error.prompt_artifact_id is None
+    assert "INSUFFICIENT_BUDGET" in error.reason_codes
+    assert error.preflight_size_bytes is not None
+    assert error.preflight_size_bytes > error.available_input_bytes
+    assert error.task_key == ISSUE_AGENT_TASK_KEY
+    assert error.route_id == ENGINEERING_IMPLEMENT_ROUTE.route_id
+    assert f"ENGINEERING_TASK_NOT_READY task_key={ISSUE_AGENT_TASK_KEY}" in str(error)
+
+    assert fallback.calls == []
+    entry = deployment.ledger.entry(authorization.authorization_id)
+    assert entry is not None
+    assert entry.state == "CLAIMED"
+    assert entry.handoff_document is None
+    assert entry.envelope_id is None
+
+
+def test_genuinely_ready_implementation_still_compiles_and_dispatches(tmp_path: Path) -> None:
+    deployment = _deployment(tmp_path)
+    fallback = GovernedFallbackAdapter(deployment.verifier, heads=["a" * 40, "c" * 40])
+    receipt = deployment.service(fallback).execute(_authorization_document())
+
+    assert [provider for provider, _ in fallback.calls] == [PROVIDER_ORDER[0]]
+    assert fallback.calls[0][1] == receipt.handoff_document
+    entry = deployment.ledger.entry(receipt.authorization_id)
+    assert entry is not None
+    assert entry.state == "COMPLETED"
+
+
+def test_giant_raw_input_still_rejects_at_the_ingress_without_compiling(tmp_path: Path) -> None:
+    body = "x" * int(ENGINEERING_IMPLEMENT_PROFILE.capability.maximum_input_bytes * 1.5)
+    deployment = _deployment(tmp_path, body=body)
+
+    with pytest.raises(PromptTaskOversizeError) as raised:
+        deployment.service().execute(_authorization_document(body=body))
+    error = raised.value
+    assert error.actual_bytes > error.maximum_input_bytes

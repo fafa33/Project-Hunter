@@ -153,9 +153,16 @@ def _fake_orchestration_result() -> Any:
         package_id="package-1",
         prompt_plan_id="plan-1",
         prompt_artifact_id="artifact-1",
+        reason_codes=(),
+    )
+    allocation = SimpleNamespace(
+        outcome="READY",
+        preflight_size_bytes=100,
+        available_input_bytes=100,
+        reason_codes=(),
     )
     return SimpleNamespace(
-        build_result=SimpleNamespace(build_record=build),
+        build_result=SimpleNamespace(allocation=allocation, build_record=build),
         persisted=SimpleNamespace(build_record_id="build-1"),
     )
 

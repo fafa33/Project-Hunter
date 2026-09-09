@@ -62,6 +62,49 @@ class PromptTaskAuthorityError(SmartPromptMachineError):
     """Raised when Phase B routing cannot prove the Phase A authority lineage."""
 
 
+class PromptTaskUnreadyError(PromptRouteConflict):
+    """Raised when canonical compilation produced no READY dispatchable build.
+
+    ``PromptTaskOversizeError`` fires on the raw caller-input size before
+    compile; this fires on the canonical compiled outcome produced by the Phase A
+    pre-model pipeline before any automation envelope is minted. Only a build
+    whose allocation outcome is ``READY`` and which carries a concrete
+    ``prompt_artifact_id`` may be wrapped into an envelope and proceed toward
+    executable handoff. ``reason`` carries the same coordinates as
+    machine-readable key=value text while ``task_key``/``route_id``/``profile_id``/
+    ``outcome``/``prompt_artifact_id``/``reason_codes``/``preflight_size_bytes``/
+    ``available_input_bytes`` expose them structurally for the caller.
+    """
+
+    def __init__(
+        self,
+        *,
+        task_key: str,
+        route_id: str,
+        profile_id: str,
+        outcome: str,
+        prompt_artifact_id: str | None,
+        reason_codes: tuple[str, ...],
+        preflight_size_bytes: int | None,
+        available_input_bytes: int,
+    ) -> None:
+        self.task_key = task_key
+        self.route_id = route_id
+        self.profile_id = profile_id
+        self.outcome = outcome
+        self.prompt_artifact_id = prompt_artifact_id
+        self.reason_codes = reason_codes
+        self.preflight_size_bytes = preflight_size_bytes
+        self.available_input_bytes = available_input_bytes
+        super().__init__(
+            "ENGINEERING_TASK_NOT_READY "
+            f"task_key={task_key} route={route_id} profile={profile_id} "
+            f"outcome={outcome} prompt_artifact_id={prompt_artifact_id} "
+            f"reason_codes={','.join(reason_codes)} "
+            f"preflight={preflight_size_bytes} available={available_input_bytes}"
+        )
+
+
 def _required_text(name: str, value: object) -> str:
     """Return one required text coordinate or fail closed."""
     if not isinstance(value, str) or not value.strip():
@@ -552,7 +595,14 @@ class SmartPromptMachine:
         )
 
     def compile_task(self, request: PromptTaskRequest) -> PromptTaskCompilationResult:
-        """Resolve the governed route and delegate compilation to the Phase A compiler."""
+        """Resolve the governed route, compile, and mint an envelope only for READY builds.
+
+        A build whose canonical compiled allocation outcome is not ``READY``, or
+        which carries no concrete ``prompt_artifact_id``, raises
+        ``PromptTaskUnreadyError`` before the automation-envelope seam runs, so
+        a non-dispatchable build is never wrapped into a signed envelope. READY
+        builds reach the seam unchanged.
+        """
         if not isinstance(request, PromptTaskRequest):
             raise TypeError("compile_task requires the canonical PromptTaskRequest")
         route = self._routes.resolve(request.task_key)
@@ -575,6 +625,24 @@ class SmartPromptMachine:
             raise PromptTaskAuthorityError("compiled manifest profile-registry identity mismatch")
         if manifest.profile_identity != profile.profile_identity:
             raise PromptTaskAuthorityError("compiled manifest profile identity mismatch")
+        # Dispatchability is decided by the canonical compiled outcome, never by
+        # raw caller-input size alone. A build that is not canonically READY or
+        # that has no concrete prompt artifact is refused HERE, before the
+        # automation-envelope seam runs, so INSUFFICIENT_BUDGET, REPLAN_REQUIRED
+        # and every other non-READY build is never wrapped into a signed
+        # executable envelope. READY builds reach the seam unchanged.
+        allocation = compilation.orchestration.build_result.allocation
+        if allocation.outcome != "READY" or manifest.prompt_artifact_id is None:
+            raise PromptTaskUnreadyError(
+                task_key=request.task_key,
+                route_id=route.route_id,
+                profile_id=profile.profile_id,
+                outcome=str(allocation.outcome),
+                prompt_artifact_id=manifest.prompt_artifact_id,
+                reason_codes=compilation.orchestration.build_result.build_record.reason_codes,
+                preflight_size_bytes=allocation.preflight_size_bytes,
+                available_input_bytes=allocation.available_input_bytes,
+            )
         envelope = _issue_prompt_automation_envelope(
             task_request_id=request.request_id,
             route_registry_identity=self._routes.registry_identity,
