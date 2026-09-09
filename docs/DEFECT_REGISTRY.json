@@ -891,7 +891,7 @@
         "rationale": "The governed engineering-task ingress and the pre-model compile path it gates are the only places a non-dispatchable compiled build could receive an automation envelope. Raw caller-input size alone is never proof of a dispatchable render, so any future engineering ingress surface must pass through the same compiled-outcome gate."
       },
       "prevention": {
-        "mechanism": "After canonical SmartPromptMachine compilation the governed ingress inspects the allocation outcome the machine already produced: unless the compiled outcome is READY with a non-None prompt_artifact_id, it fails closed with a deterministic machine-readable PromptTaskUnreadyError (ENGINEERING_TASK_NOT_READY with task_key/route/profile/outcome/prompt_artifact_id/reason_codes/preflight/available) before any automation envelope is accepted, returned, recorded or dispatched. There is no parallel renderer and no duplicate budget authority: the gate consumes the machine's own rendered outcome. The raw-input PromptTaskOversizeError guard stays as the cheap first gate, and a genuinely READY build still compiles.",
+        "mechanism": "Dispatchability is decided by the canonical compiled allocation outcome before any automation envelope exists: the SmartPromptMachine itself refuses to mint the envelope unless the compiled outcome is READY with a non-None prompt_artifact_id, raising the deterministic machine-readable PromptTaskUnreadyError (ENGINEERING_TASK_NOT_READY with task_key/route/profile/outcome/prompt_artifact_id/reason_codes/preflight/available) at the envelope seam, so INSUFFICIENT_BUDGET, REPLAN_REQUIRED and READY-without-artifact builds are never wrapped into a signed envelope. The governed ingress re-applies the same invariant at the network boundary. There is no parallel renderer and no duplicate budget authority: both layers consume the machine's own rendered outcome. The raw-input PromptTaskOversizeError guard stays as the cheap first gate, and a genuinely READY build still compiles with unchanged envelope identity.",
         "boundary": "review"
       },
       "regression_evidence": [
@@ -900,7 +900,9 @@
         "tests/test_engineering_task_ingress.py::test_genuinely_ready_build_still_compiles_to_a_signed_envelope",
         "tests/test_issue_agent_execution.py::test_rendered_budget_failure_rejects_before_handoff_and_records_no_success",
         "tests/test_issue_agent_execution.py::test_genuinely_ready_implementation_still_compiles_and_dispatches",
-        "tests/test_issue_agent_execution.py::test_giant_raw_input_still_rejects_at_the_ingress_without_compiling"
+        "tests/test_issue_agent_execution.py::test_giant_raw_input_still_rejects_at_the_ingress_without_compiling",
+        "tests/test_engineering_task_ingress.py::test_envelope_issuance_seam_never_runs_for_a_non_ready_build",
+        "tests/test_engineering_task_ingress.py::test_envelope_issuance_seam_runs_exactly_once_for_a_genuinely_ready_build"
       ],
       "lifecycle": "regression-tested",
       "sources": [

@@ -32,6 +32,7 @@ from hunter.automation.issue_agent_execution import (
     ISSUE_AGENT_ROUTE_REGISTRY,
     ISSUE_AGENT_TASK_KEY,
 )
+from hunter.evidence_intelligence import smart_prompt_routing
 from hunter.evidence_intelligence.engineering_task_ingress import (
     GovernedEngineeringTaskIngress,
     PromptTaskOversizeError,
@@ -536,4 +537,69 @@ def test_genuinely_ready_build_still_compiles_to_a_signed_envelope(monkeypatch: 
     assert "request" in captured
     assert result.envelope.route_identity == ENGINEERING_IMPLEMENT_ROUTE.route_identity
     assert result.envelope.profile_identity == ENGINEERING_IMPLEMENT_PROFILE.profile_identity
+    result.envelope.verify_issuer_signature(_verifier())
+
+
+def _recording_envelope_seam(
+    monkeypatch: pytest.MonkeyPatch,
+) -> list[dict[str, str]]:
+    real_issue = smart_prompt_routing._issue_prompt_automation_envelope
+    issued: list[dict[str, str]] = []
+
+    def recording_issue(**claims: Any) -> Any:
+        issued.append({key: str(value) for key, value in sorted(claims.items())})
+        return real_issue(**claims)
+
+    monkeypatch.setattr(smart_prompt_routing, "_issue_prompt_automation_envelope", recording_issue)
+    return issued
+
+
+@pytest.mark.parametrize(
+    ("outcome", "prompt_artifact_id"),
+    [
+        pytest.param("INSUFFICIENT_BUDGET", None, id="budget-exhausted"),
+        pytest.param("REPLAN_REQUIRED", None, id="replan-required"),
+        pytest.param("READY", None, id="ready-but-no-artifact"),
+        pytest.param("UNABLE_TO_BOOT", None, id="other-non-ready"),
+    ],
+)
+def test_envelope_issuance_seam_never_runs_for_a_non_ready_build(
+    monkeypatch: pytest.MonkeyPatch,
+    outcome: str,
+    prompt_artifact_id: str | None,
+) -> None:
+    issued = _recording_envelope_seam(monkeypatch)
+    profiles = PromptMachineProfileRegistry((ENGINEERING_IMPLEMENT_PROFILE,))
+    routes = PromptTaskRouteRegistry((ENGINEERING_IMPLEMENT_ROUTE,), profiles=profiles)
+    _machine, ingress, captured = _compose_machine(
+        monkeypatch,
+        profiles=profiles,
+        routes=routes,
+        profile_identity=ENGINEERING_IMPLEMENT_PROFILE.profile_identity,
+        outcome=outcome,
+        prompt_artifact_id=prompt_artifact_id,
+    )
+    del _machine
+
+    with pytest.raises(PromptTaskUnreadyError):
+        ingress.compile(_implement_request())
+
+    assert "request" in captured
+    assert issued == []
+
+
+def test_envelope_issuance_seam_runs_exactly_once_for_a_genuinely_ready_build(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issued = _recording_envelope_seam(monkeypatch)
+    _machine, ingress, captured = _implement_machine(monkeypatch)
+    del _machine
+    request = _implement_request()
+
+    result = ingress.compile(request)
+
+    assert "request" in captured
+    assert len(issued) == 1
+    assert issued[0]["build_record_id"] == result.envelope.build_record_id
+    assert issued[0]["task_request_id"] == request.request_id
     result.envelope.verify_issuer_signature(_verifier())

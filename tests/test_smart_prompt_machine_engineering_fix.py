@@ -47,8 +47,19 @@ def _machine(
             profile_identity=profile.profile_identity,
             manifest_id="manifest-1",
             build_record_id="build-1",
+            prompt_artifact_id="artifact-1",
         )
-        return cast(PromptCompilationResult, SimpleNamespace(manifest=manifest))
+        allocation = SimpleNamespace(
+            outcome="READY",
+            preflight_size_bytes=ENGINEERING_REVIEW_FIX_MAX_PROMPT_BYTES,
+            available_input_bytes=ENGINEERING_REVIEW_FIX_MAX_PROMPT_BYTES,
+            reason_codes=(),
+        )
+        build_record = SimpleNamespace(reason_codes=())
+        orchestration = SimpleNamespace(
+            build_result=SimpleNamespace(allocation=allocation, build_record=build_record)
+        )
+        return cast(PromptCompilationResult, SimpleNamespace(manifest=manifest, orchestration=orchestration))
 
     monkeypatch.setattr(PromptContextCompiler, "compile", fake_compile)
     machine = SmartPromptMachine(
