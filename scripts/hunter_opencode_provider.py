@@ -83,7 +83,7 @@ def _push(repo: Path, branch: str) -> None:
         askpass = Path(directory) / "askpass.sh"
         askpass.write_text(
             "#!/bin/sh\n"
-            "case \"$1\" in\n"
+            'case "$1" in\n'
             "  *Username*) printf '%s\\n' 'x-access-token' ;;\n"
             "  *) printf '%s\\n' \"$HUNTER_GIT_PUSH_TOKEN\" ;;\n"
             "esac\n",
