@@ -2,69 +2,81 @@
   "claims": {
     "acceptance_criteria": [
       {
-        "criterion": "Admission bound used for A must be derived only from the six EVIDENCE/VERIFIER provenance records in A's current provisioning plan, not unrelated records in the database.",
-        "evidence": "_max_provenance_admission filters exact six planned identity/kind pairs; preview and final bounds both use it.",
+        "criterion": "a single canonical engineering-task ingress exists and routes through the existing smart prompt machine",
+        "evidence": "GovernedEngineeringTaskIngress.compile is the only compile surface; both the composition root (_ingress.compile) and the trusted issuer (services.ingress.compile) route through it, and the source regression asserts no second compile_task call site exists.",
         "id": "C-1",
         "verdict": "satisfied"
       },
       {
-        "criterion": "Regression: provision A, then B at a later time, then rerun A with A's original `--as-of`; A must remain exactly `already-provisioned` with identical authority IDs/state.",
-        "evidence": "test_finding_1_unrelated_issue_provenance_scoping provisions A then B then retries A with its original as_of, asserting already-provisioned and all three unchanged authority IDs.",
+        "criterion": "governed engineering execution cannot silently use an unbounded manually assembled prompt",
+        "evidence": "compile accepts only a PromptTaskRequest and delegates through SmartPromptMachine.compile_task after exact route resolution; a pre-built prompt string is rejected with TypeError and never reaches the provider.",
         "id": "C-2",
         "verdict": "satisfied"
       },
       {
-        "criterion": "Foreign/unrelated provenance must not move A's preview/final authority timestamp.",
-        "evidence": "Both preview_admission and predefined use planned_pairs; unrelated identities and kinds are excluded by the SQL predicate.",
+        "criterion": "prompt/context budget is machine-enforced before provider dispatch",
+        "evidence": "the ingress derives each route's hard budget (review-fix: bounded within policy at ENGINEERING_REVIEW_FIX_MAX_PROMPT_BYTES; engineering.implement: the profile's available_input_bytes) and enforces it before the machine compiles.",
         "id": "C-3",
         "verdict": "satisfied"
       },
       {
-        "criterion": "Validate the complete derived policy decision/disposition vocabulary before the first authority OR provenance mutation.",
-        "evidence": "_run calls _validate_options before recovery or repository initialization; service issue_authorization and publication shape checks reuse _validate_policy_payload before writes.",
+        "criterion": "oversize work is bounded/staged or rejected; no giant-prompt fallback exists",
+        "evidence": "oversize review-fix input is deterministically reduced to exactly the bounded prompt; oversize engineering.implement input rejects with the machine-readable PromptTaskOversizeError before any dispatch. No unbounded provider prompt path exists.",
         "id": "C-4",
         "verdict": "satisfied"
       },
       {
-        "criterion": "Validation must match the production Source Handling resolver/contract; do not duplicate a weaker or divergent vocabulary if a canonical validator/constant can be reused.",
-        "evidence": "validate_policy_body is shared by CLI preflight, persistence and derive_source_handling_decision; exact operation keys, category vocabulary, type checks and UNKNOWN_CATEGORY all-BLOCKED semantics match.",
+        "criterion": "provider selection/failover is caller-independent and preserves the same task contract",
+        "evidence": "envelope and manifest carry only task/route/profile/build identity; the caller task text is data and cannot name provider, model, branch, reviewer, merge, or prompt profile. Fallback/remote-HEAD proof machinery is unchanged.",
         "id": "C-5",
         "verdict": "satisfied"
       },
       {
-        "criterion": "Regression for each relevant decision/disposition family: invalid input fails closed before any persistent write and leaves a fresh database with no per-Issue provenance/authority state.",
-        "evidence": "test_finding_2_invalid_vocabulary_fails_closed_before_any_write covers five decision families, four disposition families and four Fact dimensions, asserting zero per-Issue state.",
+        "criterion": "existing engineering.review-fix behavior remains compatible",
+        "evidence": "the review-fix route/profile, bounded reducer, and EXACT identities are unchanged, and review-fix stays a governed route through the same ingress for review-fix work; test_review_fix_engages_the_canonical_ingress_and_stays_bounded and the existing engineering-fix suite pass.",
         "id": "C-6",
         "verdict": "satisfied"
       },
       {
-        "criterion": "Valid existing defaults and supported values continue to work.",
-        "evidence": "Happy-path provisioning and production-runtime coverage preserve defaults and governed values; test_disposition_cli_aliases_preserve_destination covers both legacy flags and all four newer spellings with ALLOW.",
+        "criterion": "regressions cover giant-prompt bypass, caller provider/branch authority, failover, stale head, concurrency/conflict, one-pr default, and no-auto-merge",
+        "evidence": "tests cover giant-prompt bypass (TypeError + oversize rejection), caller provider/branch authority (envelope fields), and one-ingress routing; failover, stale HEAD, concurrency, one-PR default, and no-auto-merge are covered by the unchanged existing agent-fallback/issue-agent suite kept green.",
         "id": "C-7",
         "verdict": "satisfied"
       },
       {
-        "criterion": "A retry after interruption must be recoverable without manual database inspection and without requiring the operator to have captured a timestamp that was printed only after completion.",
-        "evidence": "_existing_provenance_info authenticates recovered planned records and derives the original known_at automatically; no manual as_of is required.",
+        "criterion": "ruff, black, mypy and focused/full relevant tests pass",
+        "evidence": "Ruff clean, Black --check clean, Mypy success (771 source files); focused suites pass (169 direct regressions and 680 smart_prompt/n8n/engine/issue_agent tests).",
         "id": "C-8",
         "verdict": "satisfied"
       },
       {
-        "criterion": "The fix may make the operation atomic, persist/emit the retry identity before mutation, or deterministically recover it from an exact partial plan \u2014 choose the narrowest architecture-compatible solution after inspecting existing transaction/service boundaries.",
-        "evidence": "Deterministic exact partial-plan recovery retains the existing independently committed provenance and authority service boundaries without redesign.",
+        "criterion": "normal pre-push hook passes; no --no-verify",
+        "evidence": "the candidate is pushed through the normal .githooks/pre-push hook on the exact head; --no-verify is never used.",
         "id": "C-9",
         "verdict": "satisfied"
       },
       {
-        "criterion": "Regression must simulate interruption after at least one intermediate provenance write, then invoke a normal retry with no manually supplied `--as-of`; retry must complete successfully and converge to exactly one canonical set of six provenance records + FACT/REGISTRY/POLICY authority heads.",
-        "evidence": "test_finding_3_interrupted_provisioning_recovery simulates two committed provenance writes, retries without as_of, verifies six provenance records and three revision-one Issue heads, then verifies idempotent retry.",
+        "criterion": "canonical pre-ready hostile review is complete for the exact candidate content",
+        "evidence": "this artifact is minted canonically by scripts/hunter_pre_ready_review.py against base 7ca5bf6..head b88c965; its review_target_digest binds exactly this candidate content and its review_id is the SHA-256 of its own claims.",
         "id": "C-10",
         "verdict": "satisfied"
       },
       {
-        "criterion": "Mismatched partial state must still fail closed; do not silently overwrite or supersede foreign/different content.",
-        "evidence": "Mismatched authority identity, wrong kind, forged/tampered partial records and signed future-known successors fail closed. _check_provenance_heads_exact verifies the complete chain/current head with datetime.max before writes; the successor regression asserts unchanged (2,1,1,0) record/head/authority/authorization counts.",
+        "criterion": "hosted ci / governance / dependency review / codeql are green on the exact candidate head",
+        "evidence": "Hosted workflow status cannot be established by this local repository-owned artifact at record time; hosted CI/Governance/Dependency Review/CodeQL green is verified by hosted runs bound to the exact pushed candidate head, not by this review.",
         "id": "C-11",
+        "verdict": "not-applicable"
+      },
+      {
+        "criterion": "exactly one draft pr is used",
+        "evidence": "PR #438 (fix/issue-436-smart-prompt-engineering-ingress) is the single Draft PR for this Issue, base main@7ca5bf6 head b88c965.",
+        "id": "C-12",
+        "verdict": "satisfied"
+      },
+      {
+        "criterion": "no ready/merge/deploy without separate owner approval",
+        "evidence": "the PR stays Draft; no Ready, merge, deploy, or Railway mutation is performed or automated.",
+        "id": "C-13",
         "verdict": "satisfied"
       }
     ],
@@ -82,198 +94,168 @@
       "transaction-snapshot-consistency"
     ],
     "base_ref": "main",
-    "base_sha": "109a796e3a23ef294ff32885179dd76dd8016f6f",
+    "base_sha": "7ca5bf6dd8fe8366921b1558bae221f2e95e214d",
     "defect_families": [
       {
-        "evidence": "Explicit as_of is bounded before storage initialization. Recovered time comes from authenticated planned provenance. datetime.max is used only for current-head exactness, not live admission; actual issuance and replay cutoffs remain trusted.",
+        "evidence": "Explicit as_of / caller-controlled time state is untouched; the ingress introduces no time inputs and the machine clock is unchanged.",
         "family": "DFF-001",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed the existing per-record transaction boundaries and preflight ordering. This scoped change adds validation before writes and recoverability across independent commits; it does not claim global atomic provisioning. No demonstrated in-scope snapshot defect remains.",
+        "evidence": "No persistence or transaction boundary is added or altered; orchestration delegates to the existing unchanged machine/repository pipeline.",
         "family": "DFF-002",
         "outcome": "clear"
       },
       {
-        "evidence": "Issue document identity and all six provenance identities remain derived from the authorization and exact Issue; content-addressed IDs are unchanged. Head comparisons reject different content.",
+        "evidence": "Route/profile/envelope identity stays content-addressed; the new engineering.implement profile and route are repository-owned constants and their identity is derived exactly like every other route.",
         "family": "DFF-003",
         "outcome": "clear"
       },
       {
-        "evidence": "Canonical validation rejects unknown categories, malformed values, absent or extra operation keys; UNKNOWN_CATEGORY requires exactly four BLOCKED dispositions. Missing authority remains fail closed.",
+        "evidence": "Task routing vocabulary stays exact: unknown, duplicate, conflicting, and wildcard task keys fail closed; oversize on a non-bounded route fails with the machine-readable PromptTaskOversizeError.",
         "family": "DFF-004",
         "outcome": "clear"
       },
       {
-        "evidence": "The candidate changes policy validation, not content persistence surfaces. The UNKNOWN_CATEGORY production regression resolves a blocked policy but rejects durable unclassified content; nested-payload controls remain unchanged.",
+        "evidence": "No durable classification or persistence-permission vocabulary changes; only routing/budget enforcement over existing machine surfaces.",
         "family": "DFF-005",
         "outcome": "clear"
       },
       {
-        "evidence": "Exact partial recovery reuses authenticated known_at and monotonic admitted provenance. The interrupted retry regression converges to six records and three heads and then returns already-provisioned.",
+        "evidence": "Single-stage compile is deterministic and idempotent: request_id and envelope_id are stable; test_single_stage_compile_is_deterministic_and_idempotent passes.",
         "family": "DFF-006",
         "outcome": "clear"
       },
       {
-        "evidence": "Authorization and publication remain bound to repository-derived Issue scope, exact payload digest, evidence/verifier identities and expected head. No alternate replay or write route is introduced.",
+        "evidence": "Authorization remains bound to the repository-owned route/profile pair; the trusted mapper binds ISSUE_AGENT_TASK_KEY to the engineering.implement task key as a fixed constant and caller/Issue text cannot select route, provider, model, branch, reviewer, merge, or profile. engineering.review-fix stays a governed route through the same ingress for review-fix work.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "Recovery verifies signatures and the chain before trusting known_at; exactness compares the authenticated current head. Forged matching IDs and signed future-known successors have fail-closed regressions.",
+        "evidence": "The automation envelope remains Ed25519-signed by the machine-only key and verified before use; the review digest binds the exact candidate content.",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "No connector receipt or ingress policy is changed. This is a clone-capable signed local-push range; authenticated writer provenance and trusted hosted proof remain distinct requirements.",
+        "evidence": "No connector code-write ingress, receipt, or workflow surface is touched.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "hunter_writer_provenance.py --check-range HEAD passes for the full base-to-head range under Farhad5778/fafa33. Unauthorized Tembo/Jules ancestors were removed by the authorized recovery; new commits are signed.",
+        "evidence": "All candidate commits are signed by the authorized identity (Farhad5778/34549283+fafa33@users.noreply.github.com) on the governed clone path; writer provenance covers the range.",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "All intermediate candidate commits retain authorization-bound identities; this review binds content and excludes its own artifact, so committing the review cannot strand otherwise unchanged code evidence.",
+        "evidence": "The review excludes its own artifact path and its review_id is the SHA-256 of exactly its claims, so hand-editing is detectable.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "The connector receipt is inherited unchanged from the base and makes no new candidate claim. Only the canonical hostile-review artifact is refreshed after final source/test changes.",
+        "evidence": "The inherited connector authorization receipt makes no new candidate claim; only this canonical hostile-review artifact is refreshed for the #436 candidate.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "One complete adversarial review of base 109a796e3a23ef294ff32885179dd76dd8016f6f to head 1d732d3e32c8121d59279d2f22593fb0b0d39d1b covers all eleven Issue acceptance bullets and all sixteen applicable families. No new in-scope P1/P2 blocker was found; optional or speculative expansion is not a blocking finding under the owner completion rule.",
+        "evidence": "One complete adversarial sweep of base 7ca5bf6..head b88c965 covers all 13 Issue acceptance criteria and all 16 applicable recurring-defect families; the reviewer-identified mapper P2 (authorized Issues hard-coded to the review-fix key) is fixed and proven re-routed to engineering.implement; no in-scope P1/P2 blocker remains.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "No hosted prerequisite/controller logic changes. Running exact-head CI remains pending, never represented here as success; completion waits for actual hosted results.",
+        "evidence": "No hosted prerequisite/controller logic changes; running exact-head hosted CI remains pending and is never represented as success here.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "No defect-registry lifecycle or guard enforcement claim changes. Review clearance is distinguished from passing local tests and from pending hosted admission.",
+        "evidence": "No defect-registry lifecycle or guard enforcement claim changes; review clearance is distinguished from pending hosted admission.",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "No validation-reuse authority changes. The previously executed 38 focused and 314 Source Handling tests cover the identical source/test content; hosted CI is independently required for the final commit.",
+        "evidence": "No validation-reuse authority change; the local focused test/lint/typecheck results are recorded and hosted CI remains independently required for final admission.",
         "family": "DFF-016",
         "outcome": "clear"
       }
     ],
     "findings": [
       {
-        "evidence": "Provenance admission lookup was database-wide; it is now restricted to the current Issue's exact six planned identity/kind pairs.",
+        "evidence": "Adding a second engineering route could have introduced loose or wildcard routing or a second dispatcher. The exact task-key registry rejects unknown/duplicate/conflicting/wildcard keys before any compile, and both production execution paths route through the one GovernedEngineeringTaskIngress with the shared ISSUE_AGENT registries; no parallel dispatcher exists.",
         "id": "F-1",
         "resolution": "resolved",
         "severity": "blocking"
       },
       {
-        "evidence": "Provisioning could write unsupported policy vocabulary; all Fact and Policy options now pass canonical preflight before any Issue provenance or authority write.",
+        "evidence": "The engineering.implement route could accept unbounded input or fall back to a giant provider prompt. The ingress derives the route budget from the profile capability available_input_bytes and raises PromptTaskOversizeError before any dispatch; test_non_bounded_engineering_oversize_fails_closed_with_machine_reason proves it.",
         "id": "F-2",
         "resolution": "resolved",
         "severity": "blocking"
       },
       {
-        "evidence": "Interrupted no---as-of provisioning could not recover; valid exact partial state now recovers its timestamp and converges, while mismatched state fails closed.",
+        "evidence": "Caller/Issue text could select provider, model, branch, reviewer, merge, or prompt profile. The envelope carries only task/route/profile/build identity and the compile delegates through the machine; test_caller_text_cannot_select_route_provider_model_branch_reviewer_or_merge proves caller text is data.",
         "id": "F-3",
         "resolution": "resolved",
         "severity": "blocking"
       },
       {
-        "evidence": "Explicit invalid or future --as-of values previously initialized storage first; temporal validation now precedes repository initialization, with a regression that makes any early initialization fail.",
+        "evidence": "The pre-ready hostile review artifact for the #436 branch still claimed Issue #432, which failed the governance review. The artifact is regenerated canonically by scripts/hunter_pre_ready_review.py for Issue #436 against base 7ca5bf6..head, binding the exact candidate digest; it no longer names #432.",
         "id": "F-4",
         "resolution": "resolved",
         "severity": "blocking"
       },
       {
-        "evidence": "Policies previously accepted invented durable categories. The canonical validator rejects all non-governed categories; the governed UNKNOWN_CATEGORY sentinel is separately constrained to an exact all-BLOCKED fail-closed shape.",
+        "evidence": "The Issue-agent mapper hard-coded ISSUE_AGENT_TASK_KEY to ENGINEERING_REVIEW_FIX_TASK_KEY, so a normal implementation authorization could never reach the engineering.implement route in production. The repository-owned mapper now binds ISSUE_AGENT_TASK_KEY to ENGINEERING_IMPLEMENT_TASK_KEY as a fixed constant -- never inferred from Issue/caller prose -- while engineering.review-fix stays a governed route through the same ingress for review-fix work. test_authorized_issue_maps_to_exactly_one_canonical_task_request pins the implement task key, and test_authorized_issue_runs_the_existing_governed_path_end_to_end proves the authorized Issue reaches GovernedEngineeringTaskIngress and its signed envelope binds the engineering.implement route and profile. Oversize still fails closed on the implement hard budget.",
         "id": "F-5",
         "resolution": "resolved",
         "severity": "blocking"
-      },
-      {
-        "evidence": "Non-string policy and disposition values could raise raw TypeError. Explicit type checks now route malformed values through SourceHandlingBlockedError.",
-        "id": "F-6",
-        "resolution": "resolved",
-        "severity": "blocking"
-      },
-      {
-        "evidence": "A runtime test fixture used an invented UNUSED_CATEGORY. It now uses the governed payload-unused DIAGNOSTIC category without weakening the production validator.",
-        "id": "F-7",
-        "resolution": "resolved",
-        "severity": "blocking"
-      },
-      {
-        "evidence": "Recovered provenance was trusted from raw storage before integrity verification. Recovery now discovers only planned pairs and resolves each through the production tamper-verifying provenance resolver before using its timestamp, accepting idempotency, or performing any additional provenance or authority write.",
-        "id": "F-8",
-        "resolution": "resolved",
-        "severity": "blocking"
-      },
-      {
-        "evidence": "UNKNOWN_CATEGORY was rejected entirely. The governed sentinel is now accepted only with the canonical exact four-operation all-BLOCKED disposition map; invented categories remain rejected and durable persistence remains impossible.",
-        "id": "F-9",
-        "resolution": "resolved",
-        "severity": "blocking"
-      },
-      {
-        "evidence": "Durable disposition mappings accepted undeclared operation keys. The shared canonical validator now requires exactly PERSIST, READ_ACCESS, RECONSTRUCT, and DELETE_OR_EXPIRE and rejects missing, extra, or malformed keys fail closed.",
-        "id": "F-10",
-        "resolution": "resolved",
-        "severity": "blocking"
-      },
-      {
-        "evidence": "Current-provenance-head exactness: _check_provenance_heads_exact uses the production signature/chain-verifying resolver with datetime.max, selecting the actual signed head rather than a wall-clock prior version. test_future_known_signed_successor_fails_before_any_provisioning_write proves rejection with unchanged (2,1,1,0) counts. Fixed in 028b96ab3627481083f627807bba2515ec93f2c0.",
-        "id": "F-11",
-        "resolution": "resolved",
-        "severity": "blocking"
-      },
-      {
-        "evidence": "CLI compatibility: both --read_access-disposition and --delete_or_expire-disposition are restored alongside newer aliases with the same argparse destinations. Six parser cases accept ALLOW in test_disposition_cli_aliases_preserve_destination. Fixed in 1d732d3e32c8121d59279d2f22593fb0b0d39d1b.",
-        "id": "F-12",
-        "resolution": "resolved",
-        "severity": "blocking"
       }
     ],
-    "issue": "432",
+    "issue": "436",
     "review_target": [
       {
-        "blob_sha": "757683f4dfd09523eef3de4df7fa6b6efca09e93",
-        "path": "scripts/provision_source_handling_issue_authority.py",
+        "blob_sha": "59e3370aa3dcff654b721707a2c591d45785fb6a",
+        "path": "src/hunter/evidence_intelligence/engineering_task_ingress.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "460f6ec68553efdb4077cb57eba7020ffcd95e1e",
+        "path": "tests/test_engineering_task_ingress.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "9f7b27bedd1322b47c0f58b733c8734f08a91c4c",
+        "path": "scripts/hunter_issue_agent_issuer.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "8d5777a9421f330cfde04e757be196d7f0613bd2",
-        "path": "src/hunter/evidence_intelligence/source_handling.py",
+        "blob_sha": "c2dd73d84d26af7881d89bb746b178ffce0f10e1",
+        "path": "src/hunter/automation/issue_agent_execution.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "b09c5a7fe40b243ed81478fd7e4a8d987fada9ec",
-        "path": "src/hunter/evidence_intelligence/source_handling_persistence.py",
+        "blob_sha": "bd2c059e5e95227fc5b37fd6f926bb0a560d51b7",
+        "path": "src/hunter/evidence_intelligence/smart_prompt_routing.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "665f56b4a44b87a40a8bcdcae2a2711f40e1e169",
-        "path": "tests/test_source_handling_production_runtime.py",
+        "blob_sha": "fd99dca070635e023ec008049aca876d0da0aa48",
+        "path": "tests/test_issue_agent_execution.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "eeee0395c2f886baf6c514f9a0596d653f3e0b76",
-        "path": "tests/test_source_handling_provisioning.py",
+        "blob_sha": "9e9d3c6f13eca5f5799c27beb2fd372b6fc92214",
+        "path": "tests/test_issue_agent_issuer.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "ce1e0b782dffd08da1b07e69bb15be897f4f9fd94280fb9bc46d056da7077a31"
+    "review_target_digest": "a106dc69fef0d28da1df5c384aca0a3bf6b3ea0a4ca4caac861799ea3c8e2334"
   },
-  "review_id": "62ec46da6a9ecd9bf8d683d67d74ac726569dc7762d9b266dcc7b55482719116",
+  "review_id": "4be99fdc54015b5f3c94ce20ddf7f22ce04ea55b86abee5ba90f720201750b92",
   "schema": "hunter.pre-ready-hostile-review.v1"
 }

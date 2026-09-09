@@ -79,7 +79,9 @@ from hunter.evidence_intelligence.pre_model import (
 )
 from hunter.evidence_intelligence.repository import EvidenceIntelligenceRepository
 from hunter.evidence_intelligence.smart_prompt_routing import (
-    ENGINEERING_REVIEW_FIX_TASK_KEY,
+    ENGINEERING_IMPLEMENT_PROFILE,
+    ENGINEERING_IMPLEMENT_ROUTE,
+    ENGINEERING_IMPLEMENT_TASK_KEY,
     PromptAutomationVerifier,
     PromptTaskAuthorityError,
 )
@@ -817,7 +819,7 @@ def test_authorized_issue_maps_to_exactly_one_canonical_task_request() -> None:
 
     assert first == second
     assert first.request_id == second.request_id
-    assert first.task_key == ISSUE_AGENT_TASK_KEY == ENGINEERING_REVIEW_FIX_TASK_KEY
+    assert first.task_key == ISSUE_AGENT_TASK_KEY == ENGINEERING_IMPLEMENT_TASK_KEY
     assert first.execution_owner_id == authorization.authorization_id
     assert first.document_id == evidence_document_id(issue_agent_intake_reference(authorization))
     assert first.task_text == issue_agent_task_text(authorization)
@@ -860,6 +862,12 @@ def test_authorized_issue_runs_the_existing_governed_path_end_to_end(tmp_path: P
     assert receipt.authorization_id == authorization.authorization_id
     assert receipt.document_id == issue_agent_document_id(authorization)
 
+    # A normal authorized implementation Issue maps deterministically to the
+    # governed implementation task key and reaches the canonical ingress, which
+    # binds the signed envelope to the implementation route and profile.
+    request = issue_agent_task_request(authorization)
+    assert request.task_key == ENGINEERING_IMPLEMENT_TASK_KEY
+
     # The build is persisted through the existing repository authority.
     assert deployment.repository.count("evidence_documents") == 1
     assert deployment.repository.count("evidence_spans") >= 1
@@ -873,6 +881,8 @@ def test_authorized_issue_runs_the_existing_governed_path_end_to_end(tmp_path: P
     assert envelope.route_registry_identity == ISSUE_AGENT_ROUTE_REGISTRY.registry_identity
     assert envelope.profile_registry_identity == ISSUE_AGENT_PROFILE_REGISTRY.registry_identity
     assert envelope.task_request_id == issue_agent_task_request(authorization).request_id
+    assert envelope.route_identity == ENGINEERING_IMPLEMENT_ROUTE.route_identity
+    assert envelope.profile_identity == ENGINEERING_IMPLEMENT_PROFILE.profile_identity
 
     # The persisted build and the signed envelope name one lineage.
     reconstruction = deployment.service()._machine.strict_known_reconstruction(

@@ -36,6 +36,8 @@ from hunter.automation.issue_agent_execution import (
     EVIDENCE_DATABASE_ENV,
     EXECUTION_BRANCH_ENV,
     ISSUE_AGENT_EXECUTION_RECEIPT_SCHEMA_VERSION,
+    ISSUE_AGENT_PROFILE_REGISTRY,
+    ISSUE_AGENT_ROUTE_REGISTRY,
     ISSUE_AGENT_VERIFYING_KEY_ENV,
     OWNER_LOGIN_ENV,
     REPOSITORY_CHECKOUT_ENV,
@@ -59,17 +61,15 @@ from hunter.automation.issue_agent_execution import (
     issue_agent_task_request,
 )
 from hunter.automation.n8n_handoff import serialize_prompt_automation_handoff
+from hunter.evidence_intelligence.engineering_task_ingress import GovernedEngineeringTaskIngress
 from hunter.evidence_intelligence.intake import EvidenceIntelligenceIntakeService
 from hunter.evidence_intelligence.repository import EvidenceIntelligenceRepository
 from hunter.evidence_intelligence.smart_prompt_routing import (
     _PROMPT_AUTOMATION_SIGNING_KEY_ENV,
     _PROMPT_AUTOMATION_VERIFYING_KEY_ENV,
-    ENGINEERING_REVIEW_FIX_PROFILE,
-    ENGINEERING_REVIEW_FIX_ROUTE,
     PromptAutomationVerifier,
-    PromptMachineProfileRegistry,
-    PromptTaskRouteRegistry,
     SmartPromptMachine,
+    SmartPromptMachineError,
 )
 from hunter.evidence_intelligence.source_handling_persistence import (
     IssueSourceTransientIntakeBoundary,
@@ -92,13 +92,6 @@ _MAX_CONCURRENT_REQUEST_WORKERS: Final[int] = 8
 #: body is read, so a client that withholds its declared body terminates within
 #: a bounded time (fail-closed 408) instead of occupying a worker indefinitely.
 _REQUEST_READ_TIMEOUT_SECONDS: Final[float] = 15.0
-
-#: Fixed registries (repository-owned constants)
-_ISSUE_AGENT_PROFILE_REGISTRY: Final = PromptMachineProfileRegistry((ENGINEERING_REVIEW_FIX_PROFILE,))
-_ISSUE_AGENT_ROUTE_REGISTRY: Final = PromptTaskRouteRegistry(
-    (ENGINEERING_REVIEW_FIX_ROUTE,),
-    profiles=_ISSUE_AGENT_PROFILE_REGISTRY,
-)
 
 #: Required environment variables for operational configuration
 _REQUIRED_ENV: Final[tuple[str, ...]] = (
@@ -193,7 +186,7 @@ class IssuerServices:
     source_handling_resolver: ProductionSourceHandlingAuthorityResolver
     ledger: IssueAgentExecutionLedger
     fallback: OperationalAgentFallbackRuntime
-    machine: SmartPromptMachine
+    ingress: GovernedEngineeringTaskIngress
     boundary: IssueSourceTransientIntakeBoundary
 
 
@@ -212,10 +205,15 @@ def compose_services(configuration: IssuerConfiguration) -> IssuerServices:
     )
     machine = SmartPromptMachine(
         repository=repository,
-        profiles=_ISSUE_AGENT_PROFILE_REGISTRY,
-        routes=_ISSUE_AGENT_ROUTE_REGISTRY,
+        profiles=ISSUE_AGENT_PROFILE_REGISTRY,
+        routes=ISSUE_AGENT_ROUTE_REGISTRY,
         source_handling_resolver=resolver,
         clock=configuration.clock,
+    )
+    ingress = GovernedEngineeringTaskIngress(
+        machine=machine,
+        routes=ISSUE_AGENT_ROUTE_REGISTRY,
+        profiles=ISSUE_AGENT_PROFILE_REGISTRY,
     )
     fallback = OperationalAgentFallbackRuntime(
         repo_dir=configuration.repository_checkout,
@@ -228,7 +226,7 @@ def compose_services(configuration: IssuerConfiguration) -> IssuerServices:
         source_handling_resolver=resolver,
         ledger=ledger,
         fallback=fallback,
-        machine=machine,
+        ingress=ingress,
         boundary=boundary,
     )
 
@@ -265,8 +263,8 @@ def execute_authorization(
         processed_at=services.configuration.clock.now(),
     )
 
-    # 6. Compile through canonical SmartPromptMachine
-    compiled = services.machine.compile_task(request)
+    # 6. Compile through the one canonical engineering-task ingress
+    compiled = services.ingress.compile(request)
     envelope = compiled.envelope
     envelope.verify_issuer_signature(services.configuration.prompt_verifier)
     if envelope.build_record_id != compiled.compilation.manifest.build_record_id:
@@ -384,6 +382,9 @@ class _IssuerRequestHandler(BaseHTTPRequestHandler):
             return
         except IssueAgentExecutionError as error:
             self._send_error(500, str(error))
+            return
+        except SmartPromptMachineError as error:
+            self._send_error(422, str(error))
             return
         except Exception as error:  # noqa: BLE001 - fail closed, never hang the transport
             self._send_error(500, f"unexpected execution failure: {type(error).__name__}")

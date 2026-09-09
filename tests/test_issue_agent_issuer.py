@@ -36,6 +36,8 @@ from hunter.automation.issue_agent_execution import (
     EVIDENCE_DATABASE_ENV,
     EXECUTION_BRANCH_ENV,
     ISSUE_AGENT_AUTHORIZATION_LABEL,
+    ISSUE_AGENT_PROFILE_REGISTRY,
+    ISSUE_AGENT_ROUTE_REGISTRY,
     ISSUE_AGENT_VERIFYING_KEY_ENV,
     OWNER_LOGIN_ENV,
     REPOSITORY_CHECKOUT_ENV,
@@ -53,6 +55,7 @@ from hunter.automation.issue_agent_execution import (
     issue_agent_task_request,
 )
 from hunter.evidence_intelligence import smart_prompt_routing
+from hunter.evidence_intelligence.engineering_task_ingress import GovernedEngineeringTaskIngress
 from hunter.evidence_intelligence.intake import EvidenceIntelligenceIntakeService
 from hunter.evidence_intelligence.pre_model import resolve_pre_model_source_handling
 from hunter.evidence_intelligence.repository import EvidenceIntelligenceRepository
@@ -496,10 +499,15 @@ class Deployment:
         )
         machine = SmartPromptMachine(
             repository=repository,
-            profiles=issuer._ISSUE_AGENT_PROFILE_REGISTRY,
-            routes=issuer._ISSUE_AGENT_ROUTE_REGISTRY,
+            profiles=ISSUE_AGENT_PROFILE_REGISTRY,
+            routes=ISSUE_AGENT_ROUTE_REGISTRY,
             source_handling_resolver=self.resolver,
             clock=self.clock,
+        )
+        ingress = GovernedEngineeringTaskIngress(
+            machine=machine,
+            routes=ISSUE_AGENT_ROUTE_REGISTRY,
+            profiles=ISSUE_AGENT_PROFILE_REGISTRY,
         )
         return issuer.IssuerServices(
             configuration=self.configuration,
@@ -507,7 +515,7 @@ class Deployment:
             source_handling_resolver=self.resolver,
             ledger=ledger,
             fallback=fallback if fallback is not None else self.fallback,
-            machine=machine,
+            ingress=ingress,
             boundary=boundary,
         )
 
@@ -973,9 +981,14 @@ def test_issuer_edge_reuses_existing_authorities_only(tmp_path: Path, monkeypatc
     assert isinstance(services.fallback, issuer.OperationalAgentFallbackRuntime)
     assert services.configuration is configuration
     assert services.repository is not None
-    assert services.machine is not None
+    assert isinstance(services.ingress, GovernedEngineeringTaskIngress)
 
     source = Path("scripts/hunter_issue_agent_issuer.py").read_text(encoding="utf-8")
+    assert "GovernedEngineeringTaskIngress" in source
+    assert "services.ingress.compile(request)" in source
+    assert "ISSUE_AGENT_ROUTE_REGISTRY" in source
+    assert "_ISSUE_AGENT_PROFILE_REGISTRY" not in source
+    assert "_ISSUE_AGENT_ROUTE_REGISTRY" not in source
     assert "Ed25519PrivateKey" not in source
     assert ".sign(" not in source
 

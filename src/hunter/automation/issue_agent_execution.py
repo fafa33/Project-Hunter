@@ -29,6 +29,16 @@ authority; every one of those stays with the component that already holds it:
     the only path by which Issue-sourced content becomes a durable
     ``EvidenceDocument``. Missing or non-permissive Source Handling authority
     fails closed here, before a build exists.
+``GovernedEngineeringTaskIngress`` (Issue #436)
+    the one canonical engineering-task entry point. Every authorized Issue is
+    bound to a ``PromptTaskRequest`` and compiles only through this ingress,
+    which resolves the exact governed route and enforces the route's hard input
+    budget: normal implementation authorizations route to the governed
+    ``engineering.implement`` route with a machine-readable fail-closed
+    ``PromptTaskOversizeError`` before any dispatch, while the bounded
+    ``engineering.review-fix`` reducer remains a governed route through the same
+    ingress for review-fix work. There is deliberately no second entry into the
+    machine here.
 ``SmartPromptMachine`` (ADR 0031/0032 route + profile registries)
     the only issuer of a build and of the signed ``PromptAutomationEnvelope``.
 ``serialize_prompt_automation_handoff``
@@ -63,6 +73,7 @@ from hunter.automation.agent_fallback_runtime import (
     OperationalAgentFallbackRuntime,
 )
 from hunter.automation.n8n_handoff import serialize_prompt_automation_handoff
+from hunter.evidence_intelligence.engineering_task_ingress import GovernedEngineeringTaskIngress
 from hunter.evidence_intelligence.intake import (
     EvidenceIntakeReference,
     EvidenceIntelligenceIntakeService,
@@ -70,9 +81,11 @@ from hunter.evidence_intelligence.intake import (
 )
 from hunter.evidence_intelligence.repository import EvidenceIntelligenceRepository
 from hunter.evidence_intelligence.smart_prompt_routing import (
+    ENGINEERING_IMPLEMENT_PROFILE,
+    ENGINEERING_IMPLEMENT_ROUTE,
+    ENGINEERING_IMPLEMENT_TASK_KEY,
     ENGINEERING_REVIEW_FIX_PROFILE,
     ENGINEERING_REVIEW_FIX_ROUTE,
-    ENGINEERING_REVIEW_FIX_TASK_KEY,
     PromptAutomationVerifier,
     PromptMachineProfileRegistry,
     PromptTaskRequest,
@@ -108,16 +121,20 @@ _ISSUE_AGENT_KEY_BYTES = 32
 _ISSUE_AGENT_SIGNATURE_BYTES = 64
 ISSUE_AGENT_EXECUTION_RECEIPT_SCHEMA_VERSION = "hunter-issue-agent-execution-receipt-v1"
 
-#: The governed task key for every authorized Issue. Fixed by the repository,
-#: never derived from Issue text, so an Issue cannot select its own route.
-ISSUE_AGENT_TASK_KEY = ENGINEERING_REVIEW_FIX_TASK_KEY
+#: The governed task key for normal implementation authorizations. Fixed by the
+#: repository, never derived from Issue text, so an Issue cannot select its own
+#: route. The bounded ``engineering.review-fix`` task stays a governed route
+#: through the same ingress for review-fix work.
+ISSUE_AGENT_TASK_KEY = ENGINEERING_IMPLEMENT_TASK_KEY
 
 #: The exact registries this composition root routes through. Building them once
 #: as module constants makes the route/profile pair a repository-owned fact
 #: rather than something a caller assembles per execution.
-ISSUE_AGENT_PROFILE_REGISTRY = PromptMachineProfileRegistry((ENGINEERING_REVIEW_FIX_PROFILE,))
+ISSUE_AGENT_PROFILE_REGISTRY = PromptMachineProfileRegistry(
+    (ENGINEERING_REVIEW_FIX_PROFILE, ENGINEERING_IMPLEMENT_PROFILE)
+)
 ISSUE_AGENT_ROUTE_REGISTRY = PromptTaskRouteRegistry(
-    (ENGINEERING_REVIEW_FIX_ROUTE,),
+    (ENGINEERING_REVIEW_FIX_ROUTE, ENGINEERING_IMPLEMENT_ROUTE),
     profiles=ISSUE_AGENT_PROFILE_REGISTRY,
 )
 
@@ -812,6 +829,7 @@ class GovernedIssueAgentExecutionService:
         "_configuration",
         "_ledger",
         "_machine",
+        "_ingress",
         "_boundary",
         "_fallback",
         "_verifier",
@@ -866,6 +884,11 @@ class GovernedIssueAgentExecutionService:
             routes=ISSUE_AGENT_ROUTE_REGISTRY,
             source_handling_resolver=source_handling_resolver,
             clock=self._clock,
+        )
+        self._ingress = GovernedEngineeringTaskIngress(
+            machine=self._machine,
+            routes=ISSUE_AGENT_ROUTE_REGISTRY,
+            profiles=ISSUE_AGENT_PROFILE_REGISTRY,
         )
 
     @classmethod
@@ -942,7 +965,7 @@ class GovernedIssueAgentExecutionService:
             processed_at=_aware_utc("Issue execution intake time", self._clock.now()),
         )
 
-        compiled = self._machine.compile_task(request)
+        compiled = self._ingress.compile(request)
         envelope = compiled.envelope
         envelope.verify_issuer_signature(self._verifier)
         if envelope.build_record_id != compiled.compilation.manifest.build_record_id:
