@@ -301,9 +301,14 @@ def _governing_issue_criteria(updates: Iterable[tuple[str, str, str]]) -> tuple[
     the name of the checked-out local branch, which can differ from it and hosts
     nothing; the Issue body is read from the canonical repository on GitHub (never
     from the candidate); and the criteria are parsed with the same parser the
-    hosted gate uses. Review evidence that is unreadable or structurally invalid
-    is evidence that cannot be measured, so it fails closed as a coverage doubt
-    instead of ever claiming READY-ELIGIBLE or crashing the push boundary.
+    hosted gate uses. A single pre-push invocation that reaches for multiple
+    remote branches bound to *different* Issues is ambiguous: hosted Candidate
+    Admission evaluates each pushed head independently, so the same review
+    would be admitted for one head and rejected for another, and no single
+    claimed Issue can make that mix Ready. Review evidence that is unreadable
+    or structurally invalid is evidence that cannot be measured, so it fails
+    closed as a coverage doubt instead of ever claiming READY-ELIGIBLE or
+    crashing the push boundary.
     """
 
     try:
@@ -325,6 +330,15 @@ def _governing_issue_criteria(updates: Iterable[tuple[str, str, str]]) -> tuple[
         }
         - {None}
     )
+    if len(pushed_issues) > 1:
+        return (
+            "",
+            None,
+            "the push reaches for multiple remote branches binding different Issues "
+            f"({', '.join(f'#{issue}' for issue in pushed_issues)}); hosted Candidate Admission evaluates each "
+            "pushed head independently, so readiness is ambiguous and acceptance-criteria coverage cannot be "
+            "proven for the mix",
+        )
     if claimed_issue and pushed_issues and claimed_issue not in pushed_issues:
         return (
             claimed_issue,
@@ -338,13 +352,6 @@ def _governing_issue_criteria(updates: Iterable[tuple[str, str, str]]) -> tuple[
         issue = claimed_issue
     elif len(pushed_issues) == 1:
         issue = pushed_issues[0]
-    elif len(pushed_issues) > 1:
-        return (
-            "",
-            None,
-            "the push reaches for multiple remote branches binding different Issues; "
-            "the governing Issue is ambiguous and acceptance-criteria coverage cannot be proven",
-        )
     else:
         issue = ""
     if not issue:

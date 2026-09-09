@@ -1761,6 +1761,69 @@ def test_governing_issue_binding_follows_the_pushed_remote_branch_not_the_local_
     assert captured["issue"] == "442"
 
 
+def test_mixed_issue_push_cannot_select_one_matching_claim(monkeypatch, capsys) -> None:
+    """Same HEAD pushed to issue-442-* and issue-444-* refuses the 442 claim.
+
+    Hosted Candidate Admission evaluates each pushed head independently: the
+    444-bound head would reject a review that claims Issue #442. A mixed-Issue
+    push is therefore ambiguous and must be DRAFT-ONLY -- never READY-ELIGIBLE
+    even though the claimed Issue matches one of the bound Issues.
+    """
+    monkeypatch.setattr(provenance, "resolve_governed_base", lambda _head, **_kwargs: BASE)
+    monkeypatch.setattr(hunter_pre_push.review, "read_review_document", lambda: {"claims": {"issue": "442"}})
+
+    hunter_pre_push.report_pre_ready_review_state(
+        HEAD, _pushed_updates("refs/heads/fix/issue-442-one", "refs/heads/fix/issue-444-one")
+    )
+    out = capsys.readouterr().out
+
+    assert "DRAFT-ONLY" in out
+    assert "#442, #444" in out
+    assert "READY-ELIGIBLE" not in out
+
+
+def test_mixed_issue_push_result_is_independent_of_pushed_ref_ordering(monkeypatch, capsys) -> None:
+    """The ambiguous verdict and its reason are identical in either ref order."""
+    monkeypatch.setattr(provenance, "resolve_governed_base", lambda _head, **_kwargs: BASE)
+    monkeypatch.setattr(hunter_pre_push.review, "read_review_document", lambda: {"claims": {"issue": "442"}})
+
+    hunter_pre_push.report_pre_ready_review_state(
+        HEAD, _pushed_updates("refs/heads/fix/issue-442-one", "refs/heads/fix/issue-444-one")
+    )
+    forward = capsys.readouterr().out
+
+    hunter_pre_push.report_pre_ready_review_state(
+        HEAD, _pushed_updates("refs/heads/fix/issue-444-one", "refs/heads/fix/issue-442-one")
+    )
+    reverse = capsys.readouterr().out
+
+    assert forward == reverse
+    assert "DRAFT-ONLY" in forward
+    assert "READY-ELIGIBLE" not in forward
+
+
+def test_single_issue_multi_ref_push_stays_valid(monkeypatch) -> None:
+    """All refs binding the same Issue resolve to that single governing Issue."""
+    monkeypatch.setattr(hunter_pre_push.review, "read_review_document", lambda: {"claims": {"issue": ""}})
+    monkeypatch.setattr(hunter_pre_push, "_github_access_token", lambda: "token")
+    monkeypatch.setattr(hunter_pre_push, "_repository_from_remotes", lambda: "fafa33/Project-Hunter")
+    captured: dict[str, str] = {}
+
+    def _criteria(_repository: str, _token: str, issue: str) -> tuple[str, tuple[str, ...], str]:
+        captured["issue"] = issue
+        return ("present", (), "")
+
+    monkeypatch.setattr(hunter_pre_push.governance, "read_issue_acceptance_criteria", _criteria)
+
+    issue, criteria, reason = hunter_pre_push._governing_issue_criteria(
+        _pushed_updates("refs/heads/fix/issue-442-one", "refs/heads/fix/issue-442-two")
+    )
+
+    assert reason == ""
+    assert issue == "442"
+    assert captured["issue"] == "442"
+
+
 def test_local_readiness_cannot_claim_ready_when_hosted_binds_another_issue(monkeypatch, capsys) -> None:
     """A review authored for one Issue is not Ready on a push bound to another.
 
