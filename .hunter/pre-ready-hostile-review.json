@@ -2,50 +2,50 @@
   "claims": {
     "acceptance_criteria": [
       {
-        "criterion": "a single canonical engineering-task ingress exists and routes through the existing smart prompt machine",
-        "evidence": "GovernedEngineeringTaskIngress.compile is the only compile surface; both the composition root (_ingress.compile) and the trusted issuer (services.ingress.compile) route through it, and the source regression asserts no second compile_task call site exists.",
+        "criterion": "the existing raw-input guard is kept when useful",
+        "evidence": "GovernedEngineeringTaskIngress.compile still measures the canonical task_text bytes against each route's hard budget and raises the machine-readable PromptTaskOversizeError before any compile for non-bounded routes; the bounded review-fix reduction is unchanged.",
         "id": "C-1",
         "verdict": "satisfied"
       },
       {
-        "criterion": "governed engineering execution cannot silently use an unbounded manually assembled prompt",
-        "evidence": "compile accepts only a PromptTaskRequest and delegates through SmartPromptMachine.compile_task after exact route resolution; a pre-built prompt string is rejected with TypeError and never reaches the provider.",
+        "criterion": "after canonical SmartPromptMachine compilation, the canonical build/pre-model outcome is enforced with no parallel renderer or duplicate budget authority",
+        "evidence": "the ingress now reads allocation.outcome and manifest.prompt_artifact_id from the PromptCompilationResult the machine itself produced (compiled.compilation.orchestration.build_result.allocation and compiled.compilation.manifest); nothing re-renders or re-prices the prompt, so there is no second renderer and no duplicate budget authority.",
         "id": "C-2",
         "verdict": "satisfied"
       },
       {
-        "criterion": "prompt/context budget is machine-enforced before provider dispatch",
-        "evidence": "the ingress derives each route's hard budget (review-fix: bounded within policy at ENGINEERING_REVIEW_FIX_MAX_PROMPT_BYTES; engineering.implement: the profile's available_input_bytes) and enforces it before the machine compiles.",
+        "criterion": "only a canonically READY build may proceed toward executable handoff/dispatch",
+        "evidence": "compile_task is drained only when allocation.outcome == READY and manifest.prompt_artifact_id is not None; the machine's envelope exists in-memory and is returned only after the gate passes, and the source regression test_one_canonical_ingress_across_both_production_execution_paths still pins both production callers through this one ingress.",
         "id": "C-3",
         "verdict": "satisfied"
       },
       {
-        "criterion": "oversize work is bounded/staged or rejected; no giant-prompt fallback exists",
-        "evidence": "oversize review-fix input is deterministically reduced to exactly the bounded prompt; oversize engineering.implement input rejects with the machine-readable PromptTaskOversizeError before any dispatch. No unbounded provider prompt path exists.",
+        "criterion": "INSUFFICIENT_BUDGET and every other non-READY outcome fail closed with a deterministic machine-readable error",
+        "evidence": "any non-READY outcome or a missing prompt artifact raises PromptTaskUnreadyError carrying ENGINEERING_TASK_NOT_READY reason text plus structured task_key/route_id/profile_id/outcome/prompt_artifact_id/reason_codes/preflight_size_bytes/available_input_bytes fields; the deterministic identity of the error text is asserted for a repeated compile.",
         "id": "C-4",
         "verdict": "satisfied"
       },
       {
-        "criterion": "provider selection/failover is caller-independent and preserves the same task contract",
-        "evidence": "envelope and manifest carry only task/route/profile/build identity; the caller task text is data and cannot name provider, model, branch, reviewer, merge, or prompt profile. Fallback/remote-HEAD proof machinery is unchanged.",
+        "criterion": "engineering.implement and engineering.review-fix compatibility is preserved",
+        "evidence": "both routes stay governed through the same ingress; test_review_fix_engages_the_canonical_ingress_and_stays_bounded and test_ingress_binds_to_the_exact_governed_registries still pass and the shared ISSUE_AGENT registries are unchanged.",
         "id": "C-5",
         "verdict": "satisfied"
       },
       {
-        "criterion": "existing engineering.review-fix behavior remains compatible",
-        "evidence": "the review-fix route/profile, bounded reducer, and EXACT identities are unchanged, and review-fix stays a governed route through the same ingress for review-fix work; test_review_fix_engages_the_canonical_ingress_and_stays_bounded and the existing engineering-fix suite pass.",
+        "criterion": "the Codex P1 is reproduced: raw task_text below the ingress byte ceiling that expands beyond available budget when rendered must be rejected before handoff/dispatch",
+        "evidence": "test_rendered_budget_failure_rejects_before_handoff_and_records_no_success sizes a plain-ASCII issue body so the canonical issue_agent_task_text is exactly the profile available_input_bytes; the real machine renders it over budget and the ingress rejects with PromptTaskUnreadyError(INSUFFICIENT_BUDGET, prompt_artifact_id=None) before any fallback call and with no DISPATCHED/COMPLETED ledger row.",
         "id": "C-6",
         "verdict": "satisfied"
       },
       {
-        "criterion": "regressions cover giant-prompt bypass, caller provider/branch authority, failover, stale head, concurrency/conflict, one-pr default, and no-auto-merge",
-        "evidence": "tests cover giant-prompt bypass (TypeError + oversize rejection), caller provider/branch authority (envelope fields), and one-ingress routing; failover, stale HEAD, concurrency, one-PR default, and no-auto-merge are covered by the unchanged existing agent-fallback/issue-agent suite kept green.",
+        "criterion": "proof set: genuinely READY implementation still succeeds; review-fix remains bounded; giant raw input still rejects; no successful execution record/dispatch on non-READY; deterministic failure reason; narrowest defect-prevention family added",
+        "evidence": "test_genuinely_ready_implementation_still_compiles_and_dispatches and test_genuinely_ready_build_still_compiles_to_a_signed_envelope prove READY dispatch; test_giant_raw_input_still_rejects_at_the_ingress_without_compiling proves raw oversize still rejects; the P1 reproduction asserts no fallback dispatch and ledger state CLAIMED with no handoff/envelope; the parametrized fail-closed test asserts the deterministic reason text; DFF-018 with regression-evidence pointers is added so raw-size-only validation cannot recur.",
         "id": "C-7",
         "verdict": "satisfied"
       },
       {
         "criterion": "ruff, black, mypy and focused/full relevant tests pass",
-        "evidence": "Ruff clean, Black --check clean, Mypy success (771 source files); focused suites pass (169 direct regressions and 680 smart_prompt/n8n/engine/issue_agent tests).",
+        "evidence": "Ruff clean, Black --check clean, Mypy success (771 source files); focused ingress + issue-agent suites pass (119 tests) and the broad smart_prompt/n8n/engine/issue_agent selection passes (689 tests); preflight/defect-registry suites also pass.",
         "id": "C-8",
         "verdict": "satisfied"
       },
@@ -57,7 +57,7 @@
       },
       {
         "criterion": "canonical pre-ready hostile review is complete for the exact candidate content",
-        "evidence": "this artifact is minted canonically by scripts/hunter_pre_ready_review.py against base 7ca5bf6..head b88c965; its review_target_digest binds exactly this candidate content and its review_id is the SHA-256 of its own claims.",
+        "evidence": "this artifact is minted canonically by scripts/hunter_pre_ready_review.py against base f473b44..HEAD (Issue #439); its review_target_digest binds exactly the candidate content and its review_id is the SHA-256 of its own claims; the artifact path is excluded from the target so the follow-on archive commit keeps the binding exact.",
         "id": "C-10",
         "verdict": "satisfied"
       },
@@ -69,7 +69,7 @@
       },
       {
         "criterion": "exactly one draft pr is used",
-        "evidence": "PR #438 (fix/issue-436-smart-prompt-engineering-ingress) is the single Draft PR for this Issue, base main@7ca5bf6 head b88c965.",
+        "evidence": "one Draft PR is opened for this Issue against base main@f473b44 with head = the exact candidate head (branch fix/issue-439-compiled-budget-enforcement); it is the only PR for #439.",
         "id": "C-12",
         "verdict": "satisfied"
       },
@@ -94,51 +94,41 @@
       "transaction-snapshot-consistency"
     ],
     "base_ref": "main",
-    "base_sha": "7ca5bf6dd8fe8366921b1558bae221f2e95e214d",
+    "base_sha": "f473b4489741409ef1ad6c70ad48c1d92da52463",
     "defect_families": [
       {
-        "evidence": "Explicit as_of / caller-controlled time state is untouched; the ingress introduces no time inputs and the machine clock is unchanged.",
+        "evidence": "Explicit as_of / caller-controlled time state is untouched; the new gate consumes only the machine's already-recorded rendered-budget outcome and introduces no time inputs.",
         "family": "DFF-001",
         "outcome": "clear"
       },
       {
-        "evidence": "No persistence or transaction boundary is added or altered; orchestration delegates to the existing unchanged machine/repository pipeline.",
+        "evidence": "No persistence or transaction boundary is added or altered; the gate reads the compiled result in memory and the issue-agent claim/dispatch ledger semantics are unchanged.",
         "family": "DFF-002",
         "outcome": "clear"
       },
       {
-        "evidence": "Route/profile/envelope identity stays content-addressed; the new engineering.implement profile and route are repository-owned constants and their identity is derived exactly like every other route.",
+        "evidence": "Route/profile/envelope identity stays content-addressed; the gate raises before the envelope is used and adds no new identity authority.",
         "family": "DFF-003",
         "outcome": "clear"
       },
       {
-        "evidence": "Task routing vocabulary stays exact: unknown, duplicate, conflicting, and wildcard task keys fail closed; oversize on a non-bounded route fails with the machine-readable PromptTaskOversizeError.",
+        "evidence": "Task routing vocabulary stays exact; unknown/duplicate/conflicting keys still fail closed, and the new PromptTaskUnreadyError uses deterministic coordinates instead of any caller-derived vocabulary.",
         "family": "DFF-004",
         "outcome": "clear"
       },
       {
-        "evidence": "No durable classification or persistence-permission vocabulary changes; only routing/budget enforcement over existing machine surfaces.",
+        "evidence": "No durable classification or persistence-permission vocabulary changes; only fail-closed dispatchability gating over the existing machine outcome.",
         "family": "DFF-005",
         "outcome": "clear"
       },
       {
-        "evidence": "Single-stage compile is deterministic and idempotent: request_id and envelope_id are stable; test_single_stage_compile_is_deterministic_and_idempotent passes.",
+        "evidence": "Single-stage compile stays deterministic: the fail-closed error text is identical across repeats, and READY compiles keep stable request_id/envelope_id.",
         "family": "DFF-006",
         "outcome": "clear"
       },
       {
-        "evidence": "Authorization remains bound to the repository-owned route/profile pair; the trusted mapper binds ISSUE_AGENT_TASK_KEY to the engineering.implement task key as a fixed constant and caller/Issue text cannot select route, provider, model, branch, reviewer, merge, or profile. engineering.review-fix stays a governed route through the same ingress for review-fix work.",
+        "evidence": "Authorization remains bound to the repository-owned route/profile pair; Issue text still cannot select route, provider, model, branch, reviewer, merge, or profile, and the new failure reason is machine-owned.",
         "family": "DFF-007",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "The automation envelope remains Ed25519-signed by the machine-only key and verified before use; the review digest binds the exact candidate content.",
-        "family": "DFF-008",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "No connector code-write ingress, receipt, or workflow surface is touched.",
-        "family": "DFF-009",
         "outcome": "clear"
       },
       {
@@ -152,12 +142,12 @@
         "outcome": "clear"
       },
       {
-        "evidence": "The inherited connector authorization receipt makes no new candidate claim; only this canonical hostile-review artifact is refreshed for the #436 candidate.",
+        "evidence": "The inherited connector authorization receipt makes no new candidate claim; only this canonical hostile-review artifact is refreshed for the #439 candidate.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "One complete adversarial sweep of base 7ca5bf6..head b88c965 covers all 13 Issue acceptance criteria and all 16 applicable recurring-defect families; the reviewer-identified mapper P2 (authorized Issues hard-coded to the review-fix key) is fixed and proven re-routed to engineering.implement; no in-scope P1/P2 blocker remains.",
+        "evidence": "One complete adversarial sweep of base f473b44..head covers all 13 Issue acceptance criteria and all 14 applicable recurring-defect families; the reviewer-identified post-merge P1 (raw-size-only validation allowing a non-READY rendered build to reach the envelope) is fixed by the compiled-outcome gate, DFF-018 is added, and no in-scope blocker remains.",
         "family": "DFF-013",
         "outcome": "clear"
       },
@@ -167,95 +157,71 @@
         "outcome": "clear"
       },
       {
-        "evidence": "No defect-registry lifecycle or guard enforcement claim changes; review clearance is distinguished from pending hosted admission.",
+        "evidence": "The defect-registry lifecycle change is narrow and staged at regression-tested; DFF-018 declares review-boundary prevention with resolvable pytest evidence and the preflight guard validates it.",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "No validation-reuse authority change; the local focused test/lint/typecheck results are recorded and hosted CI remains independently required for final admission.",
-        "family": "DFF-016",
+        "evidence": "Dispatchability is now decided by the canonical compiled allocation outcome (READY with concrete prompt_artifact_id) after the machine renders the actual prompt, never by raw caller-input size alone; the P1 reproduction, the parametrized fail-closed regressions, and the DFF-018 regression-evidence pointers pin this so raw-size-only validation cannot recur.",
+        "family": "DFF-018",
         "outcome": "clear"
       }
     ],
     "findings": [
       {
-        "evidence": "Adding a second engineering route could have introduced loose or wildcard routing or a second dispatcher. The exact task-key registry rejects unknown/duplicate/conflicting/wildcard keys before any compile, and both production execution paths route through the one GovernedEngineeringTaskIngress with the shared ISSUE_AGENT registries; no parallel dispatcher exists.",
+        "evidence": "Post-merge P1 on PR #438 / Issue #436: raw task_text below the ingress byte ceiling expanded beyond the available budget after the machine rendered JSON/spec/context, yet the build still received an automation envelope and could proceed toward handoff/dispatch. The ingress now drains the canonical compiled outcome and raises PromptTaskUnreadyError for any non-READY build or missing prompt artifact, and the P1 reproduction proves no fallback dispatch and no DISPATCHED/COMPLETED ledger state on the failure.",
         "id": "F-1",
         "resolution": "resolved",
         "severity": "blocking"
       },
       {
-        "evidence": "The engineering.implement route could accept unbounded input or fall back to a giant provider prompt. The ingress derives the route budget from the profile capability available_input_bytes and raises PromptTaskOversizeError before any dispatch; test_non_bounded_engineering_oversize_fails_closed_with_machine_reason proves it.",
+        "evidence": "Fixing the P1 might have introduced a second renderer or a duplicate budget authority that re-measures rendered size instead of accepting the machine's own outcome. The gate reads allocation.outcome and manifest.prompt_artifact_id directly from the PromptCompilationResult the machine produced; no parallel renderer or duplicate pricing exists, and the source regression still pins both production callers through the one ingress.",
         "id": "F-2",
         "resolution": "resolved",
         "severity": "blocking"
       },
       {
-        "evidence": "Caller/Issue text could select provider, model, branch, reviewer, merge, or prompt profile. The envelope carries only task/route/profile/build identity and the compile delegates through the machine; test_caller_text_cannot_select_route_provider_model_branch_reviewer_or_merge proves caller text is data.",
+        "evidence": "Raw-size-only validation could recur elsewhere in the engineering surface. DFF-018 is added with scope src/hunter/evidence_intelligence/ and deterministic fail-closed regressions, and the preflight guard recomputes applicable families from changed paths on every push, so any future engineering ingress path that bypasses the compiled-outcome gate is review-blocked.",
         "id": "F-3",
         "resolution": "resolved",
         "severity": "blocking"
       },
       {
-        "evidence": "The pre-ready hostile review artifact for the #436 branch still claimed Issue #432, which failed the governance review. The artifact is regenerated canonically by scripts/hunter_pre_ready_review.py for Issue #436 against base 7ca5bf6..head, binding the exact candidate digest; it no longer names #432.",
+        "evidence": "A fail-closed rejection without a deterministic machine-readable reason would leave callers and automation unable to distinguish INSUFFICIENT_BUDGET from other non-READY outcomes. PromptTaskUnreadyError carries ENGINEERING_TASK_NOT_READY key=value text plus structured fields, and the deterministic identity of the reason across repeated compiles is asserted.",
         "id": "F-4",
         "resolution": "resolved",
         "severity": "blocking"
-      },
-      {
-        "evidence": "The Issue-agent mapper hard-coded ISSUE_AGENT_TASK_KEY to ENGINEERING_REVIEW_FIX_TASK_KEY, so a normal implementation authorization could never reach the engineering.implement route in production. The repository-owned mapper now binds ISSUE_AGENT_TASK_KEY to ENGINEERING_IMPLEMENT_TASK_KEY as a fixed constant -- never inferred from Issue/caller prose -- while engineering.review-fix stays a governed route through the same ingress for review-fix work. test_authorized_issue_maps_to_exactly_one_canonical_task_request pins the implement task key, and test_authorized_issue_runs_the_existing_governed_path_end_to_end proves the authorized Issue reaches GovernedEngineeringTaskIngress and its signed envelope binds the engineering.implement route and profile. Oversize still fails closed on the implement hard budget.",
-        "id": "F-5",
-        "resolution": "resolved",
-        "severity": "blocking"
       }
     ],
-    "issue": "436",
+    "issue": "439",
     "review_target": [
       {
-        "blob_sha": "59e3370aa3dcff654b721707a2c591d45785fb6a",
+        "blob_sha": "8636d035331f10c88868568c1bfd6bfe28d6f962",
+        "path": "docs/DEFECT_REGISTRY.json",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "86ae0428867b659dda79aa64128e40ef04368bb1",
         "path": "src/hunter/evidence_intelligence/engineering_task_ingress.py",
         "previous_path": "",
-        "status": "added"
+        "status": "modified"
       },
       {
-        "blob_sha": "460f6ec68553efdb4077cb57eba7020ffcd95e1e",
+        "blob_sha": "13dc87056d7d64319f1d1176f03ddc439b11ddf2",
         "path": "tests/test_engineering_task_ingress.py",
         "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "9f7b27bedd1322b47c0f58b733c8734f08a91c4c",
-        "path": "scripts/hunter_issue_agent_issuer.py",
-        "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "c2dd73d84d26af7881d89bb746b178ffce0f10e1",
-        "path": "src/hunter/automation/issue_agent_execution.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "bd2c059e5e95227fc5b37fd6f926bb0a560d51b7",
-        "path": "src/hunter/evidence_intelligence/smart_prompt_routing.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "fd99dca070635e023ec008049aca876d0da0aa48",
+        "blob_sha": "365102e5cbea0de8fec0d6fc41899c72357793cf",
         "path": "tests/test_issue_agent_execution.py",
         "previous_path": "",
         "status": "modified"
-      },
-      {
-        "blob_sha": "9e9d3c6f13eca5f5799c27beb2fd372b6fc92214",
-        "path": "tests/test_issue_agent_issuer.py",
-        "previous_path": "",
-        "status": "modified"
       }
     ],
-    "review_target_digest": "a106dc69fef0d28da1df5c384aca0a3bf6b3ea0a4ca4caac861799ea3c8e2334"
+    "review_target_digest": "82633465717a4d059e8f889ca96224ff15e9c3da302f77b10c109a05c111c3e1"
   },
-  "review_id": "4be99fdc54015b5f3c94ce20ddf7f22ce04ea55b86abee5ba90f720201750b92",
+  "review_id": "b8fab4ce86975300818e074e348f1bdd6910ca47286e52c8d90fa932d98a552d",
   "schema": "hunter.pre-ready-hostile-review.v1"
 }
