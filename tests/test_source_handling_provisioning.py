@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import os
 import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import bootstrap_source_handling_authority as bootstrap
 import provision_source_handling_issue_authority as provisioning
@@ -131,6 +133,37 @@ def _arguments(
     return arguments
 
 
+@pytest.mark.parametrize(
+    ("option", "destination"),
+    [
+        ("--read_access-disposition", "read_access_disposition"),
+        ("--delete_or_expire-disposition", "delete_or_expire_disposition"),
+        ("--read-access-disposition", "read_access_disposition"),
+        ("--delete-or-expire-disposition", "delete_or_expire_disposition"),
+        ("--read_access_disposition", "read_access_disposition"),
+        ("--delete_or_expire_disposition", "delete_or_expire_disposition"),
+    ],
+)
+def test_disposition_cli_aliases_preserve_destination(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, option: str, destination: str
+) -> None:
+    original_parse_args = argparse.ArgumentParser.parse_args
+    captured = argparse.Namespace()
+
+    class ParsingComplete(Exception):
+        pass
+
+    def capture_args(parser: argparse.ArgumentParser, args: Any = None, namespace: Any = None) -> argparse.Namespace:
+        nonlocal captured
+        captured = original_parse_args(parser, args, namespace)
+        raise ParsingComplete
+
+    monkeypatch.setattr(argparse.ArgumentParser, "parse_args", capture_args)
+    with pytest.raises(ParsingComplete):
+        provisioning.main(_arguments(tmp_path / "unused.sqlite", _issue_updated_at_text()) + [option, "ALLOW"])
+    assert getattr(captured, destination) == "ALLOW"
+
+
 def _run_provisioning(database: Path, private_key: bytes, arguments: list[str]) -> None:
     """Invoke the provisioning CLI exactly as an operator would, via the env signing key."""
     saved = os.environ.get(provisioning.SIGNING_KEY_ENV)
@@ -154,6 +187,44 @@ def _prepare(
     _export_operator_environment(monkeypatch, database, key)
     monkeypatch.setattr(provenance_module, "_production_view", None)
     return database, key, _issue_updated_at_text()
+
+
+def _record_partial_provenance(
+    database: Path,
+    key: bytes,
+    *,
+    document_id: str,
+    at: datetime,
+    count: int = 2,
+) -> tuple[dict[str, Any], ...]:
+    rule = bootstrap._load_production_rule()
+    _, verification_key_sha256, genesis_rule_sha256 = bootstrap._derived_digests(key, rule)
+    repository = provenance_module.SourceHandlingProvenanceAuthorityRepository(
+        database,
+        signing_private_key=key,
+        operator_root=SourceHandlingOperatorRoot(
+            genesis_rule_sha256=genesis_rule_sha256,
+            verification_key_sha256=verification_key_sha256,
+        ),
+    )
+    plans = provisioning._provenance_plans(
+        document_id=document_id,
+        authority_identity=provisioning.AUTHORITY_COMPONENT_ID,
+        at=at,
+    )
+    for plan in plans[:count]:
+        repository.record_provenance(
+            provenance_id=plan["provenance_id"],
+            provenance_kind=plan["provenance_kind"],
+            authority_identity=plan["authority_identity"],
+            effective_from=at,
+            recorded_at=at,
+            known_at=at,
+            evidence_strength=plan["evidence_strength"],
+            evidence_method=plan["evidence_method"],
+            verifier_type=plan["verifier_type"],
+        )
+    return plans
 
 
 # --- happy path --------------------------------------------------------------
@@ -389,6 +460,15 @@ def test_provisioning_refuses_future_as_of_before_any_mutation(
     database, key, updated_at = _prepare(tmp_path, monkeypatch)
     future_as_of = (datetime.now(UTC) + timedelta(days=2)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
+    def _unexpected_repository_init(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("storage initialized before explicit as-of validation")
+
+    monkeypatch.setattr(
+        provisioning,
+        "SourceHandlingProvenanceAuthorityRepository",
+        _unexpected_repository_init,
+    )
+
     with sqlite3.connect(database) as connection:
         before_keys = connection.execute(
             "SELECT family, scope, current_record_id, revision FROM source_handling_canonical_keys " "ORDER BY family"
@@ -471,3 +551,604 @@ def test_provisioning_signing_key_sources_are_mutually_exclusive(
         else:
             os.environ[provisioning.SIGNING_KEY_ENV] = saved
     assert not database.exists()
+
+
+# --- regression tests for Issue #432 / PR #431 findings -------------------
+
+
+def test_finding_1_unrelated_issue_provenance_scoping(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Finding 1: Unrelated Issues/provenance must not change an Issue's authority timestamp."""
+    database, key, updated_at = _prepare(tmp_path, monkeypatch)
+
+    # Provision Issue A
+    capsys.readouterr()
+    _run_provisioning(database, key, _arguments(database, updated_at, issue_number=430, authorization_id="auth-A"))
+    outcome_a = json.loads(capsys.readouterr().out)
+    as_of_a = outcome_a["as_of"]
+
+    # Provision Issue B later
+    capsys.readouterr()
+    updated_at_b = _issue_updated_at_text()
+    _run_provisioning(database, key, _arguments(database, updated_at_b, issue_number=431, authorization_id="auth-B"))
+    outcome_b = json.loads(capsys.readouterr().out)
+    assert outcome_b["status"] == "provisioned"
+
+    # Rerun Issue A with A's original --as-of
+    capsys.readouterr()
+    _run_provisioning(
+        database,
+        key,
+        _arguments(database, updated_at, issue_number=430, authorization_id="auth-A", as_of=as_of_a),
+    )
+    rerun_a = json.loads(capsys.readouterr().out)
+
+    assert rerun_a["status"] == "already-provisioned"
+    assert rerun_a["as_of"] == as_of_a
+    assert rerun_a["records"]["FACT"]["record_id"] == outcome_a["records"]["FACT"]["record_id"]
+    assert (
+        rerun_a["records"]["FIELD_CATEGORY_REGISTRY"]["record_id"]
+        == outcome_a["records"]["FIELD_CATEGORY_REGISTRY"]["record_id"]
+    )
+    assert rerun_a["records"]["POLICY"]["record_id"] == outcome_a["records"]["POLICY"]["record_id"]
+
+
+@pytest.mark.parametrize(
+    "extra_args, expected_error_substring",
+    [
+        (
+            ["--processing-decision", "INVALID_DECISION"],
+            "policy decision is missing or invalid: processing_decision 'INVALID_DECISION'",
+        ),
+        (
+            ["--retention-decision", "INVALID_DECISION"],
+            "policy decision is missing or invalid: retention_decision 'INVALID_DECISION'",
+        ),
+        (
+            ["--reconstruction-decision", "INVALID_DECISION"],
+            "policy decision is missing or invalid: reconstruction_decision 'INVALID_DECISION'",
+        ),
+        (
+            ["--access-decision", "INVALID_DECISION"],
+            "policy decision is missing or invalid: access_decision 'INVALID_DECISION'",
+        ),
+        (
+            ["--deletion-lifecycle-decision", "INVALID_DECISION"],
+            "policy decision is missing or invalid: deletion_lifecycle_decision 'INVALID_DECISION'",
+        ),
+        (["--persist-disposition", "INVALID_DISPOSITION"], "durable content disposition is missing or invalid"),
+        (["--read-access-disposition", "INVALID_DISPOSITION"], "durable content disposition is missing or invalid"),
+        (["--reconstruct-disposition", "INVALID_DISPOSITION"], "durable content disposition is missing or invalid"),
+        (
+            ["--delete-or-expire-disposition", "INVALID_DISPOSITION"],
+            "durable lifecycle disposition is missing or invalid",
+        ),
+        (["--sensitivity", "INVALID_SENSITIVITY"], "FACT sensitivity 'INVALID_SENSITIVITY' is unknown or unsupported"),
+        (
+            ["--persistence-restriction", "INVALID_RESTRICTION"],
+            "FACT persistence restriction 'INVALID_RESTRICTION' is unknown or unsupported",
+        ),
+        (
+            ["--operation-restriction", "INVALID_RESTRICTION"],
+            "FACT operation restriction 'INVALID_RESTRICTION' is unknown or unsupported",
+        ),
+        (["--secret-presence", "INVALID_SECRET"], "FACT secret presence 'INVALID_SECRET' is unknown or unsupported"),
+    ],
+)
+def test_finding_2_invalid_vocabulary_fails_closed_before_any_write(
+    extra_args: list[str],
+    expected_error_substring: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Finding 2: Every invalid policy decision or disposition family fails closed before any persistent write."""
+    database, key, updated_at = _prepare(tmp_path, monkeypatch)
+
+    capsys.readouterr()
+    invalid_args = _arguments(database, updated_at, issue_number=432) + extra_args
+    with pytest.raises(SystemExit) as excinfo:
+        _run_provisioning(database, key, invalid_args)
+    assert excinfo.value.code == 2
+    assert expected_error_substring in capsys.readouterr().err
+
+    # Verify a fresh database has zero per-Issue provenance or authority records written for Issue 432
+    with sqlite3.connect(database) as connection:
+        provenance_table = connection.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+            ("source_handling_provenance_records",),
+        ).fetchone()
+        if provenance_table is not None:
+            assert connection.execute("SELECT COUNT(*) FROM source_handling_provenance_records").fetchone()[0] == 0
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM source_handling_authority_records WHERE family != 'AUTHORIZATION_RULE'"
+            ).fetchone()[0]
+            == 0
+        )
+
+
+def test_finding_3_interrupted_provisioning_recovery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Finding 3: Interrupted provisioning can recover without manual --as-of and converge canonically."""
+    database, key, updated_at = _prepare(tmp_path, monkeypatch)
+
+    authorization = _authorization(432, updated_at, "auth-432-interrupted")
+    document_id = issue_agent_document_id(authorization)
+
+    # Manually write 2 of the 6 provenance records to simulate an interrupted provisioning run
+    rule = bootstrap._load_production_rule()
+    _, verification_key_sha256, genesis_rule_sha256 = bootstrap._derived_digests(key, rule)
+    operator_root = SourceHandlingOperatorRoot(
+        genesis_rule_sha256=genesis_rule_sha256,
+        verification_key_sha256=verification_key_sha256,
+    )
+    provenance_repo = provenance_module.SourceHandlingProvenanceAuthorityRepository(
+        database,
+        signing_private_key=key,
+        operator_root=operator_root,
+    )
+
+    start_instant = provisioning._parse_time(updated_at)
+    plans = provisioning._provenance_plans(
+        document_id=document_id,
+        authority_identity=provisioning.AUTHORITY_COMPONENT_ID,
+        at=start_instant,
+    )
+
+    # Write only the first 2 provenance records
+    for plan in plans[:2]:
+        provenance_repo.record_provenance(
+            provenance_id=plan["provenance_id"],
+            provenance_kind=plan["provenance_kind"],
+            authority_identity=plan["authority_identity"],
+            effective_from=start_instant,
+            recorded_at=start_instant,
+            known_at=start_instant,
+            evidence_strength=plan["evidence_strength"],
+            evidence_method=plan["evidence_method"],
+            verifier_type=plan["verifier_type"],
+        )
+
+    with sqlite3.connect(database) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM source_handling_provenance_records").fetchone()[0] == 2
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM source_handling_authority_records WHERE family != 'AUTHORIZATION_RULE'"
+            ).fetchone()[0]
+            == 0
+        )
+
+    # Run a normal retry with NO --as-of
+    capsys.readouterr()
+    _run_provisioning(
+        database,
+        key,
+        _arguments(database, updated_at, issue_number=432, authorization_id="auth-432-interrupted"),
+    )
+    outcome = json.loads(capsys.readouterr().out)
+
+    assert outcome["status"] == "provisioned"
+    assert outcome["document_id"] == document_id
+
+    # Verify database converged to 6 provenance records and 3 per-Issue authority heads
+    with sqlite3.connect(database) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM source_handling_provenance_records").fetchone()[0] == 6
+        assert connection.execute("SELECT COUNT(*) FROM source_handling_authority_records").fetchone()[0] == 4
+        records = connection.execute(
+            "SELECT family, scope, revision FROM source_handling_canonical_keys ORDER BY family"
+        ).fetchall()
+        assert records == [
+            ("AUTHORIZATION_RULE", "SOURCE_HANDLING", 1),
+            ("FACT", document_id, 1),
+            ("FIELD_CATEGORY_REGISTRY", f"registry:{document_id}:v1", 1),
+            ("POLICY", f"policy:{document_id}:v1", 1),
+        ]
+
+    # Another retry (with NO --as-of) should return already-provisioned
+    capsys.readouterr()
+    _run_provisioning(
+        database,
+        key,
+        _arguments(database, updated_at, issue_number=432, authorization_id="auth-432-interrupted"),
+    )
+    rerun_outcome = json.loads(capsys.readouterr().out)
+    assert rerun_outcome["status"] == "already-provisioned"
+
+
+def test_recovery_rejects_tampered_partial_provenance_before_any_additional_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    database, key, updated_at = _prepare(tmp_path, monkeypatch)
+    authorization = _authorization(435, updated_at, "auth-435-tampered-partial")
+    document_id = issue_agent_document_id(authorization)
+    at = provisioning._parse_time(updated_at)
+    plans = _record_partial_provenance(database, key, document_id=document_id, at=at, count=1)
+
+    with sqlite3.connect(database) as connection:
+        connection.execute("DROP TRIGGER source_handling_provenance_no_update")
+        connection.execute(
+            "UPDATE source_handling_provenance_records SET known_at = ? "
+            "WHERE provenance_id = ? AND provenance_kind = ?",
+            (
+                provisioning._time_text(at - timedelta(seconds=1)),
+                plans[0]["provenance_id"],
+                plans[0]["provenance_kind"],
+            ),
+        )
+        before = (
+            connection.execute("SELECT COUNT(*) FROM source_handling_provenance_records").fetchone()[0],
+            connection.execute("SELECT COUNT(*) FROM source_handling_provenance_heads").fetchone()[0],
+            connection.execute("SELECT COUNT(*) FROM source_handling_authority_records").fetchone()[0],
+            connection.execute("SELECT COUNT(*) FROM source_handling_publication_authorizations").fetchone()[0],
+        )
+
+    with pytest.raises(SystemExit) as excinfo:
+        _run_provisioning(
+            database,
+            key,
+            _arguments(database, updated_at, issue_number=435, authorization_id="auth-435-tampered-partial"),
+        )
+    assert excinfo.value.code == 2
+    assert "TAMPER_DETECTED" in capsys.readouterr().err
+
+    with sqlite3.connect(database) as connection:
+        after = (
+            connection.execute("SELECT COUNT(*) FROM source_handling_provenance_records").fetchone()[0],
+            connection.execute("SELECT COUNT(*) FROM source_handling_provenance_heads").fetchone()[0],
+            connection.execute("SELECT COUNT(*) FROM source_handling_authority_records").fetchone()[0],
+            connection.execute("SELECT COUNT(*) FROM source_handling_publication_authorizations").fetchone()[0],
+        )
+    assert after == before == (1, 1, 1, 0)
+
+
+def test_matching_forged_provenance_head_and_content_id_cannot_bypass_signature_verification(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    database, key, updated_at = _prepare(tmp_path, monkeypatch)
+    authorization = _authorization(436, updated_at, "auth-436-forged-head")
+    document_id = issue_agent_document_id(authorization)
+    at = provisioning._parse_time(updated_at)
+    plans = _record_partial_provenance(database, key, document_id=document_id, at=at, count=1)
+    plan = plans[0]
+    forged_at = at - timedelta(seconds=1)
+    forged_id = provisioning._provenance_record_id(
+        provenance_id=str(plan["provenance_id"]),
+        provenance_kind=str(plan["provenance_kind"]),
+        authority_identity=str(plan["authority_identity"]),
+        at=forged_at,
+        evidence_strength=plan["evidence_strength"],
+        evidence_method=plan["evidence_method"],
+        verifier_type=plan["verifier_type"],
+    )
+    forged_time = provisioning._time_text(forged_at)
+
+    with sqlite3.connect(database) as connection:
+        connection.execute("DROP TRIGGER source_handling_provenance_no_update")
+        connection.execute(
+            "UPDATE source_handling_provenance_records "
+            "SET record_id = ?, effective_from = ?, recorded_at = ?, known_at = ? "
+            "WHERE provenance_id = ? AND provenance_kind = ?",
+            (
+                forged_id,
+                forged_time,
+                forged_time,
+                forged_time,
+                plan["provenance_id"],
+                plan["provenance_kind"],
+            ),
+        )
+        connection.execute(
+            "UPDATE source_handling_provenance_heads SET current_record_id = ? "
+            "WHERE provenance_id = ? AND provenance_kind = ?",
+            (forged_id, plan["provenance_id"], plan["provenance_kind"]),
+        )
+        before = (
+            connection.execute("SELECT COUNT(*) FROM source_handling_provenance_records").fetchone()[0],
+            connection.execute("SELECT COUNT(*) FROM source_handling_provenance_heads").fetchone()[0],
+            connection.execute("SELECT COUNT(*) FROM source_handling_authority_records").fetchone()[0],
+            connection.execute("SELECT COUNT(*) FROM source_handling_publication_authorizations").fetchone()[0],
+        )
+
+    with pytest.raises(SystemExit) as excinfo:
+        _run_provisioning(
+            database,
+            key,
+            _arguments(database, updated_at, issue_number=436, authorization_id="auth-436-forged-head"),
+        )
+    assert excinfo.value.code == 2
+    assert "TAMPER_DETECTED" in capsys.readouterr().err
+
+    with sqlite3.connect(database) as connection:
+        after = (
+            connection.execute("SELECT COUNT(*) FROM source_handling_provenance_records").fetchone()[0],
+            connection.execute("SELECT COUNT(*) FROM source_handling_provenance_heads").fetchone()[0],
+            connection.execute("SELECT COUNT(*) FROM source_handling_authority_records").fetchone()[0],
+            connection.execute("SELECT COUNT(*) FROM source_handling_publication_authorizations").fetchone()[0],
+        )
+    assert after == before == (1, 1, 1, 0)
+
+
+def test_future_known_signed_successor_fails_before_any_provisioning_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    database, key, updated_at = _prepare(tmp_path, monkeypatch)
+    authorization = _authorization(437, updated_at, "auth-437-future-head")
+    document_id = issue_agent_document_id(authorization)
+    at = provisioning._parse_time(updated_at)
+    plans = _record_partial_provenance(database, key, document_id=document_id, at=at, count=1)
+    future = datetime.now(UTC) + timedelta(days=1)
+
+    class FutureClock:
+        def now(self) -> datetime:
+            return future
+
+    repository = provenance_module.SourceHandlingProvenanceAuthorityRepository(
+        database,
+        signing_private_key=key,
+        operator_root=_operator_root(key),
+        clock=FutureClock(),
+    )
+    plan = plans[0]
+    repository.record_provenance(
+        provenance_id=plan["provenance_id"],
+        provenance_kind=plan["provenance_kind"],
+        authority_identity=plan["authority_identity"],
+        effective_from=future,
+        recorded_at=future,
+        known_at=future,
+        evidence_strength=plan["evidence_strength"],
+        evidence_method=plan["evidence_method"],
+        verifier_type=plan["verifier_type"],
+    )
+
+    with sqlite3.connect(database) as connection:
+        before = (
+            connection.execute("SELECT COUNT(*) FROM source_handling_provenance_records").fetchone()[0],
+            connection.execute("SELECT COUNT(*) FROM source_handling_provenance_heads").fetchone()[0],
+            connection.execute("SELECT COUNT(*) FROM source_handling_authority_records").fetchone()[0],
+            connection.execute("SELECT COUNT(*) FROM source_handling_publication_authorizations").fetchone()[0],
+        )
+
+    with pytest.raises(SystemExit) as excinfo:
+        _run_provisioning(
+            database,
+            key,
+            _arguments(database, updated_at, issue_number=437, authorization_id="auth-437-future-head"),
+        )
+    assert excinfo.value.code == 2
+    assert "already heads different content" in capsys.readouterr().err
+
+    with sqlite3.connect(database) as connection:
+        after = (
+            connection.execute("SELECT COUNT(*) FROM source_handling_provenance_records").fetchone()[0],
+            connection.execute("SELECT COUNT(*) FROM source_handling_provenance_heads").fetchone()[0],
+            connection.execute("SELECT COUNT(*) FROM source_handling_authority_records").fetchone()[0],
+            connection.execute("SELECT COUNT(*) FROM source_handling_publication_authorizations").fetchone()[0],
+        )
+    assert after == before == (2, 1, 1, 0)
+
+
+def test_finding_3_mismatched_partial_state_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Finding 3: Interrupted provisioning with mismatched partial state must fail closed."""
+    database, key, updated_at = _prepare(tmp_path, monkeypatch)
+
+    authorization = _authorization(433, updated_at, "auth-433-mismatch")
+    document_id = issue_agent_document_id(authorization)
+
+    rule = bootstrap._load_production_rule()
+    _, verification_key_sha256, genesis_rule_sha256 = bootstrap._derived_digests(key, rule)
+    operator_root = SourceHandlingOperatorRoot(
+        genesis_rule_sha256=genesis_rule_sha256,
+        verification_key_sha256=verification_key_sha256,
+    )
+    provenance_repo = provenance_module.SourceHandlingProvenanceAuthorityRepository(
+        database,
+        signing_private_key=key,
+        operator_root=operator_root,
+    )
+
+    start_instant = provisioning._parse_time(updated_at)
+    plans = provisioning._provenance_plans(
+        document_id=document_id,
+        authority_identity="ORIGINAL_AUTHORITY_IDENTITY",
+        at=start_instant,
+    )
+
+    # Write partial provenance with ORIGINAL_AUTHORITY_IDENTITY
+    for plan in plans[:2]:
+        provenance_repo.record_provenance(
+            provenance_id=plan["provenance_id"],
+            provenance_kind=plan["provenance_kind"],
+            authority_identity="ORIGINAL_AUTHORITY_IDENTITY",
+            effective_from=start_instant,
+            recorded_at=start_instant,
+            known_at=start_instant,
+            evidence_strength=plan["evidence_strength"],
+            evidence_method=plan["evidence_method"],
+            verifier_type=plan["verifier_type"],
+        )
+
+    # Retry with default authority identity (which differs from "ORIGINAL_AUTHORITY_IDENTITY")
+    capsys.readouterr()
+    with pytest.raises(SystemExit) as excinfo:
+        _run_provisioning(
+            database,
+            key,
+            _arguments(database, updated_at, issue_number=433, authorization_id="auth-433-mismatch"),
+        )
+    assert excinfo.value.code == 2
+    assert "already heads different content" in capsys.readouterr().err
+
+
+def test_finding_3_partial_provenance_wrong_kind_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Finding 3: Partial provenance created under the wrong provenance_kind fails closed on retry."""
+    database, key, updated_at = _prepare(tmp_path, monkeypatch)
+
+    authorization = _authorization(434, updated_at, "auth-434-wrong-kind")
+    document_id = issue_agent_document_id(authorization)
+
+    rule = bootstrap._load_production_rule()
+    _, verification_key_sha256, genesis_rule_sha256 = bootstrap._derived_digests(key, rule)
+    operator_root = SourceHandlingOperatorRoot(
+        genesis_rule_sha256=genesis_rule_sha256,
+        verification_key_sha256=verification_key_sha256,
+    )
+    provenance_repo = provenance_module.SourceHandlingProvenanceAuthorityRepository(
+        database,
+        signing_private_key=key,
+        operator_root=operator_root,
+    )
+
+    start_instant = provisioning._parse_time(updated_at)
+    prov_id = f"evidence:auth:fact:{document_id}"
+
+    # Manually write a provenance record using planned prov_id under WRONG provenance_kind ("VERIFIER" instead of "EVIDENCE")
+    provenance_repo.record_provenance(
+        provenance_id=prov_id,
+        provenance_kind="VERIFIER",  # WRONG KIND!
+        authority_identity=provisioning.AUTHORITY_COMPONENT_ID,
+        effective_from=start_instant,
+        recorded_at=start_instant,
+        known_at=start_instant,
+        verifier_type=provisioning.VERIFIER_TYPE,
+    )
+
+    # Retry normally with no --as-of
+    capsys.readouterr()
+    with pytest.raises(SystemExit) as excinfo:
+        _run_provisioning(
+            database,
+            key,
+            _arguments(database, updated_at, issue_number=434, authorization_id="auth-434-wrong-kind"),
+        )
+    assert excinfo.value.code == 2
+    assert "exists under unexpected kind 'VERIFIER'" in capsys.readouterr().err
+
+    # Verify no additional canonical per-Issue authority state was published
+    with sqlite3.connect(database) as connection:
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM source_handling_authority_records WHERE family != 'AUTHORIZATION_RULE'"
+            ).fetchone()[0]
+            == 0
+        )
+
+
+def test_policy_validator_rejects_unknown_durable_category() -> None:
+    from hunter.evidence_intelligence.source_handling import SourceHandlingBlockedError, validate_policy_body
+
+    policy = {
+        "processing_decision": "ALLOW",
+        "retention_decision": "ALLOW",
+        "reconstruction_decision": "ALLOW",
+        "access_decision": "ALLOW",
+        "deletion_lifecycle_decision": "ALLOW",
+        "durable_dispositions": {
+            "MADE_UP_SAFE_CATEGORY": {
+                "PERSIST": "ALLOW",
+                "READ_ACCESS": "ALLOW",
+                "RECONSTRUCT": "ALLOW",
+                "DELETE_OR_EXPIRE": "ALLOW",
+            }
+        },
+    }
+
+    with pytest.raises(SourceHandlingBlockedError, match="durable category is unknown or not persistable"):
+        validate_policy_body(policy)
+
+
+def test_policy_validator_requires_the_exact_canonical_operation_key_set() -> None:
+    from hunter.evidence_intelligence.source_handling import SourceHandlingBlockedError, validate_policy_body
+
+    def policy(dispositions: dict[object, object]) -> dict[str, object]:
+        return {
+            "processing_decision": "ALLOW",
+            "retention_decision": "ALLOW",
+            "reconstruction_decision": "ALLOW",
+            "access_decision": "ALLOW",
+            "deletion_lifecycle_decision": "ALLOW",
+            "durable_dispositions": {"SOURCE_BYTES": dispositions},
+        }
+
+    exact = {
+        "PERSIST": "ALLOW",
+        "READ_ACCESS": "ALLOW",
+        "RECONSTRUCT": "ALLOW",
+        "DELETE_OR_EXPIRE": "ALLOW",
+    }
+    validate_policy_body(policy(exact))
+
+    missing_key: dict[object, object] = dict(exact)
+    del missing_key["RECONSTRUCT"]
+    extra_key: dict[object, object] = dict(exact)
+    extra_key["EXPORT"] = "ALLOW"
+    integer_key: dict[object, object] = dict(exact)
+    integer_key[7] = "ALLOW"
+    none_key: dict[object, object] = dict(exact)
+    none_key[None] = "ALLOW"
+    malformed_maps: tuple[dict[object, object], ...] = (
+        missing_key,
+        extra_key,
+        integer_key,
+        none_key,
+    )
+    for malformed in malformed_maps:
+        with pytest.raises(SourceHandlingBlockedError, match="operation keys are incomplete or unsupported"):
+            validate_policy_body(policy(malformed))
+
+
+@pytest.mark.parametrize("bad_value", [["ALLOW"], {"decision": "ALLOW"}])
+def test_policy_validator_rejects_non_string_values_with_governed_error(bad_value: object) -> None:
+    from hunter.evidence_intelligence.source_handling import SourceHandlingBlockedError, validate_policy_body
+
+    base = {
+        "processing_decision": "ALLOW",
+        "retention_decision": "ALLOW",
+        "reconstruction_decision": "ALLOW",
+        "access_decision": "ALLOW",
+        "deletion_lifecycle_decision": "ALLOW",
+        "durable_dispositions": {
+            "SOURCE_BYTES": {
+                "PERSIST": "ALLOW",
+                "READ_ACCESS": "ALLOW",
+                "RECONSTRUCT": "ALLOW",
+                "DELETE_OR_EXPIRE": "ALLOW",
+            }
+        },
+    }
+
+    top_level = dict(base)
+    top_level["processing_decision"] = bad_value
+    with pytest.raises(SourceHandlingBlockedError, match="policy decision is missing or invalid"):
+        validate_policy_body(top_level)
+
+    disposition = dict(base)
+    disposition["durable_dispositions"] = {
+        "SOURCE_BYTES": {
+            "PERSIST": bad_value,
+            "READ_ACCESS": "ALLOW",
+            "RECONSTRUCT": "ALLOW",
+            "DELETE_OR_EXPIRE": "ALLOW",
+        }
+    }
+    with pytest.raises(SourceHandlingBlockedError, match="durable content disposition is missing or invalid"):
+        validate_policy_body(disposition)
+
+    lifecycle = dict(base)
+    lifecycle["durable_dispositions"] = {
+        "SOURCE_BYTES": {
+            "PERSIST": "ALLOW",
+            "READ_ACCESS": "ALLOW",
+            "RECONSTRUCT": "ALLOW",
+            "DELETE_OR_EXPIRE": bad_value,
+        }
+    }
+    with pytest.raises(SourceHandlingBlockedError, match="durable lifecycle disposition is missing or invalid"):
+        validate_policy_body(lifecycle)

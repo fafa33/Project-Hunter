@@ -41,6 +41,75 @@ GOVERNED_DURABLE_CATEGORIES = frozenset(
 CONTENT_DISPOSITION_ORDER = {"ALLOW": 0, "REDACT": 1, "OMIT": 2, "DENY": 3, "BLOCKED": 4}
 LIFECYCLE_DISPOSITION_ORDER = {"ALLOW": 0, "EXPIRE": 1, "DELETE": 2, "BLOCKED": 3}
 
+#: Canonical top-level policy decision vocabularies.
+TOP_LEVEL_POLICY_DECISION_VOCABULARY: Mapping[str, frozenset[str]] = {
+    "processing_decision": frozenset({"ALLOW", "DENY", "BLOCKED"}),
+    "retention_decision": frozenset({"ALLOW", "DENY", "BLOCKED"}),
+    "reconstruction_decision": frozenset({"ALLOW", "DENY", "BLOCKED"}),
+    "access_decision": frozenset({"ALLOW", "DENY", "BLOCKED"}),
+    "deletion_lifecycle_decision": frozenset({"ALLOW", "EXPIRE", "DELETE", "BLOCKED"}),
+}
+
+DURABLE_DISPOSITION_OPERATIONS = frozenset(
+    {
+        "PERSIST",
+        "READ_ACCESS",
+        "RECONSTRUCT",
+        "DELETE_OR_EXPIRE",
+    }
+)
+
+
+def _validate_durable_category_dispositions(
+    category: str,
+    category_dispositions: Mapping[typing.Any, typing.Any],
+) -> None:
+    operations = tuple(category_dispositions)
+    if len(operations) != len(DURABLE_DISPOSITION_OPERATIONS) or any(
+        not isinstance(operation, str) or operation not in DURABLE_DISPOSITION_OPERATIONS for operation in operations
+    ):
+        raise SourceHandlingBlockedError("durable disposition operation keys are incomplete or unsupported")
+
+    for operation in ("PERSIST", "READ_ACCESS", "RECONSTRUCT"):
+        disposition = category_dispositions.get(operation)
+        if not isinstance(disposition, str) or disposition not in CONTENT_DISPOSITION_ORDER:
+            raise SourceHandlingBlockedError("durable content disposition is missing or invalid")
+    lifecycle_disposition = category_dispositions.get("DELETE_OR_EXPIRE")
+    if not isinstance(lifecycle_disposition, str) or lifecycle_disposition not in LIFECYCLE_DISPOSITION_ORDER:
+        raise SourceHandlingBlockedError("durable lifecycle disposition is missing or invalid")
+
+    if category == UNKNOWN_DURABLE_CATEGORY and any(
+        category_dispositions[operation] != "BLOCKED" for operation in DURABLE_DISPOSITION_OPERATIONS
+    ):
+        raise SourceHandlingBlockedError("UNKNOWN_CATEGORY dispositions must be explicitly BLOCKED")
+
+
+def validate_policy_body(
+    policy_body: Mapping[str, typing.Any],
+    *,
+    require_durable_dispositions: bool = True,
+) -> None:
+    """Canonical validator for a Source Handling Policy body."""
+    if not isinstance(policy_body, Mapping):
+        raise SourceHandlingBlockedError("policy body is missing or malformed")
+
+    for key, allowed in TOP_LEVEL_POLICY_DECISION_VOCABULARY.items():
+        val = policy_body.get(key)
+        if not isinstance(val, str) or val not in allowed:
+            raise SourceHandlingBlockedError(f"policy decision is missing or invalid: {key} {val!r}")
+
+    if require_durable_dispositions:
+        dispositions = policy_body.get("durable_dispositions")
+        if not isinstance(dispositions, Mapping) or not dispositions:
+            raise SourceHandlingBlockedError("durable dispositions are missing or malformed")
+        for category, cat_disps in dispositions.items():
+            if not isinstance(category, str) or category not in GOVERNED_DURABLE_CATEGORIES:
+                raise SourceHandlingBlockedError(f"durable category is unknown or not persistable: {category!r}")
+            if not isinstance(cat_disps, Mapping):
+                raise SourceHandlingBlockedError("durable category disposition unavailable")
+            _validate_durable_category_dispositions(category, cat_disps)
+
+
 #: Lifecycle dispositions that forbid a durable write outright.  ``EXPIRE``
 #: establishes a governed expiry obligation rather than a write prohibition, so
 #: it is deliberately absent here and matches the top-level lifecycle rule.
@@ -850,16 +919,7 @@ def derive_source_handling_decision(
     if registry_id != policy_record.get("field_category_registry_id"):
         raise SourceHandlingBlockedError("policy is not bound to the resolved registry")
 
-    top_level_allowed = {
-        "processing_decision": {"ALLOW", "DENY", "BLOCKED"},
-        "retention_decision": {"ALLOW", "DENY", "BLOCKED"},
-        "reconstruction_decision": {"ALLOW", "DENY", "BLOCKED"},
-        "access_decision": {"ALLOW", "DENY", "BLOCKED"},
-        "deletion_lifecycle_decision": {"ALLOW", "EXPIRE", "DELETE", "BLOCKED"},
-    }
-    for key, allowed in top_level_allowed.items():
-        if policy.get(key) not in allowed:
-            raise SourceHandlingBlockedError(f"policy decision is missing or invalid: {key}")
+    validate_policy_body(policy, require_durable_dispositions=True)
 
     operation_restrictions = set(_string_sequence(normalized_fact.get("operation_restrictions")))
     if "MODEL_PROCESSING_PROHIBITED" in operation_restrictions and policy.get("processing_decision") == "ALLOW":
@@ -874,9 +934,7 @@ def derive_source_handling_decision(
     ):
         raise SourceHandlingBlockedError("policy cannot override no-persistence restriction")
 
-    dispositions = policy.get("durable_dispositions")
-    if not isinstance(dispositions, Mapping):
-        raise SourceHandlingBlockedError("durable dispositions are missing")
+    dispositions = typing.cast(Mapping[str, typing.Any], policy["durable_dispositions"])
     _validate_complete_disposition_map(dispositions, registry_record)
 
     return {
@@ -1226,11 +1284,7 @@ def _validate_complete_disposition_map(
         category_dispositions = dispositions.get(category)
         if not isinstance(category_dispositions, Mapping):
             raise SourceHandlingBlockedError("durable category disposition unavailable")
-        for operation in ("PERSIST", "READ_ACCESS", "RECONSTRUCT"):
-            if category_dispositions.get(operation) not in CONTENT_DISPOSITION_ORDER:
-                raise SourceHandlingBlockedError("durable content disposition is missing or invalid")
-        if category_dispositions.get("DELETE_OR_EXPIRE") not in LIFECYCLE_DISPOSITION_ORDER:
-            raise SourceHandlingBlockedError("durable lifecycle disposition is missing or invalid")
+        _validate_durable_category_dispositions(category, category_dispositions)
 
 
 def _publication_payload_from_record(record: Mapping[str, typing.Any]) -> dict[str, typing.Any]:

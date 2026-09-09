@@ -2,27 +2,69 @@
   "claims": {
     "acceptance_criteria": [
       {
-        "criterion": "One narrow Draft PR bound to this Issue resolving exactly the two findings above (no redesign, no scope creep).",
-        "evidence": "The candidate touches exactly: scripts/provision_source_handling_issue_authority.py (new per-Issue provisioning CLI), scripts/bootstrap_source_handling_authority.py (only the dual-source guard + docstring), tests/test_source_handling_provisioning.py (new), tests/test_source_handling_bootstrap.py (two new tests only), docs/ISSUE_AGENT_ISSUER_DEPLOYMENT.md (Railway order only). No source module outside those scripts, no new services, no registry or persistence changes.",
+        "criterion": "Admission bound used for A must be derived only from the six EVIDENCE/VERIFIER provenance records in A's current provisioning plan, not unrelated records in the database.",
+        "evidence": "_max_provenance_admission filters exact six planned identity/kind pairs; preview and final bounds both use it.",
         "id": "C-1",
         "verdict": "satisfied"
       },
       {
-        "criterion": "Canonical pre-ready hostile review regenerated for the exact candidate head.",
-        "evidence": "This judgement was recorded with scripts/hunter_pre_ready_review.py --base 8c26e09... --head 8c26e09...bf68e8c --issue 430 and then re-verified with the same arguments; the resulting .hunter/pre-ready-hostile-review.json binds the exact blob SHAs of the candidate change set (review_target / review_target_digest derived from git diff --raw, excluding only the review's own artifact path).",
+        "criterion": "Regression: provision A, then B at a later time, then rerun A with A's original `--as-of`; A must remain exactly `already-provisioned` with identical authority IDs/state.",
+        "evidence": "test_finding_1_unrelated_issue_provenance_scoping provisions A then B then retries A with its original as_of, asserting already-provisioned and all three unchanged authority IDs.",
         "id": "C-2",
         "verdict": "satisfied"
       },
       {
-        "criterion": "Complete-for-Review optimization: provisioning command for one Issue + mutual-exclusion fix + tests + deployment doc updated to the (a)-(g) Railway order.",
-        "evidence": "The provisioning CLI provisions FACT / FIELD_CATEGORY_REGISTRY / POLICY for one Issue with its six EVIDENCE/VERIFIER antecedents and is covered by 7 new tests (happy path resolves through resolve_pre_model_source_handling at the runtime boundary; exact rerun idempotent; authority mismatch fails closed; existing-but-mismatched authority head fails before any provenance write; provenance mismatch fails closed; as-of predating the rule or the Issue update fails closed; operator env guard; dual-source mutual exclusion). The bootstrap mutual-exclusion fix has 2 new tests (unit ValueError + CLI SystemExit with fresh DB untouched). The Railway deployment doc now lists steps (a)-(g) in the mandated order.",
+        "criterion": "Foreign/unrelated provenance must not move A's preview/final authority timestamp.",
+        "evidence": "Both preview_admission and predefined use planned_pairs; unrelated identities and kinds are excluded by the SQL predicate.",
         "id": "C-3",
         "verdict": "satisfied"
       },
       {
-        "criterion": "Live Railway Issue E2E is unblocked by the provisioned authority (verified via the runtime pre-model resolution boundary in tests).",
-        "evidence": "test_provisioning_publishes_exact_authority_records_for_one_issue provisions a fresh database through the CLI and then resolves the exact issue document identity with resolve_pre_model_source_handling at cutoff = updated_at + 1 day: fact_record.id, registry_record.id, decision.retention_decision == ALLOW, decision.field_category_registry_id == registry:<document_id>:v1, and authorization_rule.id == the genesis rule record id; provenance antecedents verified by the production resolver.",
+        "criterion": "Validate the complete derived policy decision/disposition vocabulary before the first authority OR provenance mutation.",
+        "evidence": "_run calls _validate_options before recovery or repository initialization; service issue_authorization and publication shape checks reuse _validate_policy_payload before writes.",
         "id": "C-4",
+        "verdict": "satisfied"
+      },
+      {
+        "criterion": "Validation must match the production Source Handling resolver/contract; do not duplicate a weaker or divergent vocabulary if a canonical validator/constant can be reused.",
+        "evidence": "validate_policy_body is shared by CLI preflight, persistence and derive_source_handling_decision; exact operation keys, category vocabulary, type checks and UNKNOWN_CATEGORY all-BLOCKED semantics match.",
+        "id": "C-5",
+        "verdict": "satisfied"
+      },
+      {
+        "criterion": "Regression for each relevant decision/disposition family: invalid input fails closed before any persistent write and leaves a fresh database with no per-Issue provenance/authority state.",
+        "evidence": "test_finding_2_invalid_vocabulary_fails_closed_before_any_write covers five decision families, four disposition families and four Fact dimensions, asserting zero per-Issue state.",
+        "id": "C-6",
+        "verdict": "satisfied"
+      },
+      {
+        "criterion": "Valid existing defaults and supported values continue to work.",
+        "evidence": "Happy-path provisioning and production-runtime coverage preserve defaults and governed values; test_disposition_cli_aliases_preserve_destination covers both legacy flags and all four newer spellings with ALLOW.",
+        "id": "C-7",
+        "verdict": "satisfied"
+      },
+      {
+        "criterion": "A retry after interruption must be recoverable without manual database inspection and without requiring the operator to have captured a timestamp that was printed only after completion.",
+        "evidence": "_existing_provenance_info authenticates recovered planned records and derives the original known_at automatically; no manual as_of is required.",
+        "id": "C-8",
+        "verdict": "satisfied"
+      },
+      {
+        "criterion": "The fix may make the operation atomic, persist/emit the retry identity before mutation, or deterministically recover it from an exact partial plan \u2014 choose the narrowest architecture-compatible solution after inspecting existing transaction/service boundaries.",
+        "evidence": "Deterministic exact partial-plan recovery retains the existing independently committed provenance and authority service boundaries without redesign.",
+        "id": "C-9",
+        "verdict": "satisfied"
+      },
+      {
+        "criterion": "Regression must simulate interruption after at least one intermediate provenance write, then invoke a normal retry with no manually supplied `--as-of`; retry must complete successfully and converge to exactly one canonical set of six provenance records + FACT/REGISTRY/POLICY authority heads.",
+        "evidence": "test_finding_3_interrupted_provisioning_recovery simulates two committed provenance writes, retries without as_of, verifies six provenance records and three revision-one Issue heads, then verifies idempotent retry.",
+        "id": "C-10",
+        "verdict": "satisfied"
+      },
+      {
+        "criterion": "Mismatched partial state must still fail closed; do not silently overwrite or supersede foreign/different content.",
+        "evidence": "Mismatched authority identity, wrong kind, forged/tampered partial records and signed future-known successors fail closed. _check_provenance_heads_exact verifies the complete chain/current head with datetime.max before writes; the successor regression asserts unchanged (2,1,1,0) record/head/authority/authorization counts.",
+        "id": "C-11",
         "verdict": "satisfied"
       }
     ],
@@ -40,138 +82,198 @@
       "transaction-snapshot-consistency"
     ],
     "base_ref": "main",
-    "base_sha": "8c26e096c4656d7fac96f4dc30af17538ea31c04",
+    "base_sha": "109a796e3a23ef294ff32885179dd76dd8016f6f",
     "defect_families": [
       {
-        "evidence": "DFF-007 swept on the provisioning path: every derived record scope is bound to issue_agent_document_id(authorization) (github-issue:repo#N) and the two registry/policy scopes derive from that exact id; the rule id is the genesis record id via bootstrap._expected_genesis_record_id, never a caller-supplied rule string; the operator environment guard (EVIDENCE_DATABASE_ENV/VERIFICATION_KEY/SHA/GENESIS_RULE_SHA256) must match this exact bootstrap and signing key, or the run fails closed before any write. test_provisioning_requires_operator_environment_configuration pins the guard; the happy path asserts the exact canonical (family, scope) keys.",
+        "evidence": "Explicit as_of is bounded before storage initialization. Recovered time comes from authenticated planned provenance. datetime.max is used only for current-head exactness, not live admission; actual issuance and replay cutoffs remain trusted.",
+        "family": "DFF-001",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Reviewed the existing per-record transaction boundaries and preflight ordering. This scoped change adds validation before writes and recoverability across independent commits; it does not claim global atomic provisioning. No demonstrated in-scope snapshot defect remains.",
+        "family": "DFF-002",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Issue document identity and all six provenance identities remain derived from the authorization and exact Issue; content-addressed IDs are unchanged. Head comparisons reject different content.",
+        "family": "DFF-003",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Canonical validation rejects unknown categories, malformed values, absent or extra operation keys; UNKNOWN_CATEGORY requires exactly four BLOCKED dispositions. Missing authority remains fail closed.",
+        "family": "DFF-004",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "The candidate changes policy validation, not content persistence surfaces. The UNKNOWN_CATEGORY production regression resolves a blocked policy but rejects durable unclassified content; nested-payload controls remain unchanged.",
+        "family": "DFF-005",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Exact partial recovery reuses authenticated known_at and monotonic admitted provenance. The interrupted retry regression converges to six records and three heads and then returns already-provisioned.",
+        "family": "DFF-006",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Authorization and publication remain bound to repository-derived Issue scope, exact payload digest, evidence/verifier identities and expected head. No alternate replay or write route is introduced.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "DFF-008 swept: record ids are content-addressed and derived byte-for-byte as the repository service derives them (sha256 of _canonical_json(_plain_mapping(payload)) for authority records via _publish; sha256 of the provenance claims payload for provenance records), and _provision_authority_record re-verifies the published result.record_id equals the derived id, so a forgery or a service deviation is structurally detectable and blocks the success report. Provenance exact-head pre-check computes the would-be id and refuses to supersede a different head.",
+        "evidence": "Recovery verifies signatures and the chain before trusting known_at; exactness compares the authenticated current head. Forged matching IDs and signed future-known successors have fail-closed regressions.",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "DFF-009 swept: the CLI itself raised an unsatisfiable proof obligation on the first end-to-end attempt - records claimed known_at = issue_updated_at (a past instant) while physical admission is wall-clock now, so the authority publication's provenance-antecedent validation found the EVIDENCE/VERIFIER antecedents not strict-known at the authority known_at ('canonical publication provenance is incomplete', SystemExit 2). Resolved by the explicit --as-of operator instant and the authority-time clamp authority_at = max(as_of, max provenance admission), which is a deterministic function of the pinned as-of. The happy path now issues all three authorizations and consumes them, with exactly six provenance records present.",
+        "evidence": "No connector receipt or ingress policy is changed. This is a clone-capable signed local-push range; authenticated writer provenance and trusted hosted proof remain distinct requirements.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "DFF-010 swept: bootstrap's _load_signing_key silently preferred the file over the environment and never errored; now both sources together raise an explicit deterministic ValueError before any database is opened (the raise precedes the database argument parsing path). test_signing_key_sources_are_mutually_exclusive (unit) and test_both_signing_key_sources_fail_closed_before_db_open (CLI, asserts the fresh database is not created) pin both success and fail-closed shapes. The provisioning CLI consumes the same shared loader and gains the same mutual-exclusion property via test_provisioning_signing_key_sources_are_mutually_exclusive. The authority-head exact pre-check likewise enforces prevention at the earliest boundary: it fails closed before any provenance or authority write, not merely by detecting a mismatch after mutation.",
+        "evidence": "hunter_writer_provenance.py --check-range HEAD passes for the full base-to-head range under Farhad5778/fafa33. Unauthorized Tembo/Jules ancestors were removed by the authorized recovery; new commits are signed.",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "DFF-011 swept: nothing in this candidate makes a valid commit permanently inadmissible. The as-of guards reject an as-of predating the genesis rule (clear error), predating the Issue's updated_at, and -- after normalization, immediately and before the provenance repository is constructed or any provenance/authority write occurs -- a FUTURE as-of ('the provisioning as-of must not be in the future'); the redundant later future check was removed. test_provisioning_refuses_future_as_of_before_any_mutation leaves the database with only the genesis/canonical state: zero per-Issue provenance records and heads, zero FACT/FIELD_CATEGORY_REGISTRY/POLICY authority records, unchanged canonical keys and operator root.",
+        "evidence": "All intermediate candidate commits retain authorization-bound identities; this review binds content and excludes its own artifact, so committing the review cannot strand otherwise unchanged code evidence.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "DFF-012 swept: the provisioning CLI mints no connector authorization receipts and introduces no receipt-freshness path; the only new persisted writes are the provenance/authority records through the repository service, and connector receipt freshness over the pushed range remains enforced by the repository-local push boundary. No receipt-driven admission logic is added or changed.",
+        "evidence": "The connector receipt is inherited unchanged from the base and makes no new candidate claim. Only the canonical hostile-review artifact is refreshed after final source/test changes.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "DFF-013 swept: this pre-ready hostile review is being recorded for the exact candidate head (base 8c26e09, head bf68e8c) via scripts/hunter_pre_ready_review.py --record --issue 430 and verified with the same base/head arguments before push; the review covers all ten applicable families and the four Issue acceptance bullets.",
+        "evidence": "One complete adversarial review of base 109a796e3a23ef294ff32885179dd76dd8016f6f to head 1d732d3e32c8121d59279d2f22593fb0b0d39d1b covers all eleven Issue acceptance bullets and all sixteen applicable families. No new in-scope P1/P2 blocker was found; optional or speculative expansion is not a blocking finding under the owner completion rule.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "DFF-014 swept: idempotency is exact-match only. On a re-run pinned to the recorded as_of, every would-be provenance id and authority record id equals the current head, so nothing is written (test_provisioning_exact_rerun_is_idempotent asserts byte-stable canonical keys, revision 1, identical record counts). Any other authority content (test_provisioning_mismatched_authority_content_fails_closed, sensitivity RESTRICTED) fails closed before write with 'refusing to replace provisioned authority state', and a mismatched existing authority head is now detected and rejected before ANY provenance write (test_provisioning_mismatched_authority_head_fails_before_any_provenance_write: existing FACT head + zero per-Issue provenance, then SystemExit 2, zero provenance/authority writes, canonical keys and record counts unchanged). A different provenance head also fails closed before any write. The printed as_of is the pinned, deterministic operator instant - not a fresh transient each run.",
+        "evidence": "No hosted prerequisite/controller logic changes. Running exact-head CI remains pending, never represented here as success; completion waits for actual hosted results.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "DFF-015 swept: the mutual-exclusion guard is enforced at the earliest practical boundary - the shared _load_signing_key raises before the database path is even read, not merely detected by a later check; the regression test proves a fresh DB is untouched. The provisioning config guard (DFF-009-adjacent) also fails before any write. These are prevention-by-construction at entry, not detection-only.",
+        "evidence": "No defect-registry lifecycle or guard enforcement claim changes. Review clearance is distinguished from passing local tests and from pending hosted admission.",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "DFF-016 swept: each FACT / FIELD_CATEGORY_REGISTRY / POLICY issuance names its own EVIDENCE and VERIFIER identity, and all six provenance records are written before the first issuance; the authority-time clamp keeps known_at at or after the highest provenance admission so each record remains resolvable at its own known_at, and the clamp is a deterministic function of the pinned as-of so the exact re-run reproduces identical records without removing or duplicating proof. No proof is ever dropped to shorten a path.",
+        "evidence": "No validation-reuse authority changes. The previously executed 38 focused and 314 Source Handling tests cover the identical source/test content; hosted CI is independently required for the final commit.",
         "family": "DFF-016",
         "outcome": "clear"
       }
     ],
     "findings": [
       {
-        "evidence": "The provisioning CLI wrote the six EVIDENCE/VERIFIER provenance records before checking whether existing FACT / FIELD_CATEGORY_REGISTRY / POLICY authority heads exactly matched the would-be records, so a run against an existing-but-mismatched authority head mutated provenance before rejecting the authority. Resolved by deriving the expected record id for all three authority families, reading each current canonical head through the repository resolver store (current_canonical_head_id), and failing closed before any provenance write on the first mismatch; exact-match heads remain on the idempotent path. New regression test pins zero provenance/authority writes and unchanged canonical state.",
+        "evidence": "Provenance admission lookup was database-wide; it is now restricted to the current Issue's exact six planned identity/kind pairs.",
         "id": "F-1",
         "resolution": "resolved",
         "severity": "blocking"
       },
       {
-        "evidence": "Backdating the per-Issue records to issue_updated_at is impossible in this contract: authority records' claimed known_at must be at or after their physical admission, and an Issue classified 'now' cannot be knowable before its last update. The first end-to-end run failed with 'canonical publication provenance is incomplete' (SystemExit 2) because the EVIDENCE/VERIFIER antecedents were admitted later than the authority records' known_at. Resolved with the explicit operator --as-of instant and the clamp authority_at = max(as_of, max provenance admission), itself a deterministic function of the pinned as-of. Happy path green; exact rerun idempotent.",
+        "evidence": "Provisioning could write unsupported policy vocabulary; all Fact and Policy options now pass canonical preflight before any Issue provenance or authority write.",
         "id": "F-2",
         "resolution": "resolved",
         "severity": "blocking"
       },
       {
-        "evidence": "A future --as-of could previously reach provenance writes before the redundant future-time check that sat later in the write path, violating fail-closed-before-mutation. Resolved by moving the future as-of rejection to immediately after on_or_after is parsed and normalized, before the provenance repository is constructed and before any provenance/authority write, and removing the later redundant check. New regression test (fresh bootstrapped DB + future --as-of) pins exit 2 with zero per-Issue provenance records, zero FACT/FIELD_CATEGORY_REGISTRY/POLICY authority records, and unchanged genesis/root and canonical state.",
-        "id": "F-2",
-        "resolution": "resolved",
-        "severity": "blocking"
-      },
-      {
-        "evidence": "The exact-head provenance pre-check queried source_handling_provenance_heads before the provenance schema existed on a fresh database, failing with sqlite3.OperationalError 'no such table'. Resolved by constructing SourceHandlingProvenanceAuthorityRepository (whose initializer creates the schema idempotently) before running the head pre-check. The fresh-database happy path now passes.",
+        "evidence": "Interrupted no---as-of provisioning could not recover; valid exact partial state now recovers its timestamp and converges, while mismatched state fails closed.",
         "id": "F-3",
         "resolution": "resolved",
         "severity": "blocking"
       },
       {
-        "evidence": "bootstrap_source_handling_authority._load_signing_key silently preferred --signing-key-file over HUNTER_SOURCE_HANDLING_SIGNING_KEY and never errored, so a misconfigured operator could be masking a stale env value. Resolved: both sources together raise an explicit deterministic ValueError before any database is opened; the provisioning CLI inherits the same loader. Unit and CLI-level tests pin the pre-DB fail-closed.",
+        "evidence": "Explicit invalid or future --as-of values previously initialized storage first; temporal validation now precedes repository initialization, with a regression that makes any early initialization fail.",
         "id": "F-4",
         "resolution": "resolved",
         "severity": "blocking"
       },
       {
-        "evidence": "Two racing provisioning processes on the same empty database both observe absent heads; the second writer's provenance writes then no-op or supersede depending on content, while the authority issue_authorization/publish path has its own genesis-style guards. Safe and fail-closed in both orders, but the graceful classification of the loser as already-provisioned is left to a follow-up rather than implemented here.",
+        "evidence": "Policies previously accepted invented durable categories. The canonical validator rejects all non-governed categories; the governed UNKNOWN_CATEGORY sentinel is separately constrained to an exact all-BLOCKED fail-closed shape.",
         "id": "F-5",
-        "resolution": "unresolved",
-        "severity": "non-blocking"
+        "resolution": "resolved",
+        "severity": "blocking"
       },
       {
-        "evidence": "Classification content (sensitivity, restrictions, dispositions) comes from operator-supplied options, not from reading the live Issue content; a real-content verification step remains the operator's responsibility (the command fails closed on a missing document contract rather than inventing content). Accepted for this operator-only provisioning path.",
+        "evidence": "Non-string policy and disposition values could raise raw TypeError. Explicit type checks now route malformed values through SourceHandlingBlockedError.",
         "id": "F-6",
-        "resolution": "unresolved",
-        "severity": "non-blocking"
+        "resolution": "resolved",
+        "severity": "blocking"
+      },
+      {
+        "evidence": "A runtime test fixture used an invented UNUSED_CATEGORY. It now uses the governed payload-unused DIAGNOSTIC category without weakening the production validator.",
+        "id": "F-7",
+        "resolution": "resolved",
+        "severity": "blocking"
+      },
+      {
+        "evidence": "Recovered provenance was trusted from raw storage before integrity verification. Recovery now discovers only planned pairs and resolves each through the production tamper-verifying provenance resolver before using its timestamp, accepting idempotency, or performing any additional provenance or authority write.",
+        "id": "F-8",
+        "resolution": "resolved",
+        "severity": "blocking"
+      },
+      {
+        "evidence": "UNKNOWN_CATEGORY was rejected entirely. The governed sentinel is now accepted only with the canonical exact four-operation all-BLOCKED disposition map; invented categories remain rejected and durable persistence remains impossible.",
+        "id": "F-9",
+        "resolution": "resolved",
+        "severity": "blocking"
+      },
+      {
+        "evidence": "Durable disposition mappings accepted undeclared operation keys. The shared canonical validator now requires exactly PERSIST, READ_ACCESS, RECONSTRUCT, and DELETE_OR_EXPIRE and rejects missing, extra, or malformed keys fail closed.",
+        "id": "F-10",
+        "resolution": "resolved",
+        "severity": "blocking"
+      },
+      {
+        "evidence": "Current-provenance-head exactness: _check_provenance_heads_exact uses the production signature/chain-verifying resolver with datetime.max, selecting the actual signed head rather than a wall-clock prior version. test_future_known_signed_successor_fails_before_any_provisioning_write proves rejection with unchanged (2,1,1,0) counts. Fixed in 028b96ab3627481083f627807bba2515ec93f2c0.",
+        "id": "F-11",
+        "resolution": "resolved",
+        "severity": "blocking"
+      },
+      {
+        "evidence": "CLI compatibility: both --read_access-disposition and --delete_or_expire-disposition are restored alongside newer aliases with the same argparse destinations. Six parser cases accept ALLOW in test_disposition_cli_aliases_preserve_destination. Fixed in 1d732d3e32c8121d59279d2f22593fb0b0d39d1b.",
+        "id": "F-12",
+        "resolution": "resolved",
+        "severity": "blocking"
       }
     ],
-    "issue": "430",
+    "issue": "432",
     "review_target": [
       {
-        "blob_sha": "e9707d300c5ae476c1c5542f0c3a7640d0f1923f",
+        "blob_sha": "757683f4dfd09523eef3de4df7fa6b6efca09e93",
         "path": "scripts/provision_source_handling_issue_authority.py",
         "previous_path": "",
-        "status": "added"
+        "status": "modified"
       },
       {
-        "blob_sha": "cbc77361bc70b9bc85d56c5d292e2df87dc402bf",
+        "blob_sha": "8d5777a9421f330cfde04e757be196d7f0613bd2",
+        "path": "src/hunter/evidence_intelligence/source_handling.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "b09c5a7fe40b243ed81478fd7e4a8d987fada9ec",
+        "path": "src/hunter/evidence_intelligence/source_handling_persistence.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "665f56b4a44b87a40a8bcdcae2a2711f40e1e169",
+        "path": "tests/test_source_handling_production_runtime.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "eeee0395c2f886baf6c514f9a0596d653f3e0b76",
         "path": "tests/test_source_handling_provisioning.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "912211659f3cfc1591b9c4d7c831ab934f1f9b72",
-        "path": "docs/ISSUE_AGENT_ISSUER_DEPLOYMENT.md",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "a9de2084c76bc2e7e7dfa26d271355582e14e7c7",
-        "path": "scripts/bootstrap_source_handling_authority.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "94bf881d3b22e4b89a6cd85895c6d34c62ab0e55",
-        "path": "tests/test_source_handling_bootstrap.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "47de1813bbb4be09eb7c7efaadaea343f24555a029143ab98aaf999ee97d969c"
+    "review_target_digest": "ce1e0b782dffd08da1b07e69bb15be897f4f9fd94280fb9bc46d056da7077a31"
   },
-  "review_id": "7e81802a1277a7f8b07e5ce7098752c5a8c30adc11651af1530c446b740afdb5",
+  "review_id": "62ec46da6a9ecd9bf8d683d67d74ac726569dc7762d9b266dcc7b55482719116",
   "schema": "hunter.pre-ready-hostile-review.v1"
 }
