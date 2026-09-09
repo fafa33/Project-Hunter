@@ -29,6 +29,13 @@ authority; every one of those stays with the component that already holds it:
     the only path by which Issue-sourced content becomes a durable
     ``EvidenceDocument``. Missing or non-permissive Source Handling authority
     fails closed here, before a build exists.
+``GovernedEngineeringTaskIngress`` (Issue #436)
+    the one canonical engineering-task entry point. Every authorized Issue is
+    bound to a ``PromptTaskRequest`` and compiles only through this ingress,
+    which resolves the exact governed route and enforces the route's hard input
+    budget (bounded ``engineering.review-fix`` reduction within policy, or a
+    machine-readable fail-closed ``PromptTaskOversizeError`` before any
+    dispatch). There is deliberately no second entry into the machine here.
 ``SmartPromptMachine`` (ADR 0031/0032 route + profile registries)
     the only issuer of a build and of the signed ``PromptAutomationEnvelope``.
 ``serialize_prompt_automation_handoff``
@@ -63,6 +70,7 @@ from hunter.automation.agent_fallback_runtime import (
     OperationalAgentFallbackRuntime,
 )
 from hunter.automation.n8n_handoff import serialize_prompt_automation_handoff
+from hunter.evidence_intelligence.engineering_task_ingress import GovernedEngineeringTaskIngress
 from hunter.evidence_intelligence.intake import (
     EvidenceIntakeReference,
     EvidenceIntelligenceIntakeService,
@@ -812,6 +820,7 @@ class GovernedIssueAgentExecutionService:
         "_configuration",
         "_ledger",
         "_machine",
+        "_ingress",
         "_boundary",
         "_fallback",
         "_verifier",
@@ -866,6 +875,11 @@ class GovernedIssueAgentExecutionService:
             routes=ISSUE_AGENT_ROUTE_REGISTRY,
             source_handling_resolver=source_handling_resolver,
             clock=self._clock,
+        )
+        self._ingress = GovernedEngineeringTaskIngress(
+            machine=self._machine,
+            routes=ISSUE_AGENT_ROUTE_REGISTRY,
+            profiles=ISSUE_AGENT_PROFILE_REGISTRY,
         )
 
     @classmethod
@@ -942,7 +956,7 @@ class GovernedIssueAgentExecutionService:
             processed_at=_aware_utc("Issue execution intake time", self._clock.now()),
         )
 
-        compiled = self._machine.compile_task(request)
+        compiled = self._ingress.compile(request)
         envelope = compiled.envelope
         envelope.verify_issuer_signature(self._verifier)
         if envelope.build_record_id != compiled.compilation.manifest.build_record_id:
