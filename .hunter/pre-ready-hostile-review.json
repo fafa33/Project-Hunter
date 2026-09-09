@@ -3,7 +3,7 @@
     "acceptance_criteria": [
       {
         "criterion": "One repository-owned Railway runtime startup seam exists.",
-        "evidence": "railway.toml start command is updated to 'python scripts/railway_issuer_startup.py', the single canonical Railway start command pinned in the repository-owned configuration; no dashboard-only configuration can bypass it. scripts/railway_issuer_startup.py is the one startup seam bridging bootstrap and issuer launch, and it delegates entirely to the existing canonical bootstrap (bootstrap_source_handling_authority) and issuer (hunter_issue_agent_issuer.py).",
+        "evidence": "railway.toml start command is updated to 'python scripts/railway_issuer_startup.py', the single canonical Railway start command pinned in the repository-owned configuration; no dashboard-only configuration can bypass it. scripts/railway_issuer_startup.py is the one startup seam bridging bootstrap and issuer launch, and it delegates entirely to the existing canonical bootstrap through the shared public contract (bootstrap_source_handling_authority.bootstrap_authority, the same function the bootstrap CLI calls) and to the canonical issuer (hunter_issue_agent_issuer.py).",
         "id": "AC-01",
         "verdict": "satisfied"
       },
@@ -33,19 +33,19 @@
       },
       {
         "criterion": "`/healthz` becomes healthy on Railway after canonical bootstrap.",
-        "evidence": "The startup seam boots fresh mounted volumes before issuer composition. test_issuer_launch_cannot_happen_before_successful_bootstrap and test_bootstrap_failure_prevents_issuer_launch prove the issuer process only starts after canonical bootstrap, so the issuer's /healthz handler becomes reachable only after the authority database exists on the mounted /data volume.",
+        "evidence": "This review establishes the implementation precondition: the startup seam composes the issuer only after the canonical bootstrap of the mounted volume, so the issuer's /healthz handler can only become reachable after the authority database exists on the mounted /data volume. test_issuer_launch_cannot_happen_before_successful_bootstrap and test_bootstrap_failure_prevents_issuer_launch prove the issuer process only starts after canonical bootstrap, and test_evidence_directory_without_a_mounted_volume_fails_closed proves the seam fails closed before bootstrap when the volume is not mounted. Live operational proof -- /healthz returning healthy on a deployed Railway service -- is still to be verified after deployment is authorized and is not claimed by this review.",
         "id": "AC-06",
         "verdict": "satisfied"
       },
       {
         "criterion": "Focused tests cover fresh, idempotent, mismatch, and signing-key-lifecycle cases.",
-        "evidence": "18 tests in test_railway_issuer_startup.py cover fresh volume bootstrap (2), idempotency (2), tamper/mismatch fail-closed (4), signing-key lifecycle (3), startup ordering (2), canonical issuer command (3), and port forwarding (1). All 18 pass, alongside the pre-existing bootstrap/issuer suites.",
+        "evidence": "21 tests in test_railway_issuer_startup.py cover fresh-volume bootstrap (2), mounted-volume verification (3), already-bootstrapped idempotency (2), tamper/mismatch fail-closed (3), configuration fail-closed (2), signing-key lifecycle isolation (3), bootstrap-before-issuer ordering (2), canonical issuer command, provenance resolver and port (3), and the shared public bootstrap contract (1). All 21 pass, alongside the pre-existing bootstrap/issuer suites.",
         "id": "AC-07",
         "verdict": "satisfied"
       },
       {
         "criterion": "`railway.toml` and deployment docs are consistent.",
-        "evidence": "railway.toml start command 'python scripts/railway_issuer_startup.py' matches the Railway section of docs/ISSUE_AGENT_ISSUER_DEPLOYMENT.md, which documents runtime bootstrap as the canonical startup path for a fresh mounted /data volume, and the signature lifecycle contract. No dashboard-only Railway configuration is introduced.",
+        "evidence": "railway.toml start command 'python scripts/railway_issuer_startup.py' matches the Railway section of docs/ISSUE_AGENT_ISSUER_DEPLOYMENT.md, which documents runtime bootstrap of the mounted /data volume as the canonical startup path and sequences per-Issue provisioning strictly after the deploying bootstrap (the genesis rule must already exist in the database), plus the signature lifecycle contract. No dashboard-only Railway configuration is introduced.",
         "id": "AC-08",
         "verdict": "satisfied"
       },
@@ -139,7 +139,7 @@
         "outcome": "clear"
       },
       {
-        "evidence": "The deployment-sequencing defect (issuer starts before volume is bootstrapped) is resolved by the runtime startup seam, and DFF-019 prevents recurrence.",
+        "evidence": "No Ready or READY-ELIGIBLE signal exists without a complete exact-head hostile review: the local pre-push boundary derives the governing Issue acceptance criteria from GitHub and fails closed (DRAFT-ONLY) unless every Issue #442 criterion is covered, so a review cannot inflate readiness on its own.",
         "family": "DFF-013",
         "outcome": "clear"
       },
@@ -164,7 +164,7 @@
         "outcome": "clear"
       },
       {
-        "evidence": "The new DFF-019 family declares runtime-bootstrap-not-volume-aware-before-issuer-composition prevention with 18 regression tests covering fresh volume, idempotency, tamper/mismatch fail-closed, signing-key lifecycle, and ordering invariants.",
+        "evidence": "The new DFF-019 family declares runtime-bootstrap-not-volume-aware-before-issuer-composition prevention with 21 regression tests covering fresh volume, mounted-volume verification, idempotency, tamper/mismatch fail-closed, signing-key lifecycle isolation, ordering invariants, and the shared public bootstrap contract.",
         "family": "DFF-019",
         "outcome": "clear"
       }
@@ -198,25 +198,25 @@
     "issue": "442",
     "review_target": [
       {
-        "blob_sha": "4dd0a69c0c35ab9a85e22b90f8e32cb9e0ae33a9",
+        "blob_sha": "121cb6adccc8b005d9cb8896e5f799c56e97613d",
         "path": "scripts/railway_issuer_startup.py",
         "previous_path": "",
         "status": "added"
       },
       {
-        "blob_sha": "f79f8e7a117f5c62866e9f4e09744e43354a9904",
+        "blob_sha": "8be93adc6e3fae23d083fcf6ea0d52cfbcab4ae2",
         "path": "tests/test_railway_issuer_startup.py",
         "previous_path": "",
         "status": "added"
       },
       {
-        "blob_sha": "d2fcf5d6ff272d8ebd8bd056128bd77e90b06307",
+        "blob_sha": "cc5ec57fbc1e8683e81bc8d5591a6087bbe42a10",
         "path": "docs/DEFECT_REGISTRY.json",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "06f98e02d9b931814f2b5155fdf8f55972322cf2",
+        "blob_sha": "01cb6a7a1f17983c2ab276e6620e25b61dce3e4d",
         "path": "docs/ISSUE_AGENT_ISSUER_DEPLOYMENT.md",
         "previous_path": "",
         "status": "modified"
@@ -224,6 +224,12 @@
       {
         "blob_sha": "1f6f517d4bcb16ca4515a2c72eb44e8cb035bfc7",
         "path": "railway.toml",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "4a7ff853985f8207ea3f363e63f45680a4c867df",
+        "path": "scripts/bootstrap_source_handling_authority.py",
         "previous_path": "",
         "status": "modified"
       },
@@ -246,8 +252,8 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "9d419812f2fabb1468cbab46a6c5b49f4c91b7b8849b113bdcafd729147065a0"
+    "review_target_digest": "69740aa10df20cc199f34f181501ecc4b3664e111ebc5f598ef2569af422f1a7"
   },
-  "review_id": "699231c07742e39bfa7f4ac02b5d21cfa7a9dd3f527abb697ed3205d6ca31f68",
+  "review_id": "fbda2b9ea94a176ac55bb4bea916e35ad32f46c2d78057d58825eec3d98abe8d",
   "schema": "hunter.pre-ready-hostile-review.v1"
 }
