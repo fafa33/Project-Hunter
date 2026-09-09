@@ -2,21 +2,69 @@
   "claims": {
     "acceptance_criteria": [
       {
-        "criterion": "Scope provenance admission lookup to the current Issue only so unrelated Issues/provenance do not change an Issue's authority timestamp.",
-        "evidence": "_max_provenance_admission accepts only the current Issue's exact planned (provenance_id, provenance_kind) pairs. test_finding_1_unrelated_issue_provenance_scoping proves a later unrelated Issue cannot move the first Issue's authority timestamp or content-addressed heads.",
+        "criterion": "Admission bound used for A must be derived only from the six EVIDENCE/VERIFIER provenance records in A's current provisioning plan, not unrelated records in the database.",
+        "evidence": "_max_provenance_admission filters exact six planned identity/kind pairs; preview and final bounds both use it.",
         "id": "C-1",
         "verdict": "satisfied"
       },
       {
-        "criterion": "Validate the complete Source Handling policy decision/disposition vocabulary before any provenance or authority write.",
-        "evidence": "The shared validate_policy_body validator is used by production resolution, persistence preflight, and the provisioning option preflight. It enforces the governed category vocabulary, the exact four operation keys, type-safe disposition values, and UNKNOWN_CATEGORY's all-BLOCKED shape before provisioning writes.",
+        "criterion": "Regression: provision A, then B at a later time, then rerun A with A's original `--as-of`; A must remain exactly `already-provisioned` with identical authority IDs/state.",
+        "evidence": "test_finding_1_unrelated_issue_provenance_scoping provisions A then B then retries A with its original as_of, asserting already-provisioned and all three unchanged authority IDs.",
         "id": "C-2",
         "verdict": "satisfied"
       },
       {
-        "criterion": "Make interrupted provisioning recoverable without manually supplied --as-of.",
-        "evidence": "No---as-of recovery discovers only the current Issue's planned identities, resolves every discovered pair through the production provenance resolver before using known_at, and then checks exact content heads. Valid partial state converges to six provenance records and FACT/REGISTRY/POLICY; tampered, forged, wrong-kind, or mismatched state fails before an additional provenance or authority write.",
+        "criterion": "Foreign/unrelated provenance must not move A's preview/final authority timestamp.",
+        "evidence": "Both preview_admission and predefined use planned_pairs; unrelated identities and kinds are excluded by the SQL predicate.",
         "id": "C-3",
+        "verdict": "satisfied"
+      },
+      {
+        "criterion": "Validate the complete derived policy decision/disposition vocabulary before the first authority OR provenance mutation.",
+        "evidence": "_run calls _validate_options before recovery or repository initialization; service issue_authorization and publication shape checks reuse _validate_policy_payload before writes.",
+        "id": "C-4",
+        "verdict": "satisfied"
+      },
+      {
+        "criterion": "Validation must match the production Source Handling resolver/contract; do not duplicate a weaker or divergent vocabulary if a canonical validator/constant can be reused.",
+        "evidence": "validate_policy_body is shared by CLI preflight, persistence and derive_source_handling_decision; exact operation keys, category vocabulary, type checks and UNKNOWN_CATEGORY all-BLOCKED semantics match.",
+        "id": "C-5",
+        "verdict": "satisfied"
+      },
+      {
+        "criterion": "Regression for each relevant decision/disposition family: invalid input fails closed before any persistent write and leaves a fresh database with no per-Issue provenance/authority state.",
+        "evidence": "test_finding_2_invalid_vocabulary_fails_closed_before_any_write covers five decision families, four disposition families and four Fact dimensions, asserting zero per-Issue state.",
+        "id": "C-6",
+        "verdict": "satisfied"
+      },
+      {
+        "criterion": "Valid existing defaults and supported values continue to work.",
+        "evidence": "Happy-path provisioning and production-runtime coverage preserve defaults and governed values; test_disposition_cli_aliases_preserve_destination covers both legacy flags and all four newer spellings with ALLOW.",
+        "id": "C-7",
+        "verdict": "satisfied"
+      },
+      {
+        "criterion": "A retry after interruption must be recoverable without manual database inspection and without requiring the operator to have captured a timestamp that was printed only after completion.",
+        "evidence": "_existing_provenance_info authenticates recovered planned records and derives the original known_at automatically; no manual as_of is required.",
+        "id": "C-8",
+        "verdict": "satisfied"
+      },
+      {
+        "criterion": "The fix may make the operation atomic, persist/emit the retry identity before mutation, or deterministically recover it from an exact partial plan \u2014 choose the narrowest architecture-compatible solution after inspecting existing transaction/service boundaries.",
+        "evidence": "Deterministic exact partial-plan recovery retains the existing independently committed provenance and authority service boundaries without redesign.",
+        "id": "C-9",
+        "verdict": "satisfied"
+      },
+      {
+        "criterion": "Regression must simulate interruption after at least one intermediate provenance write, then invoke a normal retry with no manually supplied `--as-of`; retry must complete successfully and converge to exactly one canonical set of six provenance records + FACT/REGISTRY/POLICY authority heads.",
+        "evidence": "test_finding_3_interrupted_provisioning_recovery simulates two committed provenance writes, retries without as_of, verifies six provenance records and three revision-one Issue heads, then verifies idempotent retry.",
+        "id": "C-10",
+        "verdict": "satisfied"
+      },
+      {
+        "criterion": "Mismatched partial state must still fail closed; do not silently overwrite or supersede foreign/different content.",
+        "evidence": "Mismatched authority identity, wrong kind, forged/tampered partial records and signed future-known successors fail closed. _check_provenance_heads_exact verifies the complete chain/current head with datetime.max before writes; the successor regression asserts unchanged (2,1,1,0) record/head/authority/authorization counts.",
+        "id": "C-11",
         "verdict": "satisfied"
       }
     ],
@@ -37,82 +85,82 @@
     "base_sha": "109a796e3a23ef294ff32885179dd76dd8016f6f",
     "defect_families": [
       {
-        "evidence": "Provisioning rejects future and pre-authority --as-of values before storage initialization; no---as-of recovery derives time only from signature-verified current-Issue provenance.",
+        "evidence": "Explicit as_of is bounded before storage initialization. Recovered time comes from authenticated planned provenance. datetime.max is used only for current-head exactness, not live admission; actual issuance and replay cutoffs remain trusted.",
         "family": "DFF-001",
         "outcome": "clear"
       },
       {
-        "evidence": "Authority validation and publication remain on the existing transaction-bound Source Handling service path; the change adds preflight validation and verified recovery without a new persistence path.",
+        "evidence": "Reviewed the existing per-record transaction boundaries and preflight ordering. This scoped change adds validation before writes and recoverability across independent commits; it does not claim global atomic provisioning. No demonstrated in-scope snapshot defect remains.",
         "family": "DFF-002",
         "outcome": "clear"
       },
       {
-        "evidence": "Authority and provenance logical identities remain repository-derived, content-addressed, and bound to the exact Issue document identity.",
+        "evidence": "Issue document identity and all six provenance identities remain derived from the authorization and exact Issue; content-addressed IDs are unchanged. Head comparisons reject different content.",
         "family": "DFF-003",
         "outcome": "clear"
       },
       {
-        "evidence": "The canonical policy validator rejects invented categories, missing or extra operation keys, malformed keys and values, and any non-BLOCKED UNKNOWN_CATEGORY disposition through SourceHandlingBlockedError.",
+        "evidence": "Canonical validation rejects unknown categories, malformed values, absent or extra operation keys; UNKNOWN_CATEGORY requires exactly four BLOCKED dispositions. Missing authority remains fail closed.",
         "family": "DFF-004",
         "outcome": "clear"
       },
       {
-        "evidence": "UNKNOWN_CATEGORY remains non-persistable: it may be declared only with four explicit BLOCKED dispositions, and durable payload validation rejects fields that resolve to the sentinel.",
+        "evidence": "The candidate changes policy validation, not content persistence surfaces. The UNKNOWN_CATEGORY production regression resolves a blocked policy but rejects durable unclassified content; nested-payload controls remain unchanged.",
         "family": "DFF-005",
         "outcome": "clear"
       },
       {
-        "evidence": "Valid interrupted retries recover the verified provenance known_at and converge exactly; mismatched or tampered partial state fails without additional provenance or authority records.",
+        "evidence": "Exact partial recovery reuses authenticated known_at and monotonic admitted provenance. The interrupted retry regression converges to six records and three heads and then returns already-provisioned.",
         "family": "DFF-006",
         "outcome": "clear"
       },
       {
-        "evidence": "All derived scopes and planned provenance identities remain bound to issue_agent_document_id for the exact authorization's repository and Issue number.",
+        "evidence": "Authorization and publication remain bound to repository-derived Issue scope, exact payload digest, evidence/verifier identities and expected head. No alternate replay or write route is introduced.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "Content-addressed authority and provenance record IDs are preserved, and a matching-looking forged provenance record/head ID cannot bypass production signature and chain verification.",
+        "evidence": "Recovery verifies signatures and the chain before trusting known_at; exactness compares the authenticated current head. Forged matching IDs and signed future-known successors have fail-closed regressions.",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "Strict-known recovery resolves through the production tamper-verifying provenance view before known_at is trusted, while authority known_at remains bounded by the current Issue's admitted provenance.",
+        "evidence": "No connector receipt or ingress policy is changed. This is a clone-capable signed local-push range; authenticated writer provenance and trusted hosted proof remain distinct requirements.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "Policy publication preflight and runtime resolution use the same validate_policy_body implementation and exact canonical disposition operation vocabulary.",
+        "evidence": "hunter_writer_provenance.py --check-range HEAD passes for the full base-to-head range under Farhad5778/fafa33. Unauthorized Tembo/Jules ancestors were removed by the authorized recovery; new commits are signed.",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "Malformed policy JSON shapes, non-string keys or values, unknown categories, and tampered recovered provenance fail through governed SourceHandlingBlockedError paths rather than permissive fallbacks or raw Python exceptions.",
+        "evidence": "All intermediate candidate commits retain authorization-bound identities; this review binds content and excludes its own artifact, so committing the review cannot strand otherwise unchanged code evidence.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "The candidate does not weaken connector receipt freshness, scope, or authenticated-write policy.",
+        "evidence": "The connector receipt is inherited unchanged from the base and makes no new candidate claim. Only the canonical hostile-review artifact is refreshed after final source/test changes.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "This canonical review is recorded against base 109a796e3a23ef294ff32885179dd76dd8016f6f, Issue 432, and the exact candidate content.",
+        "evidence": "One complete adversarial review of base 109a796e3a23ef294ff32885179dd76dd8016f6f to head 1d732d3e32c8121d59279d2f22593fb0b0d39d1b covers all eleven Issue acceptance bullets and all sixteen applicable families. No new in-scope P1/P2 blocker was found; optional or speculative expansion is not a blocking finding under the owner completion rule.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "Idempotency is exact-match only; foreign content, wrong provenance kind, inconsistent timestamps or authority identities, and mismatched authority heads fail without superseding state.",
+        "evidence": "No hosted prerequisite/controller logic changes. Running exact-head CI remains pending, never represented here as success; completion waits for actual hosted results.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "Complete Fact and Policy vocabularies, including the exact durable operation-key set, are validated before the first Issue provenance or authority record is written.",
+        "evidence": "No defect-registry lifecycle or guard enforcement claim changes. Review clearance is distinguished from passing local tests and from pending hosted admission.",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "Recovered retry state is selected by exact current-Issue provenance identities and kinds, authenticated by the production resolver, and checked for one consistent timestamp and authority identity before use.",
+        "evidence": "No validation-reuse authority changes. The previously executed 38 focused and 314 Source Handling tests cover the identical source/test content; hosted CI is independently required for the final commit.",
         "family": "DFF-016",
         "outcome": "clear"
       }
@@ -177,12 +225,24 @@
         "id": "F-10",
         "resolution": "resolved",
         "severity": "blocking"
+      },
+      {
+        "evidence": "Current-provenance-head exactness: _check_provenance_heads_exact uses the production signature/chain-verifying resolver with datetime.max, selecting the actual signed head rather than a wall-clock prior version. test_future_known_signed_successor_fails_before_any_provisioning_write proves rejection with unchanged (2,1,1,0) counts. Fixed in 028b96ab3627481083f627807bba2515ec93f2c0.",
+        "id": "F-11",
+        "resolution": "resolved",
+        "severity": "blocking"
+      },
+      {
+        "evidence": "CLI compatibility: both --read_access-disposition and --delete_or_expire-disposition are restored alongside newer aliases with the same argparse destinations. Six parser cases accept ALLOW in test_disposition_cli_aliases_preserve_destination. Fixed in 1d732d3e32c8121d59279d2f22593fb0b0d39d1b.",
+        "id": "F-12",
+        "resolution": "resolved",
+        "severity": "blocking"
       }
     ],
     "issue": "432",
     "review_target": [
       {
-        "blob_sha": "63db6116074f45cc0b1eda12d84603228a8811c7",
+        "blob_sha": "757683f4dfd09523eef3de4df7fa6b6efca09e93",
         "path": "scripts/provision_source_handling_issue_authority.py",
         "previous_path": "",
         "status": "modified"
@@ -206,14 +266,14 @@
         "status": "modified"
       },
       {
-        "blob_sha": "ae11bd4511d67e42603db8f30c0858623d9b23da",
+        "blob_sha": "eeee0395c2f886baf6c514f9a0596d653f3e0b76",
         "path": "tests/test_source_handling_provisioning.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "f2a9c0b49aa89f09290764733abacbe38a55c4df1d408ea3aacd8c12c75d678b"
+    "review_target_digest": "ce1e0b782dffd08da1b07e69bb15be897f4f9fd94280fb9bc46d056da7077a31"
   },
-  "review_id": "0e6fc4c268a3f892cc2340cb492d8a6def8afb5b8447d7a179d6f9567b0e787a",
+  "review_id": "62ec46da6a9ecd9bf8d683d67d74ac726569dc7762d9b266dcc7b55482719116",
   "schema": "hunter.pre-ready-hostile-review.v1"
 }
