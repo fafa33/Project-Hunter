@@ -56,9 +56,7 @@ def _machine(
             reason_codes=(),
         )
         build_record = SimpleNamespace(reason_codes=())
-        orchestration = SimpleNamespace(
-            build_result=SimpleNamespace(allocation=allocation, build_record=build_record)
-        )
+        orchestration = SimpleNamespace(build_result=SimpleNamespace(allocation=allocation, build_record=build_record))
         return cast(PromptCompilationResult, SimpleNamespace(manifest=manifest, orchestration=orchestration))
 
     monkeypatch.setattr(PromptContextCompiler, "compile", fake_compile)
