@@ -266,10 +266,10 @@
     {
       "id": "MA-006",
       "class": "retry-authorized-by-caller-intent-rather-than-by-predecessor-outcome-evidence",
-      "source": "Issue #313 ADR 0034 Phase B hostile self-review: prepare_attempt accepted attempt_ordinal > 1 with only a predecessor attempt identity, so a caller could prepare and dispatch a second attempt after an uncertain first attempt whose request the provider may already have accepted. Recurrence on PR #314 independent review (Codex P1): the first guard derived its decision from the caller-supplied predecessor ModelAttemptOutcomeRecord, so a fabricated record naming the predecessor and claiming RETRY_REQUIRES_NEW_ATTEMPT defeated the gate entirely while the repository held an uncertain outcome or none at all — the prior hardening was insufficient because it checked the shape of the evidence instead of resolving the authority",
+      "source": "Issue #313 ADR 0034 Phase B hostile self-review: prepare_attempt accepted attempt_ordinal > 1 with only a predecessor attempt identity, so a caller could prepare and dispatch a second attempt after an uncertain first attempt whose request the provider may already have accepted. Recurrence on PR #314 independent review (Codex P1): the first guard derived its decision from the caller-supplied predecessor ModelAttemptOutcomeRecord, so a fabricated record naming the predecessor and claiming RETRY_REQUIRES_NEW_ATTEMPT defeated the gate entirely while the repository held an uncertain outcome or none at all \u2014 the prior hardening was insufficient because it checked the shape of the evidence instead of resolving the authority",
       "classification": "systemic",
       "guard_boundary": "ModelAdapterService.prepare_attempt, before any authority resolution or durable write",
-      "guard": "a retry requires the predecessor attempt's own DURABLE outcome, resolved from persistence via authoritative_outcome() strict-known at the new attempt's cutoff and following the supersession chain, checked before Source Handling is resolved and before anything durable exists. A caller-supplied record is evidence only: it is compared against the durable one and a mismatch is rejected, never used in its place — the same treatment prepare_attempt already gives a caller-supplied Source Handling decision and the ADR 0033 persistence invariant requires generally. Retry is admitted only when the durable outcome's retry_authorization is RETRY_REQUIRES_NEW_ATTEMPT, which derive_retry_authorization() grants only where the transport proved non-delivery or the provider established it rejected the request instead of executing it; an attempt with no durable outcome is uncertain and blocks retry. An authorized retry still gets a new attempt, cutoff, Source Handling resolution, handoff, and idempotency key, and terminal_outcome_exists() prevents re-dispatching an attempt that already has an outcome",
+      "guard": "a retry requires the predecessor attempt's own DURABLE outcome, resolved from persistence via authoritative_outcome() strict-known at the new attempt's cutoff and following the supersession chain, checked before Source Handling is resolved and before anything durable exists. A caller-supplied record is evidence only: it is compared against the durable one and a mismatch is rejected, never used in its place \u2014 the same treatment prepare_attempt already gives a caller-supplied Source Handling decision and the ADR 0033 persistence invariant requires generally. Retry is admitted only when the durable outcome's retry_authorization is RETRY_REQUIRES_NEW_ATTEMPT, which derive_retry_authorization() grants only where the transport proved non-delivery or the provider established it rejected the request instead of executing it; an attempt with no durable outcome is uncertain and blocks retry. An authorized retry still gets a new attempt, cutoff, Source Handling resolution, handoff, and idempotency key, and terminal_outcome_exists() prevents re-dispatching an attempt that already has an outcome",
       "test": "tests/test_model_adapter_phase_b.py::test_a_fabricated_predecessor_outcome_cannot_authorize_a_retry",
       "status": "guarded"
     },
@@ -299,7 +299,7 @@
       "source": "PR #314 independent review (Codex P2): strict_known_response_artifact ordered ascending with LIMIT 1, so once append_outcome admitted a superseding correction carrying revised response evidence, every later strict-known read returned the original artifact permanently and the correction was invisible",
       "classification": "systemic",
       "guard_boundary": "Model Adapter persistence strict-known historical reads",
-      "guard": "authoritative_outcome() resolves the head of the supersession chain — the outcome that no other outcome KNOWN AT THE SAME CUTOFF supersedes — and strict_known_response_artifact() returns the artifact attached to that governing outcome, falling back to the most recent earlier artifact when the correction records no new response evidence. Both remain strict-known, so a correction recorded after the cutoff does not retroactively govern an earlier read and the superseded original is preserved rather than overwritten. The general rule: wherever a record family admits append-only corrections, a historical read must follow the supersession chain, because neither the earliest row nor a blind latest row is the authoritative one",
+      "guard": "authoritative_outcome() resolves the head of the supersession chain \u2014 the outcome that no other outcome KNOWN AT THE SAME CUTOFF supersedes \u2014 and strict_known_response_artifact() returns the artifact attached to that governing outcome, falling back to the most recent earlier artifact when the correction records no new response evidence. Both remain strict-known, so a correction recorded after the cutoff does not retroactively govern an earlier read and the superseded original is preserved rather than overwritten. The general rule: wherever a record family admits append-only corrections, a historical read must follow the supersession chain, because neither the earliest row nor a blind latest row is the authoritative one",
       "test": "tests/test_model_adapter_phase_b.py::test_a_superseding_correction_is_what_a_later_replay_reads",
       "status": "guarded"
     },
@@ -878,6 +878,33 @@
       "sources": [
         "Issue #415 Trusted Candidate Preflight Validation failure on PR #416 head 327242b (2026-09-06)",
         "Issue #419 trusted-lane parallelization (2026-09-06)"
+      ]
+    },
+    {
+      "id": "DFF-018",
+      "title": "rendered-budget-not-raw-input-decides-dispatchability",
+      "invariant": "Dispatchability is decided by the canonical compiled allocation outcome -- only a build that the machine itself ranked READY with a concrete prompt artifact proceeds toward an automation envelope and executable handoff -- never by raw caller-input size alone, because the machine renders additional prompt material (canonical JSON objective wrapper, trusted specification, authority, output contract, context, missingness) over whatever caller task text passed its raw guard.",
+      "applicability": {
+        "changed_paths": [
+          "src/hunter/evidence_intelligence/"
+        ],
+        "rationale": "The governed engineering-task ingress and the pre-model compile path it gates are the only places a non-dispatchable compiled build could receive an automation envelope. Raw caller-input size alone is never proof of a dispatchable render, so any future engineering ingress surface must pass through the same compiled-outcome gate."
+      },
+      "prevention": {
+        "mechanism": "After canonical SmartPromptMachine compilation the governed ingress inspects the allocation outcome the machine already produced: unless the compiled outcome is READY with a non-None prompt_artifact_id, it fails closed with a deterministic machine-readable PromptTaskUnreadyError (ENGINEERING_TASK_NOT_READY with task_key/route/profile/outcome/prompt_artifact_id/reason_codes/preflight/available) before any automation envelope is accepted, returned, recorded or dispatched. There is no parallel renderer and no duplicate budget authority: the gate consumes the machine's own rendered outcome. The raw-input PromptTaskOversizeError guard stays as the cheap first gate, and a genuinely READY build still compiles.",
+        "boundary": "review"
+      },
+      "regression_evidence": [
+        "tests/test_engineering_task_ingress.py::test_non_ready_compiled_outcome_fails_closed_before_any_envelope",
+        "tests/test_engineering_task_ingress.py::test_insufficient_budget_reports_the_rendered_preflight_sizes",
+        "tests/test_engineering_task_ingress.py::test_genuinely_ready_build_still_compiles_to_a_signed_envelope",
+        "tests/test_issue_agent_execution.py::test_rendered_budget_failure_rejects_before_handoff_and_records_no_success",
+        "tests/test_issue_agent_execution.py::test_genuinely_ready_implementation_still_compiles_and_dispatches",
+        "tests/test_issue_agent_execution.py::test_giant_raw_input_still_rejects_at_the_ingress_without_compiling"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "Issue #439 Codex post-merge P1 on PR #438 / Issue #436 (2026-09-09)"
       ]
     }
   ]

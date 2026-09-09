@@ -8,6 +8,14 @@ reduction within policy versus fail-closed ``PromptTaskOversizeError`` for a
 non-bounded engineering route), deterministic single-stage replay identity, and
 that both production consumers (the composition root and the trusted issuer
 edge) route through this one ingress rather than a parallel dispatcher.
+
+They also cover Issue #439: raw-input size is never proof of dispatchability.
+After canonical machine compilation the ingress must fail closed with a
+deterministic machine-readable ``PromptTaskUnreadyError`` (no automation
+envelope, no handoff) unless the compiled allocation outcome is ``READY`` with
+a concrete ``prompt_artifact_id`` -- covering INSUFFICIENT_BUDGET,
+REPLAN_REQUIRED, and READY-with-no-artifact, while a genuinely READY build
+still compiles.
 """
 
 from __future__ import annotations
@@ -27,9 +35,21 @@ from hunter.automation.issue_agent_execution import (
 from hunter.evidence_intelligence.engineering_task_ingress import (
     GovernedEngineeringTaskIngress,
     PromptTaskOversizeError,
+    PromptTaskUnreadyError,
+)
+from hunter.evidence_intelligence.pre_model import (
+    EvidenceContextAllocationResult,
+    EvidenceContextSelectionLedger,
+    EvidenceContextSelectionPolicy,
+    EvidencePreModelBuildRecord,
+    EvidencePreModelBuildResult,
+)
+from hunter.evidence_intelligence.pre_model_orchestration import (
+    EvidencePreModelOrchestrationResult,
 )
 from hunter.evidence_intelligence.repository import EvidenceIntelligenceRepository
 from hunter.evidence_intelligence.smart_prompt_machine import (
+    PromptBuildManifest,
     PromptCompilationResult,
     PromptContextCompiler,
     PromptMachineProfileRegistry,
@@ -72,18 +92,24 @@ def _compose_machine(
     profiles: PromptMachineProfileRegistry,
     routes: PromptTaskRouteRegistry,
     profile_identity: str,
+    outcome: str = "READY",
+    prompt_artifact_id: str | None = "artifact-1",
+    available_input_bytes: int | None = None,
 ) -> tuple[SmartPromptMachine, GovernedEngineeringTaskIngress, dict[str, Any]]:
     captured: dict[str, Any] = {}
+    budget = available_input_bytes if available_input_bytes is not None else 28_672
+    failing = outcome != "READY"
 
     def fake_compile(_self: PromptContextCompiler, request: Any) -> PromptCompilationResult:
         captured["request"] = request
-        manifest = SimpleNamespace(
+        return _canonical_result(
             registry_identity=profiles.registry_identity,
             profile_identity=profile_identity,
-            manifest_id="manifest-1",
-            build_record_id="build-1",
+            outcome=outcome,
+            prompt_artifact_id=prompt_artifact_id,
+            preflight_size_bytes=None if outcome == "REPLAN_REQUIRED" else budget + len("x") * (1 if failing else 0),
+            available_input_bytes=budget,
         )
-        return cast(PromptCompilationResult, SimpleNamespace(manifest=manifest))
 
     monkeypatch.setattr(PromptContextCompiler, "compile", fake_compile)
     machine = SmartPromptMachine(
@@ -94,6 +120,85 @@ def _compose_machine(
     )
     ingress = GovernedEngineeringTaskIngress(machine=machine, routes=routes, profiles=profiles)
     return machine, ingress, captured
+
+
+def _canonical_result(
+    *,
+    registry_identity: str,
+    profile_identity: str,
+    outcome: str,
+    prompt_artifact_id: str | None,
+    preflight_size_bytes: int | None,
+    available_input_bytes: int,
+) -> PromptCompilationResult:
+    """A canonical machine result the ingress gate can trust: real pre-model
+    dataclasses carrying the compiled allocation outcome and manifest lineage."""
+    reason_codes = () if outcome == "READY" else (outcome,)
+    failing = outcome != "READY"
+    allocation = EvidenceContextAllocationResult(
+        ledger_id="ledger-1",
+        capability_identity="cap-1",
+        prompt_specification_identity="spec-1",
+        outcome=cast(Any, outcome),
+        included_span_ids=(),
+        budget_excluded_span_ids=() if outcome == "READY" else ("span-1",),
+        preflight_size_bytes=preflight_size_bytes,
+        available_input_bytes=available_input_bytes,
+        reason_codes=reason_codes,
+    )
+    policy = EvidenceContextSelectionPolicy(
+        policy_id="policy-1",
+        version="1",
+        required_span_ids=(),
+        optional_span_ids=("span-1",),
+    )
+    ledger = EvidenceContextSelectionLedger(
+        intent_id="intent-1",
+        policy_identity=policy.policy_identity,
+        decisions=(),
+    )
+    build_record = EvidencePreModelBuildRecord(
+        execution_owner_id="owner-1",
+        intent_id=ledger.intent_id,
+        ledger_id=ledger.ledger_id,
+        allocation_id=allocation.allocation_id,
+        package_id=None,
+        prompt_plan_id=None,
+        prompt_artifact_id=prompt_artifact_id,
+        reconstruction_outcome="UNAVAILABLE" if failing else "AVAILABLE",
+        reason_codes=reason_codes,
+    )
+    build_result = EvidencePreModelBuildResult(
+        ledger=ledger,
+        allocation=allocation,
+        package=None,
+        prompt_plan=None,
+        prompt_artifact=None,
+        build_record=build_record,
+    )
+    orchestration = EvidencePreModelOrchestrationResult(
+        document_id="doc-1",
+        canonical_span_ids=(),
+        policy=policy,
+        build_result=build_result,
+        persisted=SimpleNamespace(build_record_id=build_record.build_record_id),
+    )
+    manifest = PromptBuildManifest(
+        request_id="req-1",
+        registry_identity=registry_identity,
+        profile_identity=profile_identity,
+        build_record_id=build_record.build_record_id,
+        intent_id=ledger.intent_id,
+        ledger_id=ledger.ledger_id,
+        allocation_id=allocation.allocation_id,
+        package_id=None,
+        prompt_plan_id=None,
+        prompt_artifact_id=prompt_artifact_id,
+    )
+    return PromptCompilationResult(
+        manifest=manifest,
+        orchestration=orchestration,
+    )
 
 
 def _review_fix_machine(
@@ -336,3 +441,99 @@ def test_one_canonical_ingress_across_both_production_execution_paths() -> None:
         ISSUE_AGENT_ROUTE_REGISTRY.resolve(ISSUE_AGENT_TASK_KEY).route_identity
         == ENGINEERING_IMPLEMENT_ROUTE.route_identity
     )
+
+
+def _implement_request() -> PromptTaskRequest:
+    return PromptTaskRequest(
+        document_id="implementation-1",
+        execution_owner_id="implementation-run-1",
+        task_key=ENGINEERING_IMPLEMENT_TASK_KEY,
+        task_text="Implement the minimal repro for the reported failure.",
+    )
+
+
+@pytest.mark.parametrize(
+    ("outcome", "prompt_artifact_id", "expected_codes"),
+    [
+        pytest.param("INSUFFICIENT_BUDGET", None, ("INSUFFICIENT_BUDGET",), id="budget-exhausted"),
+        pytest.param("REPLAN_REQUIRED", None, ("REPLAN_REQUIRED",), id="replan-required"),
+        pytest.param("READY", None, (), id="ready-but-no-artifact"),
+        pytest.param("UNABLE_TO_BOOT", None, ("UNABLE_TO_BOOT",), id="other-non-ready"),
+    ],
+)
+def test_non_ready_compiled_outcome_fails_closed_before_any_envelope(
+    monkeypatch: pytest.MonkeyPatch,
+    outcome: str,
+    prompt_artifact_id: str | None,
+    expected_codes: tuple[str, ...],
+) -> None:
+    profiles = PromptMachineProfileRegistry((ENGINEERING_IMPLEMENT_PROFILE,))
+    routes = PromptTaskRouteRegistry((ENGINEERING_IMPLEMENT_ROUTE,), profiles=profiles)
+    _machine, ingress, captured = _compose_machine(
+        monkeypatch,
+        profiles=profiles,
+        routes=routes,
+        profile_identity=ENGINEERING_IMPLEMENT_PROFILE.profile_identity,
+        outcome=outcome,
+        prompt_artifact_id=prompt_artifact_id,
+    )
+    del _machine
+    request = _implement_request()
+
+    with pytest.raises(PromptTaskUnreadyError) as raised:
+        ingress.compile(request)
+    error = raised.value
+
+    assert "request" in captured
+    assert error.task_key == ENGINEERING_IMPLEMENT_TASK_KEY
+    assert error.route_id == ENGINEERING_IMPLEMENT_ROUTE.route_id
+    assert error.profile_id == ENGINEERING_IMPLEMENT_PROFILE.profile_id
+    assert error.outcome == outcome
+    assert error.prompt_artifact_id == prompt_artifact_id
+    assert error.reason_codes == expected_codes
+    assert f"ENGINEERING_TASK_NOT_READY task_key={error.task_key}" in str(error)
+    assert f"route={error.route_id}" in str(error)
+    assert f"profile={error.profile_id}" in str(error)
+    assert f"outcome={outcome}" in str(error)
+    assert f"prompt_artifact_id={prompt_artifact_id}" in str(error)
+    assert f"reason_codes={','.join(expected_codes)}" in str(error)
+
+    with pytest.raises(PromptTaskUnreadyError) as again:
+        ingress.compile(request)
+    assert str(again.value) == str(error)
+
+
+def test_insufficient_budget_reports_the_rendered_preflight_sizes(monkeypatch: pytest.MonkeyPatch) -> None:
+    profiles = PromptMachineProfileRegistry((ENGINEERING_IMPLEMENT_PROFILE,))
+    routes = PromptTaskRouteRegistry((ENGINEERING_IMPLEMENT_ROUTE,), profiles=profiles)
+    _machine, ingress, captured = _compose_machine(
+        monkeypatch,
+        profiles=profiles,
+        routes=routes,
+        profile_identity=ENGINEERING_IMPLEMENT_PROFILE.profile_identity,
+        outcome="INSUFFICIENT_BUDGET",
+        prompt_artifact_id=None,
+    )
+    del _machine
+    del captured
+    budget = ingress.budget_for(ENGINEERING_IMPLEMENT_TASK_KEY)
+
+    with pytest.raises(PromptTaskUnreadyError) as raised:
+        ingress.compile(_implement_request())
+    assert raised.value.preflight_size_bytes == budget.maximum_input_bytes + 1
+    assert raised.value.available_input_bytes == budget.maximum_input_bytes
+    assert f"preflight={budget.maximum_input_bytes + 1}" in str(raised.value)
+    assert f"available={budget.maximum_input_bytes}" in str(raised.value)
+
+
+def test_genuinely_ready_build_still_compiles_to_a_signed_envelope(monkeypatch: pytest.MonkeyPatch) -> None:
+    _machine, ingress, captured = _implement_machine(monkeypatch)
+    del _machine
+    request = _implement_request()
+
+    result = ingress.compile(request)
+
+    assert "request" in captured
+    assert result.envelope.route_identity == ENGINEERING_IMPLEMENT_ROUTE.route_identity
+    assert result.envelope.profile_identity == ENGINEERING_IMPLEMENT_PROFILE.profile_identity
+    result.envelope.verify_issuer_signature(_verifier())

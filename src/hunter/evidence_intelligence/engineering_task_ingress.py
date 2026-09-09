@@ -18,6 +18,16 @@ task text is either deterministically reduced within policy (the governed
 dispatch with a machine-readable ``PromptTaskOversizeError``. No provider or
 model ever receives raw Issue/chat context from this path.
 
+Raw-input size is never proof of dispatchability. After canonical
+``SmartPromptMachine`` compilation the ingress inspects the compiled outcome
+the machine already produced and only a build that is canonically ``READY``
+with a concrete ``prompt_artifact_id`` may proceed toward an automation
+envelope and executable handoff; ``INSUFFICIENT_BUDGET`` and every other
+non-READY outcome fail closed with a deterministic machine-readable
+``PromptTaskUnreadyError`` before any envelope is accepted or recorded. There
+is no second renderer and no duplicate budget authority here -- the rendered
+budget outcome is the machine's own.
+
 Caller data selects nothing: the task key routes exactly through the governed
 ``PromptTaskRouteRegistry``, and provider, model, branch, reviewer, merge and
 prompt-profile coordinates remain in the routing and operational configuration
@@ -91,6 +101,49 @@ class PromptTaskOversizeError(PromptRouteConflict):
         )
 
 
+class PromptTaskUnreadyError(PromptRouteConflict):
+    """Raised when canonical compilation produced no READY dispatchable build.
+
+    ``PromptTaskOversizeError`` fires on the raw caller-input size before
+    compile; this fires on the canonical compiled outcome after the machine has
+    rendered the actual prompt. Only a build whose allocation outcome is
+    ``READY`` and which carries a concrete ``prompt_artifact_id`` may proceed to
+    an automation envelope or executable handoff. ``reason`` carries the same
+    coordinates as machine-readable key=value text while ``task_key``/``route_id``/
+    ``profile_id``/``outcome``/``prompt_artifact_id``/``reason_codes``/
+    ``preflight_size_bytes``/``available_input_bytes`` expose them structurally
+    for the caller.
+    """
+
+    def __init__(
+        self,
+        *,
+        task_key: str,
+        route_id: str,
+        profile_id: str,
+        outcome: str,
+        prompt_artifact_id: str | None,
+        reason_codes: tuple[str, ...],
+        preflight_size_bytes: int | None,
+        available_input_bytes: int,
+    ) -> None:
+        self.task_key = task_key
+        self.route_id = route_id
+        self.profile_id = profile_id
+        self.outcome = outcome
+        self.prompt_artifact_id = prompt_artifact_id
+        self.reason_codes = reason_codes
+        self.preflight_size_bytes = preflight_size_bytes
+        self.available_input_bytes = available_input_bytes
+        super().__init__(
+            "ENGINEERING_TASK_NOT_READY "
+            f"task_key={task_key} route={route_id} profile={profile_id} "
+            f"outcome={outcome} prompt_artifact_id={prompt_artifact_id} "
+            f"reason_codes={','.join(reason_codes)} "
+            f"preflight={preflight_size_bytes} available={available_input_bytes}"
+        )
+
+
 def _engineering_route_budget(route: PromptTaskRoute, profile: PromptMachineProfile) -> EngineeringTaskBudget:
     """Derive the machine-enforced budget for one governed engineering route."""
     if route.route_identity == ENGINEERING_REVIEW_FIX_ROUTE.route_identity:
@@ -120,10 +173,12 @@ class GovernedEngineeringTaskIngress:
 
     ``compile`` is the only surface. It refuses anything that is not the
     canonical ``PromptTaskRequest``, resolves the exact governed route, enforces
-    the route's hard input budget before any dispatch can occur, and delegates
-    the bounded compile to the existing ``SmartPromptMachine`` so envelope
-    lineage and Phase A/B/C identity stay exactly as the machine already issues
-    them.
+    the route's hard input budget before any dispatch can occur, delegates the
+    bounded compile to the existing ``SmartPromptMachine``, and then fails
+    closed on any compiled outcome that is not canonically ``READY`` with a
+    concrete prompt artifact -- so only a dispatchable build ever receives an
+    automation envelope. Envelope lineage and Phase A/B/C identity stay exactly
+    as the machine already issues them.
     """
 
     __slots__ = ("_machine", "_routes", "_profiles")
@@ -181,6 +236,25 @@ class GovernedEngineeringTaskIngress:
                     actual_bytes=actual,
                 )
         compiled = self._machine.compile_task(request)
+        # Raw-input size is not proof of dispatchability: the machine renders
+        # JSON/spec/context over the caller task text, so only the canonical
+        # compiled outcome -- reusing the pre-model authority the machine just
+        # produced -- decides whether this build may proceed. Any non-READY
+        # outcome (INSUFFICIENT_BUDGET, REPLAN_REQUIRED, ... ) or a missing
+        # prompt artifact fails closed before an automation envelope exists.
+        allocation = compiled.compilation.orchestration.build_result.allocation
+        manifest = compiled.compilation.manifest
+        if allocation.outcome != "READY" or manifest.prompt_artifact_id is None:
+            raise PromptTaskUnreadyError(
+                task_key=request.task_key,
+                route_id=budget.route_id,
+                profile_id=budget.profile_id,
+                outcome=str(allocation.outcome),
+                prompt_artifact_id=manifest.prompt_artifact_id,
+                reason_codes=compiled.compilation.orchestration.build_result.build_record.reason_codes,
+                preflight_size_bytes=allocation.preflight_size_bytes,
+                available_input_bytes=allocation.available_input_bytes,
+            )
         envelope = compiled.envelope
         if envelope.route_identity != route.route_identity:
             raise PromptTaskAuthorityError("compiled envelope route does not match the governed engineering route")
@@ -194,4 +268,5 @@ __all__ = [
     "EngineeringTaskBudget",
     "GovernedEngineeringTaskIngress",
     "PromptTaskOversizeError",
+    "PromptTaskUnreadyError",
 ]
