@@ -4,6 +4,7 @@ import os
 from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import hunter_pr_preflight
 import hunter_pre_push
@@ -12,6 +13,8 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 HEAD_A = "a" * 40
 HEAD_B = "b" * 40
+BASE = HEAD_A
+HEAD = HEAD_B
 
 
 def _update(
@@ -229,3 +232,253 @@ def test_hook_installer_owns_repository_hooks_path() -> None:
     text = (ROOT / "scripts" / "install_hunter_git_hooks.py").read_text(encoding="utf-8")
     assert 'HOOKS_PATH = ".githooks"' in text
     assert '"git", "config", "core.hooksPath", HOOKS_PATH' in text
+
+
+# --------------------------------------------------------------------------
+# DFF-013 follow-up: the pre-push helpers that derive the governing Issue's
+# acceptance criteria (added in PR #443) are the only production code the bug
+# fix introduced without direct unit coverage. These tests pin their parsing,
+# precedence, and fail-closed branches so a regression in remote/token/issue
+# derivation cannot silently echo READY-ELIGIBLE again.
+# --------------------------------------------------------------------------
+
+
+def _stub_git_remote(url: str) -> Callable[..., str]:
+    def fake_git(*args: str) -> str:
+        if args == ("config", "--get", "remote.origin.url"):
+            return url
+        raise AssertionError(args)
+
+    return fake_git
+
+
+def test_repository_from_remotes_parses_https_url(monkeypatch) -> None:
+    monkeypatch.setattr(hunter_pre_push, "_run_git", _stub_git_remote("https://github.com/fafa33/Project-Hunter.git"))
+    assert hunter_pre_push._repository_from_remotes() == "fafa33/Project-Hunter"
+
+
+def test_repository_from_remotes_parses_ssh_url(monkeypatch) -> None:
+    monkeypatch.setattr(hunter_pre_push, "_run_git", _stub_git_remote("git@github.com:fafa33/Project-Hunter.git"))
+    assert hunter_pre_push._repository_from_remotes() == "fafa33/Project-Hunter"
+
+
+def test_repository_from_remotes_strips_trailing_git_and_slash(monkeypatch) -> None:
+    monkeypatch.setattr(hunter_pre_push, "_run_git", _stub_git_remote("https://github.com/fafa33/Project-Hunter/"))
+    assert hunter_pre_push._repository_from_remotes() == "fafa33/Project-Hunter"
+
+
+def test_repository_from_remotes_prefers_origin_then_upstream(monkeypatch) -> None:
+    calls: list[tuple[str, ...]] = []
+
+    def fake_git(*args: str) -> str:
+        calls.append(args)
+        if args == ("config", "--get", "remote.origin.url"):
+            return "https://gitlab.com/foo/bar.git"
+        if args == ("config", "--get", "remote.upstream.url"):
+            return "git@github.com:org/repo.git"
+        raise AssertionError(args)
+
+    monkeypatch.setattr(hunter_pre_push, "_run_git", fake_git)
+    assert hunter_pre_push._repository_from_remotes() == "org/repo"
+    assert ("config", "--get", "remote.upstream.url") in calls
+
+
+def test_repository_from_remotes_returns_none_when_no_github_remote(monkeypatch) -> None:
+    def fake_git(*args: str) -> str:
+        if args == ("config", "--get", "remote.origin.url"):
+            return "https://gitlab.com/foo/bar.git"
+        if args == ("config", "--get", "remote.upstream.url"):
+            return "git@gitlab.com:org/repo.git"
+        raise AssertionError(args)
+
+    monkeypatch.setattr(hunter_pre_push, "_run_git", fake_git)
+    assert hunter_pre_push._repository_from_remotes() is None
+
+
+def test_repository_from_remotes_returns_none_when_git_fails(monkeypatch) -> None:
+    def fake_git(*args: str) -> str:
+        raise RuntimeError("not a git repository")
+
+    monkeypatch.setattr(hunter_pre_push, "_run_git", fake_git)
+    assert hunter_pre_push._repository_from_remotes() is None
+
+
+def test_github_access_token_prefers_github_token(monkeypatch) -> None:
+    monkeypatch.setenv("GITHUB_TOKEN", "github_token")
+    monkeypatch.setenv("GH_TOKEN", "gh_token")
+    assert hunter_pre_push._github_access_token() == "github_token"
+
+
+def test_github_access_token_falls_back_to_gh_token(monkeypatch) -> None:
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.setenv("GH_TOKEN", "gh_token")
+    assert hunter_pre_push._github_access_token() == "gh_token"
+
+
+def test_github_access_token_falls_back_to_gh_cli(monkeypatch) -> None:
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+
+    def fake_run(command: tuple[str, ...], **kwargs: object) -> SimpleNamespace:
+        assert command == ("gh", "auth", "token")
+        return SimpleNamespace(returncode=0, stdout="cli_token\n", stderr="")
+
+    monkeypatch.setattr(hunter_pre_push.subprocess, "run", fake_run)
+    assert hunter_pre_push._github_access_token() == "cli_token"
+
+
+def test_github_access_token_returns_none_when_gh_cli_fails(monkeypatch) -> None:
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.setattr(
+        hunter_pre_push.subprocess,
+        "run",
+        lambda command, **kwargs: SimpleNamespace(returncode=1, stdout="", stderr=""),
+    )
+    assert hunter_pre_push._github_access_token() is None
+
+
+def test_github_access_token_returns_none_when_gh_cli_is_missing(monkeypatch) -> None:
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+
+    def fake_run(command: tuple[str, ...], **kwargs: object) -> SimpleNamespace:
+        raise OSError("gh not found")
+
+    monkeypatch.setattr(hunter_pre_push.subprocess, "run", fake_run)
+    assert hunter_pre_push._github_access_token() is None
+
+
+def test_github_access_token_ignores_whitespace_only_environment(monkeypatch) -> None:
+    monkeypatch.setenv("GITHUB_TOKEN", "   ")
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.setattr(
+        hunter_pre_push.subprocess,
+        "run",
+        lambda command, **kwargs: SimpleNamespace(returncode=1, stdout="", stderr=""),
+    )
+    assert hunter_pre_push._github_access_token() is None
+
+
+def _stub_governing_issue(
+    monkeypatch,
+    *,
+    review: dict[str, Any] | None = None,
+    branch: str = "issue-442-feature",
+    branch_issue: str | None = "442",
+    token: str | None = "token",
+    repository: str | None = "owner/repo",
+    criteria_state: str = "present",
+    criteria: tuple[str, ...] = ("canonical criterion",),
+    criteria_error: str = "",
+) -> None:
+    monkeypatch.setattr(hunter_pre_push.review, "read_review_document", lambda: review)
+    monkeypatch.setattr(hunter_pre_push, "_run_git", lambda *args: branch)
+    monkeypatch.setattr(hunter_pre_push.governance, "issue_for_branch", lambda _branch: branch_issue)
+    monkeypatch.setattr(hunter_pre_push, "_github_access_token", lambda: token)
+    monkeypatch.setattr(hunter_pre_push, "_repository_from_remotes", lambda: repository)
+    monkeypatch.setattr(
+        hunter_pre_push.governance,
+        "read_issue_acceptance_criteria",
+        lambda _repo, _tok, _issue: (criteria_state, criteria, criteria_error),
+    )
+
+
+def test_governing_issue_criteria_returns_parsed_criteria_when_review_matches_branch(monkeypatch) -> None:
+    _stub_governing_issue(monkeypatch, review={"claims": {"issue": "#442"}})
+    issue, issue_criteria, reason = hunter_pre_push._governing_issue_criteria()
+    assert issue == "442"
+    assert issue_criteria == ("canonical criterion",)
+    assert reason == ""
+
+
+def test_governing_issue_criteria_uses_branch_binding_when_review_has_no_claim(monkeypatch) -> None:
+    _stub_governing_issue(monkeypatch, review={"claims": {}})
+    issue, issue_criteria, reason = hunter_pre_push._governing_issue_criteria()
+    assert issue == "442"
+    assert issue_criteria == ("canonical criterion",)
+    assert reason == ""
+
+
+def test_governing_issue_criteria_fails_closed_on_review_branch_issue_mismatch(monkeypatch) -> None:
+    _stub_governing_issue(monkeypatch, review={"claims": {"issue": "443"}})
+    issue, issue_criteria, reason = hunter_pre_push._governing_issue_criteria()
+    assert issue == "443"
+    assert issue_criteria is None
+    assert "claims Issue #443" in reason
+    assert "binds Issue #442" in reason
+
+
+def test_governing_issue_criteria_returns_empty_when_no_issue_binds(monkeypatch) -> None:
+    _stub_governing_issue(monkeypatch, review=None, branch="feature", branch_issue=None)
+    issue, issue_criteria, reason = hunter_pre_push._governing_issue_criteria()
+    assert issue == ""
+    assert issue_criteria is None
+    assert reason == ""
+
+
+def test_governing_issue_criteria_fails_closed_without_github_token(monkeypatch) -> None:
+    _stub_governing_issue(monkeypatch, review=None, token=None)
+    issue, issue_criteria, reason = hunter_pre_push._governing_issue_criteria()
+    assert issue == "442"
+    assert issue_criteria is None
+    assert "no GitHub token" in reason
+
+
+def test_governing_issue_criteria_fails_closed_when_repository_cannot_be_derived(monkeypatch) -> None:
+    _stub_governing_issue(monkeypatch, review=None, repository=None)
+    issue, issue_criteria, reason = hunter_pre_push._governing_issue_criteria()
+    assert issue == "442"
+    assert issue_criteria is None
+    assert "GitHub repository could not be derived" in reason
+
+
+def test_governing_issue_criteria_fails_closed_when_github_evidence_unavailable(monkeypatch) -> None:
+    _stub_governing_issue(
+        monkeypatch,
+        review=None,
+        criteria_state="unavailable",
+        criteria=(),
+        criteria_error="HTTP 502",
+    )
+    issue, issue_criteria, reason = hunter_pre_push._governing_issue_criteria()
+    assert issue == "442"
+    assert issue_criteria is None
+    assert "acceptance-criteria evidence is unavailable" in reason
+    assert "HTTP 502" in reason
+
+
+def test_report_pre_ready_review_state_is_unknown_when_base_evidence_missing(monkeypatch, capsys) -> None:
+    def raise_unavailable(_head: str) -> str:
+        raise hunter_pre_push.provenance.GitEvidenceUnavailable("no merge base")
+
+    monkeypatch.setattr(hunter_pre_push.provenance, "resolve_governed_base", raise_unavailable)
+    hunter_pre_push.report_pre_ready_review_state(HEAD)
+    out = capsys.readouterr().out
+    assert "[Hunter Pre-Push] NOTE" in out
+    assert "unknown" in out
+    assert "no merge base" in out
+    assert "READY-ELIGIBLE" not in out
+    assert "DRAFT-ONLY" not in out
+
+
+def test_report_pre_ready_review_state_uses_structural_verdict_when_no_governing_issue(monkeypatch, capsys) -> None:
+    captured: dict[str, object] = {}
+
+    def _verified(base: str, head: str, *, cwd: Path | None = None, issue_criteria=None):
+        captured["base"] = base
+        captured["head"] = head
+        captured["issue_criteria"] = issue_criteria
+        return hunter_pre_push.review.ReviewVerdict("valid", "structurally complete")
+
+    monkeypatch.setattr(hunter_pre_push.provenance, "resolve_governed_base", lambda _head: BASE)
+    monkeypatch.setattr(hunter_pre_push, "_governing_issue_criteria", lambda: ("", None, ""))
+    monkeypatch.setattr(hunter_pre_push.review, "verify_local", _verified)
+
+    hunter_pre_push.report_pre_ready_review_state(HEAD)
+    out = capsys.readouterr().out
+
+    assert "READY-ELIGIBLE" in out
+    assert captured["base"] == BASE
+    assert captured["head"] == HEAD
+    assert captured["issue_criteria"] is None
