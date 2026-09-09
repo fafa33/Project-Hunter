@@ -717,7 +717,7 @@
         "rationale": "Every candidate that changes repository content a reviewer would have to reason about is governed by the pre-ready hostile review requirement. Dependency manifests (requirements/, the root lockfiles and pyproject.toml) are deliberately outside this scope: a dependency-only candidate has no diff for a hostile pass to review, and demanding one would block every automated dependency update behind an artifact its author cannot produce -- a false-positive merge blockage, which is itself a defect."
       },
       "prevention": {
-        "mechanism": "Candidate admission re-derives the base, the exact change set, the applicable families and the governing Issue's acceptance criteria from trusted evidence and refuses an absent, stale, incomplete or contested review; the controller returns the pull request to Draft. The acceptance criteria come from the owner-authored Issue rather than the artifact, so a review cannot measure itself against criteria it wrote for itself, and the Issue it names must be the Issue its branch binds.",
+        "mechanism": "Candidate admission re-derives the base, the exact change set, the applicable families and the governing Issue's acceptance criteria from trusted evidence and refuses an absent, stale, incomplete or contested review; the controller returns the pull request to Draft. The acceptance criteria come from the owner-authored Issue rather than the artifact, so a review cannot measure itself against criteria it wrote for itself, and the Issue it names must be the Issue its branch binds. The local pre-push boundary derives the same governing-Issue criteria from GitHub and refuses to report READY-ELIGIBLE until the exact-head hostile review covers every one of them, so a review hosted admission would reject no longer produces a locally misleading readiness signal.",
         "boundary": "hosted-gate",
         "guard_reference": "scripts/hunter_governance_review_v2.py::verify_pre_ready_hostile_review"
       },
@@ -729,12 +729,18 @@
         "tests/test_issue_412_prevention_gate.py::test_a_review_covering_one_self_authored_criterion_is_refused",
         "tests/test_issue_412_prevention_gate.py::test_a_review_covering_every_issue_criterion_is_admitted",
         "tests/test_issue_412_prevention_gate.py::test_a_review_naming_another_issue_than_the_branch_is_refused",
-        "tests/test_issue_412_prevention_gate.py::test_candidate_admission_reconciles_after_the_trusted_upgrade_completes"
+        "tests/test_issue_412_prevention_gate.py::test_candidate_admission_reconciles_after_the_trusted_upgrade_completes",
+        "tests/test_issue_412_prevention_gate.py::test_issue_442_paraphrased_criteria_are_failed_closed",
+        "tests/test_issue_412_prevention_gate.py::test_issue_442_canonical_criteria_are_admitted",
+        "tests/test_issue_412_prevention_gate.py::test_verify_local_enforces_governing_issue_criteria",
+        "tests/test_issue_412_prevention_gate.py::test_pre_push_fails_closed_when_issue_criteria_are_unverifiable",
+        "tests/test_issue_412_prevention_gate.py::test_pre_push_reports_ready_only_when_issue_criteria_are_covered"
       ],
       "lifecycle": "hosted-enforced",
       "sources": [
         "Issue #412",
-        "PR #413 independent review (Codex P1)"
+        "PR #413 independent review (Codex P1)",
+        "Issue #442 governance review (PR #443) local/hosted coverage mismatch"
       ]
     },
     {

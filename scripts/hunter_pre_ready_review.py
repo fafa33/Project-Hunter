@@ -570,7 +570,22 @@ def read_review_document(path: Path | None = None) -> Any:
         raise GitEvidenceUnavailable(f"{REVIEW_RELATIVE_PATH} is unreadable ({type(exc).__name__}: {exc})") from exc
 
 
-def verify_local(base: str, head: str = "HEAD", *, cwd: Path | None = None) -> ReviewVerdict:
+def verify_local(
+    base: str,
+    head: str = "HEAD",
+    *,
+    cwd: Path | None = None,
+    issue_criteria: tuple[str, ...] | None = None,
+) -> ReviewVerdict:
+    """Verify the review against local git evidence, optionally against the Issue.
+
+    ``issue_criteria`` is the governing Issue's normalized acceptance criteria,
+    derived by the caller from trusted evidence exactly as hosted Candidate
+    Admission derives it. When supplied, every criterion must be covered -- so
+    the local push boundary enforces the same acceptance-criteria completeness
+    the hosted gate enforces, instead of echoing READY-ELIGIBLE on a review that
+    only looks structurally complete. ``None`` means no coverage claim is made.
+    """
     families, error = load_families()
     if error:
         return ReviewVerdict("incomplete", error)
@@ -579,7 +594,13 @@ def verify_local(base: str, head: str = "HEAD", *, cwd: Path | None = None) -> R
         document = read_review_document()
     except GitEvidenceUnavailable as exc:
         return ReviewVerdict("incomplete", f"pre-ready hostile review evidence is unavailable ({exc})")
-    return verify_claims(document, base_sha=base, changes=changes, families=families)
+    return verify_claims(
+        document,
+        base_sha=base,
+        changes=changes,
+        families=families,
+        issue_criteria=issue_criteria,
+    )
 
 
 JUDGEMENT_KEYS = ("acceptance_criteria", "adversarial_dimensions", "defect_families", "findings")
