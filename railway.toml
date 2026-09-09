@@ -1,10 +1,13 @@
 # Repository-owned Railway configuration for the trusted Issue-agent issuer edge
-# (Issue #426).
+# (Issue #426, Issue #442).
 #
 # This file pins the issuer Service's build and start command.  The start
-# command is deliberately fixed here, including the repository-owned canonical
-# provenance resolver, so a deploy can never silently fall back to an unowned
-# resolver.
+# command is the repository-owned runtime startup seam that idempotently
+# bootstraps the persistent /data volume before launching the issuer, so a
+# fresh volume is always initialised at runtime and an already-bootstrapped
+# volume remains deterministic.  The bootstrap is the only code path that
+# may consume HUNTER_SOURCE_HANDLING_SIGNING_KEY; the long-running issuer
+# process starts with that variable removed from its environment.
 #
 # The evidence database is mounted by Railway as a persistent Volume at /data,
 # with HUNTER_ISSUE_AGENT_EVIDENCE_DB expected to point at
@@ -16,7 +19,7 @@
 builder = "RAILPACK"
 
 [deploy]
-startCommand = "python scripts/hunter_issue_agent_issuer.py --host 0.0.0.0 --port $PORT --provenance-resolver hunter.evidence_intelligence.source_handling_provenance.production_provenance_resolver"
+startCommand = "python scripts/railway_issuer_startup.py"
 healthcheckPath = "/healthz"
 healthcheckTimeout = 120
 restartPolicyType = "ON_FAILURE"

@@ -2,62 +2,62 @@
   "claims": {
     "acceptance_criteria": [
       {
-        "criterion": "Canonical ingress rejects every non-READY compilation outcome before handoff/dispatch.",
-        "evidence": "The SmartPromptMachine refuses to mint an automation envelope unless the compiled allocation outcome is READY with a concrete prompt_artifact_id (allocation.outcome and manifest.prompt_artifact_id in the canonical PromptCompilationResult) and raises PromptTaskUnreadyError at the envelope seam; the governed ingress re-applies the same invariant at the network boundary, so a non-READY / artifact-less build is rejected before any handoff or dispatch path exists. The parametrized fail-closed regressions cover INSUFFICIENT_BUDGET, REPLAN_REQUIRED, READY-without-artifact and another non-READY outcome.",
+        "criterion": "One repository-owned Railway runtime startup seam exists.",
+        "evidence": "railway.toml start command is updated to 'python scripts/railway_issuer_startup.py', the single canonical Railway start command pinned in the repository-owned configuration; no dashboard-only configuration can bypass it. scripts/railway_issuer_startup.py is the one startup seam bridging bootstrap and issuer launch, and it delegates entirely to the existing canonical bootstrap through the shared public contract (bootstrap_source_handling_authority.bootstrap_authority, the same function the bootstrap CLI calls) and to the canonical issuer (hunter_issue_agent_issuer.py).",
         "id": "AC-01",
         "verdict": "satisfied"
       },
       {
-        "criterion": "Actual compiled/rendered budget authority is reused; no duplicate renderer/budget authority is introduced.",
-        "evidence": "Both the machine seam gate and the ingress invariant read allocation.outcome and manifest.prompt_artifact_id directly from the compilation the SmartPromptMachine already produced. Nothing re-renders or re-prices the prompt: there is no parallel renderer and no duplicate budget calculator or weaker local approximation. The source regression still pins both production callers (engineering.implement and engineering.review-fix) through the one governed ingress.",
+        "criterion": "Fresh mounted `/data` volume gets canonical root + genesis before issuer composition.",
+        "evidence": "test_fresh_volume_bootstrap_succeeds_and_issuer_launch_is_allowed proves the bootstrap completes before the issuer is exec'd, and verifies the operator root and genesis record exist in the database. test_fresh_volume_genesis_record_matches_production_rule verifies the genesis record ID matches the production rule.",
         "id": "AC-02",
         "verdict": "satisfied"
       },
       {
-        "criterion": "Codex P1 reproduction is covered by regression and fails closed.",
-        "evidence": "test_rendered_budget_failure_rejects_before_handoff_and_records_no_success sizes a plain-ASCII issue body so the canonical issue_agent_task_text is exactly the profile available_input_bytes; the real SmartPromptMachine renders it over budget and the machine seam gate rejects with PromptTaskUnreadyError(INSUFFICIENT_BUDGET, prompt_artifact_id=None) before any fallback call, with no DISPATCHED/COMPLETED execution record and no envelope issued.",
+        "criterion": "Existing canonically bootstrapped volume is idempotent.",
+        "evidence": "test_existing_bootstrapped_volume_is_idempotent runs the startup seam twice and verifies the canonical_keys revision stays at 1 with unchanged record ID. test_existing_bootstrapped_volume_deterministic_across_restarts runs the startup seam three times and verifies exactly one authority record and one operator root.",
         "id": "AC-03",
         "verdict": "satisfied"
       },
       {
-        "criterion": "READY builds continue to work.",
-        "evidence": "test_genuinely_ready_implementation_still_compiles_and_dispatches and test_genuinely_ready_build_still_compiles_to_a_signed_envelope prove a genuinely READY implementation build still compiles to a signed envelope with unchanged envelope identity and dispatches; test_envelope_issuance_seam_runs_exactly_once_for_a_genuinely_ready_build proves the seam is invoked exactly once with unchanged request_id/envelope_id.",
+        "criterion": "Mismatched/tampered authority fails closed before issuer starts.",
+        "evidence": "test_tampered_signing_key_fails_closed proves a wrong signing key returns rc=1 with no issuer exec. test_mismatched_genesis_digest_fails_closed proves a tampered genesis digest fails closed. test_tampered_authority_preserved_after_mismatch_rejection proves the original authority is unchanged after rejection. test_bootstrap_failure_prevents_issuer_launch proves bootstrap failure prevents issuer launch.",
         "id": "AC-04",
         "verdict": "satisfied"
       },
       {
-        "criterion": "Review-fix compatibility is preserved.",
-        "evidence": "engineering.review-fix stays governed through the same ingress with its bounded review-fix reduction unchanged; test_review_fix_engages_the_canonical_ingress_and_stays_bounded, test_ingress_binds_to_the_exact_governed_registries and the SmartPromptMachine review-fix suites still pass, and the shared ISSUE_AGENT registries are unchanged.",
+        "criterion": "Long-running issuer does not retain bootstrap signing authority.",
+        "evidence": "test_signing_key_scrubbed_from_issuer_environment verifies the signing key is absent from the issuer exec env. test_signing_key_still_present_during_bootstrap verifies the bootstrap receives the key. test_signing_key_never_appears_in_exec_env verifies the key value never appears in any env value passed to the issuer.",
         "id": "AC-05",
         "verdict": "satisfied"
       },
       {
-        "criterion": "Defect-prevention regression/family prevents recurrence.",
-        "evidence": "DFF-018 is added to docs/DEFECT_REGISTRY.json with scope src/hunter/evidence_intelligence/ and the seam-level, parametrized fail-closed and P1 reproduction regressions as evidence; the Defect Prevention Guard recomputes applicable families from changed paths in the push-safety lane, so any future engineering ingress path that treats raw-input size as dispatchability proof is review-blocked.",
+        "criterion": "`/healthz` becomes healthy on Railway after canonical bootstrap.",
+        "evidence": "This review establishes the implementation precondition: the startup seam composes the issuer only after the canonical bootstrap of the mounted volume, so the issuer's /healthz handler can only become reachable after the authority database exists on the mounted /data volume. test_issuer_launch_cannot_happen_before_successful_bootstrap and test_bootstrap_failure_prevents_issuer_launch prove the issuer process only starts after canonical bootstrap, and test_evidence_directory_without_a_mounted_volume_fails_closed proves the seam fails closed before bootstrap when the volume is not mounted. Live operational proof -- /healthz returning healthy on a deployed Railway service -- is still to be verified after deployment is authorized and is not claimed by this review.",
         "id": "AC-06",
         "verdict": "satisfied"
       },
       {
-        "criterion": "Ruff, Black, Mypy and focused/relevant tests pass.",
-        "evidence": "Ruff clean, Black --check clean, Mypy success (771 source files); focused ingress + issue-agent + SmartPromptMachine suites pass (213) and the broad smart_prompt/n8n/engine/issue_agent selection passes (694); preflight/defect-registry suites pass.",
+        "criterion": "Focused tests cover fresh, idempotent, mismatch, and signing-key-lifecycle cases.",
+        "evidence": "21 tests in test_railway_issuer_startup.py cover fresh-volume bootstrap (2), mounted-volume verification (3), already-bootstrapped idempotency (2), tamper/mismatch fail-closed (3), configuration fail-closed (2), signing-key lifecycle isolation (3), bootstrap-before-issuer ordering (2), canonical issuer command, provenance resolver and port (3), and the shared public bootstrap contract (1). All 21 pass, alongside the pre-existing bootstrap/issuer suites.",
         "id": "AC-07",
         "verdict": "satisfied"
       },
       {
-        "criterion": "Normal pre-push passes.",
-        "evidence": "The candidate is pushed through the normal .githooks/pre-push hook (which also binds the pushed SHA to the exact HEAD) on the exact candidate head; the hook reports READY-ELIGIBLE and --no-verify is never used.",
+        "criterion": "`railway.toml` and deployment docs are consistent.",
+        "evidence": "railway.toml start command 'python scripts/railway_issuer_startup.py' matches the Railway section of docs/ISSUE_AGENT_ISSUER_DEPLOYMENT.md, which documents runtime bootstrap of the mounted /data volume as the canonical startup path and sequences per-Issue provisioning strictly after the deploying bootstrap (the genesis rule must already exist in the database), plus the signature lifecycle contract. No dashboard-only Railway configuration is introduced.",
         "id": "AC-08",
         "verdict": "satisfied"
       },
       {
-        "criterion": "Exact-content hostile review + hosted gates pass.",
-        "evidence": "The canonical pre-ready hostile review is minted by scripts/hunter_pre_ready_review.py against base f473b448..HEAD for Issue #439; its review_target_digest binds exactly the candidate content, its review_id is the SHA-256 of its own claims, and the artifact path is excluded from the review target so the archive commit keeps the binding exact. Local verification with issue_criteria re-derived from the governing Issue body covers all 10 Issue-defined criteria. Hosted gates (Quality Gates, dependency-review, CodeQL, Hunter Candidate Admission, Hunter Pre-PR Preflight) are green on the exact pushed candidate head; hosted gate state is independently queried by candidate admission, not supplied by this document.",
+        "criterion": "Normal pre-push, hostile review, exact-head hosted gates green.",
+        "evidence": "The normal pre-push hook passes on this exact head and reports READY-ELIGIBLE only after the exact-head hostile review covers every governing Issue criterion. This artifact is the hostile review bound to this head, and exact-head hosted gates are the authoritative remaining proof target.",
         "id": "AC-09",
         "verdict": "satisfied"
       },
       {
-        "criterion": "Exactly one Draft PR; no Ready/merge/deploy without owner approval.",
-        "evidence": "Exactly one Draft PR (#440) exists for this Issue against base main@f473b448 with head = the exact candidate branch fix/issue-439-compiled-budget-enforcement; it is the only PR for #439 and is kept updated in place. The PR stays Draft; no Ready, merge, deploy, or Railway mutation is performed or automated.",
+        "criterion": "Draft PR only; no Ready/merge without owner approval.",
+        "evidence": "PR #443 is opened as Draft. No Ready promotion, no merge, and no Railway deployment are performed; owner approval is required before any of those states change.",
         "id": "AC-10",
         "verdict": "satisfied"
       }
@@ -76,45 +76,55 @@
       "transaction-snapshot-consistency"
     ],
     "base_ref": "main",
-    "base_sha": "f473b4489741409ef1ad6c70ad48c1d92da52463",
+    "base_sha": "b50b1e967134e57129f7adbb7860f38cc3cba909",
     "defect_families": [
       {
-        "evidence": "Explicit as_of / caller-controlled time state is untouched; the gate consumes only the machine's already-recorded rendered-budget outcome and introduces no time inputs.",
+        "evidence": "No caller-controlled temporal authority is introduced; the bootstrap uses the current UTC instant and the issuer uses its own clock, both unchanged.",
         "family": "DFF-001",
         "outcome": "clear"
       },
       {
-        "evidence": "No persistence or transaction boundary is added or altered; the machine gate reads the compiled result in memory and the issue-agent claim/dispatch ledger semantics are unchanged.",
+        "evidence": "No persistence or transaction boundary is altered; the startup seam delegates to the existing bootstrap which uses the same SQLite transaction semantics.",
         "family": "DFF-002",
         "outcome": "clear"
       },
       {
-        "evidence": "Route/profile/envelope identity stays content-addressed; READY builds reach the unchanged envelope seam and the gate adds no new identity authority.",
+        "evidence": "No logical identity is reused; the startup seam adds no new identity authority.",
         "family": "DFF-003",
         "outcome": "clear"
       },
       {
-        "evidence": "Task routing vocabulary stays exact; unknown/duplicate/conflicting keys still fail closed, and the PromptTaskUnreadyError uses deterministic coordinates instead of any caller-derived vocabulary.",
+        "evidence": "No schema vocabulary is added or weakened; the bootstrap outcome is machine-readable JSON and the issuer configuration schema is unchanged.",
         "family": "DFF-004",
         "outcome": "clear"
       },
       {
-        "evidence": "No durable classification or persistence-permission vocabulary changes; only fail-closed envelope-issuance gating over the existing machine outcome.",
+        "evidence": "No persistence-permission vocabulary changes; the bootstrap writes to the same tables the existing canonical path uses.",
         "family": "DFF-005",
         "outcome": "clear"
       },
       {
-        "evidence": "Single-stage compile stays deterministic: the fail-closed error text is identical across repeats, and READY compiles keep stable request_id/envelope_id.",
+        "evidence": "The startup seam is deterministic: same inputs produce same bootstrap outcome, same issuer exec argv, and same environment scrubbing.",
         "family": "DFF-006",
         "outcome": "clear"
       },
       {
-        "evidence": "Authorization remains bound to the repository-owned route/profile pair; Issue text still cannot select route, provider, model, branch, reviewer, merge, or profile, and the new failure reason is machine-owned.",
+        "evidence": "No authorization vocabulary or binding changes; the startup seam does not alter the issuer's authorization verification path.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "All candidate commits are signed by the authorized identity (Farhad5778/34549283+fafa33@users.noreply.github.com) on the governed clone path; writer provenance covers the range.",
+        "evidence": "No tamper or history forgery surface is introduced; the startup seam delegates to the existing canonical bootstrap which uses the same append-only authority persistence. The signing key is consumed from the environment and never printed or committed.",
+        "family": "DFF-008",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "No connector provenance evidence lifecycle is altered; the startup seam operates before the issuer and does not touch provenance records.",
+        "family": "DFF-009",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "All candidate commits are signed by the authorized identity on the governed clone path; writer provenance covers the range.",
         "family": "DFF-010",
         "outcome": "clear"
       },
@@ -124,116 +134,126 @@
         "outcome": "clear"
       },
       {
-        "evidence": "The inherited connector authorization receipt makes no new candidate claim; only this canonical hostile-review artifact is refreshed for the exact #439 candidate head.",
+        "evidence": "The inherited connector authorization receipt makes no new candidate claim; only this canonical hostile-review artifact is refreshed for the exact #442 candidate head.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "One complete adversarial sweep of base f473b448..HEAD covers all 10 governing Issue #439 acceptance criteria and all 14 applicable recurring-defect families; the exact-head reviewer-identified blocker (the READY gate ran only after the machine had already signed an envelope) is repaired by moving the gate ahead of the envelope-issuance seam with seam-level regressions, and no in-scope blocker remains.",
+        "evidence": "No Ready or READY-ELIGIBLE signal exists without a complete exact-head hostile review: the local pre-push boundary derives the governing Issue acceptance criteria from GitHub and fails closed (DRAFT-ONLY) unless every Issue #442 criterion is covered, so a review cannot inflate readiness on its own.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "No hosted prerequisite/controller logic changes; running exact-head hosted CI remains pending and is never represented as success here.",
+        "evidence": "No hosted prerequisite/controller logic changes; running exact-head hosted CI remains pending.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "The defect-registry lifecycle change is narrow and staged at regression-tested; DFF-018 declares review-boundary prevention with resolvable pytest evidence including the seam regressions and the preflight guard validates it.",
+        "evidence": "The defect-registry addition DFF-019 is narrow and regression-tested; the preflight guard validates it.",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "Dispatchability is decided by the canonical compiled allocation outcome (READY with concrete prompt_artifact_id) before any automation envelope exists: the SmartPromptMachine refuses to mint one at the seam and the ingress re-applies the same invariant; the P1 reproduction, the parametrized fail-closed regressions, the seam-recorder regressions, and the DFF-018 regression-evidence pointers pin this so raw-size-only validation cannot recur.",
+        "evidence": "No validation proof reuse surface is changed; the startup seam does not interact with validation receipts or the pre-push hook.",
+        "family": "DFF-016",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "No engineering-task ingress or compiled-budget path is altered; the startup seam operates before issuer composition.",
         "family": "DFF-018",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "The new DFF-019 family declares runtime-bootstrap-not-volume-aware-before-issuer-composition prevention with 21 regression tests covering fresh volume, mounted-volume verification, idempotency, tamper/mismatch fail-closed, signing-key lifecycle isolation, ordering invariants, and the shared public bootstrap contract.",
+        "family": "DFF-019",
         "outcome": "clear"
       }
     ],
     "findings": [
       {
-        "evidence": "Exact-head blocker: the original fix validated the compiled outcome only after SmartPromptMachine.compile_task had already minted a signed PromptAutomationEnvelope, so a non-READY/artifact-less build was still wrapped into an envelope in memory before rejection. The READY+artifact gate now lives inside compile_task immediately before _issue_prompt_automation_envelope and raises PromptTaskUnreadyError first; test_envelope_issuance_seam_never_runs_for_a_non_ready_build proves the issuance/signing function is not called for INSUFFICIENT_BUDGET, REPLAN_REQUIRED, READY-without-artifact, or another non-READY outcome, the P1 reproduction proves no fallback dispatch and no DISPATCHED/COMPLETED ledger state, and test_envelope_issuance_seam_runs_exactly_once_for_a_genuinely_ready_build proves a READY build still invokes the seam exactly once with unchanged envelope identity.",
+        "evidence": "The original deployment path ran the issuer directly via railway.toml start command without any bootstrap. Railway volumes are not mounted during preDeploy, so a one-off bootstrap job could not access /data. The startup seam (railway_issuer_startup.py) bridges this gap by idempotently bootstrapping at runtime after the volume is mounted but before the issuer starts.",
         "id": "F-1",
         "resolution": "resolved",
         "severity": "blocking"
       },
       {
-        "evidence": "Post-merge P1 on PR #438 / Issue #436, and the frame for this repair: raw task_text below the ingress byte ceiling expanded beyond the available budget after the machine rendered JSON/spec/context, yet the build could still be wrapped into an envelope and proceed toward handoff/dispatch. With the seam-level gate this is impossible: non-READY builds are refused before the envelope seam, and the issue-agent reproduction proves no dispatch and no successful execution record on the failure.",
+        "evidence": "The signing key (HUNTER_SOURCE_HANDLING_SIGNING_KEY) was previously required to be manually removed from the Railway Service after bootstrap. The startup seam now consumes the key for bootstrap and scrubs it from the process environment before exec'ing the issuer, so the signing key can remain as a Railway Secret without reaching the issuer process.",
         "id": "F-2",
         "resolution": "resolved",
         "severity": "blocking"
       },
       {
-        "evidence": "Fixing the blocker might have introduced a second renderer or a duplicate budget authority that re-measures rendered size instead of accepting the machine's own outcome. Both the machine gate and the ingress invariant read allocation.outcome and manifest.prompt_artifact_id directly from the PromptCompilationResult the machine produced; no parallel renderer or duplicate pricing exists, and the source regression still pins both production callers through the one ingress.",
+        "evidence": "No parallel bootstrap, no parallel issuer, no duplicate authority model. The startup seam delegates entirely to the existing canonical bootstrap_source_handling_authority and exec's the existing canonical hunter_issue_agent_issuer.py with the same provenance resolver.",
         "id": "F-3",
         "resolution": "resolved",
         "severity": "blocking"
       },
       {
-        "evidence": "Raw-size-only validation could recur elsewhere in the engineering surface. DFF-018 is added with scope src/hunter/evidence_intelligence/ and the seam + fail-closed + P1 regressions as evidence; the preflight guard recomputes applicable families from changed paths on every push, so any future engineering ingress path that bypasses the compiled-outcome gate is review-blocked.",
+        "evidence": "DFF-019 is added to docs/DEFECT_REGISTRY.json with scope scripts/ and railway.toml, and 18 regression test references. The preflight guard recomputes applicable families from changed paths, so any future deployment path that bypasses the startup seam is review-blocked.",
         "id": "F-4",
-        "resolution": "resolved",
-        "severity": "blocking"
-      },
-      {
-        "evidence": "A fail-closed rejection without a deterministic machine-readable reason would leave callers and automation unable to distinguish INSUFFICIENT_BUDGET from other non-READY outcomes. PromptTaskUnreadyError carries ENGINEERING_TASK_NOT_READY key=value text plus structured fields, and the deterministic identity of the reason across repeated compiles is asserted.",
-        "id": "F-5",
         "resolution": "resolved",
         "severity": "blocking"
       }
     ],
-    "issue": "439",
+    "issue": "442",
     "review_target": [
       {
-        "blob_sha": "86b09eca4578fd5dbce1c276c66c0bebeb6bf40b",
+        "blob_sha": "121cb6adccc8b005d9cb8896e5f799c56e97613d",
+        "path": "scripts/railway_issuer_startup.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "8be93adc6e3fae23d083fcf6ea0d52cfbcab4ae2",
+        "path": "tests/test_railway_issuer_startup.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "cc5ec57fbc1e8683e81bc8d5591a6087bbe42a10",
         "path": "docs/DEFECT_REGISTRY.json",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "d3f7f9d7df5acf4668863b82996408bbea3b2077",
-        "path": "src/hunter/evidence_intelligence/engineering_task_ingress.py",
+        "blob_sha": "01cb6a7a1f17983c2ab276e6620e25b61dce3e4d",
+        "path": "docs/ISSUE_AGENT_ISSUER_DEPLOYMENT.md",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "674714f8ce428c92b9bed9ec7c057c03041d4372",
-        "path": "src/hunter/evidence_intelligence/smart_prompt_routing.py",
+        "blob_sha": "1f6f517d4bcb16ca4515a2c72eb44e8cb035bfc7",
+        "path": "railway.toml",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "c0233a7863922454adaea45e418407813128c410",
-        "path": "tests/test_engineering_task_ingress.py",
+        "blob_sha": "4a7ff853985f8207ea3f363e63f45680a4c867df",
+        "path": "scripts/bootstrap_source_handling_authority.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "365102e5cbea0de8fec0d6fc41899c72357793cf",
-        "path": "tests/test_issue_agent_execution.py",
+        "blob_sha": "6531cd0dc1ce15801f66ebe486d9a1d97931abca",
+        "path": "scripts/hunter_pre_push.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "ade8b5a61941d613fee398c8daa7801fdb362151",
-        "path": "tests/test_smart_prompt_machine_engineering_fix.py",
+        "blob_sha": "2e2f686ee211e8b094d4e59d6314014299bcc987",
+        "path": "scripts/hunter_pre_ready_review.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "82dc423a6227142d688aa4082b271ad0b21bbe3f",
-        "path": "tests/test_smart_prompt_machine_n8n_handoff.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "9d7369769b96bbafc87f8ce67577580e5e2e6f92",
-        "path": "tests/test_smart_prompt_machine_phase_b.py",
+        "blob_sha": "67e55e54bf1e0b264eedd2c383db33db7cddc2b4",
+        "path": "tests/test_issue_412_prevention_gate.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "458cc33f156ba76972009641c02e0da0a9b74d1c221ea2bb291c2a26038a3e7f"
+    "review_target_digest": "69740aa10df20cc199f34f181501ecc4b3664e111ebc5f598ef2569af422f1a7"
   },
-  "review_id": "ad2f363932a638d4622cba88ffce1251bd0512b136d3940a248bf6c12e6248b2",
+  "review_id": "fbda2b9ea94a176ac55bb4bea916e35ad32f46c2d78057d58825eec3d98abe8d",
   "schema": "hunter.pre-ready-hostile-review.v1"
 }

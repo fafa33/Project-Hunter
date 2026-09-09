@@ -22,12 +22,15 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 from collections.abc import Iterable
 from pathlib import Path
+from typing import Any
 
 import hunter_connector_write_ingress as ingress
+import hunter_governance_review_v2 as governance
 import hunter_pr_preflight as preflight
 import hunter_pre_ready_review as review
 import hunter_validation_receipt as receipts
@@ -37,6 +40,9 @@ ZERO_SHA = "0" * 40
 NORMAL_MODE = "normal"
 TESTS_FIRST_RED_MODE = "tests-first-red"
 MODE_MARKER = Path(".hunter-preflight-mode")
+
+#: An owner/repo pair named by a GitHub https or ssh remote URL.
+_REMOTE_OWNER_REPO = re.compile(r"github\.com[:/](?P<repo>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git)?(?:/)?\Z")
 
 
 def _run_git(*args: str) -> str:
@@ -247,6 +253,75 @@ def _validate_receipt_freshness(head_sha: str) -> None:
         )
 
 
+def _repository_from_remotes() -> str | None:
+    """The ``owner/repo`` this clone's GitHub remotes name, or ``None``."""
+    for remote in ("origin", "upstream"):
+        try:
+            url = _run_git("config", "--get", f"remote.{remote}.url")
+        except RuntimeError:
+            continue
+        match = _REMOTE_OWNER_REPO.search(url)
+        if match is not None:
+            return match.group("repo")
+    return None
+
+
+def _github_access_token() -> str | None:
+    """A GitHub API token: the explicit environment or the ``gh`` CLI's own."""
+    token = (os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or "").strip()
+    if token:
+        return token
+    try:
+        completed = subprocess.run(("gh", "auth", "token"), check=False, capture_output=True, text=True)
+    except OSError:
+        return None
+    if completed.returncode != 0:
+        return None
+    return completed.stdout.strip() or None
+
+
+def _governing_issue_criteria() -> tuple[str, tuple[str, ...] | None, str]:
+    """The governing Issue's normalized acceptance criteria, from trusted evidence.
+
+    Returns ``(issue, criteria, failure_reason)``. ``criteria`` is ``None`` only
+    when coverage against the governing Issue cannot be proven; ``failure_reason``
+    is empty exactly when no governing Issue exists to measure against (so a push
+    with genuinely nothing to cover is not blocked). The derivation mirrors hosted
+    Candidate Admission: the Issue a branch binds is the same canonical branch
+    binding, the Issue body is read from GitHub (never from the candidate), and
+    the criteria are parsed with the same parser the hosted gate uses.
+    """
+    claim: dict[str, Any] | None = review.read_review_document()
+    claimed_issue = str(((claim or {}).get("claims") or {}).get("issue") or "").strip().lstrip("#")
+    branch = _run_git("rev-parse", "--abbrev-ref", "HEAD")
+    branch_issue = governance.issue_for_branch(branch)
+    if branch_issue is not None and claimed_issue and claimed_issue != branch_issue:
+        return (
+            claimed_issue,
+            None,
+            (
+                f"the pre-ready hostile review claims Issue #{claimed_issue}, but the current branch "
+                f"binds Issue #{branch_issue}"
+            ),
+        )
+
+    issue = claimed_issue if claimed_issue.isdigit() else (branch_issue or "")
+    if not issue:
+        return "", None, ""
+
+    token = _github_access_token()
+    if not token:
+        return issue, None, "no GitHub token is available to read the governing Issue's acceptance criteria"
+    repository = _repository_from_remotes()
+    if not repository:
+        return issue, None, "the GitHub repository could not be derived from git remotes"
+
+    state, criteria, criteria_error = governance.read_issue_acceptance_criteria(repository, token, issue)
+    if state != "present":
+        return issue, None, f"governing Issue #{issue} acceptance-criteria evidence is unavailable ({criteria_error})"
+    return issue, criteria, ""
+
+
 def report_pre_ready_review_state(head_sha: str) -> None:
     """Report, without blocking, whether this head could stand as Ready.
 
@@ -255,6 +330,13 @@ def report_pre_ready_review_state(head_sha: str) -> None:
     candidate admission refuses an unreviewed or stale head. Saying so here is
     what stops "mark Ready" from being the moment the first hostile review is
     discovered to be missing.
+
+    The report is faithful to hosted Candidate Admission: a head is READY-ELIGIBLE
+    only when the review also covers every acceptance criterion the governing
+    Issue defines, derived from GitHub the same way the hosted gate derives it.
+    When the governing Issue's criteria cannot be proven, or when the review does
+    not cover them, the report is DRAFT-ONLY -- never READY-ELIGIBLE on a review
+    the hosted gate would reject.
     """
 
     try:
@@ -262,13 +344,22 @@ def report_pre_ready_review_state(head_sha: str) -> None:
     except provenance.GitEvidenceUnavailable as exc:
         print(f"[Hunter Pre-Push] NOTE: pre-ready review state is unknown ({exc})")
         return
-    verdict = review.verify_local(base, head_sha)
+    issue, issue_criteria, criteria_reason = _governing_issue_criteria()
+    if issue_criteria is None and criteria_reason:
+        print(
+            f"[Hunter Pre-Push] DRAFT-ONLY: governing Issue acceptance-criteria coverage is unverifiable "
+            f"({criteria_reason}). Ready is blocked unless the exact-head hostile review covers every "
+            "acceptance criterion the governing Issue defines."
+        )
+        return
+    verdict = review.verify_local(base, head_sha, issue_criteria=issue_criteria)
     if verdict.ok:
         print(f"[Hunter Pre-Push] READY-ELIGIBLE: {verdict.reason}")
     else:
         print(
             f"[Hunter Pre-Push] DRAFT-ONLY: pre-ready hostile review is {verdict.state} ({verdict.reason}). "
-            "Ready is blocked until it is recorded against this exact head."
+            "Ready is blocked until it is recorded against this exact head and covers every acceptance "
+            "criterion the governing Issue defines."
         )
 
 

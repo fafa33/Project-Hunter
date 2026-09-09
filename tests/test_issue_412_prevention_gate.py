@@ -1518,3 +1518,159 @@ def test_the_draft_controller_still_leaves_a_pending_head_alone() -> None:
     source = (ROOT / "scripts/hunter_candidate_admission.py").read_text(encoding="utf-8")
 
     assert 'if admission_state == "pending":' in source
+
+
+# --------------------------------------------------------------------------
+# DFF-013 recurrence: local-vs-hosted acceptance-criteria coverage mismatch
+# (Issue #442 / PR #443). The pre-push hook echoed READY-ELIGIBLE for a review
+# hosted Candidate Admission rejected, because the local path derived none of
+# the governing Issue criteria. These tests reproduce the exact failure mode.
+# --------------------------------------------------------------------------
+
+ISSUE_442_AC_BODY = """## Acceptance criteria
+
+- [ ] One repository-owned Railway runtime startup seam exists.
+- [ ] Fresh mounted `/data` volume gets canonical root + genesis before issuer composition.
+- [ ] Existing canonically bootstrapped volume is idempotent.
+- [ ] Mismatched/tampered authority fails closed before issuer starts.
+- [ ] Long-running issuer does not retain bootstrap signing authority.
+- [ ] `/healthz` becomes healthy on Railway after canonical bootstrap.
+- [ ] Focused tests cover fresh, idempotent, mismatch, and signing-key-lifecycle cases.
+- [ ] `railway.toml` and deployment docs are consistent.
+- [ ] Normal pre-push, hostile review, exact-head hosted gates green.
+- [ ] Draft PR only; no Ready/merge without owner approval.
+"""
+
+# The self-authored paraphrase set the PR #443 artifact actually carried in
+# place of the governing Issue's criteria: none of these normalizes to any of
+# the ten Issue-defined criteria, which is exactly why hosted admission refused
+# it while the structural-only local path reported READY-ELIGIBLE.
+PR_443_PARAPHRASED_CRITERIA = (
+    "railway.toml remains the repository-owned deployment authority and is not bypassed with Railway dashboard-only configuration.",
+    "One canonical repository-owned Railway runtime startup seam is added.",
+    "At runtime, after /data is actually mounted, the startup seam idempotently runs the existing canonical bootstrap.",
+    "A fresh /data volume gets the canonical Source Handling root/genesis before issuer composition starts.",
+    "An already canonically bootstrapped volume remains deterministic and idempotent.",
+    "Any mismatch, tampering, invalid authority state, or bootstrap inconsistency fails closed BEFORE the issuer starts.",
+    "After successful bootstrap, the existing canonical issuer is started with unchanged command and provenance resolver.",
+    "HUNTER_SOURCE_HANDLING_SIGNING_KEY is bootstrap/operator-only material; the long-running issuer process must NOT retain it.",
+    "No parallel Source Handling implementation, no parallel issuer, no duplicate bootstrap mechanism, no second authority model is created.",
+    "Focused regression tests cover all required scenarios.",
+    "Ruff, Black, Mypy pass on changed files.",
+    "Existing bootstrap, issuer, and source handling tests are unbroken.",
+    "DFF-019 defect prevention family added with regression evidence.",
+)
+
+
+def _issue_442_review(*criteria: str) -> dict:
+    judgement = _judgement(families=("DFF-010", "DFF-013"))
+    claims = review.build_claims(
+        issue="442",
+        base_ref="main",
+        base_sha=BASE,
+        changes=CANDIDATE_CHANGES,
+        acceptance_criteria=tuple(
+            {"id": f"AC-{index}", "criterion": text, "verdict": "satisfied", "evidence": "covered"}
+            for index, text in enumerate(criteria, start=1)
+        ),
+        defect_families=tuple(judgement["defect_families"]),
+        findings=(),
+        adversarial_dimensions=tuple(judgement["adversarial_dimensions"]),
+    )
+    return review.document_for(claims)
+
+
+def test_issue_442_paraphrased_criteria_are_failed_closed() -> None:
+    """The PR #443 failure mode: a paraphrase/split/substitute set is refused.
+
+    Hosted Candidate Admission feeds the Issue-derived criteria into
+    ``verify_claims``; every one must be covered by normalized-text equality.
+    This review covers zero of them, so the verdict is the exact one the hosted
+    gate reported -- '10 of the 10'. The structural-only leg (issue_criteria is
+    None), which is all the pre-push hook used to run, admits the same review:
+    that is the divergence this family now prevents by supplying the criteria.
+    """
+    derived = review.parse_issue_acceptance_criteria(ISSUE_442_AC_BODY)
+    assert len(derived) == 10
+
+    document = _issue_442_review(*PR_443_PARAPHRASED_CRITERIA)
+
+    hosted_view = review.verify_claims(
+        document, base_sha=BASE, changes=CANDIDATE_CHANGES, families=FAMILIES, issue_criteria=derived
+    )
+    assert hosted_view.state == "incomplete"
+    assert "10 of the 10 acceptance criteria" in hosted_view.reason
+
+    old_local_view = review.verify_claims(
+        document, base_sha=BASE, changes=CANDIDATE_CHANGES, families=FAMILIES, issue_criteria=None
+    )
+    assert old_local_view.ok is True
+
+
+def test_issue_442_canonical_criteria_are_admitted() -> None:
+    """The paired positive: exactly the Issue's ten criteria are admitted."""
+    derived = review.parse_issue_acceptance_criteria(ISSUE_442_AC_BODY)
+    original_issue_texts = tuple(
+        line.strip() for line in ISSUE_442_AC_BODY.splitlines() if line.strip().startswith("- ")
+    )
+    document = _issue_442_review(*[text.lstrip("- ").strip() for text in original_issue_texts])
+
+    verdict = review.verify_claims(
+        document, base_sha=BASE, changes=CANDIDATE_CHANGES, families=FAMILIES, issue_criteria=derived
+    )
+
+    assert verdict.ok is True, verdict.reason
+    assert "including all 10 the Issue defines" in verdict.reason
+
+
+def test_verify_local_enforces_governing_issue_criteria(monkeypatch) -> None:
+    """The plumbing: the local boundary now carries criteria into verify_claims."""
+    monkeypatch.setattr(review, "load_families", lambda: (FAMILIES, ""))
+    monkeypatch.setattr(review, "local_changes", lambda _base, _head, **kwargs: CANDIDATE_CHANGES)
+    monkeypatch.setattr(review, "read_review_document", lambda: _issue_442_review("A criterion."))
+
+    uncovered = review.verify_local(BASE, HEAD, issue_criteria=("original issue criterion", "another"))
+    assert uncovered.state == "incomplete"
+    assert "2 of the 2 acceptance criteria" in uncovered.reason
+
+    structural = review.verify_local(BASE, HEAD)
+    assert structural.ok is True, structural.reason
+
+
+def test_pre_push_fails_closed_when_issue_criteria_are_unverifiable(monkeypatch, capsys) -> None:
+    """No READY-ELIGIBLE without proof of governing-Issue criterion coverage."""
+    monkeypatch.setattr(provenance, "resolve_governed_base", lambda _head, **_kwargs: BASE)
+    monkeypatch.setattr(
+        hunter_pre_push,
+        "_governing_issue_criteria",
+        lambda: ("442", None, "no GitHub token is available to read the governing Issue's acceptance criteria"),
+    )
+
+    hunter_pre_push.report_pre_ready_review_state(HEAD)
+    out = capsys.readouterr().out
+
+    assert "DRAFT-ONLY" in out
+    assert "no GitHub token" in out
+    assert "READY-ELIGIBLE" not in out
+
+
+def test_pre_push_reports_ready_only_when_issue_criteria_are_covered(monkeypatch, capsys) -> None:
+    """The paired positive: a review covering every Issue criterion is READY-ELIGIBLE."""
+    monkeypatch.setattr(provenance, "resolve_governed_base", lambda _head, **_kwargs: BASE)
+    captured: dict[str, object] = {}
+
+    def _verified(base: str, head: str, *, issue_criteria=None):
+        captured["base"] = base
+        captured["head"] = head
+        captured["issue_criteria"] = issue_criteria
+        return review.ReviewVerdict("valid", "complete base->HEAD hostile review for Issue #442")
+
+    monkeypatch.setattr(hunter_pre_push, "_governing_issue_criteria", lambda: ("442", ("one canonical criterion",), ""))
+    monkeypatch.setattr(hunter_pre_push.review, "verify_local", _verified)
+
+    hunter_pre_push.report_pre_ready_review_state(HEAD)
+    out = capsys.readouterr().out
+
+    assert "READY-ELIGIBLE" in out
+    assert captured["base"] == BASE and captured["head"] == HEAD
+    assert captured["issue_criteria"] == ("one canonical criterion",)
