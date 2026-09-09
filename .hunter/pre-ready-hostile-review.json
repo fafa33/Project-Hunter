@@ -109,7 +109,7 @@
         "outcome": "clear"
       },
       {
-        "evidence": "Ready coverage is preserved: the local pre-push still derives the governing Issue acceptance criteria from GitHub and fails closed (DRAFT-ONLY) unless every Issue #442 criterion is covered. The hotfix makes that derivation match hosted admission exactly: criteria are read from the canonical base repository (upstream preferred over the fork), bound to the pushed remote branch ref rather than the local checkout, and malformed/unreadable evidence fails closed to DRAFT-ONLY instead of crashing the boundary.",
+        "evidence": "Ready coverage is preserved: the local pre-push still derives the governing Issue acceptance criteria from GitHub and fails closed (DRAFT-ONLY) unless every Issue #442 criterion is covered. The hotfix makes that derivation match hosted admission exactly: criteria are read from the canonical base repository (upstream preferred over the fork), bound to the pushed remote branch ref rather than the local checkout, malformed/unreadable evidence fails closed to DRAFT-ONLY instead of crashing the boundary, and a push binding more than one distinct Issue is readiness-ambiguous (DRAFT-ONLY) rather than selecting a matching claim.",
         "family": "DFF-013",
         "outcome": "clear"
       },
@@ -152,12 +152,18 @@
         "id": "F-3",
         "resolution": "resolved",
         "severity": "blocking"
+      },
+      {
+        "evidence": "A single pre-push invocation could push the same HEAD to multiple remote branches bound to different Issues (e.g. issue-442-* and issue-444-*) and still report READY-ELIGIBLE when the review claim matched one of them, although hosted Candidate Admission evaluates each pushed head independently and would reject the other. Fixed: a push binding more than one distinct Issue now fails closed to DRAFT-ONLY before any claim is consulted; the verdict and reason are ordering-independent, and single-Issue multi-ref pushes are unchanged.",
+        "id": "F-4",
+        "resolution": "resolved",
+        "severity": "blocking"
       }
     ],
     "issue": "442",
     "review_target": [
       {
-        "blob_sha": "6ae7c20dc4a979d2589495cf8c51be731990f7ab",
+        "blob_sha": "a0362d6731f2f8f86d5d2e0f6e9b095282e93999",
         "path": "scripts/hunter_pre_push.py",
         "previous_path": "",
         "status": "modified"
@@ -175,14 +181,14 @@
         "status": "modified"
       },
       {
-        "blob_sha": "30e7d5cb3592b10b8d2948a07d8e80b78a9c3dbf",
+        "blob_sha": "df624043d27f09b8462f958b1ee91731152a6c25",
         "path": "tests/test_issue_412_prevention_gate.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "fa69724477e2a38fe6cca71783d46810506d156d9d68d5f31ad7e043c4bde0f9"
+    "review_target_digest": "1bc202cfd41b8d932074158c71c71a7eda7cf6d80ea73d56297bce0e922db08d"
   },
-  "review_id": "271f52378ccae593751ab66f213113265f1543c4f4e130cfd15fa379d9af8bdc",
+  "review_id": "898f5fd274ff4e83b29bcb2b09983f9343845b6b23c18fa01aca2735fd798fed",
   "schema": "hunter.pre-ready-hostile-review.v1"
 }
