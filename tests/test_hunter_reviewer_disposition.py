@@ -430,7 +430,7 @@ def test_deterministic_preflight_failure_cannot_cross_normal_push_boundary(tmp_p
     # on the deterministic-preflight boundary it was written for.
     monkeypatch.setattr(hunter_pre_push, "_validate_writer_provenance", lambda _head: None)
     monkeypatch.setattr(hunter_pre_push, "_validate_receipt_freshness", lambda _head: None)
-    monkeypatch.setattr(hunter_pre_push, "report_pre_ready_review_state", lambda _head: None)
+    monkeypatch.setattr(hunter_pre_push, "report_pre_ready_review_state", lambda _head, _updates: None)
     monkeypatch.setattr(hunter_pre_push, "_select_preflight_mode", lambda _head: hunter_pre_push.NORMAL_MODE)
     monkeypatch.setattr(
         hunter_pre_push.subprocess,

@@ -984,7 +984,7 @@ def test_pre_push_admits_a_bound_multi_commit_range(monkeypatch, tmp_path: Path)
     monkeypatch.setattr(hunter_pre_push, "_run_git", _pre_push_git(tmp_path, HEAD))
     monkeypatch.setattr(hunter_pre_push.os, "chdir", lambda _path: None)
     monkeypatch.setattr(hunter_pre_push, "_validate_receipt_freshness", lambda _head: None)
-    monkeypatch.setattr(hunter_pre_push, "report_pre_ready_review_state", lambda _head: None)
+    monkeypatch.setattr(hunter_pre_push, "report_pre_ready_review_state", lambda _head, _updates: None)
     monkeypatch.setattr(hunter_pre_push.provenance, "check_range", lambda *_a, **_k: None)
     monkeypatch.setattr(hunter_pre_push, "_select_preflight_mode", lambda _head: hunter_pre_push.NORMAL_MODE)
 
@@ -1643,10 +1643,14 @@ def test_pre_push_fails_closed_when_issue_criteria_are_unverifiable(monkeypatch,
     monkeypatch.setattr(
         hunter_pre_push,
         "_governing_issue_criteria",
-        lambda: ("442", None, "no GitHub token is available to read the governing Issue's acceptance criteria"),
+        lambda _updates: (
+            "442",
+            None,
+            "no GitHub token is available to read the governing Issue's acceptance criteria",
+        ),
     )
 
-    hunter_pre_push.report_pre_ready_review_state(HEAD)
+    hunter_pre_push.report_pre_ready_review_state(HEAD, ())
     out = capsys.readouterr().out
 
     assert "DRAFT-ONLY" in out
@@ -1665,12 +1669,169 @@ def test_pre_push_reports_ready_only_when_issue_criteria_are_covered(monkeypatch
         captured["issue_criteria"] = issue_criteria
         return review.ReviewVerdict("valid", "complete base->HEAD hostile review for Issue #442")
 
-    monkeypatch.setattr(hunter_pre_push, "_governing_issue_criteria", lambda: ("442", ("one canonical criterion",), ""))
+    monkeypatch.setattr(
+        hunter_pre_push, "_governing_issue_criteria", lambda _updates: ("442", ("one canonical criterion",), "")
+    )
     monkeypatch.setattr(hunter_pre_push.review, "verify_local", _verified)
 
-    hunter_pre_push.report_pre_ready_review_state(HEAD)
+    hunter_pre_push.report_pre_ready_review_state(HEAD, ())
     out = capsys.readouterr().out
 
     assert "READY-ELIGIBLE" in out
     assert captured["base"] == BASE and captured["head"] == HEAD
     assert captured["issue_criteria"] == ("one canonical criterion",)
+
+
+# --------------------------------------------------------------------------
+# PR #443 follow-up: local pre-push divergences from hosted Candidate Admission.
+# The local boundary derived the criteria repository by preferring the fork,
+# bound the governing Issue to the checked-out local branch instead of the
+# pushed remote branch, and could crash on malformed review evidence. Each
+# divergence is a local-only echo of the hosted gate the pre-push must match.
+# --------------------------------------------------------------------------
+
+
+def _pushed_updates(*remote_refs: str) -> list[tuple[str, str, str]]:
+    return [("refs/heads/feature", HEAD, remote_ref) for remote_ref in remote_refs]
+
+
+def test_governing_criteria_are_fetched_from_the_canonical_repository_not_the_fork(monkeypatch) -> None:
+    """Issue criteria come from the canonical base repository the PR targets.
+
+    ``origin`` names the contributor fork; ``upstream`` names the canonical
+    base repository whose Issue governs the pull request. Hosted Candidate
+    Admission reads the governing Issue from that base repository, so the local
+    pre-push must read it there too -- never from the fork the push drafts on.
+    """
+    monkeypatch.setattr(hunter_pre_push.review, "read_review_document", lambda: {"claims": {"issue": "442"}})
+    monkeypatch.setattr(hunter_pre_push, "_github_access_token", lambda: "token")
+
+    def fake_git(*args: str) -> str:
+        if args == ("config", "--get", "remote.origin.url"):
+            return "git@github.com:fafa33/Project-Hunter-Fork.git"
+        if args == ("config", "--get", "remote.upstream.url"):
+            return "https://github.com/fafa33/Project-Hunter.git"
+        raise AssertionError(args)
+
+    monkeypatch.setattr(hunter_pre_push, "_run_git", fake_git)
+    captured: dict[str, str] = {}
+
+    def _criteria(repository: str, _token: str, issue: str) -> tuple[str, tuple[str, ...], str]:
+        captured["repository"] = repository
+        captured["issue"] = issue
+        return ("present", ("one canonical criterion",), "")
+
+    monkeypatch.setattr(hunter_pre_push.governance, "read_issue_acceptance_criteria", _criteria)
+
+    issue, criteria, reason = hunter_pre_push._governing_issue_criteria(
+        _pushed_updates("refs/heads/fix/issue-442-hotfix")
+    )
+
+    assert reason == ""
+    assert issue == "442"
+    assert captured["issue"] == "442"
+    assert captured["repository"] == "fafa33/Project-Hunter"
+
+
+def test_governing_issue_binding_follows_the_pushed_remote_branch_not_the_local_branch(monkeypatch) -> None:
+    """A push binds the Issue its remote head ref names, whatever local branch is out.
+
+    The checked-out local branch can differ from the pushed remote branch, or be
+    detached. Hosted Candidate Admission binds the pull request head ref -- the
+    pushed remote branch -- so acceptance-criteria coverage must be measured
+    against that binding, not the local checkout a contributor happens to hold.
+    """
+    monkeypatch.setattr(hunter_pre_push.review, "read_review_document", lambda: {"claims": {"issue": ""}})
+    monkeypatch.setattr(hunter_pre_push, "_github_access_token", lambda: "token")
+    monkeypatch.setattr(hunter_pre_push, "_repository_from_remotes", lambda: "fafa33/Project-Hunter")
+    captured: dict[str, str] = {}
+
+    def _criteria(_repository: str, _token: str, issue: str) -> tuple[str, tuple[str, ...], str]:
+        captured["issue"] = issue
+        return ("present", (), "")
+
+    monkeypatch.setattr(hunter_pre_push.governance, "read_issue_acceptance_criteria", _criteria)
+
+    issue, criteria, reason = hunter_pre_push._governing_issue_criteria(
+        _pushed_updates("refs/heads/fix/issue-442-hotfix")
+    )
+
+    assert reason == ""
+    assert issue == "442"
+    assert captured["issue"] == "442"
+
+
+def test_local_readiness_cannot_claim_ready_when_hosted_binds_another_issue(monkeypatch, capsys) -> None:
+    """A review authored for one Issue is not Ready on a push bound to another.
+
+    The review claims Issue #442 but this push reaches for a branch binding
+    Issue #444; hosted Candidate Admission rejects exactly that mismatch, so the
+    local report must be DRAFT-ONLY -- never READY-ELIGIBLE.
+    """
+    monkeypatch.setattr(provenance, "resolve_governed_base", lambda _head, **_kwargs: BASE)
+    monkeypatch.setattr(hunter_pre_push.review, "read_review_document", lambda: {"claims": {"issue": "442"}})
+
+    hunter_pre_push.report_pre_ready_review_state(HEAD, _pushed_updates("refs/heads/fix/issue-444-other"))
+    out = capsys.readouterr().out
+
+    assert "DRAFT-ONLY" in out
+    assert "claims Issue #442" in out
+    assert "binds Issue #444" in out
+    assert "READY-ELIGIBLE" not in out
+
+
+def test_top_level_array_review_evidence_is_draft_only_not_a_crash(monkeypatch, capsys) -> None:
+    """Evidence that is not a JSON object proves nothing and blocks nothing."""
+    monkeypatch.setattr(provenance, "resolve_governed_base", lambda _head, **_kwargs: BASE)
+    monkeypatch.setattr(hunter_pre_push.review, "read_review_document", lambda: [{"claims": {"issue": "442"}}])
+
+    hunter_pre_push.report_pre_ready_review_state(HEAD, _pushed_updates("refs/heads/fix/issue-442-hotfix"))
+    out = capsys.readouterr().out
+
+    assert "DRAFT-ONLY" in out
+    assert "not a JSON object" in out
+    assert "READY-ELIGIBLE" not in out
+
+
+def test_non_object_review_claims_are_draft_only_not_a_crash(monkeypatch, capsys) -> None:
+    """``claims`` that is not an object cannot name an Issue or a criterion."""
+    monkeypatch.setattr(provenance, "resolve_governed_base", lambda _head, **_kwargs: BASE)
+    monkeypatch.setattr(hunter_pre_push.review, "read_review_document", lambda: {"claims": []})
+
+    hunter_pre_push.report_pre_ready_review_state(HEAD, ())
+    out = capsys.readouterr().out
+
+    assert "DRAFT-ONLY" in out
+    assert "claims are not an object" in out
+    assert "READY-ELIGIBLE" not in out
+
+
+def test_malformed_review_evidence_does_not_block_an_ordinary_draft_push(monkeypatch, tmp_path, capsys) -> None:
+    """Reporting state must never abort an otherwise authorized Draft push."""
+    monkeypatch.setattr(provenance, "resolve_governed_base", lambda _head, **_kwargs: BASE)
+
+    def fake_git(*args: str) -> str:
+        if args == ("rev-parse", "--show-toplevel"):
+            return str(tmp_path)
+        if args == ("rev-parse", "HEAD"):
+            return HEAD
+        if args == ("status", "--porcelain=v1", "--untracked-files=normal"):
+            return ""
+        raise AssertionError(args)
+
+    monkeypatch.setattr(hunter_pre_push, "_run_git", fake_git)
+    monkeypatch.setattr(hunter_pre_push.os, "chdir", lambda _path: None)
+    monkeypatch.setattr(hunter_pre_push, "_validate_writer_provenance", lambda _head: None)
+    monkeypatch.setattr(hunter_pre_push, "_validate_receipt_freshness", lambda _head: None)
+    monkeypatch.setattr(hunter_pre_push, "_select_preflight_mode", lambda _head: hunter_pre_push.NORMAL_MODE)
+    monkeypatch.setattr(hunter_pre_push.preflight, "run_quality_gates", lambda _gates: 0)
+    monkeypatch.setattr(hunter_pre_push.review, "read_review_document", lambda: {"claims": []})
+
+    updates = [f"refs/heads/fix/issue-442-hotfix {HEAD} refs/heads/fix/issue-442-hotfix {hunter_pre_push.ZERO_SHA}\n"]
+    assert hunter_pre_push.enforce_pre_push(updates) == 0
+    captured = capsys.readouterr()
+
+    assert "DRAFT-ONLY" in captured.out
+    assert "READY-ELIGIBLE" not in captured.out
+    assert "AttributeError" not in captured.out
+    assert captured.err == ""
