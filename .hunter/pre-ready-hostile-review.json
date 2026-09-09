@@ -228,7 +228,7 @@
         "status": "added"
       },
       {
-        "blob_sha": "8631b9b6cc84591d1403f6ee8df2094d73f3917b",
+        "blob_sha": "4c757f6154c55ca8dc3ce04c8ef367efd61e6b81",
         "path": "docs/DEFECT_REGISTRY.json",
         "previous_path": "",
         "status": "modified"
@@ -246,8 +246,8 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "19f2e0540a9141b7c6e0ae987f769c493df02dd4ceecc76357cdfe74217542b1"
+    "review_target_digest": "1223228adeaecc26d1cd02fd90f21890f8e8d5ca75e18deaef98d73e65c10920"
   },
-  "review_id": "f442ab96618cc9ba15c76ad35d469cb1358f1958fb8059ed787b640dc3a1d847",
+  "review_id": "0d6ea0b3da4bfd7044a865cd5351fdd1d724778bf7739ed39a778d039f736bc9",
   "schema": "hunter.pre-ready-hostile-review.v1"
 }
