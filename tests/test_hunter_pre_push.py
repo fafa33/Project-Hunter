@@ -31,7 +31,7 @@ def _stub_issue_412_boundaries(monkeypatch) -> None:
 
     monkeypatch.setattr(hunter_pre_push, "_validate_writer_provenance", lambda _head: None)
     monkeypatch.setattr(hunter_pre_push, "_validate_receipt_freshness", lambda _head: None)
-    monkeypatch.setattr(hunter_pre_push, "report_pre_ready_review_state", lambda _head: None)
+    monkeypatch.setattr(hunter_pre_push, "report_pre_ready_review_state", lambda _head, _updates: None)
 
 
 def test_pre_push_blocks_known_deterministic_failure_before_network_push(monkeypatch, tmp_path) -> None:
@@ -229,3 +229,36 @@ def test_hook_installer_owns_repository_hooks_path() -> None:
     text = (ROOT / "scripts" / "install_hunter_git_hooks.py").read_text(encoding="utf-8")
     assert 'HOOKS_PATH = ".githooks"' in text
     assert '"git", "config", "core.hooksPath", HOOKS_PATH' in text
+
+
+def test_repository_derivation_prefers_canonical_upstream_over_the_fork(monkeypatch) -> None:
+    """Fork workflow: origin names the fork, upstream the canonical base.
+
+    Governing Issue criteria are read from the base repository the pull request
+    targets (the one hosted Candidate Admission reads from). In a fork workflow
+    that is the upstream remote, never the fork that happens to be ``origin``.
+    """
+
+    def fake_git(*args: str) -> str:
+        if args == ("config", "--get", "remote.origin.url"):
+            return "git@github.com:fafa33/Project-Hunter-Fork.git"
+        if args == ("config", "--get", "remote.upstream.url"):
+            return "https://github.com/fafa33/Project-Hunter.git"
+        raise AssertionError(args)
+
+    monkeypatch.setattr(hunter_pre_push, "_run_git", fake_git)
+
+    assert hunter_pre_push._repository_from_remotes() == "fafa33/Project-Hunter"
+
+
+def test_repository_derivation_falls_back_to_origin_in_a_direct_clone(monkeypatch) -> None:
+    """No fork: origin names the canonical repository and is the only remote."""
+
+    def fake_git(*args: str) -> str:
+        if args == ("config", "--get", "remote.origin.url"):
+            return "https://github.com/fafa33/Project-Hunter.git"
+        raise RuntimeError("remote.upstream does not exist")
+
+    monkeypatch.setattr(hunter_pre_push, "_run_git", fake_git)
+
+    assert hunter_pre_push._repository_from_remotes() == "fafa33/Project-Hunter"

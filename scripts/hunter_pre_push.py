@@ -254,8 +254,17 @@ def _validate_receipt_freshness(head_sha: str) -> None:
 
 
 def _repository_from_remotes() -> str | None:
-    """The ``owner/repo`` this clone's GitHub remotes name, or ``None``."""
-    for remote in ("origin", "upstream"):
+    """The canonical/base repository this clone belongs to, or ``None``.
+
+    Hosted Candidate Admission reads the governing Issue from the base repository
+    of the pull request. In a fork workflow that is the ``upstream`` remote, never
+    the contributor's ``origin`` fork, so ``upstream`` is preferred when present;
+    ``origin`` remains the canonical repository in a direct clone, where no fork
+    exists. Preferring ``origin`` blindly was the PR #443 divergence: it read a
+    fork's Issue mirror (or nothing) and reported readiness the hosted gate never
+    granted.
+    """
+    for remote in ("upstream", "origin"):
         try:
             url = _run_git("config", "--get", f"remote.{remote}.url")
         except RuntimeError:
@@ -280,32 +289,71 @@ def _github_access_token() -> str | None:
     return completed.stdout.strip() or None
 
 
-def _governing_issue_criteria() -> tuple[str, tuple[str, ...] | None, str]:
+def _governing_issue_criteria(updates: Iterable[tuple[str, str, str]]) -> tuple[str, tuple[str, ...] | None, str]:
     """The governing Issue's normalized acceptance criteria, from trusted evidence.
 
     Returns ``(issue, criteria, failure_reason)``. ``criteria`` is ``None`` only
     when coverage against the governing Issue cannot be proven; ``failure_reason``
     is empty exactly when no governing Issue exists to measure against (so a push
     with genuinely nothing to cover is not blocked). The derivation mirrors hosted
-    Candidate Admission: the Issue a branch binds is the same canonical branch
-    binding, the Issue body is read from GitHub (never from the candidate), and
-    the criteria are parsed with the same parser the hosted gate uses.
+    Candidate Admission: the Issue a branch binds is the Issue the *pushed remote
+    branch ref* binds -- the head ref of the pull request this push creates -- not
+    the name of the checked-out local branch, which can differ from it and hosts
+    nothing; the Issue body is read from the canonical repository on GitHub (never
+    from the candidate); and the criteria are parsed with the same parser the
+    hosted gate uses. A single pre-push invocation that reaches for multiple
+    remote branches bound to *different* Issues is ambiguous: hosted Candidate
+    Admission evaluates each pushed head independently, so the same review
+    would be admitted for one head and rejected for another, and no single
+    claimed Issue can make that mix Ready. Review evidence that is unreadable
+    or structurally invalid is evidence that cannot be measured, so it fails
+    closed as a coverage doubt instead of ever claiming READY-ELIGIBLE or
+    crashing the push boundary.
     """
-    claim: dict[str, Any] | None = review.read_review_document()
-    claimed_issue = str(((claim or {}).get("claims") or {}).get("issue") or "").strip().lstrip("#")
-    branch = _run_git("rev-parse", "--abbrev-ref", "HEAD")
-    branch_issue = governance.issue_for_branch(branch)
-    if branch_issue is not None and claimed_issue and claimed_issue != branch_issue:
+
+    try:
+        claim: Any = review.read_review_document()
+    except review.GitEvidenceUnavailable as exc:
+        return "", None, f"the pre-ready hostile review evidence is unreadable ({exc})"
+    if claim is not None and not isinstance(claim, dict):
+        return "", None, "the pre-ready hostile review evidence is not a JSON object"
+    claims = claim.get("claims") if isinstance(claim, dict) else None
+    if claims is not None and not isinstance(claims, dict):
+        return "", None, "the pre-ready hostile review evidence claims are not an object"
+    claimed_issue = str((claims or {}).get("issue") or "").strip().lstrip("#")
+
+    pushed_issues = sorted(
+        {
+            governance.issue_for_branch(remote_ref)
+            for _local_ref, _local_sha, remote_ref in updates
+            if remote_ref.startswith("refs/heads/")
+        }
+        - {None}
+    )
+    if len(pushed_issues) > 1:
+        return (
+            "",
+            None,
+            "the push reaches for multiple remote branches binding different Issues "
+            f"({', '.join(f'#{issue}' for issue in pushed_issues)}); hosted Candidate Admission evaluates each "
+            "pushed head independently, so readiness is ambiguous and acceptance-criteria coverage cannot be "
+            "proven for the mix",
+        )
+    if claimed_issue and pushed_issues and claimed_issue not in pushed_issues:
         return (
             claimed_issue,
             None,
             (
-                f"the pre-ready hostile review claims Issue #{claimed_issue}, but the current branch "
-                f"binds Issue #{branch_issue}"
+                f"the pre-ready hostile review claims Issue #{claimed_issue}, but the pushed branch binds "
+                f"Issue #{', '.join(pushed_issues)}; hosted Candidate Admission binds the pushed head ref"
             ),
         )
-
-    issue = claimed_issue if claimed_issue.isdigit() else (branch_issue or "")
+    if claimed_issue.isdigit():
+        issue = claimed_issue
+    elif len(pushed_issues) == 1:
+        issue = pushed_issues[0]
+    else:
+        issue = ""
     if not issue:
         return "", None, ""
 
@@ -322,7 +370,7 @@ def _governing_issue_criteria() -> tuple[str, tuple[str, ...] | None, str]:
     return issue, criteria, ""
 
 
-def report_pre_ready_review_state(head_sha: str) -> None:
+def report_pre_ready_review_state(head_sha: str, updates: Iterable[tuple[str, str, str]]) -> None:
     """Report, without blocking, whether this head could stand as Ready.
 
     Pushing an incomplete candidate to a Draft pull request is ordinary work, so
@@ -333,10 +381,12 @@ def report_pre_ready_review_state(head_sha: str) -> None:
 
     The report is faithful to hosted Candidate Admission: a head is READY-ELIGIBLE
     only when the review also covers every acceptance criterion the governing
-    Issue defines, derived from GitHub the same way the hosted gate derives it.
-    When the governing Issue's criteria cannot be proven, or when the review does
-    not cover them, the report is DRAFT-ONLY -- never READY-ELIGIBLE on a review
-    the hosted gate would reject.
+    Issue defines, derived from GitHub the same way the hosted gate derives it and
+    bound to the pushed remote branch ref rather than the checked-out local branch
+    name. When the governing Issue's criteria cannot be proven -- including when
+    the review evidence is unreadable or structurally invalid -- or when the
+    review does not cover them, the report is DRAFT-ONLY -- never READY-ELIGIBLE
+    on a review the hosted gate would reject.
     """
 
     try:
@@ -344,7 +394,7 @@ def report_pre_ready_review_state(head_sha: str) -> None:
     except provenance.GitEvidenceUnavailable as exc:
         print(f"[Hunter Pre-Push] NOTE: pre-ready review state is unknown ({exc})")
         return
-    issue, issue_criteria, criteria_reason = _governing_issue_criteria()
+    issue, issue_criteria, criteria_reason = _governing_issue_criteria(updates)
     if issue_criteria is None and criteria_reason:
         print(
             f"[Hunter Pre-Push] DRAFT-ONLY: governing Issue acceptance-criteria coverage is unverifiable "
@@ -400,7 +450,7 @@ def enforce_pre_push(lines: Iterable[str]) -> int:
         return 2
 
     report_full_repository_proof_ownership(repo_root, after_head, mode)
-    report_pre_ready_review_state(after_head)
+    report_pre_ready_review_state(after_head, updates)
     print(f"[Hunter Pre-Push] PASS: exact HEAD {after_head} passed the {_lane_label(mode)}")
     return 0
 
