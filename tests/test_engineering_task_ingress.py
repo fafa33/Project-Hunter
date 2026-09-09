@@ -22,6 +22,7 @@ import pytest
 from hunter.automation.issue_agent_execution import (
     ISSUE_AGENT_PROFILE_REGISTRY,
     ISSUE_AGENT_ROUTE_REGISTRY,
+    ISSUE_AGENT_TASK_KEY,
 )
 from hunter.evidence_intelligence.engineering_task_ingress import (
     GovernedEngineeringTaskIngress,
@@ -331,3 +332,7 @@ def test_one_canonical_ingress_across_both_production_execution_paths() -> None:
         == ENGINEERING_IMPLEMENT_PROFILE.profile_identity
     )
     assert ISSUE_AGENT_ROUTE_REGISTRY.profile_registry_identity == ISSUE_AGENT_PROFILE_REGISTRY.registry_identity
+    assert (
+        ISSUE_AGENT_ROUTE_REGISTRY.resolve(ISSUE_AGENT_TASK_KEY).route_identity
+        == ENGINEERING_IMPLEMENT_ROUTE.route_identity
+    )

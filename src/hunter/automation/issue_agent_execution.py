@@ -33,9 +33,12 @@ authority; every one of those stays with the component that already holds it:
     the one canonical engineering-task entry point. Every authorized Issue is
     bound to a ``PromptTaskRequest`` and compiles only through this ingress,
     which resolves the exact governed route and enforces the route's hard input
-    budget (bounded ``engineering.review-fix`` reduction within policy, or a
-    machine-readable fail-closed ``PromptTaskOversizeError`` before any
-    dispatch). There is deliberately no second entry into the machine here.
+    budget: normal implementation authorizations route to the governed
+    ``engineering.implement`` route with a machine-readable fail-closed
+    ``PromptTaskOversizeError`` before any dispatch, while the bounded
+    ``engineering.review-fix`` reducer remains a governed route through the same
+    ingress for review-fix work. There is deliberately no second entry into the
+    machine here.
 ``SmartPromptMachine`` (ADR 0031/0032 route + profile registries)
     the only issuer of a build and of the signed ``PromptAutomationEnvelope``.
 ``serialize_prompt_automation_handoff``
@@ -80,9 +83,9 @@ from hunter.evidence_intelligence.repository import EvidenceIntelligenceReposito
 from hunter.evidence_intelligence.smart_prompt_routing import (
     ENGINEERING_IMPLEMENT_PROFILE,
     ENGINEERING_IMPLEMENT_ROUTE,
+    ENGINEERING_IMPLEMENT_TASK_KEY,
     ENGINEERING_REVIEW_FIX_PROFILE,
     ENGINEERING_REVIEW_FIX_ROUTE,
-    ENGINEERING_REVIEW_FIX_TASK_KEY,
     PromptAutomationVerifier,
     PromptMachineProfileRegistry,
     PromptTaskRequest,
@@ -118,9 +121,11 @@ _ISSUE_AGENT_KEY_BYTES = 32
 _ISSUE_AGENT_SIGNATURE_BYTES = 64
 ISSUE_AGENT_EXECUTION_RECEIPT_SCHEMA_VERSION = "hunter-issue-agent-execution-receipt-v1"
 
-#: The governed task key for every authorized Issue. Fixed by the repository,
-#: never derived from Issue text, so an Issue cannot select its own route.
-ISSUE_AGENT_TASK_KEY = ENGINEERING_REVIEW_FIX_TASK_KEY
+#: The governed task key for normal implementation authorizations. Fixed by the
+#: repository, never derived from Issue text, so an Issue cannot select its own
+#: route. The bounded ``engineering.review-fix`` task stays a governed route
+#: through the same ingress for review-fix work.
+ISSUE_AGENT_TASK_KEY = ENGINEERING_IMPLEMENT_TASK_KEY
 
 #: The exact registries this composition root routes through. Building them once
 #: as module constants makes the route/profile pair a repository-owned fact
