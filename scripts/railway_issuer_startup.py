@@ -7,34 +7,43 @@ idempotently bootstrapped at runtime -- *after* the Railway volume is mounted
 but *before* the long-running issuer process starts.
 
 Sequence
---------
+-------
 1.  Read the evidence database path from the environment (the same path the
     issuer will use: ``HUNTER_ISSUE_AGENT_EVIDENCE_DB``, typically
     ``/data/evidence.sqlite``).
-2.  Invoke the existing canonical bootstrap
-    (``bootstrap_source_handling_authority``) which provisions the operator
-    root and genesis authorization rule.  On a fresh volume this writes the
-    authority; on an already-bootstrapped volume the idempotency check passes
-    through without mutation; on a tampered or mismatched volume the bootstrap
-    fails closed before any issuer state is composed.
-3.  Scrub ``HUNTER_SOURCE_HANDLING_SIGNING_KEY`` from the process environment
+2.  Verify the evidence data directory is the mounted persistent Railway
+    volume, not merely a directory that exists.  A directory baked into the
+    image or created by a build step is ephemeral container storage; booting
+    there would silently lose authority on the next restart, so the seam fails
+    closed instead.
+3.  Invoke the existing canonical bootstrap through the shared public contract
+    (``bootstrap_source_handling_authority.bootstrap_authority``), which
+    provisions the operator root and genesis authorization rule.  On a fresh
+    volume this writes the authority; on an already-bootstrapped volume the
+    idempotency check passes through without mutation; on a tampered or
+    mismatched volume the bootstrap fails closed before any issuer state is
+    composed.
+4.  Scrub ``HUNTER_SOURCE_HANDLING_SIGNING_KEY`` from the process environment
     so the long-running steady-state issuer never retains bootstrap-only
     signing material.
-4.  ``exec`` the canonical issuer with unchanged arguments; the current
+5.  ``exec`` the canonical issuer with unchanged arguments; the current
     process is replaced so no Python wrapper lingers.
 
 Design constraints
 ------------------
 -   Repository-owned: the start command is pinned in ``railway.toml``; no
     dashboard-only configuration bypasses it.
--   Fail-closed: any bootstrap inconsistency, missing volume, missing signing
-    key, or misconfiguration terminates the process before the issuer starts.
+-   Fail-closed: a missing or non-mounted volume, missing signing key,
+    bootstrap inconsistency, or any other misconfiguration terminates the
+    process before the issuer starts; a merely-existing directory is never
+    accepted as proof of a mounted volume.
 -   Idempotent: repeated restarts on an already-bootstrapped volume are
     deterministic no-ops.
 -   Security: the signing key is consumed by the bootstrap and never reaches
     the issuer process environment.
 -   No parallel mechanism: this script delegates entirely to the existing
-    canonical bootstrap and issuer scripts.
+    canonical bootstrap and issuer scripts, sharing the bootstrap module's
+    single public ``bootstrap_authority`` contract with the operator CLI.
 """
 
 from __future__ import annotations
@@ -45,7 +54,6 @@ import os
 import sys
 from pathlib import Path
 
-_REPO_ROOT = Path(__file__).resolve().parent.parent
 _SCRIPTS_DIR = Path(__file__).resolve().parent
 
 _SIGNING_KEY_ENV = "HUNTER_SOURCE_HANDLING_SIGNING_KEY"
@@ -57,10 +65,31 @@ logger = logging.getLogger("railway_issuer_startup")
 
 
 def _import_bootstrap():  # type: ignore[no-untyped-def]
-    """Import the canonical bootstrap module from the scripts directory."""
-    if "bootstrap_source_handling_authority" not in sys.modules:
-        importlib.import_module("bootstrap_source_handling_authority")
-    return sys.modules["bootstrap_source_handling_authority"]
+    """Import the canonical bootstrap module from the scripts directory.
+
+    ``importlib.import_module`` returns the cached module from ``sys.modules``
+    on repeat calls, so the import itself is the whole idempotent contract.
+    """
+    return importlib.import_module("bootstrap_source_handling_authority")
+
+
+def _evidence_volume_not_mounted(data_dir: Path) -> str | None:
+    """Return an error message when *data_dir* cannot be shown to be a mounted volume.
+
+    A directory that merely exists is not proof that Railway mounted the
+    persistent volume: the path could have been created by a build step or
+    baked into the image, and bootstrapping there would silently write into
+    ephemeral container storage that is lost on the next restart.  The seam
+    fails closed unless the evidence directory is a real mount point.
+    """
+    if not data_dir.is_dir():
+        return f"data directory {data_dir} does not exist; the Railway volume is not mounted"
+    if not os.path.ismount(data_dir):
+        return (
+            f"data directory {data_dir} exists but is not a mounted Railway volume "
+            "(ephemeral container storage); refusing to bootstrap into transient data"
+        )
+    return None
 
 
 def _bootstrap(database: str) -> dict[str, object]:
@@ -70,13 +99,7 @@ def _bootstrap(database: str) -> dict[str, object]:
     caller can ``fail-closed`` before the issuer is started.
     """
     bootstrap = _import_bootstrap()
-
-    signing_key = bootstrap._load_signing_key(  # type: ignore[attr-defined]
-        environ=os.environ,
-        signing_key_file=None,
-    )
-    rule = bootstrap._load_production_rule()  # type: ignore[attr-defined]
-    return bootstrap._run(database, signing_key, rule)  # type: ignore[attr-defined]
+    return bootstrap.bootstrap_authority(database, environ=os.environ)
 
 
 def _scrub_signing_key() -> None:
@@ -123,11 +146,9 @@ def main() -> int:
 
     db_path = Path(database)
     data_dir = db_path.parent
-    if not data_dir.exists():
-        logger.error(
-            "data directory %s does not exist; the Railway volume is not mounted",
-            data_dir,
-        )
+    volume_error = _evidence_volume_not_mounted(data_dir)
+    if volume_error is not None:
+        logger.error("%s", volume_error)
         return 1
 
     if _SIGNING_KEY_ENV not in os.environ or not os.environ[_SIGNING_KEY_ENV].strip():

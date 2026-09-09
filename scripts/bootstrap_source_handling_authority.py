@@ -192,6 +192,32 @@ def _run(
     }
 
 
+def bootstrap_authority(
+    database: str,
+    *,
+    environ: Mapping[str, str] | None = None,
+    signing_key_file: str | None = None,
+) -> dict[str, Any]:
+    """Run the canonical Source Handling authority bootstrap against *database*.
+
+    This is the single public bootstrap contract shared by the operator CLI
+    (``main``) and the Railway runtime startup seam
+    (``scripts/railway_issuer_startup.py``).  It loads the signing key from
+    exactly one source (``HUNTER_SOURCE_HANDLING_SIGNING_KEY`` or a
+    ``--signing-key-file``), loads the repository-pinned production rule, and
+    publishes the operator root and genesis rule -- or verifies the already
+    bootstrapped idempotent state.  Any missing, malformed, or mismatched input
+    raises; the signing key is consumed internally and never printed or
+    returned.
+    """
+    signing_key = _load_signing_key(
+        environ=os.environ if environ is None else environ,
+        signing_key_file=signing_key_file,
+    )
+    rule = _load_production_rule()
+    return _run(database, signing_key, rule)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python scripts/bootstrap_source_handling_authority.py",
@@ -209,9 +235,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     arguments = parser.parse_args(argv)
 
     try:
-        signing_key = _load_signing_key(environ=os.environ, signing_key_file=arguments.signing_key_file)
-        rule = _load_production_rule()
-        outcome = _run(arguments.database, signing_key, rule)
+        outcome = bootstrap_authority(
+            arguments.database,
+            environ=os.environ,
+            signing_key_file=arguments.signing_key_file,
+        )
     except (ValueError, OSError, json.JSONDecodeError, SourceHandlingBlockedError) as error:
         parser.error(str(error))
     if arguments.json:

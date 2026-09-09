@@ -274,9 +274,9 @@ idempotently bootstraps the volume at runtime — *after* the volume is mounted 
 The startup sequence is:
 
 1. Read `HUNTER_ISSUE_AGENT_EVIDENCE_DB` (typically `/data/evidence.sqlite`).
-2. Verify the data directory exists (the volume is mounted).
+2. Verify the evidence data directory is the mounted persistent volume — a directory that merely exists (baked into the image, or created by a build step) is not accepted as proof and fails closed rather than bootstrapping into ephemeral storage.
 3. Verify `HUNTER_SOURCE_HANDLING_SIGNING_KEY` is present.
-4. Invoke the existing canonical bootstrap (`bootstrap_source_handling_authority`) which provisions the operator root and genesis rule.
+4. Invoke the existing canonical bootstrap through its shared public contract (`bootstrap_authority`), which provisions the operator root and genesis rule.
    On a fresh volume this writes the authority; on an already-bootstrapped volume the idempotency check passes through; on a tampered or
    mismatched volume the bootstrap fails closed before the issuer starts.
 5. Scrub `HUNTER_SOURCE_HANDLING_SIGNING_KEY` from the process environment.
@@ -297,9 +297,35 @@ bypasses this seam.
 
 **a. Attach the persistent Volume** — `railway.toml` provisions a `Volume` at `/data` and sets
 `HUNTER_ISSUE_AGENT_EVIDENCE_DB=/data/evidence.sqlite`.  Railway mounts this volume at runtime before the start command executes.
+The start command will not run any bootstrap from a `preDeploy` hook or one-off job, because Railway volumes are not mounted during
+`preDeploy`; the runtime startup seam is the **only** bootstrap path.
 
-**b. Provision the exact issue authority records** — run the per-Issue provisioning CLI against the same database and signing key for the
-first authorized Issue it will execute:
+**b. Set issuer runtime variables** — on the Railway Service, set:
+- `HUNTER_SOURCE_HANDLING_SIGNING_KEY` (secret — consumed only by the startup seam bootstrap, scrubbed before the issuer starts)
+- `HUNTER_SOURCE_HANDLING_VERIFICATION_KEY`
+- `HUNTER_SOURCE_HANDLING_VERIFICATION_KEY_SHA256`
+- `HUNTER_SOURCE_HANDLING_GENESIS_RULE_SHA256`
+- `HUNTER_PROMPT_AUTOMATION_SIGNING_KEY` (secret)
+- `HUNTER_PROMPT_AUTOMATION_VERIFYING_KEY`
+- `HUNTER_ISSUE_AGENT_AUTHORIZATION_VERIFYING_KEY`
+- `HUNTER_ISSUE_AGENT_REPOSITORY`, `HUNTER_ISSUE_AGENT_OWNER_LOGIN`, `HUNTER_ISSUE_AGENT_EXECUTION_BRANCH`, `HUNTER_ISSUE_AGENT_REPO_DIR`
+- Fallback runtime provider variables (`HUNTER_AGENT_*`)
+- `HUNTER_ISSUE_AGENT_EVIDENCE_DB=/data/evidence.sqlite` (already set by `railway.toml`)
+
+**c. Deploy the issuer (bootstraps the mounted volume)** — trigger a Railway deploy. The `railway.toml` start command runs
+`python scripts/railway_issuer_startup.py`, which verifies the mounted volume, invokes the canonical bootstrap through the shared public
+`bootstrap_authority` contract (provisioning the operator root and genesis rule on this fresh volume), scrubs the signing key, and execs
+the canonical issuer. The issuer reads the pinned operator root and genesis rule, and each authorization attempt re-verifies the
+provisioned `EVIDENCE` / `VERIFIER` provenance antecedents against the same database with the exact strength/method/verifier type the
+operator provisioned.
+
+**d. Verify bootstrap and issuer startup succeeded** — confirm in the Railway service logs that the startup seam reported the bootstrap
+outcome (`status`, `operator_root`, `genesis`) and that the issuer process began serving. This is the point where the genesis rule
+exists in the database, which the next step requires.
+
+**e. Provision the exact issue authority records** — run the per-Issue provisioning CLI against the same database and signing key for the
+first authorized Issue it will execute.  Run it where the bootstrapped volume is mounted (e.g. the deployed service's shell), with the
+same environment variables exported and `HUNTER_ISSUE_AGENT_EVIDENCE_DB=/data/evidence.sqlite`:
 
 ```bash
 python scripts/provision_source_handling_issue_authority.py \
@@ -315,37 +341,20 @@ python scripts/provision_source_handling_issue_authority.py \
   --json
 ```
 
-The CLI derives the exact `github-issue:<repository>#<number>` document identity from the same authorization claims the trigger will POST,
-derives the `FACT`, `FIELD_CATEGORY_REGISTRY`, and `POLICY` records from repository-owned contracts and defaults, and publishes each with an
-authority-signed authorization derived from the genesis rule. It refuses to run against anything but the pinned production genesis rule and
-refuses to run unless `HUNTER_ISSUE_AGENT_EVIDENCE_DB`, `HUNTER_SOURCE_HANDLING_VERIFICATION_KEY`,
+This command requires the genesis rule to already exist in the database, so it must follow step c (the deploy that bootstraps the
+mounted volume); on a fresh volume it would otherwise fail closed because there is no genesis rule yet.  The CLI derives the exact
+`github-issue:<repository>#<number>` document identity from the same authorization claims the trigger will POST, derives the `FACT`,
+`FIELD_CATEGORY_REGISTRY`, and `POLICY` records from repository-owned contracts and defaults, and publishes each with an
+authority-signed authorization derived from the genesis rule. It refuses to run against anything but the pinned production genesis rule
+and refuses to run unless `HUNTER_ISSUE_AGENT_EVIDENCE_DB`, `HUNTER_SOURCE_HANDLING_VERIFICATION_KEY`,
 `HUNTER_SOURCE_HANDLING_VERIFICATION_KEY_SHA256`, and `HUNTER_SOURCE_HANDLING_GENESIS_RULE_SHA256` are exported and match this exact
-bootstrap (the same environment the issuer runtime will use). It never invents data: if the exact canonical content of any required record
-cannot be derived it stops with the specific missing contract.
-
-**c. EVIDENCE / VERIFIER provenance** — the same provisioning run first writes the six `EVIDENCE` / `VERIFIER` provenance records the three
-issuances require (`evidence:auth:fact:<document_id>`, `verifier:auth:fact:<document_id>`, and the `registry` / `policy` equivalents), at
-the operator provisioning as-of `--as-of`. The Source Handling contract forbids backdating an authority record before its physical admission,
-so the records' claimed as-of is the operator provisioning instant and the CLI prints the exact `as_of` it used. Record it: pinning that same
-`--as-of` on a re-run makes the whole provisioning exactly idempotent (already-provisioned, nothing mutated); any other would-be difference
-fails closed before it writes or supersedes anything.
-
-**d. Set issuer runtime variables** — on the Railway Service, set:
-- `HUNTER_SOURCE_HANDLING_SIGNING_KEY` (secret — consumed only by the startup seam bootstrap, scrubbed before the issuer starts)
-- `HUNTER_SOURCE_HANDLING_VERIFICATION_KEY`
-- `HUNTER_SOURCE_HANDLING_VERIFICATION_KEY_SHA256`
-- `HUNTER_SOURCE_HANDLING_GENESIS_RULE_SHA256`
-- `HUNTER_PROMPT_AUTOMATION_SIGNING_KEY` (secret)
-- `HUNTER_PROMPT_AUTOMATION_VERIFYING_KEY`
-- `HUNTER_ISSUE_AGENT_AUTHORIZATION_VERIFYING_KEY`
-- `HUNTER_ISSUE_AGENT_REPOSITORY`, `HUNTER_ISSUE_AGENT_OWNER_LOGIN`, `HUNTER_ISSUE_AGENT_EXECUTION_BRANCH`, `HUNTER_ISSUE_AGENT_REPO_DIR`
-- Fallback runtime provider variables (`HUNTER_AGENT_*`)
-- `HUNTER_ISSUE_AGENT_EVIDENCE_DB=/data/evidence.sqlite` (already set by `railway.toml`)
-
-**e. Deploy the issuer** — trigger a Railway deploy. The `railway.toml` start command runs `python scripts/railway_issuer_startup.py`,
-which bootstraps the volume, scrubs the signing key, and execs the canonical issuer. The issuer reads the pinned operator root and genesis
-rule, and each authorization attempt re-verifies the provisioned `EVIDENCE` / `VERIFIER` provenance antecedents against the same database
-with the exact strength/method/verifier type the operator provisioned.
+bootstrap (the same environment the issuer runtime will use). It never invents data: if the exact canonical content of any required
+record cannot be derived it stops with the specific missing contract.  This same run writes the six `EVIDENCE` / `VERIFIER` provenance
+records the three issuances require (`evidence:auth:fact:<document_id>`, `verifier:auth:fact:<document_id>`, and the `registry` /
+`policy` equivalents), at the operator provisioning as-of `--as-of`. The Source Handling contract forbids backdating an authority record
+before its physical admission, so the records' claimed as-of is the operator provisioning instant and the CLI prints the exact `as_of`
+it used. Record it: pinning that same `--as-of` on a re-run makes the whole provisioning exactly idempotent (already-provisioned,
+nothing mutated); any other would-be difference fails closed before it writes or supersedes anything.
 
 **f. Live authorized E2E** — apply the `hunter-agent-execute` label to a test Issue. The trigger workflow signs and POSTs the authorization;
 the issuer verifies, resolves the pre-model Source Handling decision for the exact document, executes, and dispatches to the fallback runtime.
@@ -355,7 +364,7 @@ Check issuer and runtime logs for the complete path.
 
 1. **Set the secrets as variables** on the Service:
    `HUNTER_SOURCE_HANDLING_SIGNING_KEY`, `HUNTER_PROMPT_AUTOMATION_SIGNING_KEY`, `HUNTER_ISSUE_AGENT_AUTHORIZATION_VERIFYING_KEY`.
-   The Source Handling non-secret values are set as regular variables (derived from step d above).
+   The Source Handling non-secret values are set as regular variables (derived from step b above).
 
 2. **Set the deployment variables** on the Service:
    `HUNTER_ISSUE_AGENT_REPOSITORY`, `HUNTER_ISSUE_AGENT_OWNER_LOGIN`, `HUNTER_ISSUE_AGENT_EXECUTION_BRANCH`, `HUNTER_ISSUE_AGENT_REPO_DIR`.

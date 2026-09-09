@@ -103,7 +103,11 @@ def _run_startup(
         env.update(extra_env)
 
     captured = _ExecCapture()
-    with patch.dict(os.environ, env, clear=True), patch.object(startup.os, "execvpe", side_effect=captured):
+    with (
+        patch.dict(os.environ, env, clear=True),
+        patch.object(startup.os, "execvpe", side_effect=captured),
+        patch.object(startup.os.path, "ismount", return_value=True),
+    ):
         try:
             rc = startup.main()
         except SystemExit as exc:
@@ -248,7 +252,10 @@ def test_missing_signing_key_fails_closed_before_issuer(tmp_path: Path) -> None:
     database = str(tmp_path / "evidence.sqlite")
     import railway_issuer_startup as startup
 
-    with patch.dict(os.environ, {_EVIDENCE_DB_ENV: database}, clear=True):
+    with (
+        patch.dict(os.environ, {_EVIDENCE_DB_ENV: database}, clear=True),
+        patch.object(startup.os.path, "ismount", return_value=True),
+    ):
         rc = startup.main()
     assert rc == 1
     assert not Path(database).exists()
@@ -272,6 +279,36 @@ def test_data_directory_not_mounted_fails_closed(tmp_path: Path) -> None:
     with patch.dict(os.environ, env, clear=True):
         rc = startup.main()
     assert rc == 1
+
+
+def test_evidence_directory_without_a_mounted_volume_fails_closed(tmp_path: Path) -> None:
+    import railway_issuer_startup as startup
+
+    database = str(tmp_path / "evidence.sqlite")
+    bootstrap_invoked: list[str] = []
+    original_bootstrap = startup._bootstrap
+
+    def _tracking_bootstrap(db: str) -> dict[str, object]:
+        bootstrap_invoked.append(db)
+        return original_bootstrap(db)
+
+    env = {
+        _EVIDENCE_DB_ENV: database,
+        _SIGNING_KEY_ENV: "ab" * 32,
+    }
+    captured = _ExecCapture()
+    with (
+        patch.dict(os.environ, env, clear=True),
+        patch.object(startup.os.path, "ismount", return_value=False),
+        patch.object(startup.os, "execvpe", side_effect=captured),
+        patch.object(startup, "_bootstrap", side_effect=_tracking_bootstrap),
+    ):
+        rc = startup.main()
+
+    assert rc == 1
+    assert bootstrap_invoked == []
+    assert len(captured.calls) == 0
+    assert not Path(database).exists()
 
 
 def test_tampered_authority_preserved_after_mismatch_rejection(tmp_path: Path) -> None:
@@ -331,6 +368,7 @@ def test_signing_key_still_present_during_bootstrap(tmp_path: Path) -> None:
     with (
         patch.dict(os.environ, env, clear=True),
         patch.object(startup.os, "execvpe", side_effect=captured),
+        patch.object(startup.os.path, "ismount", return_value=True),
         patch.object(bootstrap, "_load_signing_key", side_effect=_tracking_load),
     ):
         try:
@@ -381,6 +419,7 @@ def test_issuer_launch_cannot_happen_before_successful_bootstrap(tmp_path: Path)
     with (
         patch.dict(os.environ, env, clear=True),
         patch.object(startup.os, "execvpe", side_effect=captured),
+        patch.object(startup.os.path, "ismount", return_value=True),
         patch.object(startup, "_bootstrap", side_effect=_tracking_bootstrap),
     ):
         try:
@@ -408,6 +447,7 @@ def test_bootstrap_failure_prevents_issuer_launch(tmp_path: Path) -> None:
     with (
         patch.dict(os.environ, env, clear=True),
         patch.object(startup.os, "execvpe", side_effect=captured),
+        patch.object(startup.os.path, "ismount", return_value=True),
         patch.object(startup, "_bootstrap", side_effect=_failing_bootstrap),
     ):
         rc = startup.main()
@@ -452,3 +492,53 @@ def test_startup_passes_port_from_environment(tmp_path: Path) -> None:
     _, argv, _ = calls[0]
     port_idx = argv.index("--port")
     assert argv[port_idx + 1] == "9999"
+
+
+# --- Shared public canonical bootstrap contract ----------------------------
+
+
+def test_evidence_directory_is_accepted_only_as_a_mounted_volume(tmp_path: Path) -> None:
+    database = str(tmp_path / "evidence.sqlite")
+    key = _private_key_bytes()
+    rc, calls = _run_startup(database, _signing_key_hex(key))
+
+    assert rc == 0
+    assert len(calls) == 1
+    assert Path(database).exists()
+
+
+def test_seam_and_cli_invoke_the_same_public_bootstrap_contract(tmp_path: Path) -> None:
+    import railway_issuer_startup as startup
+
+    database = str(tmp_path / "evidence.sqlite")
+    invoked: list[tuple[str, str | None]] = []
+
+    def _contract(db: str, *, environ: Any, signing_key_file: str | None = None) -> dict[str, object]:
+        invoked.append((db, signing_key_file))
+        return {
+            "status": "bootstrapped",
+            "operator_root": "pinned",
+            "genesis_record_id": "record",
+        }
+
+    env = {
+        _EVIDENCE_DB_ENV: database,
+        _SIGNING_KEY_ENV: "ab" * 32,
+    }
+    captured = _ExecCapture()
+    with (
+        patch.dict(os.environ, env, clear=True),
+        patch.object(bootstrap, "bootstrap_authority", side_effect=_contract),
+        patch.object(startup.os.path, "ismount", return_value=True),
+        patch.object(startup.os, "execvpe", side_effect=captured),
+    ):
+        cli_rc = bootstrap.main(["--database", database, "--json"])
+        try:
+            seam_rc = startup.main()
+        except SystemExit as exc:
+            seam_rc = exc.code if isinstance(exc.code, int) else 1
+
+    assert cli_rc == 0
+    assert seam_rc == 0
+    assert invoked == [(database, None), (database, None)]
+    assert len(captured.calls) == 1
