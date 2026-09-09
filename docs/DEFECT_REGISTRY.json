@@ -908,6 +908,46 @@
       "sources": [
         "Issue #439 Codex post-merge P1 on PR #438 / Issue #436 (2026-09-09)"
       ]
+    },
+    {
+      "id": "DFF-019",
+      "title": "runtime-bootstrap-not-volume-aware-before-issuer-composition",
+      "invariant": "The issuer composition may not start before the persistent volume is mounted, the canonical Source Handling bootstrap has completed successfully, and any bootstrap-only signing material has been removed from the process environment.  A fresh volume must receive the canonical operator root and genesis rule at runtime; an already-bootstrapped volume must pass through idempotently; any mismatch, tampering, or missing prerequisite must fail closed before the issuer process is composed.",
+      "applicability": {
+        "changed_paths": [
+          "scripts/",
+          "railway.toml"
+        ],
+        "rationale": "Railway volumes are not mounted during preDeploy commands, so any one-off bootstrap job running before the Service start cannot access /data.  The repository-owned start command is the only place a runtime bootstrap can safely execute, and it is where the signing-key scrub and issuer exec must be sequenced correctly."
+      },
+      "prevention": {
+        "mechanism": "A single repository-owned startup seam (railway_issuer_startup.py) is pinned in railway.toml as the start command.  It idempotently invokes the existing canonical bootstrap before exec'ing the canonical issuer, scrubs HUNTER_SOURCE_HANDLING_SIGNING_KEY from the process environment after bootstrap and before exec, and fails closed on any bootstrap error.  No pre-deploy command, no parallel bootstrap, and no dashboard-only configuration bypasses this seam.  Regression coverage exercises fresh-volume bootstrap, idempotency, tamper/mismatch fail-closed, signing-key lifecycle isolation, and ordering invariants.",
+        "boundary": "regression-tested"
+      },
+      "regression_evidence": [
+        "tests/test_railway_issuer_startup.py::test_fresh_volume_bootstrap_succeeds_and_issuer_launch_is_allowed",
+        "tests/test_railway_issuer_startup.py::test_fresh_volume_genesis_record_matches_production_rule",
+        "tests/test_railway_issuer_startup.py::test_existing_bootstrapped_volume_is_idempotent",
+        "tests/test_railway_issuer_startup.py::test_existing_bootstrapped_volume_deterministic_across_restarts",
+        "tests/test_railway_issuer_startup.py::test_tampered_signing_key_fails_closed",
+        "tests/test_railway_issuer_startup.py::test_mismatched_genesis_digest_fails_closed",
+        "tests/test_railway_issuer_startup.py::test_missing_signing_key_fails_closed_before_issuer",
+        "tests/test_railway_issuer_startup.py::test_missing_evidence_db_env_fails_closed",
+        "tests/test_railway_issuer_startup.py::test_data_directory_not_mounted_fails_closed",
+        "tests/test_railway_issuer_startup.py::test_tampered_authority_preserved_after_mismatch_rejection",
+        "tests/test_railway_issuer_startup.py::test_signing_key_scrubbed_from_issuer_environment",
+        "tests/test_railway_issuer_startup.py::test_signing_key_still_present_during_bootstrap",
+        "tests/test_railway_issuer_startup.py::test_signing_key_never_appears_in_exec_env",
+        "tests/test_railway_issuer_startup.py::test_issuer_launch_cannot_happen_before_successful_bootstrap",
+        "tests/test_railway_issuer_startup.py::test_bootstrap_failure_prevents_issuer_launch",
+        "tests/test_railway_issuer_startup.py::test_startup_uses_canonical_provenance_resolver",
+        "tests/test_railway_issuer_startup.py::test_startup_issuer_command_matches_canonical",
+        "tests/test_railway_issuer_startup.py::test_startup_passes_port_from_environment"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "Issue #442 Railway issuer runtime bootstrap volume-aware (2026-09-09)"
+      ]
     }
   ]
 }
