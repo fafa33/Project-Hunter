@@ -6,13 +6,13 @@
     "capability": "feature-branch-write",
     "changes": [
       {
-        "blob_sha": "e135ab7ba394fed003ed4ca71b6c3f4a78e8d315",
+        "blob_sha": "31d20f5500a36a8786305e4bb25106a2f34c89e2",
         "path": "src/hunter/automation/agent_targeted_validation.py",
         "previous_path": "",
         "status": "added"
       },
       {
-        "blob_sha": "1a32da0d50b7cbc0908836bf309fbfdf84d084ac",
+        "blob_sha": "6a6e891f28b007fae982bca5e0e2965a82cbf33d",
         "path": "src/hunter/automation/opencode_provider_runtime.py",
         "previous_path": "",
         "status": "added"
@@ -35,5 +35,5 @@
     "target_ref": "connector/issue-441-provider-runtime",
     "writer": "fafa33"
   },
-  "authorization_id": "7c559a24f360b4da3833d1611a4190bf9ebe0d2dffbacfaea1fe9948fc83ea9e"
+  "authorization_id": "2d39e2b75c0d456964d68f32003e80010a5057678d473930dda04df78a458154"
 }
