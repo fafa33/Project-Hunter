@@ -496,7 +496,7 @@ class Deployment:
     ) -> None:
         self.database = tmp_path / "evidence.sqlite"
         self.clock = clock
-        signing_key = _provision_authority(
+        self._signing_key = _provision_authority(
             self.database,
             document_id,
             clock,
@@ -509,10 +509,10 @@ class Deployment:
             evidence_database=self.database,
             execution_branch=BRANCH,
             repository_checkout=tmp_path,
-            source_handling_verification_key=_public_key_bytes(signing_key),
+            source_handling_verification_key=_public_key_bytes(self._signing_key),
             source_handling_operator_root=SourceHandlingOperatorRoot(
                 genesis_rule_sha256=RULE_GOLDEN,
-                verification_key_sha256=hashlib.sha256(_public_key_bytes(signing_key)).hexdigest(),
+                verification_key_sha256=hashlib.sha256(_public_key_bytes(self._signing_key)).hexdigest(),
             ),
         )
         self.resolver = build_production_source_handling_resolver(
@@ -526,6 +526,11 @@ class Deployment:
         self.issuer_verifier = IssueAgentAuthorizationVerifier.from_environment(
             environ={ISSUE_AGENT_VERIFYING_KEY_ENV: ISSUER_VERIFYING_KEY_HEX},
         )
+
+    @property
+    def signing_key(self) -> bytes:
+        """Return the private signing key for Source Handling authority publication."""
+        return self._signing_key
 
     def service(self, fallback: Any | None = None) -> GovernedIssueAgentExecutionService:
         """A freshly composed service over the same durable state (restart)."""
@@ -1042,19 +1047,67 @@ def test_crash_between_handoff_persistence_and_dispatch_cannot_duplicate(tmp_pat
     assert len(exploding.documents) == 1
 
 
-def test_crash_before_any_execution_still_owns_the_authorization(tmp_path: Path) -> None:
-    """Ownership is durable from the claim, not from a later success."""
+def test_preflight_failure_creates_no_ledger_row_and_allows_retry(tmp_path: Path) -> None:
+    """Preflight failure leaves no ledger row and allows retry once authority is fixed."""
+    # Start with authority but no document-specific FACT/POLICY/REGISTRY
     deployment = _deployment(tmp_path, publish_authority=False)
-    with pytest.raises((PreModelInvariantError, SourceHandlingBlockedError)):
+    with pytest.raises(SourceHandlingBlockedError):
         deployment.service().execute(_authorization_document())
 
     authorization = _inner(_authorization_document())
     entry = deployment.ledger.entry(authorization.authorization_id)
-    assert entry is not None
-    assert entry.state == "CLAIMED"
-    with pytest.raises(IssueAgentReplayError):
-        deployment.service().execute(_authorization_document())
+    assert entry is None, "preflight failure must not create a ledger row"
     assert deployment.fallback.documents == []
+
+    # Now publish the document-specific authority using the SAME signing key
+    # (the database already has the operator root from the initial deployment)
+    clock = deployment.clock
+    document_id = issue_agent_document_id(authorization)
+    service = SourceHandlingAuthorityService(
+        deployment.database,
+        signing_private_key=deployment.signing_key,
+        operator_root=deployment.configuration.source_handling_operator_root,
+        provenance_resolver=_provenance,
+        clock=clock,
+    )
+    genesis_record_id = service._repository.read_view().current_canonical_head_id(
+        "AUTHORIZATION_RULE", "SOURCE_HANDLING"
+    )
+    _publish(
+        service,
+        clock,
+        family="FACT",
+        scope=document_id,
+        payload=_fact_payload(document_id, clock.now()),
+        rule_id=genesis_record_id,
+        authorization_id=f"auth:fact:{ISSUE_NUMBER}",
+    )
+    registry_logical_id = f"registry:{document_id}:v1"
+    _publish(
+        service,
+        clock,
+        family="FIELD_CATEGORY_REGISTRY",
+        scope=registry_logical_id,
+        payload=_registry_payload(document_id, clock.now(), registry_id=registry_logical_id),
+        rule_id=genesis_record_id,
+        authorization_id=f"auth:registry:{ISSUE_NUMBER}",
+    )
+    _publish(
+        service,
+        clock,
+        family="POLICY",
+        scope=f"policy:{document_id}:v1",
+        payload=_policy_payload(document_id, clock.now(), registry_id=registry_logical_id),
+        rule_id=genesis_record_id,
+        authorization_id=f"auth:policy:{ISSUE_NUMBER}",
+    )
+
+    # Retry with the same authorization -- should succeed now.
+    receipt = deployment.service().execute(_authorization_document())
+    assert deployment.fallback.documents == [receipt.handoff_document]
+    entry = deployment.ledger.entry(authorization.authorization_id)
+    assert entry is not None
+    assert entry.state == "COMPLETED"
 
 
 def test_ledger_survives_a_reopened_database(tmp_path: Path) -> None:

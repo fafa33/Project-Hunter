@@ -957,6 +957,15 @@ class GovernedIssueAgentExecutionService:
         if request.document_id != document_id:
             raise IssueAgentExecutionError("Issue task request does not bind the ingested document identity")
 
+        # Source Handling preflight: validate authority before claiming ownership.
+        # This is side-effect free -- no ledger row, no persisted artifacts, no
+        # dispatch. A failed preflight allows retry once authority is corrected.
+        self._boundary.preflight(
+            reference,
+            processing_run_id=authorization.authorization_id,
+            processed_at=_aware_utc("Issue execution preflight time", self._clock.now()),
+        )
+
         self._ledger.claim(authorization, claimed_at=self._clock.now())
 
         self._boundary.ingest(
