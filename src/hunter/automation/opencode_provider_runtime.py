@@ -37,6 +37,8 @@ _PRIVATE_RUNTIME_ENV = {
     _REPOSITORY_ENV,
     "HUNTER_ISSUE_AGENT_REPO_DIR",
 }
+_CANONICAL_WRITER_NAME = "Farhad5778"
+_CANONICAL_WRITER_EMAIL = "34549283+fafa33@users.noreply.github.com"
 
 
 class ProviderAdapterError(RuntimeError):
@@ -99,15 +101,23 @@ def _publication_environment(token: str, askpass: Path) -> dict[str, str]:
     return env
 
 
-def _push_trusted(repo: Path, branch: str, push_url: str, expected_remote_head: str) -> None:
+def _push_trusted(
+    repo: Path,
+    branch: str,
+    push_url: str,
+    expected_remote_head: str,
+    *,
+    source_ref: str = "HEAD",
+    run_pre_push: bool = True,
+) -> None:
     token = os.environ.get(_PUSH_TOKEN_ENV, "").strip()
-    args = (
+    args = [
         "push",
-        "--no-verify",
         f"--force-with-lease=refs/heads/{branch}:{expected_remote_head}",
-        push_url,
-        f"HEAD:refs/heads/{branch}",
-    )
+    ]
+    if not run_pre_push:
+        args.append("--no-verify")
+    args.extend((push_url, f"{source_ref}:refs/heads/{branch}"))
     if not token:
         _git(repo, *args)
         return
@@ -230,20 +240,64 @@ def _trusted_publication_clone(repo: Path, destination: Path, branch: str, head_
         detail = completed.stderr.strip() or completed.stdout.strip() or "trusted publication clone failed"
         raise ProviderAdapterError(detail)
     _git(destination, "checkout", "-B", branch, head_before)
-    _git(destination, "config", "core.hooksPath", os.devnull)
+    _git(destination, "config", "core.hooksPath", ".githooks")
     _git(destination, "config", "credential.helper", "")
+    _git(destination, "config", "user.name", _CANONICAL_WRITER_NAME)
+    _git(destination, "config", "user.email", _CANONICAL_WRITER_EMAIL)
     return destination
 
 
-def _publish_result(repo: Path, sandbox: Path, branch: str, head_before: str, push_url: str, root: Path) -> str:
+def _validate_published_candidate(repo: Path, branch: str, expected_head: str) -> None:
+    env = {
+        name: value
+        for name, value in os.environ.items()
+        if name not in _PUBLICATION_CREDENTIAL_ENV and not name.startswith("GIT_")
+    }
+    env["HUNTER_AGENT_EXPECTED_HEAD"] = expected_head
+    env["HUNTER_AGENT_BRANCH"] = branch
+    completed = subprocess.run(
+        (sys.executable, "-m", "hunter.automation.agent_targeted_validation"),
+        cwd=repo,
+        env=env,
+        check=False,
+        timeout=900,
+    )
+    if completed.returncode != 0:
+        raise ProviderAdapterError("published provider result failed exact-head targeted validation")
+
+
+def _publish_result(
+    repo: Path,
+    sandbox: Path,
+    branch: str,
+    head_before: str,
+    push_url: str,
+    root: Path,
+) -> str:
     publisher = _trusted_publication_clone(repo, root / "publisher", branch, head_before)
+    trusted_hooks = (publisher / ".githooks").read_bytes() if (publisher / ".githooks").is_file() else None
     _mirror_worktree(sandbox, publisher)
+    if trusted_hooks is not None:
+        (publisher / ".githooks").write_bytes(trusted_hooks)
     _git(publisher, "add", "-A")
     if not _git(publisher, "status", "--porcelain=v1", "--untracked-files=normal"):
         raise ProviderAdapterError("provider reported completion without changing repository content")
-    _git(publisher, "commit", "--no-verify", "-m", "chore: apply governed OpenCode provider result")
+    _git(publisher, "commit", "-S", "-m", "chore: apply governed OpenCode provider result")
     head_after = _git(publisher, "rev-parse", "HEAD")
+    _git(publisher, "verify-commit", head_after)
     _push_trusted(publisher, branch, push_url, head_before)
+    try:
+        _validate_published_candidate(publisher, branch, head_after)
+    except ProviderAdapterError:
+        _push_trusted(
+            publisher,
+            branch,
+            push_url,
+            head_after,
+            source_ref=head_before,
+            run_pre_push=False,
+        )
+        raise
     return head_after
 
 
