@@ -253,27 +253,36 @@ def execute_authorization(
     if request.document_id != document_id:
         raise IssueAgentExecutionError("Issue task request does not bind the ingested document identity")
 
-    # 4. Claim durable execution ownership
+    # 4. Source Handling preflight: validate authority before claiming ownership.
+    # This is side-effect free -- no ledger row, no persisted artifacts, no
+    # dispatch. A failed preflight allows retry once authority is corrected.
+    services.boundary.preflight(
+        reference,
+        processing_run_id=authorization.authorization_id,
+        processed_at=services.configuration.clock.now(),
+    )
+
+    # 5. Claim durable execution ownership
     services.ledger.claim(authorization, claimed_at=services.configuration.clock.now())
 
-    # 5. Ingest through ADR 0036 boundary
+    # 6. Ingest through ADR 0036 boundary
     services.boundary.ingest(
         reference,
         processing_run_id=authorization.authorization_id,
         processed_at=services.configuration.clock.now(),
     )
 
-    # 6. Compile through the one canonical engineering-task ingress
+    # 7. Compile through the one canonical engineering-task ingress
     compiled = services.ingress.compile(request)
     envelope = compiled.envelope
     envelope.verify_issuer_signature(services.configuration.prompt_verifier)
     if envelope.build_record_id != compiled.compilation.manifest.build_record_id:
         raise IssueAgentExecutionError("signed envelope and persisted build refer to different lineage")
 
-    # 7. Serialize exact non-content handoff
+    # 8. Serialize exact non-content handoff
     handoff_document = serialize_prompt_automation_handoff(envelope)
 
-    # 8. Record handoff durably BEFORE dispatch
+    # 9. Record handoff durably BEFORE dispatch
     services.ledger.record_dispatch(
         authorization,
         document_id=document_id,
@@ -283,12 +292,12 @@ def execute_authorization(
         dispatched_at=services.configuration.clock.now(),
     )
 
-    # 9. Dispatch to fallback runtime (unchanged handoff)
+    # 10. Dispatch to fallback runtime (unchanged handoff)
     receipt = services.fallback.dispatch(handoff_document)
     if not isinstance(receipt, AgentFallbackRuntimeReceipt):
         raise IssueAgentExecutionError("fallback runtime did not return a canonical execution receipt")
 
-    # 10. Complete ledger
+    # 11. Complete ledger
     services.ledger.complete(authorization, completed_at=services.configuration.clock.now())
 
     return IssueAgentExecutionReceipt(
