@@ -59,6 +59,14 @@ _BRANCH = re.compile(r"[A-Za-z0-9._/-]+")
 _ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 _SAFE_BASE_ENV = ("PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "SSH_AUTH_SOCK")
 _FORBIDDEN_CHILD_ENV_PREFIXES = ("HUNTER_PROMPT_",)
+_OPENCODE_TRUSTED_ENV = (
+    "HUNTER_ISSUE_AGENT_EVIDENCE_DB",
+    "HUNTER_ISSUE_AGENT_REPOSITORY",
+    "HUNTER_AGENT_GITHUB_PUSH_TOKEN",
+    "HUNTER_OPENCODE_EXECUTABLE",
+    "HUNTER_OPENCODE_MODEL",
+    "HUNTER_OPENCODE_SANDBOX_EXECUTABLE",
+)
 
 
 class AgentFallbackRuntimeError(RuntimeError):
@@ -272,6 +280,10 @@ class OperationalAgentFallbackRuntime:
         child["HUNTER_AGENT_PROVIDER"] = provider
         child["HUNTER_AGENT_BRANCH"] = self._branch
         child["HUNTER_AGENT_REPO_DIR"] = str(self._repo_dir)
+        if provider == "opencode":
+            for name in _OPENCODE_TRUSTED_ENV:
+                if name in self._environ:
+                    child[name] = self._environ[name]
         return child
 
     def _execute(self, provider: str, document: str) -> AgentExecutionReport:
