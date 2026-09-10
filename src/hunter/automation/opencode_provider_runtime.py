@@ -129,11 +129,7 @@ def _push_trusted(repo: Path, branch: str, push_url: str, expected_remote_head: 
 def _model_environment(credential_home: Path) -> dict[str, str]:
     child_env = dict(os.environ)
     for name in tuple(child_env):
-        if (
-            name in _PUBLICATION_CREDENTIAL_ENV
-            or name in _PRIVATE_RUNTIME_ENV
-            or name.startswith("GIT_")
-        ):
+        if name in _PUBLICATION_CREDENTIAL_ENV or name in _PRIVATE_RUNTIME_ENV or name.startswith("GIT_"):
             child_env.pop(name, None)
     child_env["HOME"] = "/home/hunter"
     child_env["XDG_CONFIG_HOME"] = "/home/hunter/.config"
