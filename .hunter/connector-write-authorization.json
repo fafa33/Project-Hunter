@@ -16,6 +16,12 @@
         "path": "src/hunter/automation/opencode_provider_runtime.py",
         "previous_path": "",
         "status": "added"
+      },
+      {
+        "blob_sha": "55596ffbb4ef4420de8afd86a9df04864b4b2a1e",
+        "path": "tests/conftest.py",
+        "previous_path": "",
+        "status": "modified"
       }
     ],
     "governance_scopes": [],
@@ -23,10 +29,11 @@
     "issue": "441",
     "paths": [
       "src/hunter/automation/agent_targeted_validation.py",
-      "src/hunter/automation/opencode_provider_runtime.py"
+      "src/hunter/automation/opencode_provider_runtime.py",
+      "tests/conftest.py"
     ],
     "target_ref": "connector/issue-441-provider-runtime",
     "writer": "fafa33"
   },
-  "authorization_id": "4329e1158b655161acc93ef466b92753eecd9ad11ffdcee4af1bc775a0b9b34c"
+  "authorization_id": "7c559a24f360b4da3833d1611a4190bf9ebe0d2dffbacfaea1fe9948fc83ea9e"
 }
