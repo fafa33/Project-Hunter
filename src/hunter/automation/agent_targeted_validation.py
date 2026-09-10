@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-import os
 import re
 import subprocess
 import sys
 from pathlib import Path
+from urllib.parse import urlsplit
 
-_REPO_ENV = "HUNTER_ISSUE_AGENT_REPO_DIR"
-_REPOSITORY_ENV = "HUNTER_ISSUE_AGENT_REPOSITORY"
 _EXPECTED_HEAD_ENV = "HUNTER_AGENT_EXPECTED_HEAD"
 _BRANCH_ENV = "HUNTER_AGENT_BRANCH"
 _REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
@@ -20,6 +18,8 @@ class ValidationAdapterError(RuntimeError):
 
 
 def _required_env(name: str) -> str:
+    import os
+
     value = os.environ.get(name, "").strip()
     if not value:
         raise ValidationAdapterError(f"{name} is required")
@@ -41,20 +41,34 @@ def _git(repo: Path, *args: str) -> str:
     return completed.stdout.strip()
 
 
-def _canonical_remote_url() -> str:
-    repository = _required_env(_REPOSITORY_ENV)
+def _canonical_remote_url(repo: Path) -> str:
+    remote = _git(repo, "remote", "get-url", "origin")
+    if remote.startswith("git@github.com:"):
+        repository = remote.removeprefix("git@github.com:").removesuffix(".git")
+    else:
+        parsed = urlsplit(remote)
+        if (
+            parsed.scheme != "https"
+            or parsed.hostname != "github.com"
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValidationAdapterError("validation origin must be credential-free github.com")
+        repository = parsed.path.strip("/").removesuffix(".git")
     if not _REPOSITORY_RE.fullmatch(repository):
-        raise ValidationAdapterError("configured repository must be an owner/name GitHub repository")
+        raise ValidationAdapterError("validation origin must name an owner/name GitHub repository")
     return f"https://github.com/{repository}.git"
 
 
 def run() -> int:
-    repo = Path(_required_env(_REPO_ENV)).resolve()
+    repo = Path.cwd().resolve()
     expected = _required_env(_EXPECTED_HEAD_ENV).lower()
     branch = _required_env(_BRANCH_ENV)
-    remote_url = _canonical_remote_url()
-    if not repo.is_dir():
-        raise ValidationAdapterError("configured repository checkout does not exist")
+    if not (repo / ".git").exists():
+        raise ValidationAdapterError("validation working directory is not a repository checkout")
+    remote_url = _canonical_remote_url(repo)
 
     if _git(repo, "branch", "--show-current") != branch:
         raise ValidationAdapterError("validation checkout is not on the authorized execution branch")
