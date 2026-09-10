@@ -1,0 +1,32 @@
+{
+  "schema": "hunter-connector-write-authorization-v4",
+  "claims": {
+    "base_ref": "main",
+    "base_sha": "0a7bff215e437232bf4abd48d51c599ab52c683a",
+    "capability": "feature-branch-write",
+    "changes": [
+      {
+        "blob_sha": "e135ab7ba394fed003ed4ca71b6c3f4a78e8d315",
+        "path": "src/hunter/automation/agent_targeted_validation.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "1a32da0d50b7cbc0908836bf309fbfdf84d084ac",
+        "path": "src/hunter/automation/opencode_provider_runtime.py",
+        "previous_path": "",
+        "status": "added"
+      }
+    ],
+    "governance_scopes": [],
+    "grant_fingerprint": "28d4f12d40624cd5dcdf82a0edd77b8ed82aeac626a181c4236781846c89c7cd",
+    "issue": "441",
+    "paths": [
+      "src/hunter/automation/agent_targeted_validation.py",
+      "src/hunter/automation/opencode_provider_runtime.py"
+    ],
+    "target_ref": "connector/issue-441-provider-runtime",
+    "writer": "fafa33"
+  },
+  "authorization_id": "4329e1158b655161acc93ef466b92753eecd9ad11ffdcee4af1bc775a0b9b34c"
+}
