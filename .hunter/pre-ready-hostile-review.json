@@ -42,11 +42,11 @@
     "issue": "441",
     "review_target": [
       {"blob_sha":"31d20f5500a36a8786305e4bb25106a2f34c89e2","path":"src/hunter/automation/agent_targeted_validation.py","previous_path":"","status":"added"},
-      {"blob_sha":"6a6e891f28b007fae982bca5e0e2965a82cbf33d","path":"src/hunter/automation/opencode_provider_runtime.py","previous_path":"","status":"added"},
+      {"blob_sha":"154115d3036d467d7e9e5f228f6307842e3c58b9","path":"src/hunter/automation/opencode_provider_runtime.py","previous_path":"","status":"added"},
       {"blob_sha":"55596ffbb4ef4420de8afd86a9df04864b4b2a1e","path":"tests/conftest.py","previous_path":"","status":"modified"}
     ],
-    "review_target_digest": "f7af50c2aa821426bd60026004a9ca4d8e7d21451ab464ca61edc1e6e8456bf0"
+    "review_target_digest": "a7add369c780208479e01438aec6f1f0bc178d4a52a9f6bf36e6a91860e5101e"
   },
-  "review_id": "1361eba32bdec6dad663d9bd425dc7cf2c756a49c9f5dcfd6d89ff8c91217046",
+  "review_id": "29f55ff95800308472622fa4514b23a99e6646b0239dc42e23150ec8160247f7",
   "schema": "hunter.pre-ready-hostile-review.v1"
 }
