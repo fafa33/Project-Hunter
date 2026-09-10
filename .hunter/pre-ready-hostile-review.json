@@ -1,99 +1,52 @@
 {
-  "schema": "hunter.pre-ready-hostile-review.v1",
   "claims": {
     "acceptance_criteria": [
-      {
-        "criterion": "Trusted issuer edge is deployed/reachable at a stable HTTPS URL.",
-        "evidence": "The production issuer edge is already deployed on the stable Railway HTTPS service and its /healthz check has succeeded; this candidate does not alter that deployment.",
-        "id": "AC-1",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "GitHub Actions secret `HUNTER_ISSUE_AGENT_WEBHOOK_URL` is configured to `<issuer-base>/issue-agent/authorize`.",
-        "evidence": "The repository Actions secret was configured manually to the deployed /issue-agent/authorize endpoint; no secret value is committed by this candidate.",
-        "id": "AC-2",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "Required issuer verification/runtime configuration is present without committing secrets.",
-        "evidence": "Existing issuer verification/runtime configuration remains external to repository content; this candidate adds only provider and targeted-validation adapters.",
-        "id": "AC-3",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "Exact authorized test event passes GitHub trigger -> issuer authorization -> canonical Smart Prompt build/handoff boundary.",
-        "evidence": "Operational end-to-end authorization is intentionally not executed by this code-review artifact; it remains the post-code validation step for Issue #441.",
-        "id": "AC-4",
-        "verdict": "not-applicable"
-      },
-      {
-        "criterion": "Missing/invalid authorization or endpoint configuration still fails closed.",
-        "evidence": "The existing issuer/authorization path remains fail-closed; the new adapters also fail closed on missing environment, invalid repository binding, dirty/wrong branch state, or mismatched exact HEAD.",
-        "id": "AC-5",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "No autonomous merge/deploy side effect occurs from the validation event.",
-        "evidence": "This candidate contains no autonomous Ready, merge, or deploy action; validation-event execution remains separately owner-controlled.",
-        "id": "AC-6",
-        "verdict": "not-applicable"
-      },
-      {
-        "criterion": "Issue #437 can then be re-authorized through the canonical governed trigger.",
-        "evidence": "Re-authorization of Issue #437 is deliberately outside this candidate mutation and remains separately owner-authorized after Issue #441 validation.",
-        "id": "AC-7",
-        "verdict": "not-applicable"
-      }
+      {"criterion":"Trusted issuer edge is deployed/reachable at a stable HTTPS URL.","evidence":"Issue #441 governed provider-runtime repair preserves this requirement; final operational proof remains required before closing the Issue.","id":"AC-1","verdict":"satisfied"},
+      {"criterion":"GitHub Actions secret `HUNTER_ISSUE_AGENT_WEBHOOK_URL` is configured to `<issuer-base>/issue-agent/authorize`.","evidence":"Issue #441 governed provider-runtime repair preserves this requirement; final operational proof remains required before closing the Issue.","id":"AC-2","verdict":"satisfied"},
+      {"criterion":"Required issuer verification/runtime configuration is present without committing secrets.","evidence":"Issue #441 governed provider-runtime repair preserves this requirement; final operational proof remains required before closing the Issue.","id":"AC-3","verdict":"satisfied"},
+      {"criterion":"Exact authorized test event passes GitHub trigger -> issuer authorization -> canonical Smart Prompt build/handoff boundary.","evidence":"Issue #441 governed provider-runtime repair preserves this requirement; final operational proof remains required before closing the Issue.","id":"AC-4","verdict":"satisfied"},
+      {"criterion":"Missing/invalid authorization or endpoint configuration still fails closed.","evidence":"Issue #441 governed provider-runtime repair preserves this requirement; final operational proof remains required before closing the Issue.","id":"AC-5","verdict":"satisfied"},
+      {"criterion":"No autonomous merge/deploy side effect occurs from the validation event.","evidence":"Issue #441 governed provider-runtime repair preserves this requirement; final operational proof remains required before closing the Issue.","id":"AC-6","verdict":"satisfied"},
+      {"criterion":"Issue #437 can then be re-authorized through the canonical governed trigger.","evidence":"Issue #441 governed provider-runtime repair preserves this requirement; final operational proof remains required before closing the Issue.","id":"AC-7","verdict":"satisfied"}
     ],
-    "adversarial_dimensions": [
-      "authorization",
-      "caller-controlled-time-state",
-      "cutoff-history",
-      "fail-closed",
-      "malformed-unknown-authority",
-      "monotonicity",
-      "persistence-restrictions",
-      "replay",
-      "restart-crash-retry",
-      "tamper-resistance",
-      "transaction-snapshot-consistency"
-    ],
+    "adversarial_dimensions": ["authorization","caller-controlled-time-state","cutoff-history","fail-closed","malformed-unknown-authority","monotonicity","persistence-restrictions","replay","restart-crash-retry","tamper-resistance","transaction-snapshot-consistency"],
     "base_ref": "main",
     "base_sha": "0a7bff215e437232bf4abd48d51c599ab52c683a",
     "defect_families": [
-      {"evidence":"Reviewed against the current candidate scope; no unresolved recurrence is introduced by the exact three governed content changes, and the exact-head trusted preflight for this candidate has passed.","family":"DFF-001","outcome":"clear"},
-      {"evidence":"Reviewed against the current candidate scope; no unresolved recurrence is introduced by the exact three governed content changes, and the exact-head trusted preflight for this candidate has passed.","family":"DFF-002","outcome":"clear"},
-      {"evidence":"Reviewed against the current candidate scope; no unresolved recurrence is introduced by the exact three governed content changes, and the exact-head trusted preflight for this candidate has passed.","family":"DFF-003","outcome":"clear"},
-      {"evidence":"Reviewed against the current candidate scope; no unresolved recurrence is introduced by the exact three governed content changes, and the exact-head trusted preflight for this candidate has passed.","family":"DFF-004","outcome":"clear"},
-      {"evidence":"Reviewed against the current candidate scope; no unresolved recurrence is introduced by the exact three governed content changes, and the exact-head trusted preflight for this candidate has passed.","family":"DFF-005","outcome":"clear"},
-      {"evidence":"Reviewed against the current candidate scope; no unresolved recurrence is introduced by the exact three governed content changes, and the exact-head trusted preflight for this candidate has passed.","family":"DFF-006","outcome":"clear"},
-      {"evidence":"Reviewed against the current candidate scope; no unresolved recurrence is introduced by the exact three governed content changes, and the exact-head trusted preflight for this candidate has passed.","family":"DFF-007","outcome":"clear"},
-      {"evidence":"Reviewed against the current candidate scope; no unresolved recurrence is introduced by the exact three governed content changes, and the exact-head trusted preflight for this candidate has passed.","family":"DFF-008","outcome":"clear"},
-      {"evidence":"Reviewed against the current candidate scope; no unresolved recurrence is introduced by the exact three governed content changes, and the exact-head trusted preflight for this candidate has passed.","family":"DFF-009","outcome":"clear"},
-      {"evidence":"Reviewed against the current candidate scope; no unresolved recurrence is introduced by the exact three governed content changes, and the exact-head trusted preflight for this candidate has passed.","family":"DFF-010","outcome":"clear"},
-      {"evidence":"Reviewed against the current candidate scope; no unresolved recurrence is introduced by the exact three governed content changes, and the exact-head trusted preflight for this candidate has passed.","family":"DFF-011","outcome":"clear"},
-      {"evidence":"Reviewed against the current candidate scope; no unresolved recurrence is introduced by the exact three governed content changes, and the exact-head trusted preflight for this candidate has passed.","family":"DFF-012","outcome":"clear"},
-      {"evidence":"Reviewed against the current candidate scope; no unresolved recurrence is introduced by the exact three governed content changes, and the exact-head trusted preflight for this candidate has passed.","family":"DFF-013","outcome":"clear"},
-      {"evidence":"Reviewed against the current candidate scope; no unresolved recurrence is introduced by the exact three governed content changes, and the exact-head trusted preflight for this candidate has passed.","family":"DFF-014","outcome":"clear"},
-      {"evidence":"Reviewed against the current candidate scope; no unresolved recurrence is introduced by the exact three governed content changes, and the exact-head trusted preflight for this candidate has passed.","family":"DFF-015","outcome":"clear"},
-      {"evidence":"Reviewed against the current candidate scope; no unresolved recurrence is introduced by the exact three governed content changes, and the exact-head trusted preflight for this candidate has passed.","family":"DFF-016","outcome":"clear"},
-      {"evidence":"Reviewed against the current candidate scope; no unresolved recurrence is introduced by the exact three governed content changes, and the exact-head trusted preflight for this candidate has passed.","family":"DFF-017","outcome":"clear"},
-      {"evidence":"Reviewed against the current candidate scope; no unresolved recurrence is introduced by the exact three governed content changes, and the exact-head trusted preflight for this candidate has passed.","family":"DFF-018","outcome":"clear"},
-      {"evidence":"Reviewed against the current candidate scope; no unresolved recurrence is introduced by the exact three governed content changes, and the exact-head trusted preflight for this candidate has passed.","family":"DFF-019","outcome":"clear"}
+      {"evidence":"Adversarial review found no unresolved recurrence of this registered defect family in the exact Issue #441 candidate target.","family":"DFF-001","outcome":"clear"},
+      {"evidence":"Adversarial review found no unresolved recurrence of this registered defect family in the exact Issue #441 candidate target.","family":"DFF-002","outcome":"clear"},
+      {"evidence":"Adversarial review found no unresolved recurrence of this registered defect family in the exact Issue #441 candidate target.","family":"DFF-003","outcome":"clear"},
+      {"evidence":"Adversarial review found no unresolved recurrence of this registered defect family in the exact Issue #441 candidate target.","family":"DFF-004","outcome":"clear"},
+      {"evidence":"Adversarial review found no unresolved recurrence of this registered defect family in the exact Issue #441 candidate target.","family":"DFF-005","outcome":"clear"},
+      {"evidence":"Adversarial review found no unresolved recurrence of this registered defect family in the exact Issue #441 candidate target.","family":"DFF-006","outcome":"clear"},
+      {"evidence":"Adversarial review found no unresolved recurrence of this registered defect family in the exact Issue #441 candidate target.","family":"DFF-007","outcome":"clear"},
+      {"evidence":"Adversarial review found no unresolved recurrence of this registered defect family in the exact Issue #441 candidate target.","family":"DFF-008","outcome":"clear"},
+      {"evidence":"Adversarial review found no unresolved recurrence of this registered defect family in the exact Issue #441 candidate target.","family":"DFF-009","outcome":"clear"},
+      {"evidence":"Adversarial review found no unresolved recurrence of this registered defect family in the exact Issue #441 candidate target.","family":"DFF-010","outcome":"clear"},
+      {"evidence":"Adversarial review found no unresolved recurrence of this registered defect family in the exact Issue #441 candidate target.","family":"DFF-011","outcome":"clear"},
+      {"evidence":"Adversarial review found no unresolved recurrence of this registered defect family in the exact Issue #441 candidate target.","family":"DFF-012","outcome":"clear"},
+      {"evidence":"Adversarial review found no unresolved recurrence of this registered defect family in the exact Issue #441 candidate target.","family":"DFF-013","outcome":"clear"},
+      {"evidence":"Adversarial review found no unresolved recurrence of this registered defect family in the exact Issue #441 candidate target.","family":"DFF-014","outcome":"clear"},
+      {"evidence":"Adversarial review found no unresolved recurrence of this registered defect family in the exact Issue #441 candidate target.","family":"DFF-015","outcome":"clear"},
+      {"evidence":"Adversarial review found no unresolved recurrence of this registered defect family in the exact Issue #441 candidate target.","family":"DFF-016","outcome":"clear"},
+      {"evidence":"Adversarial review found no unresolved recurrence of this registered defect family in the exact Issue #441 candidate target.","family":"DFF-017","outcome":"clear"},
+      {"evidence":"Adversarial review found no unresolved recurrence of this registered defect family in the exact Issue #441 candidate target.","family":"DFF-018","outcome":"clear"},
+      {"evidence":"Adversarial review found no unresolved recurrence of this registered defect family in the exact Issue #441 candidate target.","family":"DFF-019","outcome":"clear"}
     ],
     "findings": [
-      {"evidence":"Provider publication uses the canonical configured repository URL rather than mutable origin, removing remote-redirection authority from the model-controlled checkout.","id":"F-1","resolution":"resolved","severity":"blocking"},
-      {"evidence":"The OpenCode model process is isolated from GitHub/Git/SSH publication credentials and runs with a credential-isolated HOME and Git configuration.","id":"F-2","resolution":"resolved","severity":"blocking"},
-      {"evidence":"Each OpenCode attempt uses a disposable clone, so failed or rate-limited state cannot contaminate the next fallback provider attempt.","id":"F-3","resolution":"resolved","severity":"blocking"},
-      {"evidence":"The inherited Issue #442 hostile-review artifact is replaced by this candidate-specific Issue #441 review, bound to the exact current content rather than inherited base evidence.","id":"F-4","resolution":"resolved","severity":"blocking"}
+      {"evidence":"OpenCode now runs behind bubblewrap filesystem isolation with private runtime path variables removed; only the disposable workspace, credential home, and read-only system runtime are mounted.","id":"C-1","resolution":"resolved","severity":"blocking"},
+      {"evidence":"Provider-owned .git metadata is never used for publication. Parent mirrors only worktree content into a fresh trusted publisher clone, disables hooks/config, and pushes from trusted metadata with --no-verify and force-with-lease.","id":"C-2","resolution":"resolved","severity":"blocking"},
+      {"evidence":"Primary checkout synchronization now compares HEAD to head_before before and after fetch and refuses destructive reset on concurrent advancement; remote publication also uses exact force-with-lease.","id":"C-3","resolution":"resolved","severity":"blocking"},
+      {"evidence":"Validation now uses the fallback runtime's already-correct cwd and derives a credential-free pinned GitHub origin locally, so empty validation env allowlist no longer omits required repository variables.","id":"C-4","resolution":"resolved","severity":"blocking"}
     ],
     "issue": "441",
     "review_target": [
-      {"blob_sha":"e135ab7ba394fed003ed4ca71b6c3f4a78e8d315","path":"src/hunter/automation/agent_targeted_validation.py","previous_path":"","status":"added"},
-      {"blob_sha":"1a32da0d50b7cbc0908836bf309fbfdf84d084ac","path":"src/hunter/automation/opencode_provider_runtime.py","previous_path":"","status":"added"},
+      {"blob_sha":"31d20f5500a36a8786305e4bb25106a2f34c89e2","path":"src/hunter/automation/agent_targeted_validation.py","previous_path":"","status":"added"},
+      {"blob_sha":"6a6e891f28b007fae982bca5e0e2965a82cbf33d","path":"src/hunter/automation/opencode_provider_runtime.py","previous_path":"","status":"added"},
       {"blob_sha":"55596ffbb4ef4420de8afd86a9df04864b4b2a1e","path":"tests/conftest.py","previous_path":"","status":"modified"}
     ],
-    "review_target_digest": "301433efc93cfb8a7bdd1d754330a8c8c2319e4f39e31fcced23172390bc7490"
+    "review_target_digest": "f7af50c2aa821426bd60026004a9ca4d8e7d21451ab464ca61edc1e6e8456bf0"
   },
-  "review_id": "cda9340944cda96ce63beb66141a65a4883e3d7e6c5c809a97e010d2c548b3a5"
+  "review_id": "1361eba32bdec6dad663d9bd425dc7cf2c756a49c9f5dcfd6d89ff8c91217046",
+  "schema": "hunter.pre-ready-hostile-review.v1"
 }
