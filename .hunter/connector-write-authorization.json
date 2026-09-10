@@ -12,7 +12,7 @@
         "status": "added"
       },
       {
-        "blob_sha": "6a6e891f28b007fae982bca5e0e2965a82cbf33d",
+        "blob_sha": "154115d3036d467d7e9e5f228f6307842e3c58b9",
         "path": "src/hunter/automation/opencode_provider_runtime.py",
         "previous_path": "",
         "status": "added"
@@ -35,5 +35,5 @@
     "target_ref": "connector/issue-441-provider-runtime",
     "writer": "fafa33"
   },
-  "authorization_id": "2d39e2b75c0d456964d68f32003e80010a5057678d473930dda04df78a458154"
+  "authorization_id": "c830368a13a1fbd8bb3601b54b00675d35336bce839d6a1d6e2e7dd5c97bc0ff"
 }
