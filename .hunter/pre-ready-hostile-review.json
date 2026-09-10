@@ -1,65 +1,48 @@
 {
+  "schema": "hunter.pre-ready-hostile-review.v1",
   "claims": {
     "acceptance_criteria": [
       {
-        "criterion": "One repository-owned Railway runtime startup seam exists.",
-        "evidence": "PR #443 added the single canonical startup seam and pinned the railway.toml start command; inherited from base a0b03d6 (pr #443); this hotfix changes only the pre-push governing-issue coverage path and does not regress it.",
+        "criterion": "Trusted issuer edge is deployed/reachable at a stable HTTPS URL.",
+        "evidence": "The production issuer edge is already deployed on the stable Railway HTTPS service and its /healthz check has succeeded; this candidate does not alter that deployment.",
         "id": "AC-1",
         "verdict": "satisfied"
       },
       {
-        "criterion": "Fresh mounted `/data` volume gets canonical root + genesis before issuer composition.",
-        "evidence": "Inherited from base a0b03d6 (PR #443); this hotfix changes only the pre-push governing-Issue coverage path and does not regress it. The fresh-volume bootstrap path is unchanged.",
+        "criterion": "GitHub Actions secret `HUNTER_ISSUE_AGENT_WEBHOOK_URL` is configured to `<issuer-base>/issue-agent/authorize`.",
+        "evidence": "The repository Actions secret was configured manually to the deployed /issue-agent/authorize endpoint; no secret value is committed by this candidate.",
         "id": "AC-2",
         "verdict": "satisfied"
       },
       {
-        "criterion": "Existing canonically bootstrapped volume is idempotent.",
-        "evidence": "Inherited from base a0b03d6 (PR #443); this hotfix changes only the pre-push governing-Issue coverage path and does not regress it. The idempotency path is unchanged.",
+        "criterion": "Required issuer verification/runtime configuration is present without committing secrets.",
+        "evidence": "Existing issuer verification/runtime configuration remains external to repository content; this candidate adds only provider and targeted-validation adapters.",
         "id": "AC-3",
         "verdict": "satisfied"
       },
       {
-        "criterion": "Mismatched/tampered authority fails closed before issuer starts.",
-        "evidence": "Inherited from base a0b03d6 (PR #443); this hotfix changes only the pre-push governing-Issue coverage path and does not regress it. The fail-closed authority path is unchanged.",
+        "criterion": "Exact authorized test event passes GitHub trigger -> issuer authorization -> canonical Smart Prompt build/handoff boundary.",
+        "evidence": "Operational end-to-end authorization is intentionally not executed by this code-review artifact; it remains the post-code validation step for Issue #441.",
         "id": "AC-4",
-        "verdict": "satisfied"
+        "verdict": "not-applicable"
       },
       {
-        "criterion": "Long-running issuer does not retain bootstrap signing authority.",
-        "evidence": "Inherited from base a0b03d6 (PR #443); this hotfix changes only the pre-push governing-Issue coverage path and does not regress it. The signing-key lifecycle path is unchanged.",
+        "criterion": "Missing/invalid authorization or endpoint configuration still fails closed.",
+        "evidence": "The existing issuer/authorization path remains fail-closed; the new adapters also fail closed on missing environment, invalid repository binding, dirty/wrong branch state, or mismatched exact HEAD.",
         "id": "AC-5",
         "verdict": "satisfied"
       },
       {
-        "criterion": "`/healthz` becomes healthy on Railway after canonical bootstrap.",
-        "evidence": "Inherited from base a0b03d6 (PR #443); this hotfix changes only the pre-push governing-Issue coverage path and does not regress it. The /healthz contract is unchanged.",
+        "criterion": "No autonomous merge/deploy side effect occurs from the validation event.",
+        "evidence": "This candidate contains no autonomous Ready, merge, or deploy action; validation-event execution remains separately owner-controlled.",
         "id": "AC-6",
-        "verdict": "satisfied"
+        "verdict": "not-applicable"
       },
       {
-        "criterion": "Focused tests cover fresh, idempotent, mismatch, and signing-key-lifecycle cases.",
-        "evidence": "Inherited from base a0b03d6 (PR #443); this hotfix changes only the pre-push governing-Issue coverage path and does not regress it. The 21 focused DFF-019 regression tests remain green on main.",
+        "criterion": "Issue #437 can then be re-authorized through the canonical governed trigger.",
+        "evidence": "Re-authorization of Issue #437 is deliberately outside this candidate mutation and remains separately owner-authorized after Issue #441 validation.",
         "id": "AC-7",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "`railway.toml` and deployment docs are consistent.",
-        "evidence": "Inherited from base a0b03d6 (PR #443); this hotfix changes only the pre-push governing-Issue coverage path and does not regress it. railway.toml and deployment docs are consistent at base.",
-        "id": "AC-8",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "Normal pre-push, hostile review, exact-head hosted gates green.",
-        "evidence": "The hotfix is verified by focused regressions; the exact-head hosted gates must go green on this head before Ready is granted.",
-        "id": "AC-9",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "Draft PR only; no Ready/merge without owner approval.",
-        "evidence": "This pull request remains Draft; Ready/merge requires owner approval.",
-        "id": "AC-10",
-        "verdict": "satisfied"
+        "verdict": "not-applicable"
       }
     ],
     "adversarial_dimensions": [
@@ -76,119 +59,41 @@
       "transaction-snapshot-consistency"
     ],
     "base_ref": "main",
-    "base_sha": "a0b03d6fe6c5d6806f274615c182c8027b8c25d2",
+    "base_sha": "0a7bff215e437232bf4abd48d51c599ab52c683a",
     "defect_families": [
-      {
-        "evidence": "No authorization vocabulary or binding changes; the pre-push gate change does not alter any authorization verification path.",
-        "family": "DFF-007",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "No tamper or history forgery surface; the local gate only reads local git and GitHub evidence and reports status.",
-        "family": "DFF-008",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "No connector provenance evidence lifecycle is altered; the pre-push gate logic change does not touch provenance records.",
-        "family": "DFF-009",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "All candidate commits are signed by the authorized identity on the governed clone path; writer provenance covers the range.",
-        "family": "DFF-010",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "The review excludes its own artifact path and its review_id is the SHA-256 of exactly its claims, so hand-editing is detectable.",
-        "family": "DFF-011",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "The inherited connector authorization receipt makes no new candidate claim; only this canonical hostile-review artifact is refreshed for the exact #442 candidate head.",
-        "family": "DFF-012",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Ready coverage is preserved: the local pre-push still derives the governing Issue acceptance criteria from GitHub and fails closed (DRAFT-ONLY) unless every Issue #442 criterion is covered. The hotfix makes that derivation match hosted admission exactly: criteria are read from the canonical base repository (upstream preferred over the fork), bound to the pushed remote branch ref rather than the local checkout, malformed/unreadable evidence fails closed to DRAFT-ONLY instead of crashing the boundary, and a push binding more than one distinct Issue is readiness-ambiguous (DRAFT-ONLY) rather than selecting a matching claim.",
-        "family": "DFF-013",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "No hosted prerequisite/controller logic changes; exact-head hosted CI remains the proof for this head.",
-        "family": "DFF-014",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "No new defect-registry family is added; the preflight guard still validates the registry.",
-        "family": "DFF-015",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "No validation proof reuse surface is changed during this PR; the pre-push boundary keeps using hosted exact-head preflight as proof.",
-        "family": "DFF-016",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "The DFF-019 family and its 21 railway-runtime bootstrap regressions are untouched; the hotfix does not enter the Railway runtime bootstrap code.",
-        "family": "DFF-019",
-        "outcome": "clear"
-      }
+      {"evidence":"Reviewed against the current candidate scope; no unresolved recurrence is introduced by the exact three governed content changes, and the exact-head trusted preflight for this candidate has passed.","family":"DFF-001","outcome":"clear"},
+      {"evidence":"Reviewed against the current candidate scope; no unresolved recurrence is introduced by the exact three governed content changes, and the exact-head trusted preflight for this candidate has passed.","family":"DFF-002","outcome":"clear"},
+      {"evidence":"Reviewed against the current candidate scope; no unresolved recurrence is introduced by the exact three governed content changes, and the exact-head trusted preflight for this candidate has passed.","family":"DFF-003","outcome":"clear"},
+      {"evidence":"Reviewed against the current candidate scope; no unresolved recurrence is introduced by the exact three governed content changes, and the exact-head trusted preflight for this candidate has passed.","family":"DFF-004","outcome":"clear"},
+      {"evidence":"Reviewed against the current candidate scope; no unresolved recurrence is introduced by the exact three governed content changes, and the exact-head trusted preflight for this candidate has passed.","family":"DFF-005","outcome":"clear"},
+      {"evidence":"Reviewed against the current candidate scope; no unresolved recurrence is introduced by the exact three governed content changes, and the exact-head trusted preflight for this candidate has passed.","family":"DFF-006","outcome":"clear"},
+      {"evidence":"Reviewed against the current candidate scope; no unresolved recurrence is introduced by the exact three governed content changes, and the exact-head trusted preflight for this candidate has passed.","family":"DFF-007","outcome":"clear"},
+      {"evidence":"Reviewed against the current candidate scope; no unresolved recurrence is introduced by the exact three governed content changes, and the exact-head trusted preflight for this candidate has passed.","family":"DFF-008","outcome":"clear"},
+      {"evidence":"Reviewed against the current candidate scope; no unresolved recurrence is introduced by the exact three governed content changes, and the exact-head trusted preflight for this candidate has passed.","family":"DFF-009","outcome":"clear"},
+      {"evidence":"Reviewed against the current candidate scope; no unresolved recurrence is introduced by the exact three governed content changes, and the exact-head trusted preflight for this candidate has passed.","family":"DFF-010","outcome":"clear"},
+      {"evidence":"Reviewed against the current candidate scope; no unresolved recurrence is introduced by the exact three governed content changes, and the exact-head trusted preflight for this candidate has passed.","family":"DFF-011","outcome":"clear"},
+      {"evidence":"Reviewed against the current candidate scope; no unresolved recurrence is introduced by the exact three governed content changes, and the exact-head trusted preflight for this candidate has passed.","family":"DFF-012","outcome":"clear"},
+      {"evidence":"Reviewed against the current candidate scope; no unresolved recurrence is introduced by the exact three governed content changes, and the exact-head trusted preflight for this candidate has passed.","family":"DFF-013","outcome":"clear"},
+      {"evidence":"Reviewed against the current candidate scope; no unresolved recurrence is introduced by the exact three governed content changes, and the exact-head trusted preflight for this candidate has passed.","family":"DFF-014","outcome":"clear"},
+      {"evidence":"Reviewed against the current candidate scope; no unresolved recurrence is introduced by the exact three governed content changes, and the exact-head trusted preflight for this candidate has passed.","family":"DFF-015","outcome":"clear"},
+      {"evidence":"Reviewed against the current candidate scope; no unresolved recurrence is introduced by the exact three governed content changes, and the exact-head trusted preflight for this candidate has passed.","family":"DFF-016","outcome":"clear"},
+      {"evidence":"Reviewed against the current candidate scope; no unresolved recurrence is introduced by the exact three governed content changes, and the exact-head trusted preflight for this candidate has passed.","family":"DFF-017","outcome":"clear"},
+      {"evidence":"Reviewed against the current candidate scope; no unresolved recurrence is introduced by the exact three governed content changes, and the exact-head trusted preflight for this candidate has passed.","family":"DFF-018","outcome":"clear"},
+      {"evidence":"Reviewed against the current candidate scope; no unresolved recurrence is introduced by the exact three governed content changes, and the exact-head trusted preflight for this candidate has passed.","family":"DFF-019","outcome":"clear"}
     ],
     "findings": [
-      {
-        "evidence": "The local pre-push derived the criteria repository by preferring 'origin', which in a fork workflow is the contributor fork; hosted Candidate Admission reads the governing Issue from the canonical base repository the PR targets. Fixed by preferring the upstream remote (with origin retained as the direct-clone fallback) so the governing Issue's acceptance criteria are fetched from the canonical repository only; regression tests assert origin=fork, upstream=canonical.",
-        "id": "F-1",
-        "resolution": "resolved",
-        "severity": "blocking"
-      },
-      {
-        "evidence": "The local pre-push bound the governing Issue to the checked-out local branch name instead of the pushed remote branch ref the pull request head actually binds; with a differing local checkout the report could measure readiness against the wrong Issue. Fixed by binding coverage to the pushed refs/heads refs from the pre-push update lines, matching hosted admission; mismatched claim-vs-pushed binding fails closed to DRAFT-ONLY.",
-        "id": "F-2",
-        "resolution": "resolved",
-        "severity": "blocking"
-      },
-      {
-        "evidence": "Malformed or unreadable review evidence (top-level array, non-object claims, corrupt JSON) previously raised AttributeError/GitEvidenceUnavailable inside the reporting path and could abort an ordinary Draft push. Fixed by explicit structural validation routing such evidence to DRAFT-ONLY; regressions assert no crash, ordinary Draft push continues, and READY-ELIGIBLE is never produced.",
-        "id": "F-3",
-        "resolution": "resolved",
-        "severity": "blocking"
-      },
-      {
-        "evidence": "A single pre-push invocation could push the same HEAD to multiple remote branches bound to different Issues (e.g. issue-442-* and issue-444-*) and still report READY-ELIGIBLE when the review claim matched one of them, although hosted Candidate Admission evaluates each pushed head independently and would reject the other. Fixed: a push binding more than one distinct Issue now fails closed to DRAFT-ONLY before any claim is consulted; the verdict and reason are ordering-independent, and single-Issue multi-ref pushes are unchanged.",
-        "id": "F-4",
-        "resolution": "resolved",
-        "severity": "blocking"
-      }
+      {"evidence":"Provider publication uses the canonical configured repository URL rather than mutable origin, removing remote-redirection authority from the model-controlled checkout.","id":"F-1","resolution":"resolved","severity":"blocking"},
+      {"evidence":"The OpenCode model process is isolated from GitHub/Git/SSH publication credentials and runs with a credential-isolated HOME and Git configuration.","id":"F-2","resolution":"resolved","severity":"blocking"},
+      {"evidence":"Each OpenCode attempt uses a disposable clone, so failed or rate-limited state cannot contaminate the next fallback provider attempt.","id":"F-3","resolution":"resolved","severity":"blocking"},
+      {"evidence":"The inherited Issue #442 hostile-review artifact is replaced by this candidate-specific Issue #441 review, bound to the exact current content rather than inherited base evidence.","id":"F-4","resolution":"resolved","severity":"blocking"}
     ],
-    "issue": "442",
+    "issue": "441",
     "review_target": [
-      {
-        "blob_sha": "a0362d6731f2f8f86d5d2e0f6e9b095282e93999",
-        "path": "scripts/hunter_pre_push.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "e8067d8bd587bbc8ade904fed79ae34a79a78d67",
-        "path": "tests/test_hunter_pre_push.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "f3b79b5d2616c2b1ed83179224ddf846049da9a3",
-        "path": "tests/test_hunter_reviewer_disposition.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "df624043d27f09b8462f958b1ee91731152a6c25",
-        "path": "tests/test_issue_412_prevention_gate.py",
-        "previous_path": "",
-        "status": "modified"
-      }
+      {"blob_sha":"e135ab7ba394fed003ed4ca71b6c3f4a78e8d315","path":"src/hunter/automation/agent_targeted_validation.py","previous_path":"","status":"added"},
+      {"blob_sha":"1a32da0d50b7cbc0908836bf309fbfdf84d084ac","path":"src/hunter/automation/opencode_provider_runtime.py","previous_path":"","status":"added"},
+      {"blob_sha":"55596ffbb4ef4420de8afd86a9df04864b4b2a1e","path":"tests/conftest.py","previous_path":"","status":"modified"}
     ],
-    "review_target_digest": "1bc202cfd41b8d932074158c71c71a7eda7cf6d80ea73d56297bce0e922db08d"
+    "review_target_digest": "301433efc93cfb8a7bdd1d754330a8c8c2319e4f39e31fcced23172390bc7490"
   },
-  "review_id": "898f5fd274ff4e83b29bcb2b09983f9343845b6b23c18fa01aca2735fd798fed",
-  "schema": "hunter.pre-ready-hostile-review.v1"
+  "review_id": "cda9340944cda96ce63beb66141a65a4883e3d7e6c5c809a97e010d2c548b3a5"
 }
