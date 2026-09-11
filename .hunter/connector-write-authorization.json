@@ -1,1 +1,32 @@
-{"schema":"hunter-connector-write-authorization-v4","claims":{"base_ref":"main","base_sha":"62240301683ceb5307dc29fda9c27be9ff63cb8d","capability":"feature-branch-write","changes":[{"blob_sha":"5cb8a502f010c90122e0630d411a0ddabb246ca9","path":"src/hunter/automation/railway_opencode_permission_sandbox.py","previous_path":"","status":"added"},{"blob_sha":"63a9546e67be7cb9b48efe38939c9ce4caddd47a","path":"tests/test_railway_opencode_permission_sandbox.py","previous_path":"","status":"added"}],"governance_scopes":[],"grant_fingerprint":"28d4f12d40624cd5dcdf82a0edd77b8ed82aeac626a181c4236781846c89c7cd","issue":"441","paths":["src/hunter/automation/railway_opencode_permission_sandbox.py","tests/test_railway_opencode_permission_sandbox.py"],"target_ref":"connector/issue-441-railway-sandbox","writer":"fafa33"},"authorization_id":"f3558652055c7d00779bd5f8ca93d24cda72e0c28f85656c277ba5e61d921b1e"}
+{
+  "schema": "hunter-connector-write-authorization-v4",
+  "claims": {
+    "base_ref": "main",
+    "base_sha": "62240301683ceb5307dc29fda9c27be9ff63cb8d",
+    "capability": "feature-branch-write",
+    "changes": [
+      {
+        "blob_sha": "5cb8a502f010c90122e0630d411a0ddabb246ca9",
+        "path": "src/hunter/automation/railway_opencode_permission_sandbox.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "63a9546e67be7cb9b48efe38939c9ce4caddd47a",
+        "path": "tests/test_railway_opencode_permission_sandbox.py",
+        "previous_path": "",
+        "status": "added"
+      }
+    ],
+    "governance_scopes": [],
+    "grant_fingerprint": "28d4f12d40624cd5dcdf82a0edd77b8ed82aeac626a181c4236781846c89c7cd",
+    "issue": "441",
+    "paths": [
+      "src/hunter/automation/railway_opencode_permission_sandbox.py",
+      "tests/test_railway_opencode_permission_sandbox.py"
+    ],
+    "target_ref": "connector/issue-441-railway-sandbox",
+    "writer": "fafa33"
+  },
+  "authorization_id": "f3558652055c7d00779bd5f8ca93d24cda72e0c28f85656c277ba5e61d921b1e"
+}
