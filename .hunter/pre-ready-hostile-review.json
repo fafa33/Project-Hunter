@@ -148,6 +148,12 @@
     "issue": "457",
     "review_target": [
       {
+        "blob_sha": "38074951820d5b7f7430cb984c3c4b37dac1ef12",
+        "path": ".github/workflows/hunter-issue-agent-trigger.yml",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
         "blob_sha": "5d825d3ce17b5a92711911aa4a879d9bbdf66930",
         "path": "scripts/hunter_issue_agent_trigger.py",
         "previous_path": "",
@@ -160,8 +166,8 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "8f0f00deb82d58c6f27b234db2b9ee6283b24ddcdea0cfe9f39eacda2abdcb4d"
+    "review_target_digest": "f4c678771c5748bb95f8fdf9e4864dc96bdd9dcd387b546f4dac74f4693f9aff"
   },
-  "review_id": "4bdd0130e974425a06d59631f3dacd602ac719e5a1d58f84b1d3025e7f7cf98f",
+  "review_id": "3e01c2deb7e6f0c48deb1f21f3dc9e21ccdd6a724d112999e806cdddad84170d",
   "schema": "hunter.pre-ready-hostile-review.v1"
 }
