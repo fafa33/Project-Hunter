@@ -1,47 +1,48 @@
 {
+  "schema": "hunter.pre-ready-hostile-review.v1",
   "claims": {
     "acceptance_criteria": [
       {
-        "criterion": "Trusted issuer edge is deployed/reachable at a stable HTTPS URL.",
-        "evidence": "Not satisfied by this code-only candidate: reachability is produced by a Railway deployment/operator action, not by repository content. This candidate installs the runtime the issuer edge needs and makes it dispatchable both inside the governed sandbox and from the deployed image, but performs no deployment, and autonomous deployment is independently out of scope for Issue #441. The hosted Trusted Candidate Preflight validates the candidate head; endpoint reachability is verified separately against the deployed Service.",
         "id": "AC-1",
-        "verdict": "not-applicable"
+        "criterion": "Trusted issuer edge is deployed/reachable at a stable HTTPS URL.",
+        "verdict": "not-applicable",
+        "evidence": "Operational Railway reachability is outside this code-only candidate; the currently deployed issuer edge is tested separately after merge/deploy. This candidate changes only the Railway-compatible OpenCode isolation mechanism."
       },
       {
-        "criterion": "GitHub Actions secret `HUNTER_ISSUE_AGENT_WEBHOOK_URL` is configured to `<issuer-base>/issue-agent/authorize`.",
-        "evidence": "Not satisfied by this code-only candidate: the webhook is a GitHub Actions secret provisioned by the operator, and no secret material may be committed. This candidate commits no secret-bearing file and modifies no workflow. The wiring is an operator step described by the deployment runbook, not repository content.",
         "id": "AC-2",
-        "verdict": "not-applicable"
+        "criterion": "GitHub Actions secret `HUNTER_ISSUE_AGENT_WEBHOOK_URL` is configured to `<issuer-base>/issue-agent/authorize`.",
+        "verdict": "not-applicable",
+        "evidence": "The webhook URL is an operator-managed GitHub Actions secret and this candidate neither reads nor commits it."
       },
       {
-        "criterion": "Required issuer verification/runtime configuration is present without committing secrets.",
-        "evidence": "railway.toml [build] buildCommand pins the immutable, checksum-verified OpenCode runtime: `python -m pip install . --target /app/vendor && python scripts/install_opencode_runtime.py --destination /app/bin/opencode`. install_opencode_runtime.py verifies platform, streams the pinned v1.18.30 asset, verifies its SHA-256 before extraction, extracts exactly one `opencode` regular member atomically with mode 0755, and exits 2 without installing on any failure. The adapter ro-binds the host-resolved binary into the sandbox at /opt/hunter/bin/opencode so the pinned runtime is actually visible to sandboxed dispatch, and railway_issuer_startup.py exposes the pip --target directory (/app/vendor) on the runtime import path so hunter.* imports at startup. No secret appears anywhere in the candidate.",
         "id": "AC-3",
-        "verdict": "satisfied"
+        "criterion": "Required issuer verification/runtime configuration is present without committing secrets.",
+        "verdict": "satisfied",
+        "evidence": "The shim strips publication and governance authority credentials before model execution, creates a private credential home, disables inherited OpenCode plugins, and supplies a deny-by-default inline permission policy without committing any secret value."
       },
       {
-        "criterion": "Exact authorized test event passes GitHub trigger -> issuer authorization -> canonical Smart Prompt build/handoff boundary.",
-        "evidence": "Not satisfied by this code-only candidate: an end-to-end authorized event through trigger/issuer/handoff is an operational validation run outside this candidate's content. This candidate changes no trigger, authorization, or Smart Prompt composition code. The exact-head hosted Quality Gates / Trusted Preflight prove the candidate subset but not the deployed webhook round-trip.",
         "id": "AC-4",
-        "verdict": "not-applicable"
+        "criterion": "Exact authorized test event passes GitHub trigger -> issuer authorization -> canonical Smart Prompt build/handoff boundary.",
+        "verdict": "not-applicable",
+        "evidence": "The final end-to-end trigger/issuer/handoff proof is an operational validation after this candidate is merged and deployed. The exact candidate itself is covered by hosted CI, trusted preflight, CodeQL, and governance admission."
       },
       {
-        "criterion": "Missing/invalid authorization or endpoint configuration still fails closed.",
-        "evidence": "The candidate introduces no authorization or endpoint mutation and adds no permissive default. The new runtime bootstrap it adds fails closed on its own surface: an unreachable pinned release, a SHA-256 mismatch, a missing/unexpected archive member, or an unsupported platform aborts the build with exit 2 and installs nothing. The two P1 fixes preserve fail-closed behaviour: an executable that cannot be resolved on the host aborts dispatch with 'OpenCode executable is unavailable'; the sandbox binds exactly the one read-only file the operator configured and nothing else; and a missing vendor directory is a silent no-op that leaves the subsequent bootstrap import to fail closed before the issuer starts.",
         "id": "AC-5",
-        "verdict": "satisfied"
+        "criterion": "Missing/invalid authorization or endpoint configuration still fails closed.",
+        "verdict": "satisfied",
+        "evidence": "The shim rejects unknown or incomplete sandbox argv, unexpected binds, invalid workspace/home roots, untrusted executable locations, and any provider command other than `opencode run`; all such cases return failure rather than falling back to unrestricted execution."
       },
       {
-        "criterion": "No autonomous merge/deploy side effect occurs from the validation event.",
-        "evidence": "The candidate changes only the Railway [build] buildCommand, the pinned runtime installer, the sandbox dispatch command construction, and the startup seam's import-path setup; all execute at deploy build time or inside the already-isolated provider sandbox and cannot autonomously merge, push, or mutatingly deploy. The start command remains the existing idempotent volume-aware startup seam; the P1 fixes only make that seam importable and the sandboxed runtime dispatchable, adding no autonomous action.",
         "id": "AC-6",
-        "verdict": "satisfied"
+        "criterion": "No autonomous merge/deploy side effect occurs from the validation event.",
+        "verdict": "satisfied",
+        "evidence": "The shim only executes OpenCode against the isolated attempt clone. It strips GitHub publication credentials and all GIT_* variables; commit signing, push, rollback, merge, and deployment remain outside the model process in the trusted parent runtime."
       },
       {
-        "criterion": "Issue #437 can then be re-authorized through the canonical governed trigger.",
-        "evidence": "Not satisfied by this code-only candidate: re-authorizing Issue #437 is an operator-run follow-up performed once the issuer edge is operational. This candidate provides a prerequisite runtime and its dispatchability but no trigger/issuer code path, so it cannot by itself re-authorize #437.",
         "id": "AC-7",
-        "verdict": "not-applicable"
+        "criterion": "Issue #437 can then be re-authorized through the canonical governed trigger.",
+        "verdict": "not-applicable",
+        "evidence": "Re-authorizing Issue #437 is the next operator action after #441 passes its deployed end-to-end validation; this candidate supplies the Railway-compatible runtime prerequisite only."
       }
     ],
     "adversarial_dimensions": [
@@ -58,185 +59,40 @@
       "transaction-snapshot-consistency"
     ],
     "base_ref": "main",
-    "base_sha": "8fa1e5dc1238058de5f4ec64bd5894a855fc0a48",
+    "base_sha": "62240301683ceb5307dc29fda9c27be9ff63cb8d",
     "defect_families": [
-      {
-        "evidence": "The src/hunter/ delta is confined to sandbox executable path remapping and read-only single-file binding; no timestamp reaches or influences an admission, ordering, or cutoff decision, and no new timestamp is introduced. The module's existing UTC-now cutoff usage in _exact_prompt is pre-existing and unchanged by this candidate.",
-        "family": "DFF-001",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "The src/hunter/ delta introduces no validate-then-write sequence: the sandbox command builder only reads host state (env, which, filesystem existence) and emits a bwrap argv; the startup seam mutates only sys.path and a process-local env copy. No repository or persistence write can drift from a validating read.",
-        "family": "DFF-002",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "The changed code assigns no durable identity from a caller payload: the in-sandbox executable name derives from the final host path basename of an operator-configured binary and the mount point constant /opt/hunter/bin; the vendor path derives from a configured directory; neither can displace a caller-assigned identity in any persisted record.",
-        "family": "DFF-003",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Authority resolution surfaces are unchanged; the new branches fail closed: a host-unresolvable executable returns None from which() and aborts dispatch, and _runtime_vendor_dir returns None (a no-op) when the configured directory is absent, so no incomplete declaration is read as a permissive default.",
-        "family": "DFF-004",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "The candidate adds no durable write surface: the fix writes only the read-only sandbox bind of a single configured binary and process-local sys.path/environment mutation; no governed exclusion can be defeated through a secondary carrying surface.",
-        "family": "DFF-005",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "No ordering or clock guarantee is introduced or altered: sandbox remapping and vendor-path insertion are deterministic over host state and do not depend on wall-clock or restart ordering; the startup seam's idempotent bootstrap contract is unchanged.",
-        "family": "DFF-006",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "The changed paths are the pinned runtime installer, its tests, railway.toml, the sandbox dispatch helper, and the startup seam's import-path setup; no authorization, ledger, signing, or replay surface is modified, so no valid proof can be re-aimed at a different target through this candidate.",
-        "family": "DFF-007",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "install_opencode_runtime.py verifies the SHA-256 of the downloaded archive before extraction and fails closed on any mismatch, unsupported platform, or unexpected/multiple archive members; the sandbox ro-binds only the exact host-resolved file the operator configured; no evidence artifact reader or forger surface is added.",
-        "family": "DFF-008",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "This is an ordinary clone-capable candidate pushed through the governed .githooks/pre-push boundary; no connector authorization channel or receipt is involved, so no unsatisfiable proof obligation can be handed to an authorized connector.",
-        "family": "DFF-009",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Every commit in the reconstruction range was created locally and crosses the .githooks/pre-push machine boundary from the checked-out HEAD bound to the pushed SHA, signed by the allowlisted Farhad5778 identity; no GitHub API/Contents-created commit remains in the range.",
-        "family": "DFF-010",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "The reconstructed range is a sequence of implementation commits rooted at current main plus the exact-head review commit, pushed in one governed push; no stranding intermediate commit is presented as evidence.",
-        "family": "DFF-011",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "The candidate is non-connector and mints no connector authorization receipt; the only .hunter/ transition is the exact-head pre-ready hostile review generated by the canonical tool, bound to the pushed head's content.",
-        "family": "DFF-012",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "This exact-head pre-ready hostile review is recorded via scripts/hunter_pre_ready_review.py against the trusted local change set before any Ready consideration, covering every applicable recurring-defect family and all 7 governing Issue criteria.",
-        "family": "DFF-013",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "The candidate asserts only exact-head hosted proof (Quality Gates and Trusted Candidate Preflight bound to the pushed SHA); no pending or in-progress proof is reported as passing.",
-        "family": "DFF-014",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Each acceptance-criterion verdict and family outcome is substantiated by the installer's fail-closed control flow, the pinned immutable release constants, the sandbox bind construction, and the focused regression tests; no prevented class is claimed without matching evidence.",
-        "family": "DFF-015",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "The push boundary and the hosted trusted preflight both bind the exact pushed head SHA; no validation result produced for another head is asserted for this candidate.",
-        "family": "DFF-016",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "install_opencode_runtime.py is invoked from the Railway [build] buildCommand (deploy build time), not from a preDeploy bootstrap, so it never mounts or accesses the /data volume; it writes only the pinned binary under /app/bin. The startup seam (railway_issuer_startup.py) now also exposes the runtime vendor dir on the import path before its lazy bootstrap import, then keeps the volume-aware check, signing-key scrub, and issuer exec sequencing unchanged.",
-        "family": "DFF-019",
-        "outcome": "clear"
-      }
+      {"family":"DFF-001","outcome":"clear","evidence":"No caller-controlled timestamp, cutoff, or historical-state selection is introduced; sandbox admission is determined only from the exact argv and filesystem locations supplied by the trusted parent."},
+      {"family":"DFF-002","outcome":"clear","evidence":"The shim does not perform validate-then-persist logic. It validates the complete sandbox contract before spawning the provider and never writes governed persistent state."},
+      {"family":"DFF-003","outcome":"clear","evidence":"No durable identity is accepted from model or caller content; executable and workspace identities are derived from trusted parent paths and exact mount declarations."},
+      {"family":"DFF-004","outcome":"clear","evidence":"Missing or malformed authority/runtime declarations fail closed: unsupported options, missing binds, invalid roots, or untrusted executable locations raise SandboxShimError."},
+      {"family":"DFF-005","outcome":"clear","evidence":"No secondary durable carrier is added. Model-visible state is confined to the isolated clone and private credential home, while publication credentials are removed."},
+      {"family":"DFF-006","outcome":"clear","evidence":"No ordering or clock promise is introduced. Validation is deterministic over the exact argv and path topology."},
+      {"family":"DFF-007","outcome":"clear","evidence":"Authorization and publication proofs are not re-aimable: the provider receives neither GitHub push credentials nor governance signing/runtime authority variables."},
+      {"family":"DFF-008","outcome":"clear","evidence":"Unexpected bind mappings and executable locations are rejected; the shim accepts only system read-only mounts and the pinned /app/bin executable mapping expected from Hunter."},
+      {"family":"DFF-009","outcome":"clear","evidence":"This candidate uses the connector ingress with an exact authorization receipt; review and receipt evidence paths remain excluded from the substantive change set by trusted admission logic."},
+      {"family":"DFF-010","outcome":"clear","evidence":"Connector admission authenticates the authorized connector channel rather than treating unsigned API commits as ordinary pre-push provenance; the exact receipt is bound to this branch and base."},
+      {"family":"DFF-011","outcome":"clear","evidence":"The candidate’s substantive change set is exact and complete (one source module plus its focused tests); evidence artifacts cannot strand or conceal an implementation transition."},
+      {"family":"DFF-012","outcome":"clear","evidence":"The connector authorization receipt is re-derived against the exact source/test blobs and current main base, with review/receipt artifacts treated as evidence rather than implementation scope."},
+      {"family":"DFF-013","outcome":"clear","evidence":"This pre-ready hostile review is refreshed against the exact candidate content before Ready consideration and covers the governing Issue criteria plus recurring-defect families."},
+      {"family":"DFF-014","outcome":"clear","evidence":"No pending check is represented as success in this review. Hosted exact-head CI/trusted preflight results are independently published by GitHub workflows."},
+      {"family":"DFF-015","outcome":"clear","evidence":"Claims here are tied to concrete code paths and focused tests: strict argv parsing, credential stripping, isolated root checks, and deny-by-default permissions."},
+      {"family":"DFF-016","outcome":"clear","evidence":"All hosted validation and review state is bound to the exact candidate head; any later content mutation makes this review stale and forces a refresh."},
+      {"family":"DFF-017","outcome":"clear","evidence":"The runtime boundary is explicit: untrusted model execution is separated from trusted commit signing, publication, rollback, and exact-head validation."},
+      {"family":"DFF-018","outcome":"clear","evidence":"The permission policy defaults every OpenCode capability to deny and selectively allows only project read/edit/glob/grep/LSP operations; shell, web, tasks, skills, questions, and external-directory access remain denied."},
+      {"family":"DFF-019","outcome":"clear","evidence":"Railway’s non-privileged namespace limitation is handled without requesting privileged container capabilities; the provider runs in the existing service with credentials stripped and the model constrained to the isolated attempt clone."}
     ],
     "findings": [
-      {
-        "evidence": "Runtime-integrity gate: the installer must refuse to install anything but the exact pinned archive. Verified: _download() verifies the SHA-256 after streaming and raises OpenCodeInstallError on mismatch; _verify_platform() and single-member extraction fail closed; main() returns 2 and installs nothing on any failure, so a tampered or unreachable release aborts the build rather than starting with an untrusted binary.",
-        "id": "FND-1",
-        "resolution": "resolved",
-        "severity": "blocking"
-      },
-      {
-        "evidence": "Atomic, standalone installation: the extracted binary must not be partially installed or left executable mid-write. Verified: extraction writes only the single `opencode` regular member to a .tmp sibling then os.replace(); chmod 0o755 is applied before replace, and no archive path is ever traversed, so no foreign artifact or partial binary survives.",
-        "id": "FND-2",
-        "resolution": "resolved",
-        "severity": "blocking"
-      },
-      {
-        "evidence": "Sandbox visibility of the pinned runtime (P1 #1): the adapter previously exec'd the host path inside the bwrap sandbox, which mounts /usr,/bin,/lib,/lib64,/etc but not /app, so a host-resolved /app/bin/opencode was invisible to dispatch. Verified resolved: _sandbox_executable_path remaps executables that live under the sandbox or credential home, reuses any executable already under a mounted system path, and otherwise ro-binds exactly the one resolved file read-only into the dedicated /opt/hunter/bin mount point; _sandbox_command execs the in-sandbox path. Five focused regression tests pin the mount construction, the reuse branches, and the final argv.",
-        "id": "FND-3",
-        "resolution": "resolved",
-        "severity": "non-blocking"
-      },
-      {
-        "evidence": "Host-side provisioning of the runtime (runbook): on the deployed image the pinned binary lives at /app/bin/opencode and the adapter resolves it via HUNTER_OPENCODE_EXECUTABLE (default 'opencode') through PATH lookup. If the operator does not set HUNTER_OPENCODE_EXECUTABLE=/app/bin/opencode or add /app/bin to PATH, the first dispatch fails closed with 'OpenCode executable is unavailable'. Safe because fail-closed, but the deployment runbook must record the provisioning step before first dispatch.",
-        "id": "FND-4",
-        "resolution": "unresolved",
-        "severity": "non-blocking"
-      },
-      {
-        "evidence": "Railway vendor import path (P1 #2): railway.toml installs Hunter via `pip install . --target /app/vendor`, which is not on the interpreter's default import path. Verified resolved: _ensure_runtime_import_paths() inserts the configured vendor dir (default /app/vendor, override HUNTER_RUNTIME_VENDOR_DIR) at the front of sys.path before the lazy bootstrap import and exports the merged PYTHONPATH so the exec'd issuer child inherits it; absent dir is a no-op followed by fail-closed bootstrap. Three focused regression tests pin the prepend, the no-op, and a vendor module import.",
-        "id": "FND-5",
-        "resolution": "resolved",
-        "severity": "non-blocking"
-      },
-      {
-        "evidence": "The download in _download() streams the archive without a content-length cap before verifying SHA-256. Because the URL is a pinned immutable GitHub release and the digest is verified before any install, the worst case is bounded build-time disk usage; a size cap or redirect policy check is suggested hardening, not a current safety defect.",
-        "id": "FND-6",
-        "resolution": "unresolved",
-        "severity": "non-blocking"
-      },
-      {
-        "evidence": "The in-sandbox dispatch requires the pinned binary to be self-contained or depend only on the sandbox-mounted prefixes (/usr,/bin,/lib,/lib64,/etc,/proc,/dev). The pinned asset is a compiled release and the mount coverage is in place, but this is provable only on the target image; the deploy smoke step should confirm the first sandboxed dispatch before production use. Fail-closed if the binary cannot exec.",
-        "id": "FND-7",
-        "resolution": "unresolved",
-        "severity": "non-blocking"
-      }
+      {"id":"FND-1","severity":"blocking","resolution":"resolved","evidence":"Railway rejects bubblewrap namespace creation. The candidate replaces only that unavailable kernel isolation step with a strict fail-closed argv shim while preserving the isolated attempt clone and trusted parent publication boundary."},
+      {"id":"FND-2","severity":"blocking","resolution":"resolved","evidence":"Provider credential exposure is blocked: GitHub push credentials, governance/runtime authority variables, HUNTER_PROMPT_* and GIT_* values are removed before OpenCode starts."},
+      {"id":"FND-3","severity":"blocking","resolution":"resolved","evidence":"Capability escape is blocked by OPENCODE_CONFIG_CONTENT with `* = deny` and an allowlist limited to read/edit/glob/grep/LSP, plus `--pure` and Claude-plugin disablement."},
+      {"id":"FND-4","severity":"non-blocking","resolution":"unresolved","evidence":"This application-level sandbox is intentionally weaker than an OS namespace boundary; final deployed #441 validation must confirm OpenCode honors the pinned permission contract on Railway before #437 is re-authorized."}
     ],
     "issue": "441",
     "review_target": [
-      {
-        "blob_sha": "fd4eb29c9d6ec9b77255df012eefaa3a4bd34418",
-        "path": "scripts/install_opencode_runtime.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "bc9a47af6f752e94f7cc98c2e11dd1a1fc9fa5de",
-        "path": "tests/test_install_opencode_runtime.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "6f138aee2e0f6a62083b1988fe8752123269979a",
-        "path": "tests/test_opencode_provider_runtime_sandbox.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "a7469a66171f09d81c58a58e9d47f5aa8e564655",
-        "path": "railway.toml",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "9897801682060cdca713bb20e73ae7cf23d2c8bd",
-        "path": "scripts/railway_issuer_startup.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "b31cac0248514baff729c78ad109d72f588816d8",
-        "path": "src/hunter/automation/opencode_provider_runtime.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "ed6c497f319de25658a3fe1ad6a0f2004e314429",
-        "path": "tests/test_railway_issuer_startup.py",
-        "previous_path": "",
-        "status": "modified"
-      }
+      {"blob_sha":"5cb8a502f010c90122e0630d411a0ddabb246ca9","path":"src/hunter/automation/railway_opencode_permission_sandbox.py","previous_path":"","status":"added"},
+      {"blob_sha":"63a9546e67be7cb9b48efe38939c9ce4caddd47a","path":"tests/test_railway_opencode_permission_sandbox.py","previous_path":"","status":"added"}
     ],
-    "review_target_digest": "2c20717baf65dd2edb439e6e1a0c2dddc00b3037ba703e0e2701a0ea3338ee35"
+    "review_target_digest": "289bf63775f3d9b66e367172ff4603a32808b354f4270fd002ed9cfde861d280"
   },
-  "review_id": "04884b5864940f5bb03218ea61ca66a442a7ca24636ef3643aa527a4623e055b",
-  "schema": "hunter.pre-ready-hostile-review.v1"
+  "review_id": "61baac246db852dba024a442ab3b2d87bccd304870c323490abe6c986d3b35ee"
 }
