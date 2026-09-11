@@ -24,6 +24,8 @@ _EXECUTABLE_ENV = "HUNTER_OPENCODE_EXECUTABLE"
 _MODEL_ENV = "HUNTER_OPENCODE_MODEL"
 _PUSH_TOKEN_ENV = "HUNTER_AGENT_GITHUB_PUSH_TOKEN"
 _SANDBOX_EXECUTABLE_ENV = "HUNTER_OPENCODE_SANDBOX_EXECUTABLE"
+_RAILWAY_ENV = "RAILWAY_ENVIRONMENT"
+_RAILWAY_SANDBOX_MODULE = "hunter.automation.railway_opencode_permission_sandbox"
 _REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 _PUBLICATION_CREDENTIAL_ENV = {
     _PUSH_TOKEN_ENV,
@@ -199,16 +201,36 @@ def _sandbox_executable_path(executable: str, sandbox: Path, credential_home: Pa
     return in_sandbox, ["--dir", _SANDBOX_EXECUTABLE_MOUNT, "--ro-bind", executable, in_sandbox]
 
 
-def _sandbox_command(executable: str, argv: list[str], sandbox: Path, credential_home: Path) -> list[str]:
-    sandbox_executable_name = os.environ.get(_SANDBOX_EXECUTABLE_ENV, "bwrap").strip() or "bwrap"
-    sandbox_executable = shutil.which(sandbox_executable_name)
+def _sandbox_launcher() -> list[str]:
+    """Resolve the trusted filesystem-isolation launcher for this runtime.
+
+    An explicit operator override always wins and must resolve to an executable.
+    Railway containers cannot create the namespaces bubblewrap requires, so when
+    Railway's own runtime marker is present and no override was supplied, execute
+    the repository-owned permission sandbox as a Python module. Other runtimes
+    retain the canonical bubblewrap default.
+    """
+    configured = os.environ.get(_SANDBOX_EXECUTABLE_ENV, "").strip()
+    if configured:
+        sandbox_executable = shutil.which(configured)
+        if sandbox_executable is None:
+            raise ProviderAdapterError("filesystem sandbox executable is unavailable")
+        return [sandbox_executable]
+
+    if os.environ.get(_RAILWAY_ENV, "").strip():
+        return [sys.executable, "-m", _RAILWAY_SANDBOX_MODULE]
+
+    sandbox_executable = shutil.which("bwrap")
     if sandbox_executable is None:
         raise ProviderAdapterError("filesystem sandbox executable is unavailable")
+    return [sandbox_executable]
 
+
+def _sandbox_command(executable: str, argv: list[str], sandbox: Path, credential_home: Path) -> list[str]:
     in_sandbox_executable, executable_mount = _sandbox_executable_path(executable, sandbox, credential_home)
 
     command = [
-        sandbox_executable,
+        *_sandbox_launcher(),
         "--die-with-parent",
         "--new-session",
         "--unshare-pid",
