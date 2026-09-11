@@ -3,7 +3,7 @@
     "acceptance_criteria": [
       {
         "criterion": "Trusted issuer edge is deployed/reachable at a stable HTTPS URL.",
-        "evidence": "Not satisfied by this code-only candidate: reachability is produced by a Railway deployment/operator action, not by repository content. This candidate installs the runtime the issuer edge needs but performs no deployment, and autonomous deployment is independently out of scope for Issue #441. The hosted Trusted Candidate Preflight validates the candidate head; endpoint reachability is verified separately against the deployed Service.",
+        "evidence": "Not satisfied by this code-only candidate: reachability is produced by a Railway deployment/operator action, not by repository content. This candidate installs the runtime the issuer edge needs and makes it dispatchable both inside the governed sandbox and from the deployed image, but performs no deployment, and autonomous deployment is independently out of scope for Issue #441. The hosted Trusted Candidate Preflight validates the candidate head; endpoint reachability is verified separately against the deployed Service.",
         "id": "AC-1",
         "verdict": "not-applicable"
       },
@@ -15,7 +15,7 @@
       },
       {
         "criterion": "Required issuer verification/runtime configuration is present without committing secrets.",
-        "evidence": "railway.toml [build] buildCommand pins the immutable, checksum-verified OpenCode runtime: `python -m pip install . --target /app/vendor && python scripts/install_opencode_runtime.py --destination /app/bin/opencode`. install_opencode_runtime.py verifies platform, streams the pinned v1.18.30 asset, verifies its SHA-256 before extraction, extracts exactly one `opencode` regular member atomically with mode 0755, and exits 2 without installing on any failure. No secret appears anywhere in the candidate.",
+        "evidence": "railway.toml [build] buildCommand pins the immutable, checksum-verified OpenCode runtime: `python -m pip install . --target /app/vendor && python scripts/install_opencode_runtime.py --destination /app/bin/opencode`. install_opencode_runtime.py verifies platform, streams the pinned v1.18.30 asset, verifies its SHA-256 before extraction, extracts exactly one `opencode` regular member atomically with mode 0755, and exits 2 without installing on any failure. The adapter ro-binds the host-resolved binary into the sandbox at /opt/hunter/bin/opencode so the pinned runtime is actually visible to sandboxed dispatch, and railway_issuer_startup.py exposes the pip --target directory (/app/vendor) on the runtime import path so hunter.* imports at startup. No secret appears anywhere in the candidate.",
         "id": "AC-3",
         "verdict": "satisfied"
       },
@@ -27,19 +27,19 @@
       },
       {
         "criterion": "Missing/invalid authorization or endpoint configuration still fails closed.",
-        "evidence": "The candidate introduces no authorization or endpoint mutation and adds no permissive default. The new runtime bootstrap it adds fails closed on its own surface: an unreachable pinned release, a SHA-256 mismatch, a missing/unexpected archive member, or an unsupported platform aborts the build with exit 2 and installs nothing, so a broken runtime configuration cannot be silently accepted.",
+        "evidence": "The candidate introduces no authorization or endpoint mutation and adds no permissive default. The new runtime bootstrap it adds fails closed on its own surface: an unreachable pinned release, a SHA-256 mismatch, a missing/unexpected archive member, or an unsupported platform aborts the build with exit 2 and installs nothing. The two P1 fixes preserve fail-closed behaviour: an executable that cannot be resolved on the host aborts dispatch with 'OpenCode executable is unavailable'; the sandbox binds exactly the one read-only file the operator configured and nothing else; and a missing vendor directory is a silent no-op that leaves the subsequent bootstrap import to fail closed before the issuer starts.",
         "id": "AC-5",
         "verdict": "satisfied"
       },
       {
         "criterion": "No autonomous merge/deploy side effect occurs from the validation event.",
-        "evidence": "The candidate changes only the Railway [build] buildCommand and the installer; both execute at deploy build time and cannot autonomously merge, push, or mutatingly deploy. The start command remains the existing idempotent volume-aware startup seam and is not altered to add any autonomous action.",
+        "evidence": "The candidate changes only the Railway [build] buildCommand, the pinned runtime installer, the sandbox dispatch command construction, and the startup seam's import-path setup; all execute at deploy build time or inside the already-isolated provider sandbox and cannot autonomously merge, push, or mutatingly deploy. The start command remains the existing idempotent volume-aware startup seam; the P1 fixes only make that seam importable and the sandboxed runtime dispatchable, adding no autonomous action.",
         "id": "AC-6",
         "verdict": "satisfied"
       },
       {
         "criterion": "Issue #437 can then be re-authorized through the canonical governed trigger.",
-        "evidence": "Not satisfied by this code-only candidate: re-authorizing Issue #437 is an operator-run follow-up performed once the issuer edge is operational. This candidate provides a prerequisite runtime but no trigger/issuer code path, so it cannot by itself re-authorize #437.",
+        "evidence": "Not satisfied by this code-only candidate: re-authorizing Issue #437 is an operator-run follow-up performed once the issuer edge is operational. This candidate provides a prerequisite runtime and its dispatchability but no trigger/issuer code path, so it cannot by itself re-authorize #437.",
         "id": "AC-7",
         "verdict": "not-applicable"
       }
@@ -61,12 +61,42 @@
     "base_sha": "8fa1e5dc1238058de5f4ec64bd5894a855fc0a48",
     "defect_families": [
       {
-        "evidence": "The changed paths are a build-time installer, its tests, and railway.toml; no authorization, ledger, signing, or replay surface is modified, so no valid proof can be re-aimed at a different target through this candidate.",
+        "evidence": "The src/hunter/ delta is confined to sandbox executable path remapping and read-only single-file binding; no timestamp reaches or influences an admission, ordering, or cutoff decision, and no new timestamp is introduced. The module's existing UTC-now cutoff usage in _exact_prompt is pre-existing and unchanged by this candidate.",
+        "family": "DFF-001",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "The src/hunter/ delta introduces no validate-then-write sequence: the sandbox command builder only reads host state (env, which, filesystem existence) and emits a bwrap argv; the startup seam mutates only sys.path and a process-local env copy. No repository or persistence write can drift from a validating read.",
+        "family": "DFF-002",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "The changed code assigns no durable identity from a caller payload: the in-sandbox executable name derives from the final host path basename of an operator-configured binary and the mount point constant /opt/hunter/bin; the vendor path derives from a configured directory; neither can displace a caller-assigned identity in any persisted record.",
+        "family": "DFF-003",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Authority resolution surfaces are unchanged; the new branches fail closed: a host-unresolvable executable returns None from which() and aborts dispatch, and _runtime_vendor_dir returns None (a no-op) when the configured directory is absent, so no incomplete declaration is read as a permissive default.",
+        "family": "DFF-004",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "The candidate adds no durable write surface: the fix writes only the read-only sandbox bind of a single configured binary and process-local sys.path/environment mutation; no governed exclusion can be defeated through a secondary carrying surface.",
+        "family": "DFF-005",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "No ordering or clock guarantee is introduced or altered: sandbox remapping and vendor-path insertion are deterministic over host state and do not depend on wall-clock or restart ordering; the startup seam's idempotent bootstrap contract is unchanged.",
+        "family": "DFF-006",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "The changed paths are the pinned runtime installer, its tests, railway.toml, the sandbox dispatch helper, and the startup seam's import-path setup; no authorization, ledger, signing, or replay surface is modified, so no valid proof can be re-aimed at a different target through this candidate.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "install_opencode_runtime.py verifies the SHA-256 of the downloaded archive before extraction and fails closed on any mismatch, unsupported platform, or unexpected/multiple archive members; no evidence artifact reader or forger surface is added.",
+        "evidence": "install_opencode_runtime.py verifies the SHA-256 of the downloaded archive before extraction and fails closed on any mismatch, unsupported platform, or unexpected/multiple archive members; the sandbox ro-binds only the exact host-resolved file the operator configured; no evidence artifact reader or forger surface is added.",
         "family": "DFF-008",
         "outcome": "clear"
       },
@@ -81,7 +111,7 @@
         "outcome": "clear"
       },
       {
-        "evidence": "The reconstructed range is a single implementation commit rooted at current main plus the exact-head review commit, both pushed in one governed push; no stranding intermediate commit is presented as evidence.",
+        "evidence": "The reconstructed range is a sequence of implementation commits rooted at current main plus the exact-head review commit, pushed in one governed push; no stranding intermediate commit is presented as evidence.",
         "family": "DFF-011",
         "outcome": "clear"
       },
@@ -101,7 +131,7 @@
         "outcome": "clear"
       },
       {
-        "evidence": "Each acceptance-criterion verdict and family outcome is substantiated by the installer's fail-closed control flow, the pinned immutable release constants, and the three passing tests; no prevented class is claimed without matching evidence.",
+        "evidence": "Each acceptance-criterion verdict and family outcome is substantiated by the installer's fail-closed control flow, the pinned immutable release constants, the sandbox bind construction, and the focused regression tests; no prevented class is claimed without matching evidence.",
         "family": "DFF-015",
         "outcome": "clear"
       },
@@ -111,7 +141,7 @@
         "outcome": "clear"
       },
       {
-        "evidence": "install_opencode_runtime.py is invoked from the Railway [build] buildCommand (deploy build time), not from a preDeploy bootstrap, so it never mounts or accesses the /data volume; it writes only the pinned binary under /app/bin. The idempotent volume-aware startup seam (railway_issuer_startup.py) and its signing-key scrub are untouched.",
+        "evidence": "install_opencode_runtime.py is invoked from the Railway [build] buildCommand (deploy build time), not from a preDeploy bootstrap, so it never mounts or accesses the /data volume; it writes only the pinned binary under /app/bin. The startup seam (railway_issuer_startup.py) now also exposes the runtime vendor dir on the import path before its lazy bootstrap import, then keeps the volume-aware check, signing-key scrub, and issuer exec sequencing unchanged.",
         "family": "DFF-019",
         "outcome": "clear"
       }
@@ -124,27 +154,39 @@
         "severity": "blocking"
       },
       {
-        "evidence": "Atomic, standalone installation: the extracted binary must not be partially installed or left executable mid-write. Verified: extraction writes only the single `opencode` regular member to a .tmp sibling then os.replace(); chmod 0o755 is applied before replace, and no archive path is ever traversed (only the matched member is read), so no foreign artifact or partial binary survives.",
+        "evidence": "Atomic, standalone installation: the extracted binary must not be partially installed or left executable mid-write. Verified: extraction writes only the single `opencode` regular member to a .tmp sibling then os.replace(); chmod 0o755 is applied before replace, and no archive path is ever traversed, so no foreign artifact or partial binary survives.",
         "id": "FND-2",
         "resolution": "resolved",
         "severity": "blocking"
       },
       {
-        "evidence": "Runtime discoverability of the installed binary is an operator wiring concern surfaced by the hostile pass. The governed adapter resolves the OpenCode executable via HUNTER_OPENCODE_EXECUTABLE (default \"opencode\") through PATH lookup; the installer installs to /app/bin/opencode. If the RAILPACK runtime PATH does not include /app/bin and the operator does not set HUNTER_OPENCODE_EXECUTABLE=/app/bin/opencode, the first OpenCode dispatch will fail closed with 'OpenCode executable is unavailable'. Fail-closed, so this is not unsafe, but the runbook must document the provisioning step before the first OpenCode dispatch.",
+        "evidence": "Sandbox visibility of the pinned runtime (P1 #1): the adapter previously exec'd the host path inside the bwrap sandbox, which mounts /usr,/bin,/lib,/lib64,/etc but not /app, so a host-resolved /app/bin/opencode was invisible to dispatch. Verified resolved: _sandbox_executable_path remaps executables that live under the sandbox or credential home, reuses any executable already under a mounted system path, and otherwise ro-binds exactly the one resolved file read-only into the dedicated /opt/hunter/bin mount point; _sandbox_command execs the in-sandbox path. Five focused regression tests pin the mount construction, the reuse branches, and the final argv.",
         "id": "FND-3",
-        "resolution": "unresolved",
+        "resolution": "resolved",
         "severity": "non-blocking"
       },
       {
-        "evidence": "The download in _download() streams the archive without a content-length cap before verifying SHA-256. Because the URL is a pinned immutable GitHub release and the digest is verified before any install, the worst case is bounded build-time disk usage; a size cap or redirect policy check is suggested hardening, not a current safety defect.",
+        "evidence": "Host-side provisioning of the runtime (runbook): on the deployed image the pinned binary lives at /app/bin/opencode and the adapter resolves it via HUNTER_OPENCODE_EXECUTABLE (default 'opencode') through PATH lookup. If the operator does not set HUNTER_OPENCODE_EXECUTABLE=/app/bin/opencode or add /app/bin to PATH, the first dispatch fails closed with 'OpenCode executable is unavailable'. Safe because fail-closed, but the deployment runbook must record the provisioning step before first dispatch.",
         "id": "FND-4",
         "resolution": "unresolved",
         "severity": "non-blocking"
       },
       {
-        "evidence": "Tests cover single-member extraction success, fail-closed behavior for a missing/unexpected member, and the immutability/checksum-pin invariants over the pinned constants (v1.18.30, 64-hex SHA-256). The network download path and the platform gate are not unit-tested because they are OS/network dependent; the tested extraction contract exercises the same OpenCodeInstallError fail-closed path as the download gate.",
+        "evidence": "Railway vendor import path (P1 #2): railway.toml installs Hunter via `pip install . --target /app/vendor`, which is not on the interpreter's default import path. Verified resolved: _ensure_runtime_import_paths() inserts the configured vendor dir (default /app/vendor, override HUNTER_RUNTIME_VENDOR_DIR) at the front of sys.path before the lazy bootstrap import and exports the merged PYTHONPATH so the exec'd issuer child inherits it; absent dir is a no-op followed by fail-closed bootstrap. Three focused regression tests pin the prepend, the no-op, and a vendor module import.",
         "id": "FND-5",
         "resolution": "resolved",
+        "severity": "non-blocking"
+      },
+      {
+        "evidence": "The download in _download() streams the archive without a content-length cap before verifying SHA-256. Because the URL is a pinned immutable GitHub release and the digest is verified before any install, the worst case is bounded build-time disk usage; a size cap or redirect policy check is suggested hardening, not a current safety defect.",
+        "id": "FND-6",
+        "resolution": "unresolved",
+        "severity": "non-blocking"
+      },
+      {
+        "evidence": "The in-sandbox dispatch requires the pinned binary to be self-contained or depend only on the sandbox-mounted prefixes (/usr,/bin,/lib,/lib64,/etc,/proc,/dev). The pinned asset is a compiled release and the mount coverage is in place, but this is provable only on the target image; the deploy smoke step should confirm the first sandboxed dispatch before production use. Fail-closed if the binary cannot exec.",
+        "id": "FND-7",
+        "resolution": "unresolved",
         "severity": "non-blocking"
       }
     ],
@@ -163,14 +205,38 @@
         "status": "added"
       },
       {
+        "blob_sha": "6f138aee2e0f6a62083b1988fe8752123269979a",
+        "path": "tests/test_opencode_provider_runtime_sandbox.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
         "blob_sha": "a7469a66171f09d81c58a58e9d47f5aa8e564655",
         "path": "railway.toml",
         "previous_path": "",
         "status": "modified"
+      },
+      {
+        "blob_sha": "9897801682060cdca713bb20e73ae7cf23d2c8bd",
+        "path": "scripts/railway_issuer_startup.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "b31cac0248514baff729c78ad109d72f588816d8",
+        "path": "src/hunter/automation/opencode_provider_runtime.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "ed6c497f319de25658a3fe1ad6a0f2004e314429",
+        "path": "tests/test_railway_issuer_startup.py",
+        "previous_path": "",
+        "status": "modified"
       }
     ],
-    "review_target_digest": "3db85cf7cfd2e3d7a54c9ee371a616dfbddef911fe43286d117cb47103b418b3"
+    "review_target_digest": "2c20717baf65dd2edb439e6e1a0c2dddc00b3037ba703e0e2701a0ea3338ee35"
   },
-  "review_id": "85d8a36147943ea8122c582f406de54508aeac4037735b7a6655795c640deba0",
+  "review_id": "04884b5864940f5bb03218ea61ca66a442a7ca24636ef3643aa527a4623e055b",
   "schema": "hunter.pre-ready-hostile-review.v1"
 }
