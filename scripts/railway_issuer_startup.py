@@ -58,10 +58,48 @@ _SCRIPTS_DIR = Path(__file__).resolve().parent
 
 _SIGNING_KEY_ENV = "HUNTER_SOURCE_HANDLING_SIGNING_KEY"
 _EVIDENCE_DB_ENV = "HUNTER_ISSUE_AGENT_EVIDENCE_DB"
+_RUNTIME_VENDOR_DIR_ENV = "HUNTER_RUNTIME_VENDOR_DIR"
+_DEFAULT_VENDOR_DIR = "/app/vendor"
 
 _PROVENANCE_RESOLVER = "hunter.evidence_intelligence.source_handling_provenance.production_provenance_resolver"
 
 logger = logging.getLogger("railway_issuer_startup")
+
+
+def _runtime_vendor_dir() -> Path | None:
+    """Return the configured pip ``--target`` install dir when it exists.
+
+    The Railway build installs Hunter into ``/app/vendor`` (``pip install . --
+    target /app/vendor``), so the deployed image does not carry Hunter in the
+    interpreter's default site-packages.  The start command must make that
+    directory importable both for this seam and for the issuer process it
+    ``exec``s.
+    """
+    configured = os.environ.get(_RUNTIME_VENDOR_DIR_ENV, _DEFAULT_VENDOR_DIR).strip()
+    if not configured:
+        return None
+    vendor = Path(configured)
+    return vendor if vendor.is_dir() else None
+
+
+def _ensure_runtime_import_paths() -> None:
+    """Expose the Railway runtime install dir to this process and its issuer child.
+
+    The module-freezing import of ``bootstrap_source_handling_authority`` (and
+    the ``hunter`` package it imports) happens lazily in the seam, while the
+    issuer is ``exec``ed into a fresh interpreter.  Both need the pip
+    ``--target`` directory on the import path: this process via ``sys.path``
+    and the child via an exported ``PYTHONPATH``.
+    """
+    vendor = _runtime_vendor_dir()
+    if vendor is None:
+        return
+    vendor_path = str(vendor)
+    if vendor_path not in sys.path:
+        sys.path.insert(0, vendor_path)
+    existing = os.environ.get("PYTHONPATH", "")
+    entries = [entry for entry in existing.split(os.pathsep) if entry and entry != vendor_path]
+    os.environ["PYTHONPATH"] = os.pathsep.join([vendor_path, *entries])
 
 
 def _import_bootstrap():  # type: ignore[no-untyped-def]
@@ -135,6 +173,8 @@ def main() -> int:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
         datefmt="%Y-%m-%dT%H:%M:%S%z",
     )
+
+    _ensure_runtime_import_paths()
 
     database = os.environ.get(_EVIDENCE_DB_ENV, "").strip()
     if not database:
