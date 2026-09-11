@@ -1,22 +1,28 @@
 # Repository-owned Railway configuration for the trusted Issue-agent issuer edge
-# (Issue #426, Issue #442).
+# (Issue #426, Issue #442, Issue #441).
 #
-# This file pins the issuer Service's build and start command.  The start
-# command is the repository-owned runtime startup seam that idempotently
-# bootstraps the persistent /data volume before launching the issuer, so a
-# fresh volume is always initialised at runtime and an already-bootstrapped
-# volume remains deterministic.  The bootstrap is the only code path that
-# may consume HUNTER_SOURCE_HANDLING_SIGNING_KEY; the long-running issuer
-# process starts with that variable removed from its environment.
+# This file pins the issuer Service's build and start command. The build installs
+# Hunter plus the immutable, checksum-verified OpenCode runtime used by the
+# governed OpenCode provider adapter. Railway service configuration must also
+# install the final-image runtime packages required by that adapter:
+# bubblewrap (bwrap), ripgrep, git, and ca-certificates.
+#
+# The start command is the repository-owned runtime startup seam that
+# idempotently bootstraps the persistent /data volume before launching the
+# issuer, so a fresh volume is always initialised at runtime and an
+# already-bootstrapped volume remains deterministic. The bootstrap is the only
+# code path that may consume HUNTER_SOURCE_HANDLING_SIGNING_KEY; the long-running
+# issuer process starts with that variable removed from its environment.
 #
 # The evidence database is mounted by Railway as a persistent Volume at /data,
 # with HUNTER_ISSUE_AGENT_EVIDENCE_DB expected to point at
-# /data/evidence.sqlite.  Volumes and secret/operator variables are applied from
+# /data/evidence.sqlite. Volumes and secret/operator variables are applied from
 # Railway's own Volume/Variable configuration (the railway.toml schema does not
 # carry them); see docs/ISSUE_AGENT_ISSUER_DEPLOYMENT.md "Option 3: Railway".
 
 [build]
 builder = "RAILPACK"
+buildCommand = "python -m pip install . --target /app/vendor && python scripts/install_opencode_runtime.py --destination /app/bin/opencode"
 
 [deploy]
 startCommand = "python scripts/railway_issuer_startup.py"
