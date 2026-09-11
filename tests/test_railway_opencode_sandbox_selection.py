@@ -1,42 +1,94 @@
 from __future__ import annotations
 
-import os
+import sys
 from pathlib import Path
-from unittest.mock import patch
 
-import railway_issuer_startup as startup
+import pytest
 
-ROOT = Path(__file__).resolve().parent.parent
-
-
-def test_startup_selects_repository_owned_railway_sandbox_by_default() -> None:
-    with patch.dict(os.environ, {}, clear=True):
-        startup._ensure_opencode_sandbox_executable()
-
-        assert os.environ["HUNTER_OPENCODE_SANDBOX_EXECUTABLE"] == "/app/bin/hunter-railway-opencode-sandbox"
+from hunter.automation import opencode_provider_runtime as runtime
 
 
-def test_startup_preserves_explicit_sandbox_override() -> None:
-    with patch.dict(
-        os.environ,
-        {"HUNTER_OPENCODE_SANDBOX_EXECUTABLE": "/custom/sandbox"},
-        clear=True,
-    ):
-        startup._ensure_opencode_sandbox_executable()
+def test_railway_runtime_selects_repository_permission_sandbox(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(runtime._SANDBOX_EXECUTABLE_ENV, raising=False)
+    monkeypatch.setenv(runtime._RAILWAY_ENV, "production")
+    monkeypatch.setattr(runtime.shutil, "which", lambda _name: None)
 
-        assert os.environ["HUNTER_OPENCODE_SANDBOX_EXECUTABLE"] == "/custom/sandbox"
+    assert runtime._sandbox_launcher() == [
+        sys.executable,
+        "-m",
+        "hunter.automation.railway_opencode_permission_sandbox",
+    ]
 
 
-def test_railway_build_installs_executable_sandbox_launcher() -> None:
-    config = (ROOT / "railway.toml").read_text(encoding="utf-8")
-
-    assert (
-        "install -m 0755 scripts/hunter_railway_opencode_sandbox " "/app/bin/hunter-railway-opencode-sandbox" in config
+def test_explicit_sandbox_override_wins_on_railway(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(runtime._RAILWAY_ENV, "production")
+    monkeypatch.setenv(runtime._SANDBOX_EXECUTABLE_ENV, "custom-sandbox")
+    monkeypatch.setattr(
+        runtime.shutil,
+        "which",
+        lambda name: "/opt/custom/sandbox" if name == "custom-sandbox" else None,
     )
 
+    assert runtime._sandbox_launcher() == ["/opt/custom/sandbox"]
 
-def test_launcher_executes_only_the_permission_sandbox_module() -> None:
-    launcher = (ROOT / "scripts/hunter_railway_opencode_sandbox").read_text(encoding="utf-8")
 
-    assert 'exec python -m hunter.automation.railway_opencode_permission_sandbox "$@"' in launcher
-    assert "HUNTER_RUNTIME_VENDOR_DIR:-/app/vendor" in launcher
+def test_explicit_missing_sandbox_fails_closed_on_railway(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(runtime._RAILWAY_ENV, "production")
+    monkeypatch.setenv(runtime._SANDBOX_EXECUTABLE_ENV, "missing-sandbox")
+    monkeypatch.setattr(runtime.shutil, "which", lambda _name: None)
+
+    with pytest.raises(runtime.ProviderAdapterError, match="filesystem sandbox executable is unavailable"):
+        runtime._sandbox_launcher()
+
+
+def test_non_railway_runtime_keeps_bubblewrap_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(runtime._SANDBOX_EXECUTABLE_ENV, raising=False)
+    monkeypatch.delenv(runtime._RAILWAY_ENV, raising=False)
+    monkeypatch.setattr(
+        runtime.shutil,
+        "which",
+        lambda name: "/usr/bin/bwrap" if name == "bwrap" else None,
+    )
+
+    assert runtime._sandbox_launcher() == ["/usr/bin/bwrap"]
+
+
+def test_railway_command_prefixes_bwrap_contract_with_python_module(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(runtime._SANDBOX_EXECUTABLE_ENV, raising=False)
+    monkeypatch.setenv(runtime._RAILWAY_ENV, "production")
+    sandbox = tmp_path / "hunter-opencode-attempt-1" / "repo"
+    credential_home = sandbox.parent / "credential-home"
+    sandbox.mkdir(parents=True)
+    credential_home.mkdir()
+
+    command = runtime._sandbox_command(
+        "/app/bin/opencode",
+        ["/app/bin/opencode", "run", "prompt"],
+        sandbox,
+        credential_home,
+    )
+
+    assert command[:3] == [
+        sys.executable,
+        "-m",
+        "hunter.automation.railway_opencode_permission_sandbox",
+    ]
+    assert command[3:8] == [
+        "--die-with-parent",
+        "--new-session",
+        "--unshare-pid",
+        "--unshare-ipc",
+        "--unshare-uts",
+    ]
+    assert command[-2:] == ["run", "prompt"]
