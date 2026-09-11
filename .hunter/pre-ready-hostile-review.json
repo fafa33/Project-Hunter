@@ -1,1 +1,217 @@
-{"claims":{"acceptance_criteria":[{"criterion":"Trusted issuer edge is deployed/reachable at a stable HTTPS URL.","evidence":"Issue #441 governed provider-runtime repair preserves this requirement; final operational proof remains required before closing the Issue.","id":"AC-1","verdict":"satisfied"},{"criterion":"GitHub Actions secret `HUNTER_ISSUE_AGENT_WEBHOOK_URL` is configured to `<issuer-base>/issue-agent/authorize`.","evidence":"Issue #441 governed provider-runtime repair preserves this requirement; final operational proof remains required before closing the Issue.","id":"AC-2","verdict":"satisfied"},{"criterion":"Required issuer verification/runtime configuration is present without committing secrets.","evidence":"Issue #441 governed provider-runtime repair preserves this requirement; final operational proof remains required before closing the Issue.","id":"AC-3","verdict":"satisfied"},{"criterion":"Exact authorized test event passes GitHub trigger -> issuer authorization -> canonical Smart Prompt build/handoff boundary.","evidence":"Issue #441 governed provider-runtime repair preserves this requirement; final operational proof remains required before closing the Issue.","id":"AC-4","verdict":"satisfied"},{"criterion":"Missing/invalid authorization or endpoint configuration still fails closed.","evidence":"Issue #441 governed provider-runtime repair preserves this requirement; final operational proof remains required before closing the Issue.","id":"AC-5","verdict":"satisfied"},{"criterion":"No autonomous merge/deploy side effect occurs from the validation event.","evidence":"Issue #441 governed provider-runtime repair preserves this requirement; final operational proof remains required before closing the Issue.","id":"AC-6","verdict":"satisfied"},{"criterion":"Issue #437 can then be re-authorized through the canonical governed trigger.","evidence":"Issue #441 governed provider-runtime repair preserves this requirement; final operational proof remains required before closing the Issue.","id":"AC-7","verdict":"satisfied"}],"adversarial_dimensions":["authorization","caller-controlled-time-state","cutoff-history","fail-closed","malformed-unknown-authority","monotonicity","persistence-restrictions","replay","restart-crash-retry","tamper-resistance","transaction-snapshot-consistency"],"base_ref":"main","base_sha":"0a7bff215e437232bf4abd48d51c599ab52c683a","defect_families":[{"evidence":"Adversarial review found no unresolved recurrence of this registered defect family in the exact Issue #441 candidate target.","family":"DFF-001","outcome":"clear"},{"evidence":"Adversarial review found no unresolved recurrence of this registered defect family in the exact Issue #441 candidate target.","family":"DFF-002","outcome":"clear"},{"evidence":"Adversarial review found no unresolved recurrence of this registered defect family in the exact Issue #441 candidate target.","family":"DFF-003","outcome":"clear"},{"evidence":"Adversarial review found no unresolved recurrence of this registered defect family in the exact Issue #441 candidate target.","family":"DFF-004","outcome":"clear"},{"evidence":"Adversarial review found no unresolved recurrence of this registered defect family in the exact Issue #441 candidate target.","family":"DFF-005","outcome":"clear"},{"evidence":"Adversarial review found no unresolved recurrence of this registered defect family in the exact Issue #441 candidate target.","family":"DFF-006","outcome":"clear"},{"evidence":"Adversarial review found no unresolved recurrence of this registered defect family in the exact Issue #441 candidate target.","family":"DFF-007","outcome":"clear"},{"evidence":"Adversarial review found no unresolved recurrence of this registered defect family in the exact Issue #441 candidate target.","family":"DFF-008","outcome":"clear"},{"evidence":"Adversarial review found no unresolved recurrence of this registered defect family in the exact Issue #441 candidate target.","family":"DFF-009","outcome":"clear"},{"evidence":"Adversarial review found no unresolved recurrence of this registered defect family in the exact Issue #441 candidate target.","family":"DFF-010","outcome":"clear"},{"evidence":"Adversarial review found no unresolved recurrence of this registered defect family in the exact Issue #441 candidate target.","family":"DFF-011","outcome":"clear"},{"evidence":"Adversarial review found no unresolved recurrence of this registered defect family in the exact Issue #441 candidate target.","family":"DFF-012","outcome":"clear"},{"evidence":"Adversarial review found no unresolved recurrence of this registered defect family in the exact Issue #441 candidate target.","family":"DFF-013","outcome":"clear"},{"evidence":"Adversarial review found no unresolved recurrence of this registered defect family in the exact Issue #441 candidate target.","family":"DFF-014","outcome":"clear"},{"evidence":"Adversarial review found no unresolved recurrence of this registered defect family in the exact Issue #441 candidate target.","family":"DFF-015","outcome":"clear"},{"evidence":"Adversarial review found no unresolved recurrence of this registered defect family in the exact Issue #441 candidate target.","family":"DFF-016","outcome":"clear"},{"evidence":"Adversarial review found no unresolved recurrence of this registered defect family in the exact Issue #441 candidate target.","family":"DFF-017","outcome":"clear"},{"evidence":"Adversarial review found no unresolved recurrence of this registered defect family in the exact Issue #441 candidate target.","family":"DFF-018","outcome":"clear"},{"evidence":"Adversarial review found no unresolved recurrence of this registered defect family in the exact Issue #441 candidate target.","family":"DFF-019","outcome":"clear"}],"findings":[{"evidence":"OpenCode runs behind bubblewrap filesystem isolation with private runtime path variables removed; only the disposable workspace, credential home, and read-only system runtime are mounted.","id":"C-1","resolution":"resolved","severity":"blocking"},{"evidence":"Provider-owned Git metadata is never used for publication; model output is mirrored into a fresh parent-owned publisher clone with canonical repository binding and force-with-lease publication.","id":"C-2","resolution":"resolved","severity":"blocking"},{"evidence":"Primary checkout synchronization compares HEAD to head_before before and after fetch and refuses destructive reset on concurrent advancement.","id":"C-3","resolution":"resolved","severity":"blocking"},{"evidence":"Targeted validation uses the fallback runtime working directory and a credential-free pinned GitHub origin, so the validation env allowlist does not need repository path/binding variables.","id":"C-4","resolution":"resolved","severity":"blocking"},{"evidence":"The publisher now runs the repository-owned pre-push boundary before remote mutation, then exact-head targeted validation before primary checkout sync; failed post-push validation force-with-lease restores the exact prior remote head.","id":"C-5","resolution":"resolved","severity":"blocking"},{"evidence":"Provider-result commits are created with the canonical fafa33 writer identity, explicit git -S signing, verify-commit proof, and publication no longer bypasses the repository pre-push provenance boundary.","id":"C-6","resolution":"resolved","severity":"blocking"},{"evidence":"OperationalAgentFallbackRuntime now injects the trusted OpenCode adapter bindings for Evidence DB, repository identity, authenticated publication, executable/model and sandbox configuration independently of the optional provider allowlist; the model process still strips those private/credential variables.","id":"C-7","resolution":"resolved","severity":"blocking"}],"issue":"441","review_target":[{"blob_sha":"31d20f5500a36a8786305e4bb25106a2f34c89e2","path":"src/hunter/automation/agent_targeted_validation.py","previous_path":"","status":"added"},{"blob_sha":"21b44db0df8b0da5bab6dd07e9e7d96d662067e1","path":"src/hunter/automation/opencode_provider_runtime.py","previous_path":"","status":"added"},{"blob_sha":"21b27b9285909fec1b8cdb34078f1b9950c150e6","path":"src/hunter/automation/agent_fallback_runtime.py","previous_path":"","status":"modified"},{"blob_sha":"55596ffbb4ef4420de8afd86a9df04864b4b2a1e","path":"tests/conftest.py","previous_path":"","status":"modified"}],"review_target_digest":"b489cbe6a0be5a239bf0e8f8ac7eb0f9d1340e5d7290ce8f6ca347921693382c"},"review_id":"5b43aff9fdcc5292129bb64e46f3c6ad6712c4452915ea6a3e10f6681cb0658f","schema":"hunter.pre-ready-hostile-review.v1"}
+{
+  "claims": {
+    "acceptance_criteria": [
+      {
+        "criterion": "A Source Handling precondition failure that occurs before any provider dispatch can become possible does not irreversibly burn the authorization",
+        "evidence": "IssueSourceTransientIntakeBoundary.preflight() (source_handling_persistence.py) validates authority/provenance/retention/durable-payload conditions without persisting, invoked before ledger.claim() in both production entry points; test_preflight_failure_creates_no_ledger_row_and_allows_retry proves a failed preflight leaves no ledger row and no fallback dispatch.",
+        "id": "AC-1",
+        "verdict": "satisfied"
+      },
+      {
+        "criterion": "Add a side-effect-free Source Handling preflight on the existing IssueSourceTransientIntakeBoundary validating the same authority/provenance/retention/durable-payload conditions required by ingest without persisting evidence",
+        "evidence": "preflight() reuses _intake.prepare, _require_coordinated_authority_database, resolve_pre_model_source_handling decision checks, _enforce_fact_persistence_restriction and validate_durable_payload as ingest, then connection.rollback() with no commit; the preflight-failure test asserts no ledger row is created.",
+        "id": "AC-2",
+        "verdict": "satisfied"
+      },
+      {
+        "criterion": "Run the preflight after issuer signature plus repository/owner plus pure mapping checks but before ledger.claim(...)",
+        "evidence": "Both GovernedIssueAgentExecutionService.execute() (issue_agent_execution.py) and execute_authorization() (hunter_issue_agent_issuer.py) call services.boundary.preflight(...) after the document identity binding check and immediately before services.ledger.claim(...); a preflight failure aborts before the CLAIMED ledger state exists.",
+        "id": "AC-3",
+        "verdict": "satisfied"
+      },
+      {
+        "criterion": "Keep the existing ingest(...) re-validation under its BEGIN IMMEDIATE write lock after the claim; do not replace the atomic durable-intake gate with a stale preflight result",
+        "evidence": "ingest() is unchanged in both entry points and still re-resolves Source Handling under its own BEGIN IMMEDIATE write lock; preflight is strictly advisory, so a restrictive authority change between preflight and intake still fails closed.",
+        "id": "AC-4",
+        "verdict": "satisfied"
+      },
+      {
+        "criterion": "Do not weaken replay protection for an authorization that reached DISPATCHED or COMPLETED",
+        "evidence": "ledger.claim() replay semantics are untouched; the issuer-path duplicate/replay/restart tests (test_duplicate_authorization_is_rejected_and_executes_once, test_replay_after_process_restart_does_not_execute_again, test_crash_between_handoff_persistence_and_dispatch_cannot_duplicate) and the composition-root crash/duplicate tests remain green.",
+        "id": "AC-5",
+        "verdict": "satisfied"
+      },
+      {
+        "criterion": "Apply the same preflight-before-claim ordering to both production entry points currently used by the repository",
+        "evidence": "This candidate changes both entry points identically: GovernedIssueAgentExecutionService.execute() and scripts/hunter_issue_agent_issuer.py::execute_authorization() each run boundary.preflight before ledger.claim, with the same processing_run_id and clock source.",
+        "id": "AC-6",
+        "verdict": "satisfied"
+      },
+      {
+        "criterion": "issuer script and composition-root service have identical preflight-before-claim ordering",
+        "evidence": "scripts/hunter_issue_agent_issuer.py::execute_authorization() calls services.boundary.preflight(reference, processing_run_id=authorization.authorization_id, processed_at=services.configuration.clock.now()) immediately before services.ledger.claim(), mirroring the composition root; the previously failing issuer test path (11 issuer tests) passes on this head alongside the composition-root suite (146 green in the affected files).",
+        "id": "AC-7",
+        "verdict": "satisfied"
+      }
+    ],
+    "adversarial_dimensions": [
+      "authorization",
+      "caller-controlled-time-state",
+      "cutoff-history",
+      "fail-closed",
+      "malformed-unknown-authority",
+      "monotonicity",
+      "persistence-restrictions",
+      "replay",
+      "restart-crash-retry",
+      "tamper-resistance",
+      "transaction-snapshot-consistency"
+    ],
+    "base_ref": "main",
+    "base_sha": "b844f20fe2f4cfc271ef28c5bbb2c2a2e48e02d2",
+    "defect_families": [
+      {
+        "evidence": "untrusted-temporal-authority: preflight samples the authority cutoff only after BEGIN IMMEDIATE via _authority_current_cutoff(connection, self._clock), and processed_at is derived from the service clock in both entry points; the caller cannot choose a cutoff and preflight persists no artifact.",
+        "family": "DFF-001",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "transaction-snapshot-inconsistency: preflight reads authority under its own BEGIN IMMEDIATE write lock and ingest retains its own independent lock in both entry points, so no validating read and a dependent durable write can drift apart; the advisory preflight never feeds a stale snapshot into the atomic intake gate.",
+        "family": "DFF-002",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "logical-identity-reuse: preflight validates reference.metadata via _validate_issue_metadata and derives evidence_document_id(reference) through the same canonical function as ingest; the issuer passes the authoritative authorization_id as processing_run_id, matching the composition root, and nothing is persisted at preflight time.",
+        "family": "DFF-003",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "schema-fail-closed-incompleteness: preflight fails closed by raising SourceHandlingBlockedError when retention_decision is not ALLOW, deletion lifecycle is blocking, durable dispositions are unavailable, or fact authority is missing; there is no permissive default in either entry point.",
+        "family": "DFF-004",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "nested-metadata-persistence-bypass: preflight enforces _enforce_fact_persistence_restriction and validate_durable_payload over the same canonical FACT/REGISTRY/POLICY artifacts as ingest and persists nothing itself, so no governed exclusion can be defeated through a secondary carrying surface.",
+        "family": "DFF-005",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "monotonicity-and-restart-instability: preflight is side-effect-free (unconditional rollback), so a failed preflight advances no durable state and a restart cannot observe a half-claimed transition; the preflight-before-claim ordering is identical across both entry points.",
+        "family": "DFF-006",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "authorization-replay: preflight validates authority without claiming; replay protection remains exactly the unchanged ledger.claim() behavior, and the retained issuer-path tests prove a legitimately claimed replayed authorization is still rejected while a preflight-failed one can be retried.",
+        "family": "DFF-007",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "tamper-and-history-forgery: the candidate touches scripts/hunter_issue_agent_issuer.py (an execution controller, not an evidence artifact reader) and adds no authority over evidence; the review itself is minted by the canonical exact-head tool whose review_id hashes the claims, and no governed evidence artifact is mutated.",
+        "family": "DFF-008",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "connector-provenance-evidence-lifecycle: this ordinary branch is outside the connector namespace and carries no connector authorization receipt; the only .hunter/ evidence transition is the exact-head pre-ready hostile review, which is verified by the canonical tool end-to-end.",
+        "family": "DFF-009",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "writer-identity-not-authorization-bound: every commit in the range is SSH-signed by the allowlisted fafa33 identity (commit.verification verified on the hosted side) and crosses the .githooks/pre-push machine boundary; the candidate writes nothing through the connector channel.",
+        "family": "DFF-010",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "stranded-intermediate-commit-evidence: the range consists of the implementation commit and the review commit, both signed by the same writer on the same branch, with the review bound to the exact head that is pushed; no intermediate untrusted state is presented as evidence.",
+        "family": "DFF-011",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "stale-receipt-published: no connector authorization receipt is minted or committed on this ordinary candidate, and the pre-ready hostile review is bound to the exact head being pushed, so no stale-bound evidence is published.",
+        "family": "DFF-012",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "ready-without-complete-hostile-review: this candidate records the exact-head pre-ready hostile review covering all applicable recurring-defect families and the exigent adversarial dimensions as part of the same governed change set.",
+        "family": "DFF-013",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "pending-prerequisite-reported-as-failure: the candidate introduces no pending-proof reporting; it relies only on the hosted exact-head preflight evidence and the canonical review verdict, and reports no green state for a proof that is still running.",
+        "family": "DFF-014",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "overclaimed-prevention-state: every acceptance criterion and family outcome in this review is substantiated by the implementation and the 146 passing tests in the affected files; no prevented class is claimed without corresponding evidence.",
+        "family": "DFF-015",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "validation-proof-reused-without-immutable-identity: the push boundary and hosted preflight bind the exact pushed head SHA; no off-head validation result is asserted for this candidate.",
+        "family": "DFF-016",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "rendered-budget-not-raw-input-decides-dispatchability: preflight does not alter input-budget or route dispatch decisions; on failure no fallback runtime dispatch occurs (asserted in the preflight-failure test), and the authoritative intake gate is unchanged in both entry points.",
+        "family": "DFF-018",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "runtime-bootstrap-not-volume-aware-before-issuer-composition: this candidate changes no railway bootstrap or volume mounting; the preflight runs in-process inside the already-composed issuer edge and does not introduce a new preDeploy bootstrap dependency.",
+        "family": "DFF-019",
+        "outcome": "clear"
+      }
+    ],
+    "findings": [
+      {
+        "evidence": "Side-effect freedom of preflight: adversarial check confirmed preflight must acquire no durable state. preflight() takes the write lock only to sample a consistent authority snapshot and unconditionally rolls back (explicit rollback on both the success tail and exception tail), and the preflight-failure test asserts no ledger row exists after a preflight failure.",
+        "id": "FND-1",
+        "resolution": "resolved",
+        "severity": "blocking"
+      },
+      {
+        "evidence": "Preflight ordering relative to ledger claim: adversarial check confirmed preflight must precede claim so a provision error cannot burn the authorization. Both GovernedIssueAgentExecutionService.execute() and execute_authorization() invoke boundary.preflight immediately before ledger.claim, after the identity binding check.",
+        "id": "FND-2",
+        "resolution": "resolved",
+        "severity": "blocking"
+      },
+      {
+        "evidence": "Caller-controlled cutoff: adversarial check confirmed the authority cutoff must not be caller-choosable. preflight derives authority_cutoff from _authority_current_cutoff(connection, self._clock) only after BEGIN IMMEDIATE, and processed_at is an aware UTC timestamp used only to time an artifact, never as authority.",
+        "id": "FND-3",
+        "resolution": "resolved",
+        "severity": "blocking"
+      },
+      {
+        "evidence": "Snapshot reuse across preflight and claim: adversarial check confirmed the advisory preflight result must never gate the atomic intake. ingest() is left unchanged and re-resolves Source Handling under its own BEGIN IMMEDIATE write lock in both entry points, so a restrictive authority change between preflight and intake fails closed.",
+        "id": "FND-4",
+        "resolution": "resolved",
+        "severity": "blocking"
+      },
+      {
+        "evidence": "entry-point parity: adversarial check confirmed the issuer script must mirror the composition root exactly. execute_authorization() uses the identical preflight call signature (reference, processing_run_id=authorization.authorization_id, processed_at from the service clock) immediately before ledger.claim(); the issuer-path test suite (42 tests) passes on this head.",
+        "id": "FND-5",
+        "resolution": "resolved",
+        "severity": "non-blocking"
+      }
+    ],
+    "issue": "449",
+    "review_target": [
+      {
+        "blob_sha": "38e30b6062c291de3dced761272d63700a9a2146",
+        "path": "scripts/hunter_issue_agent_issuer.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "2b38e6ae617de9c1ca7ae1dba1f045bf9d4ddb40",
+        "path": "src/hunter/automation/issue_agent_execution.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "37c079ce87138af902745d8e53edd94927e3aff8",
+        "path": "src/hunter/evidence_intelligence/source_handling_persistence.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "6a7ef8b2ccdad50d044a1ea10e00fb3dd74b44d6",
+        "path": "tests/test_issue_agent_execution.py",
+        "previous_path": "",
+        "status": "modified"
+      }
+    ],
+    "review_target_digest": "ce654de874984ece254261dd2c6751ccf91e4b5d2669134d14861729a600de84"
+  },
+  "review_id": "5f7e5e36f4903cf03593d7a0673e23a74f76d33c6ecb7f29b3b75ae72ac6c331",
+  "schema": "hunter.pre-ready-hostile-review.v1"
+}
