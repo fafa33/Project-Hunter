@@ -26,7 +26,8 @@ Sequence
 4.  Scrub ``HUNTER_SOURCE_HANDLING_SIGNING_KEY`` from the process environment
     so the long-running steady-state issuer never retains bootstrap-only
     signing material.
-5.  ``exec`` the canonical issuer with unchanged arguments; the current
+5.  Select the repository-owned Railway OpenCode sandbox launcher by default.
+6.  ``exec`` the canonical issuer with unchanged arguments; the current
     process is replaced so no Python wrapper lingers.
 
 Design constraints
@@ -59,7 +60,9 @@ _SCRIPTS_DIR = Path(__file__).resolve().parent
 _SIGNING_KEY_ENV = "HUNTER_SOURCE_HANDLING_SIGNING_KEY"
 _EVIDENCE_DB_ENV = "HUNTER_ISSUE_AGENT_EVIDENCE_DB"
 _RUNTIME_VENDOR_DIR_ENV = "HUNTER_RUNTIME_VENDOR_DIR"
+_OPENCODE_SANDBOX_ENV = "HUNTER_OPENCODE_SANDBOX_EXECUTABLE"
 _DEFAULT_VENDOR_DIR = "/app/vendor"
+_DEFAULT_OPENCODE_SANDBOX_EXECUTABLE = "/app/bin/hunter-railway-opencode-sandbox"
 
 _PROVENANCE_RESOLVER = "hunter.evidence_intelligence.source_handling_provenance.production_provenance_resolver"
 
@@ -100,6 +103,21 @@ def _ensure_runtime_import_paths() -> None:
     existing = os.environ.get("PYTHONPATH", "")
     entries = [entry for entry in existing.split(os.pathsep) if entry and entry != vendor_path]
     os.environ["PYTHONPATH"] = os.pathsep.join([vendor_path, *entries])
+
+
+def _ensure_opencode_sandbox_executable() -> None:
+    """Select the repository-owned Railway sandbox launcher unless overridden.
+
+    Railway cannot create the namespaces required by bubblewrap.  The build
+    installs a constrained executable launcher at a fixed path; publishing that
+    path through the canonical provider environment ensures the deployed runtime
+    selects the Railway-safe shim instead of silently falling back to ``bwrap``.
+    An explicit non-empty operator override is preserved.
+    """
+    configured = os.environ.get(_OPENCODE_SANDBOX_ENV, "").strip()
+    if configured:
+        return
+    os.environ[_OPENCODE_SANDBOX_ENV] = _DEFAULT_OPENCODE_SANDBOX_EXECUTABLE
 
 
 def _import_bootstrap():  # type: ignore[no-untyped-def]
@@ -175,6 +193,7 @@ def main() -> int:
     )
 
     _ensure_runtime_import_paths()
+    _ensure_opencode_sandbox_executable()
 
     database = os.environ.get(_EVIDENCE_DB_ENV, "").strip()
     if not database:
