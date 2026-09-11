@@ -3,11 +3,9 @@
 #
 # This file pins the issuer Service's build and start command. The build installs
 # Hunter plus the immutable, checksum-verified OpenCode runtime used by the
-# governed OpenCode provider adapter. It also installs the repository-owned
-# Railway sandbox launcher as a real executable under /app/bin so the deployed
-# runtime never falls back to bubblewrap on Railway's non-privileged container.
-# Railway service configuration must also install the final-image runtime
-# packages required by that adapter: ripgrep, git, and ca-certificates.
+# governed OpenCode provider adapter. Railway service configuration must also
+# install the final-image runtime packages required by that adapter:
+# bubblewrap (bwrap), ripgrep, git, and ca-certificates.
 #
 # The start command is the repository-owned runtime startup seam that
 # idempotently bootstraps the persistent /data volume before launching the
@@ -24,7 +22,7 @@
 
 [build]
 builder = "RAILPACK"
-buildCommand = "python -m pip install . --target /app/vendor && install -d /app/bin && install -m 0755 scripts/hunter_railway_opencode_sandbox /app/bin/hunter-railway-opencode-sandbox && python scripts/install_opencode_runtime.py --destination /app/bin/opencode"
+buildCommand = "python -m pip install . --target /app/vendor && python scripts/install_opencode_runtime.py --destination /app/bin/opencode"
 
 [deploy]
 startCommand = "python scripts/railway_issuer_startup.py"
