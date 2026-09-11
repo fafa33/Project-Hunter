@@ -79,9 +79,7 @@ def test_parse_rejects_workspace_outside_attempt_root(tmp_path: Path) -> None:
         shim._parse(argv)
 
 
-def test_restricted_environment_strips_authority_and_publication_credentials(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_restricted_environment_strips_authority_and_publication_credentials(tmp_path: Path, monkeypatch) -> None:
     credential_home = tmp_path / "credential-home"
     credential_home.mkdir()
     monkeypatch.setenv("HUNTER_AGENT_GITHUB_PUSH_TOKEN", "secret")
