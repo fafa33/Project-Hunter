@@ -102,9 +102,7 @@ def _parse(argv: list[str]) -> tuple[Path, Path, str, list[str]]:
 
     workspace = Path(binds["/workspace"]).resolve()
     credential_home = Path(binds["/home/hunter"]).resolve()
-    if workspace.name != "repo" or not workspace.parent.name.startswith(
-        "hunter-opencode-attempt-"
-    ):
+    if workspace.name != "repo" or not workspace.parent.name.startswith("hunter-opencode-attempt-"):
         raise SandboxShimError("workspace is outside the expected isolated attempt root")
     if credential_home != workspace.parent / "credential-home":
         raise SandboxShimError("credential home is outside the expected isolated attempt root")
@@ -135,11 +133,7 @@ def _parse(argv: list[str]) -> tuple[Path, Path, str, list[str]]:
 def _restricted_environment(credential_home: Path) -> dict[str, str]:
     env = dict(os.environ)
     for name in tuple(env):
-        if (
-            name in _FORBIDDEN_ENV
-            or name.startswith("GIT_")
-            or name.startswith("HUNTER_PROMPT_")
-        ):
+        if name in _FORBIDDEN_ENV or name.startswith("GIT_") or name.startswith("HUNTER_PROMPT_"):
             env.pop(name, None)
     config_home = credential_home / ".config"
     opencode_config = config_home / "opencode"
@@ -147,9 +141,7 @@ def _restricted_environment(credential_home: Path) -> dict[str, str]:
     env["HOME"] = str(credential_home)
     env["XDG_CONFIG_HOME"] = str(config_home)
     env["OPENCODE_CONFIG_DIR"] = str(opencode_config)
-    env["OPENCODE_CONFIG_CONTENT"] = json.dumps(
-        _PERMISSION_CONFIG, sort_keys=True, separators=(",", ":")
-    )
+    env["OPENCODE_CONFIG_CONTENT"] = json.dumps(_PERMISSION_CONFIG, sort_keys=True, separators=(",", ":"))
     env["OPENCODE_DISABLE_CLAUDE_CODE"] = "1"
     env["OPENCODE_AUTO_SHARE"] = "false"
     env["OPENCODE_DISABLE_AUTOUPDATE"] = "true"
@@ -161,9 +153,7 @@ def _restricted_environment(credential_home: Path) -> dict[str, str]:
 
 def main(argv: list[str] | None = None) -> int:
     try:
-        workspace, credential_home, executable, provider_args = _parse(
-            list(sys.argv[1:] if argv is None else argv)
-        )
+        workspace, credential_home, executable, provider_args = _parse(list(sys.argv[1:] if argv is None else argv))
         env = _restricted_environment(credential_home)
         completed = subprocess.run(
             [executable, "--pure", *provider_args],
