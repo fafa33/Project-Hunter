@@ -542,3 +542,77 @@ def test_seam_and_cli_invoke_the_same_public_bootstrap_contract(tmp_path: Path) 
     assert seam_rc == 0
     assert invoked == [(database, None), (database, None)]
     assert len(captured.calls) == 1
+
+
+# --- Railway runtime vendor import path ------------------------------------
+
+
+def test_runtime_vendor_directory_is_prepended_to_import_paths(tmp_path: Path, monkeypatch) -> None:
+    import railway_issuer_startup as startup
+
+    vendor = tmp_path / "app" / "vendor"
+    vendor.mkdir(parents=True)
+    original_path = list(sys.path)
+    original_pythonpath = os.environ.get("PYTHONPATH")
+    original_vendor = os.environ.get(startup._RUNTIME_VENDOR_DIR_ENV, startup._DEFAULT_VENDOR_DIR)
+    monkeypatch.setenv(startup._RUNTIME_VENDOR_DIR_ENV, str(vendor))
+    try:
+        startup._ensure_runtime_import_paths()
+        assert sys.path[0] == str(vendor)
+        assert str(vendor) in os.environ.get("PYTHONPATH", "").split(os.pathsep)
+    finally:
+        sys.path[:] = original_path
+        if original_pythonpath is None:
+            os.environ.pop("PYTHONPATH", None)
+        else:
+            os.environ["PYTHONPATH"] = original_pythonpath
+        os.environ[startup._RUNTIME_VENDOR_DIR_ENV] = original_vendor
+
+
+def test_runtime_vendor_directory_absent_is_a_noop(tmp_path: Path, monkeypatch) -> None:
+    import railway_issuer_startup as startup
+
+    missing = tmp_path / "missing" / "vendor"
+    original_path = list(sys.path)
+    original_pythonpath = os.environ.get("PYTHONPATH")
+    original_vendor = os.environ.get(startup._RUNTIME_VENDOR_DIR_ENV, startup._DEFAULT_VENDOR_DIR)
+    monkeypatch.setenv(startup._RUNTIME_VENDOR_DIR_ENV, str(missing))
+    try:
+        startup._ensure_runtime_import_paths()
+        assert sys.path == original_path
+        assert os.environ.get("PYTHONPATH") == original_pythonpath
+    finally:
+        sys.path[:] = original_path
+        if original_pythonpath is None:
+            os.environ.pop("PYTHONPATH", None)
+        else:
+            os.environ["PYTHONPATH"] = original_pythonpath
+        os.environ[startup._RUNTIME_VENDOR_DIR_ENV] = original_vendor
+
+
+def test_vendor_module_is_importable_from_railway_layout(tmp_path: Path, monkeypatch) -> None:
+    import importlib
+
+    import railway_issuer_startup as startup
+
+    vendor = tmp_path / "app" / "vendor"
+    module_dir = vendor / "railway_runtime_marker"
+    module_dir.mkdir(parents=True)
+    module_dir.joinpath("__init__.py").write_text("MARKER = 441\n", encoding="utf-8")
+
+    original_path = list(sys.path)
+    original_pythonpath = os.environ.get("PYTHONPATH")
+    original_vendor = os.environ.get(startup._RUNTIME_VENDOR_DIR_ENV, startup._DEFAULT_VENDOR_DIR)
+    monkeypatch.setenv(startup._RUNTIME_VENDOR_DIR_ENV, str(vendor))
+    try:
+        startup._ensure_runtime_import_paths()
+        marker = importlib.import_module("railway_runtime_marker")
+        assert marker.MARKER == 441
+    finally:
+        sys.modules.pop("railway_runtime_marker", None)
+        sys.path[:] = original_path
+        if original_pythonpath is None:
+            os.environ.pop("PYTHONPATH", None)
+        else:
+            os.environ["PYTHONPATH"] = original_pythonpath
+        os.environ[startup._RUNTIME_VENDOR_DIR_ENV] = original_vendor

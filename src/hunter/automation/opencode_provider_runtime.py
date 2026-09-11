@@ -167,11 +167,45 @@ def _clone_attempt(repo: Path, sandbox: Path, branch: str, head_before: str) -> 
     return sandbox
 
 
+_SANDBOX_SYSTEM_PATHS = ("/usr", "/bin", "/lib", "/lib64", "/etc")
+_SANDBOX_EXECUTABLE_MOUNT = "/opt/hunter/bin"
+
+
+def _sandbox_executable_path(executable: str, sandbox: Path, credential_home: Path) -> tuple[str, list[str]]:
+    """Return the in-sandbox executable path plus any extra bwrap mount args.
+
+    The candidate binary is resolved on the host.  If it already lives inside a
+    path the sandbox exposes, the host path is reused as-is (or remapped to its
+    in-sandbox location).  Otherwise the single executable file is read-only
+    bound into a dedicated, otherwise-unused mount point, so only the binary
+    itself is visible inside the sandbox.
+    """
+    candidate = Path(executable)
+    for root, mount_point in ((sandbox, "/workspace"), (credential_home, "/home/hunter")):
+        try:
+            relative = candidate.relative_to(root)
+        except ValueError:
+            continue
+        return f"{mount_point}/{relative}", []
+    for system_path in _SANDBOX_SYSTEM_PATHS:
+        if not Path(system_path).exists():
+            continue
+        try:
+            candidate.relative_to(Path(system_path))
+        except ValueError:
+            continue
+        return str(candidate), []
+    in_sandbox = f"{_SANDBOX_EXECUTABLE_MOUNT}/{candidate.name}"
+    return in_sandbox, ["--dir", _SANDBOX_EXECUTABLE_MOUNT, "--ro-bind", executable, in_sandbox]
+
+
 def _sandbox_command(executable: str, argv: list[str], sandbox: Path, credential_home: Path) -> list[str]:
     sandbox_executable_name = os.environ.get(_SANDBOX_EXECUTABLE_ENV, "bwrap").strip() or "bwrap"
     sandbox_executable = shutil.which(sandbox_executable_name)
     if sandbox_executable is None:
         raise ProviderAdapterError("filesystem sandbox executable is unavailable")
+
+    in_sandbox_executable, executable_mount = _sandbox_executable_path(executable, sandbox, credential_home)
 
     command = [
         sandbox_executable,
@@ -187,11 +221,12 @@ def _sandbox_command(executable: str, argv: list[str], sandbox: Path, credential
         "--tmpfs",
         "/tmp",
     ]
-    for system_path in ("/usr", "/bin", "/lib", "/lib64", "/etc"):
+    for system_path in _SANDBOX_SYSTEM_PATHS:
         if Path(system_path).exists():
             command.extend(("--ro-bind", system_path, system_path))
     command.extend(
-        (
+        executable_mount
+        + [
             "--bind",
             str(sandbox),
             "/workspace",
@@ -200,9 +235,9 @@ def _sandbox_command(executable: str, argv: list[str], sandbox: Path, credential
             "/home/hunter",
             "--chdir",
             "/workspace",
-            executable,
+            in_sandbox_executable,
             *argv[1:],
-        )
+        ]
     )
     return command
 
