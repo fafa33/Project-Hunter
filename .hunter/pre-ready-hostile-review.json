@@ -6,7 +6,7 @@
         "id": "AC-1",
         "criterion": "Trusted issuer edge is deployed/reachable at a stable HTTPS URL.",
         "verdict": "not-applicable",
-        "evidence": "Operational Railway reachability is outside this code-only candidate; the currently deployed issuer edge is tested separately after merge/deploy. This candidate changes only the Railway-compatible OpenCode isolation mechanism."
+        "evidence": "Operational Railway reachability is outside this code-only candidate; the currently deployed issuer edge is tested separately after merge/deploy. This candidate changes only the Railway-compatible OpenCode isolation and launcher selection mechanism."
       },
       {
         "id": "AC-2",
@@ -18,19 +18,19 @@
         "id": "AC-3",
         "criterion": "Required issuer verification/runtime configuration is present without committing secrets.",
         "verdict": "satisfied",
-        "evidence": "The shim strips publication and governance authority credentials before model execution, creates a private credential home, disables inherited OpenCode plugins, and supplies a deny-by-default inline permission policy without committing any secret value."
+        "evidence": "The Railway build now installs a repository-owned executable launcher at /app/bin/hunter-railway-opencode-sandbox; startup selects it through HUNTER_OPENCODE_SANDBOX_EXECUTABLE unless an explicit operator override exists. The shim strips publication and governance authority credentials before model execution and supplies a deny-by-default permission policy without committing secret values."
       },
       {
         "id": "AC-4",
         "criterion": "Exact authorized test event passes GitHub trigger -> issuer authorization -> canonical Smart Prompt build/handoff boundary.",
         "verdict": "not-applicable",
-        "evidence": "The final end-to-end trigger/issuer/handoff proof is an operational validation after this candidate is merged and deployed. The exact candidate itself is covered by hosted CI, trusted preflight, CodeQL, and governance admission."
+        "evidence": "The final end-to-end trigger/issuer/handoff proof is an operational validation after this candidate is merged and deployed. The exact candidate itself is covered by hosted CI, trusted preflight, CodeQL, governance review, and candidate admission."
       },
       {
         "id": "AC-5",
         "criterion": "Missing/invalid authorization or endpoint configuration still fails closed.",
         "verdict": "satisfied",
-        "evidence": "The shim rejects unknown or incomplete sandbox argv, unexpected binds, invalid workspace/home roots, untrusted executable locations, and any provider command other than `opencode run`; all such cases return failure rather than falling back to unrestricted execution."
+        "evidence": "The shim rejects unknown or incomplete sandbox argv, unexpected binds, invalid workspace/home roots, untrusted executable locations, and any provider command other than `opencode run`; all such cases return failure rather than falling back to unrestricted execution. A missing launcher still fails at provider executable resolution rather than reverting to bubblewrap."
       },
       {
         "id": "AC-6",
@@ -61,38 +61,43 @@
     "base_ref": "main",
     "base_sha": "62240301683ceb5307dc29fda9c27be9ff63cb8d",
     "defect_families": [
-      {"family":"DFF-001","outcome":"clear","evidence":"No caller-controlled timestamp, cutoff, or historical-state selection is introduced; sandbox admission is determined only from the exact argv and filesystem locations supplied by the trusted parent."},
-      {"family":"DFF-002","outcome":"clear","evidence":"The shim does not perform validate-then-persist logic. It validates the complete sandbox contract before spawning the provider and never writes governed persistent state."},
-      {"family":"DFF-003","outcome":"clear","evidence":"No durable identity is accepted from model or caller content; executable and workspace identities are derived from trusted parent paths and exact mount declarations."},
-      {"family":"DFF-004","outcome":"clear","evidence":"Missing or malformed authority/runtime declarations fail closed: unsupported options, missing binds, invalid roots, or untrusted executable locations raise SandboxShimError."},
+      {"family":"DFF-001","outcome":"clear","evidence":"No caller-controlled timestamp, cutoff, or historical-state selection is introduced; sandbox admission and launcher selection depend only on trusted runtime configuration and exact argv/path validation."},
+      {"family":"DFF-002","outcome":"clear","evidence":"The launcher, startup selector, and shim do not perform validate-then-persist governance logic. They configure process execution and never write governed persistent state."},
+      {"family":"DFF-003","outcome":"clear","evidence":"No durable identity is accepted from model or caller content; executable and workspace identities are derived from repository-owned paths and trusted parent declarations."},
+      {"family":"DFF-004","outcome":"clear","evidence":"Missing or malformed authority/runtime declarations fail closed: unsupported options, missing binds, invalid roots, untrusted executable locations, or unavailable executables do not produce permissive fallback execution."},
       {"family":"DFF-005","outcome":"clear","evidence":"No secondary durable carrier is added. Model-visible state is confined to the isolated clone and private credential home, while publication credentials are removed."},
-      {"family":"DFF-006","outcome":"clear","evidence":"No ordering or clock promise is introduced. Validation is deterministic over the exact argv and path topology."},
+      {"family":"DFF-006","outcome":"clear","evidence":"No ordering or clock promise is introduced. Build installation, startup selection, and shim validation are deterministic over repository-owned configuration and exact runtime state."},
       {"family":"DFF-007","outcome":"clear","evidence":"Authorization and publication proofs are not re-aimable: the provider receives neither GitHub push credentials nor governance signing/runtime authority variables."},
-      {"family":"DFF-008","outcome":"clear","evidence":"Unexpected bind mappings and executable locations are rejected; the shim accepts only system read-only mounts and the pinned /app/bin executable mapping expected from Hunter."},
+      {"family":"DFF-008","outcome":"clear","evidence":"Unexpected bind mappings and executable locations are rejected; the shim accepts only system read-only mounts and the pinned /app/bin OpenCode mapping expected from Hunter."},
       {"family":"DFF-009","outcome":"clear","evidence":"This candidate uses the connector ingress with an exact authorization receipt; review and receipt evidence paths remain excluded from the substantive change set by trusted admission logic."},
-      {"family":"DFF-010","outcome":"clear","evidence":"Connector admission authenticates the authorized connector channel rather than treating unsigned API commits as ordinary pre-push provenance; the exact receipt is bound to this branch and base."},
-      {"family":"DFF-011","outcome":"clear","evidence":"The candidate’s substantive change set is exact and complete (one source module plus its focused tests); evidence artifacts cannot strand or conceal an implementation transition."},
-      {"family":"DFF-012","outcome":"clear","evidence":"The connector authorization receipt is re-derived against the exact source/test blobs and current main base, with review/receipt artifacts treated as evidence rather than implementation scope."},
+      {"family":"DFF-010","outcome":"clear","evidence":"Connector admission authenticates the authorized connector channel rather than treating API commits as ordinary pre-push provenance; the exact receipt is bound to this branch and base."},
+      {"family":"DFF-011","outcome":"clear","evidence":"The substantive change set is explicit and complete: Railway config, the startup selector, executable launcher, permission sandbox, and focused tests are all bound in the exact receipt and review target."},
+      {"family":"DFF-012","outcome":"clear","evidence":"The connector authorization receipt is re-derived against every substantive blob and current main base; review/receipt artifacts remain evidence rather than implementation scope."},
       {"family":"DFF-013","outcome":"clear","evidence":"This pre-ready hostile review is refreshed against the exact candidate content before Ready consideration and covers the governing Issue criteria plus recurring-defect families."},
-      {"family":"DFF-014","outcome":"clear","evidence":"No pending check is represented as success in this review. Hosted exact-head CI/trusted preflight results are independently published by GitHub workflows."},
-      {"family":"DFF-015","outcome":"clear","evidence":"Claims here are tied to concrete code paths and focused tests: strict argv parsing, credential stripping, isolated root checks, and deny-by-default permissions."},
+      {"family":"DFF-014","outcome":"clear","evidence":"No pending check is represented as success in this review. Hosted exact-head validation results are independently published by GitHub workflows."},
+      {"family":"DFF-015","outcome":"clear","evidence":"Claims are tied to concrete code paths and focused tests: launcher installation, startup sandbox selection, strict argv parsing, credential stripping, isolated root checks, and deny-by-default permissions."},
       {"family":"DFF-016","outcome":"clear","evidence":"All hosted validation and review state is bound to the exact candidate head; any later content mutation makes this review stale and forces a refresh."},
       {"family":"DFF-017","outcome":"clear","evidence":"The runtime boundary is explicit: untrusted model execution is separated from trusted commit signing, publication, rollback, and exact-head validation."},
       {"family":"DFF-018","outcome":"clear","evidence":"The permission policy defaults every OpenCode capability to deny and selectively allows only project read/edit/glob/grep/LSP operations; shell, web, tasks, skills, questions, and external-directory access remain denied."},
-      {"family":"DFF-019","outcome":"clear","evidence":"Railway’s non-privileged namespace limitation is handled without requesting privileged container capabilities; the provider runs in the existing service with credentials stripped and the model constrained to the isolated attempt clone."}
+      {"family":"DFF-019","outcome":"clear","evidence":"Railway’s non-privileged namespace limitation is handled without requesting privileged container capabilities. The build installs the repository-owned launcher and startup selects it explicitly, preventing a silent fallback to bubblewrap."}
     ],
     "findings": [
       {"id":"FND-1","severity":"blocking","resolution":"resolved","evidence":"Railway rejects bubblewrap namespace creation. The candidate replaces only that unavailable kernel isolation step with a strict fail-closed argv shim while preserving the isolated attempt clone and trusted parent publication boundary."},
       {"id":"FND-2","severity":"blocking","resolution":"resolved","evidence":"Provider credential exposure is blocked: GitHub push credentials, governance/runtime authority variables, HUNTER_PROMPT_* and GIT_* values are removed before OpenCode starts."},
       {"id":"FND-3","severity":"blocking","resolution":"resolved","evidence":"Capability escape is blocked by OPENCODE_CONFIG_CONTENT with `* = deny` and an allowlist limited to read/edit/glob/grep/LSP, plus `--pure` and Claude-plugin disablement."},
-      {"id":"FND-4","severity":"non-blocking","resolution":"unresolved","evidence":"This application-level sandbox is intentionally weaker than an OS namespace boundary; final deployed #441 validation must confirm OpenCode honors the pinned permission contract on Railway before #437 is re-authorized."}
+      {"id":"FND-4","severity":"blocking","resolution":"resolved","evidence":"The prior P1 was real: the shim module existed but Railway never selected it. The build now installs scripts/hunter_railway_opencode_sandbox as /app/bin/hunter-railway-opencode-sandbox with mode 0755, and railway_issuer_startup.py exports that exact path as the default HUNTER_OPENCODE_SANDBOX_EXECUTABLE while preserving explicit operator overrides. Focused tests bind both installation and selection."},
+      {"id":"FND-5","severity":"non-blocking","resolution":"unresolved","evidence":"This application-level sandbox is intentionally weaker than an OS namespace boundary; final deployed #441 validation must confirm OpenCode honors the pinned permission contract on Railway before #437 is re-authorized."}
     ],
     "issue": "441",
     "review_target": [
+      {"blob_sha":"64fd069bcf4aef6d3096608f3197088297ebcdca","path":"scripts/hunter_railway_opencode_sandbox","previous_path":"","status":"added"},
       {"blob_sha":"5cb8a502f010c90122e0630d411a0ddabb246ca9","path":"src/hunter/automation/railway_opencode_permission_sandbox.py","previous_path":"","status":"added"},
-      {"blob_sha":"63a9546e67be7cb9b48efe38939c9ce4caddd47a","path":"tests/test_railway_opencode_permission_sandbox.py","previous_path":"","status":"added"}
+      {"blob_sha":"63a9546e67be7cb9b48efe38939c9ce4caddd47a","path":"tests/test_railway_opencode_permission_sandbox.py","previous_path":"","status":"added"},
+      {"blob_sha":"c1cc99ee1ff95eaa7980ec515c1bb0e167b43d9e","path":"tests/test_railway_opencode_sandbox_selection.py","previous_path":"","status":"added"},
+      {"blob_sha":"7494fa345e896f014311c23efa381a3679f45a2b","path":"railway.toml","previous_path":"","status":"modified"},
+      {"blob_sha":"25dc7e2f09d081fe99227d908a620854f858a616","path":"scripts/railway_issuer_startup.py","previous_path":"","status":"modified"}
     ],
-    "review_target_digest": "289bf63775f3d9b66e367172ff4603a32808b354f4270fd002ed9cfde861d280"
+    "review_target_digest": "8965852c783f9e50e6aca154937bae03a9f410d1e7ca57720cd7a8630d902624"
   },
-  "review_id": "61baac246db852dba024a442ab3b2d87bccd304870c323490abe6c986d3b35ee"
+  "review_id": "d573c4de5c3f9042a87d79db88df03057c7af1c61a365480633fd162109a69fe"
 }
