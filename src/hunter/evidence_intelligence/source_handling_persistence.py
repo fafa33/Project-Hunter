@@ -1290,6 +1290,71 @@ class IssueSourceTransientIntakeBoundary:
         self._resolver = resolver
         self._clock = clock or SystemClock()
 
+    def preflight(
+        self,
+        reference: EvidenceIntakeReference,
+        *,
+        processing_run_id: str,
+        processed_at: datetime,
+    ) -> None:
+        """Validate Source Handling authority for an intake reference without persisting.
+
+        This performs the same authority resolution and policy checks as ``ingest``
+        but does not acquire a write lock, does not persist any artifacts, and
+        does not advance any durable state. It is safe to call before claiming
+        execution ownership, so a failed preflight leaves no ledger row and allows
+        retry once the authority is corrected.
+        """
+        artifact_time = _aware_utc("Issue Source preflight processed_at", processed_at)
+        _validate_issue_metadata(reference.metadata)
+        document_id = evidence_document_id(reference)
+        prepared = self._intake.prepare(
+            reference,
+            processing_run_id=processing_run_id,
+            processed_at=artifact_time,
+        )
+        durable_payload = _issue_intake_durable_payload(prepared)
+
+        connection = self._intake.repository._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            _require_coordinated_authority_database(
+                evidence_path=self._intake.repository.path,
+                authority_path=self._resolver.authority_database_path,
+                connection=connection,
+            )
+            # Sampled only after the write lock is held, so the cutoff cannot be
+            # chosen by the caller and cannot precede a successor that is already
+            # durable.  `processed_at` times artifacts only; it is never authority.
+            authority_cutoff = _authority_current_cutoff(connection, self._clock)
+            resolved = resolve_pre_model_source_handling(self._resolver(document_id, authority_cutoff))
+            decision = resolved.decision
+            if decision.get("retention_decision") != "ALLOW":
+                raise SourceHandlingBlockedError("Issue Source retention is not allowed")
+            if decision.get("deletion_lifecycle_decision") in LIFECYCLE_WRITE_BLOCKING_DISPOSITIONS:
+                raise SourceHandlingBlockedError("Issue Source deletion lifecycle blocks durable intake")
+            dispositions = decision.get("durable_dispositions")
+            if not isinstance(dispositions, Mapping) or not dispositions:
+                raise SourceHandlingBlockedError("Issue Source durable dispositions are unavailable")
+            fact = resolved.fact_record.get("fact")
+            if not isinstance(fact, Mapping):
+                raise SourceHandlingBlockedError("Issue Source fact authority is unavailable")
+            secret_presence = set(_string_values(fact.get("secret_presence")))
+            _enforce_fact_persistence_restriction(fact=fact, durable_payload=durable_payload)
+            validate_durable_payload(
+                decision=decision,
+                registry=resolved.registry_record,
+                payload=durable_payload,
+                secret_presence=secret_presence,
+            )
+            # Preflight stops here -- no persistence, no commit.
+            connection.rollback()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
     def ingest(
         self,
         reference: EvidenceIntakeReference,
