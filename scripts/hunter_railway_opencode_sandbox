@@ -1,0 +1,11 @@
+#!/bin/sh
+set -eu
+
+vendor="${HUNTER_RUNTIME_VENDOR_DIR:-/app/vendor}"
+if [ -n "${PYTHONPATH:-}" ]; then
+  export PYTHONPATH="${vendor}:${PYTHONPATH}"
+else
+  export PYTHONPATH="${vendor}"
+fi
+
+exec python -m hunter.automation.railway_opencode_permission_sandbox "$@"
