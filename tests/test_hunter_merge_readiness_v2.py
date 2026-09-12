@@ -230,3 +230,48 @@ def test_sweep_isolates_failure_to_one_pull_request(monkeypatch):
 
     assert core.main() == 1
     assert published == [("d" * 40, "success")]
+
+
+def test_governance_reconcile_completion_sweeps_open_pull_requests(monkeypatch):
+    """The reconcile run publishes PR statuses from a default-branch run."""
+    monkeypatch.setattr(
+        core,
+        "event_payload",
+        lambda: {
+            "workflow_run": {
+                "name": "Hunter Governance Review Reconcile",
+                "head_sha": "m" * 40,
+                "pull_requests": [],
+            }
+        },
+    )
+    monkeypatch.setattr(core, "open_pull_requests", lambda: (466, 467))
+    monkeypatch.setattr(
+        core,
+        "open_prs_for_head",
+        lambda _sha: (_ for _ in ()).throw(AssertionError("default-branch SHA is not a candidate head")),
+    )
+
+    assert core.candidate_prs() == (466, 467)
+
+
+def test_ordinary_workflow_completion_without_association_uses_exact_head(monkeypatch):
+    monkeypatch.setattr(
+        core,
+        "event_payload",
+        lambda: {
+            "workflow_run": {
+                "name": "CI",
+                "head_sha": "h" * 40,
+                "pull_requests": [],
+            }
+        },
+    )
+    monkeypatch.setattr(core, "open_prs_for_head", lambda sha: (501,) if sha == "h" * 40 else ())
+    monkeypatch.setattr(
+        core,
+        "open_pull_requests",
+        lambda: (_ for _ in ()).throw(AssertionError("ordinary workflow completion must remain head-scoped")),
+    )
+
+    assert core.candidate_prs() == (501,)

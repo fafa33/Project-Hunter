@@ -22,6 +22,7 @@ REVIEWER_DISPOSITIONS_PATH = ROOT / "docs" / "REVIEWER_FINDING_DISPOSITIONS.json
 
 CONTEXT = "Hunter Merge Readiness"
 GOVERNANCE_CONTEXT = "Hunter Governance Review"
+GOVERNANCE_RECONCILE_WORKFLOW = "Hunter Governance Review Reconcile"
 REQUIRED_CHECKS = ("Quality Gates", "dependency-review", "CodeQL")
 HARD_FAILURES = {"failure", "timed_out", "action_required", "startup_failure"}
 
@@ -413,6 +414,8 @@ def candidate_prs() -> tuple[int, ...]:
 
     workflow_run = event.get("workflow_run") or {}
     if isinstance(workflow_run, dict):
+        if str(workflow_run.get("name") or "").strip() == GOVERNANCE_RECONCILE_WORKFLOW:
+            return open_pull_requests()
         numbers = [
             int(item["number"])
             for item in workflow_run.get("pull_requests") or []
