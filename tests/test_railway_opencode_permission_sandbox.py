@@ -108,6 +108,7 @@ def test_inline_permissions_allow_only_project_editing_capabilities(
     permission = json.loads(env["OPENCODE_CONFIG_CONTENT"])["permission"]
 
     assert permission["*"] == "deny"
+    assert permission["external_directory"] == "deny"
     assert permission["read"] == "allow"
     assert permission["edit"] == "allow"
     assert permission["glob"] == "allow"
@@ -115,7 +116,6 @@ def test_inline_permissions_allow_only_project_editing_capabilities(
     assert permission["lsp"] == "allow"
     for denied in (
         "bash",
-        "external_directory",
         "webfetch",
         "websearch",
         "task",
