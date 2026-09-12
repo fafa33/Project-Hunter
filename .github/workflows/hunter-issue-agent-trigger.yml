@@ -24,7 +24,7 @@ jobs:
         && github.event.issue.state == 'open'
       }}
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
 
     steps:
       - name: Checkout trusted trigger implementation
