@@ -1005,6 +1005,38 @@
       "sources": [
         "Issue #461 Codex P1 independent review (PR #466)"
       ]
+    },
+    {
+      "id": "DFF-022",
+      "title": "merge-readiness-without-current-head-codex-review",
+      "invariant": "The final Merge Readiness controller must itself fail closed unless a complete exact-head Codex review exists at the current PR head and verifies against trusted PR evidence -- a missing, stale, incomplete, or still-contested review is a hard merge blocker, never a warning; and a resolved review finding counts as satisfied only when its structured evidence names the exact-head correction commit and a regression test committed in the change set. No other controller's earlier word, and no resolved review thread without that evidence, can stand in for this prerequisite.",
+      "applicability": {
+        "changed_paths": [
+          "scripts/hunter_merge_readiness_v2.py",
+          "scripts/hunter_governance_review_v2.py",
+          "scripts/hunter_pre_ready_review.py",
+          ".github/workflows/hunter-merge-readiness.yml",
+          "docs/CODE_WRITE_POLICY.json"
+        ],
+        "rationale": "The final merge gate and the single shared review-verification implementation are where the workflow-ordering defect lives: Merge Readiness could go green through governance or check status alone, or a resolved thread could satisfy readiness without machine-verified structured evidence. A recurrence here means the fail-closed prerequisite was weakened at the boundary that is supposed to own it."
+      },
+      "prevention": {
+        "mechanism": "Merge Readiness evaluates an exact-head Codex review prerequisite read from the candidate's own HEAD (the content-bound pre-ready hostile review artifact, whose review_id hashes the claims and whose review_target_digest binds the exact base->HEAD change set) and re-verifies it with the same verify_claims implementation candidate admission uses; candidate admission additionally binds each resolved finding's correction commit to the candidate's own commit range and its regression test to the reviewed change set. A HEAD mutation changes the blob SHAs, so the review goes stale automatically and readiness is blocked again until it is refreshed.",
+        "boundary": "hosted-gate"
+      },
+      "regression_evidence": [
+        "tests/test_hunter_merge_readiness_v2.py::test_no_codex_review_on_current_head_blocks",
+        "tests/test_hunter_merge_readiness_v2.py::test_a_codex_review_of_an_older_head_blocks",
+        "tests/test_hunter_merge_readiness_v2.py::test_resolved_finding_without_structured_evidence_blocks",
+        "tests/test_hunter_merge_readiness_v2.py::test_a_new_commit_after_codex_review_stales_readiness_again",
+        "tests/test_hunter_merge_readiness_v2.py::test_current_head_codex_review_with_structured_evidence_allows",
+        "tests/test_issue_412_prevention_gate.py::test_a_resolved_finding_must_carry_structured_resolution_evidence",
+        "tests/test_code_write_policy.py::test_code_write_policy_guard_rejects_a_dropped_codex_review_requirement"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "Issue #467 workflow-ordering defect (PR #468)"
+      ]
     }
   ]
 }

@@ -525,8 +525,14 @@ def _review_document(*, changes=CANDIDATE_CHANGES, base=BASE, **judgement_kwargs
     return review.document_for(claims)
 
 
-def _verify(document, *, changes=CANDIDATE_CHANGES, base=BASE) -> review.ReviewVerdict:
-    return review.verify_claims(document, base_sha=base, changes=changes, families=FAMILIES)
+def _verify(document, *, changes=CANDIDATE_CHANGES, base=BASE, resolution_corrections=None) -> review.ReviewVerdict:
+    return review.verify_claims(
+        document,
+        base_sha=base,
+        changes=changes,
+        families=FAMILIES,
+        resolution_corrections=resolution_corrections,
+    )
 
 
 def test_a_complete_review_of_this_exact_content_is_valid() -> None:
@@ -571,6 +577,72 @@ def test_an_unresolved_non_blocking_finding_does_not_block_ready() -> None:
     finding = {"id": "F-2", "severity": "non-blocking", "resolution": "unresolved", "evidence": "optional refactor"}
 
     assert _verify(_review_document(findings=(finding,))).ok is True
+
+
+def test_a_resolved_finding_must_carry_structured_resolution_evidence() -> None:
+    """Issue #467: a fixed finding counts only with structured, exact-head evidence.
+
+    A resolved finding without a resolution-evidence record is exactly the
+    "resolved thread without an evidence-bearing reply" case: it must not
+    satisfy Ready, so the review is incomplete rather than merely annotated.
+    """
+    finding = {"id": "F-3", "severity": "blocking", "resolution": "resolved", "evidence": "fixed it"}
+
+    verdict = _verify(_review_document(findings=(finding,)))
+
+    assert verdict.state == "incomplete"
+    assert "F-3" in verdict.reason and "evidence" in verdict.reason
+
+
+def test_a_resolved_finding_without_a_committed_regression_test_is_incomplete() -> None:
+    """The regression test tracking the fix must be committed in the change set."""
+    evidence = {"correction": "1" * 40, "regression_test": "tests/somewhere_else.py"}
+    finding = {
+        "id": "F-4",
+        "severity": "blocking",
+        "resolution": "resolved",
+        "evidence": "fixed it",
+        "resolution_evidence": evidence,
+    }
+
+    verdict = _verify(_review_document(findings=(finding,)))
+
+    assert verdict.state == "incomplete"
+    assert "regression test" in verdict.reason
+
+
+def test_a_resolved_finding_with_structured_evidence_is_valid() -> None:
+    """Exact-head correction commit and a committed regression test satisfy the fix."""
+    evidence = {"correction": "1" * 40, "regression_test": "docs/DEFECT_REGISTRY.json"}
+    finding = {
+        "id": "F-5",
+        "severity": "blocking",
+        "resolution": "resolved",
+        "evidence": "fixed it",
+        "resolution_evidence": evidence,
+    }
+
+    verdict = _verify(_review_document(findings=(finding,)))
+
+    assert verdict.state == "valid"
+    assert verdict.ok is True
+
+
+def test_a_resolved_finding_correction_outside_the_candidate_range_is_rejected() -> None:
+    """The correction commit must be part of the reviewed candidate's commit range."""
+    evidence = {"correction": "2" * 40, "regression_test": "docs/DEFECT_REGISTRY.json"}
+    finding = {
+        "id": "F-6",
+        "severity": "blocking",
+        "resolution": "resolved",
+        "evidence": "fixed it",
+        "resolution_evidence": evidence,
+    }
+
+    verdict = _verify(_review_document(findings=(finding,)), resolution_corrections=frozenset(("1" * 40,)))
+
+    assert verdict.state == "stale"
+    assert "correction commit" in verdict.reason
 
 
 def test_an_applicable_family_left_unchecked_blocks_ready() -> None:

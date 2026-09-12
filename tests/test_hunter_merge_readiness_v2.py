@@ -30,6 +30,7 @@ def _install_green(monkeypatch, pr: dict | None = None) -> None:
     )
     monkeypatch.setattr(core, "latest_status", lambda _sha, _context: {"id": 99, "state": "success"})
     monkeypatch.setattr(core, "open_prs_for_head", lambda _sha: (501,))
+    monkeypatch.setattr(core, "exact_head_codex_review", lambda _sha, _number: ("success", "reviewed"))
 
 
 def test_green_current_state_is_merge_ready(monkeypatch):
@@ -83,6 +84,94 @@ def test_unresolved_review_thread_blocks(monkeypatch):
 
     assert decision.state == "failure"
     assert "Unresolved review threads" in decision.description
+
+
+def test_no_codex_review_on_current_head_blocks(monkeypatch):
+    _install_green(monkeypatch)
+    monkeypatch.setattr(
+        core,
+        "exact_head_codex_review",
+        lambda _sha, _number: ("failure", "no exact-head Codex review exists on the current HEAD"),
+    )
+
+    _sha, decision = core.decide(501)
+
+    assert decision.state == "failure"
+    assert "Codex review prerequisite" in decision.description
+
+
+def test_a_codex_review_of_an_older_head_blocks(monkeypatch):
+    _install_green(monkeypatch)
+    monkeypatch.setattr(
+        core,
+        "exact_head_codex_review",
+        lambda _sha, _number: ("failure", "the candidate was mutated after it was reviewed"),
+    )
+
+    _sha, decision = core.decide(501)
+
+    assert decision.state == "failure"
+    assert "Codex review prerequisite" in decision.description
+    assert "mutated" in decision.description
+
+
+def test_current_head_codex_review_with_unresolved_finding_blocks(monkeypatch):
+    _install_green(monkeypatch)
+    monkeypatch.setattr(
+        core,
+        "exact_head_codex_review",
+        lambda _sha, _number: ("failure", "substantive review findings remain unresolved: F-1"),
+    )
+
+    _sha, decision = core.decide(501)
+
+    assert decision.state == "failure"
+    assert "Codex review prerequisite" in decision.description
+    assert "F-1" in decision.description
+
+
+def test_resolved_finding_without_structured_evidence_blocks(monkeypatch):
+    _install_green(monkeypatch)
+    monkeypatch.setattr(
+        core,
+        "exact_head_codex_review",
+        lambda _sha, _number: ("failure", "resolved finding F-2 lacks structured resolution evidence"),
+    )
+
+    _sha, decision = core.decide(501)
+
+    assert decision.state == "failure"
+    assert "Codex review prerequisite" in decision.description
+    assert "structured" in decision.description
+
+
+def test_current_head_codex_review_with_structured_evidence_allows(monkeypatch):
+    _install_green(monkeypatch)
+
+    _sha, decision = core.decide(501)
+
+    assert decision.state == "success"
+
+
+def test_a_new_commit_after_codex_review_stales_readiness_again():
+    """Issue #467: a review bound to content cannot survive a head mutation."""
+    reviewed = core.StaticReadinessObservation(
+        check_runs=tuple(_green_check(name, index) for index, name in enumerate(core.REQUIRED_CHECKS, start=1)),
+        governance_status={"id": 99, "state": "success"},
+        codex_review=("success", "complete base->HEAD hostile review"),
+    )
+    assert core.evaluate(reviewed).state == "success"
+
+    mutated = core.StaticReadinessObservation(
+        check_runs=reviewed.check_runs,
+        governance_status=reviewed.governance_status,
+        codex_review=("failure", "the candidate was mutated after it was reviewed"),
+    )
+
+    decision = core.evaluate(mutated)
+
+    assert decision.state == "failure"
+    assert "Codex review prerequisite" in decision.description
 
 
 def test_changes_requested_blocks(monkeypatch):
@@ -184,6 +273,7 @@ def test_an_early_blocker_reads_no_review_or_check_state(monkeypatch):
 
     _install_green(monkeypatch, _pr(draft=True))
     for name in (
+        "exact_head_codex_review",
         "unresolved_review_threads",
         "changes_requested_reviewers",
         "all_check_runs",

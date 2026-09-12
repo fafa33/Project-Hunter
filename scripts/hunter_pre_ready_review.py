@@ -61,6 +61,9 @@ FAMILY_OUTCOMES = frozenset({"clear", "repaired"})
 FINDING_SEVERITIES = frozenset({"blocking", "non-blocking"})
 FINDING_RESOLUTIONS = frozenset({"resolved", "unresolved"})
 
+#: The exact-head correction commit a resolved finding must name: a git commit SHA.
+_GIT_SHA = re.compile(r"\A[0-9a-fA-F]{40}\Z")
+
 #: The adversarial dimensions Issue #412 requires a large or high-risk candidate
 #: to be swept in one batch rather than discovered one review round at a time.
 REQUIRED_ADVERSARIAL_DIMENSIONS = (
@@ -345,6 +348,26 @@ def _structural_error(claims: dict[str, Any]) -> str | None:
             return f"finding {item.get('id')!r} must declare a severity in {sorted(FINDING_SEVERITIES)}"
         if item.get("resolution") not in FINDING_RESOLUTIONS:
             return f"finding {item.get('id')!r} must declare a resolution in {sorted(FINDING_RESOLUTIONS)}"
+        if item.get("resolution") == "resolved":
+            # Issue #467: a finding is fixed only when the resolution is backed by
+            # structured evidence -- the exact-head correction commit and a
+            # regression test committed in the change set -- so "resolved" is a
+            # real disposition, not a thread that was closed without proof.
+            evidence = item.get("resolution_evidence")
+            if not isinstance(evidence, dict):
+                return (
+                    f"finding {item.get('id')!r} resolved without structured resolution evidence; "
+                    "a fixed finding must name its exact-head correction commit and committed regression test"
+                )
+            correction = evidence.get("correction")
+            if not isinstance(correction, str) or _GIT_SHA.fullmatch(correction) is None:
+                return (
+                    f"finding {item.get('id')!r} structured resolution evidence must name "
+                    "the exact-head correction commit SHA"
+                )
+            regression_test = evidence.get("regression_test")
+            if not isinstance(regression_test, str) or not regression_test.strip():
+                return f"finding {item.get('id')!r} structured resolution evidence must name " "a regression test path"
 
     dimensions = claims.get("adversarial_dimensions")
     if not isinstance(dimensions, list) or not all(isinstance(item, str) for item in dimensions):
@@ -365,6 +388,7 @@ def verify_claims(
     changes: tuple[ingress.ConnectorFileChange, ...],
     families: tuple[dict[str, Any], ...],
     issue_criteria: tuple[str, ...] | None = None,
+    resolution_corrections: frozenset[str] | None = None,
 ) -> ReviewVerdict:
     """Compare repository-owned review state against the exact candidate content.
 
@@ -443,6 +467,31 @@ def verify_claims(
                 "incomplete",
                 f"the review does not cover {len(uncovered)} of the {len(issue_criteria)} acceptance criteria "
                 f"the governing Issue defines: {preview}",
+            )
+
+    findings = claims.get("findings")
+    resolved = [item for item in findings if isinstance(item, dict) and item.get("resolution") == "resolved"]
+    untracked = sorted(
+        str(item.get("id"))
+        for item in resolved
+        if str((item.get("resolution_evidence") or {}).get("regression_test") or "") not in changed_paths
+    )
+    if untracked:
+        return ReviewVerdict(
+            "incomplete",
+            "resolved findings do not commit their regression test in the change set: " + ", ".join(untracked),
+        )
+    if resolution_corrections is not None:
+        staged = sorted(
+            str(item.get("id"))
+            for item in resolved
+            if str((item.get("resolution_evidence") or {}).get("correction") or "") not in resolution_corrections
+        )
+        if staged:
+            return ReviewVerdict(
+                "stale",
+                "resolved finding correction commits are not part of this candidate's commit range: "
+                + ", ".join(staged),
             )
 
     unresolved = sorted(

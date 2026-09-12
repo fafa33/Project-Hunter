@@ -170,6 +170,38 @@ def open_prs_for_head(sha: str) -> tuple[int, ...]:
     return tuple(sorted(set(numbers)))
 
 
+def exact_head_codex_review(head_sha: str, pr_number: int) -> tuple[str, str]:
+    """Fail-closed exact-head Codex review prerequisite for merge readiness.
+
+    Merge Readiness is the final current-state controller, so it must itself
+    establish that the candidate has been adversarially reviewed as it stands
+    right now -- it cannot take another controller's earlier word for it. The
+    canonical pre-ready hostile review is content-bound state, so it must exist
+    at the exact PR head and verify against trusted PR evidence. Verification
+    reuses the governance controller's single implementation, so readiness and
+    candidate admission cannot drift. A missing, stale, incomplete, or still
+    contested review is a hard merge blocker, never a warning.
+    """
+
+    # Imported here rather than at module scope: hunter_workflow_state imports
+    # this module, and governance pulls in hunter_pre_ready_review which imports
+    # hunter_workflow_state, so a module-level import would be a three-way cycle.
+    import hunter_governance_review_v2 as governance
+
+    state, _document, read_error = governance.read_head_pre_ready_review(REPO, TOKEN, head_sha)
+    if state == "unavailable":
+        return "failure", f"Codex review evidence is unavailable ({read_error})"
+    if state == "invalid":
+        return "failure", f"Codex review evidence is malformed on HEAD: {read_error}"
+    if state == "absent":
+        return "failure", "no exact-head Codex review exists on the current HEAD"
+
+    verdict_state, message = governance.verify_pre_ready_hostile_review(REPO, TOKEN, head_sha, pr_number)
+    if verdict_state != "success":
+        return "failure", message
+    return "success", message
+
+
 class ReadinessObservation(Protocol):
     """Current GitHub state for one open PR.
 
@@ -195,6 +227,9 @@ class ReadinessObservation(Protocol):
     def changes_requested(self) -> tuple[str, ...]: ...
 
     @property
+    def codex_review(self) -> tuple[str, str]: ...
+
+    @property
     def check_runs(self) -> tuple[dict[str, Any], ...]: ...
 
     @property
@@ -212,6 +247,7 @@ class StaticReadinessObservation:
     mergeable: bool | None = True
     unresolved_review_threads: tuple[str, ...] = ()
     changes_requested: tuple[str, ...] = ()
+    codex_review: tuple[str, str] = ("success", "")
     check_runs: tuple[dict[str, Any], ...] = ()
     governance_status: dict[str, Any] | None = None
     shared_open_prs: tuple[int, ...] = ()
@@ -240,6 +276,10 @@ class LiveReadinessObservation:
     @cached_property
     def changes_requested(self) -> tuple[str, ...]:
         return changes_requested_reviewers(self._pr_number)
+
+    @cached_property
+    def codex_review(self) -> tuple[str, str]:
+        return exact_head_codex_review(self._head_sha, self._pr_number)
 
     @cached_property
     def check_runs(self) -> tuple[dict[str, Any], ...]:
@@ -293,6 +333,10 @@ def evaluate(observation: ReadinessObservation) -> Decision:
 
     if observation.changes_requested:
         return Decision("failure", "Changes requested by: " + ", ".join(observation.changes_requested))
+
+    codex_state, codex_detail = observation.codex_review
+    if codex_state != "success":
+        return Decision("failure", "Exact-head Codex review prerequisite not met: " + codex_detail)
 
     runs = list(observation.check_runs)
     missing: list[str] = []

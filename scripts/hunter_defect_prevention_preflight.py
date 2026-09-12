@@ -442,6 +442,11 @@ def validate_code_write_policy() -> list[str]:
     ready_requires = str(progression.get("ready_requires") or "")
     if "exact-head" not in ready_requires or "Pre-PR Preflight" not in ready_requires:
         errors.append("Ready progression must require successful exact-head Pre-PR Preflight")
+    if progression.get("requires_current_head_codex_review") is not True:
+        errors.append("Ready progression must require a current-head Codex review")
+    finding_resolution = str(progression.get("finding_resolution") or "")
+    if "structured evidence" not in finding_resolution or "regression test" not in finding_resolution:
+        errors.append("finding resolution must require structured evidence and a committed regression test")
 
     errors.extend(validate_writer_identity_binding(policy))
     errors.extend(validate_connector_write_ingress(policy))

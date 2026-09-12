@@ -1407,12 +1407,37 @@ def verify_pre_ready_hostile_review(
                 f"unavailable ({criteria_error})."
             )
 
+    # Issue #467: a resolved finding's correction commit must be part of the
+    # candidate's own commit range, so a resolution cannot claim a fix that was
+    # never made on this candidate. The commit list is read from trusted PR
+    # evidence only when the review actually carries resolved findings -- an
+    # ordinary reviewed candidate with nothing resolved stays on the existing
+    # evidence path.
+    findings = ((document or {}).get("claims") or {}).get("findings") if isinstance(document, dict) else None
+    has_resolved = findings is not None and any(
+        isinstance(item, dict) and item.get("resolution") == "resolved" for item in findings
+    )
+    resolution_corrections: frozenset[str] | None = None
+    if has_resolved:
+        ok_commits, commits, commits_error = read_pr_commits(repository, token, pr_number)
+        if not ok_commits:
+            return (
+                "failure",
+                f"Candidate admission blocked: pull-request commit-range evidence is unavailable ({commits_error}).",
+            )
+        resolution_corrections = frozenset(
+            str(commit.get("sha") or "")
+            for commit in commits
+            if isinstance(commit, dict) and str(commit.get("sha") or "").strip()
+        )
+
     verdict = pre_ready.verify_claims(
         document,
         base_sha=merge_base,
         changes=changes,
         families=families,
         issue_criteria=issue_criteria or None,
+        resolution_corrections=resolution_corrections,
     )
     if not verdict.ok:
         return "failure", f"Candidate admission blocked: {verdict.reason}."

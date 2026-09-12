@@ -27,6 +27,36 @@ def test_code_write_policy_requires_draft_until_exact_head_admission() -> None:
     assert "exact-head" in progression["ready_requires"]
     assert "Pre-PR Preflight" in progression["ready_requires"]
     assert progression["auto_ready"] is False
+    assert progression["requires_current_head_codex_review"] is True
+    assert "structured evidence" in progression["finding_resolution"]
+    assert "regression test" in progression["finding_resolution"]
+
+
+def _write_policy(monkeypatch, tmp_path, mutator) -> None:
+    policy = json.loads((ROOT / "docs" / "CODE_WRITE_POLICY.json").read_text(encoding="utf-8"))
+    mutator(policy)
+    target = tmp_path / "CODE_WRITE_POLICY.json"
+    target.write_text(json.dumps(policy), encoding="utf-8")
+    monkeypatch.setattr(prevention, "WRITE_POLICY_PATH", target)
+    assert prevention.validate_code_write_policy() != []
+
+
+def test_code_write_policy_guard_rejects_a_dropped_codex_review_requirement(monkeypatch, tmp_path) -> None:
+    _write_policy(
+        monkeypatch,
+        tmp_path,
+        lambda policy: policy["review_progression"].pop("requires_current_head_codex_review"),
+    )
+
+
+def test_code_write_policy_guard_rejects_a_resolution_contract_without_a_regression_test(monkeypatch, tmp_path) -> None:
+    _write_policy(
+        monkeypatch,
+        tmp_path,
+        lambda policy: policy["review_progression"].update(
+            finding_resolution="resolved findings must carry structured evidence"
+        ),
+    )
 
 
 def test_defect_prevention_guard_validates_code_write_policy() -> None:
