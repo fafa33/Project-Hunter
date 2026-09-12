@@ -547,6 +547,7 @@ class Webhook:
         *,
         read_timeout: float = 15.0,
         max_workers: int = 8,
+        lease_renewal_interval: float = issuer._LEASE_RENEWAL_INTERVAL_SECONDS,
     ) -> None:
         self.server = issuer.IssuerServer(
             "127.0.0.1",
@@ -554,6 +555,7 @@ class Webhook:
             services,
             read_timeout=read_timeout,
             max_workers=max_workers,
+            lease_renewal_interval=lease_renewal_interval,
         )
         self.server.start()
         self.port = self.server._server.server_address[1]
@@ -630,6 +632,25 @@ def _wait_for_ledger_state(
         time.sleep(0.01)
     entry = ledger.entry(authorization_id)
     raise AssertionError(f"ledger did not reach {expected!r}; current={None if entry is None else entry.state!r}")
+
+
+def _wait_for_lease_renewal(
+    ledger: IssueAgentExecutionLedger,
+    authorization_id: str,
+    *,
+    later_than: str,
+    timeout: float = 5.0,
+):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        entry = ledger.entry(authorization_id)
+        if entry is not None and entry.lease_expires_at is not None and entry.lease_expires_at > later_than:
+            return entry
+        time.sleep(0.01)
+    entry = ledger.entry(authorization_id)
+    raise AssertionError(
+        f"ledger lease was not renewed past {later_than!r}; current={None if entry is None else entry.lease_expires_at!r}"
+    )
 
 
 # --- Transport boundary -----------------------------------------------------
@@ -946,7 +967,56 @@ def test_noncanonical_provider_success_becomes_durable_failure(
     assert "canonical execution receipt" in (entry.failure_message or "")
 
 
-def test_startup_recovery_turns_stranded_dispatch_into_terminal_failure(
+def test_a_second_issuer_instance_does_not_fail_live_foreign_execution(
+    tmp_path: Path,
+    webhook: Any,
+) -> None:
+    """A second instance must not fail rows whose foreign lease is still valid."""
+    blocking = BlockingFallback()
+    first = Deployment(tmp_path, fallback=blocking)
+    services = first.services()
+    hook = webhook(services)
+    document = _authorization_document()
+    authorization = _inner(document)
+
+    assert hook.post(document.encode("utf-8"))[0] == 200
+    assert blocking.started.wait(timeout=2)
+    dispatched = _wait_for_ledger_state(
+        services.ledger,
+        authorization.authorization_id,
+        "DISPATCHED",
+    )
+    assert dispatched.owner_instance_id is not None
+
+    # A second live instance over the same persistent database performs its
+    # startup recovery while the first instance is still executing.
+    second = Deployment(tmp_path, configuration=first.configuration, database=first.database)
+    other = second.services()
+    recovered = other.ledger.recover_expired_on_startup(
+        failed_at=first.clock.now(),
+    )
+    assert recovered == 0
+    entry = other.ledger.entry(authorization.authorization_id)
+    assert entry is not None
+    assert entry.state == "DISPATCHED"
+    assert entry.owner_instance_id == dispatched.owner_instance_id
+
+    # Failures on the live row do not occur in the foreign instance and it
+    # cannot take ownership: replay identity stays permanently claimed.
+    with pytest.raises(IssueAgentReplayError):
+        issuer.prepare_authorization(other, SignedIssueAgentAuthorization.from_json(document))
+
+    # The original instance remains able to complete its own execution.
+    blocking.release.set()
+    completed = _wait_for_ledger_state(
+        services.ledger,
+        authorization.authorization_id,
+        "COMPLETED",
+    )
+    assert completed.state == "COMPLETED"
+
+
+def test_an_expired_incomplete_owner_is_recovered_fail_closed(
     tmp_path: Path,
 ) -> None:
     deployment = Deployment(tmp_path)
@@ -956,20 +1026,137 @@ def test_startup_recovery_turns_stranded_dispatch_into_terminal_failure(
 
     prepared = issuer.prepare_authorization(services, signed)
     assert prepared.authorization.authorization_id == authorization.authorization_id
-    assert services.ledger.entry(authorization.authorization_id).state == "DISPATCHED"
+    dispatched = services.ledger.entry(authorization.authorization_id)
+    assert dispatched is not None
+    assert dispatched.state == "DISPATCHED"
 
-    recovered = services.ledger.fail_incomplete_on_startup(
+    # The provider never completed and its lease lapses; the next instance may
+    # fail the incomplete row closed.
+    deployment.clock.value += timedelta(hours=7)
+    restarted = deployment.services()
+    recovered = restarted.ledger.recover_expired_on_startup(
         failed_at=deployment.clock.now(),
     )
     assert recovered == 1
 
-    entry = services.ledger.entry(authorization.authorization_id)
+    entry = restarted.ledger.entry(authorization.authorization_id)
     assert entry is not None
     assert entry.state == "FAILED"
     assert entry.failure_type == "ProcessRestart"
 
+    # Lease expiry never permits replay/reclaim of the failed identity.
     with pytest.raises(IssueAgentReplayError):
-        issuer.prepare_authorization(services, signed)
+        issuer.prepare_authorization(restarted, signed)
+
+
+def test_active_execution_renews_its_lease_while_the_provider_runs(
+    tmp_path: Path,
+    webhook: Any,
+) -> None:
+    blocking = BlockingFallback()
+    deployment = Deployment(tmp_path, fallback=blocking)
+    services = deployment.services()
+    hook = webhook(services, lease_renewal_interval=0.05)
+    document = _authorization_document()
+    authorization = _inner(document)
+
+    assert hook.post(document.encode("utf-8"))[0] == 200
+    assert blocking.started.wait(timeout=2)
+    dispatched = _wait_for_ledger_state(
+        services.ledger,
+        authorization.authorization_id,
+        "DISPATCHED",
+    )
+    owner_id = dispatched.owner_instance_id
+    original_expiry = dispatched.lease_expires_at
+    assert owner_id is not None
+    assert original_expiry is not None
+
+    # The owning instance keeps renewing the lease while its provider runs.
+    deployment.clock.value += timedelta(hours=1)
+    renewed = _wait_for_lease_renewal(
+        services.ledger,
+        authorization.authorization_id,
+        later_than=original_expiry,
+    )
+    assert renewed.owner_instance_id == owner_id
+    assert renewed.lease_expires_at is not None
+    assert renewed.lease_expires_at > original_expiry
+
+    # A second instance starting just past the ORIGINAL expiry must find the
+    # row still live: the renewal carried it beyond that boundary.
+    deployment.clock.value = datetime.fromisoformat(original_expiry) + timedelta(minutes=5)
+    other = IssueAgentExecutionLedger(deployment.database)
+    assert other.recover_expired_on_startup(failed_at=deployment.clock.now()) == 0
+    entry = other.entry(authorization.authorization_id)
+    assert entry is not None
+    assert entry.state == "DISPATCHED"
+
+    blocking.release.set()
+    _wait_for_ledger_state(services.ledger, authorization.authorization_id, "COMPLETED")
+
+
+def test_shutdown_drains_an_accepted_execution_worker(tmp_path: Path, webhook: Any) -> None:
+    """Shutdown stops admission, then joins tracked execution workers to completion."""
+    blocking = BlockingFallback()
+    deployment = Deployment(tmp_path, fallback=blocking)
+    services = deployment.services()
+    hook = webhook(services)
+    document = _authorization_document()
+    authorization = _inner(document)
+
+    assert hook.post(document.encode("utf-8"))[0] == 200
+    assert blocking.started.wait(timeout=2)
+
+    # Release the provider and prove shutdown returns only after the accepted
+    # execution worker has actually drained to a durable terminal outcome.
+    blocking.release.set()
+    started = time.monotonic()
+    hook.close()
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 5.0
+    completed = services.ledger.entry(authorization.authorization_id)
+    assert completed is not None
+    assert completed.state == "COMPLETED"
+
+
+def test_shutdown_timeout_does_not_fabricate_failed_for_a_still_running_provider(
+    tmp_path: Path,
+    webhook: Any,
+) -> None:
+    """A drain timeout must never falsely mark a still-running provider FAILED."""
+    blocking = BlockingFallback()
+    deployment = Deployment(tmp_path, fallback=blocking)
+    services = deployment.services()
+    hook = webhook(services)
+    document = _authorization_document()
+    authorization = _inner(document)
+
+    assert hook.post(document.encode("utf-8"))[0] == 200
+    assert blocking.started.wait(timeout=2)
+
+    started = time.monotonic()
+    hook.server.shutdown(timeout=0.5)
+    elapsed = time.monotonic() - started
+    assert elapsed < 5.0
+
+    # The still-running provider is not terminally recorded just because the
+    # drain timeout expired; the row stays live for the genuine owner.
+    entry = services.ledger.entry(authorization.authorization_id)
+    assert entry is not None
+    assert entry.state == "DISPATCHED"
+    assert entry.failure_type is None
+    assert entry.failed_at is None
+
+    blocking.release.set()
+    completed = _wait_for_ledger_state(
+        services.ledger,
+        authorization.authorization_id,
+        "COMPLETED",
+    )
+    assert completed.state == "COMPLETED"
+    hook.close()
 
 
 # --- Fail-closed authorization checks ---------------------------------------

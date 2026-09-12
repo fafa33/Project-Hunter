@@ -19,6 +19,7 @@ import argparse
 import json
 import logging
 import os
+import secrets
 import signal
 import threading
 from collections.abc import Mapping
@@ -101,6 +102,26 @@ _MAX_CONCURRENT_EXECUTIONS: Final[int] = 2
 _EXECUTION_SLOTS = threading.BoundedSemaphore(_MAX_CONCURRENT_EXECUTIONS)
 _ISSUE_AGENT_ACCEPTED_SCHEMA = "hunter-issue-agent-accepted-v1"
 
+#: How often the issuer renews the durable execution lease of every accepted
+#: execution it is still genuinely running. The ledger lease window is far
+#: larger than this interval, so a single missed tick can never strand a live
+#: execution behind an expired lease.
+_LEASE_RENEWAL_INTERVAL_SECONDS: Final[float] = 30.0
+
+_ISSUER_INSTANCE_PREFIX = "hunter-issue-agent-issuer"
+
+
+def _new_instance_id() -> str:
+    """A stable-for-process-lifetime issuer instance identity.
+
+    Each issuer process carries one instance id, generated at trusted bootstrap
+    and used as the durable lease owner for every ledger row it claims. A
+    second live instance therefore has a different owner identity and can never
+    mistake another instance's live execution for its own leftover work.
+    """
+    return f"{_ISSUER_INSTANCE_PREFIX}-{secrets.token_hex(6)}"
+
+
 #: Required environment variables for operational configuration
 _REQUIRED_ENV: Final[tuple[str, ...]] = (
     REPOSITORY_ENV,
@@ -132,6 +153,7 @@ class IssuerConfiguration:
     prompt_verifier: PromptAutomationVerifier
     provenance_resolver: ProvenanceResolver
     clock: Clock
+    instance_id: str
 
     @classmethod
     def from_environment(
@@ -182,6 +204,7 @@ class IssuerConfiguration:
             prompt_verifier=prompt_verifier,
             provenance_resolver=provenance_resolver,
             clock=clock or SystemClock(),
+            instance_id=_new_instance_id(),
         )
 
 
@@ -205,8 +228,14 @@ def compose_services(configuration: IssuerConfiguration) -> IssuerServices:
         provenance_resolver=configuration.provenance_resolver,
     )
     repository = EvidenceIntelligenceRepository(configuration.evidence_database)
-    ledger = IssueAgentExecutionLedger(configuration.evidence_database)
-    ledger.fail_incomplete_on_startup(failed_at=configuration.clock.now())
+    ledger = IssueAgentExecutionLedger(
+        configuration.evidence_database,
+        instance_id=configuration.instance_id,
+    )
+    # Startup recovery is owner/lease-aware: only incomplete rows whose lease has
+    # lapsed are failed closed, never a row another live instance is still
+    # executing under a valid foreign lease.
+    ledger.recover_expired_on_startup(failed_at=configuration.clock.now())
     boundary = IssueSourceTransientIntakeBoundary(
         intake=EvidenceIntelligenceIntakeService(repository),
         resolver=resolver,
@@ -365,10 +394,46 @@ def execute_authorization(
     return finish_prepared_authorization(services, prepared)
 
 
+class ExecutionWorkerRegistry:
+    """Tracks accepted, still-running provider execution workers.
+
+    A worker is registered before it starts and unregistered by the worker
+    itself as its final act, so the registry and the shutdown drain agree about
+    what is still genuinely running. Each registered worker also names the
+    authorization it owns, which is what the lease renewer refreshes while the
+    provider runs. Registry operations are lock-guarded, but shutdown snapshots
+    the live set and joins outside the lock, so one stalled provider can never
+    hold the lock while every other worker's teardown waits on it.
+    """
+
+    __slots__ = ("_lock", "_entries")
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._entries: list[tuple[threading.Thread, PreparedIssueAgentExecution]] = []
+
+    def register(self, worker: threading.Thread, prepared: PreparedIssueAgentExecution) -> None:
+        """Record an accepted execution worker *before* it is started."""
+        with self._lock:
+            self._entries.append((worker, prepared))
+
+    def unregister(self, worker: threading.Thread) -> None:
+        """Drop one worker; a worker that already finished is already absent."""
+        with self._lock:
+            self._entries = [(candidate, prepared) for candidate, prepared in self._entries if candidate is not worker]
+
+    def active(self) -> list[tuple[threading.Thread, PreparedIssueAgentExecution]]:
+        """Snapshot of every still-registered execution worker and its work."""
+        with self._lock:
+            return list(self._entries)
+
+
 def _run_prepared_in_background(
     services: IssuerServices,
     prepared: PreparedIssueAgentExecution,
+    registry: ExecutionWorkerRegistry | None = None,
 ) -> None:
+    worker = threading.current_thread()
     try:
         finish_prepared_authorization(services, prepared)
     except BaseException:
@@ -377,7 +442,40 @@ def _run_prepared_in_background(
             prepared.authorization.authorization_id,
         )
     finally:
+        if registry is not None:
+            registry.unregister(worker)
         _EXECUTION_SLOTS.release()
+
+
+def _run_lease_renewer(
+    services: IssuerServices,
+    registry: ExecutionWorkerRegistry,
+    *,
+    interval: float,
+    stop_event: threading.Event,
+) -> None:
+    """Extend the durable lease of every accepted execution still running here.
+
+    A live provider keeps its ledger row non-terminal forever, so a second
+    issuer instance booting while this one runs can never fail the row closed.
+    The loop runs until shutdown: once a worker's row becomes terminal the
+    renewal raises and the worker is dropped from the registry.
+    """
+    logger = logging.getLogger(__name__)
+    while not stop_event.wait(interval):
+        for worker, prepared in registry.active():
+            try:
+                services.ledger.renew_lease(
+                    prepared.authorization,
+                    health_at=services.configuration.clock.now(),
+                )
+            except IssueAgentExecutionError as error:
+                logger.warning(
+                    "execution %s is no longer renewable by this instance: %s",
+                    prepared.authorization.authorization_id,
+                    error,
+                )
+                registry.unregister(worker)
 
 
 def _accepted_payload(prepared: PreparedIssueAgentExecution) -> dict[str, Any]:
@@ -407,6 +505,7 @@ class _IssuerRequestHandler(BaseHTTPRequestHandler):
 
     services: IssuerServices | None = None
     shutdown_event: threading.Event | None = None
+    execution_registry: ExecutionWorkerRegistry | None = None
 
     def do_POST(self) -> None:
         """Handle POST request with signed authorization."""
@@ -495,13 +594,19 @@ class _IssuerRequestHandler(BaseHTTPRequestHandler):
 
         worker = threading.Thread(
             target=_run_prepared_in_background,
-            args=(self.services, prepared),
+            args=(self.services, prepared, self.execution_registry),
             name=f"issue-agent-{prepared.authorization.issue_number}",
-            daemon=True,
+            daemon=False,
         )
         try:
+            # Register before starting: the registry and the shutdown drain must
+            # agree about every accepted worker before it can begin running.
+            assert self.execution_registry is not None
+            self.execution_registry.register(worker, prepared)
             worker.start()
         except Exception as error:  # noqa: BLE001
+            assert self.execution_registry is not None
+            self.execution_registry.unregister(worker)
             try:
                 self.services.ledger.fail(
                     prepared.authorization,
@@ -612,8 +717,13 @@ class IssuerServer:
     is told 503 at the socket, never queued behind an unbounded thread), and
     every connection carries a finite read deadline, so a client that opens a
     connection and withholds its body terminates within a bounded time instead
-    of occupying a worker indefinitely. Shutdown stays deterministic: the
-    accept loop is stopped and any in-flight worker is a daemon.
+    of occupying a worker indefinitely.
+
+    Accepted executions are owned by this instance, tracked as non-daemon
+    workers, and their durable leases are renewed while the providers run.
+    Shutdown stops new admissions, then drains the tracked execution workers to
+    a durable terminal outcome; a drain timeout expires without ever
+    fabricating a FAILED row for a provider that is still genuinely running.
     """
 
     def __init__(
@@ -625,14 +735,20 @@ class IssuerServer:
         shutdown_event: threading.Event | None = None,
         read_timeout: float = _REQUEST_READ_TIMEOUT_SECONDS,
         max_workers: int = _MAX_CONCURRENT_REQUEST_WORKERS,
+        lease_renewal_interval: float = _LEASE_RENEWAL_INTERVAL_SECONDS,
     ) -> None:
         self._host = host
         self._port = port
+        self._services = services
         self._shutdown_event = shutdown_event or threading.Event()
+        self._executions = ExecutionWorkerRegistry()
+        self._lease_renewal_interval = lease_renewal_interval
+        self._shutdown_complete = False
 
         class Handler(_IssuerRequestHandler):
             shutdown_event = self._shutdown_event
             timeout = read_timeout
+            execution_registry = self._executions
 
         Handler.services = services
         self._server = _BoundedThreadingHTTPServer(
@@ -641,21 +757,58 @@ class IssuerServer:
             max_workers=max_workers,
         )
         self._thread: threading.Thread | None = None
+        self._renewer: threading.Thread | None = None
 
     def start(self) -> None:
         """Start the server in a background thread."""
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
         self._thread.start()
+        self._renewer = threading.Thread(
+            target=_run_lease_renewer,
+            args=(
+                self._services,
+                self._executions,
+            ),
+            kwargs={
+                "interval": self._lease_renewal_interval,
+                "stop_event": self._shutdown_event,
+            },
+            name="issue-agent-lease-renewer",
+            daemon=True,
+        )
+        self._renewer.start()
         logging.getLogger(__name__).info("Trusted issuer edge listening on %s:%d", self._host, self._port)
 
     def shutdown(self, timeout: float = 30.0) -> None:
-        """Shutdown the server gracefully."""
+        """Shutdown the server gracefully.
+
+        Idempotent: a second call returns immediately. New admissions stop
+        first (the accept loop is halted), then every accepted execution worker
+        is joined to a durable terminal outcome. The join happens outside the
+        registry lock so one still-running provider cannot stall the registry
+        or any other worker's teardown, and a provider that outlives the drain
+        timeout is left genuinely running rather than falsely marked FAILED.
+        """
+        if self._shutdown_complete:
+            return
+        self._shutdown_complete = True
+        logger = logging.getLogger(__name__)
+        logger.info("stopping trusted issuer edge")
         self._shutdown_event.set()
         self._server.shutdown()
         self._server.server_close()
-        if self._thread:
+        if self._thread is not None:
             self._thread.join(timeout=timeout)
-        logging.getLogger(__name__).info("Trusted issuer edge stopped")
+        workers = self._executions.active()
+        if workers:
+            logger.info(
+                "draining %d accepted execution worker(s) with %.1fs timeout",
+                len(workers),
+                timeout,
+            )
+        for worker, _prepared in workers:
+            worker.join(timeout=timeout)
+        logger.info("Trusted issuer edge stopped")
 
 
 def _setup_logging(verbose: bool) -> None:
