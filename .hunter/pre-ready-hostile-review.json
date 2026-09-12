@@ -2,32 +2,32 @@
   "claims": {
     "acceptance_criteria": [
       {
-        "criterion": "Webhook response timeout is configurable and bounded.",
-        "evidence": "HUNTER_ISSUE_AGENT_WEBHOOK_TIMEOUT_SECONDS is parsed as a positive finite value with a 1200-second hard ceiling.",
+        "criterion": "Unset/empty GitHub Actions variable results in a 900-second timeout value reaching the trigger.",
+        "evidence": "The production workflow now uses the Actions expression fallback `vars.HUNTER_ISSUE_AGENT_WEBHOOK_TIMEOUT_SECONDS || '900'`, so an unset or empty repository variable yields 900 instead of an empty string.",
         "id": "AC-1",
         "verdict": "satisfied"
       },
       {
-        "criterion": "The production-safe default is aligned with synchronous governed execution.",
-        "evidence": "The default timeout is 900 seconds instead of the former fixed 30-second timeout.",
+        "criterion": "A configured valid timeout is propagated unchanged.",
+        "evidence": "The Actions expression uses the configured repository variable when it is non-empty and only falls back to 900 otherwise.",
         "id": "AC-2",
         "verdict": "satisfied"
       },
       {
-        "criterion": "Invalid timeout configuration fails closed before dispatch.",
-        "evidence": "Empty, zero, negative, NaN, infinity, malformed, and over-limit values are rejected; focused regression tests cover these cases.",
+        "criterion": "Invalid configured timeout values still fail closed in the trigger.",
+        "evidence": "Trigger-side timeout parsing and validation are unchanged, including rejection of malformed, non-finite, non-positive and over-limit values.",
         "id": "AC-3",
         "verdict": "satisfied"
       },
       {
-        "criterion": "Existing endpoint and authorization security semantics remain unchanged.",
-        "evidence": "HTTPS-only endpoint validation, credential-free URL enforcement, redirect refusal, issuer signatures, and synchronous dispatch remain intact.",
+        "criterion": "Production workflow job timeout remains sufficient for the maximum supported webhook timeout plus setup overhead.",
+        "evidence": "The workflow remains at 20 minutes while the trigger hard maximum remains 1200 seconds.",
         "id": "AC-4",
         "verdict": "satisfied"
       },
       {
-        "criterion": "The change remains scoped to the #441 transport-timeout blocker.",
-        "evidence": "Only the trigger implementation and its focused tests change; #437 and #434 are not implemented here.",
+        "criterion": "Live #441 trigger can proceed past timeout parsing after merge.",
+        "evidence": "The empty-string failure condition observed in live run #19 is removed at the workflow boundary by supplying 900 when the Actions variable is unset.",
         "id": "AC-5",
         "verdict": "satisfied"
       }
@@ -46,128 +46,61 @@
       "transaction-snapshot-consistency"
     ],
     "base_ref": "main",
-    "base_sha": "7f907ac8671d91c6fba4daa5ea906034e552a012",
+    "base_sha": "564a83bf297eedcae7a8459f34d686792d38dff4",
     "defect_families": [
       {
-        "evidence": "Reviewed against the exact Issue #457 timeout-only candidate. The change preserves signed authorization semantics, HTTPS-only dispatch, redirect refusal, synchronous execution, and fail-closed handling while bounding and validating only the webhook response timeout.",
-        "family": "DFF-001",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Reviewed against the exact Issue #457 timeout-only candidate. The change preserves signed authorization semantics, HTTPS-only dispatch, redirect refusal, synchronous execution, and fail-closed handling while bounding and validating only the webhook response timeout.",
-        "family": "DFF-002",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Reviewed against the exact Issue #457 timeout-only candidate. The change preserves signed authorization semantics, HTTPS-only dispatch, redirect refusal, synchronous execution, and fail-closed handling while bounding and validating only the webhook response timeout.",
-        "family": "DFF-003",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Reviewed against the exact Issue #457 timeout-only candidate. The change preserves signed authorization semantics, HTTPS-only dispatch, redirect refusal, synchronous execution, and fail-closed handling while bounding and validating only the webhook response timeout.",
-        "family": "DFF-004",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Reviewed against the exact Issue #457 timeout-only candidate. The change preserves signed authorization semantics, HTTPS-only dispatch, redirect refusal, synchronous execution, and fail-closed handling while bounding and validating only the webhook response timeout.",
-        "family": "DFF-005",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Reviewed against the exact Issue #457 timeout-only candidate. The change preserves signed authorization semantics, HTTPS-only dispatch, redirect refusal, synchronous execution, and fail-closed handling while bounding and validating only the webhook response timeout.",
-        "family": "DFF-006",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Reviewed against the exact Issue #457 timeout-only candidate. The change preserves signed authorization semantics, HTTPS-only dispatch, redirect refusal, synchronous execution, and fail-closed handling while bounding and validating only the webhook response timeout.",
-        "family": "DFF-007",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Reviewed against the exact Issue #457 timeout-only candidate. The change preserves signed authorization semantics, HTTPS-only dispatch, redirect refusal, synchronous execution, and fail-closed handling while bounding and validating only the webhook response timeout.",
-        "family": "DFF-008",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Reviewed against the exact Issue #457 timeout-only candidate. The change preserves signed authorization semantics, HTTPS-only dispatch, redirect refusal, synchronous execution, and fail-closed handling while bounding and validating only the webhook response timeout.",
+        "evidence": "Reviewed against the exact Issue #459 workflow-only fallback change. The candidate changes only the timeout environment fallback from an empty Actions variable to the explicit default 900; authorization, replay, signing, persistence, provenance, publication, and fail-closed trigger validation remain unchanged.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed against the exact Issue #457 timeout-only candidate. The change preserves signed authorization semantics, HTTPS-only dispatch, redirect refusal, synchronous execution, and fail-closed handling while bounding and validating only the webhook response timeout.",
+        "evidence": "Reviewed against the exact Issue #459 workflow-only fallback change. The candidate changes only the timeout environment fallback from an empty Actions variable to the explicit default 900; authorization, replay, signing, persistence, provenance, publication, and fail-closed trigger validation remain unchanged.",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed against the exact Issue #457 timeout-only candidate. The change preserves signed authorization semantics, HTTPS-only dispatch, redirect refusal, synchronous execution, and fail-closed handling while bounding and validating only the webhook response timeout.",
+        "evidence": "Reviewed against the exact Issue #459 workflow-only fallback change. The candidate changes only the timeout environment fallback from an empty Actions variable to the explicit default 900; authorization, replay, signing, persistence, provenance, publication, and fail-closed trigger validation remain unchanged.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed against the exact Issue #457 timeout-only candidate. The change preserves signed authorization semantics, HTTPS-only dispatch, redirect refusal, synchronous execution, and fail-closed handling while bounding and validating only the webhook response timeout.",
+        "evidence": "Reviewed against the exact Issue #459 workflow-only fallback change. The candidate changes only the timeout environment fallback from an empty Actions variable to the explicit default 900; authorization, replay, signing, persistence, provenance, publication, and fail-closed trigger validation remain unchanged.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed against the exact Issue #457 timeout-only candidate. The change preserves signed authorization semantics, HTTPS-only dispatch, redirect refusal, synchronous execution, and fail-closed handling while bounding and validating only the webhook response timeout.",
+        "evidence": "Reviewed against the exact Issue #459 workflow-only fallback change. The candidate changes only the timeout environment fallback from an empty Actions variable to the explicit default 900; authorization, replay, signing, persistence, provenance, publication, and fail-closed trigger validation remain unchanged.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed against the exact Issue #457 timeout-only candidate. The change preserves signed authorization semantics, HTTPS-only dispatch, redirect refusal, synchronous execution, and fail-closed handling while bounding and validating only the webhook response timeout.",
+        "evidence": "Reviewed against the exact Issue #459 workflow-only fallback change. The candidate changes only the timeout environment fallback from an empty Actions variable to the explicit default 900; authorization, replay, signing, persistence, provenance, publication, and fail-closed trigger validation remain unchanged.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed against the exact Issue #457 timeout-only candidate. The change preserves signed authorization semantics, HTTPS-only dispatch, redirect refusal, synchronous execution, and fail-closed handling while bounding and validating only the webhook response timeout.",
+        "evidence": "Reviewed against the exact Issue #459 workflow-only fallback change. The candidate changes only the timeout environment fallback from an empty Actions variable to the explicit default 900; authorization, replay, signing, persistence, provenance, publication, and fail-closed trigger validation remain unchanged.",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed against the exact Issue #457 timeout-only candidate. The change preserves signed authorization semantics, HTTPS-only dispatch, redirect refusal, synchronous execution, and fail-closed handling while bounding and validating only the webhook response timeout.",
+        "evidence": "Reviewed against the exact Issue #459 workflow-only fallback change. The candidate changes only the timeout environment fallback from an empty Actions variable to the explicit default 900; authorization, replay, signing, persistence, provenance, publication, and fail-closed trigger validation remain unchanged.",
         "family": "DFF-016",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Reviewed against the exact Issue #457 timeout-only candidate. The change preserves signed authorization semantics, HTTPS-only dispatch, redirect refusal, synchronous execution, and fail-closed handling while bounding and validating only the webhook response timeout.",
-        "family": "DFF-017",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Reviewed against the exact Issue #457 timeout-only candidate. The change preserves signed authorization semantics, HTTPS-only dispatch, redirect refusal, synchronous execution, and fail-closed handling while bounding and validating only the webhook response timeout.",
-        "family": "DFF-018",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Reviewed against the exact Issue #457 timeout-only candidate. The change preserves signed authorization semantics, HTTPS-only dispatch, redirect refusal, synchronous execution, and fail-closed handling while bounding and validating only the webhook response timeout.",
-        "family": "DFF-019",
         "outcome": "clear"
       }
     ],
     "findings": [],
-    "issue": "457",
+    "issue": "459",
     "review_target": [
       {
-        "blob_sha": "38074951820d5b7f7430cb984c3c4b37dac1ef12",
+        "blob_sha": "e3b15433cfb1d693d1e2b03e529733e71baab7db",
         "path": ".github/workflows/hunter-issue-agent-trigger.yml",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "5d825d3ce17b5a92711911aa4a879d9bbdf66930",
-        "path": "scripts/hunter_issue_agent_trigger.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "fab0b185c6166db073719791910a746442bae465",
-        "path": "tests/test_issue_agent_trigger.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "f4c678771c5748bb95f8fdf9e4864dc96bdd9dcd387b546f4dac74f4693f9aff"
+    "review_target_digest": "143075dcca50aafea597fe7a2d46c6d33866805d3c09ccc74456344808c4abd0"
   },
-  "review_id": "3e01c2deb7e6f0c48deb1f21f3dc9e21ccdd6a724d112999e806cdddad84170d",
+  "review_id": "13300fea4919458ade08c8df75c1fc1c390a8c29f84fda7d5afce50274a45a70",
   "schema": "hunter.pre-ready-hostile-review.v1"
 }
