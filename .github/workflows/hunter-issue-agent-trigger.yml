@@ -54,7 +54,7 @@ jobs:
       - name: Authorize exact Issue event and dispatch to trusted issuer edge
         env:
           HUNTER_ISSUE_AGENT_WEBHOOK_URL: ${{ secrets.HUNTER_ISSUE_AGENT_WEBHOOK_URL }}
-          HUNTER_ISSUE_AGENT_WEBHOOK_TIMEOUT_SECONDS: ${{ vars.HUNTER_ISSUE_AGENT_WEBHOOK_TIMEOUT_SECONDS }}
+          HUNTER_ISSUE_AGENT_WEBHOOK_TIMEOUT_SECONDS: ${{ vars.HUNTER_ISSUE_AGENT_WEBHOOK_TIMEOUT_SECONDS || '900' }}
           HUNTER_ISSUE_AGENT_AUTHORIZATION_SIGNING_KEY: ${{ secrets.HUNTER_ISSUE_AGENT_AUTHORIZATION_SIGNING_KEY }}
         run: |
           set -euo pipefail
