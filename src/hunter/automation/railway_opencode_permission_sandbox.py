@@ -39,6 +39,7 @@ _FORBIDDEN_ENV = {
 _PERMISSION_CONFIG = {
     "permission": {
         "*": "deny",
+        "external_directory": "deny",
         "read": "allow",
         "edit": "allow",
         "glob": "allow",
