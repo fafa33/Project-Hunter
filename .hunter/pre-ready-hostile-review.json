@@ -3,37 +3,37 @@
     "acceptance_criteria": [
       {
         "criterion": "/issue-agent/authorize returns success/accepted well below the railway request ceiling and before provider completion",
-        "evidence": "This criterion remains tracked by the broader Issue #461 stabilization matrix and is intentionally outside this focused workspace-isolation candidate.",
+        "evidence": "This criterion remains tracked by the broader Issue #461 stabilization matrix and is outside this focused workspace-isolation candidate.",
         "id": "AC-1",
         "verdict": "not-applicable"
       },
       {
         "criterion": "provider execution >300s cannot cause the github trigger to fail with http 499",
-        "evidence": "This criterion remains tracked by the broader Issue #461 stabilization matrix and is intentionally outside this focused workspace-isolation candidate.",
+        "evidence": "This criterion remains tracked by the broader Issue #461 stabilization matrix and is outside this focused workspace-isolation candidate.",
         "id": "AC-2",
         "verdict": "not-applicable"
       },
       {
         "criterion": "retrying a failed attempt does not mutate the issue and does not change the authorization identity",
-        "evidence": "This criterion remains tracked by the broader Issue #461 stabilization matrix and is intentionally outside this focused workspace-isolation candidate.",
+        "evidence": "This criterion remains tracked by the broader Issue #461 stabilization matrix and is outside this focused workspace-isolation candidate.",
         "id": "AC-3",
         "verdict": "not-applicable"
       },
       {
         "criterion": "source handling authority is exact, fail-closed, and retry-stable for an immutable event",
-        "evidence": "This criterion remains tracked by the broader Issue #461 stabilization matrix and is intentionally outside this focused workspace-isolation candidate.",
+        "evidence": "This criterion remains tracked by the broader Issue #461 stabilization matrix and is outside this focused workspace-isolation candidate.",
         "id": "AC-4",
         "verdict": "not-applicable"
       },
       {
         "criterion": "the exact pinned opencode/provider configuration is compatibility-checked before live use",
-        "evidence": "This criterion remains tracked by the broader Issue #461 stabilization matrix and is intentionally outside this focused workspace-isolation candidate.",
+        "evidence": "This criterion remains tracked by the broader Issue #461 stabilization matrix and is outside this focused workspace-isolation candidate.",
         "id": "AC-5",
         "verdict": "not-applicable"
       },
       {
         "criterion": "runtime capability requirements are checked before provider execution",
-        "evidence": "This criterion remains tracked by the broader Issue #461 stabilization matrix and is intentionally outside this focused workspace-isolation candidate.",
+        "evidence": "This criterion remains tracked by the broader Issue #461 stabilization matrix and is outside this focused workspace-isolation candidate.",
         "id": "AC-6",
         "verdict": "not-applicable"
       },
@@ -45,25 +45,25 @@
       },
       {
         "criterion": "a provider claiming success without candidate repository changes fails closed",
-        "evidence": "This criterion remains tracked by the broader Issue #461 stabilization matrix and is intentionally outside this focused workspace-isolation candidate.",
+        "evidence": "This criterion remains tracked by the broader Issue #461 stabilization matrix and is outside this focused workspace-isolation candidate.",
         "id": "AC-8",
         "verdict": "not-applicable"
       },
       {
         "criterion": "publication remains trusted-parent-owned and exact-head validation remains authoritative",
-        "evidence": "This criterion remains tracked by the broader Issue #461 stabilization matrix and is intentionally outside this focused workspace-isolation candidate.",
+        "evidence": "This criterion remains tracked by the broader Issue #461 stabilization matrix and is outside this focused workspace-isolation candidate.",
         "id": "AC-9",
         "verdict": "not-applicable"
       },
       {
         "criterion": "accepted authorization executes at most once and ends in a durable completed or failed state",
-        "evidence": "This criterion remains tracked by the broader Issue #461 stabilization matrix and is intentionally outside this focused workspace-isolation candidate.",
+        "evidence": "This criterion remains tracked by the broader Issue #461 stabilization matrix and is outside this focused workspace-isolation candidate.",
         "id": "AC-10",
         "verdict": "not-applicable"
       },
       {
         "criterion": "stale/closed pr history cannot generate a false current governance failure",
-        "evidence": "This criterion remains tracked by the broader Issue #461 stabilization matrix and is intentionally outside this focused workspace-isolation candidate.",
+        "evidence": "This criterion remains tracked by the broader Issue #461 stabilization matrix and is outside this focused workspace-isolation candidate.",
         "id": "AC-11",
         "verdict": "not-applicable"
       },
@@ -75,7 +75,7 @@
       },
       {
         "criterion": "only after this matrix is green do we run the live #441 acceptance test",
-        "evidence": "This criterion remains tracked by the broader Issue #461 stabilization matrix and is intentionally outside this focused workspace-isolation candidate.",
+        "evidence": "This criterion remains tracked by the broader Issue #461 stabilization matrix and is outside this focused workspace-isolation candidate.",
         "id": "AC-13",
         "verdict": "not-applicable"
       }
@@ -94,93 +94,52 @@
       "transaction-snapshot-consistency"
     ],
     "base_ref": "main",
-    "base_sha": "564a83bf297eedcae7a8459f34d686792d38dff4",
+    "base_sha": "a3c577fdc7cd37cb9256c3f101cc9b691a237386",
     "defect_families": [
       {
-        "evidence": "Reviewed against the exact base-to-HEAD workspace-isolation diff; the candidate only tightens Railway OpenCode filesystem permissions and its focused regression test, without widening authority.",
+        "evidence": "Reviewed against the exact base-to-HEAD workspace-isolation diff; the candidate only tightens Railway OpenCode filesystem permissions and focused regression coverage without widening authority.",
         "family": "DFF-001",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed against the exact base-to-HEAD workspace-isolation diff; the candidate only tightens Railway OpenCode filesystem permissions and its focused regression test, without widening authority.",
+        "evidence": "Reviewed against the exact base-to-HEAD workspace-isolation diff; the candidate only tightens Railway OpenCode filesystem permissions and focused regression coverage without widening authority.",
         "family": "DFF-002",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed against the exact base-to-HEAD workspace-isolation diff; the candidate only tightens Railway OpenCode filesystem permissions and its focused regression test, without widening authority.",
+        "evidence": "Reviewed against the exact base-to-HEAD workspace-isolation diff; the candidate only tightens Railway OpenCode filesystem permissions and focused regression coverage without widening authority.",
         "family": "DFF-003",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed against the exact base-to-HEAD workspace-isolation diff; the candidate only tightens Railway OpenCode filesystem permissions and its focused regression test, without widening authority.",
+        "evidence": "Reviewed against the exact base-to-HEAD workspace-isolation diff; the candidate only tightens Railway OpenCode filesystem permissions and focused regression coverage without widening authority.",
         "family": "DFF-004",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed against the exact base-to-HEAD workspace-isolation diff; the candidate only tightens Railway OpenCode filesystem permissions and its focused regression test, without widening authority.",
+        "evidence": "Reviewed against the exact base-to-HEAD workspace-isolation diff; the candidate only tightens Railway OpenCode filesystem permissions and focused regression coverage without widening authority.",
         "family": "DFF-005",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed against the exact base-to-HEAD workspace-isolation diff; the candidate only tightens Railway OpenCode filesystem permissions and its focused regression test, without widening authority.",
+        "evidence": "Reviewed against the exact base-to-HEAD workspace-isolation diff; the candidate only tightens Railway OpenCode filesystem permissions and focused regression coverage without widening authority.",
         "family": "DFF-006",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed against the exact base-to-HEAD workspace-isolation diff; the candidate only tightens Railway OpenCode filesystem permissions and its focused regression test, without widening authority.",
+        "evidence": "Reviewed against the exact base-to-HEAD workspace-isolation diff; the candidate only tightens Railway OpenCode filesystem permissions and focused regression coverage without widening authority.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed against the exact base-to-HEAD workspace-isolation diff; the candidate only tightens Railway OpenCode filesystem permissions and its focused regression test, without widening authority.",
-        "family": "DFF-009",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Reviewed against the exact base-to-HEAD workspace-isolation diff; the candidate only tightens Railway OpenCode filesystem permissions and its focused regression test, without widening authority.",
-        "family": "DFF-010",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Reviewed against the exact base-to-HEAD workspace-isolation diff; the candidate only tightens Railway OpenCode filesystem permissions and its focused regression test, without widening authority.",
-        "family": "DFF-011",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Reviewed against the exact base-to-HEAD workspace-isolation diff; the candidate only tightens Railway OpenCode filesystem permissions and its focused regression test, without widening authority.",
-        "family": "DFF-012",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Reviewed against the exact base-to-HEAD workspace-isolation diff; the candidate only tightens Railway OpenCode filesystem permissions and its focused regression test, without widening authority.",
+        "evidence": "Reviewed against the exact base-to-HEAD workspace-isolation diff; the candidate only tightens Railway OpenCode filesystem permissions and focused regression coverage without widening authority.",
         "family": "DFF-013",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Reviewed against the exact base-to-HEAD workspace-isolation diff; the candidate only tightens Railway OpenCode filesystem permissions and its focused regression test, without widening authority.",
-        "family": "DFF-014",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Reviewed against the exact base-to-HEAD workspace-isolation diff; the candidate only tightens Railway OpenCode filesystem permissions and its focused regression test, without widening authority.",
-        "family": "DFF-015",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Reviewed against the exact base-to-HEAD workspace-isolation diff; the candidate only tightens Railway OpenCode filesystem permissions and its focused regression test, without widening authority.",
-        "family": "DFF-016",
         "outcome": "clear"
       }
     ],
     "findings": [],
     "issue": "461",
     "review_target": [
-      {
-        "blob_sha": "81e420a8afad278d2e78b4a43e33092f66bdb69a",
-        "path": ".github/workflows/hunter-issue-agent-trigger.yml",
-        "previous_path": "",
-        "status": "modified"
-      },
       {
         "blob_sha": "0a1d1008158b9ee3d8dc6bd8e1c104d6b03ae632",
         "path": "src/hunter/automation/railway_opencode_permission_sandbox.py",
@@ -194,8 +153,8 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "4f93bed9bd68da70c12abd4b28fa6c782e4825461278c9ecc097e6bf568e0d29"
+    "review_target_digest": "000b17e846fd43cfbc3942500423e044d3f6418e0b1a21661d0ac1e2daa25742"
   },
-  "review_id": "9bedd149b0e61742c2ff0f3f416e98bdb928965cce5b2e08b91ad2b3a7a0551b",
+  "review_id": "e9d178b692cf75526c755fd8e62f1222069bce7474ed549ec7be9a2b46fbe2bf",
   "schema": "hunter.pre-ready-hostile-review.v1"
 }
