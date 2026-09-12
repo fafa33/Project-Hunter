@@ -45,6 +45,7 @@ from hunter.automation.issue_agent_execution import (
     SOURCE_HANDLING_GENESIS_RULE_SHA256_ENV,
     SOURCE_HANDLING_VERIFICATION_KEY_ENV,
     SOURCE_HANDLING_VERIFICATION_KEY_SHA256_ENV,
+    IssueAgentAuthorization,
     IssueAgentAuthorizationError,
     IssueAgentAuthorizationVerifier,
     IssueAgentConfigurationError,
@@ -92,6 +93,13 @@ _MAX_CONCURRENT_REQUEST_WORKERS: Final[int] = 8
 #: body is read, so a client that withholds its declared body terminates within
 #: a bounded time (fail-closed 408) instead of occupying a worker indefinitely.
 _REQUEST_READ_TIMEOUT_SECONDS: Final[float] = 15.0
+
+#: Background provider work must also be bounded. HTTP workers are released
+#: immediately after durable acceptance, so this separate bound prevents a
+#: burst of accepted authorizations from creating unbounded execution threads.
+_MAX_CONCURRENT_EXECUTIONS: Final[int] = 2
+_EXECUTION_SLOTS = threading.BoundedSemaphore(_MAX_CONCURRENT_EXECUTIONS)
+_ISSUE_AGENT_ACCEPTED_SCHEMA = "hunter-issue-agent-accepted-v1"
 
 #: Required environment variables for operational configuration
 _REQUIRED_ENV: Final[tuple[str, ...]] = (
@@ -198,6 +206,7 @@ def compose_services(configuration: IssuerConfiguration) -> IssuerServices:
     )
     repository = EvidenceIntelligenceRepository(configuration.evidence_database)
     ledger = IssueAgentExecutionLedger(configuration.evidence_database)
+    ledger.fail_incomplete_on_startup(failed_at=configuration.clock.now())
     boundary = IssueSourceTransientIntakeBoundary(
         intake=EvidenceIntelligenceIntakeService(repository),
         resolver=resolver,
@@ -231,83 +240,156 @@ def compose_services(configuration: IssuerConfiguration) -> IssuerServices:
     )
 
 
-def execute_authorization(
+@dataclass(frozen=True, slots=True)
+class PreparedIssueAgentExecution:
+    """Durably prepared work whose provider phase may safely outlive HTTP."""
+
+    authorization: IssueAgentAuthorization
+    document_id: str
+    build_record_id: str
+    envelope_id: str
+    handoff_document: str
+
+
+def prepare_authorization(
     services: IssuerServices,
     signed: SignedIssueAgentAuthorization,
-) -> IssueAgentExecutionReceipt:
-    """Execute one signed authorization through the governed path."""
-    # 1. Verify issuer signature (trusted origin)
+) -> PreparedIssueAgentExecution:
+    """Validate, claim, compile and durably record dispatch before HTTP ACK."""
     services.configuration.issuer_verifier.verify(signed)
     authorization = signed.authorization
 
-    # 2. Verify repository and owner match deployment
     if authorization.repository != services.configuration.repository:
         raise IssueAgentAuthorizationError("authorization names a different repository than this deployment")
     if authorization.authorized_by != services.configuration.owner_login:
         raise IssueAgentAuthorizationError("only the configured repository owner may authorize execution")
 
-    # 3. Deterministic mapping (pure, before ownership)
     reference = issue_agent_intake_reference(authorization)
     document_id = issue_agent_document_id(authorization)
     request = issue_agent_task_request(authorization)
     if request.document_id != document_id:
         raise IssueAgentExecutionError("Issue task request does not bind the ingested document identity")
 
-    # 4. Source Handling preflight: validate authority before claiming ownership.
-    # This is side-effect free -- no ledger row, no persisted artifacts, no
-    # dispatch. A failed preflight allows retry once authority is corrected.
     services.boundary.preflight(
         reference,
         processing_run_id=authorization.authorization_id,
         processed_at=services.configuration.clock.now(),
     )
 
-    # 5. Claim durable execution ownership
-    services.ledger.claim(authorization, claimed_at=services.configuration.clock.now())
-
-    # 6. Ingest through ADR 0036 boundary
-    services.boundary.ingest(
-        reference,
-        processing_run_id=authorization.authorization_id,
-        processed_at=services.configuration.clock.now(),
-    )
-
-    # 7. Compile through the one canonical engineering-task ingress
-    compiled = services.ingress.compile(request)
-    envelope = compiled.envelope
-    envelope.verify_issuer_signature(services.configuration.prompt_verifier)
-    if envelope.build_record_id != compiled.compilation.manifest.build_record_id:
-        raise IssueAgentExecutionError("signed envelope and persisted build refer to different lineage")
-
-    # 8. Serialize exact non-content handoff
-    handoff_document = serialize_prompt_automation_handoff(envelope)
-
-    # 9. Record handoff durably BEFORE dispatch
-    services.ledger.record_dispatch(
+    services.ledger.claim(
         authorization,
+        claimed_at=services.configuration.clock.now(),
+    )
+
+    try:
+        services.boundary.ingest(
+            reference,
+            processing_run_id=authorization.authorization_id,
+            processed_at=services.configuration.clock.now(),
+        )
+
+        compiled = services.ingress.compile(request)
+        envelope = compiled.envelope
+        envelope.verify_issuer_signature(services.configuration.prompt_verifier)
+        if envelope.build_record_id != compiled.compilation.manifest.build_record_id:
+            raise IssueAgentExecutionError("signed envelope and persisted build refer to different lineage")
+
+        handoff_document = serialize_prompt_automation_handoff(envelope)
+
+        services.ledger.record_dispatch(
+            authorization,
+            document_id=document_id,
+            build_record_id=envelope.build_record_id,
+            envelope_id=envelope.envelope_id,
+            handoff_document=handoff_document,
+            dispatched_at=services.configuration.clock.now(),
+        )
+    except BaseException as error:
+        services.ledger.fail(
+            authorization,
+            failed_at=services.configuration.clock.now(),
+            failure_type=type(error).__name__,
+            failure_message=str(error),
+        )
+        raise
+
+    return PreparedIssueAgentExecution(
+        authorization=authorization,
         document_id=document_id,
         build_record_id=envelope.build_record_id,
         envelope_id=envelope.envelope_id,
         handoff_document=handoff_document,
-        dispatched_at=services.configuration.clock.now(),
     )
 
-    # 10. Dispatch to fallback runtime (unchanged handoff)
-    receipt = services.fallback.dispatch(handoff_document)
-    if not isinstance(receipt, AgentFallbackRuntimeReceipt):
-        raise IssueAgentExecutionError("fallback runtime did not return a canonical execution receipt")
 
-    # 11. Complete ledger
-    services.ledger.complete(authorization, completed_at=services.configuration.clock.now())
+def finish_prepared_authorization(
+    services: IssuerServices,
+    prepared: PreparedIssueAgentExecution,
+) -> IssueAgentExecutionReceipt:
+    """Run only the slow provider phase and persist a terminal outcome."""
+    authorization = prepared.authorization
+    try:
+        receipt = services.fallback.dispatch(prepared.handoff_document)
+        if not isinstance(receipt, AgentFallbackRuntimeReceipt):
+            raise IssueAgentExecutionError("fallback runtime did not return a canonical execution receipt")
 
-    return IssueAgentExecutionReceipt(
-        authorization_id=authorization.authorization_id,
-        document_id=document_id,
-        build_record_id=envelope.build_record_id,
-        envelope_id=envelope.envelope_id,
-        handoff_document=handoff_document,
-        fallback=receipt,
-    )
+        services.ledger.complete(
+            authorization,
+            completed_at=services.configuration.clock.now(),
+        )
+
+        return IssueAgentExecutionReceipt(
+            authorization_id=authorization.authorization_id,
+            document_id=prepared.document_id,
+            build_record_id=prepared.build_record_id,
+            envelope_id=prepared.envelope_id,
+            handoff_document=prepared.handoff_document,
+            fallback=receipt,
+        )
+    except BaseException as error:
+        services.ledger.fail(
+            authorization,
+            failed_at=services.configuration.clock.now(),
+            failure_type=type(error).__name__,
+            failure_message=str(error),
+        )
+        raise
+
+
+def execute_authorization(
+    services: IssuerServices,
+    signed: SignedIssueAgentAuthorization,
+) -> IssueAgentExecutionReceipt:
+    """Synchronous compatibility path used by direct composition tests."""
+    prepared = prepare_authorization(services, signed)
+    return finish_prepared_authorization(services, prepared)
+
+
+def _run_prepared_in_background(
+    services: IssuerServices,
+    prepared: PreparedIssueAgentExecution,
+) -> None:
+    try:
+        finish_prepared_authorization(services, prepared)
+    except BaseException:
+        logging.getLogger(__name__).exception(
+            "Issue Agent background execution failed for %s",
+            prepared.authorization.authorization_id,
+        )
+    finally:
+        _EXECUTION_SLOTS.release()
+
+
+def _accepted_payload(prepared: PreparedIssueAgentExecution) -> dict[str, Any]:
+    return {
+        "authorization_id": prepared.authorization.authorization_id,
+        "document_id": prepared.document_id,
+        "build_record_id": prepared.build_record_id,
+        "envelope_id": prepared.envelope_id,
+        "handoff_document": prepared.handoff_document,
+        "state": "DISPATCHED",
+        "schema_version": _ISSUE_AGENT_ACCEPTED_SCHEMA,
+    }
 
 
 def _canonical_json(value: object) -> str:
@@ -367,40 +449,74 @@ class _IssuerRequestHandler(BaseHTTPRequestHandler):
             self._send_error(400, str(error))
             return
 
-        # Execute through governed path
+        # Admission is bounded independently of the long provider phase.
+        if not _EXECUTION_SLOTS.acquire(blocking=False):
+            self._send_error(503, "Issue Agent execution capacity is saturated")
+            return
+
         assert self.services is not None
         try:
-            receipt = execute_authorization(self.services, signed)
+            prepared = prepare_authorization(self.services, signed)
         except IssueAgentReplayError as error:
+            _EXECUTION_SLOTS.release()
             self._send_error(409, str(error))
             return
-        # IssuerError subclasses AuthorizationError, so it must be matched first:
-        # a signature the trusted issuer did not mint is an origin failure (401),
-        # not an authorization-policy failure (403).
         except IssueAgentIssuerError as error:
+            _EXECUTION_SLOTS.release()
             self._send_error(401, str(error))
             return
         except IssueAgentAuthorizationError as error:
+            _EXECUTION_SLOTS.release()
             self._send_error(403, str(error))
             return
         except SourceHandlingBlockedError as error:
+            _EXECUTION_SLOTS.release()
             self._send_error(422, str(error))
             return
         except IssueAgentConfigurationError as error:
+            _EXECUTION_SLOTS.release()
             self._send_error(500, str(error))
             return
         except IssueAgentExecutionError as error:
+            _EXECUTION_SLOTS.release()
             self._send_error(500, str(error))
             return
         except SmartPromptMachineError as error:
+            _EXECUTION_SLOTS.release()
             self._send_error(422, str(error))
             return
-        except Exception as error:  # noqa: BLE001 - fail closed, never hang the transport
-            self._send_error(500, f"unexpected execution failure: {type(error).__name__}")
+        except Exception as error:  # noqa: BLE001
+            _EXECUTION_SLOTS.release()
+            self._send_error(
+                500,
+                f"unexpected execution preparation failure: {type(error).__name__}",
+            )
             return
 
-        # Success response
-        self._send_json(200, json.loads(receipt.to_json()))
+        worker = threading.Thread(
+            target=_run_prepared_in_background,
+            args=(self.services, prepared),
+            name=f"issue-agent-{prepared.authorization.issue_number}",
+            daemon=True,
+        )
+        try:
+            worker.start()
+        except Exception as error:  # noqa: BLE001
+            try:
+                self.services.ledger.fail(
+                    prepared.authorization,
+                    failed_at=self.services.configuration.clock.now(),
+                    failure_type=type(error).__name__,
+                    failure_message=str(error),
+                )
+            finally:
+                _EXECUTION_SLOTS.release()
+            self._send_error(500, "unable to start accepted Issue Agent execution")
+            return
+
+        # ACK is intentionally independent of provider duration. At this point
+        # authorization ownership and the exact handoff are already durable.
+        self._send_json(200, _accepted_payload(prepared))
 
     def do_GET(self) -> None:
         """Health check endpoint."""

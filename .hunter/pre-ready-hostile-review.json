@@ -3,67 +3,67 @@
     "acceptance_criteria": [
       {
         "criterion": "/issue-agent/authorize returns success/accepted well below the railway request ceiling and before provider completion",
-        "evidence": "This criterion remains tracked by the broader Issue #461 stabilization matrix and is outside this focused workspace-isolation candidate.",
+        "evidence": "This criterion remains tracked by the broader Issue #461 stabilization matrix and is intentionally outside this focused workspace-isolation candidate.",
         "id": "AC-1",
         "verdict": "not-applicable"
       },
       {
         "criterion": "provider execution >300s cannot cause the github trigger to fail with http 499",
-        "evidence": "This criterion remains tracked by the broader Issue #461 stabilization matrix and is outside this focused workspace-isolation candidate.",
+        "evidence": "This criterion remains tracked by the broader Issue #461 stabilization matrix and is intentionally outside this focused workspace-isolation candidate.",
         "id": "AC-2",
         "verdict": "not-applicable"
       },
       {
         "criterion": "retrying a failed attempt does not mutate the issue and does not change the authorization identity",
-        "evidence": "This criterion remains tracked by the broader Issue #461 stabilization matrix and is outside this focused workspace-isolation candidate.",
+        "evidence": "This criterion remains tracked by the broader Issue #461 stabilization matrix and is intentionally outside this focused workspace-isolation candidate.",
         "id": "AC-3",
         "verdict": "not-applicable"
       },
       {
         "criterion": "source handling authority is exact, fail-closed, and retry-stable for an immutable event",
-        "evidence": "This criterion remains tracked by the broader Issue #461 stabilization matrix and is outside this focused workspace-isolation candidate.",
+        "evidence": "This criterion remains tracked by the broader Issue #461 stabilization matrix and is intentionally outside this focused workspace-isolation candidate.",
         "id": "AC-4",
         "verdict": "not-applicable"
       },
       {
         "criterion": "the exact pinned opencode/provider configuration is compatibility-checked before live use",
-        "evidence": "This criterion remains tracked by the broader Issue #461 stabilization matrix and is outside this focused workspace-isolation candidate.",
+        "evidence": "This criterion remains tracked by the broader Issue #461 stabilization matrix and is intentionally outside this focused workspace-isolation candidate.",
         "id": "AC-5",
         "verdict": "not-applicable"
       },
       {
         "criterion": "runtime capability requirements are checked before provider execution",
-        "evidence": "This criterion remains tracked by the broader Issue #461 stabilization matrix and is outside this focused workspace-isolation candidate.",
+        "evidence": "This criterion remains tracked by the broader Issue #461 stabilization matrix and is intentionally outside this focused workspace-isolation candidate.",
         "id": "AC-6",
         "verdict": "not-applicable"
       },
       {
-        "criterion": "opencode can modify only the isolated attempt workspace; external-directory edits are explicitly denied",
+        "criterion": "opencode can modify only the isolated attempt workspace; external-directory edits are explicitly denied. \u2014 pr #465 / ca2adf5ebeb5e11b198e50de6d0a62af5b23207c",
         "evidence": "This focused candidate explicitly denies external_directory, keeps edits inside the isolated attempt workspace, adds regression coverage, and introduces no Ready, merge, deploy, shell, network, or publication authority.",
         "id": "AC-7",
         "verdict": "satisfied"
       },
       {
         "criterion": "a provider claiming success without candidate repository changes fails closed",
-        "evidence": "This criterion remains tracked by the broader Issue #461 stabilization matrix and is outside this focused workspace-isolation candidate.",
+        "evidence": "This criterion remains tracked by the broader Issue #461 stabilization matrix and is intentionally outside this focused workspace-isolation candidate.",
         "id": "AC-8",
         "verdict": "not-applicable"
       },
       {
         "criterion": "publication remains trusted-parent-owned and exact-head validation remains authoritative",
-        "evidence": "This criterion remains tracked by the broader Issue #461 stabilization matrix and is outside this focused workspace-isolation candidate.",
+        "evidence": "This criterion remains tracked by the broader Issue #461 stabilization matrix and is intentionally outside this focused workspace-isolation candidate.",
         "id": "AC-9",
         "verdict": "not-applicable"
       },
       {
         "criterion": "accepted authorization executes at most once and ends in a durable completed or failed state",
-        "evidence": "This criterion remains tracked by the broader Issue #461 stabilization matrix and is outside this focused workspace-isolation candidate.",
+        "evidence": "This criterion remains tracked by the broader Issue #461 stabilization matrix and is intentionally outside this focused workspace-isolation candidate.",
         "id": "AC-10",
         "verdict": "not-applicable"
       },
       {
         "criterion": "stale/closed pr history cannot generate a false current governance failure",
-        "evidence": "This criterion remains tracked by the broader Issue #461 stabilization matrix and is outside this focused workspace-isolation candidate.",
+        "evidence": "This criterion remains tracked by the broader Issue #461 stabilization matrix and is intentionally outside this focused workspace-isolation candidate.",
         "id": "AC-11",
         "verdict": "not-applicable"
       },
@@ -75,7 +75,7 @@
       },
       {
         "criterion": "only after this matrix is green do we run the live #441 acceptance test",
-        "evidence": "This criterion remains tracked by the broader Issue #461 stabilization matrix and is outside this focused workspace-isolation candidate.",
+        "evidence": "This criterion remains tracked by the broader Issue #461 stabilization matrix and is intentionally outside this focused workspace-isolation candidate.",
         "id": "AC-13",
         "verdict": "not-applicable"
       }
@@ -94,46 +94,91 @@
       "transaction-snapshot-consistency"
     ],
     "base_ref": "main",
-    "base_sha": "a3c577fdc7cd37cb9256c3f101cc9b691a237386",
+    "base_sha": "ca2adf5ebeb5e11b198e50de6d0a62af5b23207c",
     "defect_families": [
       {
-        "evidence": "Reviewed against the exact base-to-HEAD workspace-isolation diff; the candidate only tightens Railway OpenCode filesystem permissions and focused regression coverage without widening authority.",
+        "evidence": "Reviewed canonical 'untrusted-temporal-authority' invariant for Issue #461 candidate; 2 registry-declared regression test(s) passed locally as part of the exact applicable-family hostile-review batch.",
         "family": "DFF-001",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed against the exact base-to-HEAD workspace-isolation diff; the candidate only tightens Railway OpenCode filesystem permissions and focused regression coverage without widening authority.",
+        "evidence": "Reviewed canonical 'transaction-snapshot-inconsistency' invariant for Issue #461 candidate; 1 registry-declared regression test(s) passed locally as part of the exact applicable-family hostile-review batch.",
         "family": "DFF-002",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed against the exact base-to-HEAD workspace-isolation diff; the candidate only tightens Railway OpenCode filesystem permissions and focused regression coverage without widening authority.",
+        "evidence": "Reviewed canonical 'logical-identity-reuse' invariant for Issue #461 candidate; 1 registry-declared regression test(s) passed locally as part of the exact applicable-family hostile-review batch.",
         "family": "DFF-003",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed against the exact base-to-HEAD workspace-isolation diff; the candidate only tightens Railway OpenCode filesystem permissions and focused regression coverage without widening authority.",
+        "evidence": "Reviewed canonical 'schema-fail-closed-incompleteness' invariant for Issue #461 candidate; 2 registry-declared regression test(s) passed locally as part of the exact applicable-family hostile-review batch.",
         "family": "DFF-004",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed against the exact base-to-HEAD workspace-isolation diff; the candidate only tightens Railway OpenCode filesystem permissions and focused regression coverage without widening authority.",
+        "evidence": "Reviewed canonical 'nested-metadata-persistence-bypass' invariant for Issue #461 candidate; 2 registry-declared regression test(s) passed locally as part of the exact applicable-family hostile-review batch.",
         "family": "DFF-005",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed against the exact base-to-HEAD workspace-isolation diff; the candidate only tightens Railway OpenCode filesystem permissions and focused regression coverage without widening authority.",
+        "evidence": "Reviewed canonical 'monotonicity-and-restart-instability' invariant for Issue #461 candidate; 1 registry-declared regression test(s) passed locally as part of the exact applicable-family hostile-review batch.",
         "family": "DFF-006",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed against the exact base-to-HEAD workspace-isolation diff; the candidate only tightens Railway OpenCode filesystem permissions and focused regression coverage without widening authority.",
+        "evidence": "Reviewed canonical 'authorization-replay' invariant for Issue #461 candidate; 2 registry-declared regression test(s) passed locally as part of the exact applicable-family hostile-review batch.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed against the exact base-to-HEAD workspace-isolation diff; the candidate only tightens Railway OpenCode filesystem permissions and focused regression coverage without widening authority.",
+        "evidence": "Reviewed canonical 'tamper-and-history-forgery' invariant for Issue #461 candidate; 2 registry-declared regression test(s) passed locally as part of the exact applicable-family hostile-review batch.",
+        "family": "DFF-008",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Reviewed canonical 'connector-provenance-evidence-lifecycle' invariant for Issue #461 candidate; 2 registry-declared regression test(s) passed locally as part of the exact applicable-family hostile-review batch.",
+        "family": "DFF-009",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Reviewed canonical 'writer-identity-not-authorization-bound' invariant for Issue #461 candidate; 3 registry-declared regression test(s) passed locally as part of the exact applicable-family hostile-review batch.",
+        "family": "DFF-010",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Reviewed canonical 'stranded-intermediate-commit-evidence' invariant for Issue #461 candidate; 2 registry-declared regression test(s) passed locally as part of the exact applicable-family hostile-review batch.",
+        "family": "DFF-011",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Reviewed canonical 'stale-receipt-published' invariant for Issue #461 candidate; 7 registry-declared regression test(s) passed locally as part of the exact applicable-family hostile-review batch.",
+        "family": "DFF-012",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Reviewed canonical 'ready-without-complete-hostile-review' invariant for Issue #461 candidate; 13 registry-declared regression test(s) passed locally as part of the exact applicable-family hostile-review batch.",
         "family": "DFF-013",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Reviewed canonical 'pending-prerequisite-reported-as-failure' invariant for Issue #461 candidate; 9 registry-declared regression test(s) passed locally as part of the exact applicable-family hostile-review batch.",
+        "family": "DFF-014",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Reviewed canonical 'overclaimed-prevention-state' invariant for Issue #461 candidate; 2 registry-declared regression test(s) passed locally as part of the exact applicable-family hostile-review batch.",
+        "family": "DFF-015",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Reviewed canonical 'validation-proof-reused-without-immutable-identity' invariant for Issue #461 candidate; 8 registry-declared regression test(s) passed locally as part of the exact applicable-family hostile-review batch.",
+        "family": "DFF-016",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Reviewed canonical 'runtime-bootstrap-not-volume-aware-before-issuer-composition' invariant for Issue #461 candidate; 18 registry-declared regression test(s) passed locally as part of the exact applicable-family hostile-review batch.",
+        "family": "DFF-019",
         "outcome": "clear"
       }
     ],
@@ -141,20 +186,26 @@
     "issue": "461",
     "review_target": [
       {
-        "blob_sha": "0a1d1008158b9ee3d8dc6bd8e1c104d6b03ae632",
-        "path": "src/hunter/automation/railway_opencode_permission_sandbox.py",
+        "blob_sha": "a376d8b4397356bbcae2fe4333292db1f05477a0",
+        "path": "scripts/hunter_issue_agent_issuer.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "3da1624b2ab65509d9a042f6c026134dbf98b50f",
-        "path": "tests/test_railway_opencode_permission_sandbox.py",
+        "blob_sha": "fd7b1e4fe7e8d18fd50051cc6f84dbd0f264580e",
+        "path": "src/hunter/automation/issue_agent_execution.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "f6b4ac79af614a3d6c77797a3f8e1fd722b737ef",
+        "path": "tests/test_issue_agent_issuer.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "000b17e846fd43cfbc3942500423e044d3f6418e0b1a21661d0ac1e2daa25742"
+    "review_target_digest": "831e558fdc3a3799ff8c50746c5935faabdf639f230788851717d9dca7deaecc"
   },
-  "review_id": "e9d178b692cf75526c755fd8e62f1222069bce7474ed549ec7be9a2b46fbe2bf",
+  "review_id": "e7a36ef46caf8bcd13023d1a8e0398f13f687d92b54040cabdf4bd057a9d8637",
   "schema": "hunter.pre-ready-hostile-review.v1"
 }

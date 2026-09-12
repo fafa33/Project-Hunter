@@ -160,12 +160,16 @@ CREATE TABLE IF NOT EXISTS {_LEDGER_TABLE} (
     handoff_document TEXT,
     claimed_at TEXT NOT NULL,
     dispatched_at TEXT,
-    completed_at TEXT
+    completed_at TEXT,
+    failed_at TEXT,
+    failure_type TEXT,
+    failure_message TEXT
 )
 """
 _STATE_CLAIMED = "CLAIMED"
 _STATE_DISPATCHED = "DISPATCHED"
 _STATE_COMPLETED = "COMPLETED"
+_STATE_FAILED = "FAILED"
 
 
 class IssueAgentExecutionError(RuntimeError):
@@ -567,6 +571,9 @@ class IssueAgentLedgerEntry:
     build_record_id: str | None
     envelope_id: str | None
     handoff_document: str | None
+    failed_at: str | None
+    failure_type: str | None
+    failure_message: str | None
 
 
 class IssueAgentExecutionLedger:
@@ -585,6 +592,10 @@ class IssueAgentExecutionLedger:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         with closing(self._connect()) as connection:
             connection.execute(_LEDGER_SCHEMA)
+            columns = {str(row["name"]) for row in connection.execute(f"PRAGMA table_info({_LEDGER_TABLE})").fetchall()}
+            for name in ("failed_at", "failure_type", "failure_message"):
+                if name not in columns:
+                    connection.execute(f"ALTER TABLE {_LEDGER_TABLE} ADD COLUMN {name} TEXT")
             connection.commit()
 
     @property
@@ -612,6 +623,9 @@ class IssueAgentExecutionLedger:
             build_record_id=row["build_record_id"],
             envelope_id=row["envelope_id"],
             handoff_document=row["handoff_document"],
+            failed_at=row["failed_at"],
+            failure_type=row["failure_type"],
+            failure_message=row["failure_message"],
         )
 
     def claim(self, authorization: IssueAgentAuthorization, *, claimed_at: datetime) -> None:
@@ -692,6 +706,71 @@ class IssueAgentExecutionLedger:
             ),
             failure="ledger completion state is not the exact dispatched authorization",
         )
+
+    def fail(
+        self,
+        authorization: IssueAgentAuthorization,
+        *,
+        failed_at: datetime,
+        failure_type: str,
+        failure_message: str,
+    ) -> None:
+        """Persist a terminal failure without ever releasing replay ownership."""
+        moment = _aware_utc("ledger failure time", failed_at).isoformat()
+        kind = str(failure_type).strip() or "ExecutionError"
+        message = str(failure_message).strip() or kind
+        if len(message) > 2000:
+            message = message[:2000]
+
+        self._advance(
+            authorization,
+            sql=(
+                f"UPDATE {_LEDGER_TABLE} "
+                "SET state = ?, failed_at = ?, failure_type = ?, failure_message = ? "
+                "WHERE authorization_id = ? AND authorization_digest = ? "
+                "AND state IN (?, ?)"
+            ),
+            parameters=(
+                _STATE_FAILED,
+                moment,
+                kind,
+                message,
+                authorization.authorization_id,
+                authorization.content_digest,
+                _STATE_CLAIMED,
+                _STATE_DISPATCHED,
+            ),
+            failure="ledger failure state is not an active exact authorization",
+        )
+
+    def fail_incomplete_on_startup(self, *, failed_at: datetime) -> int:
+        """Turn restart-stranded nonterminal ownership into durable failure.
+
+        Replay ownership remains held forever; startup recovery never retries an
+        uncertain authorization and therefore cannot double-execute it.
+        """
+        moment = _aware_utc("ledger startup recovery time", failed_at).isoformat()
+        with closing(self._connect()) as connection:
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+                cursor = connection.execute(
+                    f"UPDATE {_LEDGER_TABLE} "
+                    "SET state = ?, failed_at = ?, failure_type = ?, failure_message = ? "
+                    "WHERE state IN (?, ?)",
+                    (
+                        _STATE_FAILED,
+                        moment,
+                        "ProcessRestart",
+                        "issuer restarted before a durable terminal outcome",
+                        _STATE_CLAIMED,
+                        _STATE_DISPATCHED,
+                    ),
+                )
+                connection.execute("COMMIT")
+                return int(cursor.rowcount)
+            except BaseException:
+                connection.execute("ROLLBACK")
+                raise
 
     def _advance(
         self,
