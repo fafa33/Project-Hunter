@@ -1148,6 +1148,178 @@ def test_ledger_rejects_naive_times(tmp_path: Path) -> None:
         ledger.claim(authorization, claimed_at=datetime(2026, 9, 5, 12, 0))
 
 
+# --- Owner/lease-aware startup recovery (Issue #461) -------------------------
+#
+# A rolling deployment or the documented multiple-instance configuration runs
+# two issuer processes against one shared ledger. Startup recovery must
+# therefore be ownership- and lease-aware: it may fail closed only incomplete
+# rows whose lease has already lapsed, because a still-valid foreign lease is
+# proof that another live instance is still running that provider. Replay
+# identity stays permanently claimed forever; lease expiry never permits a
+# reclaim or re-execution.
+
+
+def test_a_live_foreign_lease_is_never_failed_or_reclaimed(tmp_path: Path) -> None:
+    path = tmp_path / "ledger.sqlite"
+    authorization = _inner(_authorization_document())
+    owner = IssueAgentExecutionLedger(path, instance_id="instance-owner-a")
+    owner.claim(authorization, claimed_at=START)
+    owner.record_dispatch(
+        authorization,
+        document_id="d",
+        build_record_id="b",
+        envelope_id="e",
+        handoff_document="{}",
+        dispatched_at=START,
+    )
+    dispatched = owner.entry(authorization.authorization_id)
+    assert dispatched.owner_instance_id == "instance-owner-a"
+    assert dispatched.lease_expires_at is not None
+
+    other = IssueAgentExecutionLedger(path, instance_id="instance-other-b")
+    assert other.recover_expired_on_startup(failed_at=START + timedelta(hours=1)) == 0
+
+    entry = other.entry(authorization.authorization_id)
+    assert entry is not None
+    assert entry.state == "DISPATCHED"
+    assert entry.owner_instance_id == "instance-owner-a"
+
+    # Permanent replay identity: a still-valid foreign lease never permits a
+    # different instance to reclaim the authorization and execute it again.
+    with pytest.raises(IssueAgentReplayError):
+        other.claim(authorization, claimed_at=START + timedelta(hours=1))
+
+
+def test_an_expired_incomplete_owner_is_recovered_fail_closed(tmp_path: Path) -> None:
+    path = tmp_path / "ledger.sqlite"
+    authorization = _inner(_authorization_document())
+    owner = IssueAgentExecutionLedger(path, instance_id="instance-owner-a")
+    owner.claim(authorization, claimed_at=START)
+    owner.record_dispatch(
+        authorization,
+        document_id="d",
+        build_record_id="b",
+        envelope_id="e",
+        handoff_document="{}",
+        dispatched_at=START,
+    )
+
+    other = IssueAgentExecutionLedger(path, instance_id="instance-other-b")
+    recovered = other.recover_expired_on_startup(failed_at=START + timedelta(hours=7))
+    assert recovered == 1
+
+    entry = other.entry(authorization.authorization_id)
+    assert entry is not None
+    assert entry.state == "FAILED"
+    assert entry.failure_type == "ProcessRestart"
+    assert "lease" in (entry.failure_message or "")
+
+    # Lease expiry never permits replay or reclaim of the failed identity.
+    with pytest.raises(IssueAgentReplayError):
+        other.claim(authorization, claimed_at=START + timedelta(hours=7))
+    with pytest.raises(IssueAgentReplayError):
+        other.claim(authorization, claimed_at=START + timedelta(hours=8))
+
+
+def test_a_wrong_instance_cannot_complete_or_fail_another_instances_execution(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "ledger.sqlite"
+    authorization = _inner(_authorization_document())
+    owner = IssueAgentExecutionLedger(path, instance_id="instance-owner-a")
+    owner.claim(authorization, claimed_at=START)
+    owner.record_dispatch(
+        authorization,
+        document_id="d",
+        build_record_id="b",
+        envelope_id="e",
+        handoff_document="{}",
+        dispatched_at=START,
+    )
+
+    intruder = IssueAgentExecutionLedger(path, instance_id="instance-intruder-c")
+    with pytest.raises(IssueAgentExecutionError, match="dispatched authorization owned by this instance"):
+        intruder.complete(authorization, completed_at=START + timedelta(seconds=1))
+    with pytest.raises(IssueAgentExecutionError, match="owned by this instance"):
+        intruder.fail(
+            authorization,
+            failed_at=START + timedelta(seconds=1),
+            failure_type="IntruderError",
+            failure_message="not the owner",
+        )
+
+    # The owning instance can still complete its own execution durably.
+    owner.complete(authorization, completed_at=START + timedelta(seconds=1))
+    entry = owner.entry(authorization.authorization_id)
+    assert entry is not None
+    assert entry.state == "COMPLETED"
+
+
+def test_active_execution_records_a_renewable_lease(tmp_path: Path) -> None:
+    path = tmp_path / "ledger.sqlite"
+    authorization = _inner(_authorization_document())
+    owner = IssueAgentExecutionLedger(path, instance_id="instance-owner-a")
+    owner.claim(authorization, claimed_at=START)
+    owner.record_dispatch(
+        authorization,
+        document_id="d",
+        build_record_id="b",
+        envelope_id="e",
+        handoff_document="{}",
+        dispatched_at=START,
+    )
+
+    first = owner.entry(authorization.authorization_id)
+    assert first.lease_expires_at is not None
+
+    renewed = START + timedelta(hours=1)
+    owner.renew_lease(authorization, health_at=renewed)
+    second = owner.entry(authorization.authorization_id)
+    assert second.lease_expires_at is not None
+    assert second.lease_expires_at > first.lease_expires_at
+
+
+def test_a_pre_lease_row_without_an_owner_is_never_guessed_at_by_recovery(
+    tmp_path: Path,
+) -> None:
+    """A row with no recorded lease (pre-upgrade) is never reclaimed or failed.
+
+    During a rolling upgrade an old instance may still be running providers
+    whose rows carry no lease; the new instance must leave those rows alone
+    exactly as it leaves any other live foreign work alone.
+    """
+    path = tmp_path / "ledger.sqlite"
+    authorization = _inner(_authorization_document())
+    ledger = IssueAgentExecutionLedger(path, instance_id="instance-owner-a")
+    ledger.claim(authorization, claimed_at=START)
+    ledger.record_dispatch(
+        authorization,
+        document_id="d",
+        build_record_id="b",
+        envelope_id="e",
+        handoff_document="{}",
+        dispatched_at=START,
+    )
+
+    # Simulate a pre-lease row: no durable lease columns were ever recorded.
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            "UPDATE issue_agent_execution_ledger "
+            "SET owner_instance_id = NULL, leased_at = NULL, lease_expires_at = NULL"
+        )
+
+    other = IssueAgentExecutionLedger(path, instance_id="instance-other-b")
+    assert other.recover_expired_on_startup(failed_at=START + timedelta(hours=7)) == 0
+    entry = other.entry(authorization.authorization_id)
+    assert entry is not None
+    assert entry.state == "DISPATCHED"
+
+    # Even with no lease to protect it, replay identity stays permanently
+    # claimed: the pre-upgrade owner still owns the row.
+    with pytest.raises(IssueAgentReplayError):
+        other.claim(authorization, claimed_at=START + timedelta(hours=7))
+
+
 def test_caller_supplied_issue_time_is_never_execution_authority(tmp_path: Path) -> None:
     """`issue_updated_at` is a claim inside caller data, never a cutoff."""
     future = "2099-01-01T00:00:00Z"

@@ -954,6 +954,57 @@
       "sources": [
         "Issue #442 Railway issuer runtime bootstrap volume-aware (2026-09-09)"
       ]
+    },
+    {
+      "id": "DFF-020",
+      "title": "live-instance-execution-ownership-isolation",
+      "invariant": "A new issuer instance must never fail or terminally mutate active work owned by another live instance: an active CLAIMED/DISPATCHED execution carries the exact owner identity and a renewable lease, expired ownership may be recovered fail-closed, and authorization replay identity is never released.",
+      "applicability": {
+        "changed_paths": [
+          "src/hunter/automation/",
+          "scripts/"
+        ],
+        "rationale": "The execution ledger and the issuer composition root are where one instance can mistake another live instance's active execution for its own leftover work; the owner/lease columns, startup recovery and the second-instance overlap live there."
+      },
+      "prevention": {
+        "mechanism": "Owner- and lease-aware execution ledger: every active row carries the exact owning issuer instance id and a renewable lease, and startup recovery fails closed only incomplete rows whose lease has lapsed, never a row under a valid foreign lease. complete/fail/record_dispatch require the exact owning instance, the owning instance renews each still-running execution's lease, and replay identity stays permanently claimed so lease expiry never permits a reclaim or re-execution.",
+        "boundary": "review"
+      },
+      "regression_evidence": [
+        "tests/test_issue_agent_execution.py::test_a_live_foreign_lease_is_never_failed_or_reclaimed",
+        "tests/test_issue_agent_issuer.py::test_a_second_issuer_instance_does_not_fail_live_foreign_execution",
+        "tests/test_issue_agent_execution.py::test_an_expired_incomplete_owner_is_recovered_fail_closed",
+        "tests/test_issue_agent_execution.py::test_a_wrong_instance_cannot_complete_or_fail_another_instances_execution",
+        "tests/test_issue_agent_execution.py::test_active_execution_records_a_renewable_lease"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "Issue #461 Codex P1 independent review (PR #466)"
+      ]
+    },
+    {
+      "id": "DFF-021",
+      "title": "accepted-execution-shutdown-drain-safety",
+      "invariant": "Once /issue-agent/authorize has accepted and durably dispatched work, process shutdown must not silently abandon the provider worker: accepted execution workers are tracked and gracefully drained to a terminal outcome, and a drain timeout must not fabricate FAILED for work still genuinely running.",
+      "applicability": {
+        "changed_paths": [
+          "src/hunter/automation/",
+          "scripts/"
+        ],
+        "rationale": "The trusted issuer HTTP edge and its background execution workers are where accepted work can be silently abandoned at shutdown or falsely failed when a drain timeout expires while the provider still runs."
+      },
+      "prevention": {
+        "mechanism": "Accepted execution workers are non-daemon and registered before start, unregister themselves on completion, and are joined by an idempotent IssuerServer.shutdown() snapshot taken outside the registry lock; a drain timeout expires without ever writing a FAILED row, leaving the live row owned by the genuine owner while its provider still runs.",
+        "boundary": "review"
+      },
+      "regression_evidence": [
+        "tests/test_issue_agent_issuer.py::test_shutdown_drains_an_accepted_execution_worker",
+        "tests/test_issue_agent_issuer.py::test_shutdown_timeout_does_not_fabricate_failed_for_a_still_running_provider"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "Issue #461 Codex P1 independent review (PR #466)"
+      ]
     }
   ]
 }
