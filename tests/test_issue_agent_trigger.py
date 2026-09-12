@@ -293,3 +293,154 @@ def test_v1_identity_derivation_is_unchanged_by_this_contribution() -> None:
     assert authorization.authorization_id == (
         f"hunter-issue-agent-authorization:{hashlib.sha256(canonical).hexdigest()}"
     )
+
+
+def test_default_webhook_timeout_is_aligned_to_synchronous_runtime() -> None:
+    assert trigger.DEFAULT_WEBHOOK_TIMEOUT_SECONDS == 900.0
+    assert trigger.MAX_WEBHOOK_TIMEOUT_SECONDS == 1200.0
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        (None, 900.0),
+        ("1", 1.0),
+        ("120", 120.0),
+        ("900", 900.0),
+        ("1200", 1200.0),
+        ("  45.5  ", 45.5),
+    ],
+)
+def test_webhook_timeout_parses_valid_values(raw: object, expected: float) -> None:
+    assert trigger._webhook_timeout(raw) == expected
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "",
+        "   ",
+        "0",
+        "-1",
+        "nan",
+        "NaN",
+        "inf",
+        "+inf",
+        "-inf",
+        "1200.1",
+        "not-a-number",
+    ],
+)
+def test_webhook_timeout_rejects_invalid_values_fail_closed(raw: object) -> None:
+    with pytest.raises(IssueAgentTriggerError, match=trigger.WEBHOOK_TIMEOUT_ENV):
+        trigger._webhook_timeout(raw)
+
+
+def test_post_authorization_passes_explicit_timeout_to_opener(monkeypatch) -> None:
+    observed: dict[str, object] = {}
+
+    class _Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class _Opener:
+        def open(self, request, timeout):
+            observed["request"] = request
+            observed["timeout"] = timeout
+            return _Response()
+
+    monkeypatch.setattr(trigger, "_OPENER", _Opener())
+
+    trigger._post_authorization(
+        "https://hook.example/dispatch",
+        '{"schema_version":"v1"}',
+        timeout=123.5,
+    )
+
+    assert observed["timeout"] == 123.5
+    request = observed["request"]
+    assert request.get_method() == "POST"
+    assert request.data == b'{"schema_version":"v1"}'
+
+
+def test_post_authorization_uses_runtime_aligned_default_timeout(monkeypatch) -> None:
+    observed: dict[str, object] = {}
+
+    class _Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class _Opener:
+        def open(self, request, timeout):
+            observed["timeout"] = timeout
+            return _Response()
+
+    monkeypatch.setattr(trigger, "_OPENER", _Opener())
+
+    trigger._post_authorization(
+        "https://hook.example/dispatch",
+        '{"schema_version":"v1"}',
+    )
+
+    assert observed["timeout"] == trigger.DEFAULT_WEBHOOK_TIMEOUT_SECONDS
+
+
+def test_parser_reads_webhook_timeout_from_environment(monkeypatch) -> None:
+    monkeypatch.setenv(trigger.WEBHOOK_TIMEOUT_ENV, "321")
+    parser = trigger._parser()
+    args = parser.parse_args(
+        [
+            "--event",
+            "event.json",
+            "--repository",
+            "fafa33/Project-Hunter",
+            "--owner-login",
+            "fafa33",
+        ]
+    )
+    assert args.webhook_timeout == "321"
+
+
+def test_main_rejects_invalid_webhook_timeout_before_dispatch(monkeypatch, tmp_path, capsys) -> None:
+    event = _event()
+    event_path = tmp_path / "event.json"
+    event_path.write_text(json.dumps(event), encoding="utf-8")
+
+    monkeypatch.setenv(trigger.SIGNING_KEY_ENV, ISSUER_KEY_HEX)
+    monkeypatch.setenv("HUNTER_ISSUE_AGENT_WEBHOOK_URL", "https://hook.example/dispatch")
+    monkeypatch.setenv(trigger.WEBHOOK_TIMEOUT_ENV, "nan")
+
+    called = False
+
+    def _unexpected_dispatch(*args, **kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("dispatch must not occur for invalid timeout")
+
+    monkeypatch.setattr(trigger, "_post_authorization", _unexpected_dispatch)
+
+    rc = trigger.main(
+        [
+            "--event",
+            str(event_path),
+            "--repository",
+            "fafa33/Project-Hunter",
+            "--owner-login",
+            "fafa33",
+        ]
+    )
+
+    assert rc == 2
+    assert called is False
+    captured = capsys.readouterr()
+    assert trigger.WEBHOOK_TIMEOUT_ENV in captured.err

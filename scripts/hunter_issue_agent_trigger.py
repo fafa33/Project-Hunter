@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import sys
 import urllib.error
@@ -26,6 +27,10 @@ ENVELOPE_SCHEMA_VERSION = "hunter-issue-agent-signed-authorization-v1"
 
 DEFAULT_LABEL = "hunter-agent-execute"
 MAX_EVENT_BYTES = 256 * 1024
+
+WEBHOOK_TIMEOUT_ENV = "HUNTER_ISSUE_AGENT_WEBHOOK_TIMEOUT_SECONDS"
+DEFAULT_WEBHOOK_TIMEOUT_SECONDS = 900.0
+MAX_WEBHOOK_TIMEOUT_SECONDS = 1200.0
 SIGNING_KEY_ENV = "HUNTER_ISSUE_AGENT_AUTHORIZATION_SIGNING_KEY"
 SIGNING_KEY_BYTES = 32
 SIGNATURE_BYTES = 64
@@ -217,7 +222,28 @@ class _RejectRedirects(urllib.request.HTTPRedirectHandler):
 _OPENER = urllib.request.build_opener(_RejectRedirects)
 
 
-def _post_authorization(url: str, document: str, *, timeout: float = 30.0) -> None:
+def _webhook_timeout(value: object) -> float:
+    if value is None:
+        return DEFAULT_WEBHOOK_TIMEOUT_SECONDS
+    if not isinstance(value, str) or not value.strip():
+        raise IssueAgentTriggerError(f"{WEBHOOK_TIMEOUT_ENV} must be a non-empty positive finite number")
+    try:
+        timeout = float(value.strip())
+    except ValueError:
+        raise IssueAgentTriggerError(f"{WEBHOOK_TIMEOUT_ENV} must be a positive finite number") from None
+    if not math.isfinite(timeout) or timeout <= 0 or timeout > MAX_WEBHOOK_TIMEOUT_SECONDS:
+        raise IssueAgentTriggerError(
+            f"{WEBHOOK_TIMEOUT_ENV} must be > 0 and <= {MAX_WEBHOOK_TIMEOUT_SECONDS:g} seconds"
+        )
+    return timeout
+
+
+def _post_authorization(
+    url: str,
+    document: str,
+    *,
+    timeout: float = DEFAULT_WEBHOOK_TIMEOUT_SECONDS,
+) -> None:
     parsed = urllib.parse.urlsplit(url)
     if parsed.scheme != "https" or not parsed.netloc or parsed.username or parsed.password or parsed.fragment:
         raise IssueAgentTriggerError("issue-agent webhook URL must be a credential-free HTTPS URL")
@@ -242,6 +268,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--owner-login", required=True)
     parser.add_argument("--label", default=DEFAULT_LABEL)
     parser.add_argument("--webhook-url", default=os.environ.get("HUNTER_ISSUE_AGENT_WEBHOOK_URL"))
+    parser.add_argument("--webhook-timeout", default=os.environ.get(WEBHOOK_TIMEOUT_ENV))
     parser.add_argument("--authorization-out")
     parser.add_argument("--no-dispatch", action="store_true")
     return parser
@@ -271,7 +298,8 @@ def main(argv: list[str] | None = None) -> int:
             Path(arguments.authorization_out).write_text(document + "\n", encoding="utf-8")
         if not arguments.no_dispatch:
             webhook_url = _required_text("HUNTER_ISSUE_AGENT_WEBHOOK_URL", arguments.webhook_url)
-            _post_authorization(webhook_url, document)
+            timeout = _webhook_timeout(arguments.webhook_timeout)
+            _post_authorization(webhook_url, document, timeout=timeout)
         print(document)
         return 0
     except (IssueAgentTriggerError, OSError) as error:
