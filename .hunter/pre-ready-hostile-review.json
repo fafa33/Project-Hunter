@@ -3,79 +3,79 @@
     "acceptance_criteria": [
       {
         "criterion": "/issue-agent/authorize returns success/accepted well below the railway request ceiling and before provider completion",
-        "evidence": "This criterion remains tracked by the broader Issue #461 stabilization matrix and is intentionally outside this focused workspace-isolation candidate.",
+        "evidence": "Async dispatch: the handler returns 200 accepted immediately after the durable ledger record while the provider still runs; test_shutdown_drains_an_accepted_execution_worker proves the POST returns while the provider is still blocked, i.e. before provider completion.",
         "id": "AC-1",
-        "verdict": "not-applicable"
+        "verdict": "satisfied"
       },
       {
         "criterion": "provider execution >300s cannot cause the github trigger to fail with http 499",
-        "evidence": "This criterion remains tracked by the broader Issue #461 stabilization matrix and is intentionally outside this focused workspace-isolation candidate.",
+        "evidence": "The accepted response is decoupled from provider runtime: the trigger request completes before the provider, so a long-running provider can no longer pin the request open up to a client close.",
         "id": "AC-2",
-        "verdict": "not-applicable"
+        "verdict": "satisfied"
       },
       {
         "criterion": "retrying a failed attempt does not mutate the issue and does not change the authorization identity",
-        "evidence": "This criterion remains tracked by the broader Issue #461 stabilization matrix and is intentionally outside this focused workspace-isolation candidate.",
+        "evidence": "The ledger keeps the authorization identity immutable; a retry of a claimed/failed identity raises IssueAgentReplayError and never reclaims or re-executes (test_a_live_foreign_lease_is_never_failed_or_reclaimed, test_an_expired_incomplete_owner_is_recovered_fail_closed).",
         "id": "AC-3",
-        "verdict": "not-applicable"
+        "verdict": "satisfied"
       },
       {
         "criterion": "source handling authority is exact, fail-closed, and retry-stable for an immutable event",
-        "evidence": "This criterion remains tracked by the broader Issue #461 stabilization matrix and is intentionally outside this focused workspace-isolation candidate.",
+        "evidence": "This criterion remains tracked by the broader Issue #461 stabilization matrix and is intentionally outside this focused async-issuer candidate.",
         "id": "AC-4",
         "verdict": "not-applicable"
       },
       {
         "criterion": "the exact pinned opencode/provider configuration is compatibility-checked before live use",
-        "evidence": "This criterion remains tracked by the broader Issue #461 stabilization matrix and is intentionally outside this focused workspace-isolation candidate.",
+        "evidence": "This criterion remains tracked by the broader Issue #461 stabilization matrix and is intentionally outside this focused async-issuer candidate.",
         "id": "AC-5",
         "verdict": "not-applicable"
       },
       {
         "criterion": "runtime capability requirements are checked before provider execution",
-        "evidence": "This criterion remains tracked by the broader Issue #461 stabilization matrix and is intentionally outside this focused workspace-isolation candidate.",
+        "evidence": "This criterion remains tracked by the broader Issue #461 stabilization matrix and is intentionally outside this focused async-issuer candidate.",
         "id": "AC-6",
         "verdict": "not-applicable"
       },
       {
         "criterion": "opencode can modify only the isolated attempt workspace; external-directory edits are explicitly denied. \u2014 pr #465 / ca2adf5ebeb5e11b198e50de6d0a62af5b23207c",
-        "evidence": "This focused candidate explicitly denies external_directory, keeps edits inside the isolated attempt workspace, adds regression coverage, and introduces no Ready, merge, deploy, shell, network, or publication authority.",
+        "evidence": "Base state from PR #465 / ca2adf5 carries the isolated workspace boundary; this candidate adds no workspace or external-directory authority.",
         "id": "AC-7",
         "verdict": "satisfied"
       },
       {
         "criterion": "a provider claiming success without candidate repository changes fails closed",
-        "evidence": "This criterion remains tracked by the broader Issue #461 stabilization matrix and is intentionally outside this focused workspace-isolation candidate.",
+        "evidence": "This criterion remains tracked by the broader Issue #461 stabilization matrix and is intentionally outside this focused async-issuer candidate.",
         "id": "AC-8",
         "verdict": "not-applicable"
       },
       {
         "criterion": "publication remains trusted-parent-owned and exact-head validation remains authoritative",
-        "evidence": "This criterion remains tracked by the broader Issue #461 stabilization matrix and is intentionally outside this focused workspace-isolation candidate.",
+        "evidence": "This candidate adds no publication authority and no admission authority; publication and exact-head validation remain unchanged and trusted-parent-owned.",
         "id": "AC-9",
         "verdict": "not-applicable"
       },
       {
         "criterion": "accepted authorization executes at most once and ends in a durable completed or failed state",
-        "evidence": "This criterion remains tracked by the broader Issue #461 stabilization matrix and is intentionally outside this focused workspace-isolation candidate.",
+        "evidence": "At-most-once is enforced by the ledger: claim is refused for a replayed identity (IssueAgentReplayError) and lease expiry never permits reclaim; every accepted execution ends durably COMPLETED or FAILED, shutdown drains accepted workers to a terminal outcome, and a drain timeout never fabricates FAILED for a still-running provider.",
         "id": "AC-10",
-        "verdict": "not-applicable"
+        "verdict": "satisfied"
       },
       {
         "criterion": "stale/closed pr history cannot generate a false current governance failure",
-        "evidence": "This criterion remains tracked by the broader Issue #461 stabilization matrix and is intentionally outside this focused workspace-isolation candidate.",
+        "evidence": "This criterion remains tracked by the broader Issue #461 stabilization matrix and is intentionally outside this focused async-issuer candidate.",
         "id": "AC-11",
         "verdict": "not-applicable"
       },
       {
         "criterion": "no autonomous ready, merge, or railway deploy is introduced",
-        "evidence": "This focused candidate explicitly denies external_directory, keeps edits inside the isolated attempt workspace, adds regression coverage, and introduces no Ready, merge, deploy, shell, network, or publication authority.",
+        "evidence": "This candidate introduces no Ready, merge, deploy, shell, network, or publication authority: it changes only issuer execution ownership/lease semantics and shutdown handling.",
         "id": "AC-12",
         "verdict": "satisfied"
       },
       {
         "criterion": "only after this matrix is green do we run the live #441 acceptance test",
-        "evidence": "This criterion remains tracked by the broader Issue #461 stabilization matrix and is intentionally outside this focused workspace-isolation candidate.",
+        "evidence": "This is a process criterion for the live acceptance gate and is intentionally not assessed by this focused review.",
         "id": "AC-13",
         "verdict": "not-applicable"
       }
@@ -180,32 +180,54 @@
         "evidence": "Reviewed canonical 'runtime-bootstrap-not-volume-aware-before-issuer-composition' invariant for Issue #461 candidate; 18 registry-declared regression test(s) passed locally as part of the exact applicable-family hostile-review batch.",
         "family": "DFF-019",
         "outcome": "clear"
+      },
+      {
+        "evidence": "Reviewed canonical 'live-instance-execution-ownership-isolation' invariant for Issue #461 candidate; 5 registry-declared regression test(s) passed locally as part of the exact applicable-family hostile-review batch. The candidate implements the family's prevention and the registry-declared regression test(s) passed locally as part of the exact applicable-family hostile-review batch.",
+        "family": "DFF-020",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Reviewed canonical 'accepted-execution-shutdown-drain-safety' invariant for Issue #461 candidate; 2 registry-declared regression test(s) passed locally as part of the exact applicable-family hostile-review batch. The candidate implements the family's prevention and the registry-declared regression test(s) passed locally as part of the exact applicable-family hostile-review batch.",
+        "family": "DFF-021",
+        "outcome": "clear"
       }
     ],
     "findings": [],
     "issue": "461",
     "review_target": [
       {
-        "blob_sha": "a376d8b4397356bbcae2fe4333292db1f05477a0",
+        "blob_sha": "ab4a0a414ff0fddd2c75148dfe04d102e7a6a762",
+        "path": "docs/DEFECT_REGISTRY.json",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "df89e06a4f0978f18e23b8ea411eff4955aa8116",
         "path": "scripts/hunter_issue_agent_issuer.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "fd7b1e4fe7e8d18fd50051cc6f84dbd0f264580e",
+        "blob_sha": "54578b9c7a0c6c7073a24c05a24e58c4483dd8ef",
         "path": "src/hunter/automation/issue_agent_execution.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "f6b4ac79af614a3d6c77797a3f8e1fd722b737ef",
+        "blob_sha": "516e9296659e645f9d3d45118cb146f080a1c4f1",
+        "path": "tests/test_issue_agent_execution.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "331216b74a48affde38f61f300c452195c5251d9",
         "path": "tests/test_issue_agent_issuer.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "831e558fdc3a3799ff8c50746c5935faabdf639f230788851717d9dca7deaecc"
+    "review_target_digest": "61246f211f45cfa77fd8cc46fb618b2857aa834c189e0a7e9354c36901b6820f"
   },
-  "review_id": "e7a36ef46caf8bcd13023d1a8e0398f13f687d92b54040cabdf4bd057a9d8637",
+  "review_id": "bb748e6855b2219c3c14ac5196c8ceab53a008828ab57a101b59c4ff58f98903",
   "schema": "hunter.pre-ready-hostile-review.v1"
 }
