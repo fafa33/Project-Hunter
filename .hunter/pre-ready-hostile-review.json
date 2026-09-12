@@ -15,27 +15,27 @@
       },
       {
         "criterion": "Unresolved review threads and fixed blocking threads without an evidence-bearing reply cannot satisfy Ready/merge state.",
-        "evidence": "This first isolated delivery changes only stale-pending orchestration; review-thread closure is a separate planned delivery under Issue #467.",
+        "evidence": "Merge Readiness now fails closed without a complete exact-head Codex review on the current PR head and re-verifies it with candidate admission's verify_claims (hunter_merge_readiness_v2.exact_head_codex_review); a resolved finding counts only with structured resolution evidence naming the exact-head correction commit and a committed regression test. Regression tests cover no-review, stale-review, unresolved-finding, resolved-without-structured-evidence, and new-commit-stales states.",
         "id": "AC-3",
-        "verdict": "not-applicable"
+        "verdict": "satisfied"
       },
       {
         "criterion": "Detection never resolves a GitHub thread automatically and does not block non-blocking review suggestions.",
-        "evidence": "This first isolated delivery neither reads nor mutates review thread content; that boundary remains unchanged.",
+        "evidence": "No path resolves a GitHub thread: detection only reads thread resolution state and review-claims findings. Non-blocking findings remain non-blocking; only unresolved blocking findings and missing structured resolution evidence block.",
         "id": "AC-4",
-        "verdict": "not-applicable"
+        "verdict": "satisfied"
       },
       {
         "criterion": "Historical findings are mapped to an existing family or added only with verified source, correction, regression test, and applicability.",
-        "evidence": "The historical backfill is a separate planned delivery; this candidate changes no defect-family records.",
+        "evidence": "The new recurring-defect family DFF-022 (merge-readiness-without-current-head-codex-review) is added with source (Issue #467), verified applicability scope, a prevention mechanism at the hosted-gate boundary, and seven resolvable regression tests; the Defect Prevention Guard revalidates the family and its evidence.",
         "id": "AC-5",
-        "verdict": "not-applicable"
+        "verdict": "satisfied"
       },
       {
         "criterion": "Applicable known-defect regression selectors are deterministic, deduplicated, and fail closed when evidence is missing or fails.",
-        "evidence": "Selector enforcement is a separate planned delivery; this candidate changes no selector or pre-push implementation.",
+        "evidence": "The DFF-022 regression evidence consists of deterministically named, deduplicated pytest targets all resolvable in the candidate; the Defect Prevention Guard fails closed if any family evidence or regression target is missing or unreadable, and it validated this candidate's registry and CODE_WRITE_POLICY fields.",
         "id": "AC-6",
-        "verdict": "not-applicable"
+        "verdict": "satisfied"
       },
       {
         "criterion": "The pre-push boundary does not run the full repository suite; hosted Pre-PR remains its sole owner.",
@@ -45,9 +45,9 @@
       },
       {
         "criterion": "Adversarial tests cover stale events, missing associations, pagination/API uncertainty, path-prefix traps, duplicate selectors, and invalid evidence.",
-        "evidence": "This isolated orchestration delivery covers stale/default-branch and missing-association workflow events. Pagination, path matching, selectors and evidence parsing belong to the later isolated deliveries.",
+        "evidence": "Adversarial coverage now spans stale/default-branch workflow events, missing associations, no-review and stale-review states, unresolved findings, resolved-without-structured-evidence, new-commit invalidation, and dropped/malformed CODE_WRITE_POLICY review-progression fields in the guard.",
         "id": "AC-8",
-        "verdict": "not-applicable"
+        "verdict": "satisfied"
       },
       {
         "criterion": "No merge occurs without explicit owner approval.",
@@ -73,68 +73,78 @@
     "base_sha": "cb56ce817f49113747fc28defc8bd0b844a4717c",
     "defect_families": [
       {
-        "evidence": "Applicable registry regression evidence passed in the exact-head hosted Pre-PR suite; this candidate changes no authorization-replay behavior.",
+        "evidence": "exact-head identities assumed intact in readiness; review and workflow changes re-derive from trusted PR evidence only",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "Applicable registry regression evidence passed in the exact-head hosted Pre-PR suite; workflow payload is only a trigger and live state remains authority.",
+        "evidence": "the hostile-review artifact remains excluded from its own reviewed change set; binding is content-based",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "Applicable registry regression evidence passed in the exact-head hosted Pre-PR suite; connector provenance and receipts are unchanged.",
+        "evidence": "no readiness or governance authority was widened; controllers evaluate trusted evidence only",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "The normal pre-push hook verified authorization-bound writer provenance on exact head 3978822e5e5dcf35aea798b7c21287c7ab763a3f.",
+        "evidence": "changed scripts keep closed allow-lists; no new authority introduced by the structured-evidence checks",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "Applicable registry regression evidence passed in the exact-head hosted Pre-PR suite; this single finalized candidate is not intermediate evidence.",
+        "evidence": "adversarial sweep of the readiness prerequisite exercised no session-sensitive replay surface",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "Applicable registry regression evidence passed in the exact-head hosted Pre-PR suite and the hook verified receipt freshness.",
+        "evidence": "the review artifact and policy changes introduce no time- or state-dependent decision input",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "This regenerated artifact is bound to Issue #467 and the exact final candidate content; no Ready promotion is performed.",
+        "evidence": "the exact-head Codex review prerequisite strengthens DFF-013 at the readiness boundary; absent and stale reviews block hard",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "The change preserves pending dependency semantics and adds immediate reconciliation after the dependency publisher completes.",
+        "evidence": "unavailable/absent/stale review evidence publishes failure, never pending-for-a-passing-state; no transient is relabelled",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "No prevention lifecycle is promoted or changed; exact applicable regression evidence passed hosted.",
+        "evidence": "structured resolution evidence binds correction commit and regression test to the candidate range",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "Hosted Pre-PR proof is bound to exact head 3978822e5e5dcf35aea798b7c21287c7ab763a3f; no proof reuse logic changes.",
+        "evidence": "no validation-proof or receipt identity semantics were changed; reuse of the governance verify path preserves the single implementation",
         "family": "DFF-016",
         "outcome": "clear"
       },
       {
-        "evidence": "Runtime bootstrap is unchanged and its applicable regressions passed in the hosted exact-head suite.",
+        "evidence": "the extended CODE_WRITE_POLICY validation is structurally pure and runnable in the trusted environment; guard passed on the candidate head",
+        "family": "DFF-017",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "no runtime bootstrap or issuer composition surface changed",
         "family": "DFF-019",
         "outcome": "clear"
       },
       {
-        "evidence": "Execution ownership is unchanged; its regressions passed in the hosted exact-head suite. Local sandbox could not bind sockets, which is not represented as a pass.",
+        "evidence": "no issue-agent execution ownership surface changed in this range",
         "family": "DFF-020",
         "outcome": "clear"
       },
       {
-        "evidence": "Shutdown drain behavior is unchanged; its regressions passed in the hosted exact-head suite. Local sandbox could not bind sockets, which is not represented as a pass.",
+        "evidence": "no issuer shutdown/drain surface changed in this range",
         "family": "DFF-021",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "the new readiness prerequisite is enforced by exact_head_codex_review and verified by regression tests covering missing, stale, unresolved, evidence-less and valid states; no bypass found where a review absent/stale/incomplete still allows green",
+        "family": "DFF-022",
         "outcome": "clear"
       }
     ],
@@ -154,26 +164,68 @@
         "status": "added"
       },
       {
-        "blob_sha": "b0ef51be308c07a8d511999728fcb091e4c7aa36",
+        "blob_sha": "7ef2fe5ffddd184ede00615ee79d150b5b6d8caa",
         "path": ".github/workflows/hunter-merge-readiness.yml",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "f9c9a4a8c8cc9c3052945ba0f90e24f326fa4e34",
+        "blob_sha": "ed7bf0a3d094cbaba0a223726ae590c6da3525df",
+        "path": "docs/CODE_WRITE_POLICY.json",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "1dc5bbf7899954fb4a086745638633c18fc8c1ec",
+        "path": "docs/DEFECT_REGISTRY.json",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "855be4783cf1a81f435bdd2c0db1784800c4a7fe",
+        "path": "scripts/hunter_defect_prevention_preflight.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "84da1f3caf725623fed89c9622eb29a40b7894eb",
+        "path": "scripts/hunter_governance_review_v2.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "dbdaa0a184490e7a05a77d7218d9a59436df16a2",
         "path": "scripts/hunter_merge_readiness_v2.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "caed2ec36f0fcf2f862395b9bce2336114140239",
+        "blob_sha": "56e8000eefe79453c05acd139b2f53ebe25b1f71",
+        "path": "scripts/hunter_pre_ready_review.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "2641453d9e9674586aa9d1fa5527f042a8a3a746",
+        "path": "tests/test_code_write_policy.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "7ef8030d40b730f0002a91ae49efc579f20e4729",
         "path": "tests/test_hunter_merge_readiness_v2.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "166bd0d4c70852614de442c28abd776e0e2d942b",
+        "path": "tests/test_issue_412_prevention_gate.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "0b711ae92e8e97cd65e957a0062f2a2b0c35f3bc5ebedfa089cc6735fa8ca289"
+    "review_target_digest": "3431964c74f549555de751edb03355e4d5a6686a597a3b97e3101bf40f5b2aab"
   },
-  "review_id": "37e729c50de7c31b5dbe606690ca9340729a63d113532d9f91348803d304ff60",
+  "review_id": "2a4b9f2028709014632f793e691232a0cf40f4b7bdc597cb2d3017d59dca87a4",
   "schema": "hunter.pre-ready-hostile-review.v1"
 }
