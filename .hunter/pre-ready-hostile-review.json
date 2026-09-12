@@ -21,7 +21,7 @@
       },
       {
         "criterion": "Production workflow job timeout remains sufficient for the maximum supported webhook timeout plus setup overhead.",
-        "evidence": "The workflow remains at 20 minutes while the trigger hard maximum remains 1200 seconds.",
+        "evidence": "The production workflow job timeout is now 25 minutes, providing five minutes of setup headroom beyond the trigger's 1200-second maximum webhook timeout.",
         "id": "AC-4",
         "verdict": "satisfied"
       },
@@ -93,14 +93,14 @@
     "issue": "459",
     "review_target": [
       {
-        "blob_sha": "e3b15433cfb1d693d1e2b03e529733e71baab7db",
+        "blob_sha": "81e420a8afad278d2e78b4a43e33092f66bdb69a",
         "path": ".github/workflows/hunter-issue-agent-trigger.yml",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "143075dcca50aafea597fe7a2d46c6d33866805d3c09ccc74456344808c4abd0"
+    "review_target_digest": "4bad2fed3cc9fb0cdbcc053ab90167bd1809396c02e5fd22185be9bf560cd2ee"
   },
-  "review_id": "13300fea4919458ade08c8df75c1fc1c390a8c29f84fda7d5afce50274a45a70",
+  "review_id": "c7cf360acc32da18080126c10f63bf19536c1768520dcb7e0f34d6595e4f82ae",
   "schema": "hunter.pre-ready-hostile-review.v1"
 }
