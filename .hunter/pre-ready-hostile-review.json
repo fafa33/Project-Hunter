@@ -2,82 +2,58 @@
   "claims": {
     "acceptance_criteria": [
       {
-        "criterion": "/issue-agent/authorize returns success/accepted well below the railway request ceiling and before provider completion",
-        "evidence": "Async dispatch: the handler returns 200 accepted immediately after the durable ledger record while the provider still runs; test_shutdown_drains_an_accepted_execution_worker proves the POST returns while the provider is still blocked, i.e. before provider completion.",
+        "criterion": "Governance-reconcile completion immediately triggers a live-state sweep of open PRs; default-branch workflow SHA is never treated as a candidate head.",
+        "evidence": "The workflow subscribes to Hunter Governance Review Reconcile and candidate_prs() identifies that publisher before SHA attribution, returning open_pull_requests(). The focused RED test failed on the previous head and passes on this head.",
         "id": "AC-1",
         "verdict": "satisfied"
       },
       {
-        "criterion": "provider execution >300s cannot cause the github trigger to fail with http 499",
-        "evidence": "The accepted response is decoupled from provider runtime: the trigger request completes before the provider, so a long-running provider can no longer pin the request open up to a client close.",
+        "criterion": "Ordinary dependency completions remain attributed to their exact candidate head.",
+        "evidence": "The ordinary workflow_run path remains unchanged after the publisher-specific branch and its focused regression proves an unassociated CI completion calls open_prs_for_head(head_sha), never the sweep.",
         "id": "AC-2",
         "verdict": "satisfied"
       },
       {
-        "criterion": "retrying a failed attempt does not mutate the issue and does not change the authorization identity",
-        "evidence": "The ledger keeps the authorization identity immutable; a retry of a claimed/failed identity raises IssueAgentReplayError and never reclaims or re-executes (test_a_live_foreign_lease_is_never_failed_or_reclaimed, test_an_expired_incomplete_owner_is_recovered_fail_closed).",
+        "criterion": "Unresolved review threads and fixed blocking threads without an evidence-bearing reply cannot satisfy Ready/merge state.",
+        "evidence": "This first isolated delivery changes only stale-pending orchestration; review-thread closure is a separate planned delivery under Issue #467.",
         "id": "AC-3",
-        "verdict": "satisfied"
+        "verdict": "not-applicable"
       },
       {
-        "criterion": "source handling authority is exact, fail-closed, and retry-stable for an immutable event",
-        "evidence": "This criterion remains tracked by the broader Issue #461 stabilization matrix and is intentionally outside this focused async-issuer candidate.",
+        "criterion": "Detection never resolves a GitHub thread automatically and does not block non-blocking review suggestions.",
+        "evidence": "This first isolated delivery neither reads nor mutates review thread content; that boundary remains unchanged.",
         "id": "AC-4",
         "verdict": "not-applicable"
       },
       {
-        "criterion": "the exact pinned opencode/provider configuration is compatibility-checked before live use",
-        "evidence": "This criterion remains tracked by the broader Issue #461 stabilization matrix and is intentionally outside this focused async-issuer candidate.",
+        "criterion": "Historical findings are mapped to an existing family or added only with verified source, correction, regression test, and applicability.",
+        "evidence": "The historical backfill is a separate planned delivery; this candidate changes no defect-family records.",
         "id": "AC-5",
         "verdict": "not-applicable"
       },
       {
-        "criterion": "runtime capability requirements are checked before provider execution",
-        "evidence": "This criterion remains tracked by the broader Issue #461 stabilization matrix and is intentionally outside this focused async-issuer candidate.",
+        "criterion": "Applicable known-defect regression selectors are deterministic, deduplicated, and fail closed when evidence is missing or fails.",
+        "evidence": "Selector enforcement is a separate planned delivery; this candidate changes no selector or pre-push implementation.",
         "id": "AC-6",
         "verdict": "not-applicable"
       },
       {
-        "criterion": "opencode can modify only the isolated attempt workspace; external-directory edits are explicitly denied. \u2014 pr #465 / ca2adf5ebeb5e11b198e50de6d0a62af5b23207c",
-        "evidence": "Base state from PR #465 / ca2adf5 carries the isolated workspace boundary; this candidate adds no workspace or external-directory authority.",
+        "criterion": "The pre-push boundary does not run the full repository suite; hosted Pre-PR remains its sole owner.",
+        "evidence": "No pre-push or validation-stage implementation changed. The normal hook ran the existing push-safety lane and explicitly delegated full proof to hosted Pre-PR; hosted run 34719386455 passed on exact head 3978822e5e5dcf35aea798b7c21287c7ab763a3f.",
         "id": "AC-7",
         "verdict": "satisfied"
       },
       {
-        "criterion": "a provider claiming success without candidate repository changes fails closed",
-        "evidence": "This criterion remains tracked by the broader Issue #461 stabilization matrix and is intentionally outside this focused async-issuer candidate.",
+        "criterion": "Adversarial tests cover stale events, missing associations, pagination/API uncertainty, path-prefix traps, duplicate selectors, and invalid evidence.",
+        "evidence": "This isolated orchestration delivery covers stale/default-branch and missing-association workflow events. Pagination, path matching, selectors and evidence parsing belong to the later isolated deliveries.",
         "id": "AC-8",
         "verdict": "not-applicable"
       },
       {
-        "criterion": "publication remains trusted-parent-owned and exact-head validation remains authoritative",
-        "evidence": "This candidate adds no publication authority and no admission authority; publication and exact-head validation remain unchanged and trusted-parent-owned.",
+        "criterion": "No merge occurs without explicit owner approval.",
+        "evidence": "The contribution is a Draft PR and adds no merge, auto-merge, Ready promotion or deployment capability.",
         "id": "AC-9",
-        "verdict": "not-applicable"
-      },
-      {
-        "criterion": "accepted authorization executes at most once and ends in a durable completed or failed state",
-        "evidence": "At-most-once is enforced by the ledger: claim is refused for a replayed identity (IssueAgentReplayError) and lease expiry never permits reclaim; every accepted execution ends durably COMPLETED or FAILED, shutdown drains accepted workers to a terminal outcome, and a drain timeout never fabricates FAILED for a still-running provider.",
-        "id": "AC-10",
         "verdict": "satisfied"
-      },
-      {
-        "criterion": "stale/closed pr history cannot generate a false current governance failure",
-        "evidence": "This criterion remains tracked by the broader Issue #461 stabilization matrix and is intentionally outside this focused async-issuer candidate.",
-        "id": "AC-11",
-        "verdict": "not-applicable"
-      },
-      {
-        "criterion": "no autonomous ready, merge, or railway deploy is introduced",
-        "evidence": "This candidate introduces no Ready, merge, deploy, shell, network, or publication authority: it changes only issuer execution ownership/lease semantics and shutdown handling.",
-        "id": "AC-12",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "only after this matrix is green do we run the live #441 acceptance test",
-        "evidence": "This is a process criterion for the live acceptance gate and is intentionally not assessed by this focused review.",
-        "id": "AC-13",
-        "verdict": "not-applicable"
       }
     ],
     "adversarial_dimensions": [
@@ -94,140 +70,110 @@
       "transaction-snapshot-consistency"
     ],
     "base_ref": "main",
-    "base_sha": "ca2adf5ebeb5e11b198e50de6d0a62af5b23207c",
+    "base_sha": "cb56ce817f49113747fc28defc8bd0b844a4717c",
     "defect_families": [
       {
-        "evidence": "Reviewed canonical 'untrusted-temporal-authority' invariant for Issue #461 candidate; 2 registry-declared regression test(s) passed locally as part of the exact applicable-family hostile-review batch.",
-        "family": "DFF-001",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Reviewed canonical 'transaction-snapshot-inconsistency' invariant for Issue #461 candidate; 1 registry-declared regression test(s) passed locally as part of the exact applicable-family hostile-review batch.",
-        "family": "DFF-002",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Reviewed canonical 'logical-identity-reuse' invariant for Issue #461 candidate; 1 registry-declared regression test(s) passed locally as part of the exact applicable-family hostile-review batch.",
-        "family": "DFF-003",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Reviewed canonical 'schema-fail-closed-incompleteness' invariant for Issue #461 candidate; 2 registry-declared regression test(s) passed locally as part of the exact applicable-family hostile-review batch.",
-        "family": "DFF-004",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Reviewed canonical 'nested-metadata-persistence-bypass' invariant for Issue #461 candidate; 2 registry-declared regression test(s) passed locally as part of the exact applicable-family hostile-review batch.",
-        "family": "DFF-005",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Reviewed canonical 'monotonicity-and-restart-instability' invariant for Issue #461 candidate; 1 registry-declared regression test(s) passed locally as part of the exact applicable-family hostile-review batch.",
-        "family": "DFF-006",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Reviewed canonical 'authorization-replay' invariant for Issue #461 candidate; 2 registry-declared regression test(s) passed locally as part of the exact applicable-family hostile-review batch.",
+        "evidence": "Applicable registry regression evidence passed in the exact-head hosted Pre-PR suite; this candidate changes no authorization-replay behavior.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed canonical 'tamper-and-history-forgery' invariant for Issue #461 candidate; 2 registry-declared regression test(s) passed locally as part of the exact applicable-family hostile-review batch.",
+        "evidence": "Applicable registry regression evidence passed in the exact-head hosted Pre-PR suite; workflow payload is only a trigger and live state remains authority.",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed canonical 'connector-provenance-evidence-lifecycle' invariant for Issue #461 candidate; 2 registry-declared regression test(s) passed locally as part of the exact applicable-family hostile-review batch.",
+        "evidence": "Applicable registry regression evidence passed in the exact-head hosted Pre-PR suite; connector provenance and receipts are unchanged.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed canonical 'writer-identity-not-authorization-bound' invariant for Issue #461 candidate; 3 registry-declared regression test(s) passed locally as part of the exact applicable-family hostile-review batch.",
+        "evidence": "The normal pre-push hook verified authorization-bound writer provenance on exact head 3978822e5e5dcf35aea798b7c21287c7ab763a3f.",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed canonical 'stranded-intermediate-commit-evidence' invariant for Issue #461 candidate; 2 registry-declared regression test(s) passed locally as part of the exact applicable-family hostile-review batch.",
+        "evidence": "Applicable registry regression evidence passed in the exact-head hosted Pre-PR suite; this single finalized candidate is not intermediate evidence.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed canonical 'stale-receipt-published' invariant for Issue #461 candidate; 7 registry-declared regression test(s) passed locally as part of the exact applicable-family hostile-review batch.",
+        "evidence": "Applicable registry regression evidence passed in the exact-head hosted Pre-PR suite and the hook verified receipt freshness.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed canonical 'ready-without-complete-hostile-review' invariant for Issue #461 candidate; 13 registry-declared regression test(s) passed locally as part of the exact applicable-family hostile-review batch.",
+        "evidence": "This regenerated artifact is bound to Issue #467 and the exact final candidate content; no Ready promotion is performed.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed canonical 'pending-prerequisite-reported-as-failure' invariant for Issue #461 candidate; 9 registry-declared regression test(s) passed locally as part of the exact applicable-family hostile-review batch.",
+        "evidence": "The change preserves pending dependency semantics and adds immediate reconciliation after the dependency publisher completes.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed canonical 'overclaimed-prevention-state' invariant for Issue #461 candidate; 2 registry-declared regression test(s) passed locally as part of the exact applicable-family hostile-review batch.",
+        "evidence": "No prevention lifecycle is promoted or changed; exact applicable regression evidence passed hosted.",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed canonical 'validation-proof-reused-without-immutable-identity' invariant for Issue #461 candidate; 8 registry-declared regression test(s) passed locally as part of the exact applicable-family hostile-review batch.",
+        "evidence": "Hosted Pre-PR proof is bound to exact head 3978822e5e5dcf35aea798b7c21287c7ab763a3f; no proof reuse logic changes.",
         "family": "DFF-016",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed canonical 'runtime-bootstrap-not-volume-aware-before-issuer-composition' invariant for Issue #461 candidate; 18 registry-declared regression test(s) passed locally as part of the exact applicable-family hostile-review batch.",
+        "evidence": "Runtime bootstrap is unchanged and its applicable regressions passed in the hosted exact-head suite.",
         "family": "DFF-019",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed canonical 'live-instance-execution-ownership-isolation' invariant for Issue #461 candidate; 5 registry-declared regression test(s) passed locally as part of the exact applicable-family hostile-review batch. The candidate implements the family's prevention and the registry-declared regression test(s) passed locally as part of the exact applicable-family hostile-review batch.",
+        "evidence": "Execution ownership is unchanged; its regressions passed in the hosted exact-head suite. Local sandbox could not bind sockets, which is not represented as a pass.",
         "family": "DFF-020",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed canonical 'accepted-execution-shutdown-drain-safety' invariant for Issue #461 candidate; 2 registry-declared regression test(s) passed locally as part of the exact applicable-family hostile-review batch. The candidate implements the family's prevention and the registry-declared regression test(s) passed locally as part of the exact applicable-family hostile-review batch.",
+        "evidence": "Shutdown drain behavior is unchanged; its regressions passed in the hosted exact-head suite. Local sandbox could not bind sockets, which is not represented as a pass.",
         "family": "DFF-021",
         "outcome": "clear"
       }
     ],
     "findings": [],
-    "issue": "461",
+    "issue": "467",
     "review_target": [
       {
-        "blob_sha": "ab4a0a414ff0fddd2c75148dfe04d102e7a6a762",
-        "path": "docs/DEFECT_REGISTRY.json",
+        "blob_sha": "4a46cff0daf0423cbd31782a8821573b71228146",
+        "path": "docs/superpowers/plans/2026-09-12-quality-gate-zero-recurrence.md",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "705acaecce33550d1cc2cfd82cc024353dfd72ae",
+        "path": "docs/superpowers/specs/2026-09-12-quality-gate-zero-recurrence-design.md",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "b0ef51be308c07a8d511999728fcb091e4c7aa36",
+        "path": ".github/workflows/hunter-merge-readiness.yml",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "df89e06a4f0978f18e23b8ea411eff4955aa8116",
-        "path": "scripts/hunter_issue_agent_issuer.py",
+        "blob_sha": "f9c9a4a8c8cc9c3052945ba0f90e24f326fa4e34",
+        "path": "scripts/hunter_merge_readiness_v2.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "54578b9c7a0c6c7073a24c05a24e58c4483dd8ef",
-        "path": "src/hunter/automation/issue_agent_execution.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "516e9296659e645f9d3d45118cb146f080a1c4f1",
-        "path": "tests/test_issue_agent_execution.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "331216b74a48affde38f61f300c452195c5251d9",
-        "path": "tests/test_issue_agent_issuer.py",
+        "blob_sha": "caed2ec36f0fcf2f862395b9bce2336114140239",
+        "path": "tests/test_hunter_merge_readiness_v2.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "61246f211f45cfa77fd8cc46fb618b2857aa834c189e0a7e9354c36901b6820f"
+    "review_target_digest": "0b711ae92e8e97cd65e957a0062f2a2b0c35f3bc5ebedfa089cc6735fa8ca289"
   },
-  "review_id": "bb748e6855b2219c3c14ac5196c8ceab53a008828ab57a101b59c4ff58f98903",
+  "review_id": "37e729c50de7c31b5dbe606690ca9340729a63d113532d9f91348803d304ff60",
   "schema": "hunter.pre-ready-hostile-review.v1"
 }
