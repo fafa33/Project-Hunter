@@ -73,8 +73,8 @@
       "artifact": ".hunter/pre-ready-hostile-review.json",
       "fallback_reason": "Codex (the primary review authority) was not usable at review time in this environment; the canonical OpenCode hostile-review tooling recorded the exact-head review instead.",
       "governance_state": "success",
-      "head_sha": "ba864af83763e77a0902355328359472eab0ab3d",
-      "reviewed_at": "2026-09-13T01:05:00+00:00",
+      "head_sha": "e1983cd960abef0b397969557e96e52fa4799ec4",
+      "reviewed_at": "2026-09-13T01:20:00+00:00",
       "structured_evidence_status": "complete",
       "tool": "opencode-hunter-review",
       "trusted_preflight_state": "success",
@@ -188,7 +188,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "a2ae2569eb97b0ef5758ba19d888e178c4a3ec24",
+        "blob_sha": "1a876435ba2edbb88361e511e27ebdf76a51958e",
         "path": "docs/DEFECT_REGISTRY.json",
         "previous_path": "",
         "status": "modified"
@@ -236,8 +236,8 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "039f3c3c8a1f14e6bf31dfe122019fed6aab6d7adbbdb50187a77daf39ef8f43"
+    "review_target_digest": "d21ed16f31ccb2cfd811697653613b0908acf168455968b9faf7da88c7a2b205"
   },
-  "review_id": "a0f4e55ca66ba46fbf880e82c22e733b46a631f0c563ed1fdf11b28a1749e185",
+  "review_id": "e99b6e2dc887f543a735e8cbfe4912a8ccd24bc79bddb553e3d480aa5344f169",
   "schema": "hunter.pre-ready-hostile-review.v1"
 }
