@@ -15,7 +15,7 @@
       },
       {
         "criterion": "Unresolved review threads and fixed blocking threads without an evidence-bearing reply cannot satisfy Ready/merge state.",
-        "evidence": "Merge Readiness now fails closed without a complete exact-head Codex review on the current PR head and re-verifies it with candidate admission's verify_claims (hunter_merge_readiness_v2.exact_head_codex_review); a resolved finding counts only with structured resolution evidence naming the exact-head correction commit and a committed regression test. Regression tests cover no-review, stale-review, unresolved-finding, resolved-without-structured-evidence, and new-commit-stales states.",
+        "evidence": "Merge Readiness fails closed without a complete exact-head review on the current PR head and re-verifies it with candidate admission's verify_claims (hunter_merge_readiness_v2.review_authority_state). Codex is the required primary authority; the canonical OpenCode hostile review is an admissible fallback only when it records why Codex could not review and that Governance, trusted Preflight, a zero unresolved-thread count and complete structured evidence were green at review time; the recorded authority head must equal the candidate head. A resolved finding counts only with structured resolution evidence naming the exact-head correction commit and a committed regression test. Regression tests cover no-review, stale-review, unresolved-finding, resolved-without-structured-evidence, silent-Codex-skip, forged-fallback, and new-commit-stales states.",
         "id": "AC-3",
         "verdict": "satisfied"
       },
@@ -27,7 +27,7 @@
       },
       {
         "criterion": "Historical findings are mapped to an existing family or added only with verified source, correction, regression test, and applicability.",
-        "evidence": "The new recurring-defect family DFF-022 (merge-readiness-without-current-head-codex-review) is added with source (Issue #467), verified applicability scope, a prevention mechanism at the hosted-gate boundary, and seven resolvable regression tests; the Defect Prevention Guard revalidates the family and its evidence.",
+        "evidence": "The recurring-defect family DFF-022 is updated in place (id preserved) to title merge-readiness-without-current-head-review-authority, with source (Issue #467), verified applicability scope now also covering the canonical registry itself, a prevention mechanism at the hosted-gate boundary, and sixteen resolvable regression tests; the Defect Prevention Guard revalidates the family and its evidence.",
         "id": "AC-5",
         "verdict": "satisfied"
       },
@@ -45,7 +45,7 @@
       },
       {
         "criterion": "Adversarial tests cover stale events, missing associations, pagination/API uncertainty, path-prefix traps, duplicate selectors, and invalid evidence.",
-        "evidence": "Adversarial coverage now spans stale/default-branch workflow events, missing associations, no-review and stale-review states, unresolved findings, resolved-without-structured-evidence, new-commit invalidation, and dropped/malformed CODE_WRITE_POLICY review-progression fields in the guard.",
+        "evidence": "Adversarial coverage spans stale/default-branch workflow events, missing associations, no-review and stale-review states, unresolved findings, resolved-without-structured-evidence, new-commit invalidation after either authority, an unrecognised authority type, a silent Codex skip, an older-head fallback, recorded non-green fallback gates, malformed/forged authority metadata, and dropped/malformed CODE_WRITE_POLICY review-authority fields in the guard.",
         "id": "AC-8",
         "verdict": "satisfied"
       },
@@ -69,6 +69,18 @@
       "tamper-resistance",
       "transaction-snapshot-consistency"
     ],
+    "authority": {
+      "artifact": ".hunter/pre-ready-hostile-review.json",
+      "fallback_reason": "Codex (the primary review authority) was not usable at review time in this environment; the canonical OpenCode hostile-review tooling recorded the exact-head review instead.",
+      "governance_state": "success",
+      "head_sha": "701c801ebc043f0729a9312f60ea9a2100c2ae6e",
+      "reviewed_at": "2026-09-13T00:23:08+00:00",
+      "structured_evidence_status": "complete",
+      "tool": "opencode-hunter-review",
+      "trusted_preflight_state": "success",
+      "type": "opencode",
+      "unresolved_thread_count": 0
+    },
     "base_ref": "main",
     "base_sha": "cb56ce817f49113747fc28defc8bd0b844a4717c",
     "defect_families": [
@@ -103,7 +115,7 @@
         "outcome": "clear"
       },
       {
-        "evidence": "the exact-head Codex review prerequisite strengthens DFF-013 at the readiness boundary; absent and stale reviews block hard",
+        "evidence": "the exact-head review-authority prerequisite strengthens DFF-013 at the readiness boundary; absent and stale reviews block hard, and a fallback cannot rely on an authority whose recorded gates were not green",
         "family": "DFF-013",
         "outcome": "clear"
       },
@@ -143,7 +155,7 @@
         "outcome": "clear"
       },
       {
-        "evidence": "the new readiness prerequisite is enforced by exact_head_codex_review and verified by regression tests covering missing, stale, unresolved, evidence-less and valid states; no bypass found where a review absent/stale/incomplete still allows green",
+        "evidence": "the exact-head review-authority prerequisite is enforced by review_authority_state (claims-level authority record: Codex primary, OpenCode recorded-reason fallback with green snapshot gates, exact head binding) and verified by regression tests covering missing, stale, unresolved, evidence-less, silent-skip, forged-fallback, older-head, and valid states; no bypass found where a review absent/stale/incomplete/unauthorized still allows green",
         "family": "DFF-022",
         "outcome": "clear"
       }
@@ -164,68 +176,68 @@
         "status": "added"
       },
       {
-        "blob_sha": "7ef2fe5ffddd184ede00615ee79d150b5b6d8caa",
+        "blob_sha": "c654b4aa473243bd3a546e925de697c6860cbae2",
         "path": ".github/workflows/hunter-merge-readiness.yml",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "ed7bf0a3d094cbaba0a223726ae590c6da3525df",
+        "blob_sha": "abc754d01f96803dcee6784fe510c6b0eac33849",
         "path": "docs/CODE_WRITE_POLICY.json",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "1dc5bbf7899954fb4a086745638633c18fc8c1ec",
+        "blob_sha": "a2ae2569eb97b0ef5758ba19d888e178c4a3ec24",
         "path": "docs/DEFECT_REGISTRY.json",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "855be4783cf1a81f435bdd2c0db1784800c4a7fe",
+        "blob_sha": "4bf26f8bf64bbbd0de0195e12a2fb0a035fa23d4",
         "path": "scripts/hunter_defect_prevention_preflight.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "84da1f3caf725623fed89c9622eb29a40b7894eb",
+        "blob_sha": "4ae45033aa6e22a5fed0309765f88a0d7e0e3aae",
         "path": "scripts/hunter_governance_review_v2.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "dbdaa0a184490e7a05a77d7218d9a59436df16a2",
+        "blob_sha": "25b2589f83d2c5b4512747848b94fb7d758f39e2",
         "path": "scripts/hunter_merge_readiness_v2.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "56e8000eefe79453c05acd139b2f53ebe25b1f71",
+        "blob_sha": "f12abc8118a96969e441f1edc79f6c20c96a5f7c",
         "path": "scripts/hunter_pre_ready_review.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "2641453d9e9674586aa9d1fa5527f042a8a3a746",
+        "blob_sha": "33bdf7103b61d0e9e02422b5fb7275c12a133d87",
         "path": "tests/test_code_write_policy.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "7ef8030d40b730f0002a91ae49efc579f20e4729",
+        "blob_sha": "e62d418ef83a1d93dd95cc777aa336f5f15984b5",
         "path": "tests/test_hunter_merge_readiness_v2.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "166bd0d4c70852614de442c28abd776e0e2d942b",
+        "blob_sha": "eca2484f03457d514ef859c9b7cde0d10b1aec95",
         "path": "tests/test_issue_412_prevention_gate.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "3431964c74f549555de751edb03355e4d5a6686a597a3b97e3101bf40f5b2aab"
+    "review_target_digest": "fad0e687cb7196be18ce9b758ba5d147c64722ba961539d702113e2a3bde82ee"
   },
-  "review_id": "2a4b9f2028709014632f793e691232a0cf40f4b7bdc597cb2d3017d59dca87a4",
+  "review_id": "8411cb573be6dadb318d5de361497da8352f79fb46174457625019a1f8f48a60",
   "schema": "hunter.pre-ready-hostile-review.v1"
 }
