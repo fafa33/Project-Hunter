@@ -442,6 +442,29 @@ def validate_code_write_policy() -> list[str]:
     ready_requires = str(progression.get("ready_requires") or "")
     if "exact-head" not in ready_requires or "Pre-PR Preflight" not in ready_requires:
         errors.append("Ready progression must require successful exact-head Pre-PR Preflight")
+    if progression.get("requires_current_head_codex_review") is not True:
+        errors.append("Ready progression must require a current-head Codex review")
+    authority = progression.get("review_authority")
+    if not isinstance(authority, dict):
+        errors.append("Ready progression must declare its review-authority model")
+    else:
+        if authority.get("primary") != "codex":
+            errors.append("the review-authority model must declare Codex as the primary reviewer")
+        if authority.get("fallback") != "opencode":
+            errors.append("the review-authority fallback must be the canonical OpenCode hostile review")
+        if authority.get("fallback_requires_recorded_reason") is not True:
+            errors.append("fallback review authority must require a recorded reason and never skip Codex silently")
+        gates = authority.get("fallback_requires_snapshot_gates")
+        if not isinstance(gates, list) or not {
+            "governance=success",
+            "trusted_preflight=success",
+            "unresolved_thread_count=0",
+            "structured_evidence=complete",
+        }.issubset({str(gate) for gate in gates}):
+            errors.append("fallback review authority must require recorded green snapshot gates")
+    finding_resolution = str(progression.get("finding_resolution") or "")
+    if "structured evidence" not in finding_resolution or "regression test" not in finding_resolution:
+        errors.append("finding resolution must require structured evidence and a committed regression test")
 
     errors.extend(validate_writer_identity_binding(policy))
     errors.extend(validate_connector_write_ingress(policy))

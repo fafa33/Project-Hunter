@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import hunter_connector_write_ingress as ingress
 import hunter_defect_prevention_preflight as prevention
@@ -483,6 +484,37 @@ CANDIDATE_CHANGES = (
     _change("docs/DEFECT_REGISTRY.json", "b" * 40),
 )
 
+
+def _authority(*, authority_type: str = "codex", head_sha: str = HEAD, **overrides: Any) -> dict[str, Any]:
+    """Review-authority record carried inside the reviewed claims.
+
+    The data is structured so the *reason* for a fallback review and the gate
+    state it relied on are machine-checkable rather than prose. Codex is the
+    primary authority; 'opencode' is the canonical OpenCode hostile-review
+    fallback, legitimate only when Codex could not review and every snapshot
+    gate the fallback required was green.
+    """
+    authority: dict[str, Any] = {
+        "type": authority_type,
+        "tool": "codex-cli" if authority_type == "codex" else "opencode-hunter-review",
+        "head_sha": head_sha,
+        "reviewed_at": "2026-09-13T00:00:00Z",
+        "artifact": review.REVIEW_RELATIVE_PATH,
+    }
+    if authority_type == "opencode":
+        authority.update(
+            {
+                "fallback_reason": "Codex unavailable (rate-limited)",
+                "unresolved_thread_count": 0,
+                "governance_state": "success",
+                "trusted_preflight_state": "success",
+                "structured_evidence_status": "complete",
+            }
+        )
+    authority.update(overrides)
+    return authority
+
+
 FAMILIES = (
     {
         "id": "DFF-010",
@@ -510,7 +542,7 @@ def _judgement(*, families=("DFF-010", "DFF-013"), findings=()) -> dict:
     }
 
 
-def _review_document(*, changes=CANDIDATE_CHANGES, base=BASE, **judgement_kwargs) -> dict:
+def _review_document(*, changes=CANDIDATE_CHANGES, base=BASE, authority=None, **judgement_kwargs) -> dict:
     judgement = _judgement(**judgement_kwargs)
     claims = review.build_claims(
         issue="412",
@@ -521,12 +553,29 @@ def _review_document(*, changes=CANDIDATE_CHANGES, base=BASE, **judgement_kwargs
         defect_families=tuple(judgement["defect_families"]),
         findings=tuple(judgement["findings"]),
         adversarial_dimensions=tuple(judgement["adversarial_dimensions"]),
+        authority=authority if authority is not None else _authority(),
     )
     return review.document_for(claims)
 
 
-def _verify(document, *, changes=CANDIDATE_CHANGES, base=BASE) -> review.ReviewVerdict:
-    return review.verify_claims(document, base_sha=base, changes=changes, families=FAMILIES)
+def _verify(
+    document,
+    *,
+    changes=CANDIDATE_CHANGES,
+    base=BASE,
+    head_sha=HEAD,
+    commit_ancestry=None,
+    resolution_corrections=None,
+) -> review.ReviewVerdict:
+    return review.verify_claims(
+        document,
+        base_sha=base,
+        changes=changes,
+        families=FAMILIES,
+        resolution_corrections=resolution_corrections,
+        head_sha=head_sha,
+        commit_ancestry=commit_ancestry if commit_ancestry is not None else frozenset({HEAD}),
+    )
 
 
 def test_a_complete_review_of_this_exact_content_is_valid() -> None:
@@ -573,6 +622,72 @@ def test_an_unresolved_non_blocking_finding_does_not_block_ready() -> None:
     assert _verify(_review_document(findings=(finding,))).ok is True
 
 
+def test_a_resolved_finding_must_carry_structured_resolution_evidence() -> None:
+    """Issue #467: a fixed finding counts only with structured, exact-head evidence.
+
+    A resolved finding without a resolution-evidence record is exactly the
+    "resolved thread without an evidence-bearing reply" case: it must not
+    satisfy Ready, so the review is incomplete rather than merely annotated.
+    """
+    finding = {"id": "F-3", "severity": "blocking", "resolution": "resolved", "evidence": "fixed it"}
+
+    verdict = _verify(_review_document(findings=(finding,)))
+
+    assert verdict.state == "incomplete"
+    assert "F-3" in verdict.reason and "evidence" in verdict.reason
+
+
+def test_a_resolved_finding_without_a_committed_regression_test_is_incomplete() -> None:
+    """The regression test tracking the fix must be committed in the change set."""
+    evidence = {"correction": "1" * 40, "regression_test": "tests/somewhere_else.py"}
+    finding = {
+        "id": "F-4",
+        "severity": "blocking",
+        "resolution": "resolved",
+        "evidence": "fixed it",
+        "resolution_evidence": evidence,
+    }
+
+    verdict = _verify(_review_document(findings=(finding,)))
+
+    assert verdict.state == "incomplete"
+    assert "regression test" in verdict.reason
+
+
+def test_a_resolved_finding_with_structured_evidence_is_valid() -> None:
+    """Exact-head correction commit and a committed regression test satisfy the fix."""
+    evidence = {"correction": "1" * 40, "regression_test": "docs/DEFECT_REGISTRY.json"}
+    finding = {
+        "id": "F-5",
+        "severity": "blocking",
+        "resolution": "resolved",
+        "evidence": "fixed it",
+        "resolution_evidence": evidence,
+    }
+
+    verdict = _verify(_review_document(findings=(finding,)))
+
+    assert verdict.state == "valid"
+    assert verdict.ok is True
+
+
+def test_a_resolved_finding_correction_outside_the_candidate_range_is_rejected() -> None:
+    """The correction commit must be part of the reviewed candidate's commit range."""
+    evidence = {"correction": "2" * 40, "regression_test": "docs/DEFECT_REGISTRY.json"}
+    finding = {
+        "id": "F-6",
+        "severity": "blocking",
+        "resolution": "resolved",
+        "evidence": "fixed it",
+        "resolution_evidence": evidence,
+    }
+
+    verdict = _verify(_review_document(findings=(finding,)), resolution_corrections=frozenset(("1" * 40,)))
+
+    assert verdict.state == "stale"
+    assert "correction commit" in verdict.reason
+
+
 def test_an_applicable_family_left_unchecked_blocks_ready() -> None:
     verdict = _verify(_review_document(families=("DFF-010",)))
 
@@ -587,6 +702,154 @@ def test_a_review_cannot_narrow_its_own_applicability() -> None:
     )
 
     assert review.applicable_family_ids(FAMILIES, changed_paths) == ("DFF-010", "DFF-013")
+
+
+def test_a_codex_review_of_the_exact_head_is_valid() -> None:
+    """Primary authority: Codex's exact-head hostile review counts for readiness."""
+    verdict = _verify(_review_document())
+
+    assert verdict.state == "valid"
+    assert verdict.ok is True
+
+
+def test_a_fallback_review_of_the_exact_head_is_valid_when_codex_is_unavailable() -> None:
+    """Fallback authority: the canonical OpenCode hostile review counts.
+
+    Machine-readability is preserved, so `verify_claims` cannot tell the two
+    authorities apart -- the difference is only the recorded authority record,
+    and the fallback record is the report of *why* Codex could not review.
+    """
+    document = _review_document(authority=_authority(authority_type="opencode"))
+
+    verdict = _verify(document)
+
+    assert verdict.state == "valid"
+    assert verdict.ok is True, verdict.reason
+
+
+def test_a_review_carries_no_authority_record_at_all_is_refused() -> None:
+    """A review that cannot say who ran it is not evidence of who reviewed it."""
+    document = _review_document()
+    document["claims"].pop("authority")
+    document["review_id"] = review.review_id(document["claims"])
+
+    verdict = _verify(document)
+
+    assert verdict.state == "incomplete"
+    assert "authority" in verdict.reason
+
+
+def test_an_unrecognised_review_authority_type_is_refused() -> None:
+    document = _review_document(authority=_authority(authority_type="codex-ghost"))
+
+    verdict = _verify(document)
+
+    assert verdict.state == "incomplete"
+    assert "authority type" in verdict.reason
+
+
+def test_a_fallback_review_without_a_recorded_reason_is_refused() -> None:
+    """Issue #467: Codex may not be silently skipped while it is available.
+
+    A fallback review must record that Codex could not review and why, in
+    machine-checkable form. An empty or missing reason is exactly the skipped
+    primary authority case, and it fails closed.
+    """
+    document = _review_document(authority=_authority(authority_type="opencode", fallback_reason=""))
+
+    verdict = _verify(document)
+
+    assert verdict.state == "incomplete"
+    assert "without a reason" in verdict.reason
+
+
+def test_a_fallback_review_recorded_for_an_older_head_is_stale() -> None:
+    """The recorded exact head binds the review; an amended head invalidates it."""
+    document = _review_document(authority=_authority(authority_type="opencode", head_sha="d" * 40))
+
+    verdict = _verify(document, head_sha=HEAD)
+
+    assert verdict.state == "stale"
+    assert "head" in verdict.reason
+
+
+def test_a_review_recorded_for_an_ancestor_head_stays_valid_across_the_artifact_commit() -> None:
+    """The review's own artifact commit is a descendant of the head it reviewed.
+
+    The reviewed change set excludes the artifact, so committing it on top of
+    the reviewed head must not invalidate the review -- the recorded head is on
+    the evaluated head's history and the reviewed content is identical.
+    """
+    recorded = "c" * 40
+    evaluated = "e" * 40
+    document = _review_document(authority=_authority(authority_type="opencode", head_sha=recorded))
+
+    verdict = _verify(document, head_sha=evaluated, commit_ancestry=frozenset({recorded, evaluated}))
+
+    assert verdict.state == "valid"
+    assert verdict.ok is True
+
+
+def test_a_fallback_review_with_unresolved_threads_recorded_is_refused() -> None:
+    document = _review_document(authority=_authority(authority_type="opencode", unresolved_thread_count=1))
+
+    verdict = _verify(document)
+
+    assert verdict.state == "incomplete"
+    assert "unresolved" in verdict.reason
+
+
+def test_a_fallback_review_without_recorded_governance_success_is_refused() -> None:
+    document = _review_document(authority=_authority(authority_type="opencode", governance_state="pending"))
+
+    verdict = _verify(document)
+
+    assert verdict.state == "incomplete"
+    assert "Governance" in verdict.reason
+
+
+def test_a_fallback_review_without_recorded_preflight_success_is_refused() -> None:
+    document = _review_document(authority=_authority(authority_type="opencode", trusted_preflight_state="failure"))
+
+    verdict = _verify(document)
+
+    assert verdict.state == "incomplete"
+    assert "Preflight" in verdict.reason
+
+
+def test_a_fallback_review_without_complete_structured_evidence_status_is_refused() -> None:
+    document = _review_document(authority=_authority(authority_type="opencode", structured_evidence_status="partial"))
+
+    verdict = _verify(document)
+
+    assert verdict.state == "incomplete"
+    assert "structured evidence" in verdict.reason
+
+
+def test_a_fallback_review_with_a_resolved_finding_missing_structured_evidence_is_refused() -> None:
+    """Requirement 8 applies to every reviewer, whatever authority ran the review."""
+    finding = {"id": "F-9", "severity": "blocking", "resolution": "resolved", "evidence": "fixed it"}
+    document = _review_document(authority=_authority(authority_type="opencode"), findings=(finding,))
+
+    verdict = _verify(document)
+
+    assert verdict.state == "incomplete"
+    assert "resolved without structured resolution evidence" in verdict.reason
+
+
+def test_malformed_review_authority_metadata_fails_closed() -> None:
+    """Forged or malformed authority evidence cannot lengthen the review's reach."""
+    malformed = [
+        _authority(authority_type="opencode", unresolved_thread_count=True),
+        _authority(head_sha="not-a-sha"),
+        _authority(tool=""),
+        _authority(reviewed_at=""),
+        _authority(artifact=""),
+    ]
+    for authority in malformed:
+        verdict = _verify(_review_document(authority=authority))
+        assert verdict.state == "incomplete"
+        assert "authority" in verdict.reason
 
 
 def test_a_family_outside_the_changed_scope_is_not_demanded() -> None:
@@ -1121,6 +1384,7 @@ def test_a_present_review_is_verified_even_when_no_family_applies(monkeypatch) -
     monkeypatch.setattr(core, "read_head_pre_ready_review", lambda *_a: ("present", _review_document(), None))
     monkeypatch.setattr(core.pre_ready, "load_families", lambda *_a, **_k: (FAMILIES, ""))
     monkeypatch.setattr(core, "read_issue_acceptance_criteria", lambda *_a: ("present", (), ""))
+    monkeypatch.setattr(core, "read_pr_commits", lambda *_a: (True, (_signed_commit(),), None))
 
     state, description = core.verify_pre_ready_hostile_review("repo", "token", HEAD, PR_NUMBER)
 
@@ -1225,6 +1489,7 @@ def test_a_review_taken_against_another_base_branch_is_refused(monkeypatch) -> N
     monkeypatch.setattr(core, "read_head_pre_ready_review", lambda *_a: ("present", document, None))
     monkeypatch.setattr(core.pre_ready, "load_families", lambda *_a, **_k: (FAMILIES, ""))
     monkeypatch.setattr(core, "read_issue_acceptance_criteria", lambda *_a: ("present", (), ""))
+    monkeypatch.setattr(core, "read_pr_commits", lambda *_a: (True, (_signed_commit(),), None))
 
     state, description = core.verify_pre_ready_hostile_review("repo", "token", HEAD, PR_NUMBER)
 
@@ -1357,6 +1622,7 @@ def _criteria_review(*criteria: str) -> dict:
         defect_families=tuple(judgement["defect_families"]),
         findings=(),
         adversarial_dimensions=tuple(judgement["adversarial_dimensions"]),
+        authority=_authority(),
     )
     return review.document_for(claims)
 
@@ -1576,6 +1842,7 @@ def _issue_442_review(*criteria: str) -> dict:
         defect_families=tuple(judgement["defect_families"]),
         findings=(),
         adversarial_dimensions=tuple(judgement["adversarial_dimensions"]),
+        authority=_authority(),
     )
     return review.document_for(claims)
 
