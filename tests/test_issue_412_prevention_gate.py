@@ -486,13 +486,15 @@ CANDIDATE_CHANGES = (
 
 
 def _authority(*, authority_type: str = "codex", head_sha: str = HEAD, **overrides: Any) -> dict[str, Any]:
-    """Review-authority record carried inside the reviewed claims.
+    """Review-authority record carried at the top level of the review document.
 
-    The data is structured so the *reason* for a fallback review and the gate
-    state it relied on are machine-checkable rather than prose. Codex is the
-    primary authority; 'opencode' is the canonical OpenCode hostile-review
-    fallback, legitimate only when Codex could not review and every snapshot
-    gate the fallback required was green.
+    The authority is document-level review metadata BEside the canonical claims
+    -- not a claim -- so the claims stay exactly the canonical claim set the
+    trusted controller verifies. The data is structured so the *reason* for a
+    fallback review and the gate state it relied on are machine-checkable rather
+    than prose. Codex is the primary authority; 'opencode' is the canonical
+    OpenCode hostile-review fallback, legitimate only when Codex could not
+    review and every snapshot gate the fallback required was green.
     """
     authority: dict[str, Any] = {
         "type": authority_type,
@@ -553,9 +555,8 @@ def _review_document(*, changes=CANDIDATE_CHANGES, base=BASE, authority=None, **
         defect_families=tuple(judgement["defect_families"]),
         findings=tuple(judgement["findings"]),
         adversarial_dimensions=tuple(judgement["adversarial_dimensions"]),
-        authority=authority if authority is not None else _authority(),
     )
-    return review.document_for(claims)
+    return review.document_for(claims, authority=authority if authority is not None else _authority())
 
 
 def _verify(
@@ -730,8 +731,7 @@ def test_a_fallback_review_of_the_exact_head_is_valid_when_codex_is_unavailable(
 def test_a_review_carries_no_authority_record_at_all_is_refused() -> None:
     """A review that cannot say who ran it is not evidence of who reviewed it."""
     document = _review_document()
-    document["claims"].pop("authority")
-    document["review_id"] = review.review_id(document["claims"])
+    document.pop("authority")
 
     verdict = _verify(document)
 
@@ -788,6 +788,145 @@ def test_a_review_recorded_for_an_ancestor_head_stays_valid_across_the_artifact_
 
     assert verdict.state == "valid"
     assert verdict.ok is True
+
+
+def test_fallback_review_claims_that_differ_from_the_canonical_claim_set_are_blocked(monkeypatch) -> None:
+    """RED: reproduce the hosted Governance failure this fix corrects.
+
+    A fallback review carrying the authority INSIDE its claims (the shape that
+    was pushed before this fix) has a non-canonical claim set. The trusted
+    controller refuses it with the exact canonical-claim-set error, so a review
+    can never smuggle claim keys past the schema on either path.
+    """
+    document = _review_document()
+    document["claims"]["authority"] = document["authority"]
+    document["review_id"] = review.review_id(document["claims"])
+    monkeypatch.setattr(core, "read_pr_refs", lambda *_a: (True, BRANCH, "main", None))
+    monkeypatch.setattr(core, "read_merge_base", lambda *_a: (True, BASE, None))
+    monkeypatch.setattr(
+        core,
+        "read_pr_changed_files",
+        lambda *_a: (True, (core.PullRequestFile("modified", "docs/DEFECT_REGISTRY.json", "", "b" * 40),), None),
+    )
+    monkeypatch.setattr(core, "read_head_pre_ready_review", lambda *_a: ("present", document, None))
+    monkeypatch.setattr(core.pre_ready, "load_families", lambda *_a, **_k: (FAMILIES, ""))
+    monkeypatch.setattr(core, "read_issue_acceptance_criteria", lambda *_a: ("present", (), ""))
+    monkeypatch.setattr(core, "read_pr_commits", lambda *_a: (True, (_signed_commit(),), None))
+
+    state, description = core.verify_pre_ready_hostile_review("repo", "token", HEAD, PR_NUMBER)
+
+    assert state == "failure"
+    assert "review claims must carry exactly the canonical claim set" in description
+
+
+def test_fallback_review_emitting_exactly_the_canonical_claim_set_is_accepted(monkeypatch) -> None:
+    """GREEN: the approved fallback shape verifies end-to-end through Governance.
+
+    The fallback authority is recorded at document level BESIDE the claims, so
+    the claims stay exactly the canonical claim set the trusted controller
+    expects: acceptance criteria, adversarial dimensions, base identity, defect
+    families, findings, issue, review target and digest -- and nothing else.
+    """
+    monkeypatch.setattr(core, "read_pr_refs", lambda *_a: (True, BRANCH, "main", None))
+    monkeypatch.setattr(core, "read_merge_base", lambda *_a: (True, BASE, None))
+    monkeypatch.setattr(
+        core,
+        "read_pr_changed_files",
+        lambda *_a: (
+            True,
+            (
+                core.PullRequestFile("added", "scripts/hunter_writer_provenance.py", "", "a" * 40),
+                core.PullRequestFile("modified", "docs/DEFECT_REGISTRY.json", "", "b" * 40),
+            ),
+            None,
+        ),
+    )
+    monkeypatch.setattr(
+        core,
+        "read_head_pre_ready_review",
+        lambda *_a: ("present", _review_document(authority=_authority(authority_type="opencode")), None),
+    )
+    monkeypatch.setattr(core.pre_ready, "load_families", lambda *_a, **_k: (FAMILIES, ""))
+    monkeypatch.setattr(core, "read_issue_acceptance_criteria", lambda *_a: ("present", (), ""))
+    monkeypatch.setattr(core, "read_pr_commits", lambda *_a: (True, (_signed_commit(),), None))
+
+    state, description = core.verify_pre_ready_hostile_review("repo", "token", HEAD, PR_NUMBER)
+
+    assert state == "success"
+    assert "complete base->HEAD hostile review" in description
+
+
+def test_local_and_hosted_consume_the_same_canonical_claim_set_definition(monkeypatch) -> None:
+    """PARITY: one definition on both paths; a second literal cannot drift into life.
+
+    Local/pre-push verification and the hosted admission controller route
+    through the SAME pre_ready.verify_claims, which enforces the SINGLE
+    CANONICAL_CLAIM_SET constant. The authority is document-level review
+    metadata, not a claim, so the claims a review carries are exactly the set
+    the trusted default-branch controller was merged with.
+    """
+    assert review.CANONICAL_CLAIM_SET == {
+        "acceptance_criteria",
+        "adversarial_dimensions",
+        "base_ref",
+        "base_sha",
+        "defect_families",
+        "findings",
+        "issue",
+        "review_target",
+        "review_target_digest",
+    }
+    assert "authority" not in review.CANONICAL_CLAIM_SET
+    assert set(_review_document()["claims"]) == review.CANONICAL_CLAIM_SET
+
+    # Removing any canonical claim or adding any non-canonical claim breaks the
+    # review on the shared definition -- including the exact coupon shape that
+    # was previously pushed (authority inside claims).
+    for key in tuple(sorted(review.CANONICAL_CLAIM_SET)):
+        mutated = json.loads(json.dumps(_review_document()))
+        mutated["claims"].pop(key)
+        mutated["review_id"] = review.review_id(mutated["claims"])
+        assert _verify(mutated).state in ("incomplete", "stale")
+    smuggled = json.loads(json.dumps(_review_document()))
+    smuggled["claims"]["authority"] = smuggled["authority"]
+    smuggled["review_id"] = review.review_id(smuggled["claims"])
+    verdict = _verify(smuggled)
+    assert verdict.state in ("incomplete", "stale")
+    assert "canonical claim set" in verdict.reason
+
+    # The hosted controller consumes the same definition: it must route through
+    # pre_ready.verify_claims rather than re-derive a second expected set.
+    called: list[bool] = []
+    original = core.pre_ready.verify_claims
+
+    def _spy(*args: Any, **kwargs: Any) -> Any:
+        called.append(True)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(core.pre_ready, "verify_claims", _spy)
+    monkeypatch.setattr(core, "read_pr_refs", lambda *_a: (True, BRANCH, "main", None))
+    monkeypatch.setattr(core, "read_merge_base", lambda *_a: (True, BASE, None))
+    monkeypatch.setattr(
+        core,
+        "read_pr_changed_files",
+        lambda *_a: (
+            True,
+            (
+                core.PullRequestFile("added", "scripts/hunter_writer_provenance.py", "", "a" * 40),
+                core.PullRequestFile("modified", "docs/DEFECT_REGISTRY.json", "", "b" * 40),
+            ),
+            None,
+        ),
+    )
+    monkeypatch.setattr(core, "read_head_pre_ready_review", lambda *_a: ("present", _review_document(), None))
+    monkeypatch.setattr(core.pre_ready, "load_families", lambda *_a, **_k: (FAMILIES, ""))
+    monkeypatch.setattr(core, "read_issue_acceptance_criteria", lambda *_a: ("present", (), ""))
+    monkeypatch.setattr(core, "read_pr_commits", lambda *_a: (True, (_signed_commit(),), None))
+
+    state, description = core.verify_pre_ready_hostile_review("repo", "token", HEAD, PR_NUMBER)
+
+    assert state == "success"
+    assert called
 
 
 def test_a_fallback_review_with_unresolved_threads_recorded_is_refused() -> None:
@@ -1622,9 +1761,8 @@ def _criteria_review(*criteria: str) -> dict:
         defect_families=tuple(judgement["defect_families"]),
         findings=(),
         adversarial_dimensions=tuple(judgement["adversarial_dimensions"]),
-        authority=_authority(),
     )
-    return review.document_for(claims)
+    return review.document_for(claims, authority=_authority())
 
 
 def test_a_review_covering_one_self_authored_criterion_is_refused() -> None:
@@ -1842,9 +1980,8 @@ def _issue_442_review(*criteria: str) -> dict:
         defect_families=tuple(judgement["defect_families"]),
         findings=(),
         adversarial_dimensions=tuple(judgement["adversarial_dimensions"]),
-        authority=_authority(),
     )
-    return review.document_for(claims)
+    return review.document_for(claims, authority=_authority())
 
 
 def test_issue_442_paraphrased_criteria_are_failed_closed() -> None:

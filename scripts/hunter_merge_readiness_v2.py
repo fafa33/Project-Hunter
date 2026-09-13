@@ -182,11 +182,13 @@ def review_authority_state(head_sha: str, pr_number: int) -> tuple[str, str]:
     candidate admission cannot drift. A missing, stale, incomplete, or still
     contested review is a hard merge blocker, never a warning.
 
-    Issue #467: the review authority is recorded inside the review claims.
-    Codex is preferred; the canonical OpenCode hostile review is an admissible
-    fallback only when it records why Codex could not review and that every
-    snapshot gate it relied on was green. The state reported here is the
-    verified review state either way.
+    Issue #467: the review authority is recorded at document level beside the
+    canonical claims (never as a claim, so the claims stay exactly the canonical
+    claim set the trusted controller verifies). Codex is preferred; the
+    canonical OpenCode hostile review is an admissible fallback only when it
+    records why Codex could not review and that every snapshot gate it relied
+    on was green. The state reported here is the verified review state either
+    way.
     """
 
     # Imported here rather than at module scope: hunter_workflow_state imports

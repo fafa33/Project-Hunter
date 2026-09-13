@@ -56,6 +56,27 @@ REVIEW_SCHEMA = "hunter.pre-ready-hostile-review.v1"
 #: candidate look stale.
 EXCLUDED_PATHS = frozenset({REVIEW_RELATIVE_PATH, ingress.AUTHORIZATION_RECEIPT_PATH})
 
+#: The single canonical claim set a review must carry -- nothing more, nothing
+#: less. Local/pre-push verification and the hosted trusted controller consume
+#: THIS ONE definition, so neither side can drift from the other. The review
+#: authority (who reviewed, when, against which exact head) is deliberately NOT
+#: a claim: it is document-level review metadata recorded beside the claims, so
+#: the claims stay exactly the set the trusted default-branch controller was
+#: merged with and no review can smuggle evidence in or out under a claim key.
+CANONICAL_CLAIM_SET = frozenset(
+    {
+        "acceptance_criteria",
+        "adversarial_dimensions",
+        "base_ref",
+        "base_sha",
+        "defect_families",
+        "findings",
+        "issue",
+        "review_target",
+        "review_target_digest",
+    }
+)
+
 CRITERION_VERDICTS = frozenset({"satisfied", "not-applicable"})
 FAMILY_OUTCOMES = frozenset({"clear", "repaired"})
 FINDING_SEVERITIES = frozenset({"blocking", "non-blocking"})
@@ -292,12 +313,10 @@ def build_claims(
     defect_families: tuple[dict[str, Any], ...],
     findings: tuple[dict[str, Any], ...],
     adversarial_dimensions: tuple[str, ...],
-    authority: dict[str, Any],
 ) -> dict[str, Any]:
     return {
         "acceptance_criteria": [dict(sorted(item.items())) for item in acceptance_criteria],
         "adversarial_dimensions": sorted(set(adversarial_dimensions)),
-        "authority": dict(sorted(authority.items())),
         "base_ref": base_ref,
         "base_sha": base_sha,
         "defect_families": [dict(sorted(item.items())) for item in defect_families],
@@ -308,11 +327,21 @@ def build_claims(
     }
 
 
-def document_for(claims: dict[str, Any]) -> dict[str, Any]:
-    return {"schema": REVIEW_SCHEMA, "claims": claims, "review_id": review_id(claims)}
+def document_for(claims: dict[str, Any], authority: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Assemble the review document: canonical claims plus document-level metadata.
+
+    ``claims`` is exactly the canonical claim set. The authority is review
+    metadata recorded BESIDE the claims (like the review_id) -- not inside them --
+    so the claims stay the canonical set the trusted default-branch controller
+    verifies while the exact-head authority contract still binds the document.
+    """
+    document: dict[str, Any] = {"schema": REVIEW_SCHEMA, "claims": claims, "review_id": review_id(claims)}
+    if authority is not None:
+        document["authority"] = dict(sorted(authority.items()))
+    return document
 
 
-def _authority_error(claims: dict[str, Any]) -> str | None:
+def _authority_error(document: dict[str, Any]) -> str | None:
     """Validate the recorded review-authority record before believing it.
 
     The two admissible authorities share one structural contract -- type, tool
@@ -322,11 +351,15 @@ def _authority_error(claims: dict[str, Any]) -> str | None:
     was green. `verify_claims` cannot tell the authorities apart, so neither can
     lengthen its own reach: the fallback is admitted on the credibility of the
     recorded reason and gates, not on the reviewer's name.
+
+    The authority is document-level review metadata, recorded beside the claims
+    rather than inside them, so the claims stay the canonical claim set the
+    trusted controller verifies.
     """
 
-    authority = claims.get("authority")
+    authority = document.get("authority")
     if not isinstance(authority, dict):
-        return "review claims must carry a review-authority record"
+        return "review document must carry a review-authority record"
     authority_type = authority.get("type")
     if authority_type not in REVIEW_AUTHORITY_TYPES:
         return f"review authority type must be one of {sorted(REVIEW_AUTHORITY_TYPES)}"
@@ -371,23 +404,7 @@ def _authority_error(claims: dict[str, Any]) -> str | None:
 def _structural_error(claims: dict[str, Any]) -> str | None:
     """Validate the review's own shape before comparing it to anything."""
 
-    authority_problem = _authority_error(claims)
-    if authority_problem is not None:
-        return authority_problem
-
-    expected = {
-        "acceptance_criteria",
-        "adversarial_dimensions",
-        "authority",
-        "base_ref",
-        "base_sha",
-        "defect_families",
-        "findings",
-        "issue",
-        "review_target",
-        "review_target_digest",
-    }
-    if set(claims) != expected:
+    if set(claims) != CANONICAL_CLAIM_SET:
         return "review claims must carry exactly the canonical claim set"
     for name in ("base_ref", "base_sha", "issue", "review_target_digest"):
         if not isinstance(claims.get(name), str) or not claims[name].strip():
@@ -507,6 +524,14 @@ def verify_claims(
     if document.get("review_id") != review_id(claims):
         return ReviewVerdict("stale", "pre-ready hostile review identifier does not match its own claims")
 
+    # Issue #467: the authority is document-level review metadata recorded beside
+    # the canonical claims. It must exist and satisfy the authority contract
+    # (Codex primary, recorded-reason OpenCode fallback) before anything that
+    # binds the candidate is trusted.
+    authority_problem = _authority_error(document)
+    if authority_problem is not None:
+        return ReviewVerdict("incomplete", authority_problem)
+
     problem = _structural_error(claims)
     if problem is not None:
         return ReviewVerdict("incomplete", problem)
@@ -536,7 +561,7 @@ def verify_claims(
     # the fast path; when the heads differ, the ancestry is the distinguisher and
     # the content checks above still bind the diff, so the self-inserted artifact
     # commit never re-legitimises different content.
-    recorded_head = claims["authority"]["head_sha"]
+    recorded_head = document["authority"]["head_sha"]
     if head_sha is not None and recorded_head.strip().lower() != head_sha.strip().lower():
         known_ancestors = {str(sha).strip().lower() for sha in (commit_ancestry or frozenset())}
         if recorded_head.strip().lower() not in known_ancestors:
@@ -769,7 +794,7 @@ def verify_local(
     exact_head = (
         head if _GIT_SHA.fullmatch(head) else _run_git("rev-parse", "--verify", f"{head}^{{commit}}", cwd=cwd).strip()
     )
-    recorded_head = str(((document or {}).get("claims") or {}).get("authority", {}).get("head_sha") or "")
+    recorded_head = str((document or {}).get("authority", {}).get("head_sha") or "")
     ancestry: frozenset[str] = frozenset({exact_head} - {""})
     if recorded_head.strip().lower() != exact_head.strip().lower() and _is_ancestor(recorded_head, exact_head, cwd=cwd):
         ancestry = frozenset({recorded_head, exact_head})
@@ -833,9 +858,8 @@ def record(
         defect_families=tuple(judgement["defect_families"]),
         findings=tuple(judgement["findings"]),
         adversarial_dimensions=tuple(judgement["adversarial_dimensions"]),
-        authority=dict(judgement["authority"]),
     )
-    return document_for(claims)
+    return document_for(claims, authority=authority)
 
 
 def main() -> int:
