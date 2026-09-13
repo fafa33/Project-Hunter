@@ -1008,20 +1008,21 @@
     },
     {
       "id": "DFF-022",
-      "title": "merge-readiness-without-current-head-codex-review",
-      "invariant": "The final Merge Readiness controller must itself fail closed unless a complete exact-head Codex review exists at the current PR head and verifies against trusted PR evidence -- a missing, stale, incomplete, or still-contested review is a hard merge blocker, never a warning; and a resolved review finding counts as satisfied only when its structured evidence names the exact-head correction commit and a regression test committed in the change set. No other controller's earlier word, and no resolved review thread without that evidence, can stand in for this prerequisite.",
+      "title": "merge-readiness-without-current-head-review-authority",
+      "invariant": "The final Merge Readiness controller must itself fail closed unless a complete exact-head review exists at the current PR head and verifies against trusted PR evidence -- a missing, stale, incomplete, or still-contested review is a hard merge blocker, never a warning. Codex is the required primary review authority; the canonical OpenCode hostile review is an admissible fallback only when it records, in machine-checkable fields, why Codex could not review and that Governance, trusted Preflight, a zero unresolved-thread count, and complete structured evidence were all green at review time -- a review that silently skips Codex while it is available, or whose recorded exact head differs from the candidate head, is rejected. A resolved review finding counts as satisfied only when its structured evidence names the exact-head correction commit and a regression test committed in the change set. No other controller's earlier word, and no resolved review thread without that evidence, can stand in for this prerequisite.",
       "applicability": {
         "changed_paths": [
           "scripts/hunter_merge_readiness_v2.py",
           "scripts/hunter_governance_review_v2.py",
           "scripts/hunter_pre_ready_review.py",
           ".github/workflows/hunter-merge-readiness.yml",
-          "docs/CODE_WRITE_POLICY.json"
+          "docs/CODE_WRITE_POLICY.json",
+          "docs/DEFECT_REGISTRY.json"
         ],
-        "rationale": "The final merge gate and the single shared review-verification implementation are where the workflow-ordering defect lives: Merge Readiness could go green through governance or check status alone, or a resolved thread could satisfy readiness without machine-verified structured evidence. A recurrence here means the fail-closed prerequisite was weakened at the boundary that is supposed to own it."
+        "rationale": "The final merge gate and the single shared review-verification implementation are where the workflow-ordering defect lives: Merge Readiness could go green through governance or check status alone, or a resolved thread could satisfy readiness without machine-verified structured evidence. A recurrence here means the fail-closed prerequisite was weakened at the boundary that is supposed to own it. The fallback authority rule lives here too because a single primary review authority that can be rate-limited or unavailable is itself a workflow freeze waiting to happen: readiness must stay fail-closed without turning Codex availability into a single point of failure."
       },
       "prevention": {
-        "mechanism": "Merge Readiness evaluates an exact-head Codex review prerequisite read from the candidate's own HEAD (the content-bound pre-ready hostile review artifact, whose review_id hashes the claims and whose review_target_digest binds the exact base->HEAD change set) and re-verifies it with the same verify_claims implementation candidate admission uses; candidate admission additionally binds each resolved finding's correction commit to the candidate's own commit range and its regression test to the reviewed change set. A HEAD mutation changes the blob SHAs, so the review goes stale automatically and readiness is blocked again until it is refreshed.",
+        "mechanism": "Merge Readiness evaluates an exact-head review-authority prerequisite read from the candidate's own HEAD: the content-bound pre-ready hostile review artifact (whose review_id hashes the claims and whose review_target_digest binds the exact base->HEAD change set) now carries a claims-level authority record -- type (codex primary, opencode fallback), reviewer/tool identity, the exact head reviewed, timestamp, and hostile-review artifact reference; an opencode fallback is structurally required to record why Codex could not review and to record trusted Governance success, trusted Preflight success, a zero unresolved-thread count, and complete structured evidence. The recorded authority head must equal the candidate head being evaluated, and the review is re-verified with the same verify_claims implementation candidate admission uses (extended to bind head_sha), so readiness and candidate admission cannot drift. Candidate admission additionally binds each resolved finding's correction commit to the candidate's own commit range and its regression test to the reviewed change set. A HEAD mutation changes the blob SHAs or the recorded head, so the review goes stale automatically and readiness is blocked again until it is refreshed; code-write policy and its guard bind the model (Codex required primary, OpenCode recorded-reason fallback with green snapshot gates) on the trusted default branch.",
         "boundary": "hosted-gate"
       },
       "regression_evidence": [
@@ -1030,12 +1031,22 @@
         "tests/test_hunter_merge_readiness_v2.py::test_resolved_finding_without_structured_evidence_blocks",
         "tests/test_hunter_merge_readiness_v2.py::test_a_new_commit_after_codex_review_stales_readiness_again",
         "tests/test_hunter_merge_readiness_v2.py::test_current_head_codex_review_with_structured_evidence_allows",
+        "tests/test_hunter_merge_readiness_v2.py::test_a_fallback_review_of_the_exact_head_is_a_valid_review_authority",
+        "tests/test_hunter_merge_readiness_v2.py::test_a_missing_fallback_review_still_blocks_readiness",
+        "tests/test_hunter_merge_readiness_v2.py::test_a_new_commit_after_a_valid_fallback_review_stales_readiness_again",
+        "tests/test_issue_412_prevention_gate.py::test_a_fallback_review_of_the_exact_head_is_valid_when_codex_is_unavailable",
+        "tests/test_issue_412_prevention_gate.py::test_a_fallback_review_without_a_recorded_reason_is_refused",
+        "tests/test_issue_412_prevention_gate.py::test_a_fallback_review_recorded_for_an_older_head_is_stale",
+        "tests/test_issue_412_prevention_gate.py::test_a_fallback_review_with_unresolved_threads_recorded_is_refused",
+        "tests/test_issue_412_prevention_gate.py::test_a_fallback_review_without_complete_structured_evidence_status_is_refused",
         "tests/test_issue_412_prevention_gate.py::test_a_resolved_finding_must_carry_structured_resolution_evidence",
-        "tests/test_code_write_policy.py::test_code_write_policy_guard_rejects_a_dropped_codex_review_requirement"
+        "tests/test_code_write_policy.py::test_code_write_policy_declares_codex_primary_with_a_recorded_reason_fallback",
+        "tests/test_code_write_policy.py::test_code_write_policy_guard_rejects_a_fallback_without_a_recorded_reason_requirement"
       ],
       "lifecycle": "regression-tested",
       "sources": [
-        "Issue #467 workflow-ordering defect (PR #468)"
+        "Issue #467 workflow-ordering defect (PR #468)",
+        "Issue #467 fallback review-authority hardening (PR #468)"
       ]
     }
   ]

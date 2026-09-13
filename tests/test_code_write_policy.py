@@ -59,6 +59,40 @@ def test_code_write_policy_guard_rejects_a_resolution_contract_without_a_regress
     )
 
 
+def test_code_write_policy_declares_codex_primary_with_a_recorded_reason_fallback() -> None:
+    policy = json.loads((ROOT / "docs" / "CODE_WRITE_POLICY.json").read_text(encoding="utf-8"))
+    authority = policy["review_progression"]["review_authority"]
+
+    assert authority["primary"] == "codex"
+    assert authority["fallback"] == "opencode"
+    assert authority["fallback_requires_recorded_reason"] is True
+    expected = {
+        "governance=success",
+        "trusted_preflight=success",
+        "unresolved_thread_count=0",
+        "structured_evidence=complete",
+    }
+    assert expected <= set(authority["fallback_requires_snapshot_gates"])
+
+
+def test_code_write_policy_guard_rejects_a_policy_without_a_review_authority_model(monkeypatch, tmp_path) -> None:
+    _write_policy(
+        monkeypatch,
+        tmp_path,
+        lambda policy: policy["review_progression"].pop("review_authority"),
+    )
+
+
+def test_code_write_policy_guard_rejects_a_fallback_without_a_recorded_reason_requirement(
+    monkeypatch, tmp_path
+) -> None:
+    _write_policy(
+        monkeypatch,
+        tmp_path,
+        lambda policy: policy["review_progression"]["review_authority"].pop("fallback_requires_recorded_reason"),
+    )
+
+
 def test_defect_prevention_guard_validates_code_write_policy() -> None:
     assert prevention.validate_code_write_policy() == []
 

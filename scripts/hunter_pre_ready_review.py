@@ -61,6 +61,26 @@ FAMILY_OUTCOMES = frozenset({"clear", "repaired"})
 FINDING_SEVERITIES = frozenset({"blocking", "non-blocking"})
 FINDING_RESOLUTIONS = frozenset({"resolved", "unresolved"})
 
+#: Review-authority model (Issue #467): the exact-head hostile review remains
+#: mandatory, and Codex remains the primary reviewer. The canonical *OpenCode*
+#: hostile-review artifact may stand in only when the primary authority could
+#: not be used, and the fallback must record, in machine-checkable fields, why
+#: Codex could not review and the gate state it relied on. The recorded evidence
+#: is validated structurally so a fallback cannot be forged by omitting the
+#: required reason or by claiming a green gate that was not green.
+CODEX_REVIEW_AUTHORITY = "codex"
+OPENCODE_REVIEW_AUTHORITY = "opencode"
+REVIEW_AUTHORITY_TYPES = frozenset({CODEX_REVIEW_AUTHORITY, OPENCODE_REVIEW_AUTHORITY})
+#: The gate states a recorded OpenCode fallback must claim at review time. Each
+#: field has its own admissible value because the states mean different things:
+#: Governance and trusted Preflight report "success"/"failure" while structured
+#: evidence completeness is "complete"/"partial".
+FALLBACK_REQUIRED_GATE_STATES = {
+    "governance_state": "success",
+    "trusted_preflight_state": "success",
+    "structured_evidence_status": "complete",
+}
+
 #: The exact-head correction commit a resolved finding must name: a git commit SHA.
 _GIT_SHA = re.compile(r"\A[0-9a-fA-F]{40}\Z")
 
@@ -272,10 +292,12 @@ def build_claims(
     defect_families: tuple[dict[str, Any], ...],
     findings: tuple[dict[str, Any], ...],
     adversarial_dimensions: tuple[str, ...],
+    authority: dict[str, Any],
 ) -> dict[str, Any]:
     return {
         "acceptance_criteria": [dict(sorted(item.items())) for item in acceptance_criteria],
         "adversarial_dimensions": sorted(set(adversarial_dimensions)),
+        "authority": dict(sorted(authority.items())),
         "base_ref": base_ref,
         "base_sha": base_sha,
         "defect_families": [dict(sorted(item.items())) for item in defect_families],
@@ -290,12 +312,73 @@ def document_for(claims: dict[str, Any]) -> dict[str, Any]:
     return {"schema": REVIEW_SCHEMA, "claims": claims, "review_id": review_id(claims)}
 
 
+def _authority_error(claims: dict[str, Any]) -> str | None:
+    """Validate the recorded review-authority record before believing it.
+
+    The two admissible authorities share one structural contract -- type, tool
+    identity, the exact head reviewed, when, and which artifact carries the
+    evidence -- and the OpenCode fallback must additionally state why Codex
+    could not review and record that every snapshot gate the fallback relied on
+    was green. `verify_claims` cannot tell the authorities apart, so neither can
+    lengthen its own reach: the fallback is admitted on the credibility of the
+    recorded reason and gates, not on the reviewer's name.
+    """
+
+    authority = claims.get("authority")
+    if not isinstance(authority, dict):
+        return "review claims must carry a review-authority record"
+    authority_type = authority.get("type")
+    if authority_type not in REVIEW_AUTHORITY_TYPES:
+        return f"review authority type must be one of {sorted(REVIEW_AUTHORITY_TYPES)}"
+    if not isinstance(authority.get("tool"), str) or not authority["tool"].strip():
+        return "review authority must name its reviewer/tool identity"
+    head_sha = authority.get("head_sha")
+    if not isinstance(head_sha, str) or _GIT_SHA.fullmatch(head_sha) is None:
+        return "review authority must record the exact 40-character head SHA it reviewed"
+    if not isinstance(authority.get("reviewed_at"), str) or not authority["reviewed_at"].strip():
+        return "review authority must record the reviewed_at timestamp"
+    if not isinstance(authority.get("artifact"), str) or not authority["artifact"].strip():
+        return "review authority must reference the hostile-review artifact it verifies"
+
+    if authority_type == OPENCODE_REVIEW_AUTHORITY:
+        reason = authority.get("fallback_reason")
+        if not isinstance(reason, str) or not reason.strip():
+            return (
+                "opencode fallback authority must record why Codex could not review; "
+                "skipping Codex without a reason is forbidden"
+            )
+        # A fallback is legitimate only when nothing is waiting on it: the exact
+        # head (held by the recorded head_sha), no open threads, and green gates.
+        unresolved = authority.get("unresolved_thread_count")
+        # bool is an int subclass; a True is a claim that something waited.
+        if isinstance(unresolved, bool) or not isinstance(unresolved, int) or unresolved != 0:
+            return "opencode fallback authority must record a zero unresolved-thread count at review time"
+        readable_gates = {
+            "governance_state": "Governance",
+            "trusted_preflight_state": "trusted Preflight",
+            "structured_evidence_status": "complete structured evidence",
+        }
+        for gate in sorted(FALLBACK_REQUIRED_GATE_STATES):
+            required = FALLBACK_REQUIRED_GATE_STATES[gate]
+            if authority.get(gate) != required:
+                return (
+                    f"opencode fallback authority requires recorded {readable_gates[gate]} "
+                    f"== {required!r} at review time"
+                )
+    return None
+
+
 def _structural_error(claims: dict[str, Any]) -> str | None:
     """Validate the review's own shape before comparing it to anything."""
+
+    authority_problem = _authority_error(claims)
+    if authority_problem is not None:
+        return authority_problem
 
     expected = {
         "acceptance_criteria",
         "adversarial_dimensions",
+        "authority",
         "base_ref",
         "base_sha",
         "defect_families",
@@ -389,6 +472,7 @@ def verify_claims(
     families: tuple[dict[str, Any], ...],
     issue_criteria: tuple[str, ...] | None = None,
     resolution_corrections: frozenset[str] | None = None,
+    head_sha: str | None = None,
 ) -> ReviewVerdict:
     """Compare repository-owned review state against the exact candidate content.
 
@@ -440,6 +524,18 @@ def verify_claims(
             "stale",
             f"the pre-ready hostile review was taken against base {claims['base_sha'][:10]}, "
             f"not this candidate's base {base_sha[:10]}",
+        )
+
+    # Issue #467: the review is a statement about an exact commit, so the head it
+    # claims to have reviewed is part of its evidence, not decoration. Content
+    # equality alone cannot detect an amended commit whose diff is byte-identical,
+    # so the recorded head must equal the candidate head the caller is evaluating.
+    recorded_head = claims["authority"]["head_sha"]
+    if head_sha is not None and recorded_head.strip().lower() != head_sha.strip().lower():
+        return ReviewVerdict(
+            "stale",
+            f"the pre-ready hostile review was recorded for head {recorded_head[:10]}, "
+            f"not this candidate's exact head {head_sha[:10]}",
         )
 
     changed_paths = tuple(sorted({path for change in target_changes(changes) for path in change.affected_paths()}))
@@ -649,10 +745,17 @@ def verify_local(
         changes=changes,
         families=families,
         issue_criteria=issue_criteria,
+        head_sha=head,
     )
 
 
-JUDGEMENT_KEYS = ("acceptance_criteria", "adversarial_dimensions", "defect_families", "findings")
+JUDGEMENT_KEYS = (
+    "acceptance_criteria",
+    "adversarial_dimensions",
+    "authority",
+    "defect_families",
+    "findings",
+)
 
 
 def record(
@@ -667,14 +770,24 @@ def record(
     """Mint review state for the exact current content of ``base..head``.
 
     The reviewer supplies only the judgement -- criteria verdicts, family
-    outcomes, findings, and the adversarial dimensions swept. Everything that
-    binds the review to the candidate is derived here from git, so a reviewer
-    cannot record a review of content that does not exist.
+    outcomes, findings, the adversarial dimensions swept, and the review
+    authority record. Everything that binds the review to the candidate is
+    derived here from git, so a reviewer cannot record a review of content that
+    does not exist, and the recorded authority head must equal ``head`` for the
+    minted review to verify.
     """
 
     missing = [key for key in JUDGEMENT_KEYS if key not in judgement]
     if missing:
         raise ValueError("review judgement is missing " + ", ".join(missing))
+    authority = judgement["authority"]
+    recorded_head = str(authority.get("head_sha", "")).strip()
+    exact_head = _run_git("rev-parse", "--verify", f"{head}^{{commit}}").strip()
+    if recorded_head.lower() != exact_head.lower():
+        raise ValueError(
+            f"review authority head_sha {recorded_head or '(empty)'} does not equal the exact "
+            f"candidate head {exact_head}; a review cannot be minted for a head it did not review"
+        )
     changes = local_changes(base, head, cwd=cwd)
     claims = build_claims(
         issue=issue,
@@ -685,6 +798,7 @@ def record(
         defect_families=tuple(judgement["defect_families"]),
         findings=tuple(judgement["findings"]),
         adversarial_dimensions=tuple(judgement["adversarial_dimensions"]),
+        authority=dict(judgement["authority"]),
     )
     return document_for(claims)
 

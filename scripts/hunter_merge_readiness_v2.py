@@ -170,8 +170,8 @@ def open_prs_for_head(sha: str) -> tuple[int, ...]:
     return tuple(sorted(set(numbers)))
 
 
-def exact_head_codex_review(head_sha: str, pr_number: int) -> tuple[str, str]:
-    """Fail-closed exact-head Codex review prerequisite for merge readiness.
+def review_authority_state(head_sha: str, pr_number: int) -> tuple[str, str]:
+    """Fail-closed exact-head review prerequisite for merge readiness.
 
     Merge Readiness is the final current-state controller, so it must itself
     establish that the candidate has been adversarially reviewed as it stands
@@ -181,6 +181,12 @@ def exact_head_codex_review(head_sha: str, pr_number: int) -> tuple[str, str]:
     reuses the governance controller's single implementation, so readiness and
     candidate admission cannot drift. A missing, stale, incomplete, or still
     contested review is a hard merge blocker, never a warning.
+
+    Issue #467: the review authority is recorded inside the review claims.
+    Codex is preferred; the canonical OpenCode hostile review is an admissible
+    fallback only when it records why Codex could not review and that every
+    snapshot gate it relied on was green. The state reported here is the
+    verified review state either way.
     """
 
     # Imported here rather than at module scope: hunter_workflow_state imports
@@ -190,11 +196,11 @@ def exact_head_codex_review(head_sha: str, pr_number: int) -> tuple[str, str]:
 
     state, _document, read_error = governance.read_head_pre_ready_review(REPO, TOKEN, head_sha)
     if state == "unavailable":
-        return "failure", f"Codex review evidence is unavailable ({read_error})"
+        return "failure", f"review evidence is unavailable ({read_error})"
     if state == "invalid":
-        return "failure", f"Codex review evidence is malformed on HEAD: {read_error}"
+        return "failure", f"review evidence is malformed on HEAD: {read_error}"
     if state == "absent":
-        return "failure", "no exact-head Codex review exists on the current HEAD"
+        return "failure", "no exact-head hostile review exists on the current HEAD"
 
     verdict_state, message = governance.verify_pre_ready_hostile_review(REPO, TOKEN, head_sha, pr_number)
     if verdict_state != "success":
@@ -227,7 +233,7 @@ class ReadinessObservation(Protocol):
     def changes_requested(self) -> tuple[str, ...]: ...
 
     @property
-    def codex_review(self) -> tuple[str, str]: ...
+    def review_authority(self) -> tuple[str, str]: ...
 
     @property
     def check_runs(self) -> tuple[dict[str, Any], ...]: ...
@@ -247,7 +253,7 @@ class StaticReadinessObservation:
     mergeable: bool | None = True
     unresolved_review_threads: tuple[str, ...] = ()
     changes_requested: tuple[str, ...] = ()
-    codex_review: tuple[str, str] = ("success", "")
+    review_authority: tuple[str, str] = ("success", "")
     check_runs: tuple[dict[str, Any], ...] = ()
     governance_status: dict[str, Any] | None = None
     shared_open_prs: tuple[int, ...] = ()
@@ -278,8 +284,8 @@ class LiveReadinessObservation:
         return changes_requested_reviewers(self._pr_number)
 
     @cached_property
-    def codex_review(self) -> tuple[str, str]:
-        return exact_head_codex_review(self._head_sha, self._pr_number)
+    def review_authority(self) -> tuple[str, str]:
+        return review_authority_state(self._head_sha, self._pr_number)
 
     @cached_property
     def check_runs(self) -> tuple[dict[str, Any], ...]:
@@ -334,9 +340,9 @@ def evaluate(observation: ReadinessObservation) -> Decision:
     if observation.changes_requested:
         return Decision("failure", "Changes requested by: " + ", ".join(observation.changes_requested))
 
-    codex_state, codex_detail = observation.codex_review
-    if codex_state != "success":
-        return Decision("failure", "Exact-head Codex review prerequisite not met: " + codex_detail)
+    authority_state, authority_detail = observation.review_authority
+    if authority_state != "success":
+        return Decision("failure", "Exact-head review prerequisite not met: " + authority_detail)
 
     runs = list(observation.check_runs)
     missing: list[str] = []

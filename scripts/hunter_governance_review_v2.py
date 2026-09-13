@@ -1438,6 +1438,10 @@ def verify_pre_ready_hostile_review(
         families=families,
         issue_criteria=issue_criteria or None,
         resolution_corrections=resolution_corrections,
+        # Issue #467: the evaluated head is the PR head SHA derived from trusted
+        # PR evidence, and the review's recorded authority head must equal it, so
+        # a review cannot be rebound to a different exact commit.
+        head_sha=head_sha,
     )
     if not verdict.ok:
         return "failure", f"Candidate admission blocked: {verdict.reason}."

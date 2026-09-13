@@ -4,7 +4,8 @@ name: Hunter / Merge Readiness
 # - Draft state or unresolved mergeability/conflicts
 # - unresolved inline review threads
 # - current CHANGES_REQUESTED reviews
-# - missing, stale, incomplete, or unresolved exact-head Codex review
+# - missing, stale, incomplete, or unresolved exact-head review
+#   (Codex primary; canonical OpenCode hostile-review fallback with recorded reason)
 # - failed or incomplete exact-head code/security checks
 # - failed lightweight Hunter Governance Review
 #

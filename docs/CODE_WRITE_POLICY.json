@@ -28,6 +28,18 @@
     "ready_requires": "successful exact-head Hunter / Pre-PR Preflight",
     "auto_ready": false,
     "requires_current_head_codex_review": true,
+    "review_authority": {
+      "primary": "codex",
+      "fallback": "opencode",
+      "fallback_only_when_unavailable": "Codex unavailable, rate-limited, timed out, or otherwise not usable -- never skipped while Codex is available",
+      "fallback_requires_recorded_reason": true,
+      "fallback_requires_snapshot_gates": [
+        "governance=success",
+        "trusted_preflight=success",
+        "unresolved_thread_count=0",
+        "structured_evidence=complete"
+      ]
+    },
     "finding_resolution": "a fixed review finding resolves only with structured evidence: the exact-head correction commit and a regression test committed in the change set, verified fail-closed before Merge Readiness"
   },
   "ingress_provenance": {
