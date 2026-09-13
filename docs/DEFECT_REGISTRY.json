@@ -734,7 +734,13 @@
         "tests/test_issue_412_prevention_gate.py::test_issue_442_canonical_criteria_are_admitted",
         "tests/test_issue_412_prevention_gate.py::test_verify_local_enforces_governing_issue_criteria",
         "tests/test_issue_412_prevention_gate.py::test_pre_push_fails_closed_when_issue_criteria_are_unverifiable",
-        "tests/test_issue_412_prevention_gate.py::test_pre_push_reports_ready_only_when_issue_criteria_are_covered"
+        "tests/test_issue_412_prevention_gate.py::test_pre_push_reports_ready_only_when_issue_criteria_are_covered",
+        "tests/test_issue_412_prevention_gate.py::test_governing_criteria_are_fetched_from_the_canonical_repository_not_the_fork",
+        "tests/test_issue_412_prevention_gate.py::test_governing_issue_binding_follows_the_pushed_remote_branch_not_the_local_branch",
+        "tests/test_issue_412_prevention_gate.py::test_mixed_issue_push_cannot_select_one_matching_claim",
+        "tests/test_issue_412_prevention_gate.py::test_top_level_array_review_evidence_is_draft_only_not_a_crash",
+        "tests/test_issue_412_prevention_gate.py::test_non_object_review_claims_are_draft_only_not_a_crash",
+        "tests/test_issue_412_prevention_gate.py::test_malformed_review_evidence_does_not_block_an_ordinary_draft_push"
       ],
       "lifecycle": "hosted-enforced",
       "sources": [
@@ -898,7 +904,8 @@
       },
       "prevention": {
         "mechanism": "Dispatchability is decided by the canonical compiled allocation outcome before any automation envelope exists: the SmartPromptMachine itself refuses to mint the envelope unless the compiled outcome is READY with a non-None prompt_artifact_id, raising the deterministic machine-readable PromptTaskUnreadyError (ENGINEERING_TASK_NOT_READY with task_key/route/profile/outcome/prompt_artifact_id/reason_codes/preflight/available) at the envelope seam, so INSUFFICIENT_BUDGET, REPLAN_REQUIRED and READY-without-artifact builds are never wrapped into a signed envelope. The governed ingress re-applies the same invariant at the network boundary. There is no parallel renderer and no duplicate budget authority: both layers consume the machine's own rendered outcome. The raw-input PromptTaskOversizeError guard stays as the cheap first gate, and a genuinely READY build still compiles with unchanged envelope identity.",
-        "boundary": "review"
+        "boundary": "review",
+        "guard_reference": "src/hunter/evidence_intelligence/smart_prompt_routing.py::PromptTaskUnreadyError"
       },
       "regression_evidence": [
         "tests/test_engineering_task_ingress.py::test_non_ready_compiled_outcome_fails_closed_before_any_envelope",
@@ -928,7 +935,8 @@
       },
       "prevention": {
         "mechanism": "A single repository-owned startup seam (railway_issuer_startup.py) is pinned in railway.toml as the start command.  It verifies the evidence data directory is the mounted persistent Railway volume (a directory that merely exists is not accepted as proof, so it never bootstraps into ephemeral container storage), then idempotently invokes the canonical bootstrap through its shared public contract (bootstrap_source_handling_authority.bootstrap_authority, also used by the operator CLI) before exec'ing the canonical issuer, scrubs HUNTER_SOURCE_HANDLING_SIGNING_KEY from the process environment after bootstrap and before exec, and fails closed on any error.  No pre-deploy command, no parallel bootstrap, and no dashboard-only configuration bypasses this seam.  Regression coverage exercises fresh-volume bootstrap, mounted-volume verification, idempotency, tamper/mismatch fail-closed, signing-key lifecycle isolation, ordering invariants, and the shared public bootstrap contract.",
-        "boundary": "review"
+        "boundary": "review",
+        "guard_reference": "scripts/railway_issuer_startup.py::main"
       },
       "regression_evidence": [
         "tests/test_railway_issuer_startup.py::test_fresh_volume_bootstrap_succeeds_and_issuer_launch_is_allowed",
@@ -968,7 +976,8 @@
       },
       "prevention": {
         "mechanism": "Owner- and lease-aware execution ledger: every active row carries the exact owning issuer instance id and a renewable lease, and startup recovery fails closed only incomplete rows whose lease has lapsed, never a row under a valid foreign lease. complete/fail/record_dispatch require the exact owning instance, the owning instance renews each still-running execution's lease, and replay identity stays permanently claimed so lease expiry never permits a reclaim or re-execution.",
-        "boundary": "review"
+        "boundary": "review",
+        "guard_reference": "src/hunter/automation/issue_agent_execution.py::IssueAgentExecutionLedger"
       },
       "regression_evidence": [
         "tests/test_issue_agent_execution.py::test_a_live_foreign_lease_is_never_failed_or_reclaimed",
@@ -995,7 +1004,8 @@
       },
       "prevention": {
         "mechanism": "Accepted execution workers are non-daemon and registered before start, unregister themselves on completion, and are joined by an idempotent IssuerServer.shutdown() snapshot taken outside the registry lock; a drain timeout expires without ever writing a FAILED row, leaving the live row owned by the genuine owner while its provider still runs.",
-        "boundary": "review"
+        "boundary": "review",
+        "guard_reference": "scripts/hunter_issue_agent_issuer.py::IssuerServer"
       },
       "regression_evidence": [
         "tests/test_issue_agent_issuer.py::test_shutdown_drains_an_accepted_execution_worker",
@@ -1023,7 +1033,8 @@
       },
       "prevention": {
         "mechanism": "Merge Readiness evaluates an exact-head review-authority prerequisite read from the candidate's own HEAD: the content-bound pre-ready hostile review artifact (whose review_id hashes the claims and whose review_target_digest binds the exact base->HEAD change set) carries a document-level authority record beside the canonical claims -- authority type (an enabled pool reviewer or the last-resort guard), reviewer/tool identity, the exact head reviewed, timestamp, and hostile-review artifact reference; the authority is deliberately NOT a claim, so the claims stay exactly the single canonical claim set (CANONICAL_CLAIM_SET) the trusted default-branch controller verifies. The admissible authorities are the ordered reviewer pool declared by CODE_WRITE_POLICY.json's review_authority.reviewer_pool on the trusted default branch -- Codex Tier 1, enabled approved agent reviewers Tier 2, 'opencode' last-resort guard -- parsed by the shared load_reviewer_pool implementation that the Defect Prevention guard also consumes, and validated structurally (documented ordering/exhaustion semantics, unique ids and priorities, Codex enabled at priority 1, every enabled agent must support exact-head binding, fallback_eligibility false for agents so only the declared last_resort closes the pool, bounded timeout_policy with default_seconds <= max_seconds and per-agent timeout_seconds within the bound). Any authority below the primary must record reviewer_attempts covering every higher-priority enabled reviewer, each attempt with status 'exhausted', a reason, and a timeout_seconds within 1..max_seconds; the guard must cover the whole enabled pool and additionally record why the pool reviewers could not review and record trusted Governance success, trusted Preflight success, a zero unresolved-thread count, and complete structured evidence; missing, skipped, duplicated, malformed, unknown-agent, or out-of-bounds attempts fail closed, and a new commit stale-binds the review so reviewer selection restarts. The recorded authority head must be on the candidate head's own history (equality for the exact-head case, ancestry otherwise -- the review's self-inserted artifact commit is excluded from the reviewed change set and descends from the head it reviews, while an amended or foreign head does not), and the review is re-verified with the same verify_claims implementation candidate admission uses (extended to bind head_sha and commit ancestry), so readiness and candidate admission cannot drift and the canonical claim-set and reviewer-pool definitions are shared by both paths rather than forked. Candidate admission additionally binds each resolved finding's correction commit to the candidate's own commit range and its regression test to the reviewed change set. A HEAD mutation changes the blob SHAs or the recorded head, so the review goes stale automatically and readiness is blocked again until it is refreshed; code-write policy and its guard bind the model (ordered pool with last-resort guard, recorded-reason exhaustion trail, green snapshot gates) on the trusted default branch.",
-        "boundary": "hosted-gate"
+        "boundary": "hosted-gate",
+        "guard_reference": "scripts/hunter_merge_readiness_v2.py::review_authority_state"
       },
       "regression_evidence": [
         "tests/test_code_write_policy.py::test_code_write_policy_declares_an_ordered_reviewer_pool_with_a_last_resort_guard",
@@ -1072,6 +1083,31 @@
         "Issue #467 workflow-ordering defect (PR #468)",
         "Issue #467 fallback review-authority hardening (PR #468)",
         "Issue #467 reviewer-pool failover hardening (follow-on)"
+      ]
+    },
+    {
+      "id": "DFF-023",
+      "title": "preflight-not-enforced-before-ledger-claim-on-every-execution-entry-point",
+      "invariant": "A governed acceptance may not claim the execution ledger before the canonical Source Handling validation has succeeded for the exact authorization, and that ordering must hold on every execution entry point. The service API and the deployed issuer HTTP path are the same governed operation: if the deployed path claims the ledger and dispatches while skipping the preflight the service path runs, a failed or denied acceptance is claimed as if it were authorized. Preflight failure therefore creates no ledger row, the acceptance remains earlier-state replayable once the authority is fixed, and a second entry point that bypasses the seam is itself the defect.",
+      "lifecycle": "regression-tested",
+      "applicability": {
+        "changed_paths": [
+          "src/hunter/automation/",
+          "scripts/"
+        ],
+        "rationale": "The execution ledger and the deployed issuer HTTP edge are the two entry points that can claim an acceptance before Source Handling validation; any future execution surface that skips the shared preparation seam reopens the retry-deadlock defect."
+      },
+      "prevention": {
+        "mechanism": "Both entry points resolve Source Handling authority in a single shared preparation seam before any ledger claim: scripts/hunter_issue_agent_issuer.py::prepare_authorization (used by execute_authorization and by the /issue-agent/authorize HTTP path) mirrors src/hunter/automation/issue_agent_execution.py::execute, so the service API and the deployed issuer path run the identical preflight-before-claim ordering. A preflight failure leaves no ledger row and allows the acceptance to be retried once the authority is fixed; a restrictive successor or denied scope is never claimed or dispatched.",
+        "boundary": "review",
+        "guard_reference": "scripts/hunter_issue_agent_issuer.py::prepare_authorization"
+      },
+      "regression_evidence": [
+        "tests/test_issue_agent_execution.py::test_preflight_failure_creates_no_ledger_row_and_allows_retry",
+        "tests/test_issue_agent_issuer.py::test_missing_source_handling_authority_fails_closed_422"
+      ],
+      "sources": [
+        "Issue #449 (2026-09-10): Codex P1 on PR #450 documented the deployed issuer entry point claiming the ledger before the Source Handling preflight; the corrective PR #453 fixed both entry points"
       ]
     }
   ]

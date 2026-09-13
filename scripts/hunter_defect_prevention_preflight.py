@@ -92,6 +92,7 @@ REGISTRY_PATH = ROOT / "docs" / "DEFECT_REGISTRY.json"
 LIFECYCLE_PATH = ROOT / "docs" / "DEFECT_PREVENTION_LIFECYCLE.json"
 WRITE_POLICY_PATH = ROOT / "docs" / "CODE_WRITE_POLICY.json"
 REVIEWER_DISPOSITIONS_PATH = ROOT / "docs" / "REVIEWER_FINDING_DISPOSITIONS.json"
+BACKFILL_PATH = ROOT / "docs" / "HISTORICAL_DEFECT_BACKFILL.json"
 BINDING_FIELD = provenance.BINDING_FIELD
 # Files that define or bind the connector write ingress itself. If the grant let a
 # connector rewrite these, the ingress could widen its own boundary, so the grant
@@ -133,6 +134,19 @@ VALIDATED_CLASSIFICATIONS = frozenset(
     }
 )
 VALIDATED_RESOLUTION_STATES = frozenset({"unresolved", "resolved"})
+BACKFILL_CLASSIFICATIONS = frozenset(
+    {
+        "confirmed",
+        "duplicate",
+        "false-positive",
+        "style-non-defect",
+        "obsolete",
+        "infra-transient",
+        "unknown",
+    }
+)
+BACKFILL_STATUSES = frozenset({"guarded", "needs-guard", "duplicate", "false-positive", "obsolete"})
+BACKFILL_SEVERITIES = frozenset({"P0", "P1", "P2", "P3", "none"})
 REQUIRED_ENFORCEMENT_FIELDS = ("local", "hosted", "merge", "recurrence")
 ALLOWED_CODE_WRITE_PATHS = frozenset(
     {
@@ -393,6 +407,241 @@ def validate_reviewer_finding_dispositions() -> list[str]:
                     errors.append(
                         f"{finding_id}: isolated_non_automatable finding cannot be falsely labeled prevented for defect {mapped_id}"
                     )
+
+    return errors
+
+
+def historical_backfill_coverage(
+    *, backfill: dict[str, Any] | None = None, registry: dict[str, Any] | None = None
+) -> dict[str, int]:
+    """Deterministic zero-recurrence coverage report over the curated backfill.
+
+    Every confirmed historical defect must be guarded across all four layers --
+    canonical family entry, regression coverage, applicability selector, and an
+    enforcement gate -- and every duplicate must map to a family some confirmed
+    record already guards. Records excluded from coverage (false positives,
+    style findings, obsolete or transient dispositions) are reported separately
+    so the audit trail cannot be mistaken for protection.
+    """
+    backfill = _load_object(BACKFILL_PATH) if backfill is None else backfill
+    registry = _load_object(REGISTRY_PATH) if registry is None else registry
+
+    records = backfill.get("records") if isinstance(backfill, dict) else []
+    records = [record for record in records if isinstance(record, dict)]
+
+    confirmed = [record for record in records if record.get("classification") == "confirmed"]
+    duplicates = [record for record in records if record.get("classification") == "duplicate"]
+    excluded_records = len(records) - len(confirmed) - len(duplicates)
+
+    confirmed_families = sorted(
+        {record.get("dff_id") for record in confirmed if _is_non_empty_str(record.get("dff_id"))}
+    )
+    families_by_id: dict[str, dict[str, Any]] = {}
+    if isinstance(registry, dict):
+        raw_families = registry.get("families")
+        if isinstance(raw_families, list):
+            families_by_id = {
+                family["id"]: family
+                for family in raw_families
+                if isinstance(family, dict) and isinstance(family.get("id"), str)
+            }
+
+    def family(identifier: str) -> dict[str, Any]:
+        return families_by_id.get(identifier, {})
+
+    families_with_regression = sum(
+        1 for identifier in confirmed_families if family(identifier).get("regression_evidence")
+    )
+    families_with_selector = sum(
+        1 for identifier in confirmed_families if family(identifier).get("applicability", {}).get("changed_paths")
+    )
+    families_with_gate = sum(
+        1
+        for identifier in confirmed_families
+        if all(
+            _is_non_empty_str(record.get("gate_reference"))
+            for record in confirmed
+            if record.get("dff_id") == identifier
+        )
+    )
+
+    guarded_confirmed = sum(1 for record in confirmed if record.get("status") == "guarded")
+    confirmed_family_set = set(confirmed_families)
+    duplicates_mapped = sum(1 for record in duplicates if record.get("dff_id") in confirmed_family_set)
+
+    return {
+        "confirmed_records": len(confirmed),
+        "guarded_records": guarded_confirmed,
+        "needs_guard_records": len(confirmed) - guarded_confirmed,
+        "confirmed_families": len(confirmed_families),
+        "families_with_regression": families_with_regression,
+        "families_without_regression": len(confirmed_families) - families_with_regression,
+        "families_with_selector": families_with_selector,
+        "families_without_selector": len(confirmed_families) - families_with_selector,
+        "families_with_gate": families_with_gate,
+        "families_without_gate": len(confirmed_families) - families_with_gate,
+        "duplicates_mapped": duplicates_mapped,
+        "duplicates_unmapped": len(duplicates) - duplicates_mapped,
+        "excluded_records": excluded_records,
+    }
+
+
+def validate_historical_defect_backfill() -> list[str]:
+    """Structurally validate the machine-readable historical defect backfill.
+
+    The backfill is the classified record of the historical reviewer-finding
+    window that established the recurring-defect families: every confirmed real
+    defect carries its canonical family, its fix, its regression test, its
+    applicability selector and its enforcement gate, and no confirmed defect may
+    remain unguarded. A duplicate must map to the one family a confirmed record
+    already guards, and records excluded from coverage (false positives, style
+    findings, obsolete or transient dispositions) must not point at a family, so
+    catalogue drift cannot silently unguard a confirmed historical defect.
+    """
+    errors: list[str] = []
+    if not BACKFILL_PATH.is_file():
+        return ["HISTORICAL_DEFECT_BACKFILL.json is missing"]
+
+    backfill = _load_object(BACKFILL_PATH)
+    if backfill.get("version") != 1:
+        errors.append("HISTORICAL_DEFECT_BACKFILL version must be 1")
+
+    window = backfill.get("window")
+    window_prs: list[int] = []
+    if not isinstance(window, dict):
+        errors.append("HISTORICAL_DEFECT_BACKFILL must declare a window object")
+    else:
+        pull_requests = window.get("pull_requests")
+        if not isinstance(pull_requests, list) or not all(
+            isinstance(number, int) and number > 0 for number in pull_requests
+        ):
+            errors.append("HISTORICAL_DEFECT_BACKFILL window pull_requests must be a list of positive integers")
+        else:
+            window_prs = pull_requests
+
+    records = backfill.get("records")
+    if not isinstance(records, list):
+        return errors + ["HISTORICAL_DEFECT_BACKFILL records must be a list"]
+
+    registry = _load_object(REGISTRY_PATH)
+    families_by_id: dict[str, dict[str, Any]] = {}
+    if isinstance(registry, dict) and isinstance(registry.get("families"), list):
+        families_by_id = {
+            family["id"]: family
+            for family in registry["families"]
+            if isinstance(family, dict) and isinstance(family.get("id"), str)
+        }
+
+    seen: set[str] = set()
+
+    for index, record in enumerate(records):
+        if not isinstance(record, dict):
+            errors.append(f"backfill record #{index} must be an object")
+            continue
+
+        record_id = record.get("id")
+        if not _is_non_empty_str(record_id):
+            errors.append(f"backfill record #{index} has invalid id")
+            continue
+        if not BACKFILL_RECORD_ID_PATTERN.match(record_id):
+            errors.append(f"backfill record #{index} id {record_id!r} must match HBF-NNN")
+            continue
+        if record_id in seen:
+            errors.append(f"duplicate record id: {record_id}")
+        seen.add(record_id)
+
+        source_pr = record.get("source_pr")
+        if not isinstance(source_pr, int) or source_pr <= 0:
+            errors.append(f"{record_id}: source_pr must be a positive integer")
+        elif window_prs and source_pr not in window_prs:
+            errors.append(f"{record_id}: source_pr {source_pr} not declared in the window")
+
+        for field in ("reviewer", "original_defect"):
+            if not _is_non_empty_str(record.get(field)):
+                errors.append(f"{record_id}: {field} must be a non-empty string")
+
+        severity = record.get("severity")
+        if severity not in BACKFILL_SEVERITIES:
+            errors.append(f"{record_id}: unknown severity {severity!r}")
+        classification = record.get("classification")
+        if classification not in BACKFILL_CLASSIFICATIONS:
+            errors.append(f"{record_id}: unknown classification {classification!r}")
+        status = record.get("status")
+        if status not in BACKFILL_STATUSES:
+            errors.append(f"{record_id}: unknown status {status!r}")
+
+        dff_id = record.get("dff_id")
+        canonical_family = record.get("canonical_family")
+
+        if classification == "confirmed":
+            if status == "needs-guard":
+                errors.append(f"{record_id}: confirmed real defect is not guarded (reported needs-guard)")
+            if not _is_non_empty_str(dff_id) or dff_id not in families_by_id:
+                errors.append(f"{record_id}: dff_id {dff_id!r} not found in DEFECT_REGISTRY families")
+            if canonical_family != dff_id:
+                errors.append(f"{record_id}: canonical_family must equal dff_id")
+            if status == "guarded":
+                if not _is_non_empty_str(record.get("fix_reference")):
+                    errors.append(f"{record_id}: guarded confirmed defect requires a fix_reference")
+                if not _is_non_empty_str(record.get("selector_reference")):
+                    errors.append(f"{record_id}: guarded confirmed defect requires a selector_reference")
+                regression_test = record.get("regression_test_reference")
+                if not _is_non_empty_str(regression_test):
+                    errors.append(f"{record_id}: guarded confirmed defect requires a regression_test_reference")
+                else:
+                    problem = _validate_reference_target(str(regression_test), role="test")
+                    if problem:
+                        errors.append(f"{record_id}: invalid regression_test_reference {regression_test!r}: {problem}")
+                gate = record.get("gate_reference")
+                if not _is_non_empty_str(gate):
+                    errors.append(f"{record_id}: guarded confirmed defect requires a gate_reference")
+                else:
+                    problem = _validate_reference_target(str(gate), role="guard")
+                    if problem:
+                        errors.append(f"{record_id}: invalid gate_reference {gate!r}: {problem}")
+
+        elif classification == "duplicate":
+            if status != "duplicate":
+                errors.append(f"{record_id}: duplicate classification requires status 'duplicate'")
+            if canonical_family != dff_id:
+                errors.append(f"{record_id}: canonical_family must equal dff_id")
+            confirmed_families = {
+                candidate.get("dff_id")
+                for candidate in records
+                if isinstance(candidate, dict)
+                and candidate.get("classification") == "confirmed"
+                and _is_non_empty_str(candidate.get("dff_id"))
+            }
+            if dff_id not in confirmed_families:
+                errors.append(f"{record_id}: duplicate maps to {dff_id!r} which no confirmed record guards")
+
+        else:
+            if status != "obsolete":
+                errors.append(f"{record_id}: {classification} record must carry status 'obsolete'")
+            if dff_id != "none":
+                errors.append(f"{record_id}: {classification} record must carry dff_id 'none', not {dff_id!r}")
+            if canonical_family != "none":
+                errors.append(f"{record_id}: {classification} record must carry canonical_family 'none'")
+
+    coverage = historical_backfill_coverage(backfill=backfill, registry=registry)
+    if coverage["needs_guard_records"]:
+        errors.append("historical backfill leaves confirmed defects unguarded (needs_guard_records > 0)")
+    if coverage["families_without_regression"]:
+        errors.append(
+            f"historical backfill has {coverage['families_without_regression']} confirmed family without regression coverage (families_without_regression > 0)"
+        )
+    if coverage["families_without_selector"]:
+        errors.append(
+            f"historical backfill has {coverage['families_without_selector']} confirmed family without an applicability selector (families_without_selector > 0)"
+        )
+    if coverage["families_without_gate"]:
+        errors.append(
+            f"historical backfill has {coverage['families_without_gate']} confirmed family without an enforcement gate (families_without_gate > 0)"
+        )
+    if coverage["duplicates_unmapped"]:
+        errors.append(
+            f"historical backfill has {coverage['duplicates_unmapped']} duplicates not mapped to a confirmed family (duplicates_unmapped > 0)"
+        )
 
     return errors
 
@@ -955,6 +1204,7 @@ def validate_governance_maintenance_capability(grant: dict[str, Any]) -> list[st
 
 
 FAMILY_ID_PATTERN = re.compile(r"\ADFF-[0-9]{3}\Z")
+BACKFILL_RECORD_ID_PATTERN = re.compile(r"\AHBF-[0-9]{3,}(-[0-9]+)?\Z")
 FAMILY_BOUNDARIES = frozenset({"review", "local-pre-push", "hosted-gate", "merge-gate"})
 #: Boundaries that are an executing machine guard rather than a human pass. A
 #: family claiming one has to name a guard symbol that actually resolves.
@@ -1183,6 +1433,7 @@ def validate_defect_prevention_lifecycle() -> list[str]:
     errors.extend(validate_recurring_defect_families(registry, lifecycle))
     errors.extend(validate_code_write_policy())
     errors.extend(validate_reviewer_finding_dispositions())
+    errors.extend(validate_historical_defect_backfill())
     return errors
 
 
@@ -1523,6 +1774,15 @@ def main() -> int:
             print(f"[Defect Prevention Guard] FAIL: {message}")
         return 1
     print("[Defect Prevention Guard] PASS: prevention lifecycle and code-write ingress policy are explicit and valid")
+    coverage = historical_backfill_coverage()
+    print(
+        "[Defect Prevention Guard] PASS: historical backfill coverage: "
+        f"{coverage['guarded_records']}/{coverage['confirmed_records']} confirmed records guarded, "
+        f"{coverage['confirmed_families']} confirmed families; needs_guard="
+        f"{coverage['needs_guard_records']} without_regression={coverage['families_without_regression']} "
+        f"without_selector={coverage['families_without_selector']} without_gate="
+        f"{coverage['families_without_gate']} duplicates_unmapped={coverage['duplicates_unmapped']}"
+    )
     return 0
 
 
