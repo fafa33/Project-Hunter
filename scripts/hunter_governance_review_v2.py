@@ -387,6 +387,14 @@ def reviewer_login(agent: dict[str, Any]) -> str:
     return str(agent.get("github_login") or "").strip().lower()
 
 
+def reviewer_identity_map(pool: dict[str, Any]) -> dict[str, str]:
+    """Authenticated identities eligible to emit authority-bearing reviews."""
+
+    identities = {reviewer_login(agent): str(agent["id"]) for agent in pre_ready.enabled_pool_reviewers(pool)}
+    identities.pop("", None)
+    return identities
+
+
 def read_pr_pool_review_comments(
     repository: str,
     token: str,
@@ -399,10 +407,7 @@ def read_pr_pool_review_comments(
     Keep stale reviews so callers can distinguish missing from stale authority.
     Pagination failure invalidates the entire observation.
     """
-    enabled = {reviewer_login(agent): str(agent["id"]) for agent in pre_ready.enabled_pool_reviewers(pool)}
-    if pool.get("last_resort_github_login"):
-        enabled[str(pool["last_resort_github_login"]).lower()] = str(pool["last_resort"])
-    enabled.pop("", None)
+    enabled = reviewer_identity_map(pool)
     reviews: list[dict[str, Any]] = []
     try:
         page = 1
@@ -1629,12 +1634,14 @@ def verify_pre_ready_hostile_review(
         ):
             latest_by_reviewer[login] = r
     enabled_ids = {str(a["id"]) for a in pre_ready.enabled_pool_reviewers(pool)} | {str(pool["last_resort"])}
+    enabled = reviewer_identity_map(pool)
     exact_reviews = [
         r
         for r in latest_by_reviewer.values()
         if r.get("commit_id") == head_sha
         and r.get("state") in {"APPROVED", "COMMENTED"}
         and r.get("agent_id") in enabled_ids
+        and enabled.get(str(r.get("login") or "")) == r.get("agent_id")
         and _substantive_review_body(str(r.get("body") or ""))
     ]
     # An out-of-band structured review avoids a self-referential artifact commit.

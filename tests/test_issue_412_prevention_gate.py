@@ -55,11 +55,16 @@ def authenticated_review_observation(monkeypatch):
         if not isinstance(document, dict):
             return [], None
         authority = document.get("authority", {})
+        identities = core.reviewer_identity_map(pool)
+        login = next(
+            (identity for identity, agent_id in identities.items() if agent_id == authority.get("type")),
+            "unverified-fallback",
+        )
         return [
             {
                 "id": 31,
                 "agent_id": authority.get("type"),
-                "login": "reviewer[bot]",
+                "login": login,
                 "commit_id": head,
                 "state": "COMMENTED",
                 "body": "Completed adversarial review of the exact candidate and its structured evidence.",
@@ -543,6 +548,7 @@ ALTERNATE_AGENT = {
     "enabled": True,
     "exact_head_support": True,
     "timeout_seconds": 900,
+    "github_login": "alternate-reviewer[bot]",
 }
 
 
@@ -915,7 +921,7 @@ def test_fallback_review_claims_that_differ_from_the_canonical_claim_set_are_blo
     assert "review claims must carry exactly the canonical claim set" in description
 
 
-def test_fallback_review_emitting_exactly_the_canonical_claim_set_is_accepted(monkeypatch) -> None:
+def test_unverified_fallback_review_emitting_canonical_claims_is_rejected(monkeypatch) -> None:
     """GREEN: the approved fallback shape verifies end-to-end through Governance.
 
     The fallback authority is recorded at document level BESIDE the claims, so
@@ -948,8 +954,8 @@ def test_fallback_review_emitting_exactly_the_canonical_claim_set_is_accepted(mo
 
     state, description = core.verify_pre_ready_hostile_review("repo", "token", HEAD, PR_NUMBER)
 
-    assert state == "success"
-    assert "complete base->HEAD hostile review" in description
+    assert state == "failure"
+    assert "MISSING_REVIEW_AUTHORITY" in description
 
 
 def test_local_and_hosted_consume_the_same_canonical_claim_set_definition(monkeypatch) -> None:

@@ -458,7 +458,7 @@ def test_authority_state_exhaustion_unproven_for_fake_timeout_evidence() -> None
     assert verdict.state == "EXHAUSTION_UNPROVEN"
 
 
-def test_authority_state_values_the_last_resort_guard_only_with_trusted_evidence() -> None:
+def test_authority_state_blocks_last_resort_without_verifiable_identity() -> None:
     doc = _review_document(authority=_authority("opencode", head_sha=HEAD))
     guard = ("present", doc, None)
     verdict = _state(
@@ -466,10 +466,10 @@ def test_authority_state_values_the_last_resort_guard_only_with_trusted_evidence
         guard=guard,
         guard_trusted=("success", ""),
     )
-    assert verdict.state == "VALID_LAST_RESORT_GUARD"
+    assert verdict.state == "MISSING_REVIEW_AUTHORITY"
 
 
-def test_authority_state_rejects_a_guard_whose_live_trust_reverification_fails() -> None:
+def test_unidentified_guard_cannot_reach_exhaustion_reverification() -> None:
     doc = _review_document(authority=_authority("opencode", head_sha=HEAD))
     guard = ("present", doc, None)
     verdict = _state(
@@ -477,7 +477,7 @@ def test_authority_state_rejects_a_guard_whose_live_trust_reverification_fails()
         guard=guard,
         guard_trusted=("failure", "run evidence is missing"),
     )
-    assert verdict.state == "EXHAUSTION_UNPROVEN"
+    assert verdict.state == "MISSING_REVIEW_AUTHORITY"
 
 
 def test_review_authority_state_surfaces_the_state_name_and_blocks(monkeypatch) -> None:
@@ -865,7 +865,7 @@ def test_zero_reviews_cannot_admit_when_no_defect_family_applies(monkeypatch):
 def test_guard_with_unresolved_threads_is_never_valid():
     assert (
         _state(guard=("present", _review_document(authority=_authority("opencode")), None), threads=1).state
-        == "BLOCKING_FINDINGS"
+        == "MISSING_REVIEW_AUTHORITY"
     )
 
 
@@ -1186,7 +1186,7 @@ def _fallback_ack() -> dict[str, Any]:
     return {"document": document, "ack": ack}
 
 
-def test_configured_opencode_login_maps_to_last_resort_authority(monkeypatch):
+def test_owner_authored_json_cannot_create_fallback_authority(monkeypatch):
     evidence = _fallback_ack()
 
     def request(_repository, _token, _method, path, *_args):
@@ -1208,16 +1208,17 @@ def test_configured_opencode_login_maps_to_last_resort_authority(monkeypatch):
     observations, error = core.read_pr_pool_review_comments("repo", "token", PR_NUMBER, _fallback_pool(), HEAD)
 
     assert error is None
-    assert [(item["agent_id"], item["login"]) for item in observations] == [("opencode", "fafa33")]
+    assert observations == []
 
 
-def test_reviewer_pool_rejects_a_missing_last_resort_login():
+def test_reviewer_pool_without_verifiable_fallback_identity_stays_disabled():
     policy = json.loads(review.CODE_WRITE_POLICY_PATH.read_text())
     policy["review_progression"]["review_authority"]["reviewer_pool"].pop("last_resort_github_login", None)
     pool, error = review.load_reviewer_pool(policy)
 
-    assert pool is None
-    assert "last_resort_github_login" in error
+    assert error == ""
+    assert pool is not None
+    assert pool["last_resort_github_login"] == ""
 
 
 def test_mismatched_login_cannot_map_to_opencode(monkeypatch):
@@ -1237,7 +1238,7 @@ def test_mismatched_login_cannot_map_to_opencode(monkeypatch):
     assert observations == []
 
 
-def test_codex_exhaustion_and_authenticated_opencode_review_satisfy_exact_head_authority(monkeypatch):
+def test_unverified_opencode_fallback_is_rejected_even_after_codex_exhaustion(monkeypatch):
     evidence = _fallback_ack()
     observation = {
         "id": 43,
@@ -1251,7 +1252,7 @@ def test_codex_exhaustion_and_authenticated_opencode_review_satisfy_exact_head_a
         "body": json.dumps(evidence["ack"]),
     }
     _install_governance(monkeypatch, document=evidence["document"], comments=(observation,))
-    monkeypatch.setattr(review, "load_reviewer_pool", lambda *_a, **_k: (_fallback_pool(), ""))
+    monkeypatch.setattr(review, "load_reviewer_pool", lambda *_a, **_k: (_pool(), ""))
     monkeypatch.setattr(core, "read_unresolved_review_threads", lambda *_a: ((), None))
     monkeypatch.setattr(core, "check_reviewer_dispositions", lambda: (True, ""))
     monkeypatch.setattr(
@@ -1267,4 +1268,15 @@ def test_codex_exhaustion_and_authenticated_opencode_review_satisfy_exact_head_a
         },
     )
 
-    assert core.verify_pre_ready_hostile_review("repo", "token", HEAD, PR_NUMBER)[0] == "success"
+    assert core.verify_pre_ready_hostile_review("repo", "token", HEAD, PR_NUMBER)[0] == "failure"
+
+
+def test_missing_fallback_identity_leaves_request_blocked_not_ready(monkeypatch):
+    document, _ = _request_and_ack()
+    _install_governance(monkeypatch, document=document, comments=())
+    monkeypatch.setattr(review, "load_reviewer_pool", lambda *_a, **_k: (_pool(), ""))
+
+    state, message = core.verify_pre_ready_hostile_review("repo", "token", HEAD, PR_NUMBER)
+
+    assert state == "failure"
+    assert "MISSING_REVIEW_AUTHORITY" in message

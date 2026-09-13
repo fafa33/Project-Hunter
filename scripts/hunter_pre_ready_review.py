@@ -387,12 +387,10 @@ def _pool_problems(policy: Mapping[str, Any]) -> list[str]:
     if not isinstance(last_resort, str) or not last_resort.strip():
         problems.append(f"{REVIEWER_POOL_FIELD} must declare a last_resort guard")
     last_resort_login = raw.get("last_resort_github_login")
-    if (
-        not isinstance(last_resort_login, str)
-        or not last_resort_login.strip()
-        or re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?", last_resort_login.strip()) is None
-    ):
-        problems.append(f"{REVIEWER_POOL_FIELD} must declare a valid last_resort_github_login")
+    if last_resort_login not in (None, ""):
+        problems.append(
+            f"{REVIEWER_POOL_FIELD} last_resort_github_login must remain unset until verifiable tool identity exists"
+        )
 
     timeout = raw.get("timeout_policy")
     if not isinstance(timeout, dict):
@@ -526,7 +524,7 @@ def load_reviewer_pool(source: Path | Mapping[str, Any] | None = None) -> tuple[
     return (
         {
             "last_resort": str(raw["last_resort"]),
-            "last_resort_github_login": str(raw["last_resort_github_login"]).strip().lower(),
+            "last_resort_github_login": "",
             "timeout_policy": dict(raw["timeout_policy"]),
             "agents": agents,
         },

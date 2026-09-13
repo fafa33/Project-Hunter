@@ -1076,7 +1076,7 @@
         "tests/test_issue_412_prevention_gate.py::test_exhaustion_evidence_must_record_a_timeout_within_the_bounded_policy",
         "tests/test_issue_412_prevention_gate.py::test_failover_restarts_after_a_new_commit_invalidates_a_review",
         "tests/test_issue_412_prevention_gate.py::test_fallback_review_claims_that_differ_from_the_canonical_claim_set_are_blocked",
-        "tests/test_issue_412_prevention_gate.py::test_fallback_review_emitting_exactly_the_canonical_claim_set_is_accepted",
+        "tests/test_issue_412_prevention_gate.py::test_unverified_fallback_review_emitting_canonical_claims_is_rejected",
         "tests/test_issue_412_prevention_gate.py::test_guard_exhaustion_does_not_relax_the_green_snapshot_gates",
         "tests/test_issue_412_prevention_gate.py::test_local_and_hosted_consume_the_same_canonical_claim_set_definition",
         "tests/test_issue_412_prevention_gate.py::test_malformed_exhaustion_evidence_fails_closed",
