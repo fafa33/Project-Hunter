@@ -1151,3 +1151,26 @@ def test_a_review_request_cannot_be_verified_locally_as_a_completed_review():
     document, _ = _request_and_ack()
     document["authority"]["head_sha"] = HEAD
     assert not _verify(document).ok
+
+
+def test_review_request_is_content_bound_without_committed_authority(monkeypatch):
+    judgement = {
+        "acceptance_criteria": [
+            {"id": "AC-1", "criterion": "the gate blocks Ready", "verdict": "satisfied", "evidence": "suite"}
+        ],
+        "adversarial_dimensions": list(review.REQUIRED_ADVERSARIAL_DIMENSIONS),
+        "defect_families": [
+            {"family": "DFF-010", "outcome": "clear", "evidence": "swept"},
+            {"family": "DFF-013", "outcome": "clear", "evidence": "swept"},
+        ],
+        "findings": [],
+    }
+    monkeypatch.setattr(review, "local_changes", lambda *_a, **_k: CANDIDATE_CHANGES)
+    document = review.prepare_request(issue="467", base=BASE, head=HEAD, base_ref="main", judgement=judgement)
+
+    assert "authority" not in document
+    assert document["review_request"] == {
+        "schema": "hunter.review-request.v1",
+        "claims_id": document["review_id"],
+    }
+    assert document["claims"]["review_target"] == [change.document() for change in CANDIDATE_CHANGES]

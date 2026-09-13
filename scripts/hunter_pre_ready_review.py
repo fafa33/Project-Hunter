@@ -1171,6 +1171,42 @@ JUDGEMENT_KEYS = (
     "defect_families",
     "findings",
 )
+REQUEST_JUDGEMENT_KEYS = tuple(key for key in JUDGEMENT_KEYS if key != "authority")
+
+
+def prepare_request(
+    *,
+    issue: str,
+    base: str,
+    head: str,
+    base_ref: str,
+    judgement: dict[str, Any],
+    cwd: Path | None = None,
+) -> dict[str, Any]:
+    """Prepare content-bound claims for later external exact-HEAD adoption.
+
+    The committed document is only a request. It carries no authority; the
+    authenticated reviewer supplies authority out of band after this request is
+    committed, so accepting the review never requires another candidate commit.
+    """
+
+    missing = [key for key in REQUEST_JUDGEMENT_KEYS if key not in judgement]
+    if missing:
+        raise ValueError("review request judgement is missing " + ", ".join(missing))
+    changes = local_changes(base, head, cwd=cwd)
+    claims = build_claims(
+        issue=issue,
+        base_ref=base_ref,
+        base_sha=base,
+        changes=changes,
+        acceptance_criteria=tuple(judgement["acceptance_criteria"]),
+        defect_families=tuple(judgement["defect_families"]),
+        findings=tuple(judgement["findings"]),
+        adversarial_dimensions=tuple(judgement["adversarial_dimensions"]),
+    )
+    document = document_for(claims)
+    document["review_request"] = {"schema": "hunter.review-request.v1", "claims_id": document["review_id"]}
+    return document
 
 
 def record(
@@ -1226,8 +1262,12 @@ def main() -> int:
     parser.add_argument("--base", required=True, help="Exact base (fork point) SHA of the governed candidate range.")
     parser.add_argument("--head", default="HEAD", help="Candidate head revision (default: HEAD).")
     parser.add_argument("--base-ref", default="main", help="Trusted base branch name (default: main).")
-    parser.add_argument("--record", metavar="JUDGEMENT", help="Mint review state from this judgement JSON file.")
-    parser.add_argument("--issue", help="Governing Issue number; required with --record.")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--record", metavar="JUDGEMENT", help="Mint review state from this judgement JSON file.")
+    mode.add_argument(
+        "--request", metavar="JUDGEMENT", help="Prepare claims for authenticated external exact-HEAD review."
+    )
+    parser.add_argument("--issue", help="Governing Issue number; required with --record or --request.")
     args = parser.parse_args()
 
     if args.record:
@@ -1251,6 +1291,29 @@ def main() -> int:
         REVIEW_PATH.parent.mkdir(parents=True, exist_ok=True)
         REVIEW_PATH.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         print(f"[Pre-Ready Hostile Review] RECORDED: {REVIEW_RELATIVE_PATH} ({document['review_id'][:12]})")
+
+    if args.request:
+        if not args.issue:
+            print("[Pre-Ready Hostile Review] FAIL: --request requires --issue", file=sys.stderr)
+            return 2
+        try:
+            judgement = json.loads(Path(args.request).read_text(encoding="utf-8"))
+            if not isinstance(judgement, dict):
+                raise ValueError("review request judgement must be a JSON object")
+            document = prepare_request(
+                issue=str(args.issue),
+                base=args.base,
+                head=args.head,
+                base_ref=args.base_ref,
+                judgement=judgement,
+            )
+        except (OSError, UnicodeError, json.JSONDecodeError, ValueError, GitEvidenceUnavailable) as exc:
+            print(f"[Pre-Ready Hostile Review] FAIL: {type(exc).__name__}: {exc}", file=sys.stderr)
+            return 2
+        REVIEW_PATH.parent.mkdir(parents=True, exist_ok=True)
+        REVIEW_PATH.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        print(f"[Pre-Ready Hostile Review] REQUESTED: {REVIEW_RELATIVE_PATH} ({document['review_id'][:12]})")
+        return 0
 
     verdict = verify_local(args.base, args.head)
     if not verdict.ok:
