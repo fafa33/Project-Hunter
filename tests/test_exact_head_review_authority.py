@@ -1174,3 +1174,97 @@ def test_review_request_is_content_bound_without_committed_authority(monkeypatch
         "claims_id": document["review_id"],
     }
     assert document["claims"]["review_target"] == [change.document() for change in CANDIDATE_CHANGES]
+
+
+def _fallback_pool(login: str = "fafa33") -> dict[str, Any]:
+    return {**_pool(), "last_resort_github_login": login}
+
+
+def _fallback_ack() -> dict[str, Any]:
+    document, ack = _request_and_ack()
+    ack["collector_run_id"] = 123
+    return {"document": document, "ack": ack}
+
+
+def test_configured_opencode_login_maps_to_last_resort_authority(monkeypatch):
+    evidence = _fallback_ack()
+
+    def request(_repository, _token, _method, path, *_args):
+        if path.startswith("pulls/"):
+            return []
+        if path.startswith("issues/"):
+            return [
+                {
+                    "id": 41,
+                    "user": {"login": "fafa33"},
+                    "body": json.dumps(evidence["ack"]),
+                    "created_at": "2026-09-13T23:30:00Z",
+                    "html_url": "https://github.com/fafa33/Project-Hunter/pull/469#issuecomment-41",
+                }
+            ]
+        raise AssertionError(path)
+
+    monkeypatch.setattr(core, "request_json", request)
+    observations, error = core.read_pr_pool_review_comments("repo", "token", PR_NUMBER, _fallback_pool(), HEAD)
+
+    assert error is None
+    assert [(item["agent_id"], item["login"]) for item in observations] == [("opencode", "fafa33")]
+
+
+def test_reviewer_pool_rejects_a_missing_last_resort_login():
+    policy = json.loads(review.CODE_WRITE_POLICY_PATH.read_text())
+    policy["review_progression"]["review_authority"]["reviewer_pool"].pop("last_resort_github_login", None)
+    pool, error = review.load_reviewer_pool(policy)
+
+    assert pool is None
+    assert "last_resort_github_login" in error
+
+
+def test_mismatched_login_cannot_map_to_opencode(monkeypatch):
+    evidence = _fallback_ack()
+
+    def request(_repository, _token, _method, path, *_args):
+        if path.startswith("pulls/"):
+            return []
+        if path.startswith("issues/"):
+            return [{"id": 42, "user": {"login": "someone-else"}, "body": json.dumps(evidence["ack"])}]
+        raise AssertionError(path)
+
+    monkeypatch.setattr(core, "request_json", request)
+    observations, error = core.read_pr_pool_review_comments("repo", "token", PR_NUMBER, _fallback_pool(), HEAD)
+
+    assert error is None
+    assert observations == []
+
+
+def test_codex_exhaustion_and_authenticated_opencode_review_satisfy_exact_head_authority(monkeypatch):
+    evidence = _fallback_ack()
+    observation = {
+        "id": 43,
+        "agent_id": "opencode",
+        "login": "fafa33",
+        "commit_id": HEAD,
+        "state": "COMMENTED",
+        "source_kind": "issue_comment",
+        "submitted_at": "2026-09-13T23:30:00Z",
+        "html_url": "https://github.com/fafa33/Project-Hunter/pull/469#issuecomment-43",
+        "body": json.dumps(evidence["ack"]),
+    }
+    _install_governance(monkeypatch, document=evidence["document"], comments=(observation,))
+    monkeypatch.setattr(review, "load_reviewer_pool", lambda *_a, **_k: (_fallback_pool(), ""))
+    monkeypatch.setattr(core, "read_unresolved_review_threads", lambda *_a: ((), None))
+    monkeypatch.setattr(core, "check_reviewer_dispositions", lambda: (True, ""))
+    monkeypatch.setattr(
+        "hunter_reviewer_collector.load_exhaustion",
+        lambda *_a: {
+            "reviewer_attempts": [_attempt()],
+            "collector_run_id": 123,
+            "fallback_reason": "trusted collector exhausted Codex",
+            "unresolved_thread_count": 0,
+            "governance_state": "success",
+            "trusted_preflight_state": "success",
+            "structured_evidence_status": "complete",
+        },
+    )
+
+    assert core.verify_pre_ready_hostile_review("repo", "token", HEAD, PR_NUMBER)[0] == "success"
