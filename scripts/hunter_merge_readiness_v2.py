@@ -37,6 +37,41 @@ class Decision:
     description: str
 
 
+# Explicit authority states consumed by the merge-readiness resolver.
+# Only VALID_AGENT_REVIEW and VALID_LAST_RESORT_GUARD are merge-admissible.
+REVIEW_AUTHORITY_STATES = (
+    "MISSING_REVIEW_AUTHORITY",
+    "VALID_AGENT_REVIEW",
+    "VALID_LAST_RESORT_GUARD",
+    "STALE_REVIEW",
+    "MALFORMED_REVIEW",
+    "BLOCKING_FINDINGS",
+    "POOL_NOT_EXHAUSTED",
+    "EXHAUSTION_UNPROVEN",
+)
+
+
+@dataclass(frozen=True)
+class ReviewAuthorityVerdict:
+    state: str
+    detail: str
+
+
+def resolve_review_authority(verification: tuple[str, str]) -> ReviewAuthorityVerdict:
+    """Classify the shared verifier's result; raw comments cannot establish authority."""
+    status, detail = verification
+    valid_states = {"VALID_AGENT_REVIEW", "VALID_LAST_RESORT_GUARD"}
+    if status == "success":
+        for state in valid_states:
+            if detail.startswith(state + ":"):
+                return ReviewAuthorityVerdict(state, detail)
+        return ReviewAuthorityVerdict("MALFORMED_REVIEW", "Verifier did not establish positive review authority.")
+    for state in REVIEW_AUTHORITY_STATES:
+        if state not in valid_states and state + ":" in detail:
+            return ReviewAuthorityVerdict(state, detail)
+    return ReviewAuthorityVerdict("MALFORMED_REVIEW", detail)
+
+
 def request_json(method: str, path: str, payload: dict[str, Any] | None = None) -> Any:
     if not REPO:
         raise RuntimeError("GH_REPO or GITHUB_REPOSITORY is required")
@@ -191,6 +226,9 @@ def review_authority_state(head_sha: str, pr_number: int) -> tuple[str, str]:
     enabled reviewer was exhausted within the bounded timeout policy, and (for
     the guard) that every snapshot gate it relied on was green. The state
     reported here is the verified review state any way a reviewer reached it.
+
+    This function now uses the pure `resolve_review_authority` resolver so the
+    authority logic is shared and testable without network calls.
     """
 
     # Imported here rather than at module scope: hunter_workflow_state imports
@@ -198,18 +236,17 @@ def review_authority_state(head_sha: str, pr_number: int) -> tuple[str, str]:
     # hunter_workflow_state, so a module-level import would be a three-way cycle.
     import hunter_governance_review_v2 as governance
 
-    state, _document, read_error = governance.read_head_pre_ready_review(REPO, TOKEN, head_sha)
-    if state == "unavailable":
-        return "failure", f"review evidence is unavailable ({read_error})"
-    if state == "invalid":
-        return "failure", f"review evidence is malformed on HEAD: {read_error}"
-    if state == "absent":
-        return "failure", "no exact-head hostile review exists on the current HEAD"
-
-    verdict_state, message = governance.verify_pre_ready_hostile_review(REPO, TOKEN, head_sha, pr_number)
-    if verdict_state != "success":
-        return "failure", message
-    return "success", message
+    try:
+        if unresolved_review_threads(pr_number) or changes_requested_reviewers(pr_number):
+            return "failure", "BLOCKING_FINDINGS: unresolved review threads or changes requested"
+        ok, problem = governance.check_reviewer_dispositions()
+        if not ok:
+            return "failure", f"BLOCKING_FINDINGS: {problem}"
+        verdict = resolve_review_authority(governance.verify_pre_ready_hostile_review(REPO, TOKEN, head_sha, pr_number))
+        status = "success" if verdict.state in {"VALID_AGENT_REVIEW", "VALID_LAST_RESORT_GUARD"} else "failure"
+        return status, f"{verdict.state}: {verdict.detail}"
+    except Exception as exc:
+        return "failure", f"Review authority evidence unavailable: {type(exc).__name__}: {exc}"
 
 
 class ReadinessObservation(Protocol):
@@ -398,7 +435,7 @@ def evaluate(observation: ReadinessObservation) -> Decision:
 
     return Decision(
         "success",
-        "Ready to merge: code/security checks pass and no active review blocker remains.",
+        "Ready to merge: code/security checks pass and positive exact-head review authority verified.",
     )
 
 

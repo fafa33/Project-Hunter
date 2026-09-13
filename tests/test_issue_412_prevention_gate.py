@@ -42,6 +42,36 @@ BRANCH = "issue-412-pre-ready-hostile-review-gate"
 WRITER = "claude"
 
 
+@pytest.fixture(autouse=True)
+def authenticated_review_observation(monkeypatch):
+    """These claim-shape tests isolate the authenticated observation boundary.
+
+    Real transport, identity and exhaustion rejection are exercised in
+    test_exact_head_review_authority.py.
+    """
+
+    def reviews(repository, token, number, pool, head):
+        state, document, error = core.read_head_pre_ready_review(repository, token, head)
+        if not isinstance(document, dict):
+            return [], None
+        authority = document.get("authority", {})
+        return [
+            {
+                "id": 31,
+                "agent_id": authority.get("type"),
+                "login": "reviewer[bot]",
+                "commit_id": head,
+                "state": "COMMENTED",
+                "body": "Completed adversarial review of the exact candidate and its structured evidence.",
+            }
+        ], None
+
+    monkeypatch.setattr(core, "read_pr_pool_review_comments", reviews)
+    monkeypatch.setattr(core, "read_unresolved_review_threads", lambda *a: ((), None))
+    monkeypatch.setattr(core, "check_reviewer_dispositions", lambda: (True, ""))
+    monkeypatch.setattr(core, "verify_trusted_exhaustion", lambda *a: ("success", "authenticated fixture"))
+
+
 # --------------------------------------------------------------------------
 # Writer identity binding (DFF-010)
 # --------------------------------------------------------------------------
@@ -491,17 +521,40 @@ def _attempt(
     status: str = "exhausted",
     reason: str = "unavailable (rate-limited)",
     timeout_seconds: int = 900,
+    failure_class: str = "transient",
+    attempt_count: int = 2,
+    invocation_reference: str = "actions/runs/12345",
 ) -> dict[str, Any]:
     """One machine-checkable reviewer-pool exhaustion attempt record."""
-    return {"agent_id": agent_id, "status": status, "reason": reason, "timeout_seconds": timeout_seconds}
+    return {
+        "agent_id": agent_id,
+        "status": status,
+        "reason": reason,
+        "timeout_seconds": timeout_seconds,
+        "failure_class": failure_class,
+        "attempt_count": attempt_count,
+        "invocation_reference": invocation_reference,
+    }
 
 
-ALTERNATE_AGENT = {"id": "alternate-agent-1", "priority": 2, "enabled": True, "exact_head_support": True}
+ALTERNATE_AGENT = {
+    "id": "alternate-agent-1",
+    "priority": 2,
+    "enabled": True,
+    "exact_head_support": True,
+    "timeout_seconds": 900,
+}
 
 
 def _pool(*, agents: tuple = (), last_resort: str = "opencode", max_seconds: int = 1800) -> dict[str, Any]:
     """A normalized reviewer pool, the shape ``review.load_reviewer_pool`` returns."""
-    base_agent = {"id": "codex", "priority": 1, "enabled": True, "exact_head_support": True}
+    base_agent = {
+        "id": "codex",
+        "priority": 1,
+        "enabled": True,
+        "exact_head_support": True,
+        "timeout_seconds": 900,
+    }
     return {
         "last_resort": last_resort,
         "timeout_policy": {"bounded": True, "default_seconds": 900, "max_seconds": max_seconds, "retries_per_agent": 1},
@@ -606,7 +659,6 @@ def _verify(
     changes=CANDIDATE_CHANGES,
     base=BASE,
     head_sha=HEAD,
-    commit_ancestry=None,
     resolution_corrections=None,
 ) -> review.ReviewVerdict:
     return review.verify_claims(
@@ -616,7 +668,6 @@ def _verify(
         families=FAMILIES,
         resolution_corrections=resolution_corrections,
         head_sha=head_sha,
-        commit_ancestry=commit_ancestry if commit_ancestry is not None else frozenset({HEAD}),
     )
 
 
@@ -814,21 +865,25 @@ def test_a_fallback_review_recorded_for_an_older_head_is_stale() -> None:
     assert "head" in verdict.reason
 
 
-def test_a_review_recorded_for_an_ancestor_head_stays_valid_across_the_artifact_commit() -> None:
-    """The review's own artifact commit is a descendant of the head it reviewed.
+def test_a_review_recorded_for_an_ancestor_head_is_stale_across_the_artifact_commit() -> None:
+    """A review recorded for an ancestor head never legitimises a later head.
 
-    The reviewed change set excludes the artifact, so committing it on top of
-    the reviewed head must not invalidate the review -- the recorded head is on
-    the evaluated head's history and the reviewed content is identical.
+    The review's own artifact commit is a descendant of the head it reviewed,
+    and the self-committed artifact therefore records the pre-commit HEAD. That
+    recorded head is an ancestor of the artifact commit, so it must NOT remain
+    authority for the commit that records it: the binding is strict-exact, and
+    an ancestor artifact is stale, never valid -- regardless of the content.
     """
     recorded = "c" * 40
     evaluated = "e" * 40
     document = _review_document(authority=_authority(authority_type="opencode", head_sha=recorded))
 
-    verdict = _verify(document, head_sha=evaluated, commit_ancestry=frozenset({recorded, evaluated}))
+    verdict = _verify(document, head_sha=evaluated)
 
-    assert verdict.state == "valid"
-    assert verdict.ok is True
+    assert verdict.state == "stale"
+    assert "recorded for exact head" in verdict.reason
+    assert "not the evaluated exact head" in verdict.reason
+    assert verdict.ok is False
 
 
 def test_fallback_review_claims_that_differ_from_the_canonical_claim_set_are_blocked(monkeypatch) -> None:
@@ -1342,7 +1397,7 @@ def test_ready_admission_refuses_a_candidate_without_review_state(monkeypatch) -
     state, description = core.verify_pre_ready_hostile_review("repo", "token", HEAD, PR_NUMBER)
 
     assert state == "failure"
-    assert "no pre-ready hostile review exists" in description
+    assert "MISSING_REVIEW_AUTHORITY" in description
 
 
 def test_ready_admission_fails_closed_when_review_evidence_is_unavailable(monkeypatch) -> None:
@@ -1753,14 +1808,8 @@ def test_an_unrecognised_github_status_fails_closed(monkeypatch) -> None:
     assert "unrecognised status" in description
 
 
-def test_a_candidate_triggering_no_family_needs_no_review(monkeypatch) -> None:
-    """A guard that demanded a review with nothing applicable would block valid work.
-
-    A dependency-only candidate touches no path any recurring-defect family
-    claims, and its author cannot produce a review artifact at all. Requiring one
-    would be the very defect family DFF-009 exists to prevent: granting a channel
-    an obligation it cannot satisfy.
-    """
+def test_a_candidate_triggering_no_family_still_requires_review(monkeypatch) -> None:
+    """No matching defect family does not waive positive review authority."""
     monkeypatch.setattr(core, "read_pr_refs", lambda *_a: (True, "dependabot/pip/x", "main", None))
     monkeypatch.setattr(core, "read_merge_base", lambda *_a: (True, BASE, None))
     monkeypatch.setattr(
@@ -1773,8 +1822,8 @@ def test_a_candidate_triggering_no_family_needs_no_review(monkeypatch) -> None:
 
     state, description = core.verify_pre_ready_hostile_review("repo", "token", HEAD, PR_NUMBER)
 
-    assert state == "success"
-    assert "No recurring-defect family applies" in description
+    assert state == "failure"
+    assert "MISSING_REVIEW_AUTHORITY" in description
 
 
 def test_a_present_review_is_verified_even_when_no_family_applies(monkeypatch) -> None:
@@ -1915,7 +1964,12 @@ def test_a_copied_file_is_not_rejected_as_a_malformed_addition(monkeypatch) -> N
             None,
         ),
     )
-    monkeypatch.setattr(core, "read_head_pre_ready_review", lambda *_a: ("absent", None, None))
+    document = _review_document(
+        changes=(ingress.ConnectorFileChange("added", "scripts/copy.py", "", "a" * 40),), families=()
+    )
+    monkeypatch.setattr(core, "read_head_pre_ready_review", lambda *_a: ("present", document, None))
+    monkeypatch.setattr(core, "read_pr_commits", lambda *_a: (True, (_signed_commit(),), None))
+    monkeypatch.setattr(core, "read_issue_acceptance_criteria", lambda *_a: ("present", (), ""))
     monkeypatch.setattr(
         core.pre_ready,
         "load_families",
@@ -2183,11 +2237,21 @@ def test_candidate_admission_reconciles_after_the_trusted_upgrade_completes() ->
     assert "pull_request_target" in condition and "push" in condition
 
 
-def test_the_draft_controller_still_leaves_a_pending_head_alone() -> None:
-    """Reconciling later is the fix, not turning pending back into a failure."""
-    source = (ROOT / "scripts/hunter_candidate_admission.py").read_text(encoding="utf-8")
+def test_the_draft_controller_keeps_pending_authority_in_draft(monkeypatch) -> None:
+    import hunter_candidate_admission as admission
 
-    assert 'if admission_state == "pending":' in source
+    pr = {"state": "open", "draft": False, "head": {"sha": HEAD}, "base": {"ref": "main"}, "node_id": "pending"}
+    monkeypatch.setattr(core, "read_mergeability", lambda *a: pr)
+    monkeypatch.setattr(core, "candidate_admission", lambda *a: ("pending", "proof is incomplete"))
+    converted: list[str] = []
+
+    def convert(token: str, node: str) -> bool:
+        converted.append(node)
+        return True
+
+    monkeypatch.setattr(admission, "convert_to_draft", convert)
+    assert admission.enforce_candidate_admission("repo", "token", PR_NUMBER) == 1
+    assert converted == ["pending"]
 
 
 # --------------------------------------------------------------------------

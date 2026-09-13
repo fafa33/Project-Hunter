@@ -257,5 +257,180 @@
       "status": "obsolete",
       "note": "Owner disposition (reply to comment 3985725499): non-blocking and out of the approved Issue #449 scope; the prescribed seam keeps ingest re-validation under its existing BEGIN IMMEDIATE transaction, so the proposed alternative transaction model was not adopted and no confirmed defect family was established for the window."
     }
-  ]
+  ],
+  "manifest": {
+    "version": 1,
+    "expected_count": 15,
+    "record_ids": [
+      "HBF-438-001",
+      "HBF-443-001",
+      "HBF-443-002",
+      "HBF-443-003",
+      "HBF-443-004",
+      "HBF-443-005",
+      "HBF-443-006",
+      "HBF-443-007",
+      "HBF-443-008",
+      "HBF-444-001",
+      "HBF-450-001",
+      "HBF-453-001",
+      "HBF-466-001",
+      "HBF-466-002",
+      "HBF-468-001"
+    ],
+    "confirmed_ids": [
+      "HBF-438-001",
+      "HBF-443-001",
+      "HBF-443-002",
+      "HBF-443-003",
+      "HBF-443-004",
+      "HBF-443-005",
+      "HBF-443-006",
+      "HBF-444-001",
+      "HBF-450-001",
+      "HBF-466-001",
+      "HBF-466-002",
+      "HBF-468-001"
+    ],
+    "family_ids": [
+      "DFF-013",
+      "DFF-018",
+      "DFF-019",
+      "DFF-020",
+      "DFF-021",
+      "DFF-022",
+      "DFF-023"
+    ],
+    "included_pull_requests": [
+      438,
+      443,
+      444,
+      450,
+      453,
+      466,
+      468
+    ],
+    "pins": {
+      "HBF-438-001": {
+        "source_pr": 438,
+        "dff_id": "DFF-018",
+        "classification": "confirmed",
+        "severity": "P1",
+        "status": "guarded",
+        "defect_digest": "54f0fe3985ec024554d3f966483c6fc1c86bb24f6db5c3f2123a114ead2b4730"
+      },
+      "HBF-443-001": {
+        "source_pr": 443,
+        "dff_id": "DFF-019",
+        "classification": "confirmed",
+        "severity": "P2",
+        "status": "guarded",
+        "defect_digest": "24db61121f76437208f1f774a2629882c8776f1dba5405462b4411ea7ec206bf"
+      },
+      "HBF-443-002": {
+        "source_pr": 443,
+        "dff_id": "DFF-019",
+        "classification": "confirmed",
+        "severity": "none",
+        "status": "guarded",
+        "defect_digest": "8f923bc5995e6254e16fe37de1a44910a4e67184a67cbc08ac03b06f0e55993e"
+      },
+      "HBF-443-003": {
+        "source_pr": 443,
+        "dff_id": "DFF-019",
+        "classification": "confirmed",
+        "severity": "none",
+        "status": "guarded",
+        "defect_digest": "111b97c9044d369679c10ceae96e05023362100e7e2d8a846367f7944e941894"
+      },
+      "HBF-443-004": {
+        "source_pr": 443,
+        "dff_id": "DFF-013",
+        "classification": "confirmed",
+        "severity": "P2",
+        "status": "guarded",
+        "defect_digest": "cb59a851d1b2a097d311bc8aa34741fd9d810af1f0106e4c564f90a3178b5b9b"
+      },
+      "HBF-443-005": {
+        "source_pr": 443,
+        "dff_id": "DFF-013",
+        "classification": "confirmed",
+        "severity": "P2",
+        "status": "guarded",
+        "defect_digest": "0866b9815c3e4ff98baf09411360fd5700fff2fc72c21c9a4ac82b99990bca2c"
+      },
+      "HBF-443-006": {
+        "source_pr": 443,
+        "dff_id": "DFF-013",
+        "classification": "confirmed",
+        "severity": "P2",
+        "status": "guarded",
+        "defect_digest": "dd32f74e175a8c2828778f255980fc948838a311d5b37a3c2cf7da883583a055"
+      },
+      "HBF-444-001": {
+        "source_pr": 444,
+        "dff_id": "DFF-013",
+        "classification": "confirmed",
+        "severity": "P2",
+        "status": "guarded",
+        "defect_digest": "77aa00b46950aac3779e8cb25dff09f5a5b8a00d11ed426cc2dc27a0341c05f1"
+      },
+      "HBF-450-001": {
+        "source_pr": 450,
+        "dff_id": "DFF-023",
+        "classification": "confirmed",
+        "severity": "P1",
+        "status": "guarded",
+        "defect_digest": "4d5a7665b4729d97ae2a46e3d3f58a8f699e663c0b8723087cadc6867d8dc63b"
+      },
+      "HBF-466-001": {
+        "source_pr": 466,
+        "dff_id": "DFF-020",
+        "classification": "confirmed",
+        "severity": "P1",
+        "status": "guarded",
+        "defect_digest": "b158086274d7da1a79a835bad78ec330e84e0140575b784fb43b344b11b9eaef"
+      },
+      "HBF-466-002": {
+        "source_pr": 466,
+        "dff_id": "DFF-021",
+        "classification": "confirmed",
+        "severity": "P1",
+        "status": "guarded",
+        "defect_digest": "c79099ff33f94cb4cfabd671c9cb36cd8ca8e6179bd80bdbdd02bf15ef2ca710"
+      },
+      "HBF-468-001": {
+        "source_pr": 468,
+        "dff_id": "DFF-022",
+        "classification": "confirmed",
+        "severity": "P1",
+        "status": "guarded",
+        "defect_digest": "eb3390fa55f994931a75442aab8a7dc1a30fa123da77e1575dc3fa1ed08ac85c"
+      },
+      "HBF-443-007": {
+        "source_pr": 443,
+        "dff_id": "none",
+        "classification": "style-non-defect",
+        "severity": "none",
+        "status": "obsolete",
+        "defect_digest": "36c1d578d1cfa439533c68ba099da7e18f1e908aa4ace20e34d2a4a1c7df2b4c"
+      },
+      "HBF-443-008": {
+        "source_pr": 443,
+        "dff_id": "none",
+        "classification": "style-non-defect",
+        "severity": "none",
+        "status": "obsolete",
+        "defect_digest": "c58b35de6ca18d54d77d10f419caea30a980db1167375dda521ec285cc299b8d"
+      },
+      "HBF-453-001": {
+        "source_pr": 453,
+        "dff_id": "none",
+        "classification": "false-positive",
+        "severity": "P1",
+        "status": "obsolete",
+        "defect_digest": "e0a6739305bdf9e4823d3d71592863c25bdfa7d0fb9a64cac10c0e4dee60c02e"
+      }
+    }
+  }
 }

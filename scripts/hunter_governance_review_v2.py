@@ -342,6 +342,247 @@ def read_pr_commits(repository: str, token: str, pr_number: int) -> tuple[bool, 
         return False, (), f"unexpected error: {type(exc).__name__}: {exc}"
 
 
+def _substantive_review_body(body: str) -> bool:
+    import re
+
+    try:
+        payload = json.loads(body)
+    except (ValueError, TypeError):
+        payload = None
+    if isinstance(payload, dict) and payload.get("schema") == "hunter.reviewer-attempt.v1":
+        return False
+    stripped = re.sub(r"!\[[^\]]*\]\([^)]+\)", "", body)
+    return sum(not c.isspace() for c in stripped) >= 40
+
+
+def review_acknowledgement(body: str) -> dict[str, Any] | None:
+    """An entire, explicitly issued JSON result, never a quoted inline example."""
+    raw = body.strip()
+    if raw.startswith("```json\n") and raw.endswith("\n```"):
+        raw = raw[len("```json\n") : -len("\n```")]
+    try:
+        value = json.loads(raw)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(value, dict) or value.get("schema") != "hunter.review-ack.v1":
+        return None
+    allowed = {"schema", "head_sha", "claims_id", "verdict", "summary", "collector_run_id"}
+    if set(value) - allowed:
+        return None
+    if "collector_run_id" in value and (type(value["collector_run_id"]) is not int or value["collector_run_id"] <= 0):
+        return None
+    if value.get("verdict") != "clear" or not re.fullmatch(r"[0-9a-f]{40}", str(value.get("head_sha") or "")):
+        return None
+    if not re.fullmatch(r"[0-9a-f]{64}", str(value.get("claims_id") or "")):
+        return None
+    if not isinstance(value.get("summary"), str) or not _substantive_review_body(value["summary"]):
+        return None
+    return value
+
+
+def reviewer_login(agent: dict[str, Any]) -> str:
+    # Integration identity is configuration, never a field supplied by a candidate.
+    if agent.get("id") == "codex":
+        return "chatgpt-codex-connector[bot]"
+    return str(agent.get("github_login") or "").strip().lower()
+
+
+def read_pr_pool_review_comments(
+    repository: str,
+    token: str,
+    pr_number: int,
+    pool: dict[str, Any],
+    exact_head: str,
+) -> tuple[list[dict[str, Any]], str | None]:
+    """Read submitted reviews, not loose comments or candidate-authored claims.
+
+    Keep stale reviews so callers can distinguish missing from stale authority.
+    Pagination failure invalidates the entire observation.
+    """
+    enabled = {reviewer_login(agent): str(agent["id"]) for agent in pre_ready.enabled_pool_reviewers(pool)}
+    if pool.get("last_resort_github_login"):
+        enabled[str(pool["last_resort_github_login"]).lower()] = str(pool["last_resort"])
+    enabled.pop("", None)
+    reviews: list[dict[str, Any]] = []
+    try:
+        page = 1
+        while True:
+            payload = request_json(repository, token, "GET", f"pulls/{pr_number}/reviews?per_page=100&page={page}")
+            if not isinstance(payload, list):
+                return [], "review payload is not a list"
+            for review in payload:
+                if not isinstance(review, dict) or not isinstance(review.get("user"), dict):
+                    return [], "malformed review record"
+                login = str(review["user"].get("login") or "").strip().lower()
+                state = review.get("state")
+                body = str(review.get("body") or "")
+                if state not in {"APPROVED", "COMMENTED", "CHANGES_REQUESTED", "DISMISSED"}:
+                    continue
+                # Keep all reviewers' actionable states, including empty approvals
+                # which can supersede a human changes-requested review.
+                if state == "COMMENTED" and (login not in enabled or not _substantive_review_body(body)):
+                    continue
+                reviews.append(
+                    {
+                        "id": review.get("id"),
+                        "login": login,
+                        "agent_id": enabled.get(login, ""),
+                        "commit_id": review.get("commit_id"),
+                        "body": body,
+                        "state": state,
+                        "source_kind": "review",
+                        "submitted_at": review.get("submitted_at", ""),
+                        "html_url": review.get("html_url", ""),
+                    }
+                )
+            if len(payload) < 100:
+                break
+            page += 1
+        page = 1
+        while True:
+            payload = request_json(repository, token, "GET", f"issues/{pr_number}/comments?per_page=100&page={page}")
+            if not isinstance(payload, list):
+                return [], "review acknowledgement payload is not a list"
+            for comment in payload:
+                if not isinstance(comment, dict) or not isinstance(comment.get("user"), dict):
+                    return [], "malformed review acknowledgement observation"
+                login = str(comment["user"].get("login") or "").lower()
+                ack = review_acknowledgement(str(comment.get("body") or ""))
+                if login not in enabled or ack is None:
+                    continue
+                reviews.append(
+                    {
+                        "id": comment.get("id"),
+                        "login": login,
+                        "agent_id": enabled[login],
+                        "commit_id": ack["head_sha"],
+                        "body": comment["body"],
+                        "state": "COMMENTED",
+                        "source_kind": "issue_comment",
+                        "submitted_at": comment.get("created_at", ""),
+                        "html_url": comment.get("html_url", ""),
+                    }
+                )
+            if len(payload) < 100:
+                break
+            page += 1
+    except Exception as exc:
+        return [], f"review evidence unavailable: {type(exc).__name__}: {exc}"
+    return reviews, None
+
+
+def read_unresolved_review_threads(repository: str, token: str, pr_number: int) -> tuple[tuple[str, ...], str | None]:
+    import hunter_merge_readiness_v2 as readiness
+
+    try:
+        owner, name = repository.split("/", 1)
+        cursor = None
+        seen: set[str] = set()
+        unresolved = []
+        while True:
+            data = transport.request_graphql_json(
+                url="https://api.github.com/graphql",
+                headers={},
+                token=token,
+                query=readiness._REVIEW_THREADS_QUERY,
+                variables={"owner": owner, "name": name, "number": pr_number, "after": cursor},
+                what="exact-head review threads",
+            )
+            threads = data["repository"]["pullRequest"]["reviewThreads"]
+            nodes, page = threads["nodes"], threads["pageInfo"]
+            if not isinstance(nodes, list) or not isinstance(page.get("hasNextPage"), bool):
+                raise ValueError("malformed thread pagination")
+            for node in nodes:
+                if not isinstance(node, dict) or not isinstance(node.get("isResolved"), bool) or not node.get("id"):
+                    raise ValueError("malformed review thread")
+                if not node["isResolved"]:
+                    unresolved.append(node["id"])
+            if not page["hasNextPage"]:
+                return tuple(unresolved), None
+            cursor = page.get("endCursor")
+            if not isinstance(cursor, str) or not cursor or cursor in seen:
+                raise ValueError("invalid review thread cursor")
+            seen.add(cursor)
+    except Exception as exc:
+        return (), f"review threads unavailable: {type(exc).__name__}: {exc}"
+
+
+def verify_trusted_exhaustion(
+    repository: str,
+    token: str,
+    pr_number: int,
+    head_sha: str,
+    pool: dict[str, Any],
+    authority: dict[str, Any],
+) -> tuple[str, str]:
+    """Resolve attempt references through authenticated GitHub reviewer results.
+
+    A reference is not proof: the configured reviewer must have emitted the
+    exact invocation/configuration/result itself at this HEAD. Unsupported
+    integrations and unavailable evidence fail closed.
+    """
+    if "collector_run_id" in authority:
+        from hunter_reviewer_collector import load_exhaustion
+
+        try:
+            evidence = load_exhaustion(
+                repository, token, pr_number, head_sha, pool, authority["collector_run_id"], str(authority.get("type"))
+            )
+            if evidence.get("reviewer_attempts") != authority.get("reviewer_attempts"):
+                return "failure", "EXHAUSTION_UNPROVEN: collector attempts do not match the authority"
+            return "success", "trusted exact-head collector results verified"
+        except Exception as exc:
+            return "failure", f"EXHAUSTION_UNPROVEN: {exc}"
+    problem = pre_ready._exhaustion_error(pool, authority, str(authority.get("type")))
+    if problem:
+        return "failure", problem
+    agents = pre_ready.enabled_pool_reviewers(pool)
+    own = next((a["priority"] for a in agents if a["id"] == authority.get("type")), float("inf"))
+    required = [a for a in agents if a["priority"] < own]
+    attempts = {a["agent_id"]: a for a in authority.get("reviewer_attempts", [])}
+    for agent in required:
+        attempt = attempts[str(agent["id"])]
+        reference = attempt.get("invocation_reference", "")
+        prefix = f"pulls/{pr_number}/reviews/"
+        if not isinstance(reference, str) or not reference.startswith(prefix) or not reference[len(prefix) :].isdigit():
+            return "failure", "EXHAUSTION_UNPROVEN: expected a PR-bound trusted reviewer result reference"
+        try:
+            result = request_json(repository, token, "GET", reference)
+            if not isinstance(result, dict) or not isinstance(result.get("user"), dict):
+                return "failure", "EXHAUSTION_UNPROVEN: malformed trusted result"
+            if not reviewer_login(agent) or result["user"].get("login", "").lower() != reviewer_login(agent):
+                return "failure", "EXHAUSTION_UNPROVEN: result was not emitted by configured reviewer"
+            if result.get("commit_id") != head_sha or result.get("state") != "COMMENTED":
+                return "failure", "EXHAUSTION_UNPROVEN: result is stale or not submitted"
+            evidence = json.loads(result.get("body", ""))
+            expected = {
+                "schema": "hunter.reviewer-attempt.v1",
+                "head_sha": head_sha,
+                "agent_id": agent["id"],
+                "priority": agent["priority"],
+                "timeout_seconds": agent["timeout_seconds"],
+                "trigger_method": agent.get("trigger_method"),
+                "retryable": agent["retryable"],
+                "evidence_parser": agent.get("evidence_parser"),
+                "retries_per_agent": pool["timeout_policy"]["retries_per_agent"],
+                "status": "exhausted",
+                "attempt_count": attempt["attempt_count"],
+                "failure_class": attempt["failure_class"],
+            }
+            if (
+                not isinstance(evidence, dict)
+                or not expected["trigger_method"]
+                or not expected["evidence_parser"]
+                or any(evidence.get(k) != v for k, v in expected.items())
+            ):
+                return "failure", "EXHAUSTION_UNPROVEN: trusted invocation/configuration/result mismatch"
+            if evidence.get("outcome") not in {"unavailable", "rate_limited", "timed_out", "transport_failure"}:
+                return "failure", "EXHAUSTION_UNPROVEN: result does not establish unavailability"
+        except Exception as exc:
+            return "failure", f"EXHAUSTION_UNPROVEN: {type(exc).__name__}: {exc}"
+    return "success", "all higher-priority reviewers have trusted exact-head exhaustion results"
+
+
 def read_commits_beyond_attestation_floor(
     repository: str,
     token: str,
@@ -1363,11 +1604,6 @@ def verify_pre_ready_hostile_review(
             "so the pre-ready hostile review cannot be bound to this candidate.",
         )
 
-    changed_paths = tuple(
-        sorted({path for change in pre_ready.target_changes(changes) for path in change.affected_paths()})
-    )
-    applicable = pre_ready.applicable_family_ids(families, changed_paths)
-
     state, document, read_error = read_head_pre_ready_review(repository, token, head_sha)
     if state == "unavailable":
         return (
@@ -1377,13 +1613,96 @@ def verify_pre_ready_hostile_review(
     if state == "invalid":
         return "failure", f"Candidate admission blocked: {read_error}."
 
-    if not applicable and document is None:
-        # A candidate that triggers no recurring-defect family has no applicable
-        # prevention rule to be checked against, so demanding a hostile review of
-        # it would be ceremony that blocks valid work -- a dependency pin bump,
-        # for instance. A review that *is* present is still verified, so this can
-        # never become a way to carry a stale or forged one.
-        return "success", "No recurring-defect family applies to this candidate's changed paths."
+    pool, pool_error = pre_ready.load_reviewer_pool()
+    if pool_error or pool is None:
+        return "failure", f"Candidate admission blocked: reviewer pool unavailable ({pool_error})."
+    reviews, reviews_error = read_pr_pool_review_comments(repository, token, pr_number, pool, head_sha)
+    if reviews_error:
+        return "failure", f"Candidate admission blocked: {reviews_error}"
+    latest_by_reviewer: dict[str, dict[str, Any]] = {}
+    for r in reviews:
+        login = str(r.get("login") or "")
+        previous = latest_by_reviewer.get(login)
+        if previous is None or (str(r.get("submitted_at") or ""), int(r.get("id") or 0)) > (
+            str(previous.get("submitted_at") or ""),
+            int(previous.get("id") or 0),
+        ):
+            latest_by_reviewer[login] = r
+    enabled_ids = {str(a["id"]) for a in pre_ready.enabled_pool_reviewers(pool)} | {str(pool["last_resort"])}
+    exact_reviews = [
+        r
+        for r in latest_by_reviewer.values()
+        if r.get("commit_id") == head_sha
+        and r.get("state") in {"APPROVED", "COMMENTED"}
+        and r.get("agent_id") in enabled_ids
+        and _substantive_review_body(str(r.get("body") or ""))
+    ]
+    # An out-of-band structured review avoids a self-referential artifact commit.
+    # Only a document emitted by the authenticated exact-head reviewer is eligible.
+    for review in exact_reviews:
+        try:
+            external = json.loads(review["body"])
+        except (ValueError, TypeError):
+            continue
+        if isinstance(external, dict) and external.get("schema") == pre_ready.REVIEW_SCHEMA:
+            authority = external.get("authority")
+            if not isinstance(authority, dict) or authority.get("type") != review.get("agent_id"):
+                return (
+                    "failure",
+                    "Candidate admission blocked: external review authority differs from its authenticated emitter.",
+                )
+            document = external
+            break
+    actionable: dict[str, dict[str, Any]] = {}
+    for r in reviews:
+        if r.get("source_kind") != "issue_comment" and r.get("state") in {"APPROVED", "CHANGES_REQUESTED", "DISMISSED"}:
+            login = str(r.get("login") or "")
+            if login not in actionable or int(r.get("id") or 0) > int(actionable[login].get("id") or 0):
+                actionable[login] = r
+    if any(r.get("state") == "CHANGES_REQUESTED" for r in actionable.values()):
+        return "failure", "Candidate admission blocked: BLOCKING_FINDINGS: changes requested."
+
+    if isinstance(document, dict) and "review_request" in document:
+        request = document["review_request"]
+        claims = document.get("claims")
+        if (
+            not isinstance(request, dict)
+            or request.get("schema") != "hunter.review-request.v1"
+            or not isinstance(claims, dict)
+        ):
+            return "failure", "MALFORMED_REVIEW: invalid review request"
+        claims_id = pre_ready.review_id(claims)
+        if request.get("claims_id") != claims_id or document.get("review_id") != claims_id:
+            return "failure", "MALFORMED_REVIEW: request digest mismatch"
+        adopted = []
+        for observation in exact_reviews:
+            ack = review_acknowledgement(observation["body"])
+            if ack and ack["head_sha"] == head_sha and ack["claims_id"] == claims_id:
+                adopted.append((observation, ack))
+        if not adopted:
+            return "failure", "MISSING_REVIEW_AUTHORITY: no authenticated exact-head adoption of the review request"
+        priorities = {str(a["id"]): int(a["priority"]) for a in pre_ready.enabled_pool_reviewers(pool)}
+        observation, ack = min(adopted, key=lambda item: priorities.get(item[0]["agent_id"], 10**9))
+        authority = {
+            "type": observation["agent_id"],
+            "tool": "authenticated-github-review",
+            "head_sha": observation["commit_id"],
+            "reviewed_at": observation.get("submitted_at") or "GitHub review observation",
+            "artifact": observation.get("html_url") or f"GitHub review {observation['id']}",
+        }
+        if priorities.get(authority["type"], 10**9) > min(priorities.values()):
+            from hunter_reviewer_collector import load_exhaustion
+
+            try:
+                authority.update(
+                    load_exhaustion(
+                        repository, token, pr_number, head_sha, pool, ack.get("collector_run_id"), authority["type"]
+                    )
+                )
+            except Exception as exc:
+                return "failure", f"EXHAUSTION_UNPROVEN: {exc}"
+        # This is NEW authority from the current reviewer; the historical record is unchanged.
+        document = pre_ready.document_for(claims, authority=authority)
 
     # The Issue the review claims must be the Issue the branch binds, when the
     # branch binds one, so a review cannot be measured against a conveniently
@@ -1407,19 +1726,17 @@ def verify_pre_ready_hostile_review(
                 f"unavailable ({criteria_error})."
             )
 
+    if document is None and not exact_reviews:
+        return (
+            "failure",
+            "Candidate admission blocked: MISSING_REVIEW_AUTHORITY: no substantive exact-head hostile review.",
+        )
     resolution_corrections: frozenset[str] | None = None
-    commit_ancestry: frozenset[str] = frozenset()
     if isinstance(document, dict):
-        # Issue #467: the review records the exact head it reviewed, and that head
-        # must be on the evaluated candidate's own history -- the review's artifact
-        # commit (excluded from the reviewed change set) is a descendant of the head
-        # it verified, but an amended or foreign head is not. The commit list is
-        # trusted PR evidence and doubles as the resolution-correction scope for a
-        # resolved finding: a correction commit must be part of the candidate's own
-        # commit range, so a resolution cannot claim a fix that was never made on
-        # this candidate. A candidate with no review at all is answered below by
-        # the missing-document verdict, so this evidence is only consulted when
-        # there is a review to bind.
+        # Issue #467: the commit list is trusted PR evidence and doubles as the
+        # resolution-correction scope for a resolved finding: a correction commit
+        # must be part of the candidate's own commit range, so a resolution cannot
+        # claim a fix that was never made on this candidate.
         ok_commits, commits, commits_error = read_pr_commits(repository, token, pr_number)
         if not ok_commits:
             return (
@@ -1444,22 +1761,47 @@ def verify_pre_ready_hostile_review(
         families=families,
         issue_criteria=issue_criteria or None,
         resolution_corrections=resolution_corrections,
-        # Issue #467: the evaluated head is the PR head SHA derived from trusted
-        # PR evidence, and the review's recorded authority head must be on that
-        # head's history, so a review cannot be rebound to a different branch or
-        # an amended commit.
         head_sha=head_sha,
-        commit_ancestry=commit_ancestry,
     )
+
     if not verdict.ok:
-        return "failure", f"Candidate admission blocked: {verdict.reason}."
+        kind = "STALE_REVIEW" if verdict.state == "stale" else "MALFORMED_REVIEW"
+        authority = document.get("authority", {}) if isinstance(document, dict) else {}
+        if isinstance(authority, dict):
+            exhaustion_kind = pre_ready.exhaustion_failure_kind(pool, authority, str(authority.get("type")))
+            if exhaustion_kind:
+                kind = exhaustion_kind
+        return "failure", f"{kind}: Candidate admission blocked: {verdict.reason}."
+    if not exact_reviews:
+        return (
+            "failure",
+            "Candidate admission blocked: MISSING_REVIEW_AUTHORITY: no substantive exact-head hostile review.",
+        )
+    threads, thread_error = read_unresolved_review_threads(repository, token, pr_number)
+    if thread_error or threads:
+        return "failure", f"BLOCKING_FINDINGS: {thread_error or 'unresolved review threads'}"
+    dispositions_ok, disposition_error = check_reviewer_dispositions()
+    if not dispositions_ok:
+        return "failure", f"BLOCKING_FINDINGS: {disposition_error}"
+    authority = document["authority"]
+    if not any(r.get("agent_id") == authority.get("type") for r in exact_reviews):
+        return "failure", "Candidate admission blocked: review author does not match structured authority."
+    exhaustion_state, exhaustion_detail = verify_trusted_exhaustion(
+        repository, token, pr_number, head_sha, pool, authority
+    )
+    if exhaustion_state != "success":
+        return "failure", exhaustion_detail
     claimed_base_ref = str(((document or {}).get("claims") or {}).get("base_ref") or "")
     if claimed_base_ref != base_ref:
         return "failure", (
             f"Candidate admission blocked: the pre-ready hostile review was taken against base branch "
             f"{claimed_base_ref!r}, not this pull request's {base_ref!r}."
         )
-    return "success", verdict.reason
+    kind = "VALID_LAST_RESORT_GUARD" if authority["type"] == pool["last_resort"] else "VALID_AGENT_REVIEW"
+    return (
+        "success",
+        f"{kind}: complete base->HEAD hostile review; substantive exact-head review and structured evidence verified.",
+    )
 
 
 def candidate_admission(repository: str, token: str, head_sha: str, pr_number: int | None = None) -> tuple[str, str]:

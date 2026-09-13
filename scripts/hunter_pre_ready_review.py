@@ -519,6 +519,7 @@ def load_reviewer_pool(source: Path | Mapping[str, Any] | None = None) -> tuple[
     return (
         {
             "last_resort": str(raw["last_resort"]),
+            "last_resort_github_login": str(raw.get("last_resort_github_login") or ""),
             "timeout_policy": dict(raw["timeout_policy"]),
             "agents": agents,
         },
@@ -537,35 +538,60 @@ def _exhaustion_error(pool: Mapping[str, Any], authority: Mapping[str, Any], aut
 
     Failover is a deterministic decision, never a human-noticed skip. A recorded
     authority from any reviewer below the primary must cover every enabled
-    reviewer above it (the guard must cover every enabled reviewer), each with
-    an ``exhausted`` status, a reason, and a ``timeout_seconds`` inside the
-    bounded timeout policy. Only then is a lower-tier review admissible.
+    reviewer above it (the guard must cover every enabled reviewer), each with an
+    ``exhausted`` status, a reason, an ``attempt_count`` honouring the retry
+    policy, a ``failure_class``, a machine-verifiable ``invocation_reference``,
+    and a ``timeout_seconds`` exactly equal to the configured reviewer timeout.
+    Only then is a lower-tier review admissible.
+    """
+
+    message, _, unproven = _exhaustion_error_impl(pool, authority, authority_type)
+    return message if unproven else None
+
+
+def _exhaustion_error_impl(
+    pool: Mapping[str, Any], authority: Mapping[str, Any], authority_type: str
+) -> tuple[str, str, bool]:
+    """Pure verdict over recorded exhaustion evidence: (message, kind, unproven).
+
+    ``kind`` is one of ``"POOL_NOT_EXHAUSTED"`` (a required enabled reviewer was
+    never attempted or recorded as anything but exhausted -- a skip) or
+    ``"EXHAUSTION_UNPROVEN"`` (attempts exist but cannot be believed: the
+    recorded timeout differs from the configured reviewer timeout, the retry
+    policy was not honoured, or there is no machine-verifiable invocation
+    reference). ``unproven`` is ``True`` only for a genuine failure.
     """
 
     enabled = enabled_pool_reviewers(pool)
     priorities = {str(agent["id"]): int(agent["priority"]) for agent in enabled}
-    max_seconds = int(pool["timeout_policy"]["max_seconds"])
     if authority_type == str(pool["last_resort"]):
         required = enabled
     else:
         own_priority = priorities.get(authority_type)
         if own_priority is None:
-            return None
+            return "", "", False
         required = [agent for agent in enabled if int(agent["priority"]) < own_priority]
     if not required:
-        return None
+        return "", "", False
 
     attempts = authority.get("reviewer_attempts")
     if attempts is None:
         return (
             "review authority must record reviewer exhaustion evidence for every higher-priority "
-            "enabled reviewer before a lower-tier review authority is admissible"
+            "enabled reviewer before a lower-tier review authority is admissible",
+            "POOL_NOT_EXHAUSTED",
+            True,
         )
     if not isinstance(attempts, list) or not attempts:
-        return "reviewer exhaustion evidence must be a non-empty list of per-agent attempt records"
+        return (
+            "reviewer exhaustion evidence must be a non-empty list of per-agent attempt records",
+            "POOL_NOT_EXHAUSTED",
+            True,
+        )
 
     covered: set[str] = set()
     problems: list[str] = []
+    pool_not_exhausted = False
     for attempt in attempts:
         if not isinstance(attempt, dict):
             problems.append("reviewer exhaustion evidence contains a malformed attempt record")
@@ -578,31 +604,87 @@ def _exhaustion_error(pool: Mapping[str, Any], authority: Mapping[str, Any], aut
             problems.append(f"reviewer exhaustion attempt for {agent_id} is recorded more than once")
             continue
         if attempt.get("status") != "exhausted":
+            pool_not_exhausted = True
             problems.append(
                 f"reviewer attempt for {agent_id} records status {attempt.get('status')!r}; a higher-priority "
                 "reviewer is bypassed unless it was actually attempted and exhausted"
             )
             continue
+        # Agent was attempted and exhausted - mark as covered regardless of
+        # evidence quality issues (those are EXHAUSTION_UNPROVEN, not POOL_NOT_EXHAUSTED)
+        covered.add(agent_id)
+
         reason = attempt.get("reason")
         if not isinstance(reason, str) or not reason.strip():
             problems.append(f"reviewer attempt for {agent_id} must record why it was exhausted")
+        configured_timeout = next(
+            (agent.get("timeout_seconds") for agent in required if str(agent.get("id")) == agent_id), None
+        )
         timeout = attempt.get("timeout_seconds")
-        if isinstance(timeout, bool) or not isinstance(timeout, int) or not (1 <= timeout <= max_seconds):
+        if (
+            isinstance(timeout, bool)
+            or not isinstance(timeout, int)
+            or not isinstance(configured_timeout, int)
+            or timeout != configured_timeout
+        ):
             problems.append(
-                f"reviewer attempt for {agent_id} must record a timeout_seconds within the bounded "
-                f"policy (1..{max_seconds})"
+                f"reviewer attempt for {agent_id} must record timeout_seconds equal to the configured "
+                f"reviewer timeout ({configured_timeout!r})"
             )
-            continue
-        covered.add(agent_id)
+        failure_class = attempt.get("failure_class")
+        if failure_class not in ("transient", "permanent"):
+            problems.append(
+                f"reviewer attempt for {agent_id} must record a machine-checkable failure_class "
+                "(transient/permanent)"
+            )
+        invocation = attempt.get("invocation_reference")
+        if not isinstance(invocation, str) or not invocation.strip():
+            problems.append(
+                f"reviewer attempt for {agent_id} must record a machine-verifiable invocation_reference "
+                "to the exhausted attempt evidence"
+            )
+        count = attempt.get("attempt_count")
+        if isinstance(count, bool) or not isinstance(count, int) or count < 1:
+            problems.append(f"reviewer attempt for {agent_id} must record a positive attempt_count")
+        elif failure_class == "transient" and next(
+            (agent.get("retryable") for agent in required if agent["id"] == agent_id), False
+        ):
+            allowed = 1 + int((pool.get("timeout_policy") or {}).get("retries_per_agent") or 0)
+            if count < allowed:
+                problems.append(
+                    f"reviewer attempt for {agent_id} records {count} attempt(s); a retryable transient "
+                    f"failure requires {allowed} attempts (policy retries_per_agent={allowed - 1})"
+                )
 
     missing = sorted({str(agent["id"]) for agent in required} - covered)
     if missing:
+        pool_not_exhausted = True
         problems.append(
             "reviewer exhaustion evidence is incomplete; missing exhausted attempts for " + ", ".join(missing)
         )
-    if problems:
-        return "reviewer exhaustion evidence fails closed: " + "; ".join(problems)
-    return None
+    if not problems:
+        return "", "", False
+    message = "reviewer exhaustion evidence fails closed: " + "; ".join(problems)
+    return message, "POOL_NOT_EXHAUSTED" if pool_not_exhausted else "EXHAUSTION_UNPROVEN", True
+
+
+def exhaustion_failure_kind(pool: Mapping[str, Any], authority: Mapping[str, Any], authority_type: str) -> str | None:
+    """Classification of unproven exhaustion: POOL_NOT_EXHAUSTED or EXHAUSTION_UNPROVEN.
+
+    ``None`` means the recorded exhaustion evidence satisfies the trusted
+    contract. The classification is consumed by the merge-readiness authority
+    resolver so a guard review's failure surfaces as an explicit state, never as
+    a silently accepted last resort.
+    """
+
+    message, kind, unproven = _exhaustion_error_impl(pool, authority, authority_type)
+    return kind if unproven else None
+
+
+def authority_problem(document: Mapping[str, Any]) -> str | None:
+    """Public validation of the recorded review-authority record, or ``None``."""
+
+    return _authority_error(document)
 
 
 def _authority_error(document: dict[str, Any]) -> str | None:
@@ -770,7 +852,6 @@ def verify_claims(
     issue_criteria: tuple[str, ...] | None = None,
     resolution_corrections: frozenset[str] | None = None,
     head_sha: str | None = None,
-    commit_ancestry: frozenset[str] | None = None,
 ) -> ReviewVerdict:
     """Compare repository-owned review state against the exact candidate content.
 
@@ -798,6 +879,8 @@ def verify_claims(
         return ReviewVerdict("missing", "no pre-ready hostile review exists for this candidate")
     if not isinstance(document, dict) or document.get("schema") != REVIEW_SCHEMA:
         return ReviewVerdict("missing", f"pre-ready hostile review must use schema {REVIEW_SCHEMA}")
+    if "review_request" in document:
+        return ReviewVerdict("missing", "a review request is not completed exact-head review authority")
     claims = document.get("claims")
     if not isinstance(claims, dict):
         return ReviewVerdict("missing", "pre-ready hostile review claims must be an object")
@@ -835,21 +918,18 @@ def verify_claims(
     # Issue #467: the review is a statement about an exact commit, so the head it
     # claims to have reviewed is part of its evidence, not decoration. Content
     # equality alone cannot detect an amended commit whose diff is byte-identical,
-    # so the recorded head must be on the evaluated candidate's history: an
-    # amended head does not contain the recorded commit, while the review's own
-    # artifact commit (excluded from the reviewed change set) does. Equality is
-    # the fast path; when the heads differ, the ancestry is the distinguisher and
-    # the content checks above still bind the diff, so the self-inserted artifact
-    # commit never re-legitimises different content.
+    # and an artifact that records an ancestor head must never legitimise a later
+    # head: the authority is positive review at *this* exact head, not review of
+    # anything on the candidate's history. The self-inserted artifact commit is
+    # therefore deliberately inert -- it records the pre-commit HEAD and can never
+    # be treated as authority for the commit that records it.
     recorded_head = document["authority"]["head_sha"]
     if head_sha is not None and recorded_head.strip().lower() != head_sha.strip().lower():
-        known_ancestors = {str(sha).strip().lower() for sha in (commit_ancestry or frozenset())}
-        if recorded_head.strip().lower() not in known_ancestors:
-            return ReviewVerdict(
-                "stale",
-                f"the pre-ready hostile review was recorded for head {recorded_head[:10]}, "
-                "which is not on the evaluated candidate's commit history",
-            )
+        return ReviewVerdict(
+            "stale",
+            f"the pre-ready hostile review was recorded for exact head {recorded_head[:10]}, "
+            f"not the evaluated exact head {head_sha[:10]}",
+        )
 
     changed_paths = tuple(sorted({path for change in target_changes(changes) for path in change.affected_paths()}))
     required = set(applicable_family_ids(families, changed_paths))
@@ -1067,17 +1147,13 @@ def verify_local(
         return ReviewVerdict("incomplete", f"pre-ready hostile review evidence is unavailable ({exc})")
     # Issue #467: the recorded authority head is the exact commit SHA, so the
     # evaluated head must be resolved the same way or a "HEAD" ref would never
-    # bind. A full SHA is already exact and passes through. The recorded head
-    # must then be on the evaluated head's history: the review's own artifact
-    # commit (excluded from the reviewed change set) is a descendant of the head
-    # it reviewed, but an amended or foreign head is not.
+    # bind. A full SHA is already exact and passes through. Verification is
+    # strict-exact only: a document recorded for any other head -- including an
+    # ancestor such as the self-inserted artifact commit's parent -- is stale and
+    # must never legitimise this candidate.
     exact_head = (
         head if _GIT_SHA.fullmatch(head) else _run_git("rev-parse", "--verify", f"{head}^{{commit}}", cwd=cwd).strip()
     )
-    recorded_head = str((document or {}).get("authority", {}).get("head_sha") or "")
-    ancestry: frozenset[str] = frozenset({exact_head} - {""})
-    if recorded_head.strip().lower() != exact_head.strip().lower() and _is_ancestor(recorded_head, exact_head, cwd=cwd):
-        ancestry = frozenset({recorded_head, exact_head})
     return verify_claims(
         document,
         base_sha=base,
@@ -1085,7 +1161,6 @@ def verify_local(
         families=families,
         issue_criteria=issue_criteria,
         head_sha=exact_head,
-        commit_ancestry=ancestry,
     )
 
 

@@ -53,7 +53,7 @@ def test_unadmitted_ready_candidate_is_returned_to_draft(monkeypatch) -> None:
     assert converted == [("token", "PR_test_node")]
 
 
-def test_pending_candidate_waits_without_redrafting(monkeypatch, capsys) -> None:
+def test_pending_candidate_waits_in_draft(monkeypatch, capsys) -> None:
     monkeypatch.setattr(
         admission.governance,
         "read_mergeability",
@@ -67,14 +67,28 @@ def test_pending_candidate_waits_without_redrafting(monkeypatch, capsys) -> None
     monkeypatch.setattr(
         admission,
         "convert_to_draft",
-        lambda *_args: (_ for _ in ()).throw(AssertionError("pending must not redraft")),
+        lambda *_args: True,
     )
 
-    assert admission.enforce_candidate_admission("fafa33/Project-Hunter", "token", 369) == 0
-    assert "candidate admission is pending" in capsys.readouterr().out
+    assert admission.enforce_candidate_admission("fafa33/Project-Hunter", "token", 369) == 1
+    assert "admission is pending" in capsys.readouterr().out
 
 
 def test_admitted_candidate_stays_ready(monkeypatch) -> None:
+    monkeypatch.setattr(
+        admission.governance,
+        "request_json",
+        lambda *args: (
+            {
+                "check_runs": [
+                    {"id": n, "name": name, "status": "completed", "conclusion": "success"}
+                    for n, name in enumerate(("Quality Gates", "dependency-review", "CodeQL"), 1)
+                ]
+            }
+            if "check-runs" in args[-1]
+            else [{"id": 1, "context": "Hunter Governance Review", "state": "success"}]
+        ),
+    )
     monkeypatch.setattr(
         admission.governance,
         "read_mergeability",

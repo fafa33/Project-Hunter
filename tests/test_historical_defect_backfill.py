@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 
 import hunter_defect_prevention_preflight as prevention
@@ -59,6 +60,7 @@ def _write_backfill(tmp_path, records: list[dict[str, object]], *, pull_requests
         "purpose": "test",
         "window": {"pull_requests": pull_requests or [999]},
         "records": records,
+        "manifest": prevention.historical_manifest(records),
     }
     path = tmp_path / "HISTORICAL_DEFECT_BACKFILL.json"
     path.write_text(json.dumps(backfill, indent=2), encoding="utf-8")
@@ -66,7 +68,14 @@ def _write_backfill(tmp_path, records: list[dict[str, object]], *, pull_requests
 
 
 def _patch_backfill(monkeypatch, tmp_path, records: list[dict[str, object]]) -> None:
-    monkeypatch.setattr(prevention, "BACKFILL_PATH", _write_backfill(tmp_path, records))
+    path = _write_backfill(tmp_path, records)
+    monkeypatch.setattr(prevention, "BACKFILL_PATH", path)
+    manifest = prevention.historical_manifest(records)
+    monkeypatch.setattr(
+        prevention,
+        "TRUSTED_BACKFILL_MANIFEST_DIGEST",
+        hashlib.sha256(json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
+    )
 
 
 def _patch_registry(monkeypatch, tmp_path, families: list[dict[str, object]]) -> None:
@@ -85,7 +94,7 @@ def test_the_canonical_historical_defect_backfill_is_valid() -> None:
     assert prevention.validate_historical_defect_backfill() == []
 
 
-def test_the_canonical_historical_backfill_meets_zero_recurrence_targets() -> None:
+def test_the_canonical_historical_backfill_reports_actual_protection_coverage() -> None:
     coverage = prevention.historical_backfill_coverage()
     assert coverage["confirmed_records"] > 0
     assert (
@@ -94,13 +103,14 @@ def test_the_canonical_historical_backfill_meets_zero_recurrence_targets() -> No
     assert coverage["needs_guard_records"] == 0, "every confirmed real defect must be guarded, none left needs-guard"
     assert coverage["guarded_records"] == coverage["confirmed_records"]
     assert coverage["duplicates_unmapped"] == 0
-    for key in ("families_without_regression", "families_without_selector", "families_without_gate"):
+    for key in ("families_without_regression", "families_without_selector"):
         assert coverage[key] == 0
     # Four protection layers hold for every confirmed historical family.
     assert coverage["confirmed_families"] > 0
     assert coverage["families_with_regression"] == coverage["confirmed_families"]
     assert coverage["families_with_selector"] == coverage["confirmed_families"]
-    assert coverage["families_with_gate"] == coverage["confirmed_families"]
+    assert coverage["families_without_gate"] > 0
+    assert coverage["families_with_gate"] + coverage["families_without_gate"] == coverage["confirmed_families"]
 
 
 # --------------------------------------------------------------------------

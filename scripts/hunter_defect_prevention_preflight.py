@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import ast
 import configparser
+import hashlib
 import importlib.util
 import json
 import os
@@ -411,6 +412,114 @@ def validate_reviewer_finding_dispositions() -> list[str]:
     return errors
 
 
+# This digest is part of the trusted controller, independent of candidate records.
+# Changing the accepted historical window requires review of this canonical pin.
+TRUSTED_BACKFILL_MANIFEST_DIGEST = "891ca3fb246ecee536fb232d5fc69ae74dbd43a3554ff79a69aeff8e0d632b1c"
+
+
+def historical_defect_digest(record: dict[str, Any]) -> str:
+    fields = (
+        "source_pr",
+        "source_reference",
+        "reviewer",
+        "original_defect",
+        "canonical_family",
+        "dff_id",
+        "classification",
+        "severity",
+        "status",
+    )
+    payload = {key: record.get(key) for key in fields}
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+    ).hexdigest()
+
+
+def historical_manifest(records: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "version": 1,
+        "expected_count": len(records),
+        "record_ids": sorted(str(r.get("id")) for r in records),
+        "confirmed_ids": sorted(str(r.get("id")) for r in records if r.get("classification") == "confirmed"),
+        "family_ids": sorted({str(r.get("dff_id")) for r in records if r.get("classification") == "confirmed"}),
+        "included_pull_requests": sorted({r.get("source_pr") for r in records}, key=str),
+        "pins": {
+            str(r.get("id")): {
+                **{key: r.get(key) for key in ("source_pr", "dff_id", "classification", "severity", "status")},
+                "defect_digest": historical_defect_digest(r),
+            }
+            for r in records
+        },
+    }
+
+
+def _historical_manifest_errors(backfill: dict[str, Any]) -> list[str]:
+    manifest = backfill.get("manifest")
+    if not isinstance(manifest, dict):
+        return ["historical backfill manifest is missing or malformed"]
+    errors = []
+    digest = hashlib.sha256(json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    if digest != TRUSTED_BACKFILL_MANIFEST_DIGEST:
+        errors.append("historical manifest differs from the trusted canonical manifest digest")
+    records = backfill.get("records", [])
+    expected = historical_manifest([r for r in records if isinstance(r, dict)])
+    for key, value in expected.items():
+        if manifest.get(key) != value:
+            errors.append(f"historical manifest {key} mismatch: expected {manifest.get(key)!r}, found {value!r}")
+    return errors
+
+
+def _family_has_machine_gate(family: dict[str, Any]) -> bool:
+    prevention = family.get("prevention", {})
+    applicability = family.get("applicability", {})
+    if not isinstance(prevention, dict) or not isinstance(applicability, dict):
+        return False
+    if prevention.get("boundary") not in MACHINE_BOUNDARIES:
+        return False
+    if family.get("lifecycle") not in {"locally-enforced", "hosted-enforced", "prevented"}:
+        return False
+    scopes = applicability.get("changed_paths")
+    if not isinstance(scopes, list) or not scopes or not all(isinstance(p, str) and p.strip() for p in scopes):
+        return False
+    reference = prevention.get("guard_reference")
+    if not isinstance(reference, str) or _validate_reference_target(reference, role="guard"):
+        return False
+    # A resolvable function alone does not prove that a gate invokes it for this family.
+    binding = (family.get("id"), prevention.get("boundary"), reference)
+    caller = MACHINE_FAMILY_BINDINGS.get(binding)
+    if not caller or _validate_reference_target(caller, role="guard"):
+        return False
+    path, selector = caller.split("::")
+    tree = ast.parse((ROOT / path).read_text(encoding="utf-8"))
+    function = next(
+        (n for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == selector), None
+    )
+    callee = reference.split("::")[-1]
+    return function is not None and any(
+        isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == callee for n in ast.walk(function)
+    )
+
+
+# Audited invocation boundaries. Unknown or merely declared boundaries count as gaps.
+MACHINE_FAMILY_BINDINGS: dict[tuple[str, str, str], str] = {
+    (
+        "DFF-012",
+        "local-pre-push",
+        "scripts/hunter_pre_push.py::_validate_receipt_freshness",
+    ): "scripts/hunter_pre_push.py::enforce_pre_push",
+    (
+        "DFF-013",
+        "hosted-gate",
+        "scripts/hunter_governance_review_v2.py::verify_pre_ready_hostile_review",
+    ): "scripts/hunter_governance_review_v2.py::candidate_admission",
+    (
+        "DFF-015",
+        "local-pre-push",
+        "scripts/hunter_defect_prevention_preflight.py::validate_recurring_defect_families",
+    ): "scripts/hunter_defect_prevention_preflight.py::validate_defect_prevention_lifecycle",
+}
+
+
 def historical_backfill_coverage(
     *, backfill: dict[str, Any] | None = None, registry: dict[str, Any] | None = None
 ) -> dict[str, int]:
@@ -455,15 +564,7 @@ def historical_backfill_coverage(
     families_with_selector = sum(
         1 for identifier in confirmed_families if family(identifier).get("applicability", {}).get("changed_paths")
     )
-    families_with_gate = sum(
-        1
-        for identifier in confirmed_families
-        if all(
-            _is_non_empty_str(record.get("gate_reference"))
-            for record in confirmed
-            if record.get("dff_id") == identifier
-        )
-    )
+    families_with_gate = sum(1 for identifier in confirmed_families if _family_has_machine_gate(family(identifier)))
 
     guarded_confirmed = sum(1 for record in confirmed if record.get("status") == "guarded")
     confirmed_family_set = set(confirmed_families)
@@ -522,6 +623,8 @@ def validate_historical_defect_backfill() -> list[str]:
     records = backfill.get("records")
     if not isinstance(records, list):
         return errors + ["HISTORICAL_DEFECT_BACKFILL records must be a list"]
+
+    errors.extend(_historical_manifest_errors(backfill))
 
     registry = _load_object(REGISTRY_PATH)
     families_by_id: dict[str, dict[str, Any]] = {}
@@ -634,10 +737,8 @@ def validate_historical_defect_backfill() -> list[str]:
         errors.append(
             f"historical backfill has {coverage['families_without_selector']} confirmed family without an applicability selector (families_without_selector > 0)"
         )
-    if coverage["families_without_gate"]:
-        errors.append(
-            f"historical backfill has {coverage['families_without_gate']} confirmed family without an enforcement gate (families_without_gate > 0)"
-        )
+    # Gate coverage is reported honestly; regression-only historical families remain
+    # valid records and are not upgraded to machine enforcement by this backfill.
     if coverage["duplicates_unmapped"]:
         errors.append(
             f"historical backfill has {coverage['duplicates_unmapped']} duplicates not mapped to a confirmed family (duplicates_unmapped > 0)"
