@@ -27,6 +27,70 @@ def test_code_write_policy_requires_draft_until_exact_head_admission() -> None:
     assert "exact-head" in progression["ready_requires"]
     assert "Pre-PR Preflight" in progression["ready_requires"]
     assert progression["auto_ready"] is False
+    assert progression["requires_current_head_codex_review"] is True
+    assert "structured evidence" in progression["finding_resolution"]
+    assert "regression test" in progression["finding_resolution"]
+
+
+def _write_policy(monkeypatch, tmp_path, mutator) -> None:
+    policy = json.loads((ROOT / "docs" / "CODE_WRITE_POLICY.json").read_text(encoding="utf-8"))
+    mutator(policy)
+    target = tmp_path / "CODE_WRITE_POLICY.json"
+    target.write_text(json.dumps(policy), encoding="utf-8")
+    monkeypatch.setattr(prevention, "WRITE_POLICY_PATH", target)
+    assert prevention.validate_code_write_policy() != []
+
+
+def test_code_write_policy_guard_rejects_a_dropped_codex_review_requirement(monkeypatch, tmp_path) -> None:
+    _write_policy(
+        monkeypatch,
+        tmp_path,
+        lambda policy: policy["review_progression"].pop("requires_current_head_codex_review"),
+    )
+
+
+def test_code_write_policy_guard_rejects_a_resolution_contract_without_a_regression_test(monkeypatch, tmp_path) -> None:
+    _write_policy(
+        monkeypatch,
+        tmp_path,
+        lambda policy: policy["review_progression"].update(
+            finding_resolution="resolved findings must carry structured evidence"
+        ),
+    )
+
+
+def test_code_write_policy_declares_codex_primary_with_a_recorded_reason_fallback() -> None:
+    policy = json.loads((ROOT / "docs" / "CODE_WRITE_POLICY.json").read_text(encoding="utf-8"))
+    authority = policy["review_progression"]["review_authority"]
+
+    assert authority["primary"] == "codex"
+    assert authority["fallback"] == "opencode"
+    assert authority["fallback_requires_recorded_reason"] is True
+    expected = {
+        "governance=success",
+        "trusted_preflight=success",
+        "unresolved_thread_count=0",
+        "structured_evidence=complete",
+    }
+    assert expected <= set(authority["fallback_requires_snapshot_gates"])
+
+
+def test_code_write_policy_guard_rejects_a_policy_without_a_review_authority_model(monkeypatch, tmp_path) -> None:
+    _write_policy(
+        monkeypatch,
+        tmp_path,
+        lambda policy: policy["review_progression"].pop("review_authority"),
+    )
+
+
+def test_code_write_policy_guard_rejects_a_fallback_without_a_recorded_reason_requirement(
+    monkeypatch, tmp_path
+) -> None:
+    _write_policy(
+        monkeypatch,
+        tmp_path,
+        lambda policy: policy["review_progression"]["review_authority"].pop("fallback_requires_recorded_reason"),
+    )
 
 
 def test_defect_prevention_guard_validates_code_write_policy() -> None:

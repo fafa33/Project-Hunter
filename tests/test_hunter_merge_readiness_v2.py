@@ -30,6 +30,7 @@ def _install_green(monkeypatch, pr: dict | None = None) -> None:
     )
     monkeypatch.setattr(core, "latest_status", lambda _sha, _context: {"id": 99, "state": "success"})
     monkeypatch.setattr(core, "open_prs_for_head", lambda _sha: (501,))
+    monkeypatch.setattr(core, "review_authority_state", lambda _sha, _number: ("success", "reviewed"))
 
 
 def test_green_current_state_is_merge_ready(monkeypatch):
@@ -83,6 +84,141 @@ def test_unresolved_review_thread_blocks(monkeypatch):
 
     assert decision.state == "failure"
     assert "Unresolved review threads" in decision.description
+
+
+def test_no_codex_review_on_current_head_blocks(monkeypatch):
+    _install_green(monkeypatch)
+    monkeypatch.setattr(
+        core,
+        "review_authority_state",
+        lambda _sha, _number: ("failure", "no exact-head hostile review exists on the current HEAD"),
+    )
+
+    _sha, decision = core.decide(501)
+
+    assert decision.state == "failure"
+    assert "review prerequisite" in decision.description
+
+
+def test_a_codex_review_of_an_older_head_blocks(monkeypatch):
+    _install_green(monkeypatch)
+    monkeypatch.setattr(
+        core,
+        "review_authority_state",
+        lambda _sha, _number: ("failure", "the candidate was mutated after it was reviewed"),
+    )
+
+    _sha, decision = core.decide(501)
+
+    assert decision.state == "failure"
+    assert "review prerequisite" in decision.description
+    assert "mutated" in decision.description
+
+
+def test_current_head_codex_review_with_unresolved_finding_blocks(monkeypatch):
+    _install_green(monkeypatch)
+    monkeypatch.setattr(
+        core,
+        "review_authority_state",
+        lambda _sha, _number: ("failure", "substantive review findings remain unresolved: F-1"),
+    )
+
+    _sha, decision = core.decide(501)
+
+    assert decision.state == "failure"
+    assert "review prerequisite" in decision.description
+    assert "F-1" in decision.description
+
+
+def test_resolved_finding_without_structured_evidence_blocks(monkeypatch):
+    _install_green(monkeypatch)
+    monkeypatch.setattr(
+        core,
+        "review_authority_state",
+        lambda _sha, _number: ("failure", "resolved finding F-2 lacks structured resolution evidence"),
+    )
+
+    _sha, decision = core.decide(501)
+
+    assert decision.state == "failure"
+    assert "review prerequisite" in decision.description
+    assert "structured" in decision.description
+
+
+def test_current_head_codex_review_with_structured_evidence_allows(monkeypatch):
+    _install_green(monkeypatch)
+
+    _sha, decision = core.decide(501)
+
+    assert decision.state == "success"
+
+
+def test_a_new_commit_after_codex_review_stales_readiness_again():
+    """Issue #467: a review bound to content cannot survive a head mutation."""
+    reviewed = core.StaticReadinessObservation(
+        check_runs=tuple(_green_check(name, index) for index, name in enumerate(core.REQUIRED_CHECKS, start=1)),
+        governance_status={"id": 99, "state": "success"},
+        review_authority=("success", "complete base->HEAD hostile review"),
+    )
+    assert core.evaluate(reviewed).state == "success"
+
+    mutated = core.StaticReadinessObservation(
+        check_runs=reviewed.check_runs,
+        governance_status=reviewed.governance_status,
+        review_authority=("failure", "the candidate was mutated after it was reviewed"),
+    )
+
+    decision = core.evaluate(mutated)
+
+    assert decision.state == "failure"
+    assert "review prerequisite" in decision.description
+
+
+def test_a_fallback_review_of_the_exact_head_is_a_valid_review_authority(monkeypatch):
+    """Requirement 2: Codex is preferred, not the only admissible reviewer."""
+    _install_green(monkeypatch)
+    monkeypatch.setattr(
+        core,
+        "review_authority_state",
+        lambda _sha, _number: ("success", "complete base->HEAD hostile review (fallback: Codex unavailable)"),
+    )
+
+    _sha, decision = core.decide(501)
+
+    assert decision.state == "success"
+
+
+def test_a_missing_fallback_review_still_blocks_readiness(monkeypatch):
+    """Requirement 10: Codex unavailable and fallback evidence missing still blocks."""
+    _install_green(monkeypatch)
+    monkeypatch.setattr(
+        core,
+        "review_authority_state",
+        lambda _sha, _number: ("failure", "no exact-head hostile review exists on the current HEAD"),
+    )
+
+    _sha, decision = core.decide(501)
+
+    assert decision.state == "failure"
+    assert "review prerequisite" in decision.description
+
+
+def test_a_new_commit_after_a_valid_fallback_review_stales_readiness_again():
+    """Requirement 6: HEAD mutation invalidates a fallback review exactly as a Codex one."""
+    reviewed = core.StaticReadinessObservation(
+        check_runs=tuple(_green_check(name, index) for index, name in enumerate(core.REQUIRED_CHECKS, start=1)),
+        governance_status={"id": 99, "state": "success"},
+        review_authority=("success", "fallback hostile review verified"),
+    )
+    assert core.evaluate(reviewed).state == "success"
+
+    mutated = core.StaticReadinessObservation(
+        check_runs=reviewed.check_runs,
+        governance_status=reviewed.governance_status,
+        review_authority=("failure", "the candidate was mutated after it was reviewed"),
+    )
+
+    assert core.evaluate(mutated).state == "failure"
 
 
 def test_changes_requested_blocks(monkeypatch):
@@ -184,6 +320,7 @@ def test_an_early_blocker_reads_no_review_or_check_state(monkeypatch):
 
     _install_green(monkeypatch, _pr(draft=True))
     for name in (
+        "review_authority_state",
         "unresolved_review_threads",
         "changes_requested_reviewers",
         "all_check_runs",
@@ -230,3 +367,48 @@ def test_sweep_isolates_failure_to_one_pull_request(monkeypatch):
 
     assert core.main() == 1
     assert published == [("d" * 40, "success")]
+
+
+def test_governance_reconcile_completion_sweeps_open_pull_requests(monkeypatch):
+    """The reconcile run publishes PR statuses from a default-branch run."""
+    monkeypatch.setattr(
+        core,
+        "event_payload",
+        lambda: {
+            "workflow_run": {
+                "name": "Hunter Governance Review Reconcile",
+                "head_sha": "m" * 40,
+                "pull_requests": [],
+            }
+        },
+    )
+    monkeypatch.setattr(core, "open_pull_requests", lambda: (466, 467))
+    monkeypatch.setattr(
+        core,
+        "open_prs_for_head",
+        lambda _sha: (_ for _ in ()).throw(AssertionError("default-branch SHA is not a candidate head")),
+    )
+
+    assert core.candidate_prs() == (466, 467)
+
+
+def test_ordinary_workflow_completion_without_association_uses_exact_head(monkeypatch):
+    monkeypatch.setattr(
+        core,
+        "event_payload",
+        lambda: {
+            "workflow_run": {
+                "name": "CI",
+                "head_sha": "h" * 40,
+                "pull_requests": [],
+            }
+        },
+    )
+    monkeypatch.setattr(core, "open_prs_for_head", lambda sha: (501,) if sha == "h" * 40 else ())
+    monkeypatch.setattr(
+        core,
+        "open_pull_requests",
+        lambda: (_ for _ in ()).throw(AssertionError("ordinary workflow completion must remain head-scoped")),
+    )
+
+    assert core.candidate_prs() == (501,)
