@@ -73,8 +73,8 @@
       "artifact": ".hunter/pre-ready-hostile-review.json",
       "fallback_reason": "Codex (the primary review authority) was not usable at review time in this environment; the canonical OpenCode hostile-review tooling recorded the exact-head review instead.",
       "governance_state": "success",
-      "head_sha": "701c801ebc043f0729a9312f60ea9a2100c2ae6e",
-      "reviewed_at": "2026-09-13T00:23:08+00:00",
+      "head_sha": "ba864af83763e77a0902355328359472eab0ab3d",
+      "reviewed_at": "2026-09-13T01:05:00+00:00",
       "structured_evidence_status": "complete",
       "tool": "opencode-hunter-review",
       "trusted_preflight_state": "success",
@@ -200,7 +200,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "4ae45033aa6e22a5fed0309765f88a0d7e0e3aae",
+        "blob_sha": "eb4ce31e74d45572dad03c4ad87ab3d50bc763fb",
         "path": "scripts/hunter_governance_review_v2.py",
         "previous_path": "",
         "status": "modified"
@@ -212,7 +212,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "f12abc8118a96969e441f1edc79f6c20c96a5f7c",
+        "blob_sha": "1de5b9dbbbedf047e341895a8d4bc7f1d3c856a5",
         "path": "scripts/hunter_pre_ready_review.py",
         "previous_path": "",
         "status": "modified"
@@ -230,14 +230,14 @@
         "status": "modified"
       },
       {
-        "blob_sha": "eca2484f03457d514ef859c9b7cde0d10b1aec95",
+        "blob_sha": "3b3598a0ad8bd9640a855c44ef48ac8f4e07e591",
         "path": "tests/test_issue_412_prevention_gate.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "fad0e687cb7196be18ce9b758ba5d147c64722ba961539d702113e2a3bde82ee"
+    "review_target_digest": "039f3c3c8a1f14e6bf31dfe122019fed6aab6d7adbbdb50187a77daf39ef8f43"
   },
-  "review_id": "8411cb573be6dadb318d5de361497da8352f79fb46174457625019a1f8f48a60",
+  "review_id": "a0f4e55ca66ba46fbf880e82c22e733b46a631f0c563ed1fdf11b28a1749e185",
   "schema": "hunter.pre-ready-hostile-review.v1"
 }
