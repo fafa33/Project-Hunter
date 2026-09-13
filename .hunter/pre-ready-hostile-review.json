@@ -4,7 +4,7 @@
     "fallback_reason": "Codex (the ordered Tier 1 primary reviewer) was not usable at review time in this local environment; the canonical OpenCode hostile review guard recorded exhaustive attempts against every enabled pool reviewer before recording this guard review.",
     "governance_state": "success",
     "head_sha": "823ad0059854c46e12b63beb270fa823162ccc2a",
-    "reviewed_at": "2026-09-13T04:56:00+00:00",
+    "reviewed_at": "2026-09-13T05:30:00+00:00",
     "reviewer_attempts": [
       {
         "agent_id": "codex",
@@ -22,39 +22,57 @@
   "claims": {
     "acceptance_criteria": [
       {
-        "criterion": "The trusted default branch declares an ordered reviewer pool (Codex tier 1, approved agent reviewers tier 2, the canonical OpenCode hostile review last resort) with a bounded, documented, machine-checkable timeout policy.",
-        "evidence": "docs/CODE_WRITE_POLICY.json declares review_authority.reviewer_pool with ordered Codex primary and opencode last resort; scripts/hunter_pre_ready_review.py _pool_problems and load_reviewer_pool structurally validate ordering, unique priorities, Codex enabled at priority 1, enabled exact-head support, fallback_eligibility false, bounded timeout_policy with default_seconds <= max_seconds, and per-agent timeout_seconds within the bound.",
+        "criterion": "governance-reconcile completion immediately triggers a live-state sweep of open prs; default-branch workflow sha is never treated as a candidate head",
+        "evidence": "scripts/hunter_merge_readiness_v2.py:25 and :471-472: reconcile completion triggers open_pull_requests() sweep; reconcile head_sha never fed to open_prs_for_head. tests/test_hunter_merge_readiness_v2.py::test_governance_reconcile_completion_sweeps_open_pull_requests arms open_prs_for_head to raise AssertionError('default-branch SHA is not a candidate head'), proving unreachable. tests/test_hunter_merge_readiness_convergence.py::test_property_27_readiness_is_never_published_against_a_base_sha.",
         "id": "AC-01",
         "verdict": "satisfied"
       },
       {
-        "criterion": "Failover is deterministic and machine-checkable: any reviewer below the primary is admissible only with recorded exhaustion evidence (status exhausted, reason, in-bound timeout_seconds) for every higher-priority enabled reviewer; a new commit stale-binds the review and restarts selection.",
-        "evidence": "scripts/hunter_pre_ready_review.py _authority_error loads the shared pool and _exhaustion_error enforces reviewer_attempts: status == 'exhausted', non-empty reason, timeout_seconds within 1..max_seconds, no duplicates, no unknown agents; verify_local re-binds exact HEAD with full-SHA equality and ancestry; regression tests in tests/test_issue_412_prevention_gate.py cover alternate-after-exhaustion, stale restart, unproven exhaustion, skipped blocker, bounded timeout, unknown agent, and malformed trail.",
+        "criterion": "ordinary dependency completions remain attributed to their exact candidate head",
+        "evidence": "scripts/hunter_merge_readiness_v2.py:480-482: ordinary workflow completion without PR association resolves candidate via workflow_run.head_sha verbatim. tests/test_hunter_merge_readiness_v2.py::test_ordinary_workflow_completion_without_association_uses_exact_head asserts open_prs_for_head receives the exact head_sha. tests/test_hunter_merge_readiness_convergence.py::test_workflow_run_without_associations_recovers_candidates_by_head.",
         "id": "AC-02",
         "verdict": "satisfied"
       },
       {
-        "criterion": "The guard (OpenCode hostile review) remains strict last resort: admissible only when the whole enabled pool is exhausted and the green snapshot gates (governance, trusted preflight, zero unresolved threads, complete structured evidence) are recorded.",
-        "evidence": "scripts/hunter_pre_ready_review.py _authority_error triggers _exhaustion_error against the full enabled pool when authority_type equals the declared last resort; fallback_requires_snapshot_gates checks and the guard tests in tests/test_issue_412_prevention_gate.py assert guard exhaustion + gate requirements remain mandatory after pool hardening.",
+        "criterion": "unresolved review threads and fixed blocking threads without an evidence-bearing reply cannot satisfy ready/merge state",
+        "evidence": "scripts/hunter_merge_readiness_v2.py:341-342: unresolved threads produce Decision('failure'). scripts/hunter_pre_ready_review.py:906-912: resolved findings require structured resolution_evidence (exact correction commit SHA plus committed regression test). tests/test_hunter_merge_readiness_v2.py::test_unresolved_review_thread_blocks; tests/test_issue_412_prevention_gate.py::test_a_resolved_finding_must_carry_structured_resolution_evidence; tests/test_hunter_reviewer_disposition.py::test_unresolved_validated_finding_cannot_be_resolved_by_thread_resolution_alone.",
         "id": "AC-03",
         "verdict": "satisfied"
       },
       {
-        "criterion": "The review verifier and the Defect Prevention guard parse the same shared pool implementation so they cannot drift into two readings of the same reviewer order or timeout policy.",
-        "evidence": "scripts/hunter_defect_prevention_preflight.py imports hunter_pre_ready_review as pre_ready and calls pre_ready.load_reviewer_pool(policy); the guard path is covered by the code-write-policy tests; load_reviewer_pool is the single canonical parser consumed by both the local verifier and the guard.",
+        "criterion": "detection never resolves a github thread automatically and does not block non-blocking review suggestions",
+        "evidence": "scripts/hunter_merge_readiness_v2.py:106-136: unresolved_review_threads() is a read-only GraphQL query (reads isResolved, paginates on hasNextPage/endCursor); grep across scripts/ found no resolveReviewThread mutation. tests/hunter_readiness_harness.py:181: thread resolver exists only in the test harness. tests/test_issue_412_prevention_gate.py::test_an_unresolved_non_blocking_finding_does_not_block_ready.",
         "id": "AC-04",
         "verdict": "satisfied"
       },
       {
-        "criterion": "Bypass fails closed: skips, missing/duplicated/malformed/unknown-agent or out-of-bounds exhaustion records are blocked; a review that silently skips an enabled reviewer while it is available is rejected.",
-        "evidence": "Regression tests in tests/test_issue_412_prevention_gate.py and tests/test_code_write_policy.py assert skipped-status blocked, unknown agent blocked, out-of-bounds timeout blocked, disabled agent neither admissible nor required, missing attempts rejected and duplicate attempts rejected; the guard rejects a pool without a strict last resort and an unbounded timeout policy.",
+        "criterion": "historical findings are mapped to an existing family or added only with verified source, correction, regression test, and applicability",
+        "evidence": "scripts/hunter_defect_prevention_preflight.py:964-1099 validate_recurring_defect_families requires source, correction, regression test, and applicability scope. scripts/hunter_pre_ready_review.py:290-311 applicable_family_ids derives coverage from the trusted catalog. tests/test_hunter_reviewer_disposition.py::test_duplicate_without_mapped_defect_id_fails; tests/test_hunter_reviewer_disposition.py::test_duplicate_with_unknown_mapped_defect_id_fails.",
         "id": "AC-05",
         "verdict": "satisfied"
       },
       {
-        "criterion": "DFF-022 is extended to describe the ordered failover invariant, exhaustion evidence, bounded timeout policy, strict-last-resort guard semantics, and regression evidence.",
-        "evidence": "docs/DEFECT_REGISTRY.json DFF-022 invariant and mechanism updated with ordered pool, exhaustion evidence, bounded timeout_policy, last-resort guard, stale-restart; regression evidence includes the new failover and pool-gate tests.",
+        "criterion": "applicable known-defect regression selectors are deterministic, deduplicated, and fail closed when evidence is missing or fails",
+        "evidence": "scripts/hunter_pre_ready_review.py:272-287 load_families fails closed on missing/unreadable registry; :290-311 applicable_family_ids returns tuple(sorted(...)) deterministic, one entry per family; :855-868 verify_claims fails closed on missing applicable families. scripts/hunter_defect_prevention_preflight.py:183-266 _validate_reference_target rejects unresolvable selectors. tests/test_issue_412_prevention_gate.py::test_a_review_cannot_narrow_its_own_applicability; tests/test_issue_412_prevention_gate.py::test_duplicate_family_identities_are_refused.",
         "id": "AC-06",
+        "verdict": "satisfied"
+      },
+      {
+        "criterion": "the pre-push boundary does not run the full repository suite; hosted pre-pr remains its sole owner",
+        "evidence": "scripts/hunter_pr_preflight.py:23-31 PUSH_SAFETY_GATES = NORMAL_QUALITY_GATES[:-1] excludes Pytest. scripts/hunter_pre_push.py:124-131 _run_push_safety_lane runs only Artifact Guard, Defect Prevention Guard, Ruff, Black, Mypy. docs/VALIDATION_STAGE_CONTRACT.md:58 pre-push-safety boundary states 'never' for the full suite. tests/test_hunter_pre_push.py::test_normal_mode_runs_the_push_safety_lane_rather_than_the_full_repository_suite asserts PYTEST_GATE not in PUSH_SAFETY_GATES.",
+        "id": "AC-07",
+        "verdict": "satisfied"
+      },
+      {
+        "criterion": "adversarial tests cover stale events, missing associations, pagination/api uncertainty, path-prefix traps, duplicate selectors, and invalid evidence",
+        "evidence": "Stale events: tests/test_hunter_merge_readiness_convergence.py::test_property_15_stale_pending_is_replaced_by_the_current_terminal_state, tests/test_validation_proof_reuse.py::test_stale_receipt_fails_closed. Missing associations: tests/test_hunter_merge_readiness_v2.py::test_ordinary_workflow_completion_without_association_uses_exact_head. Path-prefix traps: tests/test_hunter_reviewer_disposition.py::test_reference_paths_are_confined_after_symlink_resolution, tests/test_hunter_workflow_state.py::test_scope_entries_match_by_directory_prefix_and_glob. Duplicate selectors: tests/test_issue_412_prevention_gate.py::test_duplicate_family_identities_are_refused. Invalid evidence: tests/test_issue_412_prevention_gate.py::test_a_family_cannot_claim_regression_tested_without_a_resolvable_test. Pagination/fail-closed: tests/test_issue_412_prevention_gate.py::test_ready_admission_fails_closed_when_review_evidence_is_unavailable, tests/test_hunter_merge_readiness.py::test_infrastructure_unavailable_fails_closed_with_typed_pending.",
+        "id": "AC-08",
+        "verdict": "satisfied"
+      },
+      {
+        "criterion": "no merge occurs without explicit owner approval",
+        "evidence": "docs/VALIDATION_STAGE_CONTRACT.md:249: auto-merge, auto-mark Ready, or merge without human owner approval is forbidden. scripts/hunter_defect_prevention_preflight.py:628-629 rejects connector write ingress with auto_merge is not False. tests/test_validation_stage_contract.py::test_merge_control_stages_remain_human_terminated asserts human['boundary']=='human'. tests/test_code_write_policy.py:171 auto_merge must be False; :232 flipping to True is refused.",
+        "id": "AC-09",
         "verdict": "satisfied"
       }
     ],
@@ -205,6 +223,6 @@
     ],
     "review_target_digest": "3f50252a53688eb3343e188e7d6df3cabe2736bcb217866fb6159100b237da02"
   },
-  "review_id": "5e79b42ca331c380a09c14b661275be01313ffb908a3fd075263375c8a4c23eb",
+  "review_id": "906530bf7e526a409b4a131756cb2fe7361400ed5e23dba59f551a6f500a996f",
   "schema": "hunter.pre-ready-hostile-review.v1"
 }
