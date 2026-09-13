@@ -1,4 +1,16 @@
 {
+  "authority": {
+    "artifact": ".hunter/pre-ready-hostile-review.json",
+    "fallback_reason": "Codex (the primary review authority) was not usable at review time in this environment; the canonical OpenCode hostile-review tooling recorded the exact-head review instead.",
+    "governance_state": "success",
+    "head_sha": "b9c5625b7eae791c7ebe6ee5a62313f4c88c5be7",
+    "reviewed_at": "2026-09-13T02:00:00+00:00",
+    "structured_evidence_status": "complete",
+    "tool": "opencode-hunter-review",
+    "trusted_preflight_state": "success",
+    "type": "opencode",
+    "unresolved_thread_count": 0
+  },
   "claims": {
     "acceptance_criteria": [
       {
@@ -69,18 +81,6 @@
       "tamper-resistance",
       "transaction-snapshot-consistency"
     ],
-    "authority": {
-      "artifact": ".hunter/pre-ready-hostile-review.json",
-      "fallback_reason": "Codex (the primary review authority) was not usable at review time in this environment; the canonical OpenCode hostile-review tooling recorded the exact-head review instead.",
-      "governance_state": "success",
-      "head_sha": "e1983cd960abef0b397969557e96e52fa4799ec4",
-      "reviewed_at": "2026-09-13T01:20:00+00:00",
-      "structured_evidence_status": "complete",
-      "tool": "opencode-hunter-review",
-      "trusted_preflight_state": "success",
-      "type": "opencode",
-      "unresolved_thread_count": 0
-    },
     "base_ref": "main",
     "base_sha": "cb56ce817f49113747fc28defc8bd0b844a4717c",
     "defect_families": [
@@ -188,7 +188,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "1a876435ba2edbb88361e511e27ebdf76a51958e",
+        "blob_sha": "664c750ffb96238d08fc508cccf493c3d11d42c2",
         "path": "docs/DEFECT_REGISTRY.json",
         "previous_path": "",
         "status": "modified"
@@ -206,13 +206,13 @@
         "status": "modified"
       },
       {
-        "blob_sha": "25b2589f83d2c5b4512747848b94fb7d758f39e2",
+        "blob_sha": "33e11e907a20d87d0b01026556dae37055c59464",
         "path": "scripts/hunter_merge_readiness_v2.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "1de5b9dbbbedf047e341895a8d4bc7f1d3c856a5",
+        "blob_sha": "60bc5ec010e9ae0f7aaec1c7f6a67351da92e9dc",
         "path": "scripts/hunter_pre_ready_review.py",
         "previous_path": "",
         "status": "modified"
@@ -230,14 +230,14 @@
         "status": "modified"
       },
       {
-        "blob_sha": "3b3598a0ad8bd9640a855c44ef48ac8f4e07e591",
+        "blob_sha": "b02fcfc1547128009d4f281977426c0a31ccf9b3",
         "path": "tests/test_issue_412_prevention_gate.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "d21ed16f31ccb2cfd811697653613b0908acf168455968b9faf7da88c7a2b205"
+    "review_target_digest": "d93b1e28bd4040333343dc78cad8fb4bb6c72b36f7edfa2139809cadc93747c6"
   },
-  "review_id": "e99b6e2dc887f543a735e8cbfe4912a8ccd24bc79bddb553e3d480aa5344f169",
+  "review_id": "f5f77596460b406464a0c32164df8c0f03ff91f68cbda8daf9cd73b0d7d9ae0e",
   "schema": "hunter.pre-ready-hostile-review.v1"
 }
