@@ -1407,29 +1407,35 @@ def verify_pre_ready_hostile_review(
                 f"unavailable ({criteria_error})."
             )
 
-    # Issue #467: a resolved finding's correction commit must be part of the
-    # candidate's own commit range, so a resolution cannot claim a fix that was
-    # never made on this candidate. The commit list is read from trusted PR
-    # evidence only when the review actually carries resolved findings -- an
-    # ordinary reviewed candidate with nothing resolved stays on the existing
-    # evidence path.
-    findings = ((document or {}).get("claims") or {}).get("findings") if isinstance(document, dict) else None
-    has_resolved = findings is not None and any(
-        isinstance(item, dict) and item.get("resolution") == "resolved" for item in findings
-    )
     resolution_corrections: frozenset[str] | None = None
-    if has_resolved:
+    commit_ancestry: frozenset[str] = frozenset()
+    if isinstance(document, dict):
+        # Issue #467: the review records the exact head it reviewed, and that head
+        # must be on the evaluated candidate's own history -- the review's artifact
+        # commit (excluded from the reviewed change set) is a descendant of the head
+        # it verified, but an amended or foreign head is not. The commit list is
+        # trusted PR evidence and doubles as the resolution-correction scope for a
+        # resolved finding: a correction commit must be part of the candidate's own
+        # commit range, so a resolution cannot claim a fix that was never made on
+        # this candidate. A candidate with no review at all is answered below by
+        # the missing-document verdict, so this evidence is only consulted when
+        # there is a review to bind.
         ok_commits, commits, commits_error = read_pr_commits(repository, token, pr_number)
         if not ok_commits:
             return (
                 "failure",
                 f"Candidate admission blocked: pull-request commit-range evidence is unavailable ({commits_error}).",
             )
-        resolution_corrections = frozenset(
+        commit_ancestry = frozenset(
             str(commit.get("sha") or "")
             for commit in commits
             if isinstance(commit, dict) and str(commit.get("sha") or "").strip()
         )
+        findings = ((document or {}).get("claims") or {}).get("findings")
+        if findings is not None and any(
+            isinstance(item, dict) and item.get("resolution") == "resolved" for item in findings
+        ):
+            resolution_corrections = commit_ancestry
 
     verdict = pre_ready.verify_claims(
         document,
@@ -1439,9 +1445,11 @@ def verify_pre_ready_hostile_review(
         issue_criteria=issue_criteria or None,
         resolution_corrections=resolution_corrections,
         # Issue #467: the evaluated head is the PR head SHA derived from trusted
-        # PR evidence, and the review's recorded authority head must equal it, so
-        # a review cannot be rebound to a different exact commit.
+        # PR evidence, and the review's recorded authority head must be on that
+        # head's history, so a review cannot be rebound to a different branch or
+        # an amended commit.
         head_sha=head_sha,
+        commit_ancestry=commit_ancestry,
     )
     if not verdict.ok:
         return "failure", f"Candidate admission blocked: {verdict.reason}."

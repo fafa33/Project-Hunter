@@ -473,6 +473,7 @@ def verify_claims(
     issue_criteria: tuple[str, ...] | None = None,
     resolution_corrections: frozenset[str] | None = None,
     head_sha: str | None = None,
+    commit_ancestry: frozenset[str] | None = None,
 ) -> ReviewVerdict:
     """Compare repository-owned review state against the exact candidate content.
 
@@ -529,14 +530,21 @@ def verify_claims(
     # Issue #467: the review is a statement about an exact commit, so the head it
     # claims to have reviewed is part of its evidence, not decoration. Content
     # equality alone cannot detect an amended commit whose diff is byte-identical,
-    # so the recorded head must equal the candidate head the caller is evaluating.
+    # so the recorded head must be on the evaluated candidate's history: an
+    # amended head does not contain the recorded commit, while the review's own
+    # artifact commit (excluded from the reviewed change set) does. Equality is
+    # the fast path; when the heads differ, the ancestry is the distinguisher and
+    # the content checks above still bind the diff, so the self-inserted artifact
+    # commit never re-legitimises different content.
     recorded_head = claims["authority"]["head_sha"]
     if head_sha is not None and recorded_head.strip().lower() != head_sha.strip().lower():
-        return ReviewVerdict(
-            "stale",
-            f"the pre-ready hostile review was recorded for head {recorded_head[:10]}, "
-            f"not this candidate's exact head {head_sha[:10]}",
-        )
+        known_ancestors = {str(sha).strip().lower() for sha in (commit_ancestry or frozenset())}
+        if recorded_head.strip().lower() not in known_ancestors:
+            return ReviewVerdict(
+                "stale",
+                f"the pre-ready hostile review was recorded for head {recorded_head[:10]}, "
+                "which is not on the evaluated candidate's commit history",
+            )
 
     changed_paths = tuple(sorted({path for change in target_changes(changes) for path in change.affected_paths()}))
     required = set(applicable_family_ids(families, changed_paths))
@@ -647,6 +655,19 @@ def _run_git(*args: str, cwd: Path | None = None) -> str:
     return completed.stdout
 
 
+def _is_ancestor(possible_ancestor: str, commit: str, *, cwd: Path | None = None) -> bool:
+    """Whether ``possible_ancestor`` is ``commit`` or an ancestor of it."""
+
+    completed = subprocess.run(
+        ("git", "merge-base", "--is-ancestor", possible_ancestor, commit),
+        check=False,
+        capture_output=True,
+        text=True,
+        cwd=None if cwd is None else str(cwd),
+    )
+    return completed.returncode == 0
+
+
 def parse_raw_diff(raw: str) -> tuple[ingress.ConnectorFileChange, ...]:
     """Parse ``git diff --raw -z -M`` into the canonical change vocabulary.
 
@@ -741,10 +762,17 @@ def verify_local(
         return ReviewVerdict("incomplete", f"pre-ready hostile review evidence is unavailable ({exc})")
     # Issue #467: the recorded authority head is the exact commit SHA, so the
     # evaluated head must be resolved the same way or a "HEAD" ref would never
-    # match the recorded SHA. A full SHA is already exact and passes through.
+    # bind. A full SHA is already exact and passes through. The recorded head
+    # must then be on the evaluated head's history: the review's own artifact
+    # commit (excluded from the reviewed change set) is a descendant of the head
+    # it reviewed, but an amended or foreign head is not.
     exact_head = (
         head if _GIT_SHA.fullmatch(head) else _run_git("rev-parse", "--verify", f"{head}^{{commit}}", cwd=cwd).strip()
     )
+    recorded_head = str(((document or {}).get("claims") or {}).get("authority", {}).get("head_sha") or "")
+    ancestry: frozenset[str] = frozenset({exact_head} - {""})
+    if recorded_head.strip().lower() != exact_head.strip().lower() and _is_ancestor(recorded_head, exact_head, cwd=cwd):
+        ancestry = frozenset({recorded_head, exact_head})
     return verify_claims(
         document,
         base_sha=base,
@@ -752,6 +780,7 @@ def verify_local(
         families=families,
         issue_criteria=issue_criteria,
         head_sha=exact_head,
+        commit_ancestry=ancestry,
     )
 
 

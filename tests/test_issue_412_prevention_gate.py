@@ -564,6 +564,7 @@ def _verify(
     changes=CANDIDATE_CHANGES,
     base=BASE,
     head_sha=HEAD,
+    commit_ancestry=None,
     resolution_corrections=None,
 ) -> review.ReviewVerdict:
     return review.verify_claims(
@@ -573,6 +574,7 @@ def _verify(
         families=FAMILIES,
         resolution_corrections=resolution_corrections,
         head_sha=head_sha,
+        commit_ancestry=commit_ancestry if commit_ancestry is not None else frozenset({HEAD}),
     )
 
 
@@ -762,13 +764,30 @@ def test_a_fallback_review_without_a_recorded_reason_is_refused() -> None:
 
 
 def test_a_fallback_review_recorded_for_an_older_head_is_stale() -> None:
-    """The recorded exact head binds the review; a different head invalidates it."""
+    """The recorded exact head binds the review; an amended head invalidates it."""
     document = _review_document(authority=_authority(authority_type="opencode", head_sha="d" * 40))
 
     verdict = _verify(document, head_sha=HEAD)
 
     assert verdict.state == "stale"
     assert "head" in verdict.reason
+
+
+def test_a_review_recorded_for_an_ancestor_head_stays_valid_across_the_artifact_commit() -> None:
+    """The review's own artifact commit is a descendant of the head it reviewed.
+
+    The reviewed change set excludes the artifact, so committing it on top of
+    the reviewed head must not invalidate the review -- the recorded head is on
+    the evaluated head's history and the reviewed content is identical.
+    """
+    recorded = "c" * 40
+    evaluated = "e" * 40
+    document = _review_document(authority=_authority(authority_type="opencode", head_sha=recorded))
+
+    verdict = _verify(document, head_sha=evaluated, commit_ancestry=frozenset({recorded, evaluated}))
+
+    assert verdict.state == "valid"
+    assert verdict.ok is True
 
 
 def test_a_fallback_review_with_unresolved_threads_recorded_is_refused() -> None:
@@ -1365,6 +1384,7 @@ def test_a_present_review_is_verified_even_when_no_family_applies(monkeypatch) -
     monkeypatch.setattr(core, "read_head_pre_ready_review", lambda *_a: ("present", _review_document(), None))
     monkeypatch.setattr(core.pre_ready, "load_families", lambda *_a, **_k: (FAMILIES, ""))
     monkeypatch.setattr(core, "read_issue_acceptance_criteria", lambda *_a: ("present", (), ""))
+    monkeypatch.setattr(core, "read_pr_commits", lambda *_a: (True, (_signed_commit(),), None))
 
     state, description = core.verify_pre_ready_hostile_review("repo", "token", HEAD, PR_NUMBER)
 
@@ -1469,6 +1489,7 @@ def test_a_review_taken_against_another_base_branch_is_refused(monkeypatch) -> N
     monkeypatch.setattr(core, "read_head_pre_ready_review", lambda *_a: ("present", document, None))
     monkeypatch.setattr(core.pre_ready, "load_families", lambda *_a, **_k: (FAMILIES, ""))
     monkeypatch.setattr(core, "read_issue_acceptance_criteria", lambda *_a: ("present", (), ""))
+    monkeypatch.setattr(core, "read_pr_commits", lambda *_a: (True, (_signed_commit(),), None))
 
     state, description = core.verify_pre_ready_hostile_review("repo", "token", HEAD, PR_NUMBER)
 
