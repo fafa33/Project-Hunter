@@ -393,15 +393,10 @@ def test_merge_readiness_still_passes_a_successful_governance_status() -> None:
     assert readiness.evaluate(_readiness_observation({"id": 99, "state": "success"})).state == "success"
 
 
-def test_candidate_admission_controller_does_not_admit_a_waiting_head(
+def test_candidate_admission_controller_returns_a_waiting_head_to_draft(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """A waiting head is left exactly as it is: not admitted, and not drafted.
-
-    Pending is not success, so nothing is admitted; it is also not a defect, so
-    the controller must not perform the Draft demotion it reserves for a
-    candidate that actually failed admission.
-    """
+    """Pending exact-head proof is not admission authority and stays Draft."""
     import hunter_candidate_admission as controller
 
     drafted: list[str] = []
@@ -429,7 +424,9 @@ def test_candidate_admission_controller_does_not_admit_a_waiting_head(
     monkeypatch.setattr(controller, "convert_to_draft", record_draft)
 
     result = controller.enforce_candidate_admission(REPO, "token", PR, HEAD)
+    output = capsys.readouterr().out
 
-    assert result == 0
-    assert drafted == [], "a waiting candidate must not be demoted as if it had failed"
-    assert "pending" in capsys.readouterr().out
+    assert result == 1
+    assert drafted == ["drafted"]
+    assert "returned to Draft" in output
+    assert "pending" in output
