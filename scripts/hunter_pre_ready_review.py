@@ -739,13 +739,19 @@ def verify_local(
         document = read_review_document()
     except GitEvidenceUnavailable as exc:
         return ReviewVerdict("incomplete", f"pre-ready hostile review evidence is unavailable ({exc})")
+    # Issue #467: the recorded authority head is the exact commit SHA, so the
+    # evaluated head must be resolved the same way or a "HEAD" ref would never
+    # match the recorded SHA. A full SHA is already exact and passes through.
+    exact_head = (
+        head if _GIT_SHA.fullmatch(head) else _run_git("rev-parse", "--verify", f"{head}^{{commit}}", cwd=cwd).strip()
+    )
     return verify_claims(
         document,
         base_sha=base,
         changes=changes,
         families=families,
         issue_criteria=issue_criteria,
-        head_sha=head,
+        head_sha=exact_head,
     )
 
 
