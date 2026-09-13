@@ -75,6 +75,65 @@ def test_code_write_policy_declares_codex_primary_with_a_recorded_reason_fallbac
     assert expected <= set(authority["fallback_requires_snapshot_gates"])
 
 
+def test_code_write_policy_declares_an_ordered_reviewer_pool_with_a_last_resort_guard() -> None:
+    """The ordered reviewer pool: Codex Tier 1, approved alternates Tier 2, guard last resort."""
+    policy = json.loads((ROOT / "docs" / "CODE_WRITE_POLICY.json").read_text(encoding="utf-8"))
+    pool = policy["review_progression"]["review_authority"]["reviewer_pool"]
+
+    assert pool["last_resort"] == "opencode"
+    assert pool["timeout_policy"]["bounded"] is True
+    assert pool["timeout_policy"]["default_seconds"] > 0
+    assert pool["timeout_policy"]["max_seconds"] >= pool["timeout_policy"]["default_seconds"]
+    by_id = {agent["id"]: agent for agent in pool["agents"]}
+    assert by_id["codex"]["enabled"] is True
+    assert by_id["codex"]["priority"] == 1
+    assert by_id["codex"]["exact_head_support"] is True
+
+
+def test_code_write_policy_guard_rejects_a_pool_without_a_strict_last_resort(monkeypatch, tmp_path) -> None:
+    _write_policy(
+        monkeypatch,
+        tmp_path,
+        lambda policy: policy["review_progression"]["review_authority"]["reviewer_pool"].pop("last_resort"),
+    )
+
+
+def test_code_write_policy_guard_rejects_an_unbounded_timeout_policy(monkeypatch, tmp_path) -> None:
+    _write_policy(
+        monkeypatch,
+        tmp_path,
+        lambda policy: policy["review_progression"]["review_authority"]["reviewer_pool"]["timeout_policy"].update(
+            bounded=False
+        ),
+    )
+
+
+def test_code_write_policy_guard_rejects_an_enabled_agent_without_exact_head_support(monkeypatch, tmp_path) -> None:
+    _write_policy(
+        monkeypatch,
+        tmp_path,
+        lambda policy: [
+            agent.update(exact_head_support=False)
+            for agent in policy["review_progression"]["review_authority"]["reviewer_pool"]["agents"]
+            if agent["enabled"]
+        ],
+    )
+
+
+def test_code_write_policy_guard_rejects_a_pool_without_the_codex_primary(monkeypatch, tmp_path) -> None:
+    _write_policy(
+        monkeypatch,
+        tmp_path,
+        lambda policy: policy["review_progression"]["review_authority"]["reviewer_pool"].update(
+            agents=[
+                agent
+                for agent in policy["review_progression"]["review_authority"]["reviewer_pool"]["agents"]
+                if agent["id"] != "codex"
+            ]
+        ),
+    )
+
+
 def test_code_write_policy_guard_rejects_a_policy_without_a_review_authority_model(monkeypatch, tmp_path) -> None:
     _write_policy(
         monkeypatch,

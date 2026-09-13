@@ -1009,7 +1009,7 @@
     {
       "id": "DFF-022",
       "title": "merge-readiness-without-current-head-review-authority",
-      "invariant": "The final Merge Readiness controller must itself fail closed unless a complete exact-head review exists at the current PR head and verifies against trusted PR evidence -- a missing, stale, incomplete, or still-contested review is a hard merge blocker, never a warning. Codex is the required primary review authority; the canonical OpenCode hostile review is an admissible fallback only when it records, in machine-checkable fields, why Codex could not review and that Governance, trusted Preflight, a zero unresolved-thread count, and complete structured evidence were all green at review time -- a review that silently skips Codex while it is available, or whose recorded exact head differs from the candidate head, is rejected. A resolved review finding counts as satisfied only when its structured evidence names the exact-head correction commit and a regression test committed in the change set. No other controller's earlier word, and no resolved review thread without that evidence, can stand in for this prerequisite.",
+      "invariant": "The final Merge Readiness controller must itself fail closed unless a complete exact-head review exists at the current PR head and verifies against trusted PR evidence -- a missing, stale, incomplete, or still-contested review is a hard merge blocker, never a warning. The review authority is an ordered reviewer pool declared by the trusted default branch: Codex is the Tier 1 primary; approved agent reviewers are Tier 2 and are handled by the same exact-head-bound evidence pipeline; the canonical OpenCode hostile review is the last-resort guard. Any reviewer below the primary is admissible only when it records, in machine-checkable fields (reviewer_attempts), that every higher-priority enabled reviewer was actually attempted and exhausted with a recorded reason and a timeout_seconds within the bounded timeout policy; the guard is admissible only when the whole enabled pool is exhausted AND it records why the pool reviewers could not review and that Governance, trusted Preflight, a zero unresolved-thread count, and complete structured evidence were all green at review time. A review that silently skips an enabled reviewer while it is available, a guard review whose exhaustion cannot be proven (missing, skipped, duplicated, malformed, unknown-agent, or out-of-bounds attempts), a review whose recorded exact head differs from the candidate head, or a new commit after the review all invalidate the review and force reviewer selection to restart. A resolved review finding counts as satisfied only when its structured evidence names the exact-head correction commit and a regression test committed in the change set. No other controller's earlier word, and no resolved review thread without that evidence, can stand in for this prerequisite; failover is a deterministic machine decision, never a human-noticed skip.",
       "applicability": {
         "changed_paths": [
           "scripts/hunter_merge_readiness_v2.py",
@@ -1022,35 +1022,56 @@
         "rationale": "The final merge gate and the single shared review-verification implementation are where the workflow-ordering defect lives: Merge Readiness could go green through governance or check status alone, or a resolved thread could satisfy readiness without machine-verified structured evidence. A recurrence here means the fail-closed prerequisite was weakened at the boundary that is supposed to own it. The fallback authority rule lives here too because a single primary review authority that can be rate-limited or unavailable is itself a workflow freeze waiting to happen: readiness must stay fail-closed without turning Codex availability into a single point of failure."
       },
       "prevention": {
-        "mechanism": "Merge Readiness evaluates an exact-head review-authority prerequisite read from the candidate's own HEAD: the content-bound pre-ready hostile review artifact (whose review_id hashes the claims and whose review_target_digest binds the exact base->HEAD change set) carries a document-level authority record beside the canonical claims -- type (codex primary, opencode fallback), reviewer/tool identity, the exact head reviewed, timestamp, and hostile-review artifact reference; the authority is deliberately NOT a claim, so the claims stay exactly the single canonical claim set (CANONICAL_CLAIM_SET) the trusted default-branch controller verifies, and no review can smuggle evidence in or out under a claim key. An opencode fallback is structurally required to record why Codex could not review and to record trusted Governance success, trusted Preflight success, a zero unresolved-thread count, and complete structured evidence. The recorded authority head must be on the candidate head's own history (equality for the exact-head case, ancestry otherwise -- the review's self-inserted artifact commit is excluded from the reviewed change set and descends from the head it reviews, while an amended or foreign head does not), and the review is re-verified with the same verify_claims implementation candidate admission uses (extended to bind head_sha and commit ancestry), so readiness and candidate admission cannot drift and the canonical claim-set definition is shared by both paths rather than forked. Candidate admission additionally binds each resolved finding's correction commit to the candidate's own commit range and its regression test to the reviewed change set. A HEAD mutation changes the blob SHAs or the recorded head, so the review goes stale automatically and readiness is blocked again until it is refreshed; code-write policy and its guard bind the model (Codex required primary, OpenCode recorded-reason fallback with green snapshot gates) on the trusted default branch.",
+        "mechanism": "Merge Readiness evaluates an exact-head review-authority prerequisite read from the candidate's own HEAD: the content-bound pre-ready hostile review artifact (whose review_id hashes the claims and whose review_target_digest binds the exact base->HEAD change set) carries a document-level authority record beside the canonical claims -- authority type (an enabled pool reviewer or the last-resort guard), reviewer/tool identity, the exact head reviewed, timestamp, and hostile-review artifact reference; the authority is deliberately NOT a claim, so the claims stay exactly the single canonical claim set (CANONICAL_CLAIM_SET) the trusted default-branch controller verifies. The admissible authorities are the ordered reviewer pool declared by CODE_WRITE_POLICY.json's review_authority.reviewer_pool on the trusted default branch -- Codex Tier 1, enabled approved agent reviewers Tier 2, 'opencode' last-resort guard -- parsed by the shared load_reviewer_pool implementation that the Defect Prevention guard also consumes, and validated structurally (documented ordering/exhaustion semantics, unique ids and priorities, Codex enabled at priority 1, every enabled agent must support exact-head binding, fallback_eligibility false for agents so only the declared last_resort closes the pool, bounded timeout_policy with default_seconds <= max_seconds and per-agent timeout_seconds within the bound). Any authority below the primary must record reviewer_attempts covering every higher-priority enabled reviewer, each attempt with status 'exhausted', a reason, and a timeout_seconds within 1..max_seconds; the guard must cover the whole enabled pool and additionally record why the pool reviewers could not review and record trusted Governance success, trusted Preflight success, a zero unresolved-thread count, and complete structured evidence; missing, skipped, duplicated, malformed, unknown-agent, or out-of-bounds attempts fail closed, and a new commit stale-binds the review so reviewer selection restarts. The recorded authority head must be on the candidate head's own history (equality for the exact-head case, ancestry otherwise -- the review's self-inserted artifact commit is excluded from the reviewed change set and descends from the head it reviews, while an amended or foreign head does not), and the review is re-verified with the same verify_claims implementation candidate admission uses (extended to bind head_sha and commit ancestry), so readiness and candidate admission cannot drift and the canonical claim-set and reviewer-pool definitions are shared by both paths rather than forked. Candidate admission additionally binds each resolved finding's correction commit to the candidate's own commit range and its regression test to the reviewed change set. A HEAD mutation changes the blob SHAs or the recorded head, so the review goes stale automatically and readiness is blocked again until it is refreshed; code-write policy and its guard bind the model (ordered pool with last-resort guard, recorded-reason exhaustion trail, green snapshot gates) on the trusted default branch.",
         "boundary": "hosted-gate"
       },
       "regression_evidence": [
-        "tests/test_hunter_merge_readiness_v2.py::test_no_codex_review_on_current_head_blocks",
+        "tests/test_code_write_policy.py::test_code_write_policy_declares_an_ordered_reviewer_pool_with_a_last_resort_guard",
+        "tests/test_code_write_policy.py::test_code_write_policy_declares_codex_primary_with_a_recorded_reason_fallback",
+        "tests/test_code_write_policy.py::test_code_write_policy_guard_rejects_a_fallback_without_a_recorded_reason_requirement",
+        "tests/test_code_write_policy.py::test_code_write_policy_guard_rejects_a_pool_without_a_strict_last_resort",
+        "tests/test_code_write_policy.py::test_code_write_policy_guard_rejects_a_pool_without_the_codex_primary",
+        "tests/test_code_write_policy.py::test_code_write_policy_guard_rejects_an_enabled_agent_without_exact_head_support",
+        "tests/test_code_write_policy.py::test_code_write_policy_guard_rejects_an_unbounded_timeout_policy",
         "tests/test_hunter_merge_readiness_v2.py::test_a_codex_review_of_an_older_head_blocks",
-        "tests/test_hunter_merge_readiness_v2.py::test_resolved_finding_without_structured_evidence_blocks",
-        "tests/test_hunter_merge_readiness_v2.py::test_a_new_commit_after_codex_review_stales_readiness_again",
-        "tests/test_hunter_merge_readiness_v2.py::test_current_head_codex_review_with_structured_evidence_allows",
         "tests/test_hunter_merge_readiness_v2.py::test_a_fallback_review_of_the_exact_head_is_a_valid_review_authority",
         "tests/test_hunter_merge_readiness_v2.py::test_a_missing_fallback_review_still_blocks_readiness",
         "tests/test_hunter_merge_readiness_v2.py::test_a_new_commit_after_a_valid_fallback_review_stales_readiness_again",
+        "tests/test_hunter_merge_readiness_v2.py::test_a_new_commit_after_codex_review_stales_readiness_again",
+        "tests/test_hunter_merge_readiness_v2.py::test_current_head_codex_review_with_structured_evidence_allows",
+        "tests/test_hunter_merge_readiness_v2.py::test_no_codex_review_on_current_head_blocks",
+        "tests/test_hunter_merge_readiness_v2.py::test_resolved_finding_without_structured_evidence_blocks",
+        "tests/test_issue_412_prevention_gate.py::test_a_disabled_pool_agent_is_neither_admissible_nor_required",
         "tests/test_issue_412_prevention_gate.py::test_a_fallback_review_of_the_exact_head_is_valid_when_codex_is_unavailable",
-        "tests/test_issue_412_prevention_gate.py::test_a_fallback_review_without_a_recorded_reason_is_refused",
-        "tests/test_issue_412_prevention_gate.py::test_a_review_recorded_for_an_ancestor_head_stays_valid_across_the_artifact_commit",
-        "tests/test_issue_412_prevention_gate.py::test_fallback_review_claims_that_differ_from_the_canonical_claim_set_are_blocked",
-        "tests/test_issue_412_prevention_gate.py::test_fallback_review_emitting_exactly_the_canonical_claim_set_is_accepted",
-        "tests/test_issue_412_prevention_gate.py::test_local_and_hosted_consume_the_same_canonical_claim_set_definition",
         "tests/test_issue_412_prevention_gate.py::test_a_fallback_review_recorded_for_an_older_head_is_stale",
         "tests/test_issue_412_prevention_gate.py::test_a_fallback_review_with_unresolved_threads_recorded_is_refused",
+        "tests/test_issue_412_prevention_gate.py::test_a_fallback_review_without_a_recorded_reason_is_refused",
         "tests/test_issue_412_prevention_gate.py::test_a_fallback_review_without_complete_structured_evidence_status_is_refused",
+        "tests/test_issue_412_prevention_gate.py::test_a_guard_review_that_skips_an_enabled_alternate_blocks_end_to_end",
         "tests/test_issue_412_prevention_gate.py::test_a_resolved_finding_must_carry_structured_resolution_evidence",
-        "tests/test_code_write_policy.py::test_code_write_policy_declares_codex_primary_with_a_recorded_reason_fallback",
-        "tests/test_code_write_policy.py::test_code_write_policy_guard_rejects_a_fallback_without_a_recorded_reason_requirement"
+        "tests/test_issue_412_prevention_gate.py::test_a_review_recorded_for_an_ancestor_head_stays_valid_across_the_artifact_commit",
+        "tests/test_issue_412_prevention_gate.py::test_a_skipped_higher_priority_reviewer_is_not_exhaustion_evidence",
+        "tests/test_issue_412_prevention_gate.py::test_an_alternate_agent_review_is_valid_after_primary_exhaustion",
+        "tests/test_issue_412_prevention_gate.py::test_an_alternate_review_with_fresh_head_evidence_is_accepted_end_to_end",
+        "tests/test_issue_412_prevention_gate.py::test_an_untried_higher_priority_reviewer_blocks_an_alternate_review",
+        "tests/test_issue_412_prevention_gate.py::test_codex_primary_remains_valid_when_alternates_are_configured",
+        "tests/test_issue_412_prevention_gate.py::test_exhaustion_evidence_from_an_unknown_agent_fails_closed",
+        "tests/test_issue_412_prevention_gate.py::test_exhaustion_evidence_must_record_a_timeout_within_the_bounded_policy",
+        "tests/test_issue_412_prevention_gate.py::test_failover_restarts_after_a_new_commit_invalidates_a_review",
+        "tests/test_issue_412_prevention_gate.py::test_fallback_review_claims_that_differ_from_the_canonical_claim_set_are_blocked",
+        "tests/test_issue_412_prevention_gate.py::test_fallback_review_emitting_exactly_the_canonical_claim_set_is_accepted",
+        "tests/test_issue_412_prevention_gate.py::test_guard_exhaustion_does_not_relax_the_green_snapshot_gates",
+        "tests/test_issue_412_prevention_gate.py::test_local_and_hosted_consume_the_same_canonical_claim_set_definition",
+        "tests/test_issue_412_prevention_gate.py::test_malformed_exhaustion_evidence_fails_closed",
+        "tests/test_issue_412_prevention_gate.py::test_the_guard_is_a_last_resort_only_after_the_whole_pool_is_exhausted",
+        "tests/test_issue_412_prevention_gate.py::test_the_guard_review_requires_exhaustion_evidence_for_the_whole_enabled_pool",
+        "tests/test_issue_412_prevention_gate.py::test_unproven_exhaustion_fails_closed_like_a_missing_review"
       ],
       "lifecycle": "regression-tested",
       "sources": [
         "Issue #467 workflow-ordering defect (PR #468)",
-        "Issue #467 fallback review-authority hardening (PR #468)"
+        "Issue #467 fallback review-authority hardening (PR #468)",
+        "Issue #467 reviewer-pool failover hardening (follow-on)"
       ]
     }
   ]

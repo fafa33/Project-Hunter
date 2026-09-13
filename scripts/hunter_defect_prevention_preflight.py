@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import hunter_connector_write_ingress as ingress
+import hunter_pre_ready_review as pre_ready
 import hunter_writer_provenance as provenance
 import yaml
 from hunter_workflow_state import path_matches_scope_entry
@@ -462,6 +463,15 @@ def validate_code_write_policy() -> list[str]:
             "structured_evidence=complete",
         }.issubset({str(gate) for gate in gates}):
             errors.append("fallback review authority must require recorded green snapshot gates")
+        # The ordered reviewer pool is the binding reviewer-ordering model: Codex
+        # tier 1, approved agent reviewers tier 2, the canonical guard last
+        # resort, with a bounded, documented, machine-checkable timeout policy.
+        # It is parsed by the same implementation the review verifier consumes,
+        # so the guard and the verifier cannot drift into two readings of the
+        # same pool.
+        _pool, pool_error = pre_ready.load_reviewer_pool(policy)
+        if pool_error:
+            errors.append(pool_error)
     finding_resolution = str(progression.get("finding_resolution") or "")
     if "structured evidence" not in finding_resolution or "regression test" not in finding_resolution:
         errors.append("finding resolution must require structured evidence and a committed regression test")

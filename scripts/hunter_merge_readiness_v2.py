@@ -184,11 +184,13 @@ def review_authority_state(head_sha: str, pr_number: int) -> tuple[str, str]:
 
     Issue #467: the review authority is recorded at document level beside the
     canonical claims (never as a claim, so the claims stay exactly the canonical
-    claim set the trusted controller verifies). Codex is preferred; the
-    canonical OpenCode hostile review is an admissible fallback only when it
-    records why Codex could not review and that every snapshot gate it relied
-    on was green. The state reported here is the verified review state either
-    way.
+    claim set the trusted controller verifies). The authority is an ordered
+    reviewer pool: Codex is preferred, approved agent reviewers are Tier 2, and
+    the canonical OpenCode hostile review is the last-resort guard -- admissible
+    only when it records machine-checkable evidence that every higher-priority
+    enabled reviewer was exhausted within the bounded timeout policy, and (for
+    the guard) that every snapshot gate it relied on was green. The state
+    reported here is the verified review state any way a reviewer reached it.
     """
 
     # Imported here rather than at module scope: hunter_workflow_state imports

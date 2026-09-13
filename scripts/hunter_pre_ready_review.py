@@ -36,6 +36,7 @@ import re
 import subprocess
 import sys
 import unicodedata
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -48,6 +49,8 @@ REVIEW_RELATIVE_PATH = ".hunter/pre-ready-hostile-review.json"
 REVIEW_PATH = ROOT / REVIEW_RELATIVE_PATH
 REGISTRY_RELATIVE_PATH = "docs/DEFECT_REGISTRY.json"
 REGISTRY_PATH = ROOT / REGISTRY_RELATIVE_PATH
+CODE_WRITE_POLICY_RELATIVE_PATH = "docs/CODE_WRITE_POLICY.json"
+CODE_WRITE_POLICY_PATH = ROOT / CODE_WRITE_POLICY_RELATIVE_PATH
 REVIEW_SCHEMA = "hunter.pre-ready-hostile-review.v1"
 
 #: Artifacts excluded from the reviewed change set. The review cannot bind its
@@ -82,20 +85,28 @@ FAMILY_OUTCOMES = frozenset({"clear", "repaired"})
 FINDING_SEVERITIES = frozenset({"blocking", "non-blocking"})
 FINDING_RESOLUTIONS = frozenset({"resolved", "unresolved"})
 
-#: Review-authority model (Issue #467): the exact-head hostile review remains
-#: mandatory, and Codex remains the primary reviewer. The canonical *OpenCode*
-#: hostile-review artifact may stand in only when the primary authority could
-#: not be used, and the fallback must record, in machine-checkable fields, why
-#: Codex could not review and the gate state it relied on. The recorded evidence
-#: is validated structurally so a fallback cannot be forged by omitting the
-#: required reason or by claiming a green gate that was not green.
+#: Review-authority model (Issue #467 follow-on): the exact-head hostile review
+#: remains mandatory, and Codex remains the Tier 1 primary. The reviewer pool is
+#: an ordered chain -- Codex (Tier 1), any approved agent reviewers (Tier 2),
+#: and the canonical *OpenCode* Hostile-Review guard as the last resort (Tier 3)
+#: -- declared by CODE_WRITE_POLICY.json on the trusted default branch, so a
+#: candidate can never widen its own pool, invent a reviewer, or relax its own
+#: timeout bound. Any authority below the primary must record, in
+#: machine-checkable fields, that every higher-priority enabled reviewer was
+#: actually attempted and exhausted within the bounded timeout policy; the
+#: guard's record must additionally state why those reviewers could not review
+#: and the gate state it relied on. Failover is automatic: a review by a
+#: lower-tier reviewer without the exhaustion trail, or a guard review that
+#: skipped an enabled reviewer, is a bypass and fails closed.
 CODEX_REVIEW_AUTHORITY = "codex"
 OPENCODE_REVIEW_AUTHORITY = "opencode"
-REVIEW_AUTHORITY_TYPES = frozenset({CODEX_REVIEW_AUTHORITY, OPENCODE_REVIEW_AUTHORITY})
-#: The gate states a recorded OpenCode fallback must claim at review time. Each
-#: field has its own admissible value because the states mean different things:
-#: Governance and trusted Preflight report "success"/"failure" while structured
-#: evidence completeness is "complete"/"partial".
+#: The field the canonical reviewer pool is declared under inside
+#: ``review_authority`` of CODE_WRITE_POLICY.json.
+REVIEWER_POOL_FIELD = "reviewer_pool"
+#: The gate states a recorded last-resort guard review must claim at review
+#: time. Each field has its own admissible value because the states mean
+#: different things: Governance and trusted Preflight report "success"/"failure"
+#: while structured evidence completeness is "complete"/"partial".
 FALLBACK_REQUIRED_GATE_STATES = {
     "governance_state": "success",
     "trusted_preflight_state": "success",
@@ -341,28 +352,292 @@ def document_for(claims: dict[str, Any], authority: dict[str, Any] | None = None
     return document
 
 
+# --- Ordered reviewer pool --------------------------------------------------
+
+
+def _pool_problems(policy: Mapping[str, Any]) -> list[str]:
+    """Structural validation of the reviewer-pool declaration; empty means valid.
+
+    Shared by the local verifier and the Defect Prevention guard through
+    ``load_reviewer_pool``, so the two cannot drift into different readings of
+    the same pool. The checks are structural rather than spellings, so a valid
+    equivalent declaration is never rejected; missing, malformed, or ambiguous
+    declarations fail closed.
+    """
+
+    problems: list[str] = []
+    progression = policy.get("review_progression")
+    if not isinstance(progression, dict):
+        return ["review_progression must be an object"]
+    authority = progression.get("review_authority")
+    if not isinstance(authority, dict):
+        return ["review_authority must be an object"]
+    if REVIEWER_POOL_FIELD not in authority:
+        return [f"review_authority must declare a {REVIEWER_POOL_FIELD}"]
+    raw = authority[REVIEWER_POOL_FIELD]
+    if not isinstance(raw, dict):
+        return [f"{REVIEWER_POOL_FIELD} must be an object"]
+
+    for field in ("model", "ordering", "exhaustion_semantics"):
+        value = raw.get(field)
+        if not isinstance(value, str) or not value.strip():
+            problems.append(f"{REVIEWER_POOL_FIELD} must document its {field}")
+
+    last_resort = raw.get("last_resort")
+    if not isinstance(last_resort, str) or not last_resort.strip():
+        problems.append(f"{REVIEWER_POOL_FIELD} must declare a last_resort guard")
+
+    timeout = raw.get("timeout_policy")
+    if not isinstance(timeout, dict):
+        problems.append(f"{REVIEWER_POOL_FIELD} must declare a timeout_policy")
+        timeout = {}
+    else:
+        if timeout.get("bounded") is not True:
+            problems.append(f"{REVIEWER_POOL_FIELD} timeout_policy must be bounded")
+        default_seconds = timeout.get("default_seconds")
+        max_seconds = timeout.get("max_seconds")
+        if isinstance(default_seconds, bool) or not isinstance(default_seconds, int) or default_seconds <= 0:
+            problems.append(f"{REVIEWER_POOL_FIELD} timeout_policy default_seconds must be a positive integer")
+        if isinstance(max_seconds, bool) or not isinstance(max_seconds, int) or max_seconds <= 0:
+            problems.append(f"{REVIEWER_POOL_FIELD} timeout_policy max_seconds must be a positive integer")
+        if (
+            isinstance(default_seconds, int)
+            and not isinstance(default_seconds, bool)
+            and isinstance(max_seconds, int)
+            and not isinstance(max_seconds, bool)
+            and max_seconds < default_seconds
+        ):
+            problems.append(f"{REVIEWER_POOL_FIELD} timeout_policy max_seconds must be at least default_seconds")
+        retries = timeout.get("retries_per_agent")
+        if isinstance(retries, bool) or not isinstance(retries, int) or retries < 0:
+            problems.append(f"{REVIEWER_POOL_FIELD} timeout_policy retries_per_agent must be a non-negative integer")
+
+    agents = raw.get("agents")
+    if not isinstance(agents, list) or not agents:
+        problems.append(f"{REVIEWER_POOL_FIELD} agents must be a non-empty list")
+        return problems
+    seen_ids: set[str] = set()
+    seen_priorities: set[int] = set()
+    codex_primary = False
+    for entry in agents:
+        if not isinstance(entry, dict):
+            problems.append(f"{REVIEWER_POOL_FIELD} agents must be objects")
+            continue
+        agent_id = entry.get("id")
+        if not isinstance(agent_id, str) or not agent_id.strip():
+            problems.append(f"{REVIEWER_POOL_FIELD} agents must carry a non-empty id")
+        else:
+            if agent_id in seen_ids:
+                problems.append(f"{REVIEWER_POOL_FIELD} duplicate agent id {agent_id!r}")
+            seen_ids.add(agent_id)
+        priority = entry.get("priority")
+        if isinstance(priority, bool) or not isinstance(priority, int) or priority < 1:
+            problems.append(f"{REVIEWER_POOL_FIELD} agent {agent_id!r} must carry a positive-integer priority")
+        else:
+            if priority in seen_priorities:
+                problems.append(f"{REVIEWER_POOL_FIELD} agents must declare distinct priorities")
+            seen_priorities.add(priority)
+        enabled = entry.get("enabled")
+        if not isinstance(enabled, bool):
+            problems.append(f"{REVIEWER_POOL_FIELD} agent {agent_id!r} must declare enabled as a boolean")
+        exact_head = entry.get("exact_head_support")
+        if not isinstance(exact_head, bool):
+            problems.append(f"{REVIEWER_POOL_FIELD} agent {agent_id!r} must declare exact_head_support as a boolean")
+        elif enabled is True and exact_head is not True:
+            problems.append(f"{REVIEWER_POOL_FIELD} enabled agent {agent_id!r} must support exact-head binding")
+        for field in ("trigger_method", "evidence_parser"):
+            value = entry.get(field)
+            if not isinstance(value, str) or not value.strip():
+                problems.append(f"{REVIEWER_POOL_FIELD} agent {agent_id!r} must document its {field}")
+        retryable = entry.get("retryable")
+        if not isinstance(retryable, bool):
+            problems.append(f"{REVIEWER_POOL_FIELD} agent {agent_id!r} must declare retryable as a boolean")
+        fallback_eligibility = entry.get("fallback_eligibility")
+        if not isinstance(fallback_eligibility, bool):
+            problems.append(f"{REVIEWER_POOL_FIELD} agent {agent_id!r} must declare fallback_eligibility as a boolean")
+        elif fallback_eligibility is True:
+            problems.append(
+                f"{REVIEWER_POOL_FIELD} agent {agent_id!r} cannot be fallback-eligible; only the declared "
+                "last_resort guard may close the pool"
+            )
+        timeout_seconds = entry.get("timeout_seconds")
+        if isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, int) or timeout_seconds <= 0:
+            if enabled is True:
+                problems.append(
+                    f"{REVIEWER_POOL_FIELD} enabled agent {agent_id!r} must declare a positive timeout_seconds"
+                )
+        else:
+            max_seconds = timeout.get("max_seconds")
+            if isinstance(max_seconds, int) and not isinstance(max_seconds, bool) and timeout_seconds > max_seconds:
+                problems.append(
+                    f"{REVIEWER_POOL_FIELD} agent {agent_id!r} timeout_seconds cannot exceed the "
+                    f"pool max_seconds ({max_seconds})"
+                )
+        if agent_id == CODEX_REVIEW_AUTHORITY and enabled is True and priority == 1:
+            codex_primary = True
+    if not codex_primary:
+        problems.append(f"{REVIEWER_POOL_FIELD} must declare Codex as the enabled priority-1 primary reviewer")
+    if isinstance(last_resort, str) and last_resort in seen_ids:
+        problems.append(f"{REVIEWER_POOL_FIELD} last_resort {last_resort!r} must not also be a pool agent")
+    return problems
+
+
+def load_reviewer_pool(source: Path | Mapping[str, Any] | None = None) -> tuple[dict[str, Any] | None, str]:
+    """Parse the canonical ordered reviewer pool from the code-write policy.
+
+    ``source`` is either a policy mapping, a path, or ``None`` (the repository
+    default branch). Every authority record is validated against the pool the
+    trusted default branch declares, so a candidate can never widen its own
+    pool, invent a reviewer, or relax its own timeout bound. An unreadable or
+    structurally invalid pool fails closed. The same implementation is consumed
+    by the local pre-push check, the hosted trusted controller, and the Defect
+    Prevention guard, so none of them can drift into a different reading.
+    """
+
+    if source is None or isinstance(source, Path):
+        target = source if source is not None else CODE_WRITE_POLICY_PATH
+        try:
+            loaded = json.loads(target.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return None, f"{CODE_WRITE_POLICY_RELATIVE_PATH} is missing"
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            return None, f"{CODE_WRITE_POLICY_RELATIVE_PATH} is unreadable ({type(exc).__name__}: {exc})"
+        if not isinstance(loaded, dict):
+            return None, f"{CODE_WRITE_POLICY_RELATIVE_PATH} must be a JSON object"
+        policy = loaded
+    elif isinstance(source, Mapping):
+        policy = dict(source)
+    else:
+        return None, "reviewer pool source must be a policy mapping or a path"
+
+    problems = _pool_problems(policy)
+    if problems:
+        return None, "CODE_WRITE_POLICY reviewer_pool is invalid: " + "; ".join(problems)
+
+    raw = policy["review_progression"]["review_authority"][REVIEWER_POOL_FIELD]
+    agents = tuple(sorted(raw["agents"], key=lambda entry: int(entry["priority"])))
+    return (
+        {
+            "last_resort": str(raw["last_resort"]),
+            "timeout_policy": dict(raw["timeout_policy"]),
+            "agents": agents,
+        },
+        "",
+    )
+
+
+def enabled_pool_reviewers(pool: Mapping[str, Any]) -> tuple[dict[str, Any], ...]:
+    """The enabled reviewers of a normalized pool, already in priority order."""
+
+    return tuple(agent for agent in pool["agents"] if agent.get("enabled") is True)
+
+
+def _exhaustion_error(pool: Mapping[str, Any], authority: Mapping[str, Any], authority_type: str) -> str | None:
+    """Machine-checkable proof that every higher-priority enabled reviewer was exhausted.
+
+    Failover is a deterministic decision, never a human-noticed skip. A recorded
+    authority from any reviewer below the primary must cover every enabled
+    reviewer above it (the guard must cover every enabled reviewer), each with
+    an ``exhausted`` status, a reason, and a ``timeout_seconds`` inside the
+    bounded timeout policy. Only then is a lower-tier review admissible.
+    """
+
+    enabled = enabled_pool_reviewers(pool)
+    priorities = {str(agent["id"]): int(agent["priority"]) for agent in enabled}
+    max_seconds = int(pool["timeout_policy"]["max_seconds"])
+    if authority_type == str(pool["last_resort"]):
+        required = enabled
+    else:
+        own_priority = priorities.get(authority_type)
+        if own_priority is None:
+            return None
+        required = [agent for agent in enabled if int(agent["priority"]) < own_priority]
+    if not required:
+        return None
+
+    attempts = authority.get("reviewer_attempts")
+    if attempts is None:
+        return (
+            "review authority must record reviewer exhaustion evidence for every higher-priority "
+            "enabled reviewer before a lower-tier review authority is admissible"
+        )
+    if not isinstance(attempts, list) or not attempts:
+        return "reviewer exhaustion evidence must be a non-empty list of per-agent attempt records"
+
+    covered: set[str] = set()
+    problems: list[str] = []
+    for attempt in attempts:
+        if not isinstance(attempt, dict):
+            problems.append("reviewer exhaustion evidence contains a malformed attempt record")
+            continue
+        agent_id = attempt.get("agent_id")
+        if not isinstance(agent_id, str) or agent_id not in priorities:
+            problems.append(f"reviewer exhaustion attempt names {agent_id!r}, which is not an enabled pool reviewer")
+            continue
+        if agent_id in covered:
+            problems.append(f"reviewer exhaustion attempt for {agent_id} is recorded more than once")
+            continue
+        if attempt.get("status") != "exhausted":
+            problems.append(
+                f"reviewer attempt for {agent_id} records status {attempt.get('status')!r}; a higher-priority "
+                "reviewer is bypassed unless it was actually attempted and exhausted"
+            )
+            continue
+        reason = attempt.get("reason")
+        if not isinstance(reason, str) or not reason.strip():
+            problems.append(f"reviewer attempt for {agent_id} must record why it was exhausted")
+        timeout = attempt.get("timeout_seconds")
+        if isinstance(timeout, bool) or not isinstance(timeout, int) or not (1 <= timeout <= max_seconds):
+            problems.append(
+                f"reviewer attempt for {agent_id} must record a timeout_seconds within the bounded "
+                f"policy (1..{max_seconds})"
+            )
+            continue
+        covered.add(agent_id)
+
+    missing = sorted({str(agent["id"]) for agent in required} - covered)
+    if missing:
+        problems.append(
+            "reviewer exhaustion evidence is incomplete; missing exhausted attempts for " + ", ".join(missing)
+        )
+    if problems:
+        return "reviewer exhaustion evidence fails closed: " + "; ".join(problems)
+    return None
+
+
 def _authority_error(document: dict[str, Any]) -> str | None:
     """Validate the recorded review-authority record before believing it.
 
-    The two admissible authorities share one structural contract -- type, tool
-    identity, the exact head reviewed, when, and which artifact carries the
-    evidence -- and the OpenCode fallback must additionally state why Codex
-    could not review and record that every snapshot gate the fallback relied on
-    was green. `verify_claims` cannot tell the authorities apart, so neither can
-    lengthen its own reach: the fallback is admitted on the credibility of the
-    recorded reason and gates, not on the reviewer's name.
+    The admissible authorities are the reviewer pool the trusted default branch
+    declares: the enabled pool reviewers in priority order plus the last-resort
+    guard, all sharing one structural contract -- type, tool identity, the exact
+    head reviewed, when, and which artifact carries the evidence. Any reviewer
+    below the primary must record the machine-checkable exhaustion of every
+    higher-priority enabled reviewer (the guard must record the whole enabled
+    pool), and must do so within the bounded timeout policy; the guard must
+    additionally state why the pool reviewers could not review and record that
+    every snapshot gate it relied on was green. `verify_claims` cannot tell the
+    authorities apart, so neither can lengthen its own reach: a lower-tier
+    review is admitted on the credibility of the recorded exhaustion trail and,
+    for the guard, the recorded reason and gates -- never on the reviewer's
+    name. A review that bypasses an enabled reviewer, or a guard review whose
+    exhaustion cannot be proven, fails closed with no human-noticed skip needed.
 
     The authority is document-level review metadata, recorded beside the claims
     rather than inside them, so the claims stay the canonical claim set the
     trusted controller verifies.
     """
 
+    pool, pool_error = load_reviewer_pool()
+    if pool_error or pool is None:
+        return pool_error or "reviewer pool is unavailable"
     authority = document.get("authority")
     if not isinstance(authority, dict):
         return "review document must carry a review-authority record"
     authority_type = authority.get("type")
-    if authority_type not in REVIEW_AUTHORITY_TYPES:
-        return f"review authority type must be one of {sorted(REVIEW_AUTHORITY_TYPES)}"
+    admissible = {str(agent["id"]) for agent in enabled_pool_reviewers(pool)} | {str(pool["last_resort"])}
+    if authority_type not in admissible:
+        return f"review authority type must be one of {sorted(admissible)}"
     if not isinstance(authority.get("tool"), str) or not authority["tool"].strip():
         return "review authority must name its reviewer/tool identity"
     head_sha = authority.get("head_sha")
@@ -373,15 +648,16 @@ def _authority_error(document: dict[str, Any]) -> str | None:
     if not isinstance(authority.get("artifact"), str) or not authority["artifact"].strip():
         return "review authority must reference the hostile-review artifact it verifies"
 
-    if authority_type == OPENCODE_REVIEW_AUTHORITY:
+    if authority_type == str(pool["last_resort"]):
         reason = authority.get("fallback_reason")
         if not isinstance(reason, str) or not reason.strip():
             return (
                 "opencode fallback authority must record why Codex could not review; "
                 "skipping Codex without a reason is forbidden"
             )
-        # A fallback is legitimate only when nothing is waiting on it: the exact
-        # head (held by the recorded head_sha), no open threads, and green gates.
+        # A guard review is legitimate only when nothing is waiting on it: the
+        # exact head (held by the recorded head_sha), no open threads, and green
+        # gates.
         unresolved = authority.get("unresolved_thread_count")
         # bool is an int subclass; a True is a claim that something waited.
         if isinstance(unresolved, bool) or not isinstance(unresolved, int) or unresolved != 0:
@@ -398,6 +674,10 @@ def _authority_error(document: dict[str, Any]) -> str | None:
                     f"opencode fallback authority requires recorded {readable_gates[gate]} "
                     f"== {required!r} at review time"
                 )
+
+    exhaustion_problem = _exhaustion_error(pool, authority, authority_type)
+    if exhaustion_problem is not None:
+        return exhaustion_problem
     return None
 
 

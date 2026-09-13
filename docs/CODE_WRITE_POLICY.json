@@ -28,7 +28,7 @@
     "ready_requires": "successful exact-head Hunter / Pre-PR Preflight",
     "auto_ready": false,
     "requires_current_head_codex_review": true,
-    "review_authority": {
+"review_authority": {
       "primary": "codex",
       "fallback": "opencode",
       "fallback_only_when_unavailable": "Codex unavailable, rate-limited, timed out, or otherwise not usable -- never skipped while Codex is available",
@@ -38,7 +38,35 @@
         "trusted_preflight=success",
         "unresolved_thread_count=0",
         "structured_evidence=complete"
-      ]
+      ],
+      "reviewer_pool": {
+        "model": "ordered-priority-with-failover",
+        "ordering": "strict-priority-first: every enabled reviewer is attempted, in priority order, before any lower-priority reviewer; approved agent reviewers (Tier 2) are handled by the same exact-head-bound evidence pipeline as the primary, and the Hostile-Review guard is the last resort, admissible only when the whole enabled pool is exhausted",
+        "last_resort": "opencode",
+        "exhaustion_semantics": "A recorded review authority from any reviewer below the primary, and the last-resort guard in particular, must carry machine-checkable reviewer_attempts covering every enabled higher-priority reviewer (for the guard: every enabled pool reviewer), each attempt with status \"exhausted\", a reason, and a timeout_seconds within the bounded timeout policy. A missing, skipped, unproven, malformed, duplicated, unknown-agent, or untried higher-priority attempt, or a timeout outside the bound, is unproven exhaustion and fails closed: failover is a deterministic machine decision, never a human-noticed skip.",
+        "timeout_policy": {
+          "bounded": true,
+          "default_seconds": 900,
+          "max_seconds": 1800,
+          "retries_per_agent": 1,
+          "retry_scope": "transient infrastructure failures only (rate limit, transport, runner shutdown signal); a repeated or permanent failure records a single exhausted attempt against the bounded timeout"
+        },
+        "agents": [
+          {
+            "id": "codex",
+            "priority": 1,
+            "enabled": true,
+            "trigger_method": "codex-cli adversarial review bound to the exact candidate head",
+            "exact_head_support": true,
+            "timeout_seconds": 900,
+            "retryable": true,
+            "evidence_parser": "document-level authority record in the pre-ready hostile review",
+            "fallback_eligibility": false,
+            "note": "Tier 1 primary reviewer. chatgpt-codex-connector[bot] is the only agent-reviewer integration observed on this repository (COMMENTED reviews on PRs #458, #460, #466); every other PR has zero reviews, so the Tier 2 pool is empty until an approved agent reviewer is actually installed on the repository.",
+            "evidence": "Discovered by inspecting check-suites and PR reviews on main (commit dca20dd): installed apps are claude, freebuff-web, github-actions, railway-app, tembo, vercel; no Copilot code review, CodeRabbit, Jules, or CODEOWNERS exists on this repository."
+          }
+        ]
+      }
     },
     "finding_resolution": "a fixed review finding resolves only with structured evidence: the exact-head correction commit and a regression test committed in the change set, verified fail-closed before Merge Readiness"
   },
