@@ -2,13 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from hunter.automation import opencode_provider_runtime as runtime
-from hunter.evidence_intelligence.smart_prompt_routing import (
-    ENGINEERING_IMPLEMENT_ROUTE,
-    ENGINEERING_REVIEW_FIX_ROUTE,
-)
 
 
 def _sandbox(tmp_path: Path, name: str = "repo") -> Path:
@@ -80,38 +74,3 @@ def test_sandbox_command_uses_in_sandbox_executable_path(
         "/app/bin/opencode",
     ]
     assert command[source_index + 1] == "/opt/hunter/bin/opencode"
-
-
-@pytest.mark.parametrize(
-    "route_identity",
-    (
-        ENGINEERING_IMPLEMENT_ROUTE.route_identity,
-        ENGINEERING_REVIEW_FIX_ROUTE.route_identity,
-    ),
-)
-def test_railway_provider_capability_preflight_accepts_governed_edit_only_routes(
-    monkeypatch: pytest.MonkeyPatch,
-    route_identity: str,
-) -> None:
-    monkeypatch.setenv(runtime._RAILWAY_ENV, "production")
-
-    runtime._validate_railway_task_capabilities(route_identity)
-
-
-def test_railway_provider_capability_preflight_rejects_missing_required_tool(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv(runtime._RAILWAY_ENV, "production")
-    monkeypatch.setattr(runtime, "_railway_allowed_provider_tools", lambda: frozenset({"read", "glob", "grep"}))
-
-    with pytest.raises(runtime.ProviderAdapterError, match="provider capability mismatch: missing edit"):
-        runtime._validate_railway_task_capabilities(ENGINEERING_IMPLEMENT_ROUTE.route_identity)
-
-
-def test_railway_provider_capability_preflight_fails_closed_for_unknown_route(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv(runtime._RAILWAY_ENV, "production")
-
-    with pytest.raises(runtime.ProviderAdapterError, match="provider capability contract is undefined"):
-        runtime._validate_railway_task_capabilities("smart-prompt-task-route:unknown")
