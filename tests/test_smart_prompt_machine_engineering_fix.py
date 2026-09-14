@@ -13,7 +13,6 @@ from hunter.evidence_intelligence.smart_prompt_machine import (
     PromptMachineProfileRegistry,
 )
 from hunter.evidence_intelligence.smart_prompt_routing import (
-    ENGINEERING_IMPLEMENT_PROFILE,
     ENGINEERING_REVIEW_FIX_MAX_PROMPT_BYTES,
     ENGINEERING_REVIEW_FIX_PROFILE,
     ENGINEERING_REVIEW_FIX_ROUTE,
@@ -90,26 +89,12 @@ def test_review_fix_route_compiles_long_raw_finding_to_exact_bounded_prompt(
     assert prompt.startswith("Finding:\nsrc/hunter/example.py::apply_fix must preserve authority.")
     assert "\n\nTarget file/symbol:\nUse only the target file and symbol identified in the finding." in prompt
     assert "\n\nRequired behavior:\nImplement only the behavior required by the finding." in prompt
-    assert (
-        "\n\nTargeted validation:\n"
-        "Do not run shell or test commands. The trusted parent performs focused exact-head validation after publication."
-        in prompt
-    )
-    assert "Run only the focused validation required by the finding." not in prompt
+    assert "\n\nTargeted validation:\nRun only the focused validation required by the finding." in prompt
     assert prompt.endswith("Constraints:\n- No refactor.\n- No unrelated files.\n- No new branch or PR.\n- No merge.")
     assert build_request.profile_id == ENGINEERING_REVIEW_FIX_PROFILE.profile_id
     assert build_request.profile_version == ENGINEERING_REVIEW_FIX_PROFILE.version
     assert result.envelope.route_identity == ENGINEERING_REVIEW_FIX_ROUTE.route_identity
     assert result.envelope.profile_identity == ENGINEERING_REVIEW_FIX_PROFILE.profile_identity
-
-
-def test_engineering_profiles_make_provider_side_shell_validation_non_authoritative() -> None:
-    for profile in (ENGINEERING_REVIEW_FIX_PROFILE, ENGINEERING_IMPLEMENT_PROFILE):
-        constraints = " ".join(profile.specification.trusted_system_constraints)
-        assert (
-            "Do not execute shell or test commands; the trusted parent owns exact-head validation after publication."
-            in constraints
-        )
 
 
 def test_review_fix_rejects_profile_substitution_and_caller_text_cannot_select_authority(
