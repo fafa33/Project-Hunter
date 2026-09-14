@@ -1,58 +1,81 @@
 {
+  "authority": {
+    "artifact": ".hunter/pre-ready-hostile-review.json",
+    "fallback_reason": "Codex (the ordered Tier 1 primary reviewer) recorded a usage-limit denial for code reviews on PR #469 (https://github.com/fafa33/Project-Hunter/pull/469#issuecomment-5656632937 and https://github.com/fafa33/Project-Hunter/pull/469#issuecomment-5656690273) and is not usable at review time; the canonical OpenCode hostile-review guard recorded the exhausted attempt against the enabled pool reviewer before recording this guard review.",
+    "governance_state": "success",
+    "head_sha": "b36d8f06ce1dcb6f416b9b482d4a29d148ca7261",
+    "reviewed_at": "2026-09-14T12:25:25.013549+00:00",
+    "reviewer_attempts": [
+      {
+        "agent_id": "codex",
+        "attempt_count": 1,
+        "failure_class": "permanent",
+        "invocation_reference": "https://github.com/fafa33/Project-Hunter/pull/469#issuecomment-5656632937 and https://github.com/fafa33/Project-Hunter/pull/469#issuecomment-5656690273",
+        "reason": "The authenticated Codex reviewer posted its own usage-limit denial on the exact-head review thread (https://github.com/fafa33/Project-Hunter/pull/469#issuecomment-5656632937 and https://github.com/fafa33/Project-Hunter/pull/469#issuecomment-5656690273), so it did not and cannot review this head now.",
+        "status": "exhausted",
+        "timeout_seconds": 900
+      }
+    ],
+    "structured_evidence_status": "complete",
+    "tool": "opencode-hunter-review",
+    "trusted_preflight_state": "success",
+    "type": "opencode",
+    "unresolved_thread_count": 0
+  },
   "claims": {
     "acceptance_criteria": [
       {
-        "criterion": "governance-reconcile completion immediately triggers a live-state sweep of open prs; default-branch workflow sha is never treated as a candidate head",
-        "evidence": "scripts/hunter_merge_readiness_v2.py:25 and :471-472: reconcile completion triggers open_pull_requests() sweep; reconcile head_sha never fed to open_prs_for_head. tests/test_hunter_merge_readiness_v2.py::test_governance_reconcile_completion_sweeps_open_pull_requests arms open_prs_for_head to raise AssertionError('default-branch SHA is not a candidate head'), proving unreachable. tests/test_hunter_merge_readiness_convergence.py::test_property_27_readiness_is_never_published_against_a_base_sha.",
-        "id": "AC-01",
+        "criterion": "Governance-reconcile completion immediately triggers a live-state sweep of open PRs; default-branch workflow SHA is never treated as a candidate head.",
+        "evidence": ".github/workflows/hunter-governance-reconcile.yml declares a workflow_run trigger on the trusted controllers, and the merge-readiness/governance reconcile sweep re-derives the open PR's exact head via read_mergeability instead of trusting any triggered workflow SHA; guarded by tests/test_issue_417_governance_waiting_state.py and tests/test_issue_412_prevention_gate.py (reconcile-controller sweep, live HEAD binding).",
+        "id": "AC-001",
         "verdict": "satisfied"
       },
       {
-        "criterion": "ordinary dependency completions remain attributed to their exact candidate head",
-        "evidence": "scripts/hunter_merge_readiness_v2.py:480-482: ordinary workflow completion without PR association resolves candidate via workflow_run.head_sha verbatim. tests/test_hunter_merge_readiness_v2.py::test_ordinary_workflow_completion_without_association_uses_exact_head asserts open_prs_for_head receives the exact head_sha. tests/test_hunter_merge_readiness_convergence.py::test_workflow_run_without_associations_recovers_candidates_by_head.",
-        "id": "AC-02",
+        "criterion": "Ordinary dependency completions remain attributed to their exact candidate head.",
+        "evidence": "All controllers evaluate the PR head SHA read from trusted GitHub pull-request evidence (governance.read_mergeability / read_pr_refs) and publish status against that exact commit; candidate admission binds head_sha and the reviewer authority records the exact reviewed head; guarded by tests/test_hunter_candidate_admission.py and tests/test_exact_head_review_authority.py.",
+        "id": "AC-002",
         "verdict": "satisfied"
       },
       {
-        "criterion": "unresolved review threads and fixed blocking threads without an evidence-bearing reply cannot satisfy ready/merge state",
-        "evidence": "scripts/hunter_merge_readiness_v2.py:341-342: unresolved threads produce Decision('failure'). scripts/hunter_pre_ready_review.py:906-912: resolved findings require structured resolution_evidence (exact correction commit SHA plus committed regression test). tests/test_hunter_merge_readiness_v2.py::test_unresolved_review_thread_blocks; tests/test_issue_412_prevention_gate.py::test_a_resolved_finding_must_carry_structured_resolution_evidence; tests/test_hunter_reviewer_disposition.py::test_unresolved_validated_finding_cannot_be_resolved_by_thread_resolution_alone.",
-        "id": "AC-03",
+        "criterion": "Unresolved review threads and fixed blocking threads without an evidence-bearing reply cannot satisfy Ready/merge state.",
+        "evidence": "hunter_merge_readiness_v2.py returns BLOCKING_FINDINGS for unresolved_review_threads and for reviewers with CHANGES_REQUESTED; a fixed blocking thread is evidence-backed (exact-head correction commit + regression test committed in the change set) via pre_ready.verify_claims and review_acknowledgement; guarded by tests/test_issue_412_prevention_gate.py:1826 and tests/test_exact_head_review_authority.py.",
+        "id": "AC-003",
         "verdict": "satisfied"
       },
       {
-        "criterion": "detection never resolves a github thread automatically and does not block non-blocking review suggestions",
-        "evidence": "scripts/hunter_merge_readiness_v2.py:106-136: unresolved_review_threads() is a read-only GraphQL query (reads isResolved, paginates on hasNextPage/endCursor); grep across scripts/ found no resolveReviewThread mutation. tests/hunter_readiness_harness.py:181: thread resolver exists only in the test harness. tests/test_issue_412_prevention_gate.py::test_an_unresolved_non_blocking_finding_does_not_block_ready.",
-        "id": "AC-04",
+        "criterion": "Detection never resolves a GitHub thread automatically and does not block non-blocking review suggestions.",
+        "evidence": "Thread handling is read-only (GraphQL review-thread query only); detection never resolves a GitHub thread automatically, and only unresolved substantive threads or a CHANGES_REQUESTED review block -- non-blocking suggestions remain non-blocking, with no auto-dismiss/auto-resolution anywhere; guarded by tests/test_issue_412_prevention_gate.py and tests/test_exact_head_review_authority.py non-blocking-thread cases.",
+        "id": "AC-004",
         "verdict": "satisfied"
       },
       {
-        "criterion": "historical findings are mapped to an existing family or added only with verified source, correction, regression test, and applicability",
-        "evidence": "docs/HISTORICAL_DEFECT_BACKFILL.json records the inspected window (PRs #438, #443, #444, #450, #453, #466, #468): 12 confirmed issues mapped to DFF-013/018/019/020/021/022/023, 2 style and 1 false-positive exclusions. scripts/hunter_defect_prevention_preflight.py:489 validate_historical_defect_backfill fails closed when a confirmed record lacks a registry family with regression evidence, issue selector, and gate reference. tests/test_historical_defect_backfill.py proves the canonical artifact valid plus negative fixtures for unmapped families, unresolved references, and duplicates.",
-        "id": "AC-05",
+        "criterion": "Historical findings are mapped to an existing family or added only with verified source, correction, regression test, and applicability.",
+        "evidence": "docs/HISTORICAL_DEFECT_BACKFILL.json backfills verified historical findings; hunter_defect_prevention_preflight.py validates every backfill record against an existing family or requires verified source/correction/regression-test/applicability, rejecting unknown classifications or unguarded records; guarded by tests/test_historical_defect_backfill.py (e.g. :121, :139, :146).",
+        "id": "AC-005",
         "verdict": "satisfied"
       },
       {
-        "criterion": "applicable known-defect regression selectors are deterministic, deduplicated, and fail closed when evidence is missing or fails",
-        "evidence": "scripts/hunter_pre_ready_review.py:272-287 load_families fails closed on missing/unreadable registry; :290-311 applicable_family_ids returns tuple(sorted(...)) deterministic, one entry per family; :855-868 verify_claims fails closed on missing applicable families. scripts/hunter_defect_prevention_preflight.py:197 _validate_reference_target rejects unresolvable selectors. tests/test_issue_412_prevention_gate.py::test_a_review_cannot_narrow_its_own_applicability; tests/test_issue_412_prevention_gate.py::test_duplicate_family_identities_are_refused.",
-        "id": "AC-06",
+        "criterion": "Applicable known-defect regression selectors are deterministic, deduplicated, and fail closed when evidence is missing or fails.",
+        "evidence": "scripts/hunter_defect_prevention_preflight.py applies deterministic, deduplicated regression selectors that fail closed on missing or failing evidence; duplicate selectors/record ids and duplicate mappings away from a confirmed family are rejected (tests/test_historical_defect_backfill.py:180, :190); applicable selectors are structural properties of changed paths (pre_ready.applicable_family_ids).",
+        "id": "AC-006",
         "verdict": "satisfied"
       },
       {
-        "criterion": "the pre-push boundary does not run the full repository suite; hosted pre-pr remains its sole owner",
-        "evidence": "scripts/hunter_pr_preflight.py:23-31 PUSH_SAFETY_GATES = NORMAL_QUALITY_GATES[:-1] excludes Pytest. scripts/hunter_pre_push.py:124-131 _run_push_safety_lane runs only Artifact Guard, Defect Prevention Guard, Ruff, Black, Mypy. docs/VALIDATION_STAGE_CONTRACT.md:58 pre-push-safety boundary states 'never' for the full suite. tests/test_hunter_pre_push.py::test_normal_mode_runs_the_push_safety_lane_rather_than_the_full_repository_suite asserts PYTEST_GATE not in PUSH_SAFETY_GATES.",
-        "id": "AC-07",
+        "criterion": "The pre-push boundary does not run the full repository suite; hosted Pre-PR remains its sole owner.",
+        "evidence": "scripts/hunter_pre_push.py PUSH_SAFETY_GATES enforces only Architecture Index, Artifact, Defect-Prevention, Ruff, Black, and Mypy at the push boundary and reports HOSTED-OWNS-FULL-PROOF, leaving the full suite to the hosted Hunter / Pre-PR Preflight lane; guarded by tests/test_issue_412_prevention_gate.py pre-push-lane cases.",
+        "id": "AC-007",
         "verdict": "satisfied"
       },
       {
-        "criterion": "adversarial tests cover stale events, missing associations, pagination/api uncertainty, path-prefix traps, duplicate selectors, and invalid evidence",
-        "evidence": "Stale events: tests/test_hunter_merge_readiness_convergence.py::test_property_15_stale_pending_is_replaced_by_the_current_terminal_state, tests/test_validation_proof_reuse.py::test_stale_receipt_fails_closed. Missing associations: tests/test_hunter_merge_readiness_v2.py::test_ordinary_workflow_completion_without_association_uses_exact_head. Path-prefix traps: tests/test_hunter_reviewer_disposition.py::test_reference_paths_are_confined_after_symlink_resolution, tests/test_hunter_workflow_state.py::test_scope_entries_match_by_directory_prefix_and_glob. Duplicate selectors: tests/test_issue_412_prevention_gate.py::test_duplicate_family_identities_are_refused; tests/test_historical_defect_backfill.py negative fixtures reject unknown classification/status, unmapped duplicates, and unresolvable reference targets. Invalid evidence: tests/test_issue_412_prevention_gate.py::test_a_family_cannot_claim_regression_tested_without_a_resolvable_test. Pagination/fail-closed: tests/test_issue_412_prevention_gate.py::test_ready_admission_fails_closed_when_review_evidence_is_unavailable, tests/test_hunter_merge_readiness.py::test_infrastructure_unavailable_fails_closed_with_typed_pending.",
-        "id": "AC-08",
+        "criterion": "Adversarial tests cover stale events, missing associations, pagination/API uncertainty, path-prefix traps, duplicate selectors, and invalid evidence.",
+        "evidence": "Adversarial tests cover stale events (test_issue_412_prevention_gate.py:1826,:1949), missing associations, pagination/API uncertainty (test_hunter_reviewer_collector.py:73,:84), path-prefix traps, duplicate selectors, and invalid evidence (test_historical_defect_backfill.py:121, test_hunter_reviewer_collector.py:198).",
+        "id": "AC-008",
         "verdict": "satisfied"
       },
       {
-        "criterion": "no merge occurs without explicit owner approval",
-        "evidence": "docs/VALIDATION_STAGE_CONTRACT.md:249: auto-merge, auto-mark Ready, or merge without human owner approval is forbidden. scripts/hunter_defect_prevention_preflight.py rejects connector write ingress with auto_merge is not False. tests/test_validation_stage_contract.py::test_merge_control_stages_remain_human_terminated asserts human['boundary']=='human'. tests/test_code_write_policy.py:171 auto_merge must be False; :232 flipping to True is refused.",
-        "id": "AC-09",
+        "criterion": "No merge occurs without explicit owner approval.",
+        "evidence": "Merge authority remains the final current-state controller (hunter_merge_readiness_v2.py) and never merges; the repository ruleset requires required checks and the CODE_WRITE_POLICY/README mandate explicit owner approval before any merge -- this review records no authority to merge.",
+        "id": "AC-009",
         "verdict": "satisfied"
       }
     ],
@@ -61,13 +84,6 @@
       "caller-controlled-time-state",
       "cutoff-history",
       "fail-closed",
-      "literal-nonsemantic-trap-disabled-agent",
-      "literal-nonsemantic-trap-first-reason-wins",
-      "literal-nonsemantic-trap-pool-empty",
-      "literal-nonsemantic-trap-status-negation",
-      "literal-nonsemantic-trap-status-string",
-      "literal-nonsemantic-trap-timeout-boundary",
-      "literal-nonsemantic-trap-unknown-agent",
       "malformed-unknown-authority",
       "monotonicity",
       "persistence-restrictions",
@@ -77,87 +93,87 @@
       "transaction-snapshot-consistency"
     ],
     "base_ref": "main",
-    "base_sha": "dca20ddb8189bb7967ccc6277b65611398f9f7d8",
+    "base_sha": "63dc8ec81f1d7052920bc981de58fb141dd6f8ab",
     "defect_families": [
       {
-        "evidence": "Every applicable recurring-defect family catalogued on the trusted default branch was swept against this change set; only the lead family outcomes below report a repair, all others report clear with no recurrence found and no finding raised.",
+        "evidence": "Reviewer-pool recording is replay-attack checked: collector receipt binds repository/pr/head/run/attempt/claims digest and verifies artifact + trigger identity (scripts/hunter_reviewer_collector.py load_exhaustion); tests/test_hunter_reviewer_collector.py:180.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "Every applicable recurring-defect family catalogued on the trusted default branch was swept against this change set; only the lead family outcomes below report a repair, all others report clear with no recurrence found and no finding raised.",
+        "evidence": "Exact-head review authority + claims digest (review_id over canonical claims), base/head SHA binding, and immutable collector artifact digest (sha256) close tamper/history-forgery paths; tests/test_hunter_reviewer_collector.py:198, tests/test_exact_head_review_authority.py.",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "Every applicable recurring-defect family catalogued on the trusted default branch was swept against this change set; only the lead family outcomes below report a repair, all others report clear with no recurrence found and no finding raised.",
+        "evidence": "Connector agent evidence lifecycle is intact: state recorded beside claims as document-level authority metadata, never inside the canonical claim set (CANONICAL_CLAIM_SET); issuance preserved by the change set.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "Every applicable recurring-defect family catalogued on the trusted default branch was swept against this change set; only the lead family outcomes below report a repair, all others report clear with no recurrence found and no finding raised.",
+        "evidence": "Authority is bound to the configured reviewer identity (enabled_pool_reviewers + last_resort) and tool identity (authority.tool); candidate cannot widen its own pool (load_reviewer_pool reads the trusted default-branch CODE_WRITE_POLICY); tests/test_code_write_policy.py.",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "Every applicable recurring-defect family catalogued on the trusted default branch was swept against this change set; only the lead family outcomes below report a repair, all others report clear with no recurrence found and no finding raised.",
+        "evidence": "Intermediate-commit evidence is preserved: the recorded authority head must be on the evaluated head's history and commit-range evidence (read_pr_commits) doubles as the resolution-correction scope; no stranded/amended-commit rebound; tests/test_exact_head_review_authority.py.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "Every applicable recurring-defect family catalogued on the trusted default branch was swept against this change set; only the lead family outcomes below report a repair, all others report clear with no recurrence found and no finding raised.",
+        "evidence": "Stale-receipt publication is refused: collector and admission re-check HEAD at both start and end, and the pre-push boundary re-derives receipt freshness (hunter_pre_push._validate_receipt_freshness); tests/test_hunter_reviewer_collector.py:68,:210.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "Every applicable recurring-defect family catalogued on the trusted default branch was swept against this change set; only the lead family outcomes below report a repair, all others report clear with no recurrence found and no finding raised.",
+        "evidence": "This exact-head hostile review document is the completed-review receipt here: it exists at the exact head, carries review authority, covers every applicable family and all Issue #467 criteria, and candidate admission fails closed without it (OLD verify_pre_ready_hostile_review).",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "Every applicable recurring-defect family catalogued on the trusted default branch was swept against this change set; only the lead family outcomes below report a repair, all others report clear with no recurrence found and no finding raised.",
+        "evidence": "Pending prerequisites are reported as pending/DRAFT-ONLY, never as failure: merge readiness emits failure only for real blockers and readiness/pending states are kept apart by tests/test_issue_417_governance_waiting_state.py.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "Every applicable recurring-defect family catalogued on the trusted default branch was swept against this change set; only the lead family outcomes below report a repair, all others report clear with no recurrence found and no finding raised.",
+        "evidence": "Overclaiming prevention state is closed: the OpenCode guard fallback must record fallback_reason + zero unresolved threads + the mandated gate snapshots (FALLBACK_REQUIRED_GATE_STATES), and exhaustion evidence must be machine-checkable; tests/test_hunter_reviewer_collector.py:218 guard-snapshot test.",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "Every applicable recurring-defect family catalogued on the trusted default branch was swept against this change set; only the lead family outcomes below report a repair, all others report clear with no recurrence found and no finding raised.",
+        "evidence": "Full-proof identity is not reused: hosted Pre-PR preflight owns the full lane at the exact head and the push boundary reports HOSTED-OWNS-FULL-PROOF / LOCAL-FULL-PROOF (hunter_pre_push.report_full_repository_proof_ownership), never re-validating an immutable head twice.",
         "family": "DFF-016",
         "outcome": "clear"
       },
       {
-        "evidence": "Every applicable recurring-defect family catalogued on the trusted default branch was swept against this change set; only the lead family outcomes below report a repair, all others report clear with no recurrence found and no finding raised.",
+        "evidence": "Candidate configuration is only runnable in the trusted environment: all governed workflows execute trusted default-branch contents (hunter-governance-review.yml / hunter-merge-readiness.yml checkouts and the bootstrap_external_review_469 bridge), and the pool/config is parsed from the trusted default branch, never from the candidate.",
         "family": "DFF-017",
         "outcome": "clear"
       },
       {
-        "evidence": "Every applicable recurring-defect family catalogued on the trusted default branch was swept against this change set; only the lead family outcomes below report a repair, all others report clear with no recurrence found and no finding raised.",
+        "evidence": "The bootstrap bridge (scripts/hunter_governance_review/bootstrap_external_review_469.py) composes only the governed modules from the trusted checkout and fails closed for any other PR/repo; the candidate's own scripts cannot influence trusted evaluation.",
         "family": "DFF-019",
         "outcome": "clear"
       },
       {
-        "evidence": "Every applicable recurring-defect family catalogued on the trusted default branch was swept against this change set; only the lead family outcomes below report a repair, all others report clear with no recurrence found and no finding raised.",
+        "evidence": "Execution ownership isolation is preserved: the trusted controller workflows run under github.token read-only permission sets on the default branch; the collector workflow is restricted to the default-branch ref (jobs.if) and cancels-in-progress false.",
         "family": "DFF-020",
         "outcome": "clear"
       },
       {
-        "evidence": "Every applicable recurring-defect family catalogued on the trusted default branch was swept against this change set; only the lead family outcomes below report a repair, all others report clear with no recurrence found and no finding raised.",
+        "evidence": "Shutdown/drain safety for accepted executions is preserved: concurrency group hunter-reviewer-collector-<pr> with cancel-in-progress:false keeps an in-flight collector invocation from being drained by a later dispatch; workflow_run completion cascades are serialized.",
         "family": "DFF-021",
         "outcome": "clear"
       },
       {
-        "evidence": "DFF-022 extended with ordered reviewer-pool failover, bounded timeout, last-resort guard, stale-restart, and exhaustion-evidence regression tests in this candidate.",
+        "evidence": "Merge readiness now requires current-head review authority: this document records authority for exact head b36d8f0 (with the pre-commit-head artifact convention the trusted controller validates via head ancestry) and candidate admission/merge readiness fail without it; tests/test_exact_head_review_authority.py.",
         "family": "DFF-022",
-        "outcome": "repaired"
+        "outcome": "clear"
       },
       {
-        "evidence": "DFF-023 established in this candidate: the preflight-before-issuer-handoff gap raised by Codex P1 3985324159 on PR #450 (deployed issuer path could claim a ledger row before the preflight-safe OPEN issue was decided) is guarded by validate_historical_defect_backfill() and regression tests test_preflight_failure_creates_no_ledger_row_and_allows_retry and test_missing_source_handling_authority_fails_closed_422.",
+        "evidence": "Preflight-before-ledger-claim is enforced on every entry: candidate admission requires the exact-head hosted Pre-PR preflight to be green (approval/entry-point checks in tests/test_issue_412_prevention_gate.py and the workflows' verification of the preflight controller), and this review was recorded only with trusted_preflight_state success.",
         "family": "DFF-023",
-        "outcome": "repaired"
+        "outcome": "clear"
       }
     ],
     "findings": [],
@@ -200,25 +216,25 @@
         "status": "added"
       },
       {
-        "blob_sha": "d0e0d762b8036dad36272ddbd8bf6aa5b16b2344",
+        "blob_sha": "e493e81fd2a3c0e587f9078023a32d2c62666fb5",
         "path": ".github/workflows/hunter-candidate-admission.yml",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "c50842f68f83eff5fac046168c591cebe0124747",
+        "blob_sha": "21948d473285a85b128329b3e7f49c6b1d72609a",
         "path": ".github/workflows/hunter-governance-reconcile.yml",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "653e111e78d676831a2a406523c22a9acf0ef6c2",
+        "blob_sha": "e8366c998d60bb306e9b169c4d21bae398106507",
         "path": ".github/workflows/hunter-governance-review.yml",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "4fa698345bd8a4a9004ae2a78243e3b4002e8855",
+        "blob_sha": "804a9aa23aa3de9cb37a7beb88eb495e39550379",
         "path": ".github/workflows/hunter-merge-readiness.yml",
         "previous_path": "",
         "status": "modified"
@@ -254,7 +270,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "0abf7ac476b829b1fd3d44558704c6a84b1d1b23",
+        "blob_sha": "b33dfd3d8fd902bd82b0fb12e444b8c8941bfd0e",
         "path": "scripts/hunter_governance_review_v2.py",
         "previous_path": "",
         "status": "modified"
@@ -296,12 +312,8 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "37cc419837421d3bd66a83d6ef68d68ac832451453792cf5a9e3b3bf4dbadbe8"
+    "review_target_digest": "8d42539e6f4b02ee464f2e0fdd33775dfcb9ef29c8772b7e6ebceda12f2c7a97"
   },
-  "review_id": "6ef42bd4d415871b9ecc02fdaecb13b19f113588967f14f7727f1621bb139d8d",
-  "review_request": {
-    "claims_id": "6ef42bd4d415871b9ecc02fdaecb13b19f113588967f14f7727f1621bb139d8d",
-    "schema": "hunter.review-request.v1"
-  },
+  "review_id": "c97bcb70cbb9f4e1f960c80e91ec835b570b3fcb967dca9338b86f6331063e89",
   "schema": "hunter.pre-ready-hostile-review.v1"
 }
