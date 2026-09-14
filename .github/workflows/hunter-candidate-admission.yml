@@ -17,6 +17,8 @@ on:
       - completed
 
 permissions:
+  checks: read
+  statuses: read
   actions: read
   contents: read
   pull-requests: write

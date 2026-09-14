@@ -266,10 +266,10 @@
     {
       "id": "MA-006",
       "class": "retry-authorized-by-caller-intent-rather-than-by-predecessor-outcome-evidence",
-      "source": "Issue #313 ADR 0034 Phase B hostile self-review: prepare_attempt accepted attempt_ordinal > 1 with only a predecessor attempt identity, so a caller could prepare and dispatch a second attempt after an uncertain first attempt whose request the provider may already have accepted. Recurrence on PR #314 independent review (Codex P1): the first guard derived its decision from the caller-supplied predecessor ModelAttemptOutcomeRecord, so a fabricated record naming the predecessor and claiming RETRY_REQUIRES_NEW_ATTEMPT defeated the gate entirely while the repository held an uncertain outcome or none at all \u2014 the prior hardening was insufficient because it checked the shape of the evidence instead of resolving the authority",
+      "source": "Issue #313 ADR 0034 Phase B hostile self-review: prepare_attempt accepted attempt_ordinal > 1 with only a predecessor attempt identity, so a caller could prepare and dispatch a second attempt after an uncertain first attempt whose request the provider may already have accepted. Recurrence on PR #314 independent review (Codex P1): the first guard derived its decision from the caller-supplied predecessor ModelAttemptOutcomeRecord, so a fabricated record naming the predecessor and claiming RETRY_REQUIRES_NEW_ATTEMPT defeated the gate entirely while the repository held an uncertain outcome or none at all — the prior hardening was insufficient because it checked the shape of the evidence instead of resolving the authority",
       "classification": "systemic",
       "guard_boundary": "ModelAdapterService.prepare_attempt, before any authority resolution or durable write",
-      "guard": "a retry requires the predecessor attempt's own DURABLE outcome, resolved from persistence via authoritative_outcome() strict-known at the new attempt's cutoff and following the supersession chain, checked before Source Handling is resolved and before anything durable exists. A caller-supplied record is evidence only: it is compared against the durable one and a mismatch is rejected, never used in its place \u2014 the same treatment prepare_attempt already gives a caller-supplied Source Handling decision and the ADR 0033 persistence invariant requires generally. Retry is admitted only when the durable outcome's retry_authorization is RETRY_REQUIRES_NEW_ATTEMPT, which derive_retry_authorization() grants only where the transport proved non-delivery or the provider established it rejected the request instead of executing it; an attempt with no durable outcome is uncertain and blocks retry. An authorized retry still gets a new attempt, cutoff, Source Handling resolution, handoff, and idempotency key, and terminal_outcome_exists() prevents re-dispatching an attempt that already has an outcome",
+      "guard": "a retry requires the predecessor attempt's own DURABLE outcome, resolved from persistence via authoritative_outcome() strict-known at the new attempt's cutoff and following the supersession chain, checked before Source Handling is resolved and before anything durable exists. A caller-supplied record is evidence only: it is compared against the durable one and a mismatch is rejected, never used in its place — the same treatment prepare_attempt already gives a caller-supplied Source Handling decision and the ADR 0033 persistence invariant requires generally. Retry is admitted only when the durable outcome's retry_authorization is RETRY_REQUIRES_NEW_ATTEMPT, which derive_retry_authorization() grants only where the transport proved non-delivery or the provider established it rejected the request instead of executing it; an attempt with no durable outcome is uncertain and blocks retry. An authorized retry still gets a new attempt, cutoff, Source Handling resolution, handoff, and idempotency key, and terminal_outcome_exists() prevents re-dispatching an attempt that already has an outcome",
       "test": "tests/test_model_adapter_phase_b.py::test_a_fabricated_predecessor_outcome_cannot_authorize_a_retry",
       "status": "guarded"
     },
@@ -299,7 +299,7 @@
       "source": "PR #314 independent review (Codex P2): strict_known_response_artifact ordered ascending with LIMIT 1, so once append_outcome admitted a superseding correction carrying revised response evidence, every later strict-known read returned the original artifact permanently and the correction was invisible",
       "classification": "systemic",
       "guard_boundary": "Model Adapter persistence strict-known historical reads",
-      "guard": "authoritative_outcome() resolves the head of the supersession chain \u2014 the outcome that no other outcome KNOWN AT THE SAME CUTOFF supersedes \u2014 and strict_known_response_artifact() returns the artifact attached to that governing outcome, falling back to the most recent earlier artifact when the correction records no new response evidence. Both remain strict-known, so a correction recorded after the cutoff does not retroactively govern an earlier read and the superseded original is preserved rather than overwritten. The general rule: wherever a record family admits append-only corrections, a historical read must follow the supersession chain, because neither the earliest row nor a blind latest row is the authoritative one",
+      "guard": "authoritative_outcome() resolves the head of the supersession chain — the outcome that no other outcome KNOWN AT THE SAME CUTOFF supersedes — and strict_known_response_artifact() returns the artifact attached to that governing outcome, falling back to the most recent earlier artifact when the correction records no new response evidence. Both remain strict-known, so a correction recorded after the cutoff does not retroactively govern an earlier read and the superseded original is preserved rather than overwritten. The general rule: wherever a record family admits append-only corrections, a historical read must follow the supersession chain, because neither the earliest row nor a blind latest row is the authoritative one",
       "test": "tests/test_model_adapter_phase_b.py::test_a_superseding_correction_is_what_a_later_replay_reads",
       "status": "guarded"
     },
@@ -717,7 +717,7 @@
         "rationale": "Every candidate that changes repository content a reviewer would have to reason about is governed by the pre-ready hostile review requirement. Dependency manifests (requirements/, the root lockfiles and pyproject.toml) are deliberately outside this scope: a dependency-only candidate has no diff for a hostile pass to review, and demanding one would block every automated dependency update behind an artifact its author cannot produce -- a false-positive merge blockage, which is itself a defect."
       },
       "prevention": {
-        "mechanism": "Candidate admission re-derives the base, the exact change set, the applicable families and the governing Issue's acceptance criteria from trusted evidence and refuses an absent, stale, incomplete or contested review; the controller returns the pull request to Draft. The acceptance criteria come from the owner-authored Issue rather than the artifact, so a review cannot measure itself against criteria it wrote for itself, and the Issue it names must be the Issue its branch binds. The local pre-push boundary derives the same governing-Issue criteria from GitHub and refuses to report READY-ELIGIBLE until the exact-head hostile review covers every one of them, so a review hosted admission would reject no longer produces a locally misleading readiness signal.",
+        "mechanism": "Candidate admission requires an authenticated substantive submitted review at the exact current HEAD plus complete structured claims. It rejects zero reviews even when no recurring family applies, unresolved threads, changes requested, stale or incomplete evidence, and mismatched reviewer identity. Merge Readiness consumes the same verifier. Structured exact-head reviews may be submitted out of band to avoid a self-referential artifact commit.",
         "boundary": "hosted-gate",
         "guard_reference": "scripts/hunter_governance_review_v2.py::verify_pre_ready_hostile_review"
       },
@@ -734,7 +734,16 @@
         "tests/test_issue_412_prevention_gate.py::test_issue_442_canonical_criteria_are_admitted",
         "tests/test_issue_412_prevention_gate.py::test_verify_local_enforces_governing_issue_criteria",
         "tests/test_issue_412_prevention_gate.py::test_pre_push_fails_closed_when_issue_criteria_are_unverifiable",
-        "tests/test_issue_412_prevention_gate.py::test_pre_push_reports_ready_only_when_issue_criteria_are_covered"
+        "tests/test_issue_412_prevention_gate.py::test_pre_push_reports_ready_only_when_issue_criteria_are_covered",
+        "tests/test_issue_412_prevention_gate.py::test_governing_criteria_are_fetched_from_the_canonical_repository_not_the_fork",
+        "tests/test_issue_412_prevention_gate.py::test_governing_issue_binding_follows_the_pushed_remote_branch_not_the_local_branch",
+        "tests/test_issue_412_prevention_gate.py::test_mixed_issue_push_cannot_select_one_matching_claim",
+        "tests/test_issue_412_prevention_gate.py::test_top_level_array_review_evidence_is_draft_only_not_a_crash",
+        "tests/test_issue_412_prevention_gate.py::test_non_object_review_claims_are_draft_only_not_a_crash",
+        "tests/test_issue_412_prevention_gate.py::test_malformed_review_evidence_does_not_block_an_ordinary_draft_push",
+        "tests/test_exact_head_review_authority.py::test_zero_reviews_cannot_admit_a_candidate_authored_exact_head_artifact",
+        "tests/test_exact_head_review_authority.py::test_zero_reviews_cannot_admit_when_no_defect_family_applies",
+        "tests/test_exact_head_review_authority.py::test_positive_exact_head_review_and_complete_evidence_admit"
       ],
       "lifecycle": "hosted-enforced",
       "sources": [
@@ -767,7 +776,7 @@
         "tests/test_issue_412_prevention_gate.py::test_a_running_hosted_proof_is_pending_not_failure",
         "tests/test_issue_412_prevention_gate.py::test_an_invalid_hosted_proof_remains_failure",
         "tests/test_issue_412_prevention_gate.py::test_candidate_admission_reconciles_after_the_trusted_upgrade_completes",
-        "tests/test_issue_412_prevention_gate.py::test_the_draft_controller_still_leaves_a_pending_head_alone",
+        "tests/test_issue_412_prevention_gate.py::test_the_draft_controller_keeps_pending_authority_in_draft",
         "tests/test_issue_417_governance_waiting_state.py::test_an_eligible_active_trusted_run_is_waiting_not_failure",
         "tests/test_issue_417_governance_waiting_state.py::test_an_ineligible_active_run_is_not_a_waiting_dependency",
         "tests/test_issue_417_governance_waiting_state.py::test_a_real_blocker_alongside_an_active_run_is_failure_not_waiting",
@@ -797,13 +806,16 @@
         "rationale": "The catalog and its validator are where a detection-only guard can be relabelled as prevention."
       },
       "prevention": {
-        "mechanism": "scripts/hunter_defect_prevention_preflight.py structurally validates every family and refuses a stage the declared evidence does not support.",
+        "mechanism": "scripts/hunter_defect_prevention_preflight.py structurally validates every family and refuses a stage the declared evidence does not support. Historical record identity/count and source/family digests are pinned against a canonical manifest digest in the trusted controller. Coverage counts only registered machine boundaries with valid selectors, guard targets and executing call sites; regression-only families remain reported as gaps.",
         "boundary": "local-pre-push",
         "guard_reference": "scripts/hunter_defect_prevention_preflight.py::validate_recurring_defect_families"
       },
       "regression_evidence": [
         "tests/test_issue_412_prevention_gate.py::test_a_family_cannot_claim_enforcement_without_a_resolvable_guard",
-        "tests/test_issue_412_prevention_gate.py::test_a_family_cannot_claim_prevented_without_merge_enforcement_evidence"
+        "tests/test_issue_412_prevention_gate.py::test_a_family_cannot_claim_prevented_without_merge_enforcement_evidence",
+        "tests/test_exact_head_review_authority.py::test_rewriting_records_and_manifest_together_cannot_remove_accepted_history",
+        "tests/test_exact_head_review_authority.py::test_a_declared_machine_boundary_without_an_executing_binding_is_not_gated",
+        "tests/test_exact_head_review_authority.py::test_audited_canonical_machine_boundary_is_gated"
       ],
       "lifecycle": "locally-enforced",
       "sources": [
@@ -898,7 +910,8 @@
       },
       "prevention": {
         "mechanism": "Dispatchability is decided by the canonical compiled allocation outcome before any automation envelope exists: the SmartPromptMachine itself refuses to mint the envelope unless the compiled outcome is READY with a non-None prompt_artifact_id, raising the deterministic machine-readable PromptTaskUnreadyError (ENGINEERING_TASK_NOT_READY with task_key/route/profile/outcome/prompt_artifact_id/reason_codes/preflight/available) at the envelope seam, so INSUFFICIENT_BUDGET, REPLAN_REQUIRED and READY-without-artifact builds are never wrapped into a signed envelope. The governed ingress re-applies the same invariant at the network boundary. There is no parallel renderer and no duplicate budget authority: both layers consume the machine's own rendered outcome. The raw-input PromptTaskOversizeError guard stays as the cheap first gate, and a genuinely READY build still compiles with unchanged envelope identity.",
-        "boundary": "review"
+        "boundary": "review",
+        "guard_reference": "src/hunter/evidence_intelligence/smart_prompt_routing.py::PromptTaskUnreadyError"
       },
       "regression_evidence": [
         "tests/test_engineering_task_ingress.py::test_non_ready_compiled_outcome_fails_closed_before_any_envelope",
@@ -928,7 +941,8 @@
       },
       "prevention": {
         "mechanism": "A single repository-owned startup seam (railway_issuer_startup.py) is pinned in railway.toml as the start command.  It verifies the evidence data directory is the mounted persistent Railway volume (a directory that merely exists is not accepted as proof, so it never bootstraps into ephemeral container storage), then idempotently invokes the canonical bootstrap through its shared public contract (bootstrap_source_handling_authority.bootstrap_authority, also used by the operator CLI) before exec'ing the canonical issuer, scrubs HUNTER_SOURCE_HANDLING_SIGNING_KEY from the process environment after bootstrap and before exec, and fails closed on any error.  No pre-deploy command, no parallel bootstrap, and no dashboard-only configuration bypasses this seam.  Regression coverage exercises fresh-volume bootstrap, mounted-volume verification, idempotency, tamper/mismatch fail-closed, signing-key lifecycle isolation, ordering invariants, and the shared public bootstrap contract.",
-        "boundary": "review"
+        "boundary": "review",
+        "guard_reference": "scripts/railway_issuer_startup.py::main"
       },
       "regression_evidence": [
         "tests/test_railway_issuer_startup.py::test_fresh_volume_bootstrap_succeeds_and_issuer_launch_is_allowed",
@@ -968,7 +982,8 @@
       },
       "prevention": {
         "mechanism": "Owner- and lease-aware execution ledger: every active row carries the exact owning issuer instance id and a renewable lease, and startup recovery fails closed only incomplete rows whose lease has lapsed, never a row under a valid foreign lease. complete/fail/record_dispatch require the exact owning instance, the owning instance renews each still-running execution's lease, and replay identity stays permanently claimed so lease expiry never permits a reclaim or re-execution.",
-        "boundary": "review"
+        "boundary": "review",
+        "guard_reference": "src/hunter/automation/issue_agent_execution.py::IssueAgentExecutionLedger"
       },
       "regression_evidence": [
         "tests/test_issue_agent_execution.py::test_a_live_foreign_lease_is_never_failed_or_reclaimed",
@@ -995,7 +1010,8 @@
       },
       "prevention": {
         "mechanism": "Accepted execution workers are non-daemon and registered before start, unregister themselves on completion, and are joined by an idempotent IssuerServer.shutdown() snapshot taken outside the registry lock; a drain timeout expires without ever writing a FAILED row, leaving the live row owned by the genuine owner while its provider still runs.",
-        "boundary": "review"
+        "boundary": "review",
+        "guard_reference": "scripts/hunter_issue_agent_issuer.py::IssuerServer"
       },
       "regression_evidence": [
         "tests/test_issue_agent_issuer.py::test_shutdown_drains_an_accepted_execution_worker",
@@ -1009,7 +1025,7 @@
     {
       "id": "DFF-022",
       "title": "merge-readiness-without-current-head-review-authority",
-      "invariant": "The final Merge Readiness controller must itself fail closed unless a complete exact-head review exists at the current PR head and verifies against trusted PR evidence -- a missing, stale, incomplete, or still-contested review is a hard merge blocker, never a warning. Codex is the required primary review authority; the canonical OpenCode hostile review is an admissible fallback only when it records, in machine-checkable fields, why Codex could not review and that Governance, trusted Preflight, a zero unresolved-thread count, and complete structured evidence were all green at review time -- a review that silently skips Codex while it is available, or whose recorded exact head differs from the candidate head, is rejected. A resolved review finding counts as satisfied only when its structured evidence names the exact-head correction commit and a regression test committed in the change set. No other controller's earlier word, and no resolved review thread without that evidence, can stand in for this prerequisite.",
+      "invariant": "The final Merge Readiness controller must itself fail closed unless a complete exact-head review exists at the current PR head and verifies against trusted PR evidence -- a missing, stale, incomplete, or still-contested review is a hard merge blocker, never a warning. The review authority is an ordered reviewer pool declared by the trusted default branch: Codex is the Tier 1 primary; approved agent reviewers are Tier 2 and are handled by the same exact-head-bound evidence pipeline; the canonical OpenCode hostile review is the last-resort guard. Any reviewer below the primary is admissible only when it records, in machine-checkable fields (reviewer_attempts), that every higher-priority enabled reviewer was actually attempted and exhausted with a recorded reason and a timeout_seconds within the bounded timeout policy; the guard is admissible only when the whole enabled pool is exhausted AND it records why the pool reviewers could not review and that Governance, trusted Preflight, a zero unresolved-thread count, and complete structured evidence were all green at review time. A review that silently skips an enabled reviewer while it is available, a guard review whose exhaustion cannot be proven (missing, skipped, duplicated, malformed, unknown-agent, or out-of-bounds attempts), a review whose recorded exact head differs from the candidate head, or a new commit after the review all invalidate the review and force reviewer selection to restart. A resolved review finding counts as satisfied only when its structured evidence names the exact-head correction commit and a regression test committed in the change set. No other controller's earlier word, and no resolved review thread without that evidence, can stand in for this prerequisite; failover is a deterministic machine decision, never a human-noticed skip.",
       "applicability": {
         "changed_paths": [
           "scripts/hunter_merge_readiness_v2.py",
@@ -1022,35 +1038,86 @@
         "rationale": "The final merge gate and the single shared review-verification implementation are where the workflow-ordering defect lives: Merge Readiness could go green through governance or check status alone, or a resolved thread could satisfy readiness without machine-verified structured evidence. A recurrence here means the fail-closed prerequisite was weakened at the boundary that is supposed to own it. The fallback authority rule lives here too because a single primary review authority that can be rate-limited or unavailable is itself a workflow freeze waiting to happen: readiness must stay fail-closed without turning Codex availability into a single point of failure."
       },
       "prevention": {
-        "mechanism": "Merge Readiness evaluates an exact-head review-authority prerequisite read from the candidate's own HEAD: the content-bound pre-ready hostile review artifact (whose review_id hashes the claims and whose review_target_digest binds the exact base->HEAD change set) carries a document-level authority record beside the canonical claims -- type (codex primary, opencode fallback), reviewer/tool identity, the exact head reviewed, timestamp, and hostile-review artifact reference; the authority is deliberately NOT a claim, so the claims stay exactly the single canonical claim set (CANONICAL_CLAIM_SET) the trusted default-branch controller verifies, and no review can smuggle evidence in or out under a claim key. An opencode fallback is structurally required to record why Codex could not review and to record trusted Governance success, trusted Preflight success, a zero unresolved-thread count, and complete structured evidence. The recorded authority head must be on the candidate head's own history (equality for the exact-head case, ancestry otherwise -- the review's self-inserted artifact commit is excluded from the reviewed change set and descends from the head it reviews, while an amended or foreign head does not), and the review is re-verified with the same verify_claims implementation candidate admission uses (extended to bind head_sha and commit ancestry), so readiness and candidate admission cannot drift and the canonical claim-set definition is shared by both paths rather than forked. Candidate admission additionally binds each resolved finding's correction commit to the candidate's own commit range and its regression test to the reviewed change set. A HEAD mutation changes the blob SHAs or the recorded head, so the review goes stale automatically and readiness is blocked again until it is refreshed; code-write policy and its guard bind the model (Codex required primary, OpenCode recorded-reason fallback with green snapshot gates) on the trusted default branch.",
-        "boundary": "hosted-gate"
+        "mechanism": "Review authority is bound to the exact current HEAD, never an ancestor, including artifact-only and empty descendants. Authenticated submitted reviewer evidence must match the structured authority. Lower-priority and Guard reviews require trusted PR-bound exhaustion results emitted by each configured higher-priority reviewer, with matching HEAD, priority, timeout, trigger, parser and retry policy. Candidate prose and invocation references alone are not authority. Unconfigured evidence channels fail closed. Governance admission and Merge Readiness share this verifier.",
+        "boundary": "hosted-gate",
+        "guard_reference": "scripts/hunter_merge_readiness_v2.py::review_authority_state"
       },
       "regression_evidence": [
-        "tests/test_hunter_merge_readiness_v2.py::test_no_codex_review_on_current_head_blocks",
+        "tests/test_code_write_policy.py::test_code_write_policy_declares_an_ordered_reviewer_pool_with_a_last_resort_guard",
+        "tests/test_code_write_policy.py::test_code_write_policy_declares_codex_primary_with_a_recorded_reason_fallback",
+        "tests/test_code_write_policy.py::test_code_write_policy_guard_rejects_a_fallback_without_a_recorded_reason_requirement",
+        "tests/test_code_write_policy.py::test_code_write_policy_guard_rejects_a_pool_without_a_strict_last_resort",
+        "tests/test_code_write_policy.py::test_code_write_policy_guard_rejects_a_pool_without_the_codex_primary",
+        "tests/test_code_write_policy.py::test_code_write_policy_guard_rejects_an_enabled_agent_without_exact_head_support",
+        "tests/test_code_write_policy.py::test_code_write_policy_guard_rejects_an_unbounded_timeout_policy",
         "tests/test_hunter_merge_readiness_v2.py::test_a_codex_review_of_an_older_head_blocks",
-        "tests/test_hunter_merge_readiness_v2.py::test_resolved_finding_without_structured_evidence_blocks",
-        "tests/test_hunter_merge_readiness_v2.py::test_a_new_commit_after_codex_review_stales_readiness_again",
-        "tests/test_hunter_merge_readiness_v2.py::test_current_head_codex_review_with_structured_evidence_allows",
         "tests/test_hunter_merge_readiness_v2.py::test_a_fallback_review_of_the_exact_head_is_a_valid_review_authority",
         "tests/test_hunter_merge_readiness_v2.py::test_a_missing_fallback_review_still_blocks_readiness",
         "tests/test_hunter_merge_readiness_v2.py::test_a_new_commit_after_a_valid_fallback_review_stales_readiness_again",
+        "tests/test_hunter_merge_readiness_v2.py::test_a_new_commit_after_codex_review_stales_readiness_again",
+        "tests/test_hunter_merge_readiness_v2.py::test_current_head_codex_review_with_structured_evidence_allows",
+        "tests/test_hunter_merge_readiness_v2.py::test_no_codex_review_on_current_head_blocks",
+        "tests/test_hunter_merge_readiness_v2.py::test_resolved_finding_without_structured_evidence_blocks",
+        "tests/test_issue_412_prevention_gate.py::test_a_disabled_pool_agent_is_neither_admissible_nor_required",
         "tests/test_issue_412_prevention_gate.py::test_a_fallback_review_of_the_exact_head_is_valid_when_codex_is_unavailable",
-        "tests/test_issue_412_prevention_gate.py::test_a_fallback_review_without_a_recorded_reason_is_refused",
-        "tests/test_issue_412_prevention_gate.py::test_a_review_recorded_for_an_ancestor_head_stays_valid_across_the_artifact_commit",
-        "tests/test_issue_412_prevention_gate.py::test_fallback_review_claims_that_differ_from_the_canonical_claim_set_are_blocked",
-        "tests/test_issue_412_prevention_gate.py::test_fallback_review_emitting_exactly_the_canonical_claim_set_is_accepted",
-        "tests/test_issue_412_prevention_gate.py::test_local_and_hosted_consume_the_same_canonical_claim_set_definition",
         "tests/test_issue_412_prevention_gate.py::test_a_fallback_review_recorded_for_an_older_head_is_stale",
         "tests/test_issue_412_prevention_gate.py::test_a_fallback_review_with_unresolved_threads_recorded_is_refused",
+        "tests/test_issue_412_prevention_gate.py::test_a_fallback_review_without_a_recorded_reason_is_refused",
         "tests/test_issue_412_prevention_gate.py::test_a_fallback_review_without_complete_structured_evidence_status_is_refused",
+        "tests/test_issue_412_prevention_gate.py::test_a_guard_review_that_skips_an_enabled_alternate_blocks_end_to_end",
         "tests/test_issue_412_prevention_gate.py::test_a_resolved_finding_must_carry_structured_resolution_evidence",
-        "tests/test_code_write_policy.py::test_code_write_policy_declares_codex_primary_with_a_recorded_reason_fallback",
-        "tests/test_code_write_policy.py::test_code_write_policy_guard_rejects_a_fallback_without_a_recorded_reason_requirement"
+        "tests/test_issue_412_prevention_gate.py::test_a_review_recorded_for_an_ancestor_head_is_stale_across_the_artifact_commit",
+        "tests/test_issue_412_prevention_gate.py::test_a_skipped_higher_priority_reviewer_is_not_exhaustion_evidence",
+        "tests/test_issue_412_prevention_gate.py::test_an_alternate_agent_review_is_valid_after_primary_exhaustion",
+        "tests/test_issue_412_prevention_gate.py::test_an_alternate_review_with_fresh_head_evidence_is_accepted_end_to_end",
+        "tests/test_issue_412_prevention_gate.py::test_an_untried_higher_priority_reviewer_blocks_an_alternate_review",
+        "tests/test_issue_412_prevention_gate.py::test_codex_primary_remains_valid_when_alternates_are_configured",
+        "tests/test_issue_412_prevention_gate.py::test_exhaustion_evidence_from_an_unknown_agent_fails_closed",
+        "tests/test_issue_412_prevention_gate.py::test_exhaustion_evidence_must_record_a_timeout_within_the_bounded_policy",
+        "tests/test_issue_412_prevention_gate.py::test_failover_restarts_after_a_new_commit_invalidates_a_review",
+        "tests/test_issue_412_prevention_gate.py::test_fallback_review_claims_that_differ_from_the_canonical_claim_set_are_blocked",
+        "tests/test_issue_412_prevention_gate.py::test_unverified_fallback_review_emitting_canonical_claims_is_rejected",
+        "tests/test_issue_412_prevention_gate.py::test_guard_exhaustion_does_not_relax_the_green_snapshot_gates",
+        "tests/test_issue_412_prevention_gate.py::test_local_and_hosted_consume_the_same_canonical_claim_set_definition",
+        "tests/test_issue_412_prevention_gate.py::test_malformed_exhaustion_evidence_fails_closed",
+        "tests/test_issue_412_prevention_gate.py::test_the_guard_is_a_last_resort_only_after_the_whole_pool_is_exhausted",
+        "tests/test_issue_412_prevention_gate.py::test_the_guard_review_requires_exhaustion_evidence_for_the_whole_enabled_pool",
+        "tests/test_issue_412_prevention_gate.py::test_unproven_exhaustion_fails_closed_like_a_missing_review",
+        "tests/test_exact_head_review_authority.py::test_an_ancestor_recorded_head_is_stale_not_valid",
+        "tests/test_exact_head_review_authority.py::test_correct_looking_exhaustion_without_trusted_result_is_blocked",
+        "tests/test_exact_head_review_authority.py::test_actual_trusted_configured_exhaustion_allows_guard_eligibility",
+        "tests/test_exact_head_review_authority.py::test_trusted_result_cannot_substitute_a_different_timeout"
       ],
       "lifecycle": "regression-tested",
       "sources": [
         "Issue #467 workflow-ordering defect (PR #468)",
-        "Issue #467 fallback review-authority hardening (PR #468)"
+        "Issue #467 fallback review-authority hardening (PR #468)",
+        "Issue #467 reviewer-pool failover hardening (follow-on)"
+      ]
+    },
+    {
+      "id": "DFF-023",
+      "title": "preflight-not-enforced-before-ledger-claim-on-every-execution-entry-point",
+      "invariant": "A governed acceptance may not claim the execution ledger before the canonical Source Handling validation has succeeded for the exact authorization, and that ordering must hold on every execution entry point. The service API and the deployed issuer HTTP path are the same governed operation: if the deployed path claims the ledger and dispatches while skipping the preflight the service path runs, a failed or denied acceptance is claimed as if it were authorized. Preflight failure therefore creates no ledger row, the acceptance remains earlier-state replayable once the authority is fixed, and a second entry point that bypasses the seam is itself the defect.",
+      "lifecycle": "regression-tested",
+      "applicability": {
+        "changed_paths": [
+          "src/hunter/automation/",
+          "scripts/"
+        ],
+        "rationale": "The execution ledger and the deployed issuer HTTP edge are the two entry points that can claim an acceptance before Source Handling validation; any future execution surface that skips the shared preparation seam reopens the retry-deadlock defect."
+      },
+      "prevention": {
+        "mechanism": "Both entry points resolve Source Handling authority in a single shared preparation seam before any ledger claim: scripts/hunter_issue_agent_issuer.py::prepare_authorization (used by execute_authorization and by the /issue-agent/authorize HTTP path) mirrors src/hunter/automation/issue_agent_execution.py::execute, so the service API and the deployed issuer path run the identical preflight-before-claim ordering. A preflight failure leaves no ledger row and allows the acceptance to be retried once the authority is fixed; a restrictive successor or denied scope is never claimed or dispatched.",
+        "boundary": "review",
+        "guard_reference": "scripts/hunter_issue_agent_issuer.py::prepare_authorization"
+      },
+      "regression_evidence": [
+        "tests/test_issue_agent_execution.py::test_preflight_failure_creates_no_ledger_row_and_allows_retry",
+        "tests/test_issue_agent_issuer.py::test_missing_source_handling_authority_fails_closed_422"
+      ],
+      "sources": [
+        "Issue #449 (2026-09-10): Codex P1 on PR #450 documented the deployed issuer entry point claiming the ledger before the Source Handling preflight; the corrective PR #453 fixed both entry points"
       ]
     }
   ]

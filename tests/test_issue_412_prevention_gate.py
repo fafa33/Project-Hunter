@@ -42,6 +42,41 @@ BRANCH = "issue-412-pre-ready-hostile-review-gate"
 WRITER = "claude"
 
 
+@pytest.fixture(autouse=True)
+def authenticated_review_observation(monkeypatch):
+    """These claim-shape tests isolate the authenticated observation boundary.
+
+    Real transport, identity and exhaustion rejection are exercised in
+    test_exact_head_review_authority.py.
+    """
+
+    def reviews(repository, token, number, pool, head):
+        state, document, error = core.read_head_pre_ready_review(repository, token, head)
+        if not isinstance(document, dict):
+            return [], None
+        authority = document.get("authority", {})
+        identities = core.reviewer_identity_map(pool)
+        login = next(
+            (identity for identity, agent_id in identities.items() if agent_id == authority.get("type")),
+            "unverified-fallback",
+        )
+        return [
+            {
+                "id": 31,
+                "agent_id": authority.get("type"),
+                "login": login,
+                "commit_id": head,
+                "state": "COMMENTED",
+                "body": "Completed adversarial review of the exact candidate and its structured evidence.",
+            }
+        ], None
+
+    monkeypatch.setattr(core, "read_pr_pool_review_comments", reviews)
+    monkeypatch.setattr(core, "read_unresolved_review_threads", lambda *a: ((), None))
+    monkeypatch.setattr(core, "check_reviewer_dispositions", lambda: (True, ""))
+    monkeypatch.setattr(core, "verify_trusted_exhaustion", lambda *a: ("success", "authenticated fixture"))
+
+
 # --------------------------------------------------------------------------
 # Writer identity binding (DFF-010)
 # --------------------------------------------------------------------------
@@ -485,20 +520,83 @@ CANDIDATE_CHANGES = (
 )
 
 
-def _authority(*, authority_type: str = "codex", head_sha: str = HEAD, **overrides: Any) -> dict[str, Any]:
+def _attempt(
+    agent_id: str = "codex",
+    *,
+    status: str = "exhausted",
+    reason: str = "unavailable (rate-limited)",
+    timeout_seconds: int = 900,
+    failure_class: str = "transient",
+    attempt_count: int = 2,
+    invocation_reference: str = "actions/runs/12345",
+) -> dict[str, Any]:
+    """One machine-checkable reviewer-pool exhaustion attempt record."""
+    return {
+        "agent_id": agent_id,
+        "status": status,
+        "reason": reason,
+        "timeout_seconds": timeout_seconds,
+        "failure_class": failure_class,
+        "attempt_count": attempt_count,
+        "invocation_reference": invocation_reference,
+    }
+
+
+ALTERNATE_AGENT = {
+    "id": "alternate-agent-1",
+    "priority": 2,
+    "enabled": True,
+    "exact_head_support": True,
+    "timeout_seconds": 900,
+    "github_login": "alternate-reviewer[bot]",
+}
+
+
+def _pool(*, agents: tuple = (), last_resort: str = "opencode", max_seconds: int = 1800) -> dict[str, Any]:
+    """A normalized reviewer pool, the shape ``review.load_reviewer_pool`` returns."""
+    base_agent = {
+        "id": "codex",
+        "priority": 1,
+        "enabled": True,
+        "exact_head_support": True,
+        "timeout_seconds": 900,
+    }
+    return {
+        "last_resort": last_resort,
+        "timeout_policy": {"bounded": True, "default_seconds": 900, "max_seconds": max_seconds, "retries_per_agent": 1},
+        "agents": (base_agent,) + tuple(agents),
+    }
+
+
+def _use_pool(monkeypatch, pool: dict[str, Any]) -> None:
+    monkeypatch.setattr(review, "load_reviewer_pool", lambda *_args, **_kwargs: (pool, ""))
+
+
+def _authority(
+    *, authority_type: str = "codex", head_sha: str = HEAD, attempts=None, **overrides: Any
+) -> dict[str, Any]:
     """Review-authority record carried at the top level of the review document.
 
     The authority is document-level review metadata BEside the canonical claims
     -- not a claim -- so the claims stay exactly the canonical claim set the
     trusted controller verifies. The data is structured so the *reason* for a
     fallback review and the gate state it relied on are machine-checkable rather
-    than prose. Codex is the primary authority; 'opencode' is the canonical
-    OpenCode hostile-review fallback, legitimate only when Codex could not
-    review and every snapshot gate the fallback required was green.
+    than prose. Codex is the primary authority and the ordered reviewer pool's
+    Tier 1; an alternate agent is legitimate only when every higher-priority
+    enabled reviewer was actually attempted and exhausted (recorded attempts);
+    'opencode' is the last-resort Hostile-Review guard, legitimate only when the
+    whole enabled pool is exhausted AND every snapshot gate the guard required
+    was green.
     """
+    if authority_type == "codex":
+        tool = "codex-cli"
+    elif authority_type == "opencode":
+        tool = "opencode-hunter-review"
+    else:
+        tool = f"{authority_type}-review"
     authority: dict[str, Any] = {
         "type": authority_type,
-        "tool": "codex-cli" if authority_type == "codex" else "opencode-hunter-review",
+        "tool": tool,
         "head_sha": head_sha,
         "reviewed_at": "2026-09-13T00:00:00Z",
         "artifact": review.REVIEW_RELATIVE_PATH,
@@ -513,6 +611,8 @@ def _authority(*, authority_type: str = "codex", head_sha: str = HEAD, **overrid
                 "structured_evidence_status": "complete",
             }
         )
+    if authority_type != "codex":
+        authority["reviewer_attempts"] = list(attempts) if attempts is not None else [dict(_attempt())]
     authority.update(overrides)
     return authority
 
@@ -565,7 +665,6 @@ def _verify(
     changes=CANDIDATE_CHANGES,
     base=BASE,
     head_sha=HEAD,
-    commit_ancestry=None,
     resolution_corrections=None,
 ) -> review.ReviewVerdict:
     return review.verify_claims(
@@ -575,7 +674,6 @@ def _verify(
         families=FAMILIES,
         resolution_corrections=resolution_corrections,
         head_sha=head_sha,
-        commit_ancestry=commit_ancestry if commit_ancestry is not None else frozenset({HEAD}),
     )
 
 
@@ -773,21 +871,25 @@ def test_a_fallback_review_recorded_for_an_older_head_is_stale() -> None:
     assert "head" in verdict.reason
 
 
-def test_a_review_recorded_for_an_ancestor_head_stays_valid_across_the_artifact_commit() -> None:
-    """The review's own artifact commit is a descendant of the head it reviewed.
+def test_a_review_recorded_for_an_ancestor_head_is_stale_across_the_artifact_commit() -> None:
+    """A review recorded for an ancestor head never legitimises a later head.
 
-    The reviewed change set excludes the artifact, so committing it on top of
-    the reviewed head must not invalidate the review -- the recorded head is on
-    the evaluated head's history and the reviewed content is identical.
+    The review's own artifact commit is a descendant of the head it reviewed,
+    and the self-committed artifact therefore records the pre-commit HEAD. That
+    recorded head is an ancestor of the artifact commit, so it must NOT remain
+    authority for the commit that records it: the binding is strict-exact, and
+    an ancestor artifact is stale, never valid -- regardless of the content.
     """
     recorded = "c" * 40
     evaluated = "e" * 40
     document = _review_document(authority=_authority(authority_type="opencode", head_sha=recorded))
 
-    verdict = _verify(document, head_sha=evaluated, commit_ancestry=frozenset({recorded, evaluated}))
+    verdict = _verify(document, head_sha=evaluated)
 
-    assert verdict.state == "valid"
-    assert verdict.ok is True
+    assert verdict.state == "stale"
+    assert "recorded for exact head" in verdict.reason
+    assert "not the evaluated exact head" in verdict.reason
+    assert verdict.ok is False
 
 
 def test_fallback_review_claims_that_differ_from_the_canonical_claim_set_are_blocked(monkeypatch) -> None:
@@ -819,7 +921,7 @@ def test_fallback_review_claims_that_differ_from_the_canonical_claim_set_are_blo
     assert "review claims must carry exactly the canonical claim set" in description
 
 
-def test_fallback_review_emitting_exactly_the_canonical_claim_set_is_accepted(monkeypatch) -> None:
+def test_unverified_fallback_review_emitting_canonical_claims_is_rejected(monkeypatch) -> None:
     """GREEN: the approved fallback shape verifies end-to-end through Governance.
 
     The fallback authority is recorded at document level BESIDE the claims, so
@@ -852,8 +954,8 @@ def test_fallback_review_emitting_exactly_the_canonical_claim_set_is_accepted(mo
 
     state, description = core.verify_pre_ready_hostile_review("repo", "token", HEAD, PR_NUMBER)
 
-    assert state == "success"
-    assert "complete base->HEAD hostile review" in description
+    assert state == "failure"
+    assert "MISSING_REVIEW_AUTHORITY" in description
 
 
 def test_local_and_hosted_consume_the_same_canonical_claim_set_definition(monkeypatch) -> None:
@@ -991,6 +1093,231 @@ def test_malformed_review_authority_metadata_fails_closed() -> None:
         assert "authority" in verdict.reason
 
 
+# --------------------------------------------------------------------------
+# Ordered reviewer pool and automatic failover (Issue #467 follow-on)
+#
+# Requirement: Codex is Tier 1; approved agent reviewers are Tier 2 and must be
+# attempted when Codex is exhausted; the Hostile-Review guard is Tier 3 and is
+# admissible ONLY as a last resort, and only with machine-checkable exhaustion
+# evidence covering every enabled pool reviewer within the bounded timeout
+# policy. Failover is automatic (the verifier's deterministic decision), never
+# a human-noticed skip.
+# --------------------------------------------------------------------------
+
+
+def test_codex_primary_remains_valid_when_alternates_are_configured(monkeypatch) -> None:
+    """Tier 1 needs no exhaustion trail: there is nothing above it to exhaust."""
+    _use_pool(monkeypatch, _pool(agents=(ALTERNATE_AGENT,)))
+
+    verdict = _verify(_review_document())
+
+    assert verdict.state == "valid"
+    assert verdict.ok is True, verdict.reason
+
+
+def test_an_alternate_agent_review_is_valid_after_primary_exhaustion(monkeypatch) -> None:
+    """Tier 2 is admissible once every higher-priority enabled reviewer is exhausted."""
+    _use_pool(monkeypatch, _pool(agents=(ALTERNATE_AGENT,)))
+    document = _review_document(authority=_authority(authority_type=ALTERNATE_AGENT["id"]))
+
+    verdict = _verify(document)
+
+    assert verdict.state == "valid"
+    assert verdict.ok is True, verdict.reason
+
+
+def test_an_untried_higher_priority_reviewer_blocks_an_alternate_review(monkeypatch) -> None:
+    """An alternate may not record a result while the primary is still available."""
+    _use_pool(monkeypatch, _pool(agents=(ALTERNATE_AGENT,)))
+    document = _review_document(
+        authority=_authority(authority_type=ALTERNATE_AGENT["id"], attempts=[{"agent_id": ALTERNATE_AGENT["id"]}])
+    )
+
+    verdict = _verify(document)
+
+    assert verdict.state == "incomplete"
+    assert "exhaustion evidence" in verdict.reason
+    assert "codex" in verdict.reason
+
+
+def test_the_guard_is_a_last_resort_only_after_the_whole_pool_is_exhausted(monkeypatch) -> None:
+    """A guard review that never tried an enabled alternate is a bypass, not a fallback."""
+    _use_pool(monkeypatch, _pool(agents=(ALTERNATE_AGENT,)))
+    document = _review_document(authority=_authority(authority_type="opencode", attempts=[dict(_attempt())]))
+
+    verdict = _verify(document)
+
+    assert verdict.state == "incomplete"
+    assert "exhaustion evidence" in verdict.reason
+    assert ALTERNATE_AGENT["id"] in verdict.reason
+
+
+def test_the_guard_review_requires_exhaustion_evidence_for_the_whole_enabled_pool() -> None:
+    document = _review_document(authority=_authority(authority_type="opencode", attempts=[]))
+
+    verdict = _verify(document)
+
+    assert verdict.state == "incomplete"
+    assert "exhaustion evidence" in verdict.reason
+
+
+def test_guard_exhaustion_does_not_relax_the_green_snapshot_gates() -> None:
+    document = _review_document(authority=_authority(authority_type="opencode", governance_state="pending"))
+
+    verdict = _verify(document)
+
+    assert verdict.state == "incomplete"
+    assert "Governance" in verdict.reason
+
+
+def test_a_skipped_higher_priority_reviewer_is_not_exhaustion_evidence(monkeypatch) -> None:
+    _use_pool(monkeypatch, _pool(agents=(ALTERNATE_AGENT,)))
+    document = _review_document(
+        authority=_authority(
+            authority_type="opencode",
+            attempts=[dict(_attempt()), _attempt(ALTERNATE_AGENT["id"], status="skipped")],
+        )
+    )
+
+    verdict = _verify(document)
+
+    assert verdict.state == "incomplete"
+    assert "skipped" in verdict.reason
+
+
+def test_exhaustion_evidence_must_record_a_timeout_within_the_bounded_policy(monkeypatch) -> None:
+    _use_pool(monkeypatch, _pool(agents=(), max_seconds=1800))
+    too_long = _authority(authority_type="opencode", attempts=[_attempt("codex", timeout_seconds=3600)])
+    unbounded = _authority(authority_type="opencode", attempts=[_attempt("codex", timeout_seconds="never")])
+
+    for document in (_review_document(authority=too_long), _review_document(authority=unbounded)):
+        verdict = _verify(document)
+        assert verdict.state == "incomplete"
+        assert "timeout_seconds" in verdict.reason
+
+
+def test_exhaustion_evidence_from_an_unknown_agent_fails_closed(monkeypatch) -> None:
+    _use_pool(monkeypatch, _pool(agents=(ALTERNATE_AGENT,)))
+    document = _review_document(
+        authority=_authority(authority_type="opencode", attempts=[dict(_attempt()), _attempt("ghost")])
+    )
+
+    verdict = _verify(document)
+
+    assert verdict.state == "incomplete"
+    assert "ghost" in verdict.reason
+
+
+def test_malformed_exhaustion_evidence_fails_closed() -> None:
+    document = _review_document(authority=_authority(authority_type="opencode", attempts=["not an attempt record"]))
+
+    verdict = _verify(document)
+
+    assert verdict.state == "incomplete"
+    assert "exhaustion evidence" in verdict.reason
+
+
+def test_a_disabled_pool_agent_is_neither_admissible_nor_required(monkeypatch) -> None:
+    """Disabling an alternate removes it from the pool: not admissible, not required."""
+    disabled = {"id": "retired-agent", "priority": 2, "enabled": False, "exact_head_support": True}
+    _use_pool(monkeypatch, _pool(agents=(disabled,)))
+
+    guard = _review_document(authority=_authority(authority_type="opencode"))
+    assert _verify(guard).ok is True
+
+    retired = _review_document(authority=_authority(authority_type="retired-agent"))
+    verdict = _verify(retired)
+    assert verdict.state == "incomplete"
+    assert "authority type" in verdict.reason
+
+
+def test_failover_restarts_after_a_new_commit_invalidates_a_review(monkeypatch) -> None:
+    """HEAD mutation invalidates the review and forces the pool to be re-attempted."""
+    _use_pool(monkeypatch, _pool(agents=(ALTERNATE_AGENT,)))
+    reviewed = _review_document(authority=_authority(authority_type=ALTERNATE_AGENT["id"]))
+    mutated = (CANDIDATE_CHANGES[0], _change("docs/DEFECT_REGISTRY.json", "9" * 40))
+
+    verdict = _verify(reviewed, changes=mutated)
+
+    assert verdict.state == "stale"
+    assert "mutated" in verdict.reason
+
+
+def test_unproven_exhaustion_fails_closed_like_a_missing_review() -> None:
+    """A guard review whose exhaustion cannot be proven is refused, never admitted."""
+    document = _review_document(authority=_authority(authority_type="opencode"))
+    document["authority"].pop("reviewer_attempts")
+
+    verdict = _verify(document)
+
+    assert verdict.state == "incomplete"
+    assert "exhaustion evidence" in verdict.reason
+
+
+def test_an_alternate_review_with_fresh_head_evidence_is_accepted_end_to_end(monkeypatch) -> None:
+    """The hosted controller admits a Tier-2 review built on primary exhaustion."""
+    _use_pool(monkeypatch, _pool(agents=(ALTERNATE_AGENT,)))
+    monkeypatch.setattr(core, "read_pr_refs", lambda *_a: (True, BRANCH, "main", None))
+    monkeypatch.setattr(core, "read_merge_base", lambda *_a: (True, BASE, None))
+    monkeypatch.setattr(
+        core,
+        "read_pr_changed_files",
+        lambda *_a: (
+            True,
+            (
+                core.PullRequestFile("added", "scripts/hunter_writer_provenance.py", "", "a" * 40),
+                core.PullRequestFile("modified", "docs/DEFECT_REGISTRY.json", "", "b" * 40),
+            ),
+            None,
+        ),
+    )
+    monkeypatch.setattr(
+        core,
+        "read_head_pre_ready_review",
+        lambda *_a: ("present", _review_document(authority=_authority(authority_type=ALTERNATE_AGENT["id"])), None),
+    )
+    monkeypatch.setattr(core.pre_ready, "load_families", lambda *_a, **_k: (FAMILIES, ""))
+    monkeypatch.setattr(core, "read_issue_acceptance_criteria", lambda *_a: ("present", (), ""))
+    monkeypatch.setattr(core, "read_pr_commits", lambda *_a: (True, (_signed_commit(),), None))
+
+    state, description = core.verify_pre_ready_hostile_review("repo", "token", HEAD, PR_NUMBER)
+
+    assert state == "success"
+    assert "complete base->HEAD hostile review" in description
+
+
+def test_a_guard_review_that_skips_an_enabled_alternate_blocks_end_to_end(monkeypatch) -> None:
+    """The hosted controller applies the same fail-closed exhaustion rule."""
+    _use_pool(monkeypatch, _pool(agents=(ALTERNATE_AGENT,)))
+    monkeypatch.setattr(core, "read_pr_refs", lambda *_a: (True, BRANCH, "main", None))
+    monkeypatch.setattr(core, "read_merge_base", lambda *_a: (True, BASE, None))
+    monkeypatch.setattr(
+        core,
+        "read_pr_changed_files",
+        lambda *_a: (
+            True,
+            (
+                core.PullRequestFile("added", "scripts/hunter_writer_provenance.py", "", "a" * 40),
+                core.PullRequestFile("modified", "docs/DEFECT_REGISTRY.json", "", "b" * 40),
+            ),
+            None,
+        ),
+    )
+    monkeypatch.setattr(
+        core,
+        "read_head_pre_ready_review",
+        lambda *_a: ("present", _review_document(authority=_authority(authority_type="opencode")), None),
+    )
+    monkeypatch.setattr(core.pre_ready, "load_families", lambda *_a, **_k: (FAMILIES, ""))
+    monkeypatch.setattr(core, "read_issue_acceptance_criteria", lambda *_a: ("present", (), ""))
+    monkeypatch.setattr(core, "read_pr_commits", lambda *_a: (True, (_signed_commit(),), None))
+
+    state, description = core.verify_pre_ready_hostile_review("repo", "token", HEAD, PR_NUMBER)
+
+    assert state == "failure"
+    assert ALTERNATE_AGENT["id"] in description
+
+
 def test_a_family_outside_the_changed_scope_is_not_demanded() -> None:
     """A guard that demanded inapplicable families would block valid work."""
     assert "DFF-001" not in review.applicable_family_ids(
@@ -1076,7 +1403,7 @@ def test_ready_admission_refuses_a_candidate_without_review_state(monkeypatch) -
     state, description = core.verify_pre_ready_hostile_review("repo", "token", HEAD, PR_NUMBER)
 
     assert state == "failure"
-    assert "no pre-ready hostile review exists" in description
+    assert "MISSING_REVIEW_AUTHORITY" in description
 
 
 def test_ready_admission_fails_closed_when_review_evidence_is_unavailable(monkeypatch) -> None:
@@ -1487,14 +1814,8 @@ def test_an_unrecognised_github_status_fails_closed(monkeypatch) -> None:
     assert "unrecognised status" in description
 
 
-def test_a_candidate_triggering_no_family_needs_no_review(monkeypatch) -> None:
-    """A guard that demanded a review with nothing applicable would block valid work.
-
-    A dependency-only candidate touches no path any recurring-defect family
-    claims, and its author cannot produce a review artifact at all. Requiring one
-    would be the very defect family DFF-009 exists to prevent: granting a channel
-    an obligation it cannot satisfy.
-    """
+def test_a_candidate_triggering_no_family_still_requires_review(monkeypatch) -> None:
+    """No matching defect family does not waive positive review authority."""
     monkeypatch.setattr(core, "read_pr_refs", lambda *_a: (True, "dependabot/pip/x", "main", None))
     monkeypatch.setattr(core, "read_merge_base", lambda *_a: (True, BASE, None))
     monkeypatch.setattr(
@@ -1507,8 +1828,8 @@ def test_a_candidate_triggering_no_family_needs_no_review(monkeypatch) -> None:
 
     state, description = core.verify_pre_ready_hostile_review("repo", "token", HEAD, PR_NUMBER)
 
-    assert state == "success"
-    assert "No recurring-defect family applies" in description
+    assert state == "failure"
+    assert "MISSING_REVIEW_AUTHORITY" in description
 
 
 def test_a_present_review_is_verified_even_when_no_family_applies(monkeypatch) -> None:
@@ -1649,7 +1970,12 @@ def test_a_copied_file_is_not_rejected_as_a_malformed_addition(monkeypatch) -> N
             None,
         ),
     )
-    monkeypatch.setattr(core, "read_head_pre_ready_review", lambda *_a: ("absent", None, None))
+    document = _review_document(
+        changes=(ingress.ConnectorFileChange("added", "scripts/copy.py", "", "a" * 40),), families=()
+    )
+    monkeypatch.setattr(core, "read_head_pre_ready_review", lambda *_a: ("present", document, None))
+    monkeypatch.setattr(core, "read_pr_commits", lambda *_a: (True, (_signed_commit(),), None))
+    monkeypatch.setattr(core, "read_issue_acceptance_criteria", lambda *_a: ("present", (), ""))
     monkeypatch.setattr(
         core.pre_ready,
         "load_families",
@@ -1917,11 +2243,21 @@ def test_candidate_admission_reconciles_after_the_trusted_upgrade_completes() ->
     assert "pull_request_target" in condition and "push" in condition
 
 
-def test_the_draft_controller_still_leaves_a_pending_head_alone() -> None:
-    """Reconciling later is the fix, not turning pending back into a failure."""
-    source = (ROOT / "scripts/hunter_candidate_admission.py").read_text(encoding="utf-8")
+def test_the_draft_controller_keeps_pending_authority_in_draft(monkeypatch) -> None:
+    import hunter_candidate_admission as admission
 
-    assert 'if admission_state == "pending":' in source
+    pr = {"state": "open", "draft": False, "head": {"sha": HEAD}, "base": {"ref": "main"}, "node_id": "pending"}
+    monkeypatch.setattr(core, "read_mergeability", lambda *a: pr)
+    monkeypatch.setattr(core, "candidate_admission", lambda *a: ("pending", "proof is incomplete"))
+    converted: list[str] = []
+
+    def convert(token: str, node: str) -> bool:
+        converted.append(node)
+        return True
+
+    monkeypatch.setattr(admission, "convert_to_draft", convert)
+    assert admission.enforce_candidate_admission("repo", "token", PR_NUMBER) == 1
+    assert converted == ["pending"]
 
 
 # --------------------------------------------------------------------------

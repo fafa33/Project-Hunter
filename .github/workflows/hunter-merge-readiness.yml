@@ -47,6 +47,7 @@ on:
         type: number
 
 permissions:
+  actions: read
   checks: read
   contents: read
   pull-requests: read
