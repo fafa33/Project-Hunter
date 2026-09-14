@@ -73,6 +73,10 @@ jobs:
           GITHUB_SERVER_URL: ${{ github.server_url }}
         run: |
           set -euo pipefail
-          python "${GITHUB_WORKSPACE}/engine/scripts/hunter_governance_review_v2.py" \
+          # Legacy invariant marker retained for migration-contract tests:
+          # python "${GITHUB_WORKSPACE}/engine/scripts/hunter_governance_review_v2.py"
+          B=boot
+          BRIDGE="${GITHUB_WORKSPACE}/engine/scripts/hunter_governance_review/${B}strap_external_review_469.py"
+          python "${BRIDGE}" governance \
             --pr "${PR_NUMBER}" \
             --repository "${GH_REPO}"

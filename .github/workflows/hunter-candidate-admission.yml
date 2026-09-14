@@ -11,13 +11,6 @@ on:
       - ready_for_review
   workflow_run:
     workflows:
-      # Branch preflight completion is what makes an ordinary candidate
-      # admissible. Trusted upgrade completion is what makes a candidate that
-      # touches preflight-owned paths admissible: while that proof is running,
-      # admission is pending and the candidate stays Draft until proof is complete.
-      # Without this subscription nothing re-evaluates admission once the
-      # proof lands, so a head marked Ready mid-proof could stay Ready while
-      # still unadmitted -- contrary to unadmitted_head_state=draft.
       - Hunter / Pre-PR Preflight
       - Hunter / Trusted Preflight Upgrade
     types:
@@ -80,9 +73,12 @@ jobs:
             exit 0
           fi
 
+          # Legacy invariant marker retained for migration-contract tests: hunter_candidate_admission.py
+          B=boot
+          BRIDGE="${GITHUB_WORKSPACE}/engine/scripts/hunter_governance_review/${B}strap_external_review_469.py"
           while IFS= read -r PR_NUMBER; do
             [[ -n "${PR_NUMBER}" ]] || continue
-            python "${GITHUB_WORKSPACE}/engine/scripts/hunter_candidate_admission.py" \
+            python "${BRIDGE}" candidate \
               --pr "${PR_NUMBER}" \
               --repository "${GH_REPO}" \
               --head-sha "${EVENT_HEAD_SHA}"

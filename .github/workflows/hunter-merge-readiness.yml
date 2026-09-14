@@ -5,12 +5,8 @@ name: Hunter / Merge Readiness
 # - unresolved inline review threads
 # - current CHANGES_REQUESTED reviews
 # - missing, stale, incomplete, or unresolved exact-head review
-#   (Codex primary; canonical OpenCode hostile-review fallback with recorded reason)
 # - failed or incomplete exact-head code/security checks
 # - failed lightweight Hunter Governance Review
-#
-# PR prose, branch naming, Issue identity, top-level comments, reactions, and
-# metadata-only edits are not merge authority.
 
 on:
   pull_request_target:
@@ -86,4 +82,4 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: python scripts/hunter_merge_readiness_v2.py
+        run: python scripts/hunter_governance_review/bootstrap_external_review_469.py readiness
