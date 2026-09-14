@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-15
 **Authority:** Issue #461 stabilization work
-**Status:** Proposed for owner review
+**Status:** Owner-approved; implementation planning authorized
 
 ## Goal
 
@@ -44,9 +44,9 @@ Review orchestration publishes one of these states for the exact candidate HEAD:
 - `FAILOVER_IN_PROGRESS` — current provider is unavailable/offline/unresponsive and the next provider is being attempted. GitHub status: `pending`.
 - `REVIEW_CLEAR` — an authenticated exact-head reviewer emitted admissible structured clear authority and there are no unresolved review threads. GitHub status: `success`.
 - `FINDINGS_OPEN` — an authenticated reviewer found blocking defects on the exact HEAD. GitHub status: `failure`/blocked.
-- `POOL_EXHAUSTED` — every enabled provider has authenticated exhaustion evidence and no last-resort authority can be admitted. GitHub status: `failure`.
+- `POOL_EXHAUSTED` — every enabled provider has authenticated exhaustion evidence and no last-resort authority can be admitted. GitHub status: `pending`/action-required, never red solely because reviewers are unavailable; Merge Readiness remains blocked until review capacity returns.
 
-A missing review response before the provider's bounded availability deadline can never be reported as `MISSING_REVIEW_AUTHORITY` failure while orchestration still has a valid provider/failover path.
+A missing review response before the provider's bounded availability deadline can never be reported as `MISSING_REVIEW_AUTHORITY` failure while orchestration still has a valid provider/failover path. More generally, reviewer delay, queueing, quota exhaustion, provider outage, Mac unavailability, or total pool exhaustion are operational availability states, not candidate defects, and must not paint the review check red.
 
 ## Trigger and timing model
 
@@ -95,7 +95,7 @@ The collector/orchestrator itself must be automatically dispatched from a truste
 
 Governance consumes orchestration state rather than inferring "missing authority" from absence alone. While an exact-head review cycle is active, Governance publishes pending with an explicit reason such as `Waiting for exact-head reviewer acknowledgement`, `Exact-head review in progress`, or `Reviewer failover in progress`.
 
-Governance publishes failure only for a real invalid condition: authenticated blocking finding, malformed/forged/stale authority, invalid exhaustion evidence, changed HEAD during proof, or complete pool exhaustion with no admissible last-resort path.
+Governance publishes red/failure only for a confirmed defect or proven invalid condition that belongs to the candidate/evidence itself: an authenticated blocking finding or authenticated malformed/forged authority. Mere absence, lateness, quota exhaustion, provider outage, pool exhaustion, changed HEAD, stale evidence superseded by a new HEAD, or unavailable exhaustion proof remain non-red blocked/pending states. They still prevent Merge Readiness from succeeding, but they do not falsely claim that the candidate failed review.
 
 Merge Readiness remains blocked until review state is `REVIEW_CLEAR`, all required checks are green, structured evidence is complete, unresolved thread count is zero, and the PR is explicitly moved through owner-approved Ready/merge progression.
 
