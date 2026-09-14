@@ -147,15 +147,12 @@ def _parse(argv: list[str]) -> tuple[Path, Path, str, list[str]]:
 def _validate_provider_capabilities() -> dict[str, str]:
     permission = _PERMISSION_CONFIG.get("permission")
     if not isinstance(permission, dict) or any(
-        not isinstance(name, str) or not isinstance(decision, str)
-        for name, decision in permission.items()
+        not isinstance(name, str) or not isinstance(decision, str) for name, decision in permission.items()
     ):
         raise SandboxShimError("provider capability contract is malformed")
     normalized = {str(name): str(decision) for name, decision in permission.items()}
     allowed = {
-        name
-        for name, decision in normalized.items()
-        if name not in {"*", "external_directory"} and decision == "allow"
+        name for name, decision in normalized.items() if name not in {"*", "external_directory"} and decision == "allow"
     }
     missing = sorted(_REQUIRED_PROVIDER_CAPABILITIES - allowed)
     if missing:
