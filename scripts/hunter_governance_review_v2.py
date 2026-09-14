@@ -1610,6 +1610,11 @@ def verify_pre_ready_hostile_review(
         )
 
     state, document, read_error = read_head_pre_ready_review(repository, token, head_sha)
+    review_artifact_changed = any(
+        item.path == pre_ready.REVIEW_RELATIVE_PATH and pre_ready.canonical_status(item.status) in {"added", "modified"}
+        for item in changed_files
+    )
+    document_from_committed_artifact = state == "present"
     if state == "unavailable":
         return (
             "failure",
@@ -1659,6 +1664,7 @@ def verify_pre_ready_hostile_review(
                     "Candidate admission blocked: external review authority differs from its authenticated emitter.",
                 )
             document = external
+            document_from_committed_artifact = False
             break
     actionable: dict[str, dict[str, Any]] = {}
     for r in reviews:
@@ -1717,10 +1723,17 @@ def verify_pre_ready_hostile_review(
     claimed_issue = str(((document or {}).get("claims") or {}).get("issue") or "").strip().lstrip("#")
     branch_issue = issue_for_branch(head_ref)
     if branch_issue is not None and claimed_issue and claimed_issue != branch_issue:
-        return "failure", (
-            f"Candidate admission blocked: the pre-ready hostile review claims Issue #{claimed_issue}, but branch "
-            f"{head_ref} binds Issue #{branch_issue}."
-        )
+        if document_from_committed_artifact and not review_artifact_changed:
+            # The candidate did not author this evidence path, so a mismatched
+            # artifact can only be inherited historical evidence from the base.
+            # Do not attribute an older PR's review authority to this candidate.
+            document = None
+            claimed_issue = ""
+        else:
+            return "failure", (
+                f"Candidate admission blocked: the pre-ready hostile review claims Issue #{claimed_issue}, but branch "
+                f"{head_ref} binds Issue #{branch_issue}."
+            )
 
     issue_criteria: tuple[str, ...] | None = None
     if claimed_issue.isdigit():

@@ -1280,3 +1280,28 @@ def test_missing_fallback_identity_leaves_request_blocked_not_ready(monkeypatch)
 
     assert state == "failure"
     assert "MISSING_REVIEW_AUTHORITY" in message
+
+
+def test_inherited_base_review_artifact_is_not_candidate_review(monkeypatch) -> None:
+    """A review inherited unchanged from main must not be attributed to a new PR."""
+    inherited = _review_document()
+    monkeypatch.setattr(core, "read_pr_refs", lambda *_args: (True, "connector/issue-461-next-slice", "main", None))
+    monkeypatch.setattr(core, "read_merge_base", lambda *_args: (True, BASE, None))
+    monkeypatch.setattr(
+        core,
+        "read_pr_changed_files",
+        lambda *_args: (
+            True,
+            (core.PullRequestFile("modified", "src/hunter/example.py", "", "3" * 40),),
+            None,
+        ),
+    )
+    monkeypatch.setattr(core, "read_head_pre_ready_review", lambda *_args: ("present", inherited, None))
+    monkeypatch.setattr(core.pre_ready, "load_families", lambda *_args, **_kwargs: ((), ""))
+    monkeypatch.setattr(core, "read_pr_pool_review_comments", lambda *_args: ((), None))
+
+    state, description = core.verify_pre_ready_hostile_review("repo", "token", HEAD, 471)
+
+    assert state == "failure"
+    assert "MISSING_REVIEW_AUTHORITY" in description
+    assert "claims Issue #467" not in description

@@ -2173,7 +2173,14 @@ def test_a_review_naming_another_issue_than_the_branch_is_refused(monkeypatch) -
     monkeypatch.setattr(
         core,
         "read_pr_changed_files",
-        lambda *_a: (True, (core.PullRequestFile("modified", "docs/DEFECT_REGISTRY.json", "", "b" * 40),), None),
+        lambda *_a: (
+            True,
+            (
+                core.PullRequestFile("modified", "docs/DEFECT_REGISTRY.json", "", "b" * 40),
+                core.PullRequestFile("modified", review.REVIEW_RELATIVE_PATH, "", "c" * 40),
+            ),
+            None,
+        ),
     )
     document = _review_document()
     document["claims"]["issue"] = "999"
