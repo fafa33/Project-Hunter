@@ -156,20 +156,20 @@ def _install_governance(
     document: Any,
     state: str = "present",
     comments: tuple[Any, ...] = (),
+    artifact_changed: bool = True,
 ) -> None:
     monkeypatch.setattr(core, "read_pr_refs", lambda *_args: (True, "issue-467-reviewer-pool-failover", "main", None))
     monkeypatch.setattr(core, "read_merge_base", lambda *_args: (True, BASE, None))
+    changed_files = [
+        core.PullRequestFile("added", "scripts/hunter_writer_provenance.py", "", "1" * 40),
+        core.PullRequestFile("modified", "docs/DEFECT_REGISTRY.json", "", "2" * 40),
+    ]
+    if state == "present" and artifact_changed:
+        changed_files.append(core.PullRequestFile("modified", review.REVIEW_RELATIVE_PATH, "", "9" * 40))
     monkeypatch.setattr(
         core,
         "read_pr_changed_files",
-        lambda *_args: (
-            True,
-            (
-                core.PullRequestFile("added", "scripts/hunter_writer_provenance.py", "", "1" * 40),
-                core.PullRequestFile("modified", "docs/DEFECT_REGISTRY.json", "", "2" * 40),
-            ),
-            None,
-        ),
+        lambda *_args: (True, tuple(changed_files), None),
     )
     monkeypatch.setattr(core, "read_head_pre_ready_review", lambda *_args: (state, document, None))
     monkeypatch.setattr(core.pre_ready, "load_families", lambda *_args, **_kwargs: (FAMILIES, ""))
@@ -1305,3 +1305,48 @@ def test_inherited_base_review_artifact_is_not_candidate_review(monkeypatch) -> 
     assert state == "failure"
     assert "MISSING_REVIEW_AUTHORITY" in description
     assert "claims Issue #467" not in description
+
+
+def test_inherited_same_issue_review_artifact_is_still_historical(monkeypatch) -> None:
+    """Unchanged base evidence is historical even when the new slice binds the same Issue."""
+    inherited = _review_document(
+        changes=(_change("src/hunter/old_slice.py", "4" * 40),),
+        families=(),
+    )
+    _install_governance(monkeypatch, document=inherited, artifact_changed=False)
+
+    state, description = core.verify_pre_ready_hostile_review("repo", "token", HEAD, PR_NUMBER)
+
+    assert state == "failure"
+    assert "MISSING_REVIEW_AUTHORITY" in description
+    assert "STALE_REVIEW" not in description
+    assert "MALFORMED_REVIEW" not in description
+
+
+def test_current_exact_review_with_inherited_artifact_waits_for_structured_authority(monkeypatch) -> None:
+    """A current review beside inherited evidence must fail closed, never crash or synthesize authority."""
+    inherited = _review_document()
+    monkeypatch.setattr(core, "read_pr_refs", lambda *_args: (True, "connector/issue-461-next-slice", "main", None))
+    monkeypatch.setattr(core, "read_merge_base", lambda *_args: (True, BASE, None))
+    monkeypatch.setattr(
+        core,
+        "read_pr_changed_files",
+        lambda *_args: (
+            True,
+            (core.PullRequestFile("modified", "src/hunter/example.py", "", "3" * 40),),
+            None,
+        ),
+    )
+    monkeypatch.setattr(core, "read_head_pre_ready_review", lambda *_args: ("present", inherited, None))
+    monkeypatch.setattr(core.pre_ready, "load_families", lambda *_args, **_kwargs: ((), ""))
+    monkeypatch.setattr(
+        core,
+        "read_issue_acceptance_criteria",
+        lambda *_args: ("present", ("the live slice remains fail-closed",), ""),
+    )
+    monkeypatch.setattr(core, "read_pr_pool_review_comments", lambda *_args: ((_trusted_review(),), None))
+
+    state, description = core.verify_pre_ready_hostile_review("repo", "token", HEAD, 472)
+
+    assert state == "failure"
+    assert "MISSING_REVIEW_AUTHORITY" in description

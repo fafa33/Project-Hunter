@@ -1622,6 +1622,13 @@ def verify_pre_ready_hostile_review(
         )
     if state == "invalid":
         return "failure", f"Candidate admission blocked: {read_error}."
+    if document_from_committed_artifact and not review_artifact_changed:
+        # Review evidence inherited unchanged from the base is historical state,
+        # never authority for this candidate. This is independent of Issue number:
+        # same-Issue follow-up slices and unbound branch names must not inherit an
+        # earlier PR's stale/malformed review outcome either.
+        document = None
+        document_from_committed_artifact = False
 
     pool, pool_error = pre_ready.load_reviewer_pool()
     if pool_error or pool is None:
@@ -1723,17 +1730,10 @@ def verify_pre_ready_hostile_review(
     claimed_issue = str(((document or {}).get("claims") or {}).get("issue") or "").strip().lstrip("#")
     branch_issue = issue_for_branch(head_ref)
     if branch_issue is not None and claimed_issue and claimed_issue != branch_issue:
-        if document_from_committed_artifact and not review_artifact_changed:
-            # The candidate did not author this evidence path, so a mismatched
-            # artifact can only be inherited historical evidence from the base.
-            # Do not attribute an older PR's review authority to this candidate.
-            document = None
-            claimed_issue = ""
-        else:
-            return "failure", (
-                f"Candidate admission blocked: the pre-ready hostile review claims Issue #{claimed_issue}, but branch "
-                f"{head_ref} binds Issue #{branch_issue}."
-            )
+        return "failure", (
+            f"Candidate admission blocked: the pre-ready hostile review claims Issue #{claimed_issue}, but branch "
+            f"{head_ref} binds Issue #{branch_issue}."
+        )
 
     issue_criteria: tuple[str, ...] | None = None
     if claimed_issue.isdigit():
@@ -1746,70 +1746,15 @@ def verify_pre_ready_hostile_review(
                 f"unavailable ({criteria_error})."
             )
 
-    if document is None and not exact_reviews:
+    if document is None:
+        # A substantive exact-head comment proves that a reviewer looked at this
+        # head, but it does not manufacture structured review claims or authority.
+        # Authority must come from an authenticated structured review document or
+        # an explicit adoption of the candidate's exact review request.
         return (
             "failure",
-            "Candidate admission blocked: MISSING_REVIEW_AUTHORITY: no substantive exact-head hostile review.",
+            "Candidate admission blocked: MISSING_REVIEW_AUTHORITY: no authenticated structured exact-head hostile review authority.",
         )
-
-    # If no committed artifact but exact-head external reviews exist, build a
-    # document from trusted evidence with authority from the highest-priority
-    # external review. This avoids requiring a self-referential artifact commit.
-    if document is None and exact_reviews:
-        # Determine the governing issue from branch name
-        claimed_issue = branch_issue or "0"
-        if claimed_issue.isdigit():
-            state_criteria, issue_criteria, criteria_error = read_issue_acceptance_criteria(
-                repository, token, claimed_issue
-            )
-            if state_criteria != "present":
-                issue_criteria = ()
-        else:
-            issue_criteria = ()
-        # Build canonical claims from trusted evidence
-        claims = pre_ready.build_claims(
-            issue=claimed_issue,
-            base_ref=base_ref,
-            base_sha=merge_base,
-            changes=changes,
-            acceptance_criteria=issue_criteria,
-            defect_families=tuple(
-                {"family": fid, "outcome": "clear", "evidence": "swept"}
-                for fid in pre_ready.applicable_family_ids(
-                    families,
-                    tuple(
-                        sorted(
-                            {path for change in pre_ready.target_changes(changes) for path in change.affected_paths()}
-                        )
-                    ),
-                )
-            ),
-            findings=tuple(),
-            adversarial_dimensions=pre_ready.REQUIRED_ADVERSARIAL_DIMENSIONS,
-        )
-        # Select highest-priority exact review as authority
-        priorities = {str(a["id"]): int(a["priority"]) for a in pre_ready.enabled_pool_reviewers(pool)}
-        observation = min(exact_reviews, key=lambda r: priorities.get(r.get("agent_id", ""), 10**9))
-        authority = {
-            "type": observation["agent_id"],
-            "tool": "authenticated-github-review",
-            "head_sha": observation["commit_id"],
-            "reviewed_at": observation.get("submitted_at") or "GitHub review observation",
-            "artifact": observation.get("html_url") or f"GitHub review {observation['id']}",
-        }
-        # Lower-tier reviewers must prove exhaustion of higher-priority pool
-        if priorities.get(authority["type"], 10**9) > min(priorities.values()):
-            from hunter_reviewer_collector import load_exhaustion
-
-            try:
-                ack = review_acknowledgement(observation["body"])
-                collector_run_id = ack.get("collector_run_id") if ack else None
-                authority.update(
-                    load_exhaustion(repository, token, pr_number, head_sha, pool, collector_run_id, authority["type"])
-                )
-            except Exception as exc:
-                return "failure", f"EXHAUSTION_UNPROVEN: {exc}"
-        document = pre_ready.document_for(claims, authority=authority)
 
     resolution_corrections: frozenset[str] | None = None
     if isinstance(document, dict):
