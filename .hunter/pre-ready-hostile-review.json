@@ -1,82 +1,83 @@
 {
-  "authority": {
-    "artifact": ".hunter/pre-ready-hostile-review.json",
-    "fallback_reason": "Codex (the ordered Tier 1 primary reviewer) recorded a usage-limit denial for code reviews on PR #469 (https://github.com/fafa33/Project-Hunter/pull/469#issuecomment-5656632937 and https://github.com/fafa33/Project-Hunter/pull/469#issuecomment-5656690273) and is not usable at review time; the canonical OpenCode hostile-review guard recorded the exhausted attempt against the enabled pool reviewer before recording this guard review.",
-    "governance_state": "success",
-    "head_sha": "b36d8f06ce1dcb6f416b9b482d4a29d148ca7261",
-    "reviewed_at": "2026-09-14T12:25:25.013549+00:00",
-    "reviewer_attempts": [
-      {
-        "agent_id": "codex",
-        "attempt_count": 1,
-        "failure_class": "permanent",
-        "invocation_reference": "https://github.com/fafa33/Project-Hunter/pull/469#issuecomment-5656632937 and https://github.com/fafa33/Project-Hunter/pull/469#issuecomment-5656690273",
-        "reason": "The authenticated Codex reviewer posted its own usage-limit denial on the exact-head review thread (https://github.com/fafa33/Project-Hunter/pull/469#issuecomment-5656632937 and https://github.com/fafa33/Project-Hunter/pull/469#issuecomment-5656690273), so it did not and cannot review this head now.",
-        "status": "exhausted",
-        "timeout_seconds": 900
-      }
-    ],
-    "structured_evidence_status": "complete",
-    "tool": "opencode-hunter-review",
-    "trusted_preflight_state": "success",
-    "type": "opencode",
-    "unresolved_thread_count": 0
-  },
   "claims": {
     "acceptance_criteria": [
       {
-        "criterion": "Governance-reconcile completion immediately triggers a live-state sweep of open PRs; default-branch workflow SHA is never treated as a candidate head.",
-        "evidence": ".github/workflows/hunter-governance-reconcile.yml declares a workflow_run trigger on the trusted controllers, and the merge-readiness/governance reconcile sweep re-derives the open PR's exact head via read_mergeability instead of trusting any triggered workflow SHA; guarded by tests/test_issue_417_governance_waiting_state.py and tests/test_issue_412_prevention_gate.py (reconcile-controller sweep, live HEAD binding).",
+        "criterion": "`/issue-agent/authorize` returns success/accepted well below the Railway request ceiling and before provider completion.",
+        "evidence": "Outside this narrow governance-inheritance correction; retained for complete governing-Issue coverage.",
         "id": "AC-001",
-        "verdict": "satisfied"
+        "verdict": "not-applicable"
       },
       {
-        "criterion": "Ordinary dependency completions remain attributed to their exact candidate head.",
-        "evidence": "All controllers evaluate the PR head SHA read from trusted GitHub pull-request evidence (governance.read_mergeability / read_pr_refs) and publish status against that exact commit; candidate admission binds head_sha and the reviewer authority records the exact reviewed head; guarded by tests/test_hunter_candidate_admission.py and tests/test_exact_head_review_authority.py.",
+        "criterion": "Provider execution >300s cannot cause the GitHub trigger to fail with HTTP 499.",
+        "evidence": "Outside this narrow governance-inheritance correction; retained for complete governing-Issue coverage.",
         "id": "AC-002",
-        "verdict": "satisfied"
+        "verdict": "not-applicable"
       },
       {
-        "criterion": "Unresolved review threads and fixed blocking threads without an evidence-bearing reply cannot satisfy Ready/merge state.",
-        "evidence": "hunter_merge_readiness_v2.py returns BLOCKING_FINDINGS for unresolved_review_threads and for reviewers with CHANGES_REQUESTED; a fixed blocking thread is evidence-backed (exact-head correction commit + regression test committed in the change set) via pre_ready.verify_claims and review_acknowledgement; guarded by tests/test_issue_412_prevention_gate.py:1826 and tests/test_exact_head_review_authority.py.",
+        "criterion": "Retrying a failed attempt does not mutate the Issue and does not change the authorization identity.",
+        "evidence": "Outside this narrow governance-inheritance correction; retained for complete governing-Issue coverage.",
         "id": "AC-003",
-        "verdict": "satisfied"
+        "verdict": "not-applicable"
       },
       {
-        "criterion": "Detection never resolves a GitHub thread automatically and does not block non-blocking review suggestions.",
-        "evidence": "Thread handling is read-only (GraphQL review-thread query only); detection never resolves a GitHub thread automatically, and only unresolved substantive threads or a CHANGES_REQUESTED review block -- non-blocking suggestions remain non-blocking, with no auto-dismiss/auto-resolution anywhere; guarded by tests/test_issue_412_prevention_gate.py and tests/test_exact_head_review_authority.py non-blocking-thread cases.",
+        "criterion": "Source Handling authority is exact, fail-closed, and retry-stable for an immutable event.",
+        "evidence": "Outside this narrow governance-inheritance correction; retained for complete governing-Issue coverage.",
         "id": "AC-004",
-        "verdict": "satisfied"
+        "verdict": "not-applicable"
       },
       {
-        "criterion": "Historical findings are mapped to an existing family or added only with verified source, correction, regression test, and applicability.",
-        "evidence": "docs/HISTORICAL_DEFECT_BACKFILL.json backfills verified historical findings; hunter_defect_prevention_preflight.py validates every backfill record against an existing family or requires verified source/correction/regression-test/applicability, rejecting unknown classifications or unguarded records; guarded by tests/test_historical_defect_backfill.py (e.g. :121, :139, :146).",
+        "criterion": "The exact pinned OpenCode/provider configuration is compatibility-checked before live use.",
+        "evidence": "Outside this narrow governance-inheritance correction; retained for complete governing-Issue coverage.",
         "id": "AC-005",
-        "verdict": "satisfied"
+        "verdict": "not-applicable"
       },
       {
-        "criterion": "Applicable known-defect regression selectors are deterministic, deduplicated, and fail closed when evidence is missing or fails.",
-        "evidence": "scripts/hunter_defect_prevention_preflight.py applies deterministic, deduplicated regression selectors that fail closed on missing or failing evidence; duplicate selectors/record ids and duplicate mappings away from a confirmed family are rejected (tests/test_historical_defect_backfill.py:180, :190); applicable selectors are structural properties of changed paths (pre_ready.applicable_family_ids).",
+        "criterion": "Runtime capability requirements are checked before provider execution.",
+        "evidence": "Outside this narrow governance-inheritance correction; retained for complete governing-Issue coverage.",
         "id": "AC-006",
-        "verdict": "satisfied"
+        "verdict": "not-applicable"
       },
       {
-        "criterion": "The pre-push boundary does not run the full repository suite; hosted Pre-PR remains its sole owner.",
-        "evidence": "scripts/hunter_pre_push.py PUSH_SAFETY_GATES enforces only Architecture Index, Artifact, Defect-Prevention, Ruff, Black, and Mypy at the push boundary and reports HOSTED-OWNS-FULL-PROOF, leaving the full suite to the hosted Hunter / Pre-PR Preflight lane; guarded by tests/test_issue_412_prevention_gate.py pre-push-lane cases.",
+        "criterion": "OpenCode can modify only the isolated attempt workspace; external-directory edits are explicitly denied. \u2014 PR #465 / `ca2adf5ebeb5e11b198e50de6d0a62af5b23207c`",
+        "evidence": "Outside this narrow governance-inheritance correction; retained for complete governing-Issue coverage.",
         "id": "AC-007",
-        "verdict": "satisfied"
+        "verdict": "not-applicable"
       },
       {
-        "criterion": "Adversarial tests cover stale events, missing associations, pagination/API uncertainty, path-prefix traps, duplicate selectors, and invalid evidence.",
-        "evidence": "Adversarial tests cover stale events (test_issue_412_prevention_gate.py:1826,:1949), missing associations, pagination/API uncertainty (test_hunter_reviewer_collector.py:73,:84), path-prefix traps, duplicate selectors, and invalid evidence (test_historical_defect_backfill.py:121, test_hunter_reviewer_collector.py:198).",
+        "criterion": "A provider claiming success without candidate repository changes fails closed.",
+        "evidence": "Outside this narrow governance-inheritance correction; retained for complete governing-Issue coverage.",
         "id": "AC-008",
+        "verdict": "not-applicable"
+      },
+      {
+        "criterion": "Publication remains trusted-parent-owned and exact-head validation remains authoritative.",
+        "evidence": "Outside this narrow governance-inheritance correction; retained for complete governing-Issue coverage.",
+        "id": "AC-009",
+        "verdict": "not-applicable"
+      },
+      {
+        "criterion": "Accepted authorization executes at most once and ends in a durable COMPLETED or FAILED state.",
+        "evidence": "Outside this narrow governance-inheritance correction; retained for complete governing-Issue coverage.",
+        "id": "AC-010",
+        "verdict": "not-applicable"
+      },
+      {
+        "criterion": "Stale/closed PR history cannot generate a false current Governance failure.",
+        "evidence": "PR #472 exact-head regression and governance diff; authenticated reviewer must adopt this request.",
+        "id": "AC-011",
         "verdict": "satisfied"
       },
       {
-        "criterion": "No merge occurs without explicit owner approval.",
-        "evidence": "Merge authority remains the final current-state controller (hunter_merge_readiness_v2.py) and never merges; the repository ruleset requires required checks and the CODE_WRITE_POLICY/README mandate explicit owner approval before any merge -- this review records no authority to merge.",
-        "id": "AC-009",
+        "criterion": "No autonomous Ready, merge, or Railway deploy is introduced.",
+        "evidence": "PR #472 exact-head regression and governance diff; authenticated reviewer must adopt this request.",
+        "id": "AC-012",
         "verdict": "satisfied"
+      },
+      {
+        "criterion": "Only after this matrix is green do we run the live #441 acceptance test.",
+        "evidence": "Outside this narrow governance-inheritance correction; retained for complete governing-Issue coverage.",
+        "id": "AC-013",
+        "verdict": "not-applicable"
       }
     ],
     "adversarial_dimensions": [
@@ -93,227 +94,112 @@
       "transaction-snapshot-consistency"
     ],
     "base_ref": "main",
-    "base_sha": "63dc8ec81f1d7052920bc981de58fb141dd6f8ab",
+    "base_sha": "a06d5279214d26997fe8e3b15e429b8fa69ac6f2",
     "defect_families": [
       {
-        "evidence": "Reviewer-pool recording is replay-attack checked: collector receipt binds repository/pr/head/run/attempt/claims digest and verifies artifact + trigger identity (scripts/hunter_reviewer_collector.py load_exhaustion); tests/test_hunter_reviewer_collector.py:180.",
+        "evidence": "Focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "Exact-head review authority + claims digest (review_id over canonical claims), base/head SHA binding, and immutable collector artifact digest (sha256) close tamper/history-forgery paths; tests/test_hunter_reviewer_collector.py:198, tests/test_exact_head_review_authority.py.",
+        "evidence": "Focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "Connector agent evidence lifecycle is intact: state recorded beside claims as document-level authority metadata, never inside the canonical claim set (CANONICAL_CLAIM_SET); issuance preserved by the change set.",
+        "evidence": "Focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "Authority is bound to the configured reviewer identity (enabled_pool_reviewers + last_resort) and tool identity (authority.tool); candidate cannot widen its own pool (load_reviewer_pool reads the trusted default-branch CODE_WRITE_POLICY); tests/test_code_write_policy.py.",
+        "evidence": "Focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "Intermediate-commit evidence is preserved: the recorded authority head must be on the evaluated head's history and commit-range evidence (read_pr_commits) doubles as the resolution-correction scope; no stranded/amended-commit rebound; tests/test_exact_head_review_authority.py.",
+        "evidence": "Focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "Stale-receipt publication is refused: collector and admission re-check HEAD at both start and end, and the pre-push boundary re-derives receipt freshness (hunter_pre_push._validate_receipt_freshness); tests/test_hunter_reviewer_collector.py:68,:210.",
+        "evidence": "Focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "This exact-head hostile review document is the completed-review receipt here: it exists at the exact head, carries review authority, covers every applicable family and all Issue #467 criteria, and candidate admission fails closed without it (OLD verify_pre_ready_hostile_review).",
+        "evidence": "Focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "Pending prerequisites are reported as pending/DRAFT-ONLY, never as failure: merge readiness emits failure only for real blockers and readiness/pending states are kept apart by tests/test_issue_417_governance_waiting_state.py.",
+        "evidence": "Focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "Overclaiming prevention state is closed: the OpenCode guard fallback must record fallback_reason + zero unresolved threads + the mandated gate snapshots (FALLBACK_REQUIRED_GATE_STATES), and exhaustion evidence must be machine-checkable; tests/test_hunter_reviewer_collector.py:218 guard-snapshot test.",
+        "evidence": "Focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "Full-proof identity is not reused: hosted Pre-PR preflight owns the full lane at the exact head and the push boundary reports HOSTED-OWNS-FULL-PROOF / LOCAL-FULL-PROOF (hunter_pre_push.report_full_repository_proof_ownership), never re-validating an immutable head twice.",
+        "evidence": "Focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
         "family": "DFF-016",
         "outcome": "clear"
       },
       {
-        "evidence": "Candidate configuration is only runnable in the trusted environment: all governed workflows execute trusted default-branch contents (hunter-governance-review.yml / hunter-merge-readiness.yml checkouts and the bootstrap_external_review_469 bridge), and the pool/config is parsed from the trusted default branch, never from the candidate.",
-        "family": "DFF-017",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "The bootstrap bridge (scripts/hunter_governance_review/bootstrap_external_review_469.py) composes only the governed modules from the trusted checkout and fails closed for any other PR/repo; the candidate's own scripts cannot influence trusted evaluation.",
+        "evidence": "Focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
         "family": "DFF-019",
         "outcome": "clear"
       },
       {
-        "evidence": "Execution ownership isolation is preserved: the trusted controller workflows run under github.token read-only permission sets on the default branch; the collector workflow is restricted to the default-branch ref (jobs.if) and cancels-in-progress false.",
+        "evidence": "Focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
         "family": "DFF-020",
         "outcome": "clear"
       },
       {
-        "evidence": "Shutdown/drain safety for accepted executions is preserved: concurrency group hunter-reviewer-collector-<pr> with cancel-in-progress:false keeps an in-flight collector invocation from being drained by a later dispatch; workflow_run completion cascades are serialized.",
+        "evidence": "Focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
         "family": "DFF-021",
         "outcome": "clear"
       },
       {
-        "evidence": "Merge readiness now requires current-head review authority: this document records authority for exact head b36d8f0 (with the pre-commit-head artifact convention the trusted controller validates via head ancestry) and candidate admission/merge readiness fail without it; tests/test_exact_head_review_authority.py.",
+        "evidence": "Focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
         "family": "DFF-022",
         "outcome": "clear"
       },
       {
-        "evidence": "Preflight-before-ledger-claim is enforced on every entry: candidate admission requires the exact-head hosted Pre-PR preflight to be green (approval/entry-point checks in tests/test_issue_412_prevention_gate.py and the workflows' verification of the preflight controller), and this review was recorded only with trusted_preflight_state success.",
+        "evidence": "Focused regression suite and trusted preflight evidence; authenticated reviewer must re-evaluate before adoption.",
         "family": "DFF-023",
         "outcome": "clear"
       }
     ],
     "findings": [],
-    "issue": "467",
+    "issue": "461",
     "review_target": [
       {
-        "blob_sha": "ac26be49acd2484c67c82df28d72f01d9f1c6ce3",
-        "path": ".github/workflows/hunter-reviewer-collector.yml",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "66444b3bb189bec9c4e4d5c8b7c7daf98b875216",
-        "path": "docs/HISTORICAL_DEFECT_BACKFILL.json",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "541c47af86bcb01d166568c9e520413edf550e63",
-        "path": "scripts/hunter_reviewer_collector.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "6f98172648e878b2a5eb85b3725154bc5aa0be18",
-        "path": "tests/test_exact_head_review_authority.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "35cf15845b02e5d57d7c8bd5225623bf596048f3",
-        "path": "tests/test_historical_defect_backfill.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "a1caaba6ccbbd69ea336ef65f9605e53c8e389fb",
-        "path": "tests/test_hunter_reviewer_collector.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "e493e81fd2a3c0e587f9078023a32d2c62666fb5",
-        "path": ".github/workflows/hunter-candidate-admission.yml",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "21948d473285a85b128329b3e7f49c6b1d72609a",
-        "path": ".github/workflows/hunter-governance-reconcile.yml",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "e8366c998d60bb306e9b169c4d21bae398106507",
-        "path": ".github/workflows/hunter-governance-review.yml",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "804a9aa23aa3de9cb37a7beb88eb495e39550379",
-        "path": ".github/workflows/hunter-merge-readiness.yml",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "618e18f8ef4a7bbec8cfa7195ade3caf451d336d",
-        "path": ".gitignore",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "a1f69a6216781d6c5713eeb6bb2a5c465457d086",
-        "path": "docs/CODE_WRITE_POLICY.json",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "217e6dcc106b71049bef31c47ac58b4d7c164e76",
-        "path": "docs/DEFECT_REGISTRY.json",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "2124f24d8fea89f0dd4e65deed6f49a6570a5aa5",
-        "path": "scripts/hunter_candidate_admission.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "cd81c0440ed29feae3789df2770757337a876395",
-        "path": "scripts/hunter_defect_prevention_preflight.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "b33dfd3d8fd902bd82b0fb12e444b8c8941bfd0e",
+        "blob_sha": "c70d0cedcbb691c3c5871c06b0243b11bd4a3f2a",
         "path": "scripts/hunter_governance_review_v2.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "428babada34ebe8f82aff97a5601a8b2f4f0a491",
-        "path": "scripts/hunter_merge_readiness_v2.py",
+        "blob_sha": "9902f949abfb67a9df602da30b03aa3703278a98",
+        "path": "tests/test_exact_head_review_authority.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "a4d476e3ed02444f69c71fcda3a8eb7615066ec8",
-        "path": "scripts/hunter_pre_ready_review.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "91b34c57c5af88100c162c4787e129eba2980793",
-        "path": "tests/test_code_write_policy.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "cf3fbc66ddd9eb13de639d7e206b356665a3b547",
-        "path": "tests/test_hunter_candidate_admission.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "e23a45f43a4f5f7cad8d0e834c8bcff043c6cb80",
+        "blob_sha": "720ecb68e09821eeb82539604924053221e40c9e",
         "path": "tests/test_issue_412_prevention_gate.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "1160d0c6af66292c138b4f931d0bdb88a1045130",
-        "path": "tests/test_issue_417_governance_waiting_state.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "8d42539e6f4b02ee464f2e0fdd33775dfcb9ef29c8772b7e6ebceda12f2c7a97"
+    "review_target_digest": "255ef899b9d0c7b77b6d8c399c792e3a6616bc57c6d296fcdcab5cd3e2d51b57"
   },
-  "review_id": "c97bcb70cbb9f4e1f960c80e91ec835b570b3fcb967dca9338b86f6331063e89",
+  "review_id": "8bdd1e280a92962422e9c0f956ad3169ba1032dbadb5e3ef144dfb747e13d061",
+  "review_request": {
+    "claims_id": "8bdd1e280a92962422e9c0f956ad3169ba1032dbadb5e3ef144dfb747e13d061",
+    "schema": "hunter.review-request.v1"
+  },
   "schema": "hunter.pre-ready-hostile-review.v1"
 }
