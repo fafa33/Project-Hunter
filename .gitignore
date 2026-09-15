@@ -13,3 +13,5 @@ nohup.out
 reports/
 .aider*
 .freebuff/project-id
+
+.worktrees/
