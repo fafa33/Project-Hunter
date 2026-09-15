@@ -1,1 +1,32 @@
-{"authorization_id":"ea9523c6a8761115d19285265b0c1e73604afff1e48f4217ff3fce88685db322","claims":{"base_ref":"main","base_sha":"a06d5279214d26997fe8e3b15e429b8fa69ac6f2","capability":"feature-branch-write","changes":[{"blob_sha":"8fdcab4bf7cde9492c49e70c6d7fa3e082f3e7ee","path":"src/hunter/automation/railway_opencode_permission_sandbox.py","previous_path":"","status":"modified"},{"blob_sha":"1991249a028d2168922bbedb214e28786f6d761d","path":"tests/test_railway_opencode_permission_sandbox.py","previous_path":"","status":"modified"}],"governance_scopes":[],"grant_fingerprint":"aacd323333c03193a08bf3536ecd83b98ca1462abe445b1a1b275edecf46ec34","issue":"461","paths":["src/hunter/automation/railway_opencode_permission_sandbox.py","tests/test_railway_opencode_permission_sandbox.py"],"target_ref":"connector/issue-461-provider-capability-preflight","writer":"fafa33"},"schema":"hunter-connector-write-authorization-v4"}
+{
+  "authorization_id": "7265b45fb4adc8d6cdf99151393f523e4e5fc77031f119237865bdcd5d52a353",
+  "claims": {
+    "base_ref": "main",
+    "base_sha": "fea16ec43ecd728198733b14050f0037ea66080a",
+    "capability": "feature-branch-write",
+    "changes": [
+      {
+        "blob_sha": "78879bb13c3ccf1ae704a90b66d849a831873284",
+        "path": "src/hunter/automation/railway_opencode_permission_sandbox.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "e6ec120b8930ac4aa59a70d8b522c58114e79f57",
+        "path": "tests/test_railway_opencode_permission_sandbox.py",
+        "previous_path": "",
+        "status": "modified"
+      }
+    ],
+    "governance_scopes": [],
+    "grant_fingerprint": "aacd323333c03193a08bf3536ecd83b98ca1462abe445b1a1b275edecf46ec34",
+    "issue": "461",
+    "paths": [
+      "src/hunter/automation/railway_opencode_permission_sandbox.py",
+      "tests/test_railway_opencode_permission_sandbox.py"
+    ],
+    "target_ref": "connector/issue-461-provider-capability-preflight",
+    "writer": "fafa33"
+  },
+  "schema": "hunter-connector-write-authorization-v4"
+}
