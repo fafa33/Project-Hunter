@@ -358,6 +358,9 @@ def _substantive_review_body(body: str) -> bool:
 def review_acknowledgement(body: str) -> dict[str, Any] | None:
     """An entire, explicitly issued JSON result, never a quoted inline example."""
     raw = body.strip()
+    codex_footer = re.fullmatch(r"(?s)(\{.*\})\n\n ?\[View task →\]\(https://chatgpt\.com/s/[A-Za-z0-9_-]+\)", raw)
+    if codex_footer:
+        raw = codex_footer.group(1)
     if raw.startswith("```json\n") and raw.endswith("\n```"):
         raw = raw[len("```json\n") : -len("\n```")]
     try:
