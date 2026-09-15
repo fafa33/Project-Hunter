@@ -255,3 +255,9 @@ def test_read_collector_completion_rejects_untrusted_or_wrong_head_run(monkeypat
     assert state == "absent"
     assert run_id is None
     assert reason is None
+
+
+def test_reconcile_runs_when_reviewer_collector_completes():
+    root = orchestrator.__file__ and orchestrator.__file__.rsplit("/scripts/", 1)[0]
+    text = open(f"{root}/.github/workflows/hunter-governance-reconcile.yml", encoding="utf-8").read()
+    assert "Hunter Reviewer Collector" in text

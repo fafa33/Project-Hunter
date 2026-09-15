@@ -158,7 +158,7 @@ def collect_attempts(pool: dict[str, Any], head: str, backend: Backend) -> list[
                     "outcome": "responded" if completed else "timed_out",
                 }
             )
-            if completed:
+            if completed and agent.get("authority_eligible", True):
                 return records
     return records
 

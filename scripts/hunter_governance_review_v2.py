@@ -600,7 +600,7 @@ def verify_trusted_exhaustion(
     problem = pre_ready._exhaustion_error(pool, authority, str(authority.get("type")))
     if problem:
         return "failure", problem
-    agents = pre_ready.enabled_pool_reviewers(pool)
+    agents = pre_ready.authority_pool_reviewers(pool)
     own = next((a["priority"] for a in agents if a["id"] == authority.get("type")), float("inf"))
     required = [a for a in agents if a["priority"] < own]
     attempts = {a["agent_id"]: a for a in authority.get("reviewer_attempts", [])}
@@ -1759,7 +1759,7 @@ def verify_pre_ready_hostile_review(
             ack = review_adoption_acknowledgement(observation, head_sha, claims_id)
             if ack and ack["head_sha"] == head_sha and ack["claims_id"] == claims_id:
                 adopted.append((observation, ack))
-        priorities = {str(a["id"]): int(a["priority"]) for a in pre_ready.enabled_pool_reviewers(pool)}
+        priorities = {str(a["id"]): int(a["priority"]) for a in pre_ready.authority_pool_reviewers(pool)}
         if adopted:
             observation, ack = min(adopted, key=lambda item: priorities.get(item[0]["agent_id"], 10**9))
             authority = {
@@ -1781,31 +1781,27 @@ def verify_pre_ready_hostile_review(
                 except Exception as exc:
                     return "failure", f"EXHAUSTION_UNPROVEN: {exc}"
         else:
+            # An authenticated exact-head reviewer response that fails to adopt
+            # this request is substantive invalid evidence, not ordinary waiting.
+            if exact_reviews:
+                return "failure", (
+                    "MISSING_REVIEW_AUTHORITY: authenticated exact-head reviewer response did not validly adopt "
+                    "the current review request"
+                )
             import hunter_review_orchestrator as orchestrator
-            from hunter_reviewer_collector import load_exhaustion
 
             collector_state, collector_run_id, collector_error = orchestrator.read_collector_completion(
                 repository, token, pr_number, head_sha
             )
             if collector_state != "present" or collector_run_id is None:
                 detail = f" ({collector_error})" if collector_error else ""
-                return "failure", (
-                    "MISSING_REVIEW_AUTHORITY: no authenticated exact-head adoption of the review request" + detail
+                return "pending", (
+                    "MISSING_REVIEW_AUTHORITY: waiting for authenticated exact-head reviewer authority" + detail
                 )
-            try:
-                exhaustion = load_exhaustion(
-                    repository, token, pr_number, head_sha, pool, collector_run_id, str(pool["last_resort"])
-                )
-            except Exception as exc:
-                return "failure", f"EXHAUSTION_UNPROVEN: {exc}"
-            authority = {
-                "type": str(pool["last_resort"]),
-                "tool": "hunter-deterministic-review-guard",
-                "head_sha": head_sha,
-                "reviewed_at": "trusted collector completion",
-                "artifact": f"actions/runs/{collector_run_id}",
-                **exhaustion,
-            }
+            return "pending", (
+                "MISSING_REVIEW_AUTHORITY: reviewer pool completed without substantive authenticated exact-head "
+                "authority; synthetic last-resort authority is forbidden"
+            )
         # This is NEW authority for the current exact HEAD; historical evidence is unchanged.
         document = pre_ready.document_for(claims, authority=authority)
 

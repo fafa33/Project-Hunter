@@ -1339,7 +1339,9 @@ def test_unverified_opencode_fallback_is_rejected_even_after_codex_exhaustion(mo
         },
     )
 
-    assert core.verify_pre_ready_hostile_review("repo", "token", HEAD, PR_NUMBER)[0] == "failure"
+    state, reason = core.verify_pre_ready_hostile_review("repo", "token", HEAD, PR_NUMBER)
+    assert state == "pending"
+    assert "MISSING_REVIEW_AUTHORITY" in reason
 
 
 def test_missing_fallback_identity_leaves_request_blocked_not_ready(monkeypatch):
@@ -1349,7 +1351,7 @@ def test_missing_fallback_identity_leaves_request_blocked_not_ready(monkeypatch)
 
     state, message = core.verify_pre_ready_hostile_review("repo", "token", HEAD, PR_NUMBER)
 
-    assert state == "failure"
+    assert state == "pending"
     assert "MISSING_REVIEW_AUTHORITY" in message
 
 
@@ -1440,7 +1442,7 @@ def test_authenticated_codex_standard_clear_review_adopts_current_exact_head_req
     assert state == "success", reason
 
 
-def test_verified_pool_exhaustion_uses_deterministic_guard_instead_of_missing_authority(monkeypatch):
+def test_verified_pool_exhaustion_without_substantive_authority_stays_pending(monkeypatch):
     document, _ = _request_and_ack()
     _install_governance(monkeypatch, document=document, comments=())
     monkeypatch.setattr(core, "read_unresolved_review_threads", lambda *a: ((), None))
@@ -1461,7 +1463,8 @@ def test_verified_pool_exhaustion_uses_deterministic_guard_instead_of_missing_au
     }
     monkeypatch.setattr("hunter_reviewer_collector.load_exhaustion", lambda *_a: evidence)
     state, reason = core.verify_pre_ready_hostile_review("repo", "token", HEAD, PR_NUMBER)
-    assert state == "success", reason
+    assert state == "pending"
+    assert "substantive" in reason.lower() or "review authority" in reason.lower()
 
 
 def test_deterministic_guard_fails_closed_when_collector_evidence_is_unavailable(monkeypatch):
@@ -1471,5 +1474,5 @@ def test_deterministic_guard_fails_closed_when_collector_evidence_is_unavailable
 
     monkeypatch.setattr(orchestrator, "read_collector_completion", lambda *_a: ("absent", None, None))
     state, reason = core.verify_pre_ready_hostile_review("repo", "token", HEAD, PR_NUMBER)
-    assert state == "failure"
+    assert state == "pending"
     assert "MISSING_REVIEW_AUTHORITY" in reason

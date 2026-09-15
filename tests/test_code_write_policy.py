@@ -78,7 +78,7 @@ def test_code_write_policy_declares_codex_primary_with_a_recorded_reason_fallbac
 
 
 def test_code_write_policy_declares_an_ordered_reviewer_pool_with_a_last_resort_guard() -> None:
-    """The ordered reviewer pool: Codex first, local fast fallback, guard last resort."""
+    """The ordered reviewer pool: local free-first, Codex hosted fallback, guard last resort."""
     policy = json.loads((ROOT / "docs" / "CODE_WRITE_POLICY.json").read_text(encoding="utf-8"))
     pool = policy["review_progression"]["review_authority"]["reviewer_pool"]
 
@@ -88,8 +88,8 @@ def test_code_write_policy_declares_an_ordered_reviewer_pool_with_a_last_resort_
     assert pool["timeout_policy"]["max_seconds"] >= pool["timeout_policy"]["default_seconds"]
     by_id = {agent["id"]: agent for agent in pool["agents"]}
     assert by_id["codex"]["enabled"] is True
-    assert by_id["codex"]["priority"] == 1
-    assert by_id["local-ollama"]["priority"] == 2
+    assert by_id["local-ollama"]["priority"] == 1
+    assert by_id["codex"]["priority"] == 2
     assert by_id["codex"]["exact_head_support"] is True
 
 
@@ -293,10 +293,10 @@ def test_local_ollama_is_declared_as_fast_priority_one_provider() -> None:
     by_id = {agent["id"]: agent for agent in pool["agents"]}
     local = by_id["local-ollama"]
     assert local["enabled"] is True
-    assert local["priority"] == 2
+    assert local["priority"] == 1
     assert local["trigger_method"] == "github-workflow:hunter-local-reviewer.yml"
     assert local["ack_timeout_seconds"] == 30
-    assert by_id["codex"]["priority"] < local["priority"]
+    assert by_id["codex"]["priority"] > local["priority"]
 
 
 def test_codex_hard_review_budget_is_capped_at_five_minutes() -> None:

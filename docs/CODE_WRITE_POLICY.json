@@ -41,7 +41,7 @@
       ],
       "reviewer_pool": {
         "model": "ordered-priority-with-failover",
-        "ordering": "strict-priority-first: every enabled reviewer is attempted, in priority order, before any lower-priority reviewer; approved agent reviewers (Tier 2) are handled by the same exact-head-bound evidence pipeline as the primary, and the Hostile-Review guard is the last resort, admissible only when the whole enabled pool is exhausted",
+        "ordering": "free-first strict priority: local-ollama triage runs first; because it is not authority-eligible it cannot terminate the authority search, so Codex is the hosted authority fallback; no synthetic last-resort authority is granted without a substantive exact-head reviewer",
         "last_resort": "opencode",
         "exhaustion_semantics": "Every enabled higher-priority reviewer must have authenticated exact-head invocation results. The trusted default-branch Hunter Reviewer Collector records actual trigger IDs, the configured timeout and all retries, and immutable artifact provenance. A response proves availability and forbids failover, even if its format is invalid. Candidate prose, skipped reviewers, failed GitHub reads, changed HEAD, wrong configuration, insufficient elapsed time, candidate-ref collector runs, or missing retries fail closed.",
         "timeout_policy": {
@@ -54,7 +54,7 @@
         "agents": [
           {
             "id": "local-ollama",
-            "priority": 2,
+            "priority": 1,
             "enabled": true,
             "trigger_method": "github-workflow:hunter-local-reviewer.yml",
             "exact_head_support": true,
@@ -82,7 +82,7 @@
           },
           {
             "id": "codex",
-            "priority": 1,
+            "priority": 2,
             "enabled": true,
             "trigger_method": "github-pr-comment:@codex review",
             "exact_head_support": true,

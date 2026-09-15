@@ -420,3 +420,30 @@ def test_codex_trigger_permission_failure_fails_over_instead_of_crashing():
     assert results[0]["failure_class"] == "permanent"
     assert results[0]["failure_status"] == 403
     assert results[1]["outcome"] == "responded"
+
+
+def test_triage_only_response_does_not_prevent_hosted_fallback():
+    class TriageThenHostedBackend(Backend):
+        def acknowledged(self, agent, trigger):
+            return True
+
+        def completed(self, agent, trigger):
+            return True
+
+    backend = TriageThenHostedBackend()
+    local = {
+        **POOL["agents"][0],
+        "id": "local-ollama",
+        "priority": 1,
+        "authority_eligible": False,
+        "retryable": False,
+        "trigger_method": "github-workflow:hunter-local-reviewer.yml",
+        "evidence_parser": "hunter.local-review.v1",
+    }
+    codex = {**POOL["agents"][0], "id": "codex", "priority": 2, "retryable": False}
+    pool = {"last_resort": "opencode", "timeout_policy": {"retries_per_agent": 0}, "agents": (local, codex)}
+
+    results = collector.collect_attempts(pool, HEAD, backend)
+
+    assert [item["agent_id"] for item in results] == ["local-ollama", "codex"]
+    assert [item["outcome"] for item in results] == ["responded", "responded"]
