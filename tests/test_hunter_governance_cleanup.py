@@ -53,15 +53,19 @@ def test_active_workflows_do_not_invoke_retired_preflight() -> None:
         assert "hunter_governance_preflight.py" not in text, relative
 
 
-def test_governance_review_has_no_bootstrap_fallback() -> None:
+def test_governance_review_bootstrap_stays_on_trusted_default_branch() -> None:
     path = ROOT / ".github/workflows/hunter-governance-review.yml"
     text = path.read_text(encoding="utf-8")
     assert "github.event.pull_request.number" in text
     assert "github.event.workflow_run.pull_requests[0].number" in text
     assert "github.event.inputs.pr_number" in text
     assert "283" not in text
-    assert "bootstrap" not in text.lower()
-    assert 'python "${GITHUB_WORKSPACE}/engine/scripts/hunter_governance_review_v2.py"' in text
+    assert "ref: ${{ github.event.repository.default_branch }}" in text
+    assert "persist-credentials: false" in text
+    assert "${GITHUB_WORKSPACE}/engine/scripts/hunter_review_orchestrator.py" in text
+    assert "${GITHUB_WORKSPACE}/scripts/hunter_review_orchestrator.py" not in text
+    assert 'if [ ! -f "${ORCHESTRATOR}" ]; then' in text
+    assert "${GITHUB_WORKSPACE}/engine/scripts/hunter_governance_review/" in text
 
 
 def test_merge_readiness_docs_name_only_current_risk_inputs() -> None:
