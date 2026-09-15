@@ -32,6 +32,12 @@ def configuration_digest(pool: dict[str, Any]) -> str:
     return hashlib.sha256(json.dumps(pool, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
+def authority_attempt_records(pool: dict[str, Any], records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return only receipt rows emitted by authority-eligible reviewers."""
+    authority_ids = {str(agent["id"]) for agent in review.authority_pool_reviewers(pool)}
+    return [record for record in records if isinstance(record, dict) and str(record.get("agent_id")) in authority_ids]
+
+
 class Backend(Protocol):
     def head(self) -> str: ...
     def now(self) -> float: ...
@@ -309,6 +315,14 @@ class GitHubBackend:
             trigger["id"] = int(run.get("id") or 0)
             return str(run.get("status") or "") == "completed" and str(run.get("conclusion") or "") == "success"
         login = governance.reviewer_login(agent)
+        for item in _pages(self.repository, self.token, f"pulls/{self.pr}/reviews"):
+            if (
+                (item.get("user") or {}).get("login", "").lower() == login
+                and item.get("commit_id") == self.expected_head
+                and item.get("state") in {"APPROVED", "COMMENTED", "CHANGES_REQUESTED"}
+                and str(item.get("submitted_at") or item.get("created_at") or "") >= trigger["created_at"]
+            ):
+                return True
         for item in _pages(self.repository, self.token, f"issues/{self.pr}/comments"):
             if (item.get("user") or {}).get("login", "").lower() != login:
                 continue
@@ -422,6 +436,7 @@ def load_exhaustion(
     records = receipt.get("attempts")
     if not isinstance(records, list):
         raise ValueError("collector attempts are missing")
+    records = authority_attempt_records(pool, records)
     result = []
     offset = 0
     seen = set()

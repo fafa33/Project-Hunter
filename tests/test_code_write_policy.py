@@ -82,7 +82,7 @@ def test_code_write_policy_declares_an_ordered_reviewer_pool_with_a_last_resort_
     policy = json.loads((ROOT / "docs" / "CODE_WRITE_POLICY.json").read_text(encoding="utf-8"))
     pool = policy["review_progression"]["review_authority"]["reviewer_pool"]
 
-    assert pool["last_resort"] == "opencode"
+    assert pool["last_resort"] == "hunter-guard"
     assert pool["timeout_policy"]["bounded"] is True
     assert pool["timeout_policy"]["default_seconds"] > 0
     assert pool["timeout_policy"]["max_seconds"] >= pool["timeout_policy"]["default_seconds"]

@@ -248,6 +248,8 @@ def test_read_collector_completion_rejects_untrusted_or_wrong_head_run(monkeypat
                 "status": "completed",
                 "conclusion": "success",
             }
+        if path == f"compare/{'b' * 40}...{'c' * 40}":
+            return {"status": "diverged"}
         raise AssertionError(path)
 
     monkeypatch.setattr(orchestrator, "request_json", request)
@@ -261,3 +263,43 @@ def test_reconcile_runs_when_reviewer_collector_completes():
     root = orchestrator.__file__ and orchestrator.__file__.rsplit("/scripts/", 1)[0]
     text = open(f"{root}/.github/workflows/hunter-governance-reconcile.yml", encoding="utf-8").read()
     assert "Hunter Reviewer Collector" in text
+
+
+def test_collector_completion_accepts_trusted_ancestor_of_current_main(monkeypatch):
+    old_main = "b" * 40
+    current_main = "c" * 40
+
+    def request(_repository, _token, _method, path, _payload=None):
+        if path == f"commits/{HEAD}/statuses?per_page=100":
+            return [
+                {
+                    "state": "success",
+                    "context": "Hunter Reviewer Collector / PR #472",
+                    "description": "collector_run_id=777",
+                    "creator": {"login": "github-actions[bot]"},
+                }
+            ]
+        if path == "":
+            return {"default_branch": "main"}
+        if path == "commits/main":
+            return {"sha": current_main}
+        if path == "actions/runs/777":
+            return {
+                "id": 777,
+                "head_branch": "main",
+                "head_sha": old_main,
+                "path": ".github/workflows/hunter-reviewer-collector.yml",
+                "event": "workflow_dispatch",
+                "status": "completed",
+                "conclusion": "success",
+            }
+        if path == f"compare/{old_main}...{current_main}":
+            return {"status": "ahead"}
+        raise AssertionError(path)
+
+    monkeypatch.setattr(orchestrator, "request_json", request)
+    state, run_id, reason = orchestrator.read_collector_completion("owner/repo", "token", 472, HEAD)
+
+    assert reason is None
+    assert state == "present"
+    assert run_id == 777

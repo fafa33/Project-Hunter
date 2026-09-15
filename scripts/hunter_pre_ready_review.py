@@ -770,7 +770,7 @@ def _authority_error(document: dict[str, Any]) -> str | None:
         reason = authority.get("fallback_reason")
         if not isinstance(reason, str) or not reason.strip():
             return (
-                "opencode fallback authority must record why Codex could not review; "
+                "last-resort guard authority must record why Codex could not review; "
                 "skipping Codex without a reason is forbidden"
             )
         # A guard review is legitimate only when nothing is waiting on it: the
@@ -779,7 +779,7 @@ def _authority_error(document: dict[str, Any]) -> str | None:
         unresolved = authority.get("unresolved_thread_count")
         # bool is an int subclass; a True is a claim that something waited.
         if isinstance(unresolved, bool) or not isinstance(unresolved, int) or unresolved != 0:
-            return "opencode fallback authority must record a zero unresolved-thread count at review time"
+            return "last-resort guard authority must record a zero unresolved-thread count at review time"
         readable_gates = {
             "governance_state": "Governance",
             "trusted_preflight_state": "trusted Preflight",
@@ -789,7 +789,7 @@ def _authority_error(document: dict[str, Any]) -> str | None:
             required = FALLBACK_REQUIRED_GATE_STATES[gate]
             if authority.get(gate) != required:
                 return (
-                    f"opencode fallback authority requires recorded {readable_gates[gate]} "
+                    f"last-resort guard authority requires recorded {readable_gates[gate]} "
                     f"== {required!r} at review time"
                 )
 

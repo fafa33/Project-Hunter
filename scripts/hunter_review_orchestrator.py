@@ -221,10 +221,15 @@ def read_collector_completion(
             run = request_json(repository, token, "GET", f"actions/runs/{run_id}")
             if not isinstance(run, dict):
                 continue
+            run_revision = str(run.get("head_sha") or "")
+            revision_trusted = run_revision == trusted_revision
+            if run_revision and trusted_revision and not revision_trusted:
+                comparison = request_json(repository, token, "GET", f"compare/{run_revision}...{trusted_revision}")
+                revision_trusted = isinstance(comparison, dict) and comparison.get("status") in {"ahead", "identical"}
             if (
                 run.get("id") == run_id
                 and run.get("head_branch") == default_branch
-                and run.get("head_sha") == trusted_revision
+                and revision_trusted
                 and run.get("path") == COLLECTOR_WORKFLOW_PATH
                 and run.get("event") == "workflow_dispatch"
                 and run.get("status") == "completed"

@@ -1798,10 +1798,22 @@ def verify_pre_ready_hostile_review(
                 return "pending", (
                     "MISSING_REVIEW_AUTHORITY: waiting for authenticated exact-head reviewer authority" + detail
                 )
-            return "pending", (
-                "MISSING_REVIEW_AUTHORITY: reviewer pool completed without substantive authenticated exact-head "
-                "authority; synthetic last-resort authority is forbidden"
-            )
+            from hunter_reviewer_collector import load_exhaustion
+
+            try:
+                exhaustion = load_exhaustion(
+                    repository, token, pr_number, head_sha, pool, collector_run_id, str(pool["last_resort"])
+                )
+            except Exception as exc:
+                return "failure", f"EXHAUSTION_UNPROVEN: {exc}"
+            authority = {
+                "type": str(pool["last_resort"]),
+                "tool": "hunter-deterministic-review-guard",
+                "head_sha": head_sha,
+                "reviewed_at": "trusted collector completion",
+                "artifact": f"actions/runs/{collector_run_id}",
+                **exhaustion,
+            }
         # This is NEW authority for the current exact HEAD; historical evidence is unchanged.
         document = pre_ready.document_for(claims, authority=authority)
 

@@ -475,3 +475,44 @@ def test_review_execution_budget_starts_after_acknowledgement():
     assert result[0]["outcome"] == "responded"
     assert result[0]["ack_elapsed_seconds"] >= 25.0
     assert result[0]["elapsed_seconds"] >= 325.0
+
+
+def test_authority_receipt_filter_skips_triage_only_records():
+    local = {
+        "agent_id": "local-ollama",
+        "priority": 1,
+        "outcome": "responded",
+    }
+    codex = {
+        "agent_id": "codex",
+        "priority": 2,
+        "outcome": "timed_out",
+    }
+    pool = {
+        "agents": (
+            {"id": "local-ollama", "enabled": True, "authority_eligible": False, "priority": 1},
+            {"id": "codex", "enabled": True, "priority": 2},
+        )
+    }
+
+    assert collector.authority_attempt_records(pool, [local, codex]) == [codex]
+
+
+def test_native_exact_head_codex_review_counts_as_completed(monkeypatch):
+    backend = collector.GitHubBackend("owner/repo", "token", 473, HEAD, "d" * 64, 123, 1)
+    trigger = {"id": 55, "created_at": "2026-09-15T00:00:00Z"}
+    agent = {**POOL["agents"][0], "id": "codex"}
+    review = {
+        "id": 99,
+        "user": {"login": "chatgpt-codex-connector[bot]"},
+        "commit_id": HEAD,
+        "state": "COMMENTED",
+        "body": "Codex Review: Didn't find any major issues. Bravo.\n\n**Reviewed commit:** `aaaaaaaaaa`",
+        "submitted_at": "2026-09-15T00:01:00Z",
+    }
+
+    monkeypatch.setattr(
+        collector, "_pages", lambda _r, _t, path, _key=None: [review] if path.endswith("/reviews") else []
+    )
+
+    assert backend.completed(agent, trigger) is True

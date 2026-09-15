@@ -1442,7 +1442,7 @@ def test_authenticated_codex_standard_clear_review_adopts_current_exact_head_req
     assert state == "success", reason
 
 
-def test_verified_pool_exhaustion_without_substantive_authority_stays_pending(monkeypatch):
+def test_verified_pool_exhaustion_uses_deterministic_hunter_guard(monkeypatch):
     document, _ = _request_and_ack()
     _install_governance(monkeypatch, document=document, comments=())
     monkeypatch.setattr(core, "read_unresolved_review_threads", lambda *a: ((), None))
@@ -1463,8 +1463,8 @@ def test_verified_pool_exhaustion_without_substantive_authority_stays_pending(mo
     }
     monkeypatch.setattr("hunter_reviewer_collector.load_exhaustion", lambda *_a: evidence)
     state, reason = core.verify_pre_ready_hostile_review("repo", "token", HEAD, PR_NUMBER)
-    assert state == "pending"
-    assert "substantive" in reason.lower() or "review authority" in reason.lower()
+    assert state == "success", reason
+    assert "VALID_LAST_RESORT_GUARD" in reason
 
 
 def test_deterministic_guard_fails_closed_when_collector_evidence_is_unavailable(monkeypatch):
