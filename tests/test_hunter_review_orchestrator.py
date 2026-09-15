@@ -121,6 +121,15 @@ def test_trusted_governance_workflows_auto_ensure_review_cycle():
         assert " ensure " in text or " ensure\\" in text
 
 
+def test_governance_workflow_bootstraps_only_from_trusted_default_branch():
+    root = orchestrator.__file__ and orchestrator.__file__.rsplit("/scripts/", 1)[0]
+    text = open(f"{root}/.github/workflows/hunter-governance-review.yml", encoding="utf-8").read()
+    assert 'if [ ! -f "${ORCHESTRATOR}" ]; then' in text
+    assert "Governance review above handled review authority" in text
+    assert "${GITHUB_WORKSPACE}/engine/scripts/hunter_review_orchestrator.py" in text
+    assert "${GITHUB_WORKSPACE}/scripts/hunter_review_orchestrator.py" not in text
+
+
 def test_review_prerequisites_accept_canonical_review_request_object(monkeypatch):
     monkeypatch.setattr(
         orchestrator,

@@ -162,7 +162,7 @@ def test_protected_preflight_ordinary_candidate_cannot_self_authorize(monkeypatc
     assert description == "trusted proof missing"
 
 
-def test_workflow_uses_only_trusted_v2_controller_without_bootstrap():
+def test_workflow_uses_only_trusted_v2_controller_with_safe_bootstrap():
     workflow = (
         Path(__file__).resolve().parents[1] / ".github" / "workflows" / "hunter-governance-review.yml"
     ).read_text(encoding="utf-8")
@@ -173,7 +173,10 @@ def test_workflow_uses_only_trusted_v2_controller_without_bootstrap():
     assert "persist-credentials: false" in workflow
     assert 'PR_NUMBER} = "283"' not in workflow
     assert "python -m hunter_governance_review" not in workflow
-    assert "bootstrap" not in workflow.lower()
+    assert "${GITHUB_WORKSPACE}/engine/scripts/hunter_review_orchestrator.py" in workflow
+    assert "${GITHUB_WORKSPACE}/scripts/hunter_review_orchestrator.py" not in workflow
+    assert 'if [ ! -f "${ORCHESTRATOR}" ]; then' in workflow
+    assert "Governance review above handled review authority" in workflow
     assert "hunter_governance_review_v2.py" in workflow
 
 
