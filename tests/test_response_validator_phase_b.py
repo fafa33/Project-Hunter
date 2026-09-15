@@ -829,6 +829,7 @@ def _external_ptrace_mem_denial_is_enforceable(
             process.join(timeout=5)
 
 
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="requires Linux prctl/PR_GET_DUMPABLE")
 def test_ptrace_denial_probe_reports_enforceable_when_external_read_is_denied() -> None:
     def deny(pid: int) -> None:
         raise PermissionError(13, "Permission denied")
@@ -836,6 +837,7 @@ def test_ptrace_denial_probe_reports_enforceable_when_external_read_is_denied() 
     assert _external_ptrace_mem_denial_is_enforceable(attempt_open=deny) is True
 
 
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="requires Linux prctl/PR_GET_DUMPABLE")
 def test_ptrace_denial_probe_reports_unenforceable_when_external_read_succeeds() -> None:
     def allow(pid: int) -> None:
         return None
@@ -857,6 +859,7 @@ def test_ptrace_denial_probe_classifier_accepts_a_hardening_report_confirmed_by_
     _classify_probe_status("DUMPABLE_STATE:0")
 
 
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="requires Linux prctl/PR_GET_DUMPABLE")
 def test_ptrace_denial_probe_fails_closed_when_the_child_never_actually_hardened() -> None:
     def allow(pid: int) -> None:
         return None

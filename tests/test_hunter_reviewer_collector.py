@@ -230,3 +230,12 @@ def test_guard_snapshot_rejects_unresolved_threads(monkeypatch):
     monkeypatch.setattr(collector.governance, "read_unresolved_review_threads", lambda *a: (("thread",), None))
     with pytest.raises(ValueError, match="zero unresolved threads"):
         collector.load_exhaustion("owner/repo", "token", 469, HEAD, pool, 123, "opencode")
+
+
+def test_collector_workflow_can_write_pr_conversation_triggers():
+    import yaml
+
+    workflow = yaml.safe_load((collector.review.ROOT / collector.WORKFLOW).read_text())
+    permissions = workflow["permissions"]
+
+    assert permissions.get("pull-requests") == "write"

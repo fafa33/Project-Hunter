@@ -908,7 +908,14 @@ def test_fallback_review_claims_that_differ_from_the_canonical_claim_set_are_blo
     monkeypatch.setattr(
         core,
         "read_pr_changed_files",
-        lambda *_a: (True, (core.PullRequestFile("modified", "docs/DEFECT_REGISTRY.json", "", "b" * 40),), None),
+        lambda *_a: (
+            True,
+            (
+                core.PullRequestFile("modified", "docs/DEFECT_REGISTRY.json", "", "b" * 40),
+                core.PullRequestFile("modified", review.REVIEW_RELATIVE_PATH, "", "c" * 40),
+            ),
+            None,
+        ),
     )
     monkeypatch.setattr(core, "read_head_pre_ready_review", lambda *_a: ("present", document, None))
     monkeypatch.setattr(core.pre_ready, "load_families", lambda *_a, **_k: (FAMILIES, ""))
@@ -1016,6 +1023,7 @@ def test_local_and_hosted_consume_the_same_canonical_claim_set_definition(monkey
             (
                 core.PullRequestFile("added", "scripts/hunter_writer_provenance.py", "", "a" * 40),
                 core.PullRequestFile("modified", "docs/DEFECT_REGISTRY.json", "", "b" * 40),
+                core.PullRequestFile("modified", review.REVIEW_RELATIVE_PATH, "", "c" * 40),
             ),
             None,
         ),
@@ -1267,6 +1275,7 @@ def test_an_alternate_review_with_fresh_head_evidence_is_accepted_end_to_end(mon
             (
                 core.PullRequestFile("added", "scripts/hunter_writer_provenance.py", "", "a" * 40),
                 core.PullRequestFile("modified", "docs/DEFECT_REGISTRY.json", "", "b" * 40),
+                core.PullRequestFile("modified", review.REVIEW_RELATIVE_PATH, "", "c" * 40),
             ),
             None,
         ),
@@ -1299,6 +1308,7 @@ def test_a_guard_review_that_skips_an_enabled_alternate_blocks_end_to_end(monkey
             (
                 core.PullRequestFile("added", "scripts/hunter_writer_provenance.py", "", "a" * 40),
                 core.PullRequestFile("modified", "docs/DEFECT_REGISTRY.json", "", "b" * 40),
+                core.PullRequestFile("modified", review.REVIEW_RELATIVE_PATH, "", "c" * 40),
             ),
             None,
         ),
@@ -1839,7 +1849,14 @@ def test_a_present_review_is_verified_even_when_no_family_applies(monkeypatch) -
     monkeypatch.setattr(
         core,
         "read_pr_changed_files",
-        lambda *_a: (True, (core.PullRequestFile("modified", "requirements/ci-constraints.txt", "", "a" * 40),), None),
+        lambda *_a: (
+            True,
+            (
+                core.PullRequestFile("modified", "requirements/ci-constraints.txt", "", "a" * 40),
+                core.PullRequestFile("modified", review.REVIEW_RELATIVE_PATH, "", "c" * 40),
+            ),
+            None,
+        ),
     )
     monkeypatch.setattr(core, "read_head_pre_ready_review", lambda *_a: ("present", _review_document(), None))
     monkeypatch.setattr(core.pre_ready, "load_families", lambda *_a, **_k: (FAMILIES, ""))
@@ -1939,6 +1956,7 @@ def test_a_review_taken_against_another_base_branch_is_refused(monkeypatch) -> N
             (
                 core.PullRequestFile("added", "scripts/hunter_writer_provenance.py", "", "a" * 40),
                 core.PullRequestFile("modified", "docs/DEFECT_REGISTRY.json", "", "b" * 40),
+                core.PullRequestFile("modified", review.REVIEW_RELATIVE_PATH, "", "c" * 40),
             ),
             None,
         ),
@@ -1966,7 +1984,10 @@ def test_a_copied_file_is_not_rejected_as_a_malformed_addition(monkeypatch) -> N
         "read_pr_changed_files",
         lambda *_a: (
             True,
-            (core.PullRequestFile("copied", "scripts/copy.py", "scripts/original.py", "a" * 40),),
+            (
+                core.PullRequestFile("copied", "scripts/copy.py", "scripts/original.py", "a" * 40),
+                core.PullRequestFile("modified", review.REVIEW_RELATIVE_PATH, "", "c" * 40),
+            ),
             None,
         ),
     )
@@ -2173,7 +2194,14 @@ def test_a_review_naming_another_issue_than_the_branch_is_refused(monkeypatch) -
     monkeypatch.setattr(
         core,
         "read_pr_changed_files",
-        lambda *_a: (True, (core.PullRequestFile("modified", "docs/DEFECT_REGISTRY.json", "", "b" * 40),), None),
+        lambda *_a: (
+            True,
+            (
+                core.PullRequestFile("modified", "docs/DEFECT_REGISTRY.json", "", "b" * 40),
+                core.PullRequestFile("modified", review.REVIEW_RELATIVE_PATH, "", "c" * 40),
+            ),
+            None,
+        ),
     )
     document = _review_document()
     document["claims"]["issue"] = "999"
@@ -2198,6 +2226,7 @@ def test_unavailable_issue_criteria_evidence_fails_closed(monkeypatch) -> None:
             (
                 core.PullRequestFile("added", "scripts/hunter_writer_provenance.py", "", "a" * 40),
                 core.PullRequestFile("modified", "docs/DEFECT_REGISTRY.json", "", "b" * 40),
+                core.PullRequestFile("modified", review.REVIEW_RELATIVE_PATH, "", "c" * 40),
             ),
             None,
         ),
