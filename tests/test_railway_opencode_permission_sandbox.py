@@ -168,3 +168,20 @@ def test_provider_capability_contract_keeps_shell_and_external_directory_denied(
     assert set(shim._REQUIRED_PROVIDER_CAPABILITIES) <= {
         name for name, decision in permission.items() if decision == "allow"
     }
+
+
+def test_main_fails_closed_before_provider_run_when_runtime_capability_is_missing(tmp_path: Path, monkeypatch) -> None:
+    argv, _, _ = _argv(tmp_path)
+    calls: list[list[str]] = []
+
+    def fake_run(command, **kwargs):
+        calls.append(list(command))
+        if command[1:4] == ["debug", "agent", "build"]:
+            tools = {"read": True, "edit": False, "glob": True, "grep": True}
+            return shim.subprocess.CompletedProcess(command, 0, stdout=json.dumps({"tools": tools}), stderr="")
+        pytest.fail("provider execution must not start when runtime capability discovery is incomplete")
+
+    monkeypatch.setattr(shim.subprocess, "run", fake_run)
+
+    assert shim.main(argv) == 1
+    assert calls == [["/app/bin/opencode", "debug", "agent", "build", "--pure"]]
